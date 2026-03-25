@@ -1,0 +1,373 @@
+{# ペルソナ長期記憶一覧パーシャル（htmx swap用） #}
+{% from "components/icons.html" import icon_trash, icon_lightbulb, icon_plus %}
+
+<div id="memory-list-container">
+    {# エラーメッセージ表示 #}
+    {% if error %}
+    <div id="memory-error-message" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md mb-4 flex items-center justify-between">
+        <span>{{ error }}</span>
+        <button 
+            onclick="this.parentElement.remove()"
+            class="text-red-700 hover:text-red-900 ml-2"
+            title="閉じる"
+        >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+        </button>
+    </div>
+    {% endif %}
+
+    {# 成功メッセージ表示 #}
+    {% if message %}
+    <div id="memory-success-message" class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded-md mb-4 flex items-center justify-between">
+        <span>{{ message }}</span>
+        <button 
+            onclick="this.parentElement.remove()"
+            class="text-green-700 hover:text-green-900 ml-2"
+            title="閉じる"
+        >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+        </button>
+    </div>
+    {% endif %}
+
+    {# 知識追加フォーム（semantic戦略の場合のみ表示） #}
+    {% if strategy_type == 'semantic' %}
+    <div x-data="{ showForm: false, activeTab: 'manual' }" class="mb-4">
+        <button 
+            @click="showForm = !showForm"
+            class="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-3 py-2 rounded-md transition-colors"
+        >
+            <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-45': showForm }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            <span x-text="showForm ? '閉じる' : '知識・事実情報を追加'"></span>
+        </button>
+        
+        <div x-show="showForm" x-collapse class="mt-3">
+            {# タブナビゲーション #}
+            <div class="flex border-b border-gray-200 mb-3">
+                <button 
+                    @click="activeTab = 'manual'"
+                    :class="activeTab === 'manual' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+                >
+                    手動入力
+                </button>
+                <button 
+                    @click="activeTab = 'file'"
+                    :class="activeTab === 'file' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+                >
+                    ファイルアップロード
+                </button>
+            </div>
+            
+            {# 手動入力タブ #}
+            <div x-show="activeTab === 'manual'">
+                <form 
+                    hx-post="/persona/{{ persona_id }}/memories"
+                    hx-target="#memory-list-container"
+                    hx-swap="innerHTML"
+                    hx-indicator="#add-memory-indicator"
+                    class="bg-indigo-50 rounded-lg p-4 border border-indigo-200"
+                >
+                    <input type="hidden" name="strategy_type" value="semantic">
+                    
+                    <div class="space-y-3">
+                        <div>
+                            <label for="topic_name" class="block text-sm font-medium text-gray-700 mb-1">
+                                トピック名 <span class="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="topic_name" 
+                                name="topic_name" 
+                                placeholder="例: 好きな食べ物、趣味、仕事の経験など"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                                required
+                            >
+                        </div>
+                        
+                        <div>
+                            <label for="topic_content" class="block text-sm font-medium text-gray-700 mb-1">
+                                内容 <span class="text-red-500">*</span>
+                            </label>
+                            <textarea 
+                                id="topic_content" 
+                                name="topic_content" 
+                                rows="3"
+                                placeholder="例: ラーメンが大好きで、特に味噌ラーメンを週に2回は食べている"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                                required
+                            ></textarea>
+                            <p class="mt-1 text-xs text-gray-500">このペルソナが持つ知識や事実情報を入力してください</p>
+                        </div>
+                        
+                        <div class="flex items-center justify-end gap-2">
+                            <button 
+                                type="button"
+                                @click="showForm = false"
+                                class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
+                            >
+                                キャンセル
+                            </button>
+                            <button 
+                                type="submit"
+                                class="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                            >
+                                <span id="add-memory-indicator" class="htmx-indicator">
+                                    <svg class="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                </span>
+                                <span class="htmx-indicator-hide">追加</span>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            {# ファイルアップロードタブ #}
+            <div x-show="activeTab === 'file'">
+                <div class="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                    <div class="mb-3 p-3 bg-white rounded-md border border-purple-100">
+                        <p class="text-sm text-gray-600">
+                            <strong>対応ファイル形式:</strong> PDF, Word(.docx), PowerPoint(.pptx), Excel(.xlsx), テキスト(.txt, .md)<br>
+                            <strong>最大ファイルサイズ:</strong> 10MB
+                        </p>
+                    </div>
+                    
+                    <form 
+                        hx-post="/persona/{{ persona_id }}/memories/upload-preview"
+                        hx-target="#file-upload-preview-area"
+                        hx-swap="innerHTML"
+                        hx-indicator="#file-upload-indicator"
+                        hx-encoding="multipart/form-data"
+                        x-data="{ fileName: '' }"
+                    >
+                        <div class="border-2 border-dashed border-purple-300 rounded-lg p-6 text-center hover:border-purple-400 transition-colors bg-white"
+                             @drop.prevent="handleFileDrop($event)"
+                             @dragover.prevent
+                             @dragenter.prevent="$el.classList.add('border-purple-400', 'bg-purple-50')"
+                             @dragleave.prevent="$el.classList.remove('border-purple-400', 'bg-purple-50')">
+                            <input 
+                                type="file" 
+                                id="knowledge_file" 
+                                name="file"
+                                accept=".pdf,.docx,.pptx,.xlsx,.txt,.md"
+                                class="hidden"
+                                required
+                                @change="fileName = $event.target.files[0]?.name || ''"
+                            >
+                            <label for="knowledge_file" class="cursor-pointer">
+                                <div class="flex justify-center mb-2 text-purple-400">
+                                    <svg class="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                    </svg>
+                                </div>
+                                <p class="text-gray-600 mb-1">クリックしてファイルを選択</p>
+                                <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                            </label>
+                            <p x-show="fileName" x-text="'選択中: ' + fileName" class="mt-3 text-purple-600 font-medium text-sm"></p>
+                        </div>
+                        
+                        <div class="flex items-center justify-end gap-2 mt-3">
+                            <button 
+                                type="button"
+                                @click="showForm = false"
+                                class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md transition-colors"
+                            >
+                                キャンセル
+                            </button>
+                            <button 
+                                type="submit"
+                                class="px-4 py-1.5 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors flex items-center gap-2"
+                            >
+                                <span id="file-upload-indicator" class="htmx-indicator">
+                                    <svg class="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                </span>
+                                <svg class="w-4 h-4 htmx-indicator-hide" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                                </svg>
+                                <span class="htmx-indicator-hide">アップロード</span>
+                            </button>
+                        </div>
+                    </form>
+                    
+                    {# プレビュー表示エリア #}
+                    <div id="file-upload-preview-area" class="mt-3"></div>
+                </div>
+                
+                <script>
+                function handleFileDrop(event) {
+                    const files = event.dataTransfer.files;
+                    if (files.length) {
+                        const fileInput = document.getElementById('knowledge_file');
+                        fileInput.files = files;
+                        // Alpine.jsのデータを更新
+                        const changeEvent = new Event('change', { bubbles: true });
+                        fileInput.dispatchEvent(changeEvent);
+                    }
+                    event.target.classList.remove('border-purple-400', 'bg-purple-50');
+                }
+                </script>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if memories and memories|length > 0 %}
+    <div class="space-y-4" id="memory-items-list">
+        {% for memory in memories %}
+        <div id="memory-item-{{ memory.id }}" class="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-gray-300 transition-colors group">
+            <div class="flex items-start justify-between gap-4">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-2 flex-wrap">
+                        {{ icon_lightbulb("w-4 h-4 text-yellow-500") }}
+                        <span class="text-xs text-gray-500">
+                            {{ memory.created_at.strftime('%Y年%m月%d日 %H:%M') if memory.created_at else '日時不明' }}
+                        </span>
+                        {% if memory.metadata and memory.metadata.importance %}
+                        <span class="px-2 py-0.5 text-xs rounded-full 
+                            {% if memory.metadata.importance == 'high' %}
+                            bg-red-100 text-red-700
+                            {% elif memory.metadata.importance == 'low' %}
+                            bg-gray-100 text-gray-600
+                            {% else %}
+                            bg-blue-100 text-blue-700
+                            {% endif %}
+                        ">
+                            {% if memory.metadata.importance == 'high' %}重要{% elif memory.metadata.importance == 'low' %}低{% else %}通常{% endif %}
+                        </span>
+                        {% endif %}
+                        {% if memory.session_id %}
+                        <span class="text-xs text-gray-400">
+                            セッション: {{ memory.session_id[:8] }}...
+                        </span>
+                        {% endif %}
+                    </div>
+                    
+                    {# トピック形式の記憶を整形表示 #}
+                    {% if memory.parsed_topic %}
+                    <div class="space-y-2">
+                        <div class="flex items-center gap-2">
+                            <span class="inline-flex items-center px-2.5 py-1 rounded-md bg-purple-100 text-purple-700 text-sm font-medium">
+                                 {{ memory.parsed_topic.name }}
+                            </span>
+                        </div>
+                        <div class="text-gray-700 text-sm pl-1 border-l-2 border-purple-200 ml-1">
+                            <p class="whitespace-pre-wrap break-words pl-3">{{ memory.parsed_topic.content }}</p>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="text-gray-700 text-sm whitespace-pre-wrap break-words">{{ memory.content }}</p>
+                    {% endif %}
+                </div>
+                {# 個別削除ボタン - Requirements 8.1, 8.2 #}
+                <button 
+                    hx-delete="/persona/{{ persona_id }}/memories/{{ memory.id }}"
+                    hx-target="#memory-item-{{ memory.id }}"
+                    hx-swap="outerHTML swap:0.3s"
+                    hx-confirm="この記憶を削除しますか？この操作は取り消せません。"
+                    hx-indicator="#delete-indicator-{{ memory.id }}"
+                    class="flex-shrink-0 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                    title="この記憶を削除"
+                >
+                    <span id="delete-indicator-{{ memory.id }}" class="htmx-indicator">
+                        <svg class="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                    <span class="htmx-indicator-hide">
+                        {{ icon_trash("w-4 h-4") }}
+                    </span>
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if total_pages and total_pages > 1 %}
+    <div class="mt-6 flex items-center justify-center gap-2">
+        {% if current_page > 1 %}
+        <button 
+            hx-get="/persona/{{ persona_id }}/memories?page={{ current_page - 1 }}&strategy_type={{ strategy_type|default('summary') }}"
+            hx-target="#memory-list-container"
+            hx-swap="innerHTML"
+            class="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+        >
+            前へ
+        </button>
+        {% endif %}
+        
+        <span class="text-sm text-gray-500">
+            {{ current_page }} / {{ total_pages }} ページ
+        </span>
+        
+        {% if current_page < total_pages %}
+        <button 
+            hx-get="/persona/{{ persona_id }}/memories?page={{ current_page + 1 }}&strategy_type={{ strategy_type|default('summary') }}"
+            hx-target="#memory-list-container"
+            hx-swap="innerHTML"
+            class="px-3 py-1 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+        >
+            次へ
+        </button>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# 全削除ボタン - Requirements 8.5 #}
+    <div class="mt-6 pt-4 border-t border-gray-200 flex items-center justify-between">
+        <span class="text-sm text-gray-500">{{ memories|length }}件の{% if strategy_type == 'semantic' %}知識・事実{% else %}記憶{% endif %}</span>
+        <button 
+            hx-delete="/persona/{{ persona_id }}/memories?strategy_type={{ strategy_type|default('summary') }}"
+            hx-target="#memory-list-container"
+            hx-swap="innerHTML"
+            hx-confirm="このペルソナの{% if strategy_type == 'semantic' %}全ての知識・事実{% else %}全ての記憶{% endif %}を削除しますか？この操作は取り消せません。"
+            hx-indicator="#delete-all-indicator"
+            class="text-sm text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5"
+        >
+            <span id="delete-all-indicator" class="htmx-indicator">
+                <svg class="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </span>
+            <span class="htmx-indicator-hide">
+                {{ icon_trash("w-4 h-4") }}
+            </span>
+            {% if strategy_type == 'semantic' %}全ての知識・事実を削除{% else %}全ての記憶を削除{% endif %}
+        </button>
+    </div>
+
+    {% else %}
+    <div class="text-center py-8">
+        <div class="inline-flex items-center justify-center w-12 h-12 bg-gray-100 rounded-full mb-4">
+            {% if strategy_type == 'semantic' %}
+            <svg class="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
+            </svg>
+            {% else %}
+            {{ icon_lightbulb("w-6 h-6 text-gray-400") }}
+            {% endif %}
+        </div>
+        {% if strategy_type == 'semantic' %}
+        <p class="text-gray-500 text-sm">ペルソナの知識・事実情報はまだありません</p>
+        <p class="text-gray-400 text-xs mt-1">議論やインタビューを通じて、ペルソナが学んだ知識や事実情報がここに表示されます</p>
+        {% else %}
+        <p class="text-gray-500 text-sm">ペルソナの議論記憶はまだありません</p>
+        <p class="text-gray-400 text-xs mt-1">議論で長期記憶・知識を有効にすると、ペルソナが議論で学んだ内容がここに表示されます</p>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>

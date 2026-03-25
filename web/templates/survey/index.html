@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_document, icon_play, icon_chat, icon_plus, icon_users %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="text-center mb-10">
+        <h1 class="text-3xl font-bold text-gray-900 flex items-center justify-center gap-3">
+            <svg class="w-8 h-8 text-teal-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+            </svg>
+            アンケート
+        </h1>
+        <p class="text-gray-600 mt-2">AIペルソナを活用した大規模アンケート調査</p>
+    </div>
+
+    <!-- ステップ表示 -->
+    <div class="flex items-center justify-center mb-8 text-sm text-gray-500">
+        <span class="flex items-center gap-1"><span class="bg-teal-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">1</span> データ設定</span>
+        <span class="mx-3 text-gray-300">→</span>
+        <span class="flex items-center gap-1"><span class="bg-teal-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">2</span> テンプレート</span>
+        <span class="mx-3 text-gray-300">→</span>
+        <span class="flex items-center gap-1"><span class="bg-teal-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">3</span> アンケート実行</span>
+        <span class="mx-3 text-gray-300">→</span>
+        <span class="flex items-center gap-1"><span class="bg-teal-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold">4</span> 結果確認</span>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- ペルソナデータ設定 -->
+        <a href="/survey/persona-data" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow block text-center border-2 border-teal-100">
+            <div class="flex justify-center mb-4 text-teal-600">{{ icon_users("w-10 h-10") }}</div>
+            <div class="flex items-center justify-center gap-2 mb-2">
+                <span class="bg-teal-100 text-teal-700 text-xs font-bold px-2 py-0.5 rounded">STEP 1</span>
+                <h3 class="text-lg font-semibold text-gray-900">ペルソナデータ設定</h3>
+            </div>
+            <p class="text-gray-600 text-sm">オープンデータセットのやカスタムペルソナデータのセットアップ</p>
+        </a>
+
+        <!-- テンプレート管理 -->
+        <a href="/survey/templates" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow block text-center">
+            <div class="flex justify-center mb-4 text-teal-600">{{ icon_document("w-10 h-10") }}</div>
+            <div class="flex items-center justify-center gap-2 mb-2">
+                <span class="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded">STEP 2</span>
+                <h3 class="text-lg font-semibold text-gray-900">テンプレート管理</h3>
+            </div>
+            <p class="text-gray-600 text-sm">アンケートテンプレートの作成・編集・管理</p>
+        </a>
+
+        <!-- アンケート開始 -->
+        <a href="/survey/start" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow block text-center">
+            <div class="flex justify-center mb-4 text-blue-600">{{ icon_play("w-10 h-10") }}</div>
+            <div class="flex items-center justify-center gap-2 mb-2">
+                <span class="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded">STEP 3</span>
+                <h3 class="text-lg font-semibold text-gray-900">アンケート開始</h3>
+            </div>
+            <p class="text-gray-600 text-sm">テンプレートを選択してアンケートを実行</p>
+        </a>
+
+        <!-- 結果表示 -->
+        <a href="/survey/results" class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow block text-center">
+            <div class="flex justify-center mb-4 text-green-600">{{ icon_chat("w-10 h-10") }}</div>
+            <div class="flex items-center justify-center gap-2 mb-2">
+                <span class="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded">STEP 4</span>
+                <h3 class="text-lg font-semibold text-gray-900">結果表示</h3>
+            </div>
+            <p class="text-gray-600 text-sm">アンケート結果の確認・分析・レポート</p>
+        </a>
+    </div>
+</div>
+{% endblock %}

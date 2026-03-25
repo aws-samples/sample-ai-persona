@@ -1,0 +1,12 @@
+.venv
+.vscode
+.kiro
+.pytest_cache
+.gitignore
+.hypothesis
+data/
+docs/
+cdk/
+example/
+tests/
+tailwindcss

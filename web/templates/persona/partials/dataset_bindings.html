@@ -1,0 +1,79 @@
+<!-- データセット紐付け一覧パーシャル -->
+{% if not datasets %}
+<p class="text-gray-500 text-sm">利用可能なデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。</p>
+{% else %}
+<div class="space-y-3">
+    {% for dataset in datasets %}
+    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false }">
+        <div class="flex items-center justify-between">
+            <div class="flex-1">
+                <h4 class="font-medium text-gray-900">{{ dataset.name }}</h4>
+                {% if dataset.description %}
+                <p class="text-sm text-gray-500 mt-1">{{ dataset.description }}</p>
+                {% endif %}
+                <p class="text-xs text-gray-400 mt-1">{{ dataset.row_count }}行 / {{ dataset.columns|length }}列</p>
+            </div>
+            <div class="ml-4">
+                {% set binding = bindings_map.get(dataset.id) %}
+                {% if binding %}
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
+                    <button
+                        hx-delete="/persona/{{ persona_id }}/dataset-bindings/{{ binding.id }}"
+                        hx-target="#dataset-binding-content"
+                        hx-swap="innerHTML"
+                        hx-confirm="この紐付けを解除しますか？"
+                        class="text-red-500 hover:text-red-700 text-sm"
+                    >解除</button>
+                </div>
+                {% if binding.binding_keys %}
+                <div class="mt-2 text-xs text-gray-500">
+                    キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </div>
+                {% endif %}
+                {% else %}
+                <button
+                    @click="showModal = true"
+                    class="text-cyan-600 hover:text-cyan-800 text-sm font-medium"
+                >紐付ける</button>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- 紐付けモーダル -->
+        {% if not bindings_map.get(dataset.id) %}
+        <div x-show="showModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+            <div class="fixed inset-0 bg-black/50" @click="showModal = false"></div>
+            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <h3 class="text-lg font-semibold mb-4">{{ dataset.name }} を紐付け</h3>
+                <p class="text-sm text-gray-600 mb-4">このペルソナがデータセットにアクセスする際のキー値を設定してください。</p>
+                
+                <form id="binding-form-{{ dataset.id }}">
+                    <div class="space-y-3 mb-4">
+                        <div class="flex gap-2">
+                            <input type="text" name="key_name" placeholder="キー名 (例: user_id)" class="flex-1 border rounded px-3 py-2 text-sm">
+                            <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm">
+                        </div>
+                    </div>
+                    <input type="hidden" name="dataset_id" value="{{ dataset.id }}">
+                </form>
+                
+                <div class="flex justify-end gap-2">
+                    <button type="button" @click="showModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                    <button 
+                        type="button"
+                        hx-post="/persona/{{ persona_id }}/dataset-bindings"
+                        hx-target="#dataset-binding-content"
+                        hx-swap="innerHTML"
+                        hx-include="#binding-form-{{ dataset.id }}"
+                        @click="showModal = false"
+                        class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700"
+                    >紐付ける</button>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

@@ -1,0 +1,39 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.env
+
+# Virtual environments
+.venv
+
+# その他
+uploads/
+discussion_documents/
+knowledge_files/
+.playwright-cli
+survey_images/
+examples/
+unicode_data/
+constants/
+data/
+
+# Kiro
+.kiro/specs/
+.kiro/hooks/
+.kiro/settings/
+
+# CDK
+cdk/node_modules/
+# cdk/package-lock.json
+cdk.out/
+.cdk.staging/
+cdk/cdk.context.json
+
+# Tailwind CSS standalone CLI binary
+tailwindcss
+.hypothesis/
+.DS_Store

@@ -1,0 +1,55 @@
+<!-- チャットメッセージ部分テンプレート -->
+{% if message.persona_id == 'user' %}
+<!-- ユーザーメッセージ -->
+<div class="message-item user-message animate-fade-in">
+    <div class="flex justify-end mb-4">
+        <div class="relative max-w-xs lg:max-w-md">
+            <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl rounded-br-md px-4 py-3 shadow-md">
+                <p class="text-sm leading-relaxed">{{ message.content }}</p>
+            </div>
+            {% if message.timestamp %}
+            <div class="flex justify-end mt-1">
+                <span class="text-xs text-gray-500 bg-white px-2 py-1 rounded-full shadow-sm">
+                    {{ message.timestamp.strftime('%H:%M') }}
+                </span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% else %}
+<!-- ペルソナメッセージ -->
+<div class="message-item persona-message animate-fade-in">
+    <div class="flex gap-3 mb-4">
+        <div class="flex-shrink-0">
+            <!-- ペルソナアバター（色分け） -->
+            {% set persona_colors = [
+                'bg-purple-500',
+                'bg-indigo-500', 
+                'bg-pink-500',
+                'bg-emerald-500',
+                'bg-orange-500',
+                'bg-cyan-500',
+                'bg-amber-500',
+                'bg-rose-500'
+            ] %}
+            {% set color_index = loop.index0 % persona_colors|length %}
+            <div class="w-12 h-12 rounded-full {{ persona_colors[color_index] }} flex items-center justify-center shadow-md ring-2 ring-white">
+                <span class="text-white font-bold text-sm">{{ message.persona_name[0] }}</span>
+            </div>
+        </div>
+        <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2 mb-2">
+                <span class="font-semibold text-gray-900 text-sm">{{ message.persona_name }}</span>
+                <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">ペルソナ</span>
+                {% if message.timestamp %}
+                <span class="text-xs text-gray-400">{{ message.timestamp.strftime('%H:%M') }}</span>
+                {% endif %}
+            </div>
+            <div class="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
+                <p class="text-gray-800 text-sm leading-relaxed">{{ message.content }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}

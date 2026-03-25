@@ -1,0 +1,25 @@
+<!-- ナレッジベース一覧パーシャル -->
+{% if not knowledge_bases %}
+<p class="text-gray-500 text-sm">登録されたナレッジベースはありません。</p>
+{% else %}
+<div class="space-y-3">
+    {% for kb in knowledge_bases %}
+    <div class="border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+        <div>
+            <h4 class="font-medium text-gray-900">{{ kb.name }}</h4>
+            {% if kb.description %}
+            <p class="text-sm text-gray-500 mt-0.5">{{ kb.description }}</p>
+            {% endif %}
+            <p class="text-sm text-gray-500 mt-1">ナレッジベースID: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{ kb.knowledge_base_id }}</code></p>
+        </div>
+        <button
+            hx-delete="/settings/knowledge-bases/{{ kb.id }}"
+            hx-target="#kb-list"
+            hx-swap="innerHTML"
+            hx-confirm="ナレッジベース「{{ kb.name }}」を削除しますか？"
+            class="text-red-500 hover:text-red-700 text-sm"
+        >削除</button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

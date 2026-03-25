@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_arrow_left, icon_users, icon_upload %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                {{ icon_users("w-8 h-8 text-teal-600") }} ペルソナデータ設定
+            </h1>
+            <p class="text-gray-600">アンケートで使用するペルソナデータを管理します</p>
+        </div>
+        <a href="/survey" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+            {{ icon_arrow_left("w-4 h-4") }} 戻る
+        </a>
+    </div>
+
+    <!-- オープンデータセットのダウンロード -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+            <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+            オープンデータセットのダウンロード
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+            Hugging Face の <a href="https://huggingface.co/datasets/nvidia/Nemotron-Personas-Japan" target="_blank" class="text-blue-600 hover:underline">Nemotron-Personas-Japan</a>
+            データセットをダウンロードしてアンケート用ペルソナとして使用できます。
+        </p>
+
+        <div id="nemotron-status">
+            {% include "survey/partials/nemotron_status.html" %}
+        </div>
+    </div>
+
+    <!-- 自社顧客データのアップロード -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+            {{ icon_upload("w-5 h-5 text-teal-600") }}
+            ペルソナデータのアップロード
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+            ペルソナデータ（CSV形式）をアップロードして、独自のアンケート用ペルソナデータを構築できます。
+        </p>
+
+        <div class="mb-4 p-4 bg-gray-50 rounded-md">
+            <p class="text-sm text-gray-600">
+                <strong>対応ファイル形式:</strong> CSVファイル (.csv)<br>
+                <strong>最大ファイルサイズ:</strong> 500MB<br>
+                <strong>エンコーディング:</strong> UTF-8推奨
+            </p>
+        </div>
+
+        <form hx-post="/survey/persona-data/upload-custom"
+              hx-target="#custom-upload-result"
+              hx-swap="innerHTML"
+              hx-encoding="multipart/form-data"
+              hx-indicator="#upload-spinner">
+
+            <div id="custom-drop-zone"
+                 class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-teal-400 transition-colors cursor-pointer"
+                 ondragenter="this.classList.add('border-teal-400','bg-teal-50')"
+                 ondragover="event.preventDefault(); this.classList.add('border-teal-400','bg-teal-50')"
+                 ondragleave="this.classList.remove('border-teal-400','bg-teal-50')"
+                 ondrop="event.preventDefault(); this.classList.remove('border-teal-400','bg-teal-50'); var f=event.dataTransfer.files; if(f.length && f[0].name.endsWith('.csv')){document.getElementById('custom-csv-input').files=f; document.getElementById('custom-selected-file').textContent=f[0].name+' ('+Math.round(f[0].size/1024)+' KB)';}"
+                 onclick="document.getElementById('custom-csv-input').click()">
+                <input type="file"
+                       name="file"
+                       id="custom-csv-input"
+                       accept=".csv"
+                       required
+                       class="hidden"
+                       onchange="if(this.files[0]){document.getElementById('custom-selected-file').textContent=this.files[0].name+' ('+Math.round(this.files[0].size/1024)+' KB)';}">
+                <div class="flex justify-center mb-2 text-gray-400">
+                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                </div>
+                <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
+                <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                <p id="custom-selected-file" class="mt-4 text-teal-600 font-medium"></p>
+            </div>
+
+            <div class="mt-4">
+                <button type="submit"
+                        class="bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-2">
+                    <span id="upload-spinner" class="htmx-indicator">
+                        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                    </span>
+                    {{ icon_upload("w-4 h-4") }} アップロード
+                </button>
+            </div>
+        </form>
+        <div id="custom-upload-result" class="mt-4"></div>
+
+        <!-- アップロード済みデータセット一覧 -->
+        <div id="custom-dataset-list" class="mt-6">
+            {% include "survey/partials/custom_dataset_list.html" %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_sparkles, icon_document, icon_upload %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto" x-data="{ activeTab: 'interview' }">
+    <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
+    <p class="text-gray-600 mb-8">ペルソナに関するデータをアップロードして、AIペルソナを自動構築します。</p>
+    
+    <!-- タブナビゲーション -->
+    <div class="bg-white rounded-lg shadow-md mb-6">
+        <div class="border-b border-gray-200">
+            <nav class="flex -mb-px">
+                <button @click="activeTab = 'interview'"
+                        :class="activeTab === 'interview' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="w-1/2 py-4 px-6 text-center border-b-2 font-medium text-sm transition-colors">
+                    {{ icon_document("w-5 h-5 inline mr-2") }}
+                    インタビューデータ
+                </button>
+                <button @click="activeTab = 'report'"
+                        :class="activeTab === 'report' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                        class="w-1/2 py-4 px-6 text-center border-b-2 font-medium text-sm transition-colors">
+                    {{ icon_sparkles("w-5 h-5 inline mr-2") }}
+                    調査・分析レポート
+                </button>
+            </nav>
+        </div>
+    </div>
+    
+    <!-- インタビューデータタブ -->
+    <div x-show="activeTab === 'interview'" x-transition>
+        <!-- ステップガイド -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
+            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} ペルソナ生成の流れ</h3>
+            <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
+                <li>発言やインタビューテキストファイル（.txt, .md）を準備</li>
+                <li>ファイルをアップロード（最大10MB）</li>
+                <li>AIがペルソナを自動生成（30-60秒）</li>
+                <li>生成されたペルソナを確認・編集</li>
+                <li>ペルソナを保存して完了</li>
+            </ol>
+        </div>
+        
+        <!-- ファイルアップロードセクション -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_upload("w-5 h-5 text-gray-600") }} ペルソナ関連ファイルのアップロード</h2>
+            
+            <div class="mb-4 p-4 bg-gray-50 rounded-md">
+                <p class="text-sm text-gray-600">
+                    <strong>対応ファイル形式:</strong> テキストファイル (.txt, .md)<br>
+                    <strong>最大ファイルサイズ:</strong> 10MB<br>
+                    <strong>エンコーディング:</strong> UTF-8, Shift_JIS, EUC-JP
+                </p>
+            </div>
+            
+            <form hx-post="/persona/upload"
+                  hx-target="#upload-result"
+                  hx-swap="innerHTML"
+                  hx-encoding="multipart/form-data"
+                  hx-indicator="#upload-spinner">
+                
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors" id="interview-drop-zone">
+                    <input type="file" 
+                           name="file" 
+                           id="file-input"
+                           accept=".txt,.md"
+                           required
+                           class="hidden"
+                           onchange="updateFileName(this, 'selected-file')">
+                    <label for="file-input" class="cursor-pointer">
+                        <div class="flex justify-center mb-2 text-gray-400">{{ icon_document("w-12 h-12") }}</div>
+                        <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
+                        <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                    </label>
+                    <p id="selected-file" class="mt-4 text-blue-600 font-medium"></p>
+                </div>
+                
+                <div class="mt-4 flex items-center justify-between">
+                    <button type="submit" 
+                            class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            id="upload-btn">
+                        <span class="htmx-indicator" id="upload-spinner">
+                            <span class="spinner inline-block mr-2"></span>
+                        </span>
+                        {{ icon_upload("w-4 h-4 inline mr-1") }} アップロード
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- アップロード結果表示エリア -->
+        <div id="upload-result"></div>
+        
+        <!-- ペルソナ生成結果表示エリア -->
+        <div id="persona-result"></div>
+    </div>
+    
+    <!-- 調査・分析レポートタブ -->
+    <div x-show="activeTab === 'report'" x-transition>
+        <!-- ステップガイド -->
+        <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-8">
+            <h3 class="font-semibold text-purple-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-5 h-5") }} 複数ペルソナ生成の流れ</h3>
+            <ol class="list-decimal list-inside text-purple-800 text-sm space-y-1">
+                <li>レポートファイル（.pdf, .docx, .txt, .md）を準備</li>
+                <li>ファイルをアップロードし、生成するペルソナ数を指定（1-10個）</li>
+                <li>AIがレポートを分析して複数ペルソナを生成（5-15分）</li>
+                <li>生成されたペルソナ候補を確認</li>
+                <li>保存したいペルソナを選択して保存</li>
+            </ol>
+        </div>
+        
+        <!-- ファイルアップロードセクション -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_upload("w-5 h-5 text-gray-600") }} 資料のアップロード</h2>
+            
+            <div class="mb-4 p-4 bg-gray-50 rounded-md">
+                <p class="text-sm text-gray-600">
+                    <strong>対応ファイル形式:</strong> PDF (.pdf), Word (.docx, .doc), テキスト (.txt, .md)<br>
+                    <strong>最大ファイルサイズ:</strong> 10MB<br>
+                    <strong>推奨内容:</strong> 市場調査レポート、顧客分析資料、マーケティングレポートなど
+                </p>
+            </div>
+            
+            <form hx-post="/persona/generate-multiple"
+                  hx-target="#multiple-result"
+                  hx-swap="innerHTML"
+                  hx-encoding="multipart/form-data"
+                  hx-indicator="#multiple-spinner">
+                
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-purple-400 transition-colors" id="report-drop-zone">
+                    <input type="file" 
+                           name="file" 
+                           id="report-file-input"
+                           accept=".pdf,.docx,.doc,.txt,.md"
+                           required
+                           class="hidden"
+                           onchange="updateFileName(this, 'selected-report-file')">
+                    <label for="report-file-input" class="cursor-pointer">
+                        <div class="flex justify-center mb-2 text-gray-400">{{ icon_document("w-12 h-12") }}</div>
+                        <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
+                        <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                    </label>
+                    <p id="selected-report-file" class="mt-4 text-purple-600 font-medium"></p>
+                </div>
+                
+                <div class="mt-4">
+                    <label for="persona-count" class="block text-sm font-medium text-gray-700 mb-2">
+                        生成するペルソナ数
+                    </label>
+                    <input type="number" 
+                           name="persona_count" 
+                           id="persona-count"
+                           min="1" 
+                           max="10" 
+                           value="3"
+                           required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <p class="text-xs text-gray-500 mt-1">1-10個の範囲で指定してください（推奨: 3-5個）</p>
+                </div>
+                
+                <div class="mt-4 flex items-center justify-between">
+                    <button type="submit" 
+                            class="bg-purple-600 text-white px-6 py-2 rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            id="generate-multiple-btn">
+                        <span class="htmx-indicator" id="multiple-spinner">
+                            <span class="spinner inline-block mr-2"></span>
+                        </span>
+                        {{ icon_sparkles("w-4 h-4 inline mr-1") }} ペルソナを生成
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- 複数ペルソナ生成結果表示エリア -->
+        <div id="multiple-result"></div>
+    </div>
+</div>
+
+<script>
+function updateFileName(input, targetId) {
+    const fileName = input.files[0]?.name || '';
+    document.getElementById(targetId).textContent = fileName ? `選択中: ${fileName}` : '';
+}
+
+// ドラッグ＆ドロップ対応（インタビューデータ）
+const interviewDropZone = document.getElementById('interview-drop-zone');
+const fileInput = document.getElementById('file-input');
+
+setupDropZone(interviewDropZone, fileInput, 'selected-file');
+
+// ドラッグ＆ドロップ対応（調査・分析レポート）
+const reportDropZone = document.getElementById('report-drop-zone');
+const reportFileInput = document.getElementById('report-file-input');
+
+setupDropZone(reportDropZone, reportFileInput, 'selected-report-file');
+
+function setupDropZone(dropZone, input, targetId) {
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.add('border-blue-400', 'bg-blue-50');
+        });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+        });
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files.length) {
+            input.files = files;
+            updateFileName(input, targetId);
+        }
+    });
+}
+</script>
+{% endblock %}

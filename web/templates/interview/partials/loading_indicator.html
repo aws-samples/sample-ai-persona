@@ -1,0 +1,55 @@
+{% from "components/icons.html" import icon_refresh %}
+
+<!-- インタビュー用ローディングインジケーター -->
+<div class="flex items-center justify-center p-4 bg-blue-50 border border-blue-200 rounded-lg" id="interview-loading">
+    <div class="flex items-center space-x-3">
+        <div class="animate-spin">
+            {{ icon_refresh("w-5 h-5 text-blue-600") }}
+        </div>
+        <div class="text-blue-800">
+            <p class="font-medium">{{ message or "処理中..." }}</p>
+            {% if detail %}
+                <p class="text-sm text-blue-600">{{ detail }}</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+// ローディング状態のタイムアウト処理
+setTimeout(() => {
+    const loadingElement = document.getElementById('interview-loading');
+    if (loadingElement && loadingElement.style.display !== 'none') {
+        loadingElement.innerHTML = `
+            <div class="flex items-center space-x-3">
+                <div class="text-yellow-600">⚠️</div>
+                <div class="text-yellow-800">
+                    <p class="font-medium">処理に時間がかかっています</p>
+                    <p class="text-sm">しばらくお待ちください...</p>
+                </div>
+            </div>
+        `;
+        loadingElement.className = 'flex items-center justify-center p-4 bg-yellow-50 border border-yellow-200 rounded-lg';
+    }
+}, 10000); // 10秒後に警告表示
+
+// 30秒後にエラー表示
+setTimeout(() => {
+    const loadingElement = document.getElementById('interview-loading');
+    if (loadingElement && loadingElement.style.display !== 'none') {
+        loadingElement.innerHTML = `
+            <div class="flex items-center space-x-3">
+                <div class="text-red-600">❌</div>
+                <div class="text-red-800">
+                    <p class="font-medium">処理がタイムアウトしました</p>
+                    <p class="text-sm">ページを更新して再試行してください</p>
+                    <button onclick="location.reload()" class="mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">
+                        ページを更新
+                    </button>
+                </div>
+            </div>
+        `;
+        loadingElement.className = 'flex items-center justify-center p-4 bg-red-50 border border-red-200 rounded-lg';
+    }
+}, 30000); // 30秒後にタイムアウト
+</script>

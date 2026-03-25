@@ -1,0 +1,13 @@
+{# 知識追加エラー表示パーシャル #}
+<div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md mb-4 flex items-center justify-between">
+    <span>{{ error }}</span>
+    <button 
+        onclick="this.parentElement.remove()"
+        class="text-red-700 hover:text-red-900 ml-2"
+        title="閉じる"
+    >
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+        </svg>
+    </button>
+</div>

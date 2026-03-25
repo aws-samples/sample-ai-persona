@@ -1,0 +1,13 @@
+{% if error is defined and error %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+    {{ error }}
+</div>
+{% elif success %}
+<div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700">
+    ✓ <strong>{{ result.name }}</strong> をアップロードしました（{{ result.row_count }}行、{{ result.columns|length }}カラム、{{ result.size_mb }} MB）
+</div>
+<!-- OOBスワップでデータセット一覧も更新 -->
+<div id="custom-dataset-list" hx-swap-oob="innerHTML">
+    {% include "survey/partials/custom_dataset_list.html" %}
+</div>
+{% endif %}

@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_chat, icon_arrow_left, icon_cpu_chip, icon_bolt, icon_users, icon_persona, icon_lightbulb, icon_refresh, icon_trash %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- ヘッダー -->
+    <div class="mb-8">
+        <a href="/discussion/results" class="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-flex items-center gap-1">
+            {{ icon_arrow_left("w-4 h-4") }} 議論結果一覧に戻る
+        </a>
+        <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
+            {% if discussion.mode == 'interview' %}
+                {{ icon_persona("w-8 h-8 text-green-600") }} {{ discussion.topic }}
+            {% else %}
+                {{ icon_chat("w-8 h-8 text-green-600") }} {{ discussion.topic }}
+            {% endif %}
+        </h1>
+        <div class="flex items-center gap-4 mt-2">
+            <span class="text-gray-500">
+                {{ discussion.created_at.strftime('%Y年%m月%d日 %H:%M') if discussion.created_at else '不明' }}
+            </span>
+            <span class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
+            </span>
+        </div>
+    </div>
+    
+    <!-- エージェントモードパラメータ -->
+    {% if discussion.mode == 'agent' and discussion.agent_config %}
+    <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6">
+        <h3 class="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-2">
+            {{ icon_cpu_chip("w-4 h-4") }} 議論パラメータ
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div class="flex items-center gap-2">
+                <span class="text-purple-600 font-medium">ラウンド数:</span>
+                <span class="text-gray-700">{{ discussion.agent_config.rounds }}回</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-purple-600 font-medium">長期記憶:</span>
+                <span class="text-gray-700">
+                    {% if discussion.agent_config.enable_memory %}
+                    <span class="inline-flex items-center gap-1 text-green-600">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        有効
+                    </span>
+                    {% else %}
+                    <span class="text-gray-500">無効</span>
+                    {% endif %}
+                </span>
+            </div>
+            {% if discussion.agent_config.additional_instructions %}
+            <div class="md:col-span-3">
+                <span class="text-purple-600 font-medium">追加指示:</span>
+                <span class="text-gray-700 ml-2">{{ discussion.agent_config.additional_instructions }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- 参加ペルソナ -->
+    {% if discussion.participants %}
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ discussion.participants|length }}名)</h2>
+        <div class="grid md:grid-cols-2 gap-4">
+            {% for participant_id in discussion.participants %}
+            {% set persona = participant_personas.get(participant_id) if participant_personas else None %}
+            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                {% if persona %}
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h4 class="font-semibold text-gray-900 text-lg flex items-center gap-1.5">{{ icon_persona("w-4 h-4 text-blue-600") }} {{ persona.name }}</h4>
+                        <p class="text-sm text-blue-600 font-medium">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                    </div>
+                    <a href="/persona/{{ persona.id }}" class="text-xs text-gray-500 hover:text-blue-600">詳細</a>
+                </div>
+                <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ persona.background[:100] }}{% if persona.background|length > 100 %}...{% endif %}</p>
+                <div class="mt-2 flex flex-wrap gap-1">
+                    {% for value in persona.values[:2] %}
+                    <span class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{{ value[:15] }}{% if value|length > 15 %}...{% endif %}</span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-gray-500">
+                    <h4 class="font-semibold">ペルソナ情報なし</h4>
+                    <p class="text-xs text-gray-400">ID: {{ participant_id[:8] }}...</p>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- 参考資料 -->
+    {% if discussion.documents and discussion.documents|length > 0 %}
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+            </svg>
+            参考資料（{{ discussion.documents|length }}件）
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {% for doc in discussion.documents %}
+            {% set doc_id = doc.id if doc.id else doc.file_path %}
+            {% set file_url = document_urls.get(doc_id) if document_urls else None %}
+            <div class="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+                {# 画像プレビュー（署名付きURLがある場合） #}
+                {% if doc.mime_type and doc.mime_type.startswith('image/') and file_url %}
+                <a href="{{ file_url }}" target="_blank" class="block">
+                    <div class="aspect-video bg-gray-100 flex items-center justify-center overflow-hidden">
+                        <img src="{{ file_url }}" 
+                             alt="{{ doc.filename }}" 
+                             class="max-w-full max-h-full object-contain hover:scale-105 transition-transform cursor-pointer"
+                             loading="lazy"
+                             onerror="this.parentElement.innerHTML='<div class=\'flex items-center justify-center h-full text-gray-400\'><svg class=\'w-12 h-12\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'currentColor\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'1.5\' d=\'m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Z\' /></svg></div>'">
+                    </div>
+                </a>
+                {% elif doc.mime_type == 'application/pdf' and file_url %}
+                {# PDFプレビュー #}
+                <a href="{{ file_url }}" target="_blank" class="block">
+                    <div class="aspect-video bg-red-50 flex items-center justify-center">
+                        <div class="text-center">
+                            <svg class="w-16 h-16 text-red-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                            </svg>
+                            <p class="text-xs text-red-500 mt-2">クリックして開く</p>
+                        </div>
+                    </div>
+                </a>
+                {% elif doc.mime_type and doc.mime_type.startswith('image/') %}
+                {# 画像だがURLがない場合（インタビューモード等） #}
+                <div class="aspect-video bg-purple-50 flex items-center justify-center">
+                    <div class="text-center">
+                        <svg class="w-12 h-12 text-purple-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                        </svg>
+                        <p class="text-xs text-purple-500 mt-2">プレビュー不可</p>
+                    </div>
+                </div>
+                {% elif doc.mime_type == 'application/pdf' %}
+                {# PDFだがURLがない場合 #}
+                <div class="aspect-video bg-red-50 flex items-center justify-center">
+                    <div class="text-center">
+                        <svg class="w-12 h-12 text-red-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                        </svg>
+                        <p class="text-xs text-red-500 mt-2">プレビュー不可</p>
+                    </div>
+                </div>
+                {% endif %}
+                
+                {# ファイル情報 #}
+                <div class="p-3">
+                    <p class="font-medium text-gray-900 text-sm truncate" title="{{ doc.filename }}">{{ doc.filename }}</p>
+                    <div class="flex items-center justify-between mt-1">
+                        <p class="text-xs text-gray-500">
+                            {% if doc.file_size %}
+                                {% if doc.file_size < 1024 %}
+                                    {{ doc.file_size }} B
+                                {% elif doc.file_size < 1024 * 1024 %}
+                                    {{ "%.1f"|format(doc.file_size / 1024) }} KB
+                                {% else %}
+                                    {{ "%.1f"|format(doc.file_size / (1024 * 1024)) }} MB
+                                {% endif %}
+                            {% endif %}
+                        </p>
+                        {% if file_url %}
+                        <a href="{{ file_url }}" 
+                           target="_blank" 
+                           class="text-xs text-blue-600 hover:text-blue-800 hover:underline">
+                            開く
+                        </a>
+                        {% endif %}
+                    </div>
+                    {% if doc.uploaded_at %}
+                    <p class="text-xs text-gray-400 mt-1">
+                        {{ doc.uploaded_at[:10] if doc.uploaded_at is string else doc.uploaded_at.strftime('%Y-%m-%d') }}
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- 議論内容 -->
+    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_chat("w-5 h-5 text-green-600") }} 議論内容</h2>
+        
+        {% if discussion.messages %}
+        {# ペルソナごとの色を定義 #}
+        {% set persona_colors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'] %}
+        
+        <div class="space-y-3 discussion-messages max-h-screen overflow-y-auto">
+            {% for message in discussion.messages %}
+            {% if message.message_type == 'user_message' %}
+            {# ユーザーメッセージ - インタビューモード専用 #}
+            <div class="flex justify-end my-4">
+                <div class="max-w-xs lg:max-w-md">
+                    <div class="flex items-center gap-2 mb-1 justify-end">
+                        <span class="text-xs text-gray-500">あなた</span>
+                        <div class="w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center">
+                            <span class="text-white font-bold text-sm">U</span>
+                        </div>
+                    </div>
+                    <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-none shadow-sm">
+                        <p class="whitespace-pre-wrap">{{ message.content }}</p>
+                    </div>
+                </div>
+            </div>
+            {% elif message.message_type in ['facilitation', 'summary'] or message.persona_id == 'facilitator' %}
+            {# ファシリテーターの発言 - 中央寄せ #}
+            <div class="flex justify-center my-4">
+                <div class="facilitator-bubble">
+                    <div class="flex items-center gap-2 mb-2">
+                        <div class="w-7 h-7 rounded-full facilitator-avatar flex items-center justify-center">
+                            {{ icon_cpu_chip("w-4 h-4 text-white") }}
+                        </div>
+                        <span class="font-semibold">ファシリテーター</span>
+                        {% if message.round_number %}
+                        <span class="ml-auto text-xs bg-white/20 px-2 py-0.5 rounded-full">ラウンド {{ message.round_number }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="whitespace-pre-wrap prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
+                </div>
+            </div>
+            {% else %}
+            {# ペルソナの発言 - チャット風 #}
+            {# persona_idからインデックスを取得して色を決定 #}
+            {% set color_index = discussion.participants.index(message.persona_id) if message.persona_id in discussion.participants else 0 %}
+            {% set color = persona_colors[color_index % persona_colors|length] %}
+            {% set persona = participant_personas.get(message.persona_id) if participant_personas else None %}
+            <div class="flex gap-2.5 message-item">
+                {# アバター #}
+                <div class="flex-shrink-0">
+                    <div class="w-10 h-10 rounded-full persona-avatar-{{ color }} flex items-center justify-center shadow-md">
+                        <span class="text-white font-bold text-sm">{{ (message.persona_name or 'P')[0] }}</span>
+                    </div>
+                </div>
+                {# 発言内容 #}
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-baseline gap-2 mb-1">
+                        <span class="font-semibold persona-name-{{ color }}">{{ message.persona_name if message.persona_name else 'ペルソナ' }}</span>
+                        {% if persona %}
+                        <span class="text-xs text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</span>
+                        {% endif %}
+                        {% if message.round_number %}
+                        <span class="text-xs text-gray-400 ml-auto">R{{ message.round_number }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="persona-bubble-{{ color }} border rounded-2xl rounded-tl-none shadow-sm">
+                        <div class="text-gray-800 prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-500 text-center py-8">議論内容がありません</p>
+        {% endif %}
+    </div>
+    
+    <!-- インサイト -->
+    {% if discussion.insights or discussion.mode != 'interview' %}
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-yellow-500") }} インサイト</h2>
+        
+        <!-- カスタムカテゴリー情報 -->
+        {% if custom_categories %}
+        <details class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <summary class="text-sm font-medium text-blue-900 cursor-pointer hover:text-blue-700">
+                📋 使用されたカテゴリーを表示 ({{ custom_categories|length }}個)
+            </summary>
+            <div class="space-y-2 mt-3">
+                {% for category in custom_categories %}
+                <div class="bg-white rounded p-2 border border-blue-100">
+                    <p class="text-sm font-semibold text-gray-900">{{ category.name }}</p>
+                    <p class="text-xs text-gray-600">{{ category.description }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+        
+        <div id="insights-container">
+            {% include "discussion/partials/insights.html" with context %}
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- アクション -->
+    <div class="flex gap-4">
+        <a href="/discussion/setup" 
+           class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+            {{ icon_refresh("w-4 h-4") }} 新しい議論を開始
+        </a>
+        <button hx-delete="/discussion/{{ discussion.id }}"
+                hx-confirm="この議論を削除しますか？"
+                hx-target="body"
+                class="bg-red-100 text-red-700 px-4 py-2 rounded-md hover:bg-red-200 transition-colors flex items-center gap-1.5">
+            {{ icon_trash("w-4 h-4") }} この議論を削除
+        </button>
+    </div>
+</div>
+{% endblock %}

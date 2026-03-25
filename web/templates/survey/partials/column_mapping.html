@@ -1,0 +1,154 @@
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+    <h3 class="font-semibold text-blue-900 mb-1">カラムマッピング設定</h3>
+    <p class="text-sm text-blue-700">
+        <strong>{{ filename }}</strong> のカラムを、アンケートペルソナの標準項目に対応付けてください。
+    </p>
+</div>
+
+<form hx-post="/survey/persona-data/confirm-mapping"
+      hx-target="#custom-upload-result"
+      hx-swap="innerHTML"
+      hx-indicator="#mapping-spinner">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="hidden" name="temp_key" value="{{ temp_key }}">
+
+    <!-- CSVカラムのサンプルデータ表示 -->
+    <div class="mb-4 overflow-x-auto">
+        <table class="w-full text-xs border">
+            <thead class="bg-gray-100">
+                <tr>
+                    {% for col in columns %}
+                    <th class="px-2 py-1 text-left text-gray-600 font-medium border-r whitespace-nowrap">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for i in range(samples[columns[0]]|length) %}
+                <tr class="border-t">
+                    {% for col in columns %}
+                    <td class="px-2 py-1 text-gray-500 truncate max-w-[150px] border-r">{{ samples[col][i] if i < samples[col]|length else '' }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- マッピング設定 -->
+    <h4 class="text-sm font-semibold text-gray-700 mb-2">属性</h4>
+    {% for std_col, info in standard_columns.items() %}
+    {% if info.group == '属性' %}
+    <div class="flex items-center gap-3 mb-2">
+        <label class="w-44 text-sm text-gray-700 flex-shrink-0">
+            {{ info.label }}{% if info.required %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+        </label>
+        <select name="mapping_{{ std_col }}"
+                class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
+            <option value="">-- マッピングしない --</option>
+            {% for col in columns %}
+            <option value="{{ col }}" {% if auto_mapping.get(std_col) == col %}selected{% endif %}>{{ col }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <h4 class="text-sm font-semibold text-gray-700 mb-2 mt-4">プロフィール</h4>
+    {% for std_col, info in standard_columns.items() %}
+    {% if info.group == 'プロフィール' %}
+    <div class="flex items-center gap-3 mb-2">
+        <label class="w-44 text-sm text-gray-700 flex-shrink-0">
+            {{ info.label }}{% if info.required %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+        </label>
+        <select name="mapping_{{ std_col }}"
+                class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
+            <option value="">-- マッピングしない --</option>
+            {% for col in columns %}
+            <option value="{{ col }}" {% if auto_mapping.get(std_col) == col %}selected{% endif %}>{{ col }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <!-- その他カラム（動的追加） -->
+    <div x-data="{ items: [] }" class="mt-4">
+        <div class="flex items-center gap-2 mb-2">
+            <h4 class="text-sm font-semibold text-gray-700">その他</h4>
+            <span class="text-xs text-gray-500">（標準項目以外の情報をプロンプトに追加）</span>
+        </div>
+
+        <template x-for="(item, index) in items" :key="index">
+            <div class="border border-gray-200 rounded-md p-3 mb-2 bg-gray-50">
+                <div class="flex items-center gap-3 mb-2">
+                    <label class="w-28 text-sm text-gray-600 flex-shrink-0">CSVカラム</label>
+                    <select :name="'extra_column_' + index"
+                            x-model="item.csv_column"
+                            class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">-- 選択 --</option>
+                        {% for col in columns %}
+                        <option value="{{ col }}">{{ col }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" @click="items.splice(index, 1)"
+                            class="text-red-400 hover:text-red-600 text-sm px-2">✕</button>
+                </div>
+                <div class="flex items-center gap-3 mb-2">
+                    <label class="w-28 text-sm text-gray-600 flex-shrink-0">ラベル名</label>
+                    <input type="text" :name="'extra_label_' + index"
+                           x-model="item.label" placeholder="例: 会員ランク"
+                           class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div class="flex items-center gap-3">
+                    <label class="w-28 text-sm text-gray-600 flex-shrink-0">補足情報</label>
+                    <input type="text" :name="'extra_desc_' + index"
+                           x-model="item.description" placeholder="例: ゴールド/シルバー/ブロンズの3段階。購入頻度と金額に基づく"
+                           class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+        </template>
+
+        <button type="button" @click="items.push({ csv_column: '', label: '', description: '' })"
+                class="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            項目を追加
+        </button>
+        <input type="hidden" name="extra_count" :value="items.length">
+    </div>
+
+    <!-- プレビューエリア -->
+    <div id="prompt-preview" class="mt-4"></div>
+
+    <div class="flex justify-end gap-3 mt-4">
+        <button type="button"
+                onclick="this.closest('#custom-upload-result').innerHTML=''"
+                class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 text-sm">
+            キャンセル
+        </button>
+        <button type="button"
+                hx-post="/survey/persona-data/preview-prompt"
+                hx-include="closest form"
+                hx-target="#prompt-preview"
+                hx-swap="innerHTML"
+                hx-indicator="#preview-spinner"
+                class="bg-amber-500 text-white px-4 py-2 rounded-md hover:bg-amber-600 text-sm flex items-center gap-2">
+            <span id="preview-spinner" class="htmx-indicator">
+                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+            </span>
+            プロンプトをプレビュー
+        </button>
+        <button type="submit"
+                class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 text-sm flex items-center gap-2">
+            <span id="mapping-spinner" class="htmx-indicator">
+                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+            </span>
+            マッピングを確定してアップロード
+        </button>
+    </div>
+</form>

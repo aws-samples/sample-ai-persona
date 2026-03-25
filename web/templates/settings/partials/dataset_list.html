@@ -1,0 +1,158 @@
+{% if datasets %}
+<div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">名前</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">説明</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">カラム数</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">行数</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">作成日</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
+            </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-200">
+            {% for dataset in datasets %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-4 py-3">
+                    <div class="font-medium text-gray-900">{{ dataset.name }}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
+                    {{ dataset.description or '-' }}
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500">
+                    {{ dataset.columns|length }}
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500">
+                    {{ "{:,}".format(dataset.row_count) }}
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-500">
+                    {{ dataset.created_at[:10].replace('-', '/') }}
+                </td>
+                <td class="px-4 py-3 text-right">
+                    <button 
+                        class="text-blue-600 hover:text-blue-800 text-sm mr-2"
+                        onclick="showDatasetDetail('{{ dataset.id }}')"
+                    >
+                        詳細
+                    </button>
+                    <button 
+                        class="text-red-600 hover:text-red-800 text-sm"
+                        hx-delete="/settings/datasets/{{ dataset.id }}"
+                        hx-target="#dataset-list"
+                        hx-confirm="データセット「{{ dataset.name }}」を削除しますか？"
+                    >
+                        削除
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- 詳細モーダル -->
+<div id="detail-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div id="detail-content" class="p-6"></div>
+    </div>
+</div>
+
+<script>
+function el(tag, attrs, ...children) {
+    const e = document.createElement(tag);
+    if (attrs) Object.entries(attrs).forEach(([k, v]) => {
+        if (k === 'className') e.className = v;
+        else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
+        else e.setAttribute(k, v);
+    });
+    children.flat().forEach(c => {
+        if (c == null) return;
+        e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    });
+    return e;
+}
+
+function showDatasetDetail(datasetId) {
+    const datasets = {{ datasets | tojson | safe }};
+    const dataset = datasets.find(d => d.id === datasetId);
+    if (!dataset) return;
+
+    const closeModal = () => document.getElementById('detail-modal').classList.add('hidden');
+
+    const closeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    closeSvg.setAttribute('class', 'w-6 h-6');
+    closeSvg.setAttribute('fill', 'none');
+    closeSvg.setAttribute('stroke', 'currentColor');
+    closeSvg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('d', 'M6 18L18 6M6 6l12 12');
+    closeSvg.appendChild(path);
+
+    const columnRows = dataset.columns.map(c =>
+        el('tr', {className: 'border-t'},
+            el('td', {className: 'px-3 py-2 font-mono'}, c.name),
+            el('td', {className: 'px-3 py-2'}, c.data_type),
+            el('td', {className: 'px-3 py-2 text-gray-500'}, c.description || '-')
+        )
+    );
+
+    const sections = [
+        el('div', null,
+            el('label', {className: 'text-sm font-medium text-gray-500'}, '説明'),
+            el('p', {className: 'text-gray-900'}, dataset.description || '-')
+        ),
+        el('div', null,
+            el('label', {className: 'text-sm font-medium text-gray-500'}, 'S3パス'),
+            el('p', {className: 'text-gray-900 text-sm font-mono bg-gray-100 p-2 rounded'}, dataset.s3_path)
+        ),
+        el('div', null,
+            el('label', {className: 'text-sm font-medium text-gray-500'}, 'カラム'),
+            el('table', {className: 'min-w-full mt-2 text-sm'},
+                el('thead', {className: 'bg-gray-50'},
+                    el('tr', null,
+                        el('th', {className: 'px-3 py-2 text-left'}, '名前'),
+                        el('th', {className: 'px-3 py-2 text-left'}, '型'),
+                        el('th', {className: 'px-3 py-2 text-left'}, '説明')
+                    )
+                ),
+                el('tbody', null, ...columnRows)
+            )
+        )
+    ];
+
+    if (dataset.notes) {
+        sections.push(
+            el('div', null,
+                el('label', {className: 'text-sm font-medium text-gray-500'}, '補足情報'),
+                el('p', {className: 'text-gray-900'}, dataset.notes)
+            )
+        );
+    }
+
+    const fragment = el('div', null,
+        el('div', {className: 'flex justify-between items-center mb-4'},
+            el('h3', {className: 'text-lg font-semibold'}, dataset.name),
+            el('button', {className: 'text-gray-500 hover:text-gray-700', onClick: closeModal}, closeSvg)
+        ),
+        el('div', {className: 'space-y-4'}, ...sections)
+    );
+
+    const container = document.getElementById('detail-content');
+    container.replaceChildren(fragment);
+    document.getElementById('detail-modal').classList.remove('hidden');
+}
+</script>
+
+{% else %}
+<div class="text-center py-8 text-gray-500">
+    <svg class="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+    </svg>
+    <p>データセットがありません</p>
+    <p class="text-sm mt-1">「新規アップロード」からCSVファイルをアップロードしてください</p>
+</div>
+{% endif %}

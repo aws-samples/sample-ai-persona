@@ -1,0 +1,38 @@
+<div class="flex items-center justify-between">
+    <div>
+        <p class="text-sm text-gray-600 mb-2">
+            データ連携機能を有効にすると、ペルソナが外部データセット（購買データなど）にアクセスできるようになります。
+        </p>
+        <p class="text-xs text-gray-500">
+            MotherDuck MCPサーバーを使用してS3上のCSVファイルにSQLクエリを実行します。
+        </p>
+    </div>
+    <div class="ml-4">
+        <form hx-post="/settings/mcp/toggle" hx-target="#mcp-status" hx-swap="innerHTML">
+            <!-- チェックボックスがOFFの時にfalseを送信 -->
+            <input type="hidden" name="enabled" value="false" />
+            <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" name="enabled" value="true" 
+                    {% if mcp_enabled %}checked{% endif %}
+                    class="sr-only peer"
+                    onchange="this.form.requestSubmit()"
+                />
+                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <span class="ml-3 text-sm font-medium text-gray-700">
+                    {% if mcp_enabled %}有効{% else %}無効{% endif %}
+                </span>
+            </label>
+        </form>
+    </div>
+</div>
+
+{% if mcp_enabled %}
+<div class="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+    <div class="flex items-center text-green-700">
+        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+        </svg>
+        <span class="text-sm font-medium">MCPサーバーが起動中です</span>
+    </div>
+</div>
+{% endif %}

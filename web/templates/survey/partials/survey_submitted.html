@@ -1,0 +1,25 @@
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-4" x-data="{ countdown: 5 }" x-init="
+    let timer = setInterval(() => {
+        countdown--;
+        if (countdown <= 0) {
+            clearInterval(timer);
+            window.location.href = '/survey/results';
+        }
+    }, 1000);
+">
+    <div class="flex items-start gap-3">
+        <svg class="w-6 h-6 text-blue-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+        </svg>
+        <div>
+            <h3 class="text-blue-900 font-semibold text-base mb-1">アンケート調査を開始しました</h3>
+            <p class="text-blue-800 text-sm mb-2">
+                「{{ survey_name }}」の実行を開始しました。<br>
+                ペルソナ数や質問数によって、完了まで<span class="font-semibold">数十分〜数時間</span>かかる場合があります。
+            </p>
+            <p class="text-blue-600 text-xs">
+                進捗はアンケート結果一覧で確認できます。<span x-text="countdown"></span>秒後に自動で遷移します…
+            </p>
+        </div>
+    </div>
+</div>

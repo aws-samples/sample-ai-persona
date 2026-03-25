@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">システム設定</h1>
+    
+    <!-- データ連携機能 + データセット管理（1つのカード） -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-700 mb-4">データ連携機能</h2>
+        <div id="mcp-status" hx-get="/settings/mcp/status" hx-trigger="load">
+            {% include "settings/partials/mcp_status.html" %}
+        </div>
+        
+        <!-- データセット管理（同カード内） -->
+        <div class="border-t border-gray-200 mt-6 pt-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-base font-semibold text-gray-700">データセット管理</h3>
+                <button 
+                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+                    onclick="document.getElementById('upload-modal').classList.remove('hidden')"
+                >
+                    + 新規アップロード
+                </button>
+            </div>
+            
+            <div id="dataset-list" hx-get="/settings/datasets" hx-trigger="load">
+                {% include "settings/partials/dataset_list.html" %}
+            </div>
+        </div>
+    </div>
+
+    <!-- ナレッジベース管理 -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <div class="flex justify-between items-center mb-4">
+            <div>
+                <h2 class="text-lg font-semibold text-gray-700">ナレッジベース管理</h2>
+                <p class="text-xs text-gray-500 mt-1">Bedrock Knowledge Basesを登録して、ペルソナがRAGで情報を取得できるようにします</p>
+            </div>
+            <button 
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition"
+                onclick="document.getElementById('kb-register-modal').classList.remove('hidden')"
+            >
+                + ナレッジベース登録
+            </button>
+        </div>
+        
+        <div id="kb-list" hx-get="/settings/knowledge-bases" hx-trigger="load">
+            {% include "settings/partials/kb_list.html" %}
+        </div>
+    </div>
+</div>
+
+<!-- ナレッジベース登録モーダル -->
+<div id="kb-register-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-900">ナレッジベースを登録</h3>
+                <button onclick="document.getElementById('kb-register-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <form hx-post="/settings/knowledge-bases"
+                  hx-target="#kb-list"
+                  hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful) document.getElementById('kb-register-modal').classList.add('hidden')">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">ナレッジベースID <span class="text-red-500">*</span></label>
+                    <input type="text" name="knowledge_base_id" required
+                        class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="例: ABCDE12345"
+                        pattern="[0-9a-zA-Z]+"
+                        title="英数字のみ入力可能です"
+                    />
+                    <p class="text-xs text-gray-400 mt-1">Bedrock Knowledge BasesのID（英数字）</p>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">名前 <span class="text-red-500">*</span></label>
+                    <input type="text" name="name" required
+                        class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="例: 企業独自のナレッジ集"
+                    />
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">説明</label>
+                    <textarea name="description" rows="2"
+                        class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="例: 企業における商品の仕様や独自専門知識が蓄積されています"
+                    ></textarea>
+                    <p class="text-xs text-gray-400 mt-1">ペルソナがナレッジベースの検索判断に使う補足情報</p>
+                </div>
+                
+                <div class="flex justify-end gap-2 pt-4 border-t">
+                    <button type="button" onclick="document.getElementById('kb-register-modal').classList.add('hidden')" 
+                            class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">登録</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- アップロードモーダル -->
+<div id="upload-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-900">データセットをアップロード</h3>
+                <button onclick="closeUploadModal()" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <form id="upload-form" x-data="{ step: 1, columns: [], filename: '', rowCount: 0, uploading: false }">
+                <!-- Step 1: ファイル選択 -->
+                <div x-show="step === 1">
+                    <div class="mb-4 p-4 bg-gray-50 rounded-md">
+                        <p class="text-sm text-gray-600">
+                            <strong>対応ファイル形式:</strong> CSVファイル (.csv)<br>
+                            <strong>最大ファイルサイズ:</strong> 10MB<br>
+                            <strong>エンコーディング:</strong> UTF-8推奨
+                        </p>
+                    </div>
+                    
+                    <div id="csv-drop-zone" 
+                         class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors cursor-pointer"
+                         @dragenter.prevent="$el.classList.add('border-blue-400', 'bg-blue-50')"
+                         @dragover.prevent="$el.classList.add('border-blue-400', 'bg-blue-50')"
+                         @dragleave.prevent="$el.classList.remove('border-blue-400', 'bg-blue-50')"
+                         @drop.prevent="
+                             $el.classList.remove('border-blue-400', 'bg-blue-50');
+                             const files = $event.dataTransfer.files;
+                             if (files.length && files[0].name.endsWith('.csv')) {
+                                 document.getElementById('csv-file-input').files = files;
+                                 handleCsvFileSelect(files[0]);
+                             }
+                         "
+                         @click="document.getElementById('csv-file-input').click()">
+                        <input type="file" 
+                               name="file" 
+                               id="csv-file-input"
+                               accept=".csv"
+                               required
+                               class="hidden"
+                               @change="if ($event.target.files[0]) handleCsvFileSelect($event.target.files[0])">
+                        <div class="flex justify-center mb-2 text-gray-400">
+                            <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                        </div>
+                        <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
+                        <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                        <p id="csv-selected-file" class="mt-4 text-blue-600 font-medium"></p>
+                    </div>
+                    
+                    <div x-show="uploading" class="mt-4 flex items-center justify-center text-gray-600">
+                        <div class="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-2"></div>
+                        スキーマを解析中...
+                    </div>
+                </div>
+                
+                <!-- Step 2: スキーマ確認・編集 -->
+                <div x-show="step === 2">
+                    <div id="schema-preview" class="mb-4"></div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">データセット名 <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" required
+                            class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="例: 購買履歴データ"
+                        />
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">説明</label>
+                        <textarea name="description" rows="2"
+                            class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="データセットの説明を入力"
+                        ></textarea>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">補足情報</label>
+                        <textarea name="notes" rows="2"
+                            class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="追加のメモや注意事項"
+                        ></textarea>
+                    </div>
+                    
+                    <div class="flex justify-between pt-4 border-t">
+                        <button type="button" @click="step = 1; document.getElementById('csv-selected-file').textContent = '';" 
+                                class="px-4 py-2 text-gray-600 hover:text-gray-800 flex items-center gap-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                            </svg>
+                            戻る
+                        </button>
+                        <button type="button" @click="submitDataset()" 
+                                class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                            </svg>
+                            アップロード
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// 安全なinnerHTML設定（DOMPurifyでサニタイズ）
+// NOTE: onchangeはサーバーサイドテンプレート(schema_preview.html)で使用されるため許可
+function safeSetInnerHTML(elementOrId, html) {
+    const el = typeof elementOrId === 'string' ? document.getElementById(elementOrId) : elementOrId;
+    if (el) {
+        el.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ['onchange'] }); // nosemgrep: insecure-document-method
+    }
+}
+
+function updateColumnType(index, value) {
+    const alpineData = Alpine.$data(document.getElementById('upload-form'));
+    if (alpineData && alpineData.columns[index]) {
+        alpineData.columns[index].data_type = value;
+    }
+}
+
+function updateColumnDesc(index, value) {
+    const alpineData = Alpine.$data(document.getElementById('upload-form'));
+    if (alpineData && alpineData.columns[index]) {
+        alpineData.columns[index].description = value;
+    }
+}
+
+let uploadFormData = { columns: [], filename: '', rowCount: 0 };
+
+function closeUploadModal() {
+    document.getElementById('upload-modal').classList.add('hidden');
+    // フォームをリセット
+    const form = document.getElementById('upload-form');
+    form.reset();
+    document.getElementById('csv-selected-file').textContent = '';
+    safeSetInnerHTML('schema-preview', '');
+    uploadFormData = { columns: [], filename: '', rowCount: 0 };
+    // Alpine.jsのstepをリセット
+    if (form._x_dataStack) {
+        form._x_dataStack[0].step = 1;
+        form._x_dataStack[0].uploading = false;
+    }
+}
+
+function handleCsvFileSelect(file) {
+    if (!file.name.endsWith('.csv')) {
+        alert('CSVファイルのみアップロード可能です');
+        return;
+    }
+    
+    document.getElementById('csv-selected-file').textContent = `選択中: ${file.name}`;
+    uploadFormData.filename = file.name;
+    
+    // Alpine.jsのuploadingをtrueに
+    const form = document.getElementById('upload-form');
+    if (form._x_dataStack) {
+        form._x_dataStack[0].uploading = true;
+    }
+    
+    // スキーマ解析
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    fetch('/settings/datasets/analyze', { method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'} })
+        .then(r => r.text())
+        .then(html => {
+            safeSetInnerHTML('schema-preview', html);
+            
+            // スキーマデータを取得
+            const colData = document.querySelector('#schema-preview [data-columns]');
+            if (colData) {
+                uploadFormData.columns = JSON.parse(colData.dataset.columns);
+                uploadFormData.rowCount = parseInt(colData.dataset.rowcount || 0);
+            }
+            
+            // Step 2に進む
+            if (form._x_dataStack) {
+                form._x_dataStack[0].step = 2;
+                form._x_dataStack[0].uploading = false;
+                form._x_dataStack[0].columns = uploadFormData.columns;
+            }
+        })
+        .catch(err => {
+            console.error('Schema analysis failed:', err);
+            alert('スキーマ解析に失敗しました');
+            if (form._x_dataStack) {
+                form._x_dataStack[0].uploading = false;
+            }
+        });
+}
+
+function submitDataset() {
+    const form = document.getElementById('upload-form');
+    const formData = new FormData(form);
+    formData.append('columns_json', JSON.stringify(uploadFormData.columns));
+    
+    fetch('/settings/datasets', { method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'} })
+        .then(r => r.text())
+        .then(html => {
+            safeSetInnerHTML('dataset-list', html);
+            closeUploadModal();
+        })
+        .catch(err => {
+            console.error('Upload failed:', err);
+            alert('アップロードに失敗しました');
+        });
+}
+</script>
+{% endblock %}

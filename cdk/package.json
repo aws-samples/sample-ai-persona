@@ -1,0 +1,26 @@
+{
+  "name": "ai-persona-cdk",
+  "version": "1.0.0",
+  "bin": {
+    "cdk": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "aws-cdk": "^2.1100.3",
+    "aws-cdk-lib": "^2.243.0",
+    "constructs": "^10.4.0",
+    "source-map-support": "^0.5.21"
+  }
+}

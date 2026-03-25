@@ -1,0 +1,193 @@
+<div class="space-y-6">
+    <!-- サマリーカード -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-white rounded-lg shadow-md p-5 text-center">
+            <p class="text-3xl font-bold text-teal-600">{{ stats.total_count }}</p>
+            <p class="text-sm text-gray-500 mt-1">調査対象人数</p>
+        </div>
+        {% if stats.age_stats %}
+        <div class="bg-white rounded-lg shadow-md p-5 text-center">
+            <p class="text-3xl font-bold text-blue-600">{{ stats.age_stats.average }}</p>
+            <p class="text-sm text-gray-500 mt-1">平均年齢</p>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-5 text-center">
+            <p class="text-3xl font-bold text-indigo-600">{{ stats.age_stats.min }}</p>
+            <p class="text-sm text-gray-500 mt-1">年齢（最小）</p>
+        </div>
+        <div class="bg-white rounded-lg shadow-md p-5 text-center">
+            <p class="text-3xl font-bold text-purple-600">{{ stats.age_stats.max }}</p>
+            <p class="text-sm text-gray-500 mt-1">年齢（最大）</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- 性別分布 -->
+    {% if stats.sex_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-4">性別分布</h3>
+        <div class="space-y-2">
+            {% set sex_total = stats.sex_distribution.values() | list | sum %}
+            {% set sex_max = stats.sex_distribution.values() | list | max if stats.sex_distribution else 1 %}
+            {% for label, count in stats.sex_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-24 shrink-0">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / sex_max * 100) if sex_max > 0 else 0 %}
+                    <div class="bg-teal-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if sex_total > 0 %}{{ (count / sex_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 年代分布 -->
+    {% if stats.age_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-4">年代分布</h3>
+        <div class="space-y-2">
+            {% set age_total = stats.age_distribution.values() | list | sum %}
+            {% set age_max = stats.age_distribution.values() | list | max if stats.age_distribution else 1 %}
+            {% for label, count in stats.age_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-24 shrink-0">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / age_max * 100) if age_max > 0 else 0 %}
+                    <div class="bg-blue-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if age_total > 0 %}{{ (count / age_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 地域分布 -->
+    {% if stats.region_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-4">地域分布</h3>
+        <div class="space-y-2">
+            {% set region_total = stats.region_distribution.values() | list | sum %}
+            {% set region_max = stats.region_distribution.values() | list | max if stats.region_distribution else 1 %}
+            {% for label, count in stats.region_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-24 shrink-0 truncate" title="{{ label }}">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / region_max * 100) if region_max > 0 else 0 %}
+                    <div class="bg-indigo-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if region_total > 0 %}{{ (count / region_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 都道府県分布（上位15） -->
+    {% if stats.prefecture_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-1">都道府県分布</h3>
+        <p class="text-xs text-gray-400 mb-4">上位15件</p>
+        <div class="space-y-2">
+            {% set pref_total = stats.prefecture_distribution.values() | list | sum %}
+            {% set pref_max = stats.prefecture_distribution.values() | list | max if stats.prefecture_distribution else 1 %}
+            {% for label, count in stats.prefecture_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-24 shrink-0 truncate" title="{{ label }}">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / pref_max * 100) if pref_max > 0 else 0 %}
+                    <div class="bg-violet-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if pref_total > 0 %}{{ (count / pref_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 結婚・子供の有無 -->
+    {% if stats.marital_status_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-4">結婚・子供の有無</h3>
+        <div class="space-y-2">
+            {% set marital_total = stats.marital_status_distribution.values() | list | sum %}
+            {% set marital_max = stats.marital_status_distribution.values() | list | max if stats.marital_status_distribution else 1 %}
+            {% for label, count in stats.marital_status_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-32 shrink-0 truncate" title="{{ label }}">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / marital_max * 100) if marital_max > 0 else 0 %}
+                    <div class="bg-rose-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if marital_total > 0 %}{{ (count / marital_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 職業分布（上位15） -->
+    {% if stats.occupation_distribution %}
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-md font-semibold text-gray-900 mb-1">職業分布</h3>
+        <p class="text-xs text-gray-400 mb-4">上位15件</p>
+        <div class="space-y-2">
+            {% set occ_total = stats.occupation_distribution.values() | list | sum %}
+            {% set occ_max = stats.occupation_distribution.values() | list | max if stats.occupation_distribution else 1 %}
+            {% for label, count in stats.occupation_distribution.items() %}
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-700 w-32 shrink-0 truncate" title="{{ label }}">{{ label }}</span>
+                <div class="flex-1 bg-gray-100 rounded-full h-6 relative">
+                    {% set width = (count / occ_max * 100) if occ_max > 0 else 0 %}
+                    <div class="bg-amber-500 h-6 rounded-full flex items-center justify-end pr-2 transition-all"
+                         style="width: {{ width }}%; min-width: {% if count > 0 %}2rem{% else %}0{% endif %}">
+                        {% if count > 0 %}
+                        <span class="text-xs text-white font-medium">{{ count }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="text-xs text-gray-500 w-12 text-right">
+                    {% if occ_total > 0 %}{{ (count / occ_total * 100) | round(1) }}%{% else %}0%{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>

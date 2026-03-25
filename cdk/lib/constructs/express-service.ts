@@ -1,0 +1,235 @@
+import { Construct } from 'constructs';
+import * as cdk from 'aws-cdk-lib';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+
+export interface ExpressServiceProps {
+  vpc: ec2.IVpc;
+  ecrRepository: ecr.IRepository;
+  envName: string;
+  containerCpu: string;
+  containerMemory: string;
+  dynamoDbTables: dynamodb.ITable[];
+  dynamoDbTablePrefix: string;
+  awsRegion: string;
+  bedrockModelId: string;
+  agentModelId: string;
+  agentCoreMemoryId?: string;
+  summaryMemoryStrategyId?: string;
+  semanticMemoryStrategyId?: string;
+  uploadBucket: s3.IBucket;
+  bedrockBatchRoleArn: string;
+  batchInferenceModelId: string;
+  surveyS3Prefix?: string;
+  batchInferenceS3Prefix?: string;
+}
+
+export class ExpressService extends Construct {
+  public readonly service: ecs.CfnExpressGatewayService;
+  public readonly endpoint: string;
+
+  constructor(scope: Construct, id: string, props: ExpressServiceProps) {
+    super(scope, id);
+
+    const {
+      vpc,
+      ecrRepository,
+      envName,
+      containerCpu,
+      containerMemory,
+      dynamoDbTables,
+      dynamoDbTablePrefix,
+      awsRegion,
+      bedrockModelId,
+      agentModelId,
+      agentCoreMemoryId,
+      summaryMemoryStrategyId,
+      semanticMemoryStrategyId,
+      uploadBucket,
+      bedrockBatchRoleArn,
+      batchInferenceModelId,
+      surveyS3Prefix = 'survey-results/',
+      batchInferenceS3Prefix = 'batch-inference/',
+    } = props;
+
+    // Task Execution Role
+    const executionRole = new iam.Role(this, 'ExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
+      ],
+    });
+
+    // ECR pull permission
+    ecrRepository.grantPull(executionRole);
+
+    // Task Role (for application permissions)
+    const taskRole = new iam.Role(this, 'TaskRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+
+    // DynamoDB permissions
+    for (const table of dynamoDbTables) {
+      table.grantReadWriteData(taskRole);
+    }
+
+    // DynamoDB ListTables permission (for initialization check)
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:ListTables'],
+        resources: ['*'],
+      }),
+    );
+
+    // S3 permissions
+    uploadBucket.grantReadWrite(taskRole);
+
+    // Bedrock permissions
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock:InvokeModel',
+          'bedrock:InvokeModelWithResponseStream',
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetInferenceProfile",
+          "bedrock:TagResource", 
+          "bedrock:UntagResource", 
+          "bedrock:ListTagsForResource",
+          'bedrock:CreateModelInvocationJob',
+          'bedrock:GetModelInvocationJob',
+          'bedrock:ListModelInvocationJobs',
+          'bedrock:StopModelInvocationJob',
+          'bedrock:Retrieve',
+        ],
+        resources: ['*'],
+      }),
+    );
+
+    // PassRole permission for Bedrock Batch Inference
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['iam:PassRole'],
+        resources: [bedrockBatchRoleArn],
+        conditions: {
+          StringEquals: {
+            'iam:PassedToService': 'bedrock.amazonaws.com',
+          },
+        },
+      }),
+    );
+
+    // AgentCore Memory permissions (if enabled)
+    if (agentCoreMemoryId) {
+      taskRole.addToPolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            // Memory operations
+            'bedrock-agentcore:GetMemory',
+            'bedrock-agentcore:ListMemories',
+            // Event operations (short-term memory)
+            'bedrock-agentcore:CreateEvent',
+            'bedrock-agentcore:ListEvents',
+            'bedrock-agentcore:GetEvent',
+            // Memory record operations (long-term memory)
+            'bedrock-agentcore:CreateMemoryRecord',
+            'bedrock-agentcore:BatchCreateMemoryRecords',
+            'bedrock-agentcore:ListMemoryRecords',
+            'bedrock-agentcore:GetMemoryRecord',
+            'bedrock-agentcore:DeleteMemoryRecord',
+            'bedrock-agentcore:SearchMemoryRecords',
+            'bedrock-agentcore:RetrieveMemoryRecords',
+            // Invoke/Retrieve operations
+            'bedrock-agentcore:InvokeMemory',
+            'bedrock-agentcore:RetrieveMemory',
+          ],
+          resources: ['*'],
+        }),
+      );
+    }
+
+    // Infrastructure Role for Express Mode
+    const infrastructureRole = new iam.Role(this, 'InfrastructureRole', {
+      assumedBy: new iam.ServicePrincipal('ecs.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSInfrastructureRoleforExpressGatewayServices'),
+      ],
+    });
+
+    // Environment variables
+    const environment: { name: string; value: string }[] = [
+      { name: 'AWS_REGION', value: awsRegion },
+      { name: 'DATABASE_BACKEND', value: 'dynamodb' },
+      { name: 'DYNAMODB_TABLE_PREFIX', value: dynamoDbTablePrefix },
+      { name: 'DYNAMODB_REGION', value: awsRegion },
+      { name: 'BEDROCK_MODEL_ID', value: bedrockModelId },
+      { name: 'AGENT_MODEL_ID', value: agentModelId },
+      { name: 'ENABLE_LONG_TERM_MEMORY', value: agentCoreMemoryId ? 'true' : 'false' },
+      { name: 'S3_BUCKET_NAME', value: uploadBucket.bucketName },
+      { name: 'BEDROCK_BATCH_ROLE_ARN', value: bedrockBatchRoleArn },
+      { name: 'BATCH_INFERENCE_MODEL_ID', value: batchInferenceModelId },
+      { name: 'SURVEY_S3_PREFIX', value: surveyS3Prefix },
+      { name: 'BATCH_INFERENCE_S3_PREFIX', value: batchInferenceS3Prefix },
+    ];
+
+    if (agentCoreMemoryId) {
+      environment.push({ name: 'AGENTCORE_MEMORY_ID', value: agentCoreMemoryId });
+      environment.push({ name: 'AGENTCORE_MEMORY_REGION', value: awsRegion });
+    }
+    if (summaryMemoryStrategyId) {
+      environment.push({ name: 'SUMMARY_MEMORY_STRATEGY_ID', value: summaryMemoryStrategyId });
+    }
+    if (semanticMemoryStrategyId) {
+      environment.push({ name: 'SEMANTIC_MEMORY_STRATEGY_ID', value: semanticMemoryStrategyId });
+    }
+
+    // ECS Cluster
+    const cluster = new ecs.Cluster(this, 'Cluster', {
+      clusterName: `ai-persona-cluster-${envName}`,
+      vpc,
+    });
+
+    // ECS Express Gateway Service
+    this.service = new ecs.CfnExpressGatewayService(this, 'Default', {
+      cluster: cluster.clusterName,
+      serviceName: `ai-persona-${envName}`,
+      executionRoleArn: executionRole.roleArn,
+      infrastructureRoleArn: infrastructureRole.roleArn,
+      taskRoleArn: taskRole.roleArn,
+      cpu: containerCpu,
+      memory: containerMemory,
+      healthCheckPath: '/health',
+      networkConfiguration: {
+        subnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PUBLIC }).subnetIds,
+      },
+      primaryContainer: {
+        image: `${ecrRepository.repositoryUri}:latest`,
+        containerPort: 80,
+        environment,
+      },
+      scalingTarget: {
+        minTaskCount: 1,
+        maxTaskCount: 10,
+      },
+    });
+
+    // Ensure IGW and routes are fully configured before Express Mode evaluates subnets,
+    // otherwise it may misidentify public subnets as private and create an internal ALB.
+    const publicSubnets = vpc.selectSubnets({ subnetType: ec2.SubnetType.PUBLIC });
+    for (const subnet of publicSubnets.subnets) {
+      this.service.node.addDependency(subnet.internetConnectivityEstablished);
+    }
+
+    // Get endpoint from service
+    this.endpoint = this.service.attrEndpoint;
+  }
+}

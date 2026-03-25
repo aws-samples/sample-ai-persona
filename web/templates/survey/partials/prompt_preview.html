@@ -1,0 +1,10 @@
+{% if error %}
+<div class="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-700">
+    プレビューの生成に失敗しました: {{ error }}
+</div>
+{% else %}
+<div class="bg-amber-50 border border-amber-200 rounded-md p-3">
+    <h5 class="text-sm font-semibold text-amber-800 mb-2">📋 システムプロンプト プレビュー（1行目のデータ）</h5>
+    <pre class="text-xs text-gray-700 whitespace-pre-wrap bg-white border border-gray-200 rounded p-3 max-h-80 overflow-y-auto">{{ preview_text }}</pre>
+</div>
+{% endif %}

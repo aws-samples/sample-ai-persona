@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_document, icon_plus, icon_pencil, icon_trash, icon_arrow_left %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                {{ icon_document("w-8 h-8 text-teal-600") }} テンプレート一覧
+            </h1>
+            <p class="text-gray-600">アンケートテンプレートの管理</p>
+        </div>
+        <div class="flex gap-2">
+            <a href="/survey" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+                {{ icon_arrow_left("w-4 h-4") }} 戻る
+            </a>
+            <a href="/survey/start"
+               class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+                アンケート開始
+            </a>
+            <a href="/survey/templates/new" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-1.5">
+                {{ icon_plus("w-4 h-4") }} 新規作成
+            </a>
+        </div>
+    </div>
+
+    {% if templates %}
+    <div class="space-y-4">
+        {% for tmpl in templates %}
+        <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition-shadow" id="template-card-{{ tmpl.id }}">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">{{ tmpl.name }}</h3>
+                    <p class="text-sm text-gray-500 mt-1">
+                        {{ tmpl.questions|length }}問
+                        {% if tmpl.images %} ・ 画像あり{% endif %} ・
+                        作成: {{ tmpl.created_at.strftime('%Y/%m/%d %H:%M') }}
+                        {% if tmpl.updated_at != tmpl.created_at %}
+                        ・ 更新: {{ tmpl.updated_at.strftime('%Y/%m/%d %H:%M') }}
+                        {% endif %}
+                    </p>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                        {% for q in tmpl.questions %}
+                        <span class="text-xs px-2 py-1 rounded-full
+                            {% if q.question_type == 'multiple_choice' %}bg-blue-100 text-blue-700
+                            {% elif q.question_type == 'scale_rating' %}bg-amber-100 text-amber-700
+                            {% else %}bg-gray-100 text-gray-700{% endif %}">
+                            {% if q.question_type == 'multiple_choice' %}選択式{% if q.allow_multiple %}(複数){% endif %}
+                            {% elif q.question_type == 'scale_rating' %}スケール
+                            {% else %}自由記述{% endif %}:
+                            {{ q.text[:30] }}{% if q.text|length > 30 %}...{% endif %}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="flex gap-2 ml-4 shrink-0">
+                    <a href="/survey/templates/{{ tmpl.id }}/edit"
+                       class="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 transition-colors text-sm flex items-center gap-1">
+                        {{ icon_pencil("w-3.5 h-3.5") }} 編集
+                    </a>
+                    <button hx-delete="/survey/templates/{{ tmpl.id }}"
+                            hx-target="#template-card-{{ tmpl.id }}"
+                            hx-swap="outerHTML"
+                            hx-confirm="このテンプレートを削除しますか？"
+                            class="bg-red-100 text-red-700 px-3 py-1.5 rounded-md hover:bg-red-200 transition-colors text-sm flex items-center gap-1">
+                        {{ icon_trash("w-3.5 h-3.5") }} 削除
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <p class="text-center text-gray-500 mt-6 text-sm">{{ templates|length }}件のテンプレート</p>
+    {% else %}
+    <div class="bg-gray-50 rounded-lg p-12 text-center">
+        <div class="flex justify-center mb-4 text-gray-400">{{ icon_document("w-16 h-16") }}</div>
+        <h3 class="text-xl font-semibold text-gray-700 mb-2">テンプレートがありません</h3>
+        <p class="text-gray-500 mb-6">新しいアンケートテンプレートを作成してください。</p>
+        <a href="/survey/templates/new"
+           class="inline-flex items-center gap-2 bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors">
+            {{ icon_plus("w-4 h-4") }} テンプレートを作成
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

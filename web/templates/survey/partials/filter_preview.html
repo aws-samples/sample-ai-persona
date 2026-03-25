@@ -1,0 +1,40 @@
+<div class="border rounded-lg p-4 mt-4
+    {% if count == 0 %}border-red-300 bg-red-50
+    {% elif count < 100 %}border-yellow-300 bg-yellow-50
+    {% else %}border-green-300 bg-green-50{% endif %}">
+
+    <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-gray-900">フィルタプレビュー</h3>
+        <span class="text-lg font-bold
+            {% if count == 0 %}text-red-700
+            {% elif count < 100 %}text-yellow-700
+            {% else %}text-green-700{% endif %}">
+            {{ "{:,}".format(count) }} / {{ "{:,}".format(total) }} 名
+        </span>
+    </div>
+
+    {% if count == 0 %}
+    <p class="text-sm text-red-700">該当するペルソナがありません。フィルタ条件を変更してください。</p>
+    {% elif count < 100 %}
+    <p class="text-sm text-yellow-700">該当ペルソナが100名未満です。アンケート実行には100名以上が必要です。</p>
+    {% else %}
+    {% if not has_filter %}
+    <p class="text-sm text-gray-500 mb-2">フィルタなし（全ペルソナが対象）</p>
+    {% endif %}
+
+    {% if stats %}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+        {% for label, data in stats.items() %}
+        <div class="text-xs">
+            <span class="font-medium text-gray-700">{{ label }}</span>
+            <ul class="mt-1 text-gray-600 space-y-0.5">
+                {% for k, v in data.items() %}
+                <li>{{ k }}: {{ v }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+</div>

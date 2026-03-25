@@ -1,0 +1,44 @@
+<div data-columns='{{ columns | tojson }}' data-rowcount="{{ row_count }}">
+    <div class="mb-4">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-gray-700">スキーマプレビュー</span>
+            <span class="text-sm text-gray-500">{{ row_count | default(0) }} 行</span>
+        </div>
+        <div class="border rounded-lg overflow-hidden">
+            <table class="min-w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">カラム名</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">推定型</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">説明（任意）</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for col in columns %}
+                    <tr>
+                        <td class="px-3 py-2 font-mono text-gray-900">{{ col.name }}</td>
+                        <td class="px-3 py-2">
+                            <select class="border rounded px-2 py-1 text-sm" 
+                                onchange="updateColumnType({{ loop.index0 }}, this.value)">
+                                <option value="string" {% if col.data_type == 'string' %}selected{% endif %}>string</option>
+                                <option value="integer" {% if col.data_type == 'integer' %}selected{% endif %}>integer</option>
+                                <option value="float" {% if col.data_type == 'float' %}selected{% endif %}>float</option>
+                                <option value="date" {% if col.data_type == 'date' %}selected{% endif %}>date</option>
+                                <option value="datetime" {% if col.data_type == 'datetime' %}selected{% endif %}>datetime</option>
+                                <option value="boolean" {% if col.data_type == 'boolean' %}selected{% endif %}>boolean</option>
+                            </select>
+                        </td>
+                        <td class="px-3 py-2">
+                            <input type="text" class="border rounded px-2 py-1 text-sm w-full"
+                                placeholder="カラムの説明"
+                                onchange="updateColumnDesc({{ loop.index0 }}, this.value)"
+                            />
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+

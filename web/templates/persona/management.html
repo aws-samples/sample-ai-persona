@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_users, icon_plus %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">{{ icon_users("w-8 h-8 text-indigo-600") }} ペルソナ管理</h1>
+            <p class="text-gray-600">保存済みペルソナの確認・編集・削除</p>
+        </div>
+        <a href="/persona/generation" 
+           class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+            {{ icon_plus("w-4 h-4") }} 新規ペルソナ生成
+        </a>
+    </div>
+    
+    <!-- 検索・フィルター -->
+    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div class="flex gap-4">
+            <div class="flex-1">
+                <input type="text" 
+                       id="search-input"
+                       placeholder="ペルソナを検索（名前、職業、背景）..."
+                       hx-get="/persona/list/partial"
+                       hx-trigger="keyup changed delay:300ms"
+                       hx-target="#persona-list"
+                       hx-swap="innerHTML"
+                       hx-include="this"
+                       name="search"
+                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <button onclick="document.getElementById('search-input').value=''; htmx.trigger('#search-input', 'keyup')"
+                    class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors">
+                クリア
+            </button>
+        </div>
+    </div>
+    
+    <!-- ペルソナ一覧 -->
+    <div id="persona-list">
+        {% include "persona/partials/persona_list.html" %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_chat, icon_plus, icon_cpu_chip, icon_bolt, icon_persona, icon_lightbulb, icon_cog, icon_search %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">{{ icon_chat("w-8 h-8 text-green-600") }} 議論結果</h1>
+            <p class="text-gray-600">過去の議論結果とインサイトを確認</p>
+        </div>
+        <a href="/discussion/setup" 
+           class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+            {{ icon_plus("w-4 h-4") }} 新規議論を開始
+        </a>
+    </div>
+    
+    <!-- フィルタ・検索・ソート -->
+    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+        <form id="filter-form" hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true">
+            <div class="flex flex-wrap gap-4 items-end">
+                <!-- モードフィルタ -->
+                <div class="flex-1 min-w-[150px]">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">モード</label>
+                    <select name="mode" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                            hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" hx-include="#filter-form">
+                        <option value="" {% if not current_mode %}selected{% endif %}>すべて</option>
+                        <option value="agent" {% if current_mode == 'agent' %}selected{% endif %}>しっかり議論モード</option>
+                        <option value="classic" {% if current_mode == 'classic' %}selected{% endif %}>簡易議論モード</option>
+                        <option value="interview" {% if current_mode == 'interview' %}selected{% endif %}>インタビューモード</option>
+                    </select>
+                </div>
+                
+                <!-- トピック検索 -->
+                <div class="flex-[2] min-w-[200px]">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">トピック検索</label>
+                    <div class="relative">
+                        <input type="text" name="search" value="{{ current_search or '' }}" placeholder="トピックを検索..."
+                               class="w-full border border-gray-300 rounded-md pl-9 pr-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                               hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" 
+                               hx-trigger="keyup changed delay:300ms" hx-include="#filter-form">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ソート -->
+                <div class="flex-1 min-w-[150px]">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">並び順</label>
+                    <select name="sort" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                            hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" hx-include="#filter-form">
+                        <option value="newest" {% if current_sort == 'newest' or not current_sort %}selected{% endif %}>新しい順</option>
+                        <option value="oldest" {% if current_sort == 'oldest' %}selected{% endif %}>古い順</option>
+                    </select>
+                </div>
+                
+                <!-- リセットボタン -->
+                <div>
+                    <a href="/discussion/results" class="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-700 bg-white hover:bg-gray-50">
+                        リセット
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+    
+    <div id="discussion-list">
+    {% if discussions %}
+    <!-- 議論一覧 -->
+    <div class="space-y-6">
+        {% for discussion in discussions %}
+        <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow" id="discussion-card-{{ discussion.id }}">
+            <div class="flex items-start justify-between mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">
+                        {{ discussion.topic }}
+                    </h3>
+                    <div class="flex items-center gap-4 mt-2">
+                        <span class="text-sm text-gray-500">
+                            {{ discussion.created_at.strftime('%Y/%m/%d %H:%M') if discussion.created_at else '不明' }}
+                        </span>
+                        <span class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                            {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
+                        </span>
+                        <span class="text-sm text-gray-500">
+                            {{ discussion.messages|length if discussion.messages else 0 }}件の発言
+                        </span>
+                    </div>
+                </div>
+                <div class="flex gap-2">
+                    <a href="/discussion/{{ discussion.id }}" 
+                       class="bg-blue-100 text-blue-700 px-3 py-1 rounded-md hover:bg-blue-200 transition-colors text-sm">
+                        詳細を見る
+                    </a>
+                    <button hx-delete="/discussion/{{ discussion.id }}"
+                            hx-target="#discussion-card-{{ discussion.id }}"
+                            hx-swap="outerHTML"
+                            hx-confirm="この議論を削除しますか？"
+                            class="bg-red-100 text-red-700 px-3 py-1 rounded-md hover:bg-red-200 transition-colors text-sm">
+                        削除
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 参加ペルソナ -->
+            {% if discussion.participants %}
+            <div class="mb-4">
+                <p class="text-sm text-gray-500 mb-2">参加ペルソナ ({{ discussion.participants|length }}名):</p>
+                <div class="flex flex-wrap gap-2">
+                    {% for participant_id in discussion.participants %}
+                    {% set persona = participant_personas.get(participant_id) if participant_personas else None %}
+                    {% if persona %}
+                    <span class="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm border border-blue-200 flex items-center gap-1">
+                        {{ icon_persona("w-3.5 h-3.5") }} {{ persona.name }} <span class="text-blue-500 text-xs">({{ persona.occupation }})</span>
+                    </span>
+                    {% else %}
+                    <span class="bg-gray-100 text-gray-500 px-2 py-1 rounded-full text-xs">
+                        ID: {{ participant_id[:8] }}...
+                    </span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            
+            <!-- インサイトプレビュー -->
+            {% if discussion.insights %}
+            <div class="border-t pt-4">
+                <p class="text-sm text-gray-500 mb-2 flex items-center gap-1">{{ icon_lightbulb("w-4 h-4 text-yellow-500") }} インサイト ({{ discussion.insights|length }}件):</p>
+                <div class="space-y-2">
+                    {% for insight in discussion.insights[:2] %}
+                    <div class="bg-yellow-50 border-l-4 border-yellow-400 p-3">
+                        <p class="text-sm text-gray-700">{{ insight.description[:150] }}{% if insight.description|length > 150 %}...{% endif %}</p>
+                    </div>
+                    {% endfor %}
+                    {% if discussion.insights|length > 2 %}
+                    <p class="text-sm text-gray-500">他 {{ discussion.insights|length - 2 }}件のインサイト...</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    
+    <p class="text-center text-gray-500 mt-6">
+        {{ discussions|length }}件の議論{% if current_mode or current_search %}（フィルタ適用中）{% endif %}
+    </p>
+    
+    {% else %}
+    <!-- 議論がない場合 -->
+    <div class="bg-gray-50 rounded-lg p-12 text-center">
+        <div class="flex justify-center mb-4 text-gray-400">{{ icon_chat("w-16 h-16") }}</div>
+        {% if current_mode or current_search %}
+        <h3 class="text-xl font-semibold text-gray-700 mb-2">該当する議論がありません</h3>
+        <p class="text-gray-500 mb-6">検索条件を変更してください。</p>
+        <a href="/discussion/results" 
+           class="inline-flex items-center gap-2 bg-gray-600 text-white px-6 py-2 rounded-md hover:bg-gray-700 transition-colors">
+            フィルタをリセット
+        </a>
+        {% else %}
+        <h3 class="text-xl font-semibold text-gray-700 mb-2">議論がありません</h3>
+        <p class="text-gray-500 mb-6">ペルソナを選択して議論を開始してください。</p>
+        <a href="/discussion/setup" 
+           class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
+            {{ icon_cog("w-4 h-4") }} 議論を設定する
+        </a>
+        {% endif %}
+    </div>
+    {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,138 @@
+{% from "components/icons.html" import icon_sparkles, icon_document, icon_lightbulb, icon_x_circle, icon_rocket, icon_save, icon_refresh, icon_users %}
+<!-- 生成されたペルソナ表示パーシャル -->
+<div class="bg-white rounded-lg shadow-md p-6 fade-in">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 flex items-center gap-2">{{ icon_sparkles("w-6 h-6 text-yellow-500") }} 生成されたペルソナ</h2>
+            <p class="text-gray-600">{{ persona.name }} ({{ persona.age }}歳)</p>
+        </div>
+        <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+            生成完了
+        </span>
+    </div>
+    
+    <!-- 基本情報 -->
+    <div class="grid md:grid-cols-3 gap-4 mb-6">
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">名前</p>
+            <p class="font-semibold text-gray-900">{{ persona.name }}</p>
+        </div>
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">年齢</p>
+            <p class="font-semibold text-gray-900">{{ persona.age }}歳</p>
+        </div>
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">職業</p>
+            <p class="font-semibold text-gray-900">{{ persona.occupation }}</p>
+        </div>
+    </div>
+    
+    <!-- タブ形式の詳細情報 -->
+    <div x-data="{ activeTab: 'background' }" class="mb-6">
+        <!-- タブヘッダー -->
+        <div class="border-b border-gray-200 mb-4">
+            <nav class="flex space-x-4">
+                <button @click="activeTab = 'background'" 
+                        :class="activeTab === 'background' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1">
+                    {{ icon_document("w-4 h-4") }} 背景
+                </button>
+                <button @click="activeTab = 'values'" 
+                        :class="activeTab === 'values' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1">
+                    {{ icon_lightbulb("w-4 h-4") }} 価値観
+                </button>
+                <button @click="activeTab = 'pain_points'" 
+                        :class="activeTab === 'pain_points' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1">
+                    {{ icon_x_circle("w-4 h-4") }} 課題・悩み
+                </button>
+                <button @click="activeTab = 'goals'" 
+                        :class="activeTab === 'goals' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                        class="py-2 px-1 border-b-2 font-medium text-sm flex items-center gap-1">
+                    {{ icon_rocket("w-4 h-4") }} 目標・願望
+                </button>
+            </nav>
+        </div>
+        
+        <!-- タブコンテンツ -->
+        <div x-show="activeTab === 'background'" class="prose max-w-none">
+            <h4 class="text-lg font-semibold text-gray-900 mb-2">背景・プロフィール</h4>
+            <p class="text-gray-700">{{ persona.background }}</p>
+        </div>
+        
+        <div x-show="activeTab === 'values'">
+            <h4 class="text-lg font-semibold text-gray-900 mb-2">価値観・信念</h4>
+            <ul class="space-y-2">
+                {% for value in persona.values %}
+                <li class="flex items-start">
+                    <span class="text-blue-500 mr-2">•</span>
+                    <span class="text-gray-700">{{ value }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        
+        <div x-show="activeTab === 'pain_points'">
+            <h4 class="text-lg font-semibold text-gray-900 mb-2">抱えている課題・悩み</h4>
+            <ul class="space-y-2">
+                {% for pain_point in persona.pain_points %}
+                <li class="flex items-start">
+                    <span class="text-red-500 mr-2">•</span>
+                    <span class="text-gray-700">{{ pain_point }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        
+        <div x-show="activeTab === 'goals'">
+            <h4 class="text-lg font-semibold text-gray-900 mb-2">目標・願望</h4>
+            <ul class="space-y-2">
+                {% for goal in persona.goals %}
+                <li class="flex items-start">
+                    <span class="text-green-500 mr-2">•</span>
+                    <span class="text-gray-700">{{ goal }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    
+    <!-- 保存フォーム -->
+    <form hx-post="/persona/save"
+          hx-target="#persona-result"
+          hx-swap="innerHTML"
+          hx-indicator="#save-spinner"
+          class="border-t pt-6">
+        
+        <input type="hidden" name="persona_id" value="{{ persona.id }}">
+        <input type="hidden" name="name" value="{{ persona.name }}">
+        <input type="hidden" name="age" value="{{ persona.age }}">
+        <input type="hidden" name="occupation" value="{{ persona.occupation }}">
+        <input type="hidden" name="background" value="{{ persona.background }}">
+        <input type="hidden" name="values" value="{{ persona.values | join('\n') }}">
+        <input type="hidden" name="pain_points" value="{{ persona.pain_points | join('\n') }}">
+        <input type="hidden" name="goals" value="{{ persona.goals | join('\n') }}">
+        
+        <div class="flex gap-4">
+            <button type="submit"
+                    class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+                <span class="htmx-indicator" id="save-spinner">
+                    <span class="spinner inline-block mr-2"></span>
+                </span>
+                {{ icon_save("w-4 h-4") }} ペルソナを保存
+            </button>
+            
+            <button type="button"
+                    onclick="location.reload()"
+                    class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors flex items-center gap-1.5">
+                {{ icon_refresh("w-4 h-4") }} 新しいペルソナを生成
+            </button>
+            
+            <a href="/persona/management"
+               class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5">
+                {{ icon_users("w-4 h-4") }} ペルソナ管理へ
+            </a>
+        </div>
+    </form>
+</div>

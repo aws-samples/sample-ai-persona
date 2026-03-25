@@ -6,10 +6,11 @@
 <img src="./docs/images/ai-persona-image-01.jpg" alt="ai-persona-image-01" width="68%">
 
 ## セットアップ
+### AWS 上へのデプロイ
 
-[AWS CDK を利用したデプロイ手順](./cdk/README.md)
+[AWS CDK を利用したデプロイ手順](./cdk/README.md)を参照ください。
 
-### ローカルでのアプリケーション起動
+### ローカル環境でのアプリケーション起動
 #### 前提条件
 - Python 3.13+、[uv](https://docs.astral.sh/uv/)
 - バックエンドリソース（DynamoDB、S3、AgentCore Memory）がAWS上で構築済み
@@ -116,7 +117,7 @@ ai-persona-system/
 ├── tests/                 # テストコード（unit, integration, api）
 ├── docs/                  # ドキュメント
 ├── scripts/               # ユーティリティスクリプト
-└── test_data/             # サンプルデータセット
+└── sample_data/             # サンプルデータセット
 ```
 
 </details>

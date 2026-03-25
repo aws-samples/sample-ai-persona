@@ -1,0 +1,15 @@
+{% from "components/icons.html" import icon_x_circle, icon_refresh %}
+<!-- エラー表示パーシャル -->
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 fade-in">
+    <div class="flex items-start">
+        <span class="text-red-600 mr-3">{{ icon_x_circle("w-6 h-6") }}</span>
+        <div>
+            <h3 class="font-semibold text-red-900">エラーが発生しました</h3>
+            <p class="text-red-800 text-sm mt-1">{{ error }}</p>
+            <button onclick="location.reload()" 
+                    class="mt-3 text-sm text-red-600 hover:text-red-800 underline flex items-center gap-1">
+                {{ icon_refresh("w-4 h-4") }} ページを更新して再試行
+            </button>
+        </div>
+    </div>
+</div>

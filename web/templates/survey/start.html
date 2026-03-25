@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_play, icon_arrow_left, icon_document, icon_pencil, icon_users, icon_cog %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto" x-data="surveyStartForm()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                {{ icon_play("w-8 h-8 text-blue-600") }} アンケート開始
+            </h1>
+            <p class="text-gray-600">テンプレートを選択してアンケートを実行</p>
+        </div>
+        <a href="/survey" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+            {{ icon_arrow_left("w-4 h-4") }} 戻る
+        </a>
+    </div>
+
+    <!-- エラーメッセージ -->
+    <div id="execute-error"></div>
+
+    {% if not templates %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+        <p class="text-yellow-800 mb-4">テンプレートがまだ作成されていません。</p>
+        <a href="/survey/templates/new" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
+            テンプレートを作成する
+        </a>
+    </div>
+    {% else %}
+    <form id="survey-form"
+          hx-post="/survey/execute"
+          hx-target="#survey-form"
+          hx-swap="outerHTML"
+          hx-indicator="#execute-spinner"
+          @submit="prepareFilters()">
+
+        <!-- データソース選択 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                {{ icon_users("w-5 h-5 text-purple-600") }} ペルソナデータソース
+            </label>
+            <select name="datasource" required
+                    hx-get="/survey/filter-options"
+                    hx-target="#filter-fields"
+                    hx-swap="innerHTML"
+                    hx-trigger="change"
+                    hx-include="[name='datasource']"
+                    @htmx:before-request.camel="document.getElementById('filter-overlay').classList.remove('hidden')"
+                    @htmx:after-request.camel="document.getElementById('filter-overlay').classList.add('hidden')"
+                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+                {% if nemotron_available %}
+                <option value="nemotron">オープンデータ(Nemotron-Personas-Japan)</option>
+                {% endif %}
+                {% for ds in custom_datasets %}
+                <option value="custom:{{ ds.name }}">カスタムデータ（{{ ds.name }}）</option>
+                {% endfor %}
+                {% if not nemotron_available and not custom_datasets %}
+                <option value="" disabled selected>利用可能なデータセットがありません</option>
+                {% endif %}
+            </select>
+            {% if not nemotron_available and not custom_datasets %}
+            <p class="text-sm text-yellow-600 mt-2">
+                <a href="/survey/persona-data" class="underline">ペルソナデータ設定</a>からデータセットを準備してください。
+            </p>
+            {% endif %}
+        </div>
+
+        <!-- テンプレート選択 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                {{ icon_document("w-5 h-5 text-teal-600") }} テンプレート選択
+            </label>
+            <select name="template_id" required x-model="templateId"
+                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+                <option value="">テンプレートを選択してください</option>
+                {% for tmpl in templates %}
+                <option value="{{ tmpl.id }}">{{ tmpl.name }}（{{ tmpl.questions|length }}問）</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- アンケート名・説明 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="mb-4">
+                <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                    {{ icon_pencil("w-5 h-5 text-blue-600") }} アンケート名（空欄の場合は自動生成）
+                </label>
+                <input type="text" name="name" placeholder="テンプレート名 + 日付が自動設定されます"
+                       class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">説明（任意）</label>
+                <textarea name="description" rows="2" placeholder="アンケートの目的や備考"
+                          class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+            </div>
+        </div>
+
+        <!-- ペルソナ数 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                {{ icon_users("w-5 h-5 text-purple-600") }} 対象ペルソナ数
+                <span class="text-sm font-normal text-gray-500" x-text="personaCountLabel"></span>
+            </label>
+            <input type="number" name="persona_count" value="100" min="100" :max="maxPersonaCount" required
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+            <p class="text-xs text-gray-500 mt-1" x-show="hasImages">
+                ⚠️ 画像付きテンプレートは最大1,000人までです
+            </p>
+        </div>
+
+        <!-- 属性フィルタ -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6 relative">
+            <!-- ローディングオーバーレイ -->
+            <div id="filter-overlay" class="hidden absolute inset-0 bg-gray-200/80 z-10 flex items-center justify-center rounded-lg backdrop-blur-sm">
+                <div class="flex flex-col items-center gap-3 text-gray-600">
+                    <svg class="animate-spin w-10 h-10" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span class="text-base font-medium">フィルタ情報を読み込み中...</span>
+                </div>
+            </div>
+            <h2 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                {{ icon_cog("w-5 h-5 text-gray-600") }} 属性フィルタ（任意）
+            </h2>
+            <p class="text-sm text-gray-500 mb-4">フィルタを指定しない場合、全ペルソナからランダムに抽出されます。</p>
+
+            <div id="filter-fields">
+                {% include "survey/partials/filter_fields.html" %}
+            </div>
+
+            <input type="hidden" name="filters_json" id="filters_json_input" value="{}">
+
+            <!-- プレビュー -->
+            <div class="mt-4">
+                <button type="button"
+                        @click="previewFilters()"
+                        class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-2 text-sm">
+                    <span id="preview-spinner" class="htmx-indicator">
+                        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                    </span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                    </svg>
+                    対象ペルソナをプレビュー
+                </button>
+                <div id="filter-preview"></div>
+            </div>
+        </div>
+
+        <!-- 実行ボタン -->
+        <div class="flex justify-end gap-3">
+            <a href="/survey" class="bg-gray-200 text-gray-700 px-6 py-2 rounded-md hover:bg-gray-300 transition-colors">
+                キャンセル
+            </a>
+            <button type="submit" :disabled="!templateId"
+                    class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span id="execute-spinner" class="htmx-indicator">
+                    <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                </span>
+                {{ icon_play("w-4 h-4") }} アンケート実行
+            </button>
+        </div>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function surveyStartForm() {
+    return {
+        templateId: '',
+        hasImages: false,
+        get maxPersonaCount() {
+            return this.hasImages ? 1000 : 10000;
+        },
+        get personaCountLabel() {
+            return this.hasImages ? '（100〜1,000）' : '（100〜10,000）';
+        },
+        init() {
+            // テンプレート選択時に画像の有無をチェック
+            this.$watch('templateId', (value) => {
+                if (value) {
+                    const templates = {{ templates_dict | tojson }};
+                    const selected = templates.find(t => t.id === value);
+                    this.hasImages = selected && selected.images && selected.images.length > 0;
+                }
+            });
+        },
+        collectFilters() {
+            // DOM上のフィルタ入力から値を収集
+            const filters = {};
+            document.querySelectorAll('#filter-fields .filter-input').forEach(el => {
+                const name = el.dataset.filterName;
+                const type = el.dataset.filterType;
+                if (type === 'range') {
+                    if (!filters[name]) filters[name] = {};
+                    const part = el.dataset.rangePart;
+                    if (el.value !== '') filters[name][part] = Number(el.value);
+                } else if (type === 'multi') {
+                    if (!filters[name]) filters[name] = [];
+                    if (el.checked) filters[name].push(el.value);
+                } else if (type === 'keyword' || type === 'select') {
+                    if (el.value) filters[name] = el.value;
+                }
+            });
+            return filters;
+        },
+        prepareFilters() {
+            document.getElementById('filters_json_input').value = JSON.stringify(this.collectFilters());
+        },
+        previewFilters() {
+            const datasource = document.querySelector('select[name="datasource"]').value;
+            const filters = this.collectFilters();
+            
+            htmx.ajax('POST', '/survey/preview', {
+                target: '#filter-preview',
+                swap: 'innerHTML',
+                values: {filters_json: JSON.stringify(filters), datasource: datasource}
+            });
+        }
+    };
+}
+</script>
+{% endblock %}

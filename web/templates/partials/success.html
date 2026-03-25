@@ -1,0 +1,26 @@
+{% from "components/icons.html" import icon_check_circle, icon_arrow_right %}
+<!-- 成功表示パーシャル -->
+<div class="bg-green-50 border border-green-200 rounded-lg p-4 fade-in">
+    <div class="flex items-start">
+        <span class="text-green-600 mr-3">{{ icon_check_circle("w-6 h-6") }}</span>
+        <div>
+            <h3 class="font-semibold text-green-900">成功</h3>
+            <p class="text-green-800 text-sm mt-1">{{ message }}</p>
+            {% if redirect_url %}
+            <a href="{{ redirect_url }}" 
+               class="mt-3 inline-flex items-center gap-1 text-sm text-green-600 hover:text-green-800 underline">
+                {{ icon_arrow_right("w-4 h-4") }} 次のページへ進む
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if redirect_url %}
+<script>
+// 2秒後に自動リダイレクト
+setTimeout(() => {
+    window.location.href = '{{ redirect_url }}';
+}, 2000);
+</script>
+{% endif %}

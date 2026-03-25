@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_cpu_chip, icon_sparkles, icon_users, icon_cog, icon_chat, icon_document, icon_lightbulb, icon_play %}
+
+{% block content %}
+<div class="text-center py-12" x-data="{ selected: null }">
+    <h1 class="text-4xl font-bold text-gray-900 mb-6 flex items-center justify-center gap-3">
+        {{ icon_cpu_chip("w-10 h-10 text-blue-600") }} AIペルソナシステム
+    </h1>
+    <p class="text-xl text-gray-600 mb-8">
+        AIペルソナを生成し、議論・対話・アンケートを通じてマーケティング戦略のためのインサイトを発見
+    </p>
+    
+    <!-- 2大機能選択 -->
+    <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-10 mt-8">
+        <button @click="selected = selected === 'interview' ? null : 'interview'"
+                :class="selected === 'interview' ? 'ring-2 ring-indigo-500 bg-indigo-50' : 'bg-white hover:shadow-lg'"
+                class="rounded-lg shadow-md p-8 transition-all text-center">
+            <div class="flex justify-center mb-4 text-indigo-600">{{ icon_chat("w-12 h-12") }}</div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">インタビュー</h2>
+            <p class="text-gray-600 text-sm">
+                AIペルソナとの議論・対話を通じて<br>インサイトを発見
+            </p>
+        </button>
+        
+        <button @click="selected = selected === 'survey' ? null : 'survey'"
+                :class="selected === 'survey' ? 'ring-2 ring-teal-500 bg-teal-50' : 'bg-white hover:shadow-lg'"
+                class="rounded-lg shadow-md p-8 transition-all text-center">
+            <div class="flex justify-center mb-4 text-teal-600">
+                <svg class="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+                </svg>
+            </div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">アンケート調査</h2>
+            <p class="text-gray-600 text-sm">
+                数百〜数千のAIペルソナに<br>大規模アンケートを実施
+            </p>
+        </button>
+    </div>
+
+    <!-- インタビュー サブメニュー -->
+    <div x-show="selected === 'interview'" x-collapse class="mb-10">
+        <div class="grid md:grid-cols-4 gap-6">
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-blue-600">{{ icon_sparkles("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">1. ペルソナ生成</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    データをアップロードしてAIペルソナを自動生成
+                </p>
+                <a href="/persona/generation" 
+                   class="inline-block bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors">
+                    開始する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-indigo-600">{{ icon_users("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">2. ペルソナ管理</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    保存済みペルソナの確認・編集・削除<br>
+                    ペルソナの記憶、知識、データ管理
+                </p>
+                <a href="/persona/management" 
+                   class="inline-block bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors">
+                    管理する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-purple-600">{{ icon_cog("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">3. 議論設定</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    ペルソナを選択して議論、<br>
+                    インタビューを開始
+                </p>
+                <a href="/discussion/setup" 
+                   class="inline-block bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors">
+                    設定する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-green-600">{{ icon_chat("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">4. 議論結果</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    議論結果とインサイトの確認<br>
+                    過去議論の検索
+                </p>
+                <a href="/discussion/results" 
+                   class="inline-block bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors">
+                    確認する
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- アンケート調査 サブメニュー -->
+    <div x-show="selected === 'survey'" x-collapse class="mb-10">
+        <div class="grid md:grid-cols-4 gap-6">
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-teal-600">{{ icon_users("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">1. ペルソナデータ設定</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    オープンデータセットや<br>カスタムペルソナデータの管理
+                </p>
+                <a href="/survey/persona-data" 
+                   class="inline-block bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
+                    設定する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-teal-600">{{ icon_document("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">2. テンプレート管理</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    アンケートテンプレートの<br>作成・編集・管理
+                </p>
+                <a href="/survey/templates" 
+                   class="inline-block bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
+                    管理する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-blue-600">{{ icon_play("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">3. アンケート開始</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    テンプレートを選択して<br>アンケートを実行
+                </p>
+                <a href="/survey/start" 
+                   class="inline-block bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
+                    開始する
+                </a>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                <div class="flex justify-center mb-4 text-green-600">{{ icon_chat("w-10 h-10") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">4. 結果表示</h3>
+                <p class="text-gray-600 text-sm mb-4">
+                    アンケート結果の確認<br>分析・レポート
+                </p>
+                <a href="/survey/results" 
+                   class="inline-block bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
+                    確認する
+                </a>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- 機能説明 -->
+    <div class="mt-16 bg-white rounded-lg shadow-md p-8">
+        <h2 class="text-2xl font-bold text-gray-900 mb-6">主な機能</h2>
+        <div class="grid md:grid-cols-3 gap-8 text-left">
+            <div>
+                <h3 class="font-semibold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-5 h-5 text-blue-600") }} AIペルソナ生成</h3>
+                <p class="text-gray-600 text-sm">
+                    インタビューデータや市場調査レポート（PDF/Word）から自動的にペルソナを生成。長期記憶機能で過去の議論を記憶し、外部データセットとの連携も可能
+                </p>
+            </div>
+            <div>
+                <h3 class="font-semibold text-gray-900 mb-2 flex items-center gap-2">{{ icon_chat("w-5 h-5 text-purple-600") }} 多様な対話形式</h3>
+                <p class="text-gray-600 text-sm">
+                    簡易議論・しっかり議論・インタビューの3つのモード。リアルタイム対話、マルチモーダル対応（画像・PDF）で深い洞察を獲得
+                </p>
+            </div>
+            <div>
+                <h3 class="font-semibold text-gray-900 mb-2 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-yellow-500") }} インサイト発見</h3>
+                <p class="text-gray-600 text-sm">
+                    議論から信頼度スコア付きインサイトを自動抽出。大規模アンケート機能で数百〜数千のペルソナから統計的な傾向を分析
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

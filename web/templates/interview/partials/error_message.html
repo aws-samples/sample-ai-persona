@@ -1,0 +1,92 @@
+{% from "components/icons.html" import icon_x_circle, icon_refresh, icon_exclamation_triangle %}
+
+<!-- インタビュー専用エラーメッセージパーシャル -->
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 fade-in" id="interview-error">
+    <div class="flex items-start">
+        <span class="text-red-600 mr-3 flex-shrink-0">
+            {% if error_type == "agent_error" %}
+                {{ icon_exclamation_triangle("w-6 h-6") }}
+            {% else %}
+                {{ icon_x_circle("w-6 h-6") }}
+            {% endif %}
+        </span>
+        <div class="flex-1">
+            <h3 class="font-semibold text-red-900">
+                {% if error_type == "validation_error" %}
+                    入力エラー
+                {% elif error_type == "session_not_found" %}
+                    セッションエラー
+                {% elif error_type == "agent_error" %}
+                    AIエージェントエラー
+                {% elif error_type == "persistence_error" %}
+                    保存エラー
+                {% else %}
+                    エラーが発生しました
+                {% endif %}
+            </h3>
+            <p class="text-red-800 text-sm mt-1">{{ error }}</p>
+            
+            {% if error_type == "session_not_found" %}
+                <div class="mt-3 space-y-2">
+                    <p class="text-red-700 text-xs">
+                        セッションが見つからない場合の対処法：
+                    </p>
+                    <ul class="text-red-700 text-xs list-disc list-inside space-y-1">
+                        <li>新しいインタビューセッションを作成してください</li>
+                        <li>URLが正しいか確認してください</li>
+                        <li>セッションが既に終了している可能性があります</li>
+                    </ul>
+                    <a href="/discussion/setup" 
+                       class="inline-block mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">
+                        新しいセッションを作成
+                    </a>
+                </div>
+            {% elif error_type == "agent_error" %}
+                <div class="mt-3">
+                    <p class="text-red-700 text-xs mb-2">
+                        AIエージェントとの通信に問題があります。以下をお試しください：
+                    </p>
+                    <ul class="text-red-700 text-xs list-disc list-inside space-y-1">
+                        <li>しばらく待ってから再試行してください</li>
+                        <li>メッセージを短くしてみてください</li>
+                        <li>問題が続く場合は管理者にお問い合わせください</li>
+                    </ul>
+                </div>
+            {% elif error_type == "persistence_error" %}
+                <div class="mt-3">
+                    <p class="text-red-700 text-xs mb-2">
+                        データの保存に失敗しました：
+                    </p>
+                    <ul class="text-red-700 text-xs list-disc list-inside space-y-1">
+                        <li>ネットワーク接続を確認してください</li>
+                        <li>しばらく待ってから再試行してください</li>
+                        <li>セッションデータは一時的に保持されています</li>
+                    </ul>
+                </div>
+            {% endif %}
+            
+            <div class="mt-3 flex gap-2">
+                <button onclick="location.reload()" 
+                        class="text-sm text-red-600 hover:text-red-800 underline flex items-center gap-1">
+                    {{ icon_refresh("w-4 h-4") }} ページを更新
+                </button>
+                
+                {% if error_type != "session_not_found" %}
+                <button onclick="document.getElementById('interview-error').style.display='none'" 
+                        class="text-sm text-red-600 hover:text-red-800 underline">
+                    閉じる
+                </button>
+                {% endif %}
+            </div>
+            
+            {% if technical_details %}
+                <details class="mt-3">
+                    <summary class="text-xs text-red-600 cursor-pointer hover:text-red-800">
+                        技術的な詳細を表示
+                    </summary>
+                    <pre class="mt-2 text-xs text-red-700 bg-red-100 p-2 rounded overflow-x-auto">{{ technical_details }}</pre>
+                </details>
+            {% endif %}
+        </div>
+    </div>
+</div>

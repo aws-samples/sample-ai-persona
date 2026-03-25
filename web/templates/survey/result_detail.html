@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_chat, icon_arrow_left, icon_document, icon_lightbulb %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto" x-data="{ activeTab: 'download' }">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">{{ survey.name }}</h1>
+            {% if survey.description %}
+            <p class="text-gray-600 mt-1">{{ survey.description }}</p>
+            {% endif %}
+            <div class="flex items-center gap-4 mt-2">
+                <span class="text-sm text-gray-500">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</span>
+                <span class="text-sm text-gray-500">{{ survey.persona_count }}名</span>
+                <span class="px-2 py-0.5 text-xs rounded-full
+                    {% if survey.status == 'completed' %}bg-green-100 text-green-800
+                    {% elif survey.status == 'running' %}bg-blue-100 text-blue-800
+                    {% elif survey.status == 'error' %}bg-red-100 text-red-800
+                    {% else %}bg-gray-100 text-gray-800{% endif %}">
+                    {% if survey.status == 'completed' %}完了
+                    {% elif survey.status == 'running' %}実行中
+                    {% elif survey.status == 'error' %}エラー
+                    {% else %}待機中{% endif %}
+                </span>
+            </div>
+            {% if survey.filters %}
+            <div class="flex flex-wrap items-center gap-2 mt-3">
+                <span class="text-xs text-gray-500">セグメント:</span>
+                {% for key, value in survey.filters.items() %}
+                {% if value is mapping %}
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                    {{ key }}: {{ value.min|default('') }}〜{{ value.max|default('') }}
+                </span>
+                {% elif value is iterable and value is not string %}
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                    {{ key }}: {{ value|join(', ') }}
+                </span>
+                {% elif value %}
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                    {{ key }}: {{ value }}
+                </span>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        <a href="/survey/results" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+            {{ icon_arrow_left("w-4 h-4") }} 一覧に戻る
+        </a>
+    </div>
+
+    {% if survey.status == 'error' %}
+    <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+        <p class="text-red-800">エラーが発生しました: {{ survey.error_message or '不明なエラー' }}</p>
+    </div>
+    {% endif %}
+
+    {% if survey_template and survey_template.images %}
+    <div class="bg-white rounded-lg shadow-md p-5 mb-6">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+            <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            添付画像
+        </h3>
+        <div class="flex gap-4 flex-wrap">
+            {% for img in survey_template.images %}
+            <div class="text-center">
+                <img src="{{ image_preview_urls.get(img.id, '') }}" alt="{{ img.name }}"
+                     class="w-24 h-24 object-cover rounded border">
+                <p class="text-xs text-gray-600 mt-1">{{ img.name }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if survey.status == 'completed' %}
+    <!-- タブナビゲーション -->
+    <div class="border-b border-gray-200 mb-6">
+        <nav class="flex gap-4">
+            <button @click="activeTab = 'personas'"
+                    :class="activeTab === 'personas' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                    class="pb-3 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                調査対象ペルソナ
+            </button>
+            <button @click="activeTab = 'download'"
+                    :class="activeTab === 'download' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                    class="pb-3 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 transition-colors">
+                {{ icon_document("w-4 h-4") }} ダウンロード
+            </button>
+            <button @click="activeTab = 'visual'"
+                    :class="activeTab === 'visual' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                    class="pb-3 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                集計結果
+            </button>
+            <button @click="activeTab = 'report'"
+                    :class="activeTab === 'report' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
+                    class="pb-3 px-1 border-b-2 font-medium text-sm flex items-center gap-1.5 transition-colors">
+                {{ icon_lightbulb("w-4 h-4") }} レポート
+            </button>
+        </nav>
+    </div>
+
+    <!-- 調査対象ペルソナタブ -->
+    <div x-show="activeTab === 'personas'">
+        <div id="personas-content"
+             hx-get="/survey/results/{{ survey.id }}/personas"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML">
+            <div class="text-center py-8">
+                <svg class="animate-spin w-8 h-8 mx-auto text-teal-600" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-gray-500 mt-2">ペルソナデータを読み込み中...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ダウンロードタブ -->
+    <div x-show="activeTab === 'download'">
+        <div class="bg-white rounded-lg shadow-md p-6 text-center">
+            <div class="flex justify-center mb-4 text-teal-600">{{ icon_document("w-12 h-12") }}</div>
+            <h3 class="text-lg font-semibold text-gray-900 mb-2">CSV結果データ</h3>
+            <p class="text-gray-600 text-sm mb-4">ペルソナ属性と全回答データを含むCSVファイル</p>
+            <a href="/survey/results/{{ survey.id }}/download"
+               class="inline-flex items-center gap-2 bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                CSVをダウンロード
+            </a>
+        </div>
+    </div>
+
+    <!-- ビジュアル分析タブ -->
+    <div x-show="activeTab === 'visual'">
+        <div id="visual-content"
+             hx-get="/survey/results/{{ survey.id }}/visual"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML">
+            <div class="text-center py-8">
+                <svg class="animate-spin w-8 h-8 mx-auto text-teal-600" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-gray-500 mt-2">分析データを読み込み中...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- レポートタブ -->
+    <div x-show="activeTab === 'report'">
+        <div id="report-content">
+            {% if survey.insight_report %}
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <div class="flex items-center gap-2 mb-4">
+                    {{ icon_lightbulb("w-5 h-5 text-yellow-500") }}
+                    <h3 class="text-lg font-semibold text-gray-900">インサイトレポート</h3>
+                    <span class="text-xs text-gray-500">{{ survey.insight_report.created_at.strftime('%Y/%m/%d %H:%M') }}</span>
+                </div>
+                <div class="prose prose-slate max-w-none
+                prose-headings:font-bold prose-headings:text-gray-900
+                prose-h1:text-2xl prose-h1:mb-4 prose-h1:mt-6
+                prose-h2:text-xl prose-h2:mb-3 prose-h2:mt-5
+                prose-h3:text-lg prose-h3:mb-2 prose-h3:mt-4
+                prose-p:text-gray-700 prose-p:mb-3 prose-p:leading-relaxed
+                prose-ul:my-3 prose-ul:list-disc prose-ul:pl-6
+                prose-ol:my-3 prose-ol:list-decimal prose-ol:pl-6
+                prose-li:mb-1
+                prose-strong:text-gray-900 prose-strong:font-semibold
+                prose-table:my-4 prose-table:border-collapse
+                prose-th:border prose-th:border-gray-300 prose-th:bg-gray-100 prose-th:px-4 prose-th:py-2 prose-th:font-semibold
+                prose-td:border prose-td:border-gray-300 prose-td:px-4 prose-td:py-2
+                prose-hr:my-6 prose-hr:border-gray-300">
+                    {{ survey.insight_report.content | markdown | safe }}
+                </div>
+            </div>
+            {% else %}
+            <div class="bg-white rounded-lg shadow-md p-6 text-center">
+                <div class="flex justify-center mb-4 text-yellow-500">{{ icon_lightbulb("w-12 h-12") }}</div>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">インサイトレポート</h3>
+                <p class="text-gray-600 text-sm mb-4">AIがアンケート結果を分析し、インサイトを抽出します。</p>
+                <button hx-post="/survey/results/{{ survey.id }}/report"
+                        hx-target="#report-content"
+                        hx-swap="innerHTML"
+                        hx-indicator="#report-spinner"
+                        hx-request='{"timeout":300000}'
+                        class="inline-flex items-center gap-2 bg-yellow-500 text-white px-6 py-2 rounded-md hover:bg-yellow-600 transition-colors">
+                    <span id="report-spinner" class="htmx-indicator">
+                        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                    </span>
+                    {{ icon_lightbulb("w-4 h-4") }} レポートを生成
+                </button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% elif survey.status == 'running' %}
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-6 text-center">
+        <svg class="animate-spin w-8 h-8 mx-auto text-blue-600 mb-4" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <p class="text-blue-800">アンケートを実行中です。しばらくお待ちください。</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

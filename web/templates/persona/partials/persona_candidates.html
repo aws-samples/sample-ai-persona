@@ -1,0 +1,127 @@
+<!-- ペルソナ候補一覧表示パーシャル -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4">生成されたペルソナ候補</h2>
+    <p class="text-sm text-gray-600 mb-4">保存したいペルソナを選択してください（複数選択可）</p>
+    
+    <form id="save-personas-form" 
+          hx-post="/persona/save-selected"
+          hx-target="#save-result"
+          hx-swap="innerHTML">
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {% for persona in personas %}
+            <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-400 transition-colors">
+                <div class="flex items-start gap-3">
+                    <input type="checkbox" 
+                           name="persona_check" 
+                           value="{{ persona.id }}"
+                           id="persona-{{ persona.id }}"
+                           class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    <label for="persona-{{ persona.id }}" class="flex-1 cursor-pointer">
+                        <div class="font-semibold text-gray-900 mb-1">{{ persona.name }}</div>
+                        <div class="text-sm text-gray-600 mb-2">{{ persona.age }}歳 / {{ persona.occupation }}</div>
+                        <div class="text-sm text-gray-700 mb-3">{{ persona.background }}</div>
+                        
+                        <div class="space-y-2">
+                            <div>
+                                <span class="text-xs font-medium text-blue-600">価値観:</span>
+                                <div class="text-xs text-gray-600 mt-1">
+                                    {% for value in persona.values[:2] %}
+                                    <span class="inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1">{{ value }}</span>
+                                    {% endfor %}
+                                    {% if persona.values|length > 2 %}
+                                    <span class="text-gray-400">他{{ persona.values|length - 2 }}件</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <span class="text-xs font-medium text-orange-600">課題:</span>
+                                <div class="text-xs text-gray-600 mt-1">
+                                    {% for pain in persona.pain_points[:2] %}
+                                    <span class="inline-block bg-orange-50 px-2 py-1 rounded mr-1 mb-1">{{ pain }}</span>
+                                    {% endfor %}
+                                    {% if persona.pain_points|length > 2 %}
+                                    <span class="text-gray-400">他{{ persona.pain_points|length - 2 }}件</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <span class="text-xs font-medium text-green-600">目標:</span>
+                                <div class="text-xs text-gray-600 mt-1">
+                                    {% for goal in persona.goals[:2] %}
+                                    <span class="inline-block bg-green-50 px-2 py-1 rounded mr-1 mb-1">{{ goal }}</span>
+                                    {% endfor %}
+                                    {% if persona.goals|length > 2 %}
+                                    <span class="text-gray-400">他{{ persona.goals|length - 2 }}件</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="flex items-center justify-between">
+            <div class="text-sm text-gray-600">
+                <span id="selected-count">0</span>個のペルソナを選択中
+            </div>
+            <button type="submit" 
+                    class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    id="save-selected-btn"
+                    disabled>
+                選択したペルソナを保存
+            </button>
+        </div>
+        
+        <input type="hidden" name="persona_ids" id="persona-ids-input" value="">
+    </form>
+    
+    <div id="save-result" class="mt-4"></div>
+</div>
+
+<script>
+// チェックボックスの状態を監視
+function initPersonaSelection() {
+    const form = document.getElementById('save-personas-form');
+    if (!form) return;
+    
+    const checkboxes = form.querySelectorAll('input[name="persona_check"]');
+    const selectedCount = document.getElementById('selected-count');
+    const saveBtn = document.getElementById('save-selected-btn');
+    const personaIdsInput = document.getElementById('persona-ids-input');
+    
+    function updateSelection() {
+        const checked = Array.from(checkboxes).filter(cb => cb.checked);
+        selectedCount.textContent = checked.length;
+        saveBtn.disabled = checked.length === 0;
+        
+        // 選択されたIDをカンマ区切りで設定
+        personaIdsInput.value = checked.map(cb => cb.value).join(',');
+    }
+    
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', updateSelection);
+    });
+    
+    updateSelection();
+}
+
+// 初回ロード時
+document.addEventListener('DOMContentLoaded', initPersonaSelection);
+
+// htmxで動的に読み込まれた場合
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.detail.target.id === 'generation-result' || 
+        event.detail.elt.id === 'save-personas-form' ||
+        event.target.querySelector('#save-personas-form')) {
+        initPersonaSelection();
+    }
+});
+
+// 即時実行（htmxで読み込まれた直後の場合）
+initPersonaSelection();
+</script>

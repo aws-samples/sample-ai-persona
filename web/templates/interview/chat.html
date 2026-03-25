@@ -1,0 +1,1031 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_chat, icon_save, icon_arrow_left, icon_paper_airplane, icon_users, icon_persona, icon_attachment %}
+
+{% block content %}
+<style>
+/* ペルソナアバターの色定義 */
+.persona-avatar-purple { @apply bg-purple-500; }
+.persona-avatar-indigo { @apply bg-indigo-500; }
+.persona-avatar-pink { @apply bg-pink-500; }
+.persona-avatar-emerald { @apply bg-emerald-500; }
+.persona-avatar-orange { @apply bg-orange-500; }
+.persona-avatar-cyan { @apply bg-cyan-500; }
+.persona-avatar-amber { @apply bg-amber-500; }
+.persona-avatar-rose { @apply bg-rose-500; }
+</style>
+<div class="max-w-4xl mx-auto">
+    <!-- ヘッダー -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                    {{ icon_chat("w-6 h-6 text-purple-600") }} インタビューチャット
+                </h1>
+                <p class="text-gray-600 text-sm mt-1">セッションID: {{ session.id }}</p>
+            </div>
+            <div class="flex gap-3">
+                <button id="save-session-btn" 
+                        class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors flex items-center gap-2">
+                    {{ icon_save("w-4 h-4") }} 保存
+                </button>
+                <a href="/discussion/setup" 
+                   class="bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700 transition-colors flex items-center gap-2">
+                    {{ icon_arrow_left("w-4 h-4") }} 戻る
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 参加者情報 -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h3 class="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            {{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ participants|length }}名)
+        </h3>
+        <div class="grid md:grid-cols-2 gap-4">
+            {% for participant in participants %}
+            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h4 class="font-semibold text-gray-900 text-lg flex items-center gap-1.5">
+                            {{ icon_persona("w-4 h-4 text-blue-600") }} {{ participant.name }}
+                        </h4>
+                        <p class="text-sm text-blue-600 font-medium">{{ participant.occupation }} / {{ participant.age }}歳</p>
+                    </div>
+                    <a href="/persona/{{ participant.id }}" class="text-xs text-gray-500 hover:text-blue-600">詳細</a>
+                </div>
+                <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ participant.background[:100] }}{% if participant.background|length > 100 %}...{% endif %}</p>
+                <div class="mt-2 flex flex-wrap gap-1">
+                    {% for value in participant.values[:2] %}
+                    <span class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{{ value[:15] }}{% if value|length > 15 %}...{% endif %}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <!-- チャットエリア -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div id="chat-messages" class="space-y-4 max-h-[600px] overflow-y-auto mb-4 pr-2 scroll-smooth">
+            <!-- 既存のメッセージを表示 -->
+            {% for message in session.messages %}
+            <div class="message-item {% if message.persona_id == 'user' %}user-message{% else %}persona-message{% endif %} animate-fade-in">
+                {% if message.persona_id == 'user' %}
+                <!-- ユーザーメッセージ -->
+                <div class="flex justify-end mb-4">
+                    <div class="relative max-w-xs lg:max-w-md">
+                        <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl rounded-br-md px-4 py-3 shadow-md">
+                            <p class="text-sm leading-relaxed">{{ message.content }}</p>
+                        </div>
+                        {% if message.timestamp %}
+                        <div class="flex justify-end mt-1">
+                            <span class="text-xs text-gray-500 bg-white px-2 py-1 rounded-full shadow-sm">
+                                {{ message.timestamp.strftime('%H:%M') }}
+                            </span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <!-- ペルソナメッセージ -->
+                <div class="flex gap-3 mb-4">
+                    <div class="flex-shrink-0">
+                        <!-- ペルソナアバター（ペルソナIDベースの一貫した色分け） -->
+                        {% set persona_colors = [
+                            'bg-purple-500',
+                            'bg-indigo-500', 
+                            'bg-pink-500',
+                            'bg-emerald-500',
+                            'bg-orange-500',
+                            'bg-cyan-500',
+                            'bg-amber-500',
+                            'bg-rose-500'
+                        ] %}
+                        {% set color_index = session.participants.index(message.persona_id) if message.persona_id in session.participants else 0 %}
+                        <div class="w-12 h-12 rounded-full {{ persona_colors[color_index % persona_colors|length] }} flex items-center justify-center shadow-md ring-2 ring-white">
+                            <span class="text-white font-bold text-sm">{{ message.persona_name[0] }}</span>
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-baseline gap-2 mb-2">
+                            <span class="font-semibold text-gray-900 text-sm">{{ message.persona_name }}</span>
+                            <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">ペルソナ</span>
+                            {% if message.timestamp %}
+                            <span class="text-xs text-gray-400">{{ message.timestamp.strftime('%H:%M') }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
+                            <div class="text-gray-800 text-sm leading-relaxed prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            
+            <!-- 空の状態メッセージ -->
+            {% if not session.messages %}
+            <div class="text-center py-12">
+                <div class="w-16 h-16 mx-auto mb-4 bg-purple-100 rounded-full flex items-center justify-center">
+                    {{ icon_chat("w-8 h-8 text-purple-600") }}
+                </div>
+                <h3 class="text-lg font-medium text-gray-900 mb-2">インタビューを開始しましょう</h3>
+                <p class="text-gray-500 text-sm">下のメッセージ入力欄から質問を送信してください</p>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- メッセージ入力フォーム -->
+        <div class="border-t border-gray-200 pt-4">
+            <form id="message-form" class="flex flex-col gap-3" onsubmit="return false;">
+                <!-- 添付ファイルプレビューエリア -->
+                <div id="file-preview-container" class="hidden">
+                    <div class="flex flex-wrap gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                        <div id="file-preview-list" class="flex flex-wrap gap-2"></div>
+                    </div>
+                </div>
+                
+                <div class="flex gap-3">
+                    <!-- ファイル添付ボタン -->
+                    <div class="flex-shrink-0">
+                        <input type="file" 
+                               id="file-input"
+                               multiple
+                               accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/csv,text/html,text/markdown,.md"
+                               class="hidden">
+                        <button type="button" 
+                                id="attach-button"
+                                title="ファイルを添付（画像・PDF・テキスト）"
+                                class="bg-gray-100 text-gray-600 p-3 rounded-2xl hover:bg-gray-200 transition-colors flex items-center justify-center">
+                            {{ icon_attachment("w-5 h-5") }}
+                        </button>
+                    </div>
+                    
+                    <div class="flex-1 relative">
+                        <input type="text" 
+                               id="message-input"
+                               placeholder="質問やメッセージを入力してください..."
+                               class="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 pr-12 text-sm"
+                               required
+                               maxlength="500">
+                        <div class="absolute right-3 top-1/2 transform -translate-y-1/2">
+                            <span id="char-counter" class="text-xs text-gray-400">0/500</span>
+                        </div>
+                    </div>
+                    <button type="submit" 
+                            id="send-button"
+                            class="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-3 rounded-2xl hover:from-purple-700 hover:to-purple-800 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none">
+                        <span id="send-button-text">{{ icon_paper_airplane("w-4 h-4") }} </span>
+                        <div id="send-button-loading" class="hidden flex items-center gap-2">
+                            <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            <span>送信中</span>
+                        </div>
+                    </button>
+                </div>
+            </form>
+            
+            <!-- 入力ヒント -->
+            <div class="mt-2 text-xs text-gray-500 flex items-center gap-4 flex-wrap">
+                <span>💡 具体的な質問をすると、より詳しい回答が得られます</span>
+                <span>⏎ Enterキーで送信</span>
+                <span>📎 画像・PDF・テキストファイルを添付可能（最大10MB）</span>
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- ローディング表示（改善版） -->
+    <div id="loading-indicator" class="hidden bg-white rounded-lg shadow-md p-6 text-center border-l-4 border-purple-500">
+        <div class="flex items-center justify-center gap-3 text-gray-700">
+            <div class="relative">
+                <div class="w-8 h-8 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="w-2 h-2 bg-purple-600 rounded-full animate-pulse"></div>
+                </div>
+            </div>
+            <div>
+                <p class="font-medium">ペルソナが回答を考えています...</p>
+                <p class="text-sm text-gray-500 mt-1">しばらくお待ちください</p>
+            </div>
+        </div>
+        
+        <!-- 参加ペルソナの状態表示 -->
+        <div class="mt-4 flex justify-center gap-2">
+            {% for participant in participants %}
+            <div class="flex items-center gap-1 bg-purple-50 px-2 py-1 rounded-full">
+                <div class="w-2 h-2 bg-purple-400 rounded-full animate-pulse"></div>
+                <span class="text-xs text-purple-700">{{ participant.name }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <!-- エラー表示エリア -->
+    <div id="error-container" class="hidden mb-6"></div>
+    
+    <!-- 警告表示（見つからないペルソナがある場合） -->
+    {% if missing_personas %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+        <div class="flex items-start">
+            <span class="text-yellow-600 mr-3">⚠️</span>
+            <div>
+                <h3 class="font-semibold text-yellow-900">一部のペルソナが見つかりません</h3>
+                <p class="text-yellow-800 text-sm mt-1">
+                    以下のペルソナが見つかりませんでした: {{ missing_personas|join(', ') }}
+                </p>
+                <p class="text-yellow-700 text-xs mt-2">
+                    インタビューは利用可能なペルソナで続行できますが、一部の応答が得られない可能性があります。
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+
+
+// グローバル変数として定義
+let messageForm, messageInput, sendButton, chatMessages, loadingIndicator, charCounter, sendButtonText, sendButtonLoading, saveButton;
+let fileInput, attachButton, filePreviewContainer, filePreviewList;
+let selectedFiles = []; // 選択されたファイルを保持
+
+// サポートするファイルタイプ
+const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const SUPPORTED_DOCUMENT_TYPES = ['application/pdf', 'text/plain', 'text/csv', 'text/html', 'text/markdown'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// 参加者リストとペルソナ色マッピング
+const sessionParticipants = {{ session.participants | tojson | safe }};
+const personaColors = ['bg-purple-500', 'bg-indigo-500', 'bg-pink-500', 'bg-emerald-500', 'bg-orange-500', 'bg-cyan-500', 'bg-amber-500', 'bg-rose-500'];
+
+// ペルソナIDから一貫した色を取得する関数
+function getPersonaColor(personaId) {
+    const index = sessionParticipants.indexOf(personaId);
+    return personaColors[index >= 0 ? index % personaColors.length : 0];
+}
+
+// 安全なinnerHTML代入（DOMPurifyでサニタイズ）
+function safeSetInnerHTML(element, html) {
+    element.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
+}
+
+
+
+function initializeChat() {
+    // 要素を取得
+    messageForm = document.getElementById('message-form');
+    messageInput = document.getElementById('message-input');
+    sendButton = document.getElementById('send-button');
+    chatMessages = document.getElementById('chat-messages');
+    loadingIndicator = document.getElementById('loading-indicator');
+    charCounter = document.getElementById('char-counter');
+    sendButtonText = document.getElementById('send-button-text');
+    sendButtonLoading = document.getElementById('send-button-loading');
+    saveButton = document.getElementById('save-session-btn');
+    
+    // ファイル添付関連の要素
+    fileInput = document.getElementById('file-input');
+    attachButton = document.getElementById('attach-button');
+    filePreviewContainer = document.getElementById('file-preview-container');
+    filePreviewList = document.getElementById('file-preview-list');
+    
+    if (!messageForm || !messageInput || !sendButton) {
+        console.error('Required elements not found');
+        return;
+    }
+    
+    // 送信ボタンクリックイベント
+    sendButton.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const message = messageInput.value.trim();
+        if (!message && selectedFiles.length === 0) return;
+        
+        sendMessage(message);
+    });
+    
+    // フォーム送信を完全に無効化
+    messageForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    });
+    
+    // ファイル添付ボタンのクリックイベント
+    if (attachButton && fileInput) {
+        attachButton.addEventListener('click', function() {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', function(e) {
+            handleFileSelection(e.target.files);
+        });
+    }
+    
+    // 文字数カウンター
+    if (messageInput && charCounter) {
+        messageInput.addEventListener('input', function() {
+            const length = this.value.length;
+            charCounter.textContent = `${length}/500`;
+            
+            if (length > 450) {
+                charCounter.classList.add('text-red-500');
+                charCounter.classList.remove('text-gray-400');
+            } else {
+                charCounter.classList.remove('text-red-500');
+                charCounter.classList.add('text-gray-400');
+            }
+        });
+    }
+    
+    // Enterキーでの送信
+    if (messageInput) {
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const message = messageInput.value.trim();
+                if (message || selectedFiles.length > 0) {
+                    sendMessage(message);
+                }
+            }
+        });
+    }
+    
+    // 保存ボタンのイベントハンドラー
+    if (saveButton) {
+        saveButton.addEventListener('click', async function() {
+            await saveInterviewSession();
+        });
+    }
+    
+    // フォーカス設定
+    if (messageInput) {
+        messageInput.focus();
+    }
+}
+
+// ファイル選択処理
+function handleFileSelection(files) {
+    for (const file of files) {
+        // ファイルサイズチェック
+        if (file.size > MAX_FILE_SIZE) {
+            showErrorMessage(`ファイル "${file.name}" が大きすぎます（最大10MB）`);
+            continue;
+        }
+        
+        // MIMEタイプチェック
+        const allSupportedTypes = [...SUPPORTED_IMAGE_TYPES, ...SUPPORTED_DOCUMENT_TYPES];
+        if (!allSupportedTypes.includes(file.type)) {
+            showErrorMessage(`ファイル "${file.name}" のタイプはサポートされていません`);
+            continue;
+        }
+        
+        // 重複チェック
+        if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+            continue;
+        }
+        
+        selectedFiles.push(file);
+    }
+    
+    updateFilePreview();
+    
+    // ファイル入力をリセット（同じファイルを再選択可能にする）
+    if (fileInput) {
+        fileInput.value = '';
+    }
+}
+
+// ファイルプレビュー更新
+function updateFilePreview() {
+    if (!filePreviewContainer || !filePreviewList) return;
+    
+    if (selectedFiles.length === 0) {
+        filePreviewContainer.classList.add('hidden');
+        return;
+    }
+    
+    filePreviewContainer.classList.remove('hidden');
+    filePreviewList.textContent = '';
+    
+    selectedFiles.forEach((file, index) => {
+        const isImage = SUPPORTED_IMAGE_TYPES.includes(file.type);
+        const fileItem = document.createElement('div');
+        fileItem.className = 'flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm';
+        
+        // ファイルアイコンまたはサムネイル
+        let iconEl;
+        if (isImage) {
+            const url = URL.createObjectURL(file);
+            iconEl = document.createElement('img');
+            iconEl.src = url;
+            iconEl.className = 'w-8 h-8 object-cover rounded';
+            iconEl.alt = file.name;
+        } else if (file.type === 'application/pdf') {
+            iconEl = document.createElement('span');
+            iconEl.className = 'text-red-500 text-lg';
+            iconEl.textContent = '📄';
+        } else {
+            iconEl = document.createElement('span');
+            iconEl.className = 'text-gray-500 text-lg';
+            iconEl.textContent = '📝';
+        }
+        
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'flex-1 min-w-0';
+        const nameP = document.createElement('p');
+        nameP.className = 'text-xs text-gray-700 truncate max-w-[120px]';
+        nameP.title = file.name;
+        nameP.textContent = file.name;
+        const sizeP = document.createElement('p');
+        sizeP.className = 'text-xs text-gray-400';
+        sizeP.textContent = formatFileSize(file.size);
+        infoDiv.appendChild(nameP);
+        infoDiv.appendChild(sizeP);
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'text-gray-400 hover:text-red-500 transition-colors p-1';
+        removeBtn.title = '削除';
+        removeBtn.addEventListener('click', () => removeFile(index));
+        safeSetInnerHTML(removeBtn, `
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+        `);
+        
+        fileItem.appendChild(iconEl);
+        fileItem.appendChild(infoDiv);
+        fileItem.appendChild(removeBtn);
+        
+        filePreviewList.appendChild(fileItem);
+    });
+}
+
+// ファイル削除
+function removeFile(index) {
+    selectedFiles.splice(index, 1);
+    updateFilePreview();
+}
+
+// ファイルサイズフォーマット
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// メッセージ送信処理
+async function sendMessage(message) {
+    const sessionId = '{{ session.id }}';
+    
+    // メッセージもファイルもない場合は送信しない
+    if (!message && selectedFiles.length === 0) {
+        return;
+    }
+    
+    try {
+        
+        // UI状態を送信中に変更
+        setSendingState(true);
+        
+        // ユーザーメッセージを即座に表示（添付ファイル情報も含む）
+        addUserMessage(message, selectedFiles);
+        messageInput.value = '';
+        if (charCounter) charCounter.textContent = '0/500';
+        
+        // ローディング表示
+        showLoadingIndicator();
+        
+        // HTTPリクエストを送信
+        const formData = new FormData();
+        formData.append('message', message || '（添付ファイルを確認してください）');
+        
+        // 選択されたファイルを追加
+        for (const file of selectedFiles) {
+            formData.append('files', file);
+        }
+        
+        const requestUrl = `/interview/${sessionId}/message`;
+        
+        const response = await fetch(requestUrl, {
+            method: 'POST',
+            body: formData,
+            headers: {'X-Requested-With': 'XMLHttpRequest'}
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        // 送信成功後、選択ファイルをクリア
+        selectedFiles = [];
+        updateFilePreview();
+        
+        if (data.error) {
+            showDetailedError(data.error, data.error_type, data.technical_details);
+        } else if (data.responses && data.responses.length > 0) {
+            // ペルソナの応答を順次表示
+            for (let i = 0; i < data.responses.length; i++) {
+                const response = data.responses[i];
+                setTimeout(() => {
+                    addPersonaMessage(response.persona_name, response.content, response.timestamp, response.persona_id, response.content_html);
+                }, i * 800); // 800ms間隔で表示
+            }
+        } else {
+            showDetailedError('ペルソナからの応答がありませんでした', 'no_response');
+        }
+        
+    } catch (error) {
+        console.error('Send message error:', error);
+        
+        // ネットワークエラーかどうかを判定
+        if (error.name === 'TypeError' && error.message.includes('fetch')) {
+            showDetailedError(
+                'ネットワーク接続に問題があります。インターネット接続を確認してください。',
+                'network_error'
+            );
+        } else if (error.message.includes('HTTP 404')) {
+            showDetailedError(
+                'セッションが見つかりません。セッションが終了している可能性があります。',
+                'session_not_found'
+            );
+        } else if (error.message.includes('HTTP 503')) {
+            showDetailedError(
+                'AIエージェントサービスが一時的に利用できません。しばらく待ってから再試行してください。',
+                'agent_error'
+            );
+        } else if (error.message.includes('保存済み')) {
+            // 保存済みセッションでのメッセージ送信エラー
+            disableMessageSending('このセッションは既に保存されています。新しいメッセージは送信できません。');
+            showDetailedError(
+                'このセッションは既に保存されているため、新しいメッセージを送信できません。',
+                'session_saved'
+            );
+        } else {
+            showDetailedError(
+                'メッセージの送信中にエラーが発生しました: ' + error.message,
+                'internal_error',
+                error.stack
+            );
+        }
+    } finally {
+        // ローディング状態をリセット
+        setTimeout(() => {
+            hideLoadingIndicator();
+            setSendingState(false);
+        }, 1000);
+    }
+}
+
+// UI状態管理関数
+function setSendingState(sending) {
+    if (sendButton) sendButton.disabled = sending;
+    if (messageInput) messageInput.disabled = sending;
+    
+    if (sendButtonText && sendButtonLoading) {
+        if (sending) {
+            sendButtonText.classList.add('hidden');
+            sendButtonLoading.classList.remove('hidden');
+        } else {
+            sendButtonText.classList.remove('hidden');
+            sendButtonLoading.classList.add('hidden');
+        }
+    }
+}
+
+function showLoadingIndicator() {
+    if (loadingIndicator) {
+        loadingIndicator.classList.remove('hidden');
+        loadingIndicator.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+function hideLoadingIndicator() {
+    if (loadingIndicator) {
+        loadingIndicator.classList.add('hidden');
+    }
+}
+
+// メッセージ表示関数
+function addUserMessage(content, files = []) {
+    if (!chatMessages) return;
+    
+    // 添付ファイルのプレビューHTML生成
+    let attachmentsHtml = '';
+    if (files && files.length > 0) {
+        const fileItems = files.map(file => {
+            const isImage = SUPPORTED_IMAGE_TYPES.includes(file.type);
+            if (isImage) {
+                const url = URL.createObjectURL(file);
+                return `<img src="${url}" class="max-w-[150px] max-h-[100px] rounded-lg object-cover" alt="${escapeHtml(file.name)}">`;
+            } else if (file.type === 'application/pdf') {
+                return `<div class="flex items-center gap-1 bg-white/20 px-2 py-1 rounded text-xs">📄 ${escapeHtml(file.name)}</div>`;
+            } else {
+                return `<div class="flex items-center gap-1 bg-white/20 px-2 py-1 rounded text-xs">📝 ${escapeHtml(file.name)}</div>`;
+            }
+        }).join('');
+        
+        attachmentsHtml = `<div class="flex flex-wrap gap-2 mt-2">${fileItems}</div>`;
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message-item user-message animate-fade-in';
+    safeSetInnerHTML(messageDiv, `
+        <div class="flex justify-end mb-4">
+            <div class="relative max-w-xs lg:max-w-md">
+                <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl rounded-br-md px-4 py-3 shadow-md">
+                    ${content ? `<p class="text-sm leading-relaxed">${escapeHtml(content)}</p>` : ''}
+                    ${attachmentsHtml}
+                </div>
+                <div class="flex justify-end mt-1">
+                    <span class="text-xs text-gray-500 bg-white px-2 py-1 rounded-full shadow-sm">
+                        ${new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'})}
+                    </span>
+                </div>
+            </div>
+        </div>
+    `);
+    chatMessages.appendChild(messageDiv);
+    scrollToBottom();
+}
+
+function addPersonaMessage(personaName, content, timestamp, personaId, contentHtml) {
+    if (!chatMessages) return;
+    
+    // ペルソナIDから一貫した色を取得
+    const colorClass = getPersonaColor(personaId);
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message-item persona-message animate-fade-in';
+    const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'}) : new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
+    
+    safeSetInnerHTML(messageDiv, `
+        <div class="flex gap-3 mb-4">
+            <div class="flex-shrink-0">
+                <div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white">
+                    <span class="text-white font-bold text-sm">${personaName[0]}</span>
+                </div>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-2 mb-2">
+                    <span class="font-semibold text-gray-900 text-sm">${escapeHtml(personaName)}</span>
+                    <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">ペルソナ</span>
+                    <span class="text-xs text-gray-400">${timeStr}</span>
+                </div>
+                <div class="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
+                    <div class="text-gray-800 text-sm leading-relaxed prose prose-sm max-w-none">${contentHtml || escapeHtml(content)}</div>
+                </div>
+            </div>
+        </div>
+    `);
+    chatMessages.appendChild(messageDiv);
+    scrollToBottom();
+}
+
+// ユーティリティ関数
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function scrollToBottom() {
+    if (chatMessages) {
+        setTimeout(() => {
+            chatMessages.scrollTo({
+                top: chatMessages.scrollHeight,
+                behavior: 'smooth'
+            });
+        }, 100);
+    }
+}
+
+function showErrorMessage(message) {
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+    errorDiv.textContent = message;
+    document.body.appendChild(errorDiv);
+    
+    setTimeout(() => {
+        errorDiv.remove();
+    }, 5000);
+}
+
+function showDetailedError(message, errorType, technicalDetails) {
+    const errorContainer = document.getElementById('error-container');
+    if (!errorContainer) {
+        showErrorMessage(message);
+        return;
+    }
+    
+    // エラータイプに応じたアイコンとスタイル
+    let iconHtml = '❌';
+    let titleText = 'エラーが発生しました';
+    let actionHtml = '';
+    
+    switch (errorType) {
+        case 'validation_error':
+            iconHtml = '⚠️';
+            titleText = '入力エラー';
+            break;
+        case 'session_not_found':
+            iconHtml = '🔍';
+            titleText = 'セッションエラー';
+            actionHtml = `
+                <a href="/discussion/setup" 
+                   class="inline-block mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">
+                    新しいセッションを作成
+                </a>
+            `;
+            break;
+        case 'agent_error':
+            iconHtml = '🤖';
+            titleText = 'AIエージェントエラー';
+            actionHtml = `
+                <button onclick="location.reload()" 
+                        class="inline-block mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">
+                    ページを更新
+                </button>
+            `;
+            break;
+        case 'network_error':
+            iconHtml = '🌐';
+            titleText = 'ネットワークエラー';
+            actionHtml = `
+                <button onclick="location.reload()" 
+                        class="inline-block mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700">
+                    再接続を試行
+                </button>
+            `;
+            break;
+    }
+    
+    const technicalDetailsHtml = technicalDetails ? `
+        <details class="mt-3">
+            <summary class="text-xs text-red-600 cursor-pointer hover:text-red-800">
+                技術的な詳細を表示
+            </summary>
+            <pre class="mt-2 text-xs text-red-700 bg-red-100 p-2 rounded overflow-x-auto">${escapeHtml(technicalDetails)}</pre>
+        </details>
+    ` : '';
+    
+    safeSetInnerHTML(errorContainer, `
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4 fade-in">
+            <div class="flex items-start">
+                <span class="text-red-600 mr-3 flex-shrink-0 text-xl">${iconHtml}</span>
+                <div class="flex-1">
+                    <h3 class="font-semibold text-red-900">${titleText}</h3>
+                    <p class="text-red-800 text-sm mt-1">${escapeHtml(message)}</p>
+                    <div class="mt-3 flex gap-2">
+                        <button data-dismiss-error
+                                class="text-sm text-red-600 hover:text-red-800 underline">
+                            閉じる
+                        </button>
+                        ${actionHtml}
+                    </div>
+                    ${technicalDetailsHtml}
+                </div>
+            </div>
+        </div>
+    `);
+    
+    errorContainer.querySelector('[data-dismiss-error]')?.addEventListener('click', () => {
+        errorContainer.classList.add('hidden');
+    });
+    errorContainer.classList.remove('hidden');
+    errorContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function showSuccessMessage(message) {
+    const successDiv = document.createElement('div');
+    successDiv.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+    successDiv.textContent = message;
+    document.body.appendChild(successDiv);
+    
+    setTimeout(() => {
+        successDiv.remove();
+    }, 3000);
+}
+
+// メッセージ送信を無効化する関数
+function disableMessageSending(reason) {
+    if (messageInput) {
+        messageInput.disabled = true;
+        messageInput.placeholder = reason;
+        messageInput.classList.add('bg-gray-100', 'text-gray-500', 'cursor-not-allowed');
+    }
+    
+    if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.classList.add('opacity-50', 'cursor-not-allowed');
+        safeSetInnerHTML(sendButton, '<span class="text-gray-500">送信不可</span>');
+    }
+    
+    // フォーム送信も完全に無効化
+    if (messageForm) {
+        messageForm.onsubmit = function(e) {
+            e.preventDefault();
+            showErrorMessage(reason);
+            return false;
+        };
+    }
+}
+
+// インタビューセッション保存処理
+async function saveInterviewSession() {
+    const sessionId = '{{ session.id }}';
+    
+    if (!saveButton) return;
+    
+    // 保存名を入力するモーダルを表示
+    const sessionName = await showSaveNameModal();
+    if (!sessionName) {
+        return; // キャンセルされた場合
+    }
+    
+    const originalText = saveButton.innerHTML;
+    
+    try {
+        // 保存中の表示に変更
+        safeSetInnerHTML(saveButton, '<div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>保存中...');
+        saveButton.disabled = true;
+        
+        const formData = new FormData();
+        formData.append('session_name', sessionName);
+        
+        const response = await fetch(`/interview/${sessionId}/save`, {
+            method: 'POST',
+            body: formData,
+            headers: {'X-Requested-With': 'XMLHttpRequest'}
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.error) {
+            showDetailedError(data.error, data.error_type, data.technical_details);
+        } else if (data.already_saved) {
+            showSuccessMessage('このセッションは既に保存されています');
+            setTimeout(() => {
+                window.location.href = '/discussion/results';
+            }, 1500);
+        } else {
+            const messageCount = data.session_status?.message_count || 0;
+            showSuccessMessage(`「${sessionName}」として保存されました（${messageCount}件のメッセージ）`);
+            
+            // 保存後はメッセージ送信を無効化
+            disableMessageSending('セッションが保存されました。新しいメッセージは送信できません。');
+            
+            setTimeout(() => {
+                window.location.href = `/discussion/${data.discussion_id}`;
+            }, 1500);
+        }
+        
+    } catch (error) {
+        console.error('Save session error:', error);
+        
+        // エラータイプに応じた詳細なエラーメッセージ
+        if (error.message.includes('HTTP 404')) {
+            showDetailedError(
+                'セッションが見つかりません。セッションが既に終了している可能性があります。',
+                'session_not_found'
+            );
+        } else if (error.message.includes('HTTP 503')) {
+            showDetailedError(
+                'データベースサービスが一時的に利用できません。しばらく待ってから再試行してください。',
+                'persistence_error'
+            );
+        } else {
+            showDetailedError(
+                'セッションの保存中にエラーが発生しました: ' + error.message,
+                'internal_error',
+                error.stack
+            );
+        }
+    } finally {
+        // ボタンを元の状態に戻す
+        safeSetInnerHTML(saveButton, originalText);
+        saveButton.disabled = false;
+    }
+}
+
+// 保存名入力モーダルを表示
+function showSaveNameModal() {
+    return new Promise((resolve) => {
+        // モーダルHTML作成
+        const modalHtml = `
+            <div id="save-name-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4">インタビューセッションを保存</h3>
+                    <p class="text-gray-600 text-sm mb-4">保存するセッションの名前を入力してください。この名前は議論一覧で表示されます。</p>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">セッション名</label>
+                        <input type="text" 
+                               id="session-name-input"
+                               placeholder="例: 新商品に関するインタビュー"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                               maxlength="100">
+                        <p class="text-xs text-gray-500 mt-1">最大100文字まで入力できます</p>
+                    </div>
+                    
+                    <div class="flex gap-3 justify-end">
+                        <button id="cancel-save-btn" 
+                                class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors">
+                            キャンセル
+                        </button>
+                        <button id="confirm-save-btn" 
+                                class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                            保存
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // モーダルをDOMに追加（静的HTMLだがDOMPurifyで一貫性を保つ）
+        const modalContainer = document.createElement('div');
+        safeSetInnerHTML(modalContainer, modalHtml);
+        document.body.appendChild(modalContainer.firstElementChild);
+        
+        const modal = document.getElementById('save-name-modal');
+        const input = document.getElementById('session-name-input');
+        const cancelBtn = document.getElementById('cancel-save-btn');
+        const confirmBtn = document.getElementById('confirm-save-btn');
+        
+        // 入力フィールドにフォーカス
+        input.focus();
+        
+        // デフォルト名を設定（現在の日時ベース）
+        const now = new Date();
+        const defaultName = `インタビューセッション ${now.getFullYear()}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getDate().toString().padStart(2,'0')} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+        input.value = defaultName;
+        input.select(); // テキストを選択状態にする
+        
+        // 入力値の検証
+        function validateInput() {
+            const value = input.value.trim();
+            confirmBtn.disabled = !value || value.length === 0;
+        }
+        
+        input.addEventListener('input', validateInput);
+        validateInput(); // 初期検証
+        
+        // キャンセルボタン
+        cancelBtn.addEventListener('click', () => {
+            modal.remove();
+            resolve(null);
+        });
+        
+        // 確定ボタン
+        confirmBtn.addEventListener('click', () => {
+            const sessionName = input.value.trim();
+            if (sessionName) {
+                modal.remove();
+                resolve(sessionName);
+            }
+        });
+        
+        // Enterキーで確定
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !confirmBtn.disabled) {
+                const sessionName = input.value.trim();
+                if (sessionName) {
+                    modal.remove();
+                    resolve(sessionName);
+                }
+            } else if (e.key === 'Escape') {
+                modal.remove();
+                resolve(null);
+            }
+        });
+        
+        // モーダル外クリックでキャンセル
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+                resolve(null);
+            }
+        });
+    });
+}
+
+// DOMContentLoaded イベントで初期化
+document.addEventListener('DOMContentLoaded', initializeChat);
+
+// 念のため、window.onload でも初期化
+window.addEventListener('load', function() {
+    if (!messageForm) {
+        initializeChat();
+    }
+});
+</script>
+{% endblock %}

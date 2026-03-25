@@ -1,0 +1,49 @@
+{% if filter_values %}
+<div class="grid md:grid-cols-2 gap-4">
+    {% for attr_name, info in filter_values.items() %}
+    <div>
+        <label class="block text-xs text-gray-500 mb-1">{{ attr_name }}</label>
+        {% if info.type == 'range' %}
+        <div class="flex items-center gap-2">
+            <input type="number" name="filter_{{ attr_name }}_min"
+                   placeholder="{{ info.min }}" min="{{ info.min }}" max="{{ info.max }}"
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500 filter-input"
+                   data-filter-name="{{ attr_name }}" data-filter-type="range" data-range-part="min">
+            <span class="text-gray-400 text-sm">〜</span>
+            <input type="number" name="filter_{{ attr_name }}_max"
+                   placeholder="{{ info.max }}" min="{{ info.min }}" max="{{ info.max }}"
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500 filter-input"
+                   data-filter-name="{{ attr_name }}" data-filter-type="range" data-range-part="max">
+        </div>
+        {% elif info.type == 'keyword' %}
+        <input type="text" name="filter_{{ attr_name }}"
+               placeholder="キーワードを入力"
+               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500 filter-input"
+               data-filter-name="{{ attr_name }}" data-filter-type="keyword">
+        {% elif info.type == 'multi' %}
+        <div class="max-h-40 overflow-y-auto border border-gray-300 rounded-md p-2 space-y-1">
+            {% for val in info.options %}
+            <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-50 px-1 rounded">
+                <input type="checkbox" value="{{ val }}"
+                       class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 filter-input"
+                       data-filter-name="{{ attr_name }}" data-filter-type="multi">
+                {{ val }}
+            </label>
+            {% endfor %}
+        </div>
+        {% else %}
+        <select name="filter_{{ attr_name }}"
+                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500 filter-input"
+                data-filter-name="{{ attr_name }}" data-filter-type="select">
+            <option value="">指定なし</option>
+            {% for val in info.options %}
+            <option value="{{ val }}">{{ val }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-sm text-gray-400">フィルタ情報を取得できませんでした。フィルタなしで実行されます。</p>
+{% endif %}

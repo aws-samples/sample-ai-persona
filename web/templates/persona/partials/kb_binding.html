@@ -1,0 +1,89 @@
+<!-- ナレッジベース紐付けパーシャル（データセット紐付けUIと統一） -->
+{% if not knowledge_bases %}
+<p class="text-gray-500 text-sm">利用可能なナレッジベースがありません。<a href="/settings" class="text-indigo-600 hover:underline">設定</a>からナレッジベースを登録してください。</p>
+{% else %}
+<div class="space-y-3">
+    {% for kb in knowledge_bases %}
+    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false, filters: [], addFilter() { this.filters.push({key:'',value:''}); }, removeFilter(i) { this.filters.splice(i,1); } }">
+        <div class="flex items-center justify-between">
+            <div class="flex-1">
+                <h4 class="font-medium text-gray-900">{{ kb.name }}</h4>
+                {% if kb.description %}
+                <p class="text-sm text-gray-500 mt-1">{{ kb.description }}</p>
+                {% endif %}
+                <p class="text-xs text-gray-400 mt-1">ナレッジベースID: {{ kb.knowledge_base_id }}</p>
+            </div>
+            <div class="ml-4">
+                {% if binding and binding.kb_id == kb.id %}
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
+                    <button
+                        hx-delete="/persona/{{ persona_id }}/kb-binding/{{ binding.id }}"
+                        hx-target="#kb-binding-content"
+                        hx-swap="innerHTML"
+                        hx-confirm="この紐付けを解除しますか？"
+                        class="text-red-500 hover:text-red-700 text-sm"
+                    >解除</button>
+                </div>
+                {% if binding.metadata_filters %}
+                <div class="mt-2 text-xs text-gray-500">
+                    フィルタ: {% for k, v in binding.metadata_filters.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </div>
+                {% endif %}
+                {% elif not binding %}
+                <button
+                    @click="showModal = true"
+                    class="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                >紐付ける</button>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- 紐付けモーダル -->
+        {% if not binding %}
+        <div x-show="showModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+            <div class="fixed inset-0 bg-black/50" @click="showModal = false"></div>
+            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <h3 class="text-lg font-semibold mb-4">{{ kb.name }} を紐付け</h3>
+                <p class="text-sm text-gray-600 mb-4">ナレッジベース検索時に適用するメタデータフィルタを設定してください（オプション）。</p>
+                
+                <form id="kb-binding-form-{{ kb.id }}">
+                    <div class="mb-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="text-sm font-medium text-gray-700">メタデータフィルタ</label>
+                            <button type="button" @click="addFilter()" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium">+ 追加</button>
+                        </div>
+                        <template x-for="(filter, i) in filters" :key="i">
+                            <div class="flex gap-2 mb-2">
+                                <input type="text" x-model="filter.key" placeholder="キー名" class="flex-1 border rounded px-3 py-2 text-sm">
+                                <input type="text" x-model="filter.value" placeholder="値" class="flex-1 border rounded px-3 py-2 text-sm">
+                                <button type="button" @click="removeFilter(i)" class="text-red-400 hover:text-red-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                        </template>
+                        <p x-show="filters.length === 0" class="text-xs text-gray-400">フィルタなし（全ドキュメントが検索対象）</p>
+                    </div>
+                    <input type="hidden" name="kb_id" value="{{ kb.id }}">
+                    <input type="hidden" name="metadata_filters_json" :value="JSON.stringify(filters.reduce((acc, f) => { if(f.key.trim()) acc[f.key.trim()] = f.value.trim(); return acc; }, {}))">
+                </form>
+                
+                <div class="flex justify-end gap-2">
+                    <button type="button" @click="showModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                    <button 
+                        type="button"
+                        hx-post="/persona/{{ persona_id }}/kb-binding"
+                        hx-target="#kb-binding-content"
+                        hx-swap="innerHTML"
+                        hx-include="#kb-binding-form-{{ kb.id }}"
+                        @click="showModal = false"
+                        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                    >紐付ける</button>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

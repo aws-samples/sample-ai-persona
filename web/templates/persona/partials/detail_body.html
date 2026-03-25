@@ -1,0 +1,227 @@
+{% from "components/icons.html" import icon_persona, icon_document, icon_lightbulb, icon_x_circle, icon_rocket, icon_cpu_chip %}
+<!-- ペルソナ詳細ボディ（共通パーシャル） -->
+
+<!-- 基本情報カード -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_persona("w-5 h-5 text-gray-600") }} 基本情報</h2>
+    <div class="grid md:grid-cols-3 gap-4">
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">名前</p>
+            <p class="font-semibold text-gray-900">{{ persona.name }}</p>
+        </div>
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">年齢</p>
+            <p class="font-semibold text-gray-900">{{ persona.age }}歳</p>
+        </div>
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">職業</p>
+            <p class="font-semibold text-gray-900">{{ persona.occupation }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- 背景 -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_document("w-5 h-5 text-gray-600") }} 背景・プロフィール</h2>
+    <p class="text-gray-700 whitespace-pre-wrap">{{ persona.background }}</p>
+</div>
+
+<!-- 価値観 -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-blue-600") }} 価値観・信念</h2>
+    <ul class="space-y-3">
+        {% for value in persona.values %}
+        <li class="flex items-start">
+            <span class="bg-blue-100 text-blue-600 rounded-full w-6 h-6 flex items-center justify-center text-sm mr-3 flex-shrink-0">
+                {{ loop.index }}
+            </span>
+            <span class="text-gray-700">{{ value }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- 課題・悩み -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_x_circle("w-5 h-5 text-red-600") }} 課題・悩み</h2>
+    <ul class="space-y-3">
+        {% for pain_point in persona.pain_points %}
+        <li class="flex items-start">
+            <span class="bg-red-100 text-red-600 rounded-full w-6 h-6 flex items-center justify-center text-sm mr-3 flex-shrink-0">
+                {{ loop.index }}
+            </span>
+            <span class="text-gray-700">{{ pain_point }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- 目標・願望 -->
+<div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_rocket("w-5 h-5 text-green-600") }} 目標・願望</h2>
+    <ul class="space-y-3">
+        {% for goal in persona.goals %}
+        <li class="flex items-start">
+            <span class="bg-green-100 text-green-600 rounded-full w-6 h-6 flex items-center justify-center text-sm mr-3 flex-shrink-0">
+                {{ loop.index }}
+            </span>
+            <span class="text-gray-700">{{ goal }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- 長期記憶セクション -->
+<div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false, loaded: false, activeTab: 'summary' }">
+    <button 
+        @click="open = !open; if (!loaded) { $nextTick(() => { htmx.trigger(document.getElementById('memory-section-content'), 'load-memories'); loaded = true; }); }"
+        class="w-full p-6 flex items-center justify-between text-left hover:bg-gray-50 transition-colors rounded-lg"
+    >
+        <div>
+            <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                {{ icon_cpu_chip("w-5 h-5 text-purple-600") }} 長期記憶
+            </h2>
+            <p class="text-sm text-gray-500 mt-1">過去の議論で得た気づきや学び、事実情報などペルソナ固有の記憶</p>
+        </div>
+        <svg 
+            class="w-5 h-5 text-gray-500 transition-transform duration-200 flex-shrink-0"
+            :class="{ 'rotate-180': open }"
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke-width="1.5" 
+            stroke="currentColor"
+        >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+    </button>
+    
+    <div x-show="open" x-collapse class="px-6 pb-6">
+        <div class="border-t border-gray-100 pt-4">
+            <!-- タブナビゲーション -->
+            <div class="flex border-b border-gray-200 mb-4">
+                <button 
+                    @click="activeTab = 'summary'; htmx.ajax('GET', '/persona/{{ persona.id }}/memories?strategy_type=summary', {target: '#memory-section-content', swap: 'innerHTML'})"
+                    :class="activeTab === 'summary' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-2"
+                >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    議論の記憶
+                </button>
+                <button 
+                    @click="activeTab = 'semantic'; htmx.ajax('GET', '/persona/{{ persona.id }}/memories?strategy_type=semantic', {target: '#memory-section-content', swap: 'innerHTML'})"
+                    :class="activeTab === 'semantic' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-2"
+                >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
+                    </svg>
+                    知識・事実
+                </button>
+            </div>
+            
+            <!-- 記憶一覧読み込みエリア -->
+            <div 
+                id="memory-section-content"
+                hx-get="/persona/{{ persona.id }}/memories?strategy_type=summary"
+                hx-trigger="load-memories"
+                hx-swap="innerHTML"
+            >
+                <div class="flex items-center justify-center py-8">
+                    <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600"></div>
+                    <span class="ml-2 text-gray-500 text-sm">記憶を読み込み中...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ナレッジベース紐付けセクション -->
+<div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false }">
+    <button 
+        @click="open = !open"
+        class="w-full p-6 flex items-center justify-between text-left hover:bg-gray-50 transition-colors rounded-lg"
+    >
+        <div>
+            <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                </svg>
+                ナレッジベース連携
+            </h2>
+            <p class="text-sm text-gray-500 mt-1">専門知識や文献・資料を紐付けてペルソナの知識を拡張</p>
+        </div>
+        <svg 
+            class="w-5 h-5 text-gray-500 transition-transform duration-200 flex-shrink-0"
+            :class="{ 'rotate-180': open }"
+            fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+    </button>
+    
+    <div x-show="open" x-collapse class="px-6 pb-6">
+        <div class="border-t border-gray-100 pt-4">
+            <div 
+                id="kb-binding-content"
+                hx-get="/persona/{{ persona.id }}/kb-binding"
+                hx-trigger="load"
+                hx-swap="innerHTML"
+            >
+                <div class="flex items-center justify-center py-4">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+                    <span class="ml-2 text-gray-500 text-sm">読み込み中...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- データセット紐付けセクション -->
+<div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false }">
+    <button 
+        @click="open = !open"
+        class="w-full p-6 flex items-center justify-between text-left hover:bg-gray-50 transition-colors rounded-lg"
+    >
+        <div>
+            <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                <svg class="w-5 h-5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+                </svg>
+                データセット紐付け
+            </h2>
+            <p class="text-sm text-gray-500 mt-1">購買履歴や行動ログなど実際のインタラクションデータへのアクセスを付与</p>
+        </div>
+        <svg 
+            class="w-5 h-5 text-gray-500 transition-transform duration-200 flex-shrink-0"
+            :class="{ 'rotate-180': open }"
+            fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"
+        >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+    </button>
+    
+    <div x-show="open" x-collapse class="px-6 pb-6">
+        <div class="border-t border-gray-100 pt-4">
+            <div 
+                id="dataset-binding-content"
+                hx-get="/persona/{{ persona.id }}/dataset-bindings"
+                hx-trigger="load"
+                hx-swap="innerHTML"
+            >
+                <div class="flex items-center justify-center py-4">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-cyan-600"></div>
+                    <span class="ml-2 text-gray-500 text-sm">読み込み中...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- メタ情報 -->
+<div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-500">
+    <p><strong>ペルソナID:</strong> {{ persona.id }}</p>
+    <p><strong>作成日時:</strong> {{ persona.created_at.strftime('%Y年%m月%d日 %H:%M:%S') if persona.created_at else '不明' }}</p>
+    <p><strong>更新日時:</strong> {{ persona.updated_at.strftime('%Y年%m月%d日 %H:%M:%S') if persona.updated_at else '不明' }}</p>
+</div>

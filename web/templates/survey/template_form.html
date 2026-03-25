@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_document, icon_plus, icon_trash, icon_arrow_left, icon_check %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto" x-data="templateForm()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
+                {{ icon_document("w-8 h-8 text-teal-600") }}
+                {% if template %}テンプレート編集{% else %}テンプレート作成{% endif %}
+            </h1>
+        </div>
+        <a href="/survey/templates" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+            {{ icon_arrow_left("w-4 h-4") }} 一覧に戻る
+        </a>
+    </div>
+
+    <!-- エラーメッセージ表示エリア -->
+    <div id="form-error"></div>
+
+    <form id="template-form"
+          {% if template %}
+          hx-put="/survey/templates/{{ template.id }}"
+          {% else %}
+          hx-post="/survey/templates"
+          {% endif %}
+          hx-target="#form-error"
+          hx-swap="innerHTML"
+          @submit="prepareSubmit()">
+
+        <!-- テンプレート名 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="block text-sm font-medium text-gray-700 mb-2">テンプレート名</label>
+            <input type="text" name="name" x-model="name" required
+                   placeholder="例: 新商品満足度調査"
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-teal-500 focus:border-teal-500">
+        </div>
+
+        <!-- 画像アップロードセクション -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    画像(オプション)
+                </h2>
+                <span class="text-sm text-gray-500" x-text="images.length + '/1枚'"></span>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、5MB以下、1枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
+
+            <!-- アップロード済み画像一覧 -->
+            <template x-for="(img, idx) in images" :key="img.id">
+                <div class="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <img :src="img.preview_url || img.preview" class="w-16 h-16 object-cover rounded border" alt="">
+                    <div class="flex-1">
+                        <input type="text" x-model="img.name" placeholder="画像の名前（例: 広告A）"
+                               class="w-full border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        <p class="text-xs text-gray-400 mt-1" x-text="img.original_filename"></p>
+                    </div>
+                    <button type="button" @click="removeImage(idx)" class="text-red-500 hover:text-red-700 p-1" title="削除">
+                        {{ icon_trash("w-4 h-4") }}
+                    </button>
+                </div>
+            </template>
+
+            <!-- アップロードエリア -->
+            <div x-show="images.length < 1"
+                 class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-400 transition-colors cursor-pointer"
+                 @click="$refs.imageInput.click()"
+                 @dragover.prevent="$el.classList.add('border-indigo-400', 'bg-indigo-50')"
+                 @dragleave.prevent="$el.classList.remove('border-indigo-400', 'bg-indigo-50')"
+                 @drop.prevent="handleDrop($event)">
+                <svg class="w-8 h-8 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                <p class="text-sm text-gray-500">クリックまたはドラッグ&ドロップで画像をアップロード</p>
+                <input type="file" x-ref="imageInput" class="hidden" accept="image/png,image/jpeg"
+                       @change="handleFileSelect($event)">
+            </div>
+            <div x-show="uploading" class="text-center py-2">
+                <span class="text-sm text-indigo-600">アップロード中...</span>
+            </div>
+        </div>
+
+        <!-- 質問リスト -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold text-gray-900">質問一覧</h2>
+                <span class="text-sm text-gray-500" x-text="questions.length + '問'"></span>
+            </div>
+
+            <template x-for="(q, index) in questions" :key="q._key">
+                <div class="border border-gray-200 rounded-lg p-4 mb-4 bg-gray-50">
+                    <div class="flex justify-between items-start mb-3">
+                        <span class="text-sm font-medium text-gray-700" x-text="'質問 ' + (index + 1)"></span>
+                        <button type="button" @click="removeQuestion(index)"
+                                class="text-red-500 hover:text-red-700 p-1" title="削除">
+                            {{ icon_trash("w-4 h-4") }}
+                        </button>
+                    </div>
+
+                    <!-- 質問タイプ -->
+                    <div class="mb-3">
+                        <label class="block text-xs text-gray-500 mb-1">質問タイプ</label>
+                        <select x-model="q.question_type" @change="onTypeChange(index)"
+                                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-teal-500 focus:border-teal-500">
+                            <option value="multiple_choice">選択式</option>
+                            <option value="free_text">自由記述</option>
+                            <option value="scale_rating">スケール評価（1〜5）</option>
+                        </select>
+                    </div>
+
+                    <!-- 質問テキスト -->
+                    <div class="mb-3">
+                        <label class="block text-xs text-gray-500 mb-1">質問文</label>
+                        <input type="text" x-model="q.text" required
+                               placeholder="質問を入力してください"
+                               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-teal-500 focus:border-teal-500">
+                        <p x-show="images.length > 0" class="text-xs text-indigo-500 mt-1">
+                            💡 画像について質問する場合は、質問文に画像名（<template x-for="(img, i) in images" :key="img.id"><span><span x-text="img.name || img.original_filename" class="font-medium"></span><span x-show="i < images.length - 1">、</span></span></template>）を含めてください
+                        </p>
+                    </div>
+
+                    <!-- 選択肢（選択式の場合のみ） -->
+                    <template x-if="q.question_type === 'multiple_choice'">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">選択肢（2つ以上必須）</label>
+                            <template x-for="(opt, optIdx) in q.options" :key="optIdx">
+                                <div class="flex gap-2 mb-2">
+                                    <input type="text" x-model="q.options[optIdx]"
+                                           :placeholder="'選択肢 ' + (optIdx + 1)"
+                                           class="flex-1 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:ring-teal-500 focus:border-teal-500">
+                                    <button type="button" @click="q.options.splice(optIdx, 1)"
+                                            x-show="q.options.length > 2"
+                                            class="text-red-400 hover:text-red-600 px-1">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </div>
+                            </template>
+                            <button type="button" @click="q.options.push('')"
+                                    class="text-teal-600 hover:text-teal-800 text-sm flex items-center gap-1 mt-1">
+                                {{ icon_plus("w-3.5 h-3.5") }} 選択肢を追加
+                            </button>
+                            <!-- 複数回答設定 -->
+                            <div class="mt-3 pt-3 border-t border-gray-200">
+                                <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                    <input type="checkbox" x-model="q.allow_multiple"
+                                           class="rounded border-gray-300 text-teal-600 focus:ring-teal-500">
+                                    複数回答を許可
+                                </label>
+                                <div x-show="q.allow_multiple" class="mt-2 ml-6">
+                                    <label class="block text-xs text-gray-500 mb-1">最大選択数（0 = 無制限）</label>
+                                    <input type="number" x-model.number="q.max_selections" min="0" :max="q.options.length"
+                                           class="w-24 border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-teal-500 focus:border-teal-500">
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <!-- 質問追加ボタン -->
+            <div class="flex gap-2 mt-4">
+                <button type="button" @click="addQuestion('multiple_choice')"
+                        class="bg-blue-50 text-blue-700 px-3 py-2 rounded-md hover:bg-blue-100 transition-colors text-sm flex items-center gap-1">
+                    {{ icon_plus("w-4 h-4") }} 選択式
+                </button>
+                <button type="button" @click="addQuestion('free_text')"
+                        class="bg-gray-50 text-gray-700 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors text-sm flex items-center gap-1">
+                    {{ icon_plus("w-4 h-4") }} 自由記述
+                </button>
+                <button type="button" @click="addQuestion('scale_rating')"
+                        class="bg-amber-50 text-amber-700 px-3 py-2 rounded-md hover:bg-amber-100 transition-colors text-sm flex items-center gap-1">
+                    {{ icon_plus("w-4 h-4") }} スケール評価
+                </button>
+            </div>
+        </div>
+
+        <!-- 隠しフィールド -->
+        <input type="hidden" name="questions_json" :value="JSON.stringify(questionsForSubmit())">
+        <input type="hidden" name="images_json" :value="JSON.stringify(imagesForSubmit())">
+
+        <!-- 保存ボタン -->
+        <div class="flex justify-end gap-3">
+            <a href="/survey/templates" class="bg-gray-200 text-gray-700 px-6 py-2 rounded-md hover:bg-gray-300 transition-colors">
+                キャンセル
+            </a>
+            <button type="submit"
+                    class="bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-1.5"
+                    :disabled="questions.length === 0 || !name.trim()">
+                {{ icon_check("w-4 h-4") }} 保存
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function templateForm() {
+    let keyCounter = 0;
+    {% if template %}
+    const initialQuestions = {{ questions_json | tojson }};
+    const initialImages = {{ images_json | default([]) | tojson }};
+    {% else %}
+    const initialQuestions = [];
+    const initialImages = [];
+    {% endif %}
+
+    return {
+        name: '{{ template.name if template else "" }}',
+        questions: initialQuestions.map(q => ({...q, _key: keyCounter++})),
+        images: initialImages.map(img => ({...img})),
+        uploading: false,
+
+        async handleFileSelect(event) {
+            const files = event.target.files;
+            if (files.length > 0) await this.uploadImage(files[0]);
+            event.target.value = '';
+        },
+
+        async handleDrop(event) {
+            event.target.classList.remove('border-indigo-400', 'bg-indigo-50');
+            const files = event.dataTransfer.files;
+            if (files.length > 0) await this.uploadImage(files[0]);
+        },
+
+        async uploadImage(file) {
+            if (this.images.length >= 1) return;
+            if (!file.type.match(/^image\/(png|jpeg)$/)) {
+                alert('PNG/JPEG画像のみアップロードできます');
+                return;
+            }
+            if (file.size > 5 * 1024 * 1024) {
+                alert('ファイルサイズは5MB以下にしてください');
+                return;
+            }
+            this.uploading = true;
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const resp = await fetch('/survey/templates/upload-image', { method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'} });
+                const data = await resp.json();
+                if (data.error) { alert(data.error); return; }
+                // プレビュー用URL: サーバーから返された署名付きURLを優先
+                this.images.push({
+                    id: data.file_id,
+                    name: '',
+                    file_path: data.file_path,
+                    mime_type: data.mime_type,
+                    original_filename: data.original_filename,
+                    preview_url: data.preview_url || '',
+                    preview: URL.createObjectURL(file),
+                });
+            } catch (e) {
+                alert('アップロードに失敗しました: ' + e.message);
+            } finally {
+                this.uploading = false;
+            }
+        },
+
+        removeImage(idx) {
+            this.images.splice(idx, 1);
+        },
+
+        addQuestion(type) {
+            const q = { question_type: type, text: '', options: [], allow_multiple: false, max_selections: 0, _key: keyCounter++ };
+            if (type === 'multiple_choice') q.options = ['', ''];
+            this.questions.push(q);
+        },
+
+        removeQuestion(index) {
+            this.questions.splice(index, 1);
+        },
+
+        onTypeChange(index) {
+            const q = this.questions[index];
+            if (q.question_type === 'multiple_choice' && q.options.length < 2) {
+                q.options = ['', ''];
+            } else if (q.question_type !== 'multiple_choice') {
+                q.options = [];
+                q.allow_multiple = false;
+                q.max_selections = 0;
+            }
+        },
+
+        questionsForSubmit() {
+            return this.questions.map(q => ({
+                question_type: q.question_type,
+                text: q.text,
+                options: q.question_type === 'multiple_choice' ? q.options.filter(o => o.trim()) : [],
+                allow_multiple: q.question_type === 'multiple_choice' ? q.allow_multiple : false,
+                max_selections: q.question_type === 'multiple_choice' ? (q.max_selections || 0) : 0,
+            }));
+        },
+
+        imagesForSubmit() {
+            return this.images.map(img => ({
+                id: img.id,
+                name: img.name || img.original_filename,
+                file_path: img.file_path,
+                mime_type: img.mime_type,
+                original_filename: img.original_filename,
+            }));
+        },
+
+        prepareSubmit() {
+            // hidden input の値を更新
+        }
+    };
+}
+</script>
+{% endblock %}

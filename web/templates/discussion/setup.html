@@ -1,0 +1,867 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_sparkles %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_cog("w-8 h-8 text-purple-600") }} 議論設定</h1>
+    <p class="text-gray-600 mb-8">ペルソナを選択して議論トピックを設定します。</p>
+    
+    <!-- ステップガイド -->
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
+        <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
+        <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
+            <li>議論モードを選択</li>
+            <li>議論に参加させるペルソナを選択</li>
+            <li>議論トピックを入力（インタビューモード以外）</li>
+            <li>議論を開始</li>
+        </ol>
+    </div>
+    
+    {% if personas %}
+    <form hx-post="/discussion/start"
+          hx-target="#discussion-result"
+          hx-swap="innerHTML"
+          hx-indicator="#discussion-spinner"
+          x-data="{ 
+              mode: 'traditional',
+              selectedPersonas: [], 
+              topic: '', 
+              rounds: 3, 
+              additionalInstructions: '',
+              enableMemory: false,
+              memoryMode: 'full',
+              enableDataset: false,
+              enableKB: false,
+              streamingMode: false,
+              customizeCategories: false,
+              uploadedDocuments: [],
+              totalSize: 0,
+              uploading: false,
+              categories: [
+                  {name: '顧客ニーズ', description: '議論から読み取れる潜在的・顕在的ニーズ、各ペルソナが抱える共通課題や個別課題、現在のソリューションに対する不満や改善要望'},
+                  {name: '市場機会', description: '議論から見えてくる新たな市場セグメント、競合他社が見落としている機会、成長が期待できる領域や需要'},
+                  {name: '商品開発', description: '議論内容から導かれる機能要件や仕様、ユーザー体験（UX）改善のヒント、新商品・サービスのアイデア'},
+                  {name: 'マーケティング', description: '効果的なメッセージングやポジショニング、適切なコミュニケーションチャネル、プロモーション戦略のヒント'},
+                  {name: 'その他', description: '上記以外で戦略的に重要な洞察、業界トレンドや将来予測、リスクや注意すべき点'}
+              ],
+              addCategory() {
+                  if (this.categories.length >= 10) {
+                      alert('カテゴリーは最大10個までです');
+                      return;
+                  }
+                  this.categories.push({name: '', description: ''});
+              },
+              removeCategory(index) {
+                  if (this.categories.length <= 1) {
+                      alert('カテゴリーは最低1個必要です');
+                      return;
+                  }
+                  this.categories.splice(index, 1);
+              },
+              resetCategories() {
+                  this.categories = [
+                      {name: '顧客ニーズ', description: '議論から読み取れる潜在的・顕在的ニーズ、各ペルソナが抱える共通課題や個別課題、現在のソリューションに対する不満や改善要望'},
+                      {name: '市場機会', description: '議論から見えてくる新たな市場セグメント、競合他社が見落としている機会、成長が期待できる領域や需要'},
+                      {name: '商品開発', description: '議論内容から導かれる機能要件や仕様、ユーザー体験（UX）改善のヒント、新商品・サービスのアイデア'},
+                      {name: 'マーケティング', description: '効果的なメッセージングやポジショニング、適切なコミュニケーションチャネル、プロモーション戦略のヒント'},
+                      {name: 'その他', description: '上記以外で戦略的に重要な洞察、業界トレンドや将来予測、リスクや注意すべき点'}
+                  ];
+              },
+              async uploadFile(file) {
+                  if (!this.validateFile(file)) return;
+                  
+                  this.uploading = true;
+                  const formData = new FormData();
+                  formData.append('file', file);
+                  
+                  try {
+                      const response = await fetch('/discussion/upload-document', {
+                          method: 'POST',
+                          body: formData,
+                          headers: {'X-Requested-With': 'XMLHttpRequest'}
+                      });
+                      const data = await response.json();
+                      
+                      if (data.error) {
+                          alert(data.error);
+                      } else {
+                          this.uploadedDocuments.push(data);
+                          this.totalSize += data.file_size;
+                      }
+                  } catch (error) {
+                      alert('ファイルのアップロードに失敗しました');
+                  } finally {
+                      this.uploading = false;
+                  }
+              },
+              validateFile(file) {
+                  const validTypes = ['image/png', 'image/jpeg', 'application/pdf'];
+                  const maxSize = 10 * 1024 * 1024;
+                  const maxTotal = 32 * 1024 * 1024;
+                  
+                  if (!validTypes.includes(file.type)) {
+                      alert('PNG、JPEG、PDFファイルのみアップロード可能です');
+                      return false;
+                  }
+                  if (file.size > maxSize) {
+                      alert('ファイルサイズは10MB以下にしてください');
+                      return false;
+                  }
+                  if (this.totalSize + file.size > maxTotal) {
+                      alert('ドキュメントの合計サイズは32MB以下にしてください');
+                      return false;
+                  }
+                  return true;
+              },
+              removeDocument(id) {
+                  const doc = this.uploadedDocuments.find(d => d.file_id === id);
+                  if (doc) {
+                      this.totalSize -= doc.file_size;
+                      this.uploadedDocuments = this.uploadedDocuments.filter(d => d.file_id !== id);
+                  }
+              },
+              formatSize(bytes) {
+                  if (bytes < 1024) return bytes + ' B';
+                  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+              },
+              handleDrop(e) {
+                  e.preventDefault();
+                  const files = Array.from(e.dataTransfer.files);
+                  files.forEach(file => this.uploadFile(file));
+              },
+              startInterviewSession() {
+                  if (this.selectedPersonas.length < 1 || !this.selectedPersonas.length) {
+                      alert('インタビューには最低1つのペルソナが必要です');
+                      return;
+                  }
+                  
+                  // インタビューセッション作成
+                  const formData = new FormData();
+                  this.selectedPersonas.forEach(id => formData.append('persona_ids', id));
+                  formData.append('enable_memory', this.enableMemory);
+                  formData.append('memory_mode', this.memoryMode);
+                  formData.append('enable_dataset', this.enableDataset);
+                  formData.append('enable_kb', this.enableKB);
+                  
+                  fetch('/interview/create', {
+                      method: 'POST',
+                      body: formData,
+                      headers: {'X-Requested-With': 'XMLHttpRequest'}
+                  })
+                  .then(response => response.json())
+                  .then(data => {
+                      if (data.error) {
+                          alert(data.error);
+                      } else {
+                          // インタビューチャットページにリダイレクト
+                          window.location.href = `/interview/chat/${data.session_id}`;
+                      }
+                  })
+                  .catch(error => {
+                      console.error('Error:', error);
+                      alert('インタビューセッションの作成中にエラーが発生しました');
+                  });
+              },
+              startStreamingDiscussion() {
+                  if (this.selectedPersonas.length < 2 || !this.topic.trim()) return;
+                  
+                  const resultDiv = document.getElementById('discussion-result');
+                  // ストリーミング議論UIを表示
+                  resultDiv.innerHTML = this.getStreamingHtml();
+                  // SSE接続を開始
+                  this.initStreaming();
+              },
+              getStreamingHtml() {
+                  return `
+                      <div id='streaming-container' class='bg-white rounded-lg shadow-md p-6'>
+                          <div class='flex items-center justify-between mb-6'>
+                              <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
+                                  <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
+                                  議論進行中...
+                              </h2>
+                              <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
+                          </div>
+                          <div id='streaming-messages' class='space-y-4 max-h-[600px] overflow-y-auto discussion-messages pr-2'></div>
+                          <div id='streaming-loading' class='flex items-center justify-center py-4 text-gray-500 mt-4'>
+                              <div class='spinner mr-2' style='width: 20px; height: 20px;'></div>
+                              <span>ペルソナが発言中...</span>
+                          </div>
+                      </div>
+                  `;
+              },
+              initStreaming() {
+                  const container = document.getElementById('streaming-messages');
+                  const counter = document.getElementById('message-counter');
+                  const loading = document.getElementById('streaming-loading');
+                  const personaColors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'];
+                  let participantMap = {};
+                  let messageCount = 0;
+
+                  function escapeHtml(text) {
+                      const div = document.createElement('div');
+                      div.textContent = text;
+                      return div.innerHTML;
+                  }
+                  
+                  // モードに応じたURLを構築
+                  let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.selectedPersonas.join(','))}&mode=${this.mode}`;
+                  if (this.mode === 'agent') {
+                      url += `&rounds=${this.rounds}&additional_instructions=${encodeURIComponent(this.additionalInstructions)}&enable_memory=${this.enableMemory}&memory_mode=${this.memoryMode}&enable_dataset=${this.enableDataset}&enable_kb=${this.enableKB}`;
+                  }
+                  // カテゴリーをJSON形式でURLに追加
+                  if (this.customizeCategories && this.categories.length > 0) {
+                      const categoriesJson = JSON.stringify(this.categories);
+                      url += `&categories_json=${encodeURIComponent(categoriesJson)}`;
+                  }
+                  // ドキュメントIDを追加
+                  if (this.uploadedDocuments && this.uploadedDocuments.length > 0) {
+                      const docIds = this.uploadedDocuments.map(d => d.file_id).join(',');
+                      url += `&document_ids=${encodeURIComponent(docIds)}`;
+                  }
+                  const eventSource = new EventSource(url);
+                  
+                  eventSource.onmessage = function(event) {
+                      const data = JSON.parse(event.data);
+                      
+                      if (data.type === 'participants') {
+                          data.personas.forEach((p, idx) => {
+                              participantMap[p.id] = { name: p.name, colorIndex: idx };
+                          });
+                      } else if (data.type === 'message') {
+                          messageCount++;
+                          counter.textContent = messageCount + ' 発言';
+                          
+                          // ファシリテーターの発言かどうかを判定
+                          const isFacilitator = data.persona_id === 'facilitator' || data.message_type === 'summary';
+                          
+                          // サーバーサイドでサニタイズ済みHTMLを使用（フォールバックはテキストをエスケープ）
+                          const renderedContent = data.content_html || escapeHtml(data.content).replace(/\n/g, '<br>');
+                          const safeName = escapeHtml(data.persona_name || '');
+                          
+                          let msgHtml;
+                          if (isFacilitator) {
+                              // ファシリテーターの発言（中央寄せ、グレー背景）
+                              msgHtml = `
+                                  <div class='flex justify-center my-4 message-item fade-in'>
+                                      <div class='facilitator-bubble max-w-2xl'>
+                                          <div class='flex items-center gap-2 mb-2'>
+                                              <div class='w-8 h-8 rounded-full facilitator-avatar flex items-center justify-center'>
+                                                  <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg>
+                                              </div>
+                                              <span class='font-bold'>ファシリテーター</span>
+                                          </div>
+                                          <div class='leading-relaxed prose prose-sm max-w-none'>${renderedContent}</div>
+                                      </div>
+                                  </div>
+                              `;
+                          } else {
+                              // ペルソナの発言
+                              const info = participantMap[data.persona_id] || { name: data.persona_name, colorIndex: 0 };
+                              const color = personaColors[info.colorIndex % personaColors.length];
+                              
+                              msgHtml = `
+                                  <div class='flex gap-3 message-item fade-in'>
+                                      <div class='flex-shrink-0'>
+                                          <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
+                                              <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
+                                          </div>
+                                      </div>
+                                      <div class='flex-1 min-w-0'>
+                                          <div class='flex items-baseline gap-2 mb-1'>
+                                              <span class='font-bold persona-name-${color} text-lg'>${safeName}</span>
+                                          </div>
+                                          <div class='persona-bubble-${color} border rounded-2xl rounded-tl-none p-4 shadow-sm'>
+                                              <div class='text-gray-800 leading-relaxed prose prose-sm max-w-none'>${renderedContent}</div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              `;
+                          }
+                          const tempDiv = document.createElement('div');
+                          tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
+                          while (tempDiv.firstChild) container.appendChild(tempDiv.firstChild);
+                          container.scrollTop = container.scrollHeight;
+                          
+                      } else if (data.type === 'complete') {
+                          eventSource.close();
+                          // 従来の議論完了画面を取得して表示
+                          loading.innerHTML = `
+                              <div class='text-center py-4'>
+                                  <div class='spinner mx-auto mb-2' style='width: 20px; height: 20px;'></div>
+                                  <p class='text-gray-500 text-sm'>結果を読み込み中...</p>
+                              </div>
+                          `;
+                          // 議論結果パーシャルを取得
+                          fetch(`/discussion/result-partial/${data.discussion_id}`)
+                              .then(response => response.text())
+                              .then(html => {
+                                  document.getElementById('discussion-result').innerHTML = html;
+                              })
+                              .catch(err => {
+                                  loading.innerHTML = `
+                                      <div class='text-center py-4'>
+                                          <p class='text-green-600 font-semibold mb-2'>✓ 議論が完了しました</p>
+                                          <p class='text-gray-500 text-sm'>${data.message_count}件の発言、${data.insight_count}件のインサイト</p>
+                                          <div class='mt-4 flex gap-3 justify-center'>
+                                              <a href='/discussion/${data.discussion_id}' class='bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors text-sm'>詳細を見る</a>
+                                              <button onclick='location.reload()' class='bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm'>新しい議論</button>
+                                          </div>
+                                      </div>
+                                  `;
+                              });
+                      } else if (data.type === 'error') {
+                          eventSource.close();
+                          loading.innerHTML = `<p class='text-red-600'>エラー: ${data.message}</p>`;
+                      }
+                  };
+                  
+                  eventSource.onerror = function() {
+                      eventSource.close();
+                      loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                  };
+              }
+          }">
+        
+        <!-- 議論モード選択（最初に表示） -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論モード</h2>
+            <p class="text-gray-600 text-sm mb-4">まず議論の形式を選択してください</p>
+            
+            <div class="grid md:grid-cols-3 gap-4">
+                <!-- 簡易議論モード -->
+                <label class="relative cursor-pointer">
+                    <input type="radio" 
+                           name="mode" 
+                           value="traditional"
+                           x-model="mode"
+                           class="peer sr-only">
+                    <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all h-full">
+                        <div class="flex items-center gap-2 mb-2">
+                            {{ icon_bolt("w-5 h-5 text-blue-600") }}
+                            <h4 class="font-semibold text-gray-900">簡易議論</h4>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-2">高速: 3-5分</p>
+                        <p class="text-xs text-gray-400">単一のAI呼び出しで全ペルソナの発言を生成。高速で効率的。</p>
+                    </div>
+                </label>
+                
+                <!-- しっかり議論モード -->
+                <label class="relative cursor-pointer">
+                    <input type="radio" 
+                           name="mode" 
+                           value="agent"
+                           x-model="mode"
+                           class="peer sr-only">
+                    <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-green-300 peer-checked:border-green-500 peer-checked:bg-green-50 transition-all h-full">
+                        <div class="flex items-center gap-2 mb-2">
+                            {{ icon_cpu_chip("w-5 h-5 text-green-600") }}
+                            <h4 class="font-semibold text-gray-900">しっかり議論</h4>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-2">詳細: 5-15分</p>
+                        <p class="text-xs text-gray-400">各ペルソナが独立したAIエージェントとして対話。より自然で深い議論。</p>
+                    </div>
+                </label>
+                
+                <!-- インタビューモード -->
+                <label class="relative cursor-pointer">
+                    <input type="radio" 
+                           name="mode" 
+                           value="interview"
+                           x-model="mode"
+                           class="peer sr-only">
+                    <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-purple-300 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition-all h-full">
+                        <div class="flex items-center gap-2 mb-2">
+                            {{ icon_chat("w-5 h-5 text-purple-600") }}
+                            <h4 class="font-semibold text-gray-900">インタビュー</h4>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-2">対話型: リアルタイム</p>
+                        <p class="text-xs text-gray-400">ユーザーがペルソナと直接チャットでインタビュー。</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+        
+        <!-- ペルソナ選択 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_users("w-5 h-5 text-indigo-600") }} ペルソナ選択</h2>
+            <p class="text-gray-600 text-sm mb-4">
+                <span x-show="mode === 'interview'">インタビューに参加させるペルソナを選択してください（最低1体、最大5体推奨）</span>
+                <span x-show="mode !== 'interview'">議論に参加させるペルソナを選択してください（最低2体、最大5体推奨）</span>
+            </p>
+            
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {% for persona in personas %}
+                <label class="relative cursor-pointer">
+                    <input type="checkbox" 
+                           name="persona_ids" 
+                           value="{{ persona.id }}"
+                           x-model="selectedPersonas"
+                           class="peer sr-only">
+                    <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all">
+                        <div class="flex items-start justify-between">
+                            <div>
+                                <h4 class="font-semibold text-gray-900">{{ persona.name }}</h4>
+                                <p class="text-sm text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                            </div>
+                            <div class="w-5 h-5 border-2 border-gray-300 rounded peer-checked:bg-blue-500 peer-checked:border-blue-500 flex items-center justify-center">
+                                <svg class="w-3 h-3 text-white hidden peer-checked:block" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2 line-clamp-2">
+                            {{ persona.background[:80] }}...
+                        </p>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+            
+            <p class="text-sm mt-4" :class="(mode === 'interview' ? selectedPersonas.length >= 1 : selectedPersonas.length >= 2) ? 'text-green-600' : 'text-red-600'">
+                <span x-text="selectedPersonas.length"></span>体選択中
+                <span x-show="mode === 'interview' && selectedPersonas.length < 1">（最低1体必要）</span>
+                <span x-show="mode !== 'interview' && selectedPersonas.length < 2">（最低2体必要）</span>
+            </p>
+        </div>
+        
+        <!-- 議論トピック -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center gap-2" 
+                :class="mode === 'interview' ? 'text-gray-400' : 'text-gray-900'">
+                <svg class="w-5 h-5" :class="mode === 'interview' ? 'text-gray-400' : 'text-green-600'" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" />
+                </svg>
+                議論トピック
+            </h2>
+            <textarea name="topic"
+                      x-model="topic"
+                      rows="3"
+                      placeholder="例: 新しいスマートフォンアプリの機能について、どのような要素が最も重要だと思いますか？"
+                      :required="mode !== 'interview'"
+                      :disabled="mode === 'interview'"
+                      :class="mode === 'interview' ? 
+                          'w-full px-4 py-2 border border-gray-200 rounded-md bg-gray-100 text-gray-400 cursor-not-allowed' : 
+                          'w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500'"></textarea>
+            <p class="text-sm mt-2 mb-6" 
+               :class="mode === 'interview' ? 'text-gray-400' : 'text-gray-500'">
+                <span x-show="mode === 'interview'">インタビューモードでは、リアルタイムでペルソナと対話します。</span>
+                <span x-show="mode !== 'interview'">具体的で明確な質問にすると、より深い議論が生まれます。</span>
+            </p>
+            
+            <!-- ドキュメントアップロード（議論モードのみ） -->
+            <div x-show="mode !== 'interview'" x-transition>
+                <h3 class="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    参考資料（オプション）
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">
+                    議論の参考資料として画像やPDFをアップロードできます（PNG/JPEG/PDF、最大10MB/ファイル、合計32MB）
+                </p>
+                
+                <!-- ドロップゾーン -->
+                <div @drop="handleDrop($event)" 
+                     @dragover.prevent 
+                     @dragenter.prevent
+                     class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-purple-400 transition-colors cursor-pointer"
+                     :class="uploading ? 'opacity-50 pointer-events-none' : ''"
+                     @click="$refs.fileInput.click()">
+                    <svg class="w-10 h-10 mx-auto text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                    </svg>
+                    <p class="text-gray-600 mb-1">
+                        <span class="font-semibold text-purple-600">クリックしてファイルを選択</span>
+                        またはドラッグ&ドロップ
+                    </p>
+                    <p class="text-sm text-gray-500">PNG, JPEG, PDF（最大10MB/ファイル）</p>
+                    <input type="file" 
+                           x-ref="fileInput"
+                           @change="Array.from($event.target.files).forEach(file => uploadFile(file)); $event.target.value = ''"
+                           accept=".png,.jpg,.jpeg,.pdf"
+                           multiple
+                           class="hidden">
+                </div>
+                
+                <!-- アップロード中 -->
+                <div x-show="uploading" class="mt-3 flex items-center justify-center text-purple-600">
+                    <div class="spinner mr-2" style="width: 20px; height: 20px;"></div>
+                    <span>アップロード中...</span>
+                </div>
+                
+                <!-- アップロード済みドキュメント -->
+                <div x-show="uploadedDocuments.length > 0" class="mt-4">
+                    <h4 class="font-semibold text-gray-900 mb-2 text-sm">アップロード済み（<span x-text="uploadedDocuments.length"></span>件、<span x-text="formatSize(totalSize)"></span>）</h4>
+                    <div class="space-y-2">
+                        <template x-for="doc in uploadedDocuments" :key="doc.file_id">
+                            <div class="flex items-center gap-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                                <!-- アイコン -->
+                                <div class="flex-shrink-0">
+                                    <template x-if="doc.mime_type.startsWith('image/')">
+                                        <div class="w-10 h-10 bg-purple-100 rounded flex items-center justify-center">
+                                            <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                                            </svg>
+                                        </div>
+                                    </template>
+                                    <template x-if="doc.mime_type === 'application/pdf'">
+                                        <div class="w-10 h-10 bg-red-100 rounded flex items-center justify-center">
+                                            <svg class="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                            </svg>
+                                        </div>
+                                    </template>
+                                </div>
+                                
+                                <!-- ファイル情報 -->
+                                <div class="flex-1 min-w-0">
+                                    <p class="font-medium text-gray-900 truncate text-sm" x-text="doc.filename"></p>
+                                    <p class="text-xs text-gray-500" x-text="formatSize(doc.file_size)"></p>
+                                </div>
+                                
+                                <!-- 削除ボタン -->
+                                <button type="button"
+                                        @click="removeDocument(doc.file_id)"
+                                        class="flex-shrink-0 text-red-600 hover:text-red-800 transition-colors">
+                                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                                    </svg>
+                                </button>
+                                
+                                <!-- Hidden input for form submission -->
+                                <input type="hidden" name="document_ids" :value="doc.file_id">
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 詳細設定（しっかり議論モード時のみ表示） -->
+        <div x-show="mode === 'agent'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-gray-600") }} 詳細設定</h2>
+            
+            <div class="space-y-6">
+                <!-- ラウンド数 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">ラウンド数</label>
+                    <input type="number" 
+                           name="rounds"
+                           x-model="rounds"
+                           min="1" 
+                           max="10" 
+                           value="3"
+                           class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <p class="text-xs text-gray-500 mt-1">各ペルソナが発言する回数。3-4ラウンドが標準的。</p>
+                </div>
+                
+                <!-- ファシリテータへの追加指示 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">ファシリテータへの追加指示（オプション）</label>
+                    <textarea name="additional_instructions"
+                              x-model="additionalInstructions"
+                              rows="3"
+                              placeholder="例: 特定のトピックに焦点を当てる、議論の方向性を指定する、など"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+                    <p class="text-xs text-gray-500 mt-1">
+                        ファシリテータの振る舞いをカスタマイズする追加の指示を入力できます。（デフォルトで発言の要約は行います。）
+                    </p>
+                </div>
+            </div>
+        </div>
+            
+        <!-- インサイトカテゴリーカスタマイズ（インタビューモード以外で表示） -->
+        <div x-show="mode !== 'interview'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z" />
+                        </svg>
+                        インサイトカテゴリー
+                    </h2>
+                    <p class="text-sm text-gray-500 mt-1">議論から抽出するインサイトのカテゴリーをカスタマイズできます</p>
+                </div>
+                <button type="button"
+                        @click="customizeCategories = !customizeCategories"
+                        class="text-sm text-blue-600 hover:text-blue-800 font-medium">
+                    <span x-show="!customizeCategories">カスタマイズ</span>
+                    <span x-show="customizeCategories">閉じる</span>
+                </button>
+            </div>
+            
+            <div x-show="customizeCategories" x-transition class="space-y-4">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                    <p class="font-medium mb-1">💡 カテゴリーについて</p>
+                    <ul class="list-disc list-inside space-y-1 text-xs">
+                        <li>カテゴリーは1〜10個まで設定できます</li>
+                        <li>名前は50文字以内、説明は500文字以内で入力してください</li>
+                        <li>デフォルトに戻すには「デフォルトに戻す」ボタンをクリック</li>
+                    </ul>
+                </div>
+                
+                <template x-for="(category, index) in categories" :key="index">
+                    <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                        <div class="flex items-start justify-between mb-3">
+                            <span class="text-sm font-medium text-gray-700">カテゴリー <span x-text="index + 1"></span></span>
+                            <button type="button"
+                                    @click="removeCategory(index)"
+                                    :disabled="categories.length <= 1"
+                                    class="text-red-600 hover:text-red-800 disabled:opacity-30 disabled:cursor-not-allowed">
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">カテゴリー名 *</label>
+                                <input type="text"
+                                       x-model="category.name"
+                                       :name="'category_name_' + index"
+                                       maxlength="50"
+                                       placeholder="例: 技術トレンド"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">説明 *</label>
+                                <textarea x-model="category.description"
+                                          :name="'category_description_' + index"
+                                          rows="2"
+                                          maxlength="500"
+                                          placeholder="例: 議論から見えてくる技術的なトレンドや将来の技術動向"
+                                          class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+                                <p class="text-xs text-gray-500 mt-1"><span x-text="category.description.length"></span>/500文字</p>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                
+                <div class="flex gap-3">
+                    <button type="button"
+                            @click="addCategory()"
+                            :disabled="categories.length >= 10"
+                            class="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium">
+                        + カテゴリーを追加
+                    </button>
+                    <button type="button"
+                            @click="resetCategories()"
+                            class="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium">
+                        デフォルトに戻す
+                    </button>
+                </div>
+                
+                <p class="text-xs text-gray-500 text-center">
+                    現在 <span x-text="categories.length"></span> 個のカテゴリー（最大10個）
+                </p>
+            </div>
+            
+            <!-- Hidden inputs for categories -->
+            <template x-for="(category, index) in categories" :key="index">
+                <div>
+                    <input type="hidden" :name="'categories[' + index + '][name]'" :value="category.name">
+                    <input type="hidden" :name="'categories[' + index + '][description]'" :value="category.description">
+                </div>
+            </template>
+        </div>
+        
+        <!-- 長期記憶オプション（エージェントモードまたはインタビューモード時に表示） -->
+        <div x-show="mode === 'agent' || mode === 'interview'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" 
+                       name="enable_memory"
+                       x-model="enableMemory"
+                       value="true"
+                       class="w-5 h-5 text-purple-600 rounded focus:ring-purple-500">
+                <div>
+                    <span class="font-medium text-gray-900">長期記憶・知識を有効にする</span>
+                    <span class="ml-2 px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-800 rounded-full">実験的機能</span>
+                    <p class="text-xs text-gray-500">ペルソナが過去の議論や知識・経験を記憶・活用できるようになります</p>
+                </div>
+            </label>
+            <div x-show="enableMemory" x-transition class="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-md">
+                <p class="text-xs text-purple-700">
+                    <strong>長期記憶・知識機能について:</strong><br>
+                    有効にすると、各ペルソナは以下のツールを使用できます：
+                </p>
+                <ul class="text-xs text-purple-600 mt-1 list-disc list-inside">
+                    <li>過去の議論や知識・経験から関連する記憶、知識を検索</li>
+                    <li>重要な気づきや学びを長期記憶や知識として保存</li>
+                </ul>
+                <p x-show="mode === 'interview'" class="text-xs text-purple-500 mt-2">
+                    インタビュー中のやり取りを通じて、ペルソナはより一貫性のある、経験に基づいた回答ができるようになります。
+                </p>
+                
+                <!-- メモリモード選択 -->
+                <div class="mt-4 pt-3 border-t border-purple-200">
+                    <p class="text-xs font-medium text-purple-800 mb-2">メモリモード:</p>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" 
+                                   name="memory_mode"
+                                   value="full"
+                                   x-model="memoryMode"
+                                   class="w-4 h-4 text-purple-600 focus:ring-purple-500">
+                            <div>
+                                <span class="text-xs font-medium text-purple-900">フル（検索 + 保存）</span>
+                                <p class="text-xs text-purple-600">過去の記憶・知識を検索し、新しい記憶・知識も保存します</p>
+                            </div>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" 
+                                   name="memory_mode"
+                                   value="retrieve_only"
+                                   x-model="memoryMode"
+                                   class="w-4 h-4 text-purple-600 focus:ring-purple-500">
+                            <div>
+                                <span class="text-xs font-medium text-purple-900">検索のみ</span>
+                                <p class="text-xs text-purple-600">過去の記憶・知識を検索しますが、新しい記憶・知識は保存しません</p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- データセット連携オプション（エージェントモードまたはインタビューモード時に表示） -->
+        <div x-show="mode === 'agent' || mode === 'interview'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" 
+                       name="enable_dataset"
+                       x-model="enableDataset"
+                       value="true"
+                       class="w-5 h-5 text-cyan-600 rounded focus:ring-cyan-500">
+                <div>
+                    <span class="font-medium text-gray-900">外部データセット連携を有効にする</span>
+                    <span class="ml-2 px-2 py-0.5 text-xs font-medium bg-cyan-100 text-cyan-800 rounded-full">実験的機能</span>
+                    <p class="text-xs text-gray-500">ペルソナが紐付けられた外部データ（購買履歴など）にアクセスできるようになります</p>
+                </div>
+            </label>
+            <div x-show="enableDataset" x-transition class="mt-4 p-3 bg-cyan-50 border border-cyan-200 rounded-md">
+                <p class="text-xs text-cyan-700">
+                    <strong>データセット連携について:</strong><br>
+                    有効にすると、各ペルソナは紐付けられたデータセットにSQLクエリでアクセスできます。
+                </p>
+                <ul class="text-xs text-cyan-600 mt-1 list-disc list-inside">
+                    <li>ペルソナ詳細画面でデータセットを紐付けてください</li>
+                    <li>紐付けキー（user_idなど）でペルソナ固有のデータを取得</li>
+                    <li>設定画面でデータ連携機能を有効化する必要があります</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- ナレッジベース連携オプション（エージェントモードまたはインタビューモード時に表示） -->
+        <div x-show="mode === 'agent' || mode === 'interview'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" 
+                       name="enable_kb"
+                       x-model="enableKB"
+                       value="true"
+                       class="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500">
+                <div>
+                    <span class="font-medium text-gray-900">ナレッジベース連携を有効にする</span>
+                    <p class="text-xs text-gray-500">ペルソナに紐付けられたナレッジベースから情報を検索して、取得できるようになります</p>
+                </div>
+            </label>
+            <div x-show="enableKB" x-transition class="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded-md">
+                <p class="text-xs text-indigo-700">
+                    <strong>ナレッジベース連携について:</strong><br>
+                    有効にすると、各ペルソナは紐付けられたナレッジベースを議論中に検索できます。
+                </p>
+                <ul class="text-xs text-indigo-600 mt-1 list-disc list-inside">
+                    <li>設定画面でナレッジベースを登録してください</li>
+                    <li>ペルソナ詳細画面でナレッジベースを紐付けてください</li>
+                    <li>メタデータフィルタでペルソナごとに検索範囲を制限できます</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- リアルタイム表示オプション（インタビューモード以外で表示） -->
+        <div x-show="mode !== 'interview'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" 
+                       x-model="streamingMode"
+                       class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500">
+                <div>
+                    <span class="font-medium text-gray-900">リアルタイム表示</span>
+                    <p class="text-xs text-gray-500">各ペルソナの発言を順次表示します</p>
+                </div>
+            </label>
+        </div>
+        
+        <!-- 開始ボタン -->
+        <div class="flex justify-center">
+            <!-- インタビューモード用ボタン -->
+            <button type="button"
+                    x-show="mode === 'interview'"
+                    @click="startInterviewSession()"
+                    :disabled="selectedPersonas.length < 1"
+                    class="bg-purple-600 text-white px-8 py-3 rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
+                {{ icon_chat("w-5 h-5") }} インタビューを開始
+            </button>
+            
+            <!-- 通常モード用ボタン -->
+            <button type="submit"
+                    x-show="mode !== 'interview' && !streamingMode"
+                    :disabled="selectedPersonas.length < 2 || !topic.trim()"
+                    class="bg-blue-600 text-white px-8 py-3 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
+                <span class="htmx-indicator" id="discussion-spinner">
+                    <span class="spinner inline-block mr-2"></span>
+                </span>
+                {{ icon_play("w-5 h-5") }} 議論を開始
+            </button>
+            
+            <!-- ストリーミングモード用ボタン -->
+            <button type="button"
+                    x-show="mode !== 'interview' && streamingMode"
+                    @click="startStreamingDiscussion()"
+                    :disabled="selectedPersonas.length < 2 || !topic.trim()"
+                    class="bg-green-600 text-white px-8 py-3 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
+                {{ icon_bolt("w-5 h-5") }} リアルタイム議論を開始
+            </button>
+        </div>
+    </form>
+    
+    <!-- 議論結果表示エリア -->
+    <div id="discussion-result" class="mt-8"></div>
+    
+    {% else %}
+    <!-- ペルソナがない場合 -->
+    <div class="bg-gray-50 rounded-lg p-12 text-center">
+        <div class="flex justify-center mb-4 text-gray-400">{{ icon_users("w-16 h-16") }}</div>
+        <h3 class="text-xl font-semibold text-gray-700 mb-2">ペルソナがありません</h3>
+        <p class="text-gray-500 mb-6">議論を開始するには、まずペルソナを生成してください。</p>
+        <a href="/persona/generation" 
+           class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
+            {{ icon_sparkles("w-4 h-4") }} ペルソナを生成する
+        </a>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 議論中のローディング表示 -->
+<div id="discussion-loading" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg p-8 max-w-md text-center">
+        <div class="spinner mx-auto mb-4" style="width: 64px; height: 64px; border-width: 4px;"></div>
+        <h3 class="text-xl font-semibold text-gray-900 mb-2 flex items-center justify-center gap-2">{{ icon_chat("w-6 h-6 text-blue-600") }} 議論進行中...</h3>
+        <p class="text-gray-600">ペルソナたちが議論しています。</p>
+        <p class="text-sm text-gray-500 mt-2">通常3-15分かかります。</p>
+    </div>
+</div>
+
+<script>
+document.body.addEventListener('htmx:beforeRequest', function(evt) {
+    if (evt.detail.elt.getAttribute('hx-post') === '/discussion/start') {
+        document.getElementById('discussion-loading').classList.remove('hidden');
+    }
+});
+
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+    if (evt.detail.elt.getAttribute('hx-post') === '/discussion/start') {
+        document.getElementById('discussion-loading').classList.add('hidden');
+    }
+});
+</script>
+{% endblock %}
