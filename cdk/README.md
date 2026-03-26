@@ -1,6 +1,6 @@
 # AI ペルソナシステムの AWS CDK デプロイについて
 
-AI PersonaシステムをAWSにデプロイするためのCDKコードです。ECS Express Modeを使用してシンプルにデプロイします。
+AI ペルソナシステムをAWSにデプロイするためのCDKコードです。ECS Express Modeを使用してシンプルにデプロイします。
 
 ## アーキテクチャ
 
