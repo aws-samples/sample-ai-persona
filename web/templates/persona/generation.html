@@ -176,52 +176,7 @@
 </div>
 
 <script>
-function updateFileName(input, targetId) {
-    const fileName = input.files[0]?.name || '';
-    document.getElementById(targetId).textContent = fileName ? `選択中: ${fileName}` : '';
-}
-
-// ドラッグ＆ドロップ対応（インタビューデータ）
-const interviewDropZone = document.getElementById('interview-drop-zone');
-const fileInput = document.getElementById('file-input');
-
-setupDropZone(interviewDropZone, fileInput, 'selected-file');
-
-// ドラッグ＆ドロップ対応（調査・分析レポート）
-const reportDropZone = document.getElementById('report-drop-zone');
-const reportFileInput = document.getElementById('report-file-input');
-
-setupDropZone(reportDropZone, reportFileInput, 'selected-report-file');
-
-function setupDropZone(dropZone, input, targetId) {
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
-    });
-
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, () => {
-            dropZone.classList.add('border-blue-400', 'bg-blue-50');
-        });
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, () => {
-            dropZone.classList.remove('border-blue-400', 'bg-blue-50');
-        });
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        const files = e.dataTransfer.files;
-        if (files.length) {
-            input.files = files;
-            updateFileName(input, targetId);
-        }
-    });
-}
+// ドラッグ＆ドロップは app.js の setupDragAndDrop で設定済み
+// （DOMContentLoaded で #interview-drop-zone, #report-drop-zone に適用）
 </script>
 {% endblock %}

@@ -70,16 +70,16 @@ function showFlashMessage(message, type = 'info') {
 }
 
 // ファイル名更新
-function updateFileName(input) {
+function updateFileName(input, targetId) {
     const fileName = input.files[0]?.name || '';
-    const display = document.getElementById('selected-file');
+    const display = document.getElementById(targetId || 'selected-file');
     if (display) {
         display.textContent = fileName ? `選択中: ${fileName}` : '';
     }
 }
 
 // ドラッグ＆ドロップ設定
-function setupDragAndDrop(dropZoneSelector, fileInputSelector) {
+function setupDragAndDrop(dropZoneSelector, fileInputSelector, targetId) {
     const dropZone = document.querySelector(dropZoneSelector);
     const fileInput = document.querySelector(fileInputSelector);
     
@@ -110,7 +110,7 @@ function setupDragAndDrop(dropZoneSelector, fileInputSelector) {
         const files = e.dataTransfer.files;
         if (files.length) {
             fileInput.files = files;
-            updateFileName(fileInput);
+            updateFileName(fileInput, targetId);
         }
     });
 }
@@ -174,7 +174,8 @@ document.body.addEventListener('htmx:afterSwap', function(evt) {
 // ページ読み込み完了時の処理
 document.addEventListener('DOMContentLoaded', function() {
     // ドラッグ＆ドロップの設定
-    setupDragAndDrop('.border-dashed', '#file-input');
+    setupDragAndDrop('#interview-drop-zone', '#file-input', 'selected-file');
+    setupDragAndDrop('#report-drop-zone', '#report-file-input', 'selected-report-file');
     
     // ローカルタイムゾーン変換
     convertAllTimes();
