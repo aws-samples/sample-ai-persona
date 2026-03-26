@@ -82,7 +82,7 @@ Models are immutable—use `replace()` for updates.
 ### DynamoDB Backend
 ```bash
 DYNAMODB_TABLE_PREFIX=AIPersona
-DYNAMODB_REGION=us-east-1
+DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 ```
 
 Always use service factory:

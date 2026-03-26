@@ -107,27 +107,21 @@ CDKやDockerの知識や環境がなくても、AWS CloudShellとデプロイス
 
 ### 手順
 
-#### 1. プロジェクトのzipファイルの準備 （zipファイルが既にある場合はスキップ）
-
-```bash
-cd ai-persona
-zip -r ai-persona.zip . -x ".git/*" ".venv/*" "__pycache__/*" "cdk/node_modules/*" "cdk/cdk.out/*" "uploads/*" "data/*" "*.pyc"
-```
-
-#### 2. CloudShellにアップロード
+#### 1. CloudShellを開く
 
 1. AWSマネジメントコンソール右上の CloudShell アイコンをクリック
-2. リージョンが `us-east-1` であることを確認
-3. 画面右上の「Actions > Upload file」から `ai-persona.zip` をアップロード
+2. デプロイ先のリージョン（例: `us-east-1`, `us-west-2`, `ap-northeast-1`）が選択されていることを確認
 
-#### 3. デプロイ実行
+#### 2. デプロイ実行
 
 ```bash
-unzip ai-persona.zip -d ai-persona
-cd ai-persona/ai-persona-main
+git clone https://github.com/aws-samples/sample-ai-persona.git
+cd sample-ai-persona
 chmod +x deploy.sh
-./deploy.sh
+./deploy.sh --region <AWS_REGION>
 ```
+
+> デフォルトのデプロイ先は `us-east-1` です。他のリージョンにデプロイする場合は `--region` を指定してください（例: `--region us-west-2`, `--region ap-northeast-1`）。
 
 全自動で ECR → Docker ビルド → AgentCore Memory → DynamoDB + ECS → Cognito がデプロイされます。
 
@@ -156,12 +150,10 @@ chmod +x deploy.sh
 - Cognitoは作成済みの場合はスキップしてください。
 
 ```bash
-# 新しいzipをアップロード後
-rm -rf ai-persona
-unzip ai-persona.zip -d ai-persona
-cd ai-persona/ai-persona-main
+cd sample-ai-persona
+git pull
 chmod +x deploy.sh
-./deploy.sh --skip-memory --skip-cognito
+./deploy.sh --skip-memory --skip-cognito --region <AWS_REGION>
 ```
 - アプリケーションのみの変更の場合、新しいDockerイメージがECRにPUSHされます。
 - ECS Express Modeで新しいコンテナイメージに更新し、再度デプロイすることでアプリケーションが更新されます。
@@ -172,7 +164,7 @@ chmod +x deploy.sh
 
 ```bash
 chmod +x destroy.sh
-./destroy.sh
+./destroy.sh --region <AWS_REGION>
 ```
 
 スタックの依存関係に基づき、正しい順序（Cognito → Main → Memory → ECR）で自動削除されます。
@@ -265,8 +257,8 @@ npx cdk deploy AIPersonaMemory-dev
 ```
 Outputs:
 AIPersonaMemory-dev.MemoryId = memory_ai_persona-XXXXXXXXXX
-AIPersonaMemory-dev.GetStrategyIdCommand = aws bedrock-agentcore-control get-memory --memory-id memory_ai_persona-XXXXXXXXXX --region us-east-1 --query 'memory.strategies[?type==`SUMMARIZATION`].strategyId' --output text
-AIPersonaMemory-dev.GetSemanticStrategyIdCommand = aws bedrock-agentcore-control get-memory --memory-id memory_ai_persona-XXXXXXXXXX --region us-east-1 --query 'memory.strategies[?type==`SEMANTIC`].strategyId' --output text
+AIPersonaMemory-dev.GetStrategyIdCommand = aws bedrock-agentcore-control get-memory --memory-id memory_ai_persona-XXXXXXXXXX --region <AWS_REGION> --query 'memory.strategies[?type==`SUMMARIZATION`].strategyId' --output text
+AIPersonaMemory-dev.GetSemanticStrategyIdCommand = aws bedrock-agentcore-control get-memory --memory-id memory_ai_persona-XXXXXXXXXX --region <AWS_REGION> --query 'memory.strategies[?type==`SEMANTIC`].strategyId' --output text
 AIPersonaMemory-dev.NextSteps = IMPORTANT: After deployment, run "aws bedrock-agentcore-control get-memory --memory-id <MEMORY_ID>" to get the Strategy ID, then update parameters.ts
 ```
 
@@ -278,7 +270,7 @@ AIPersonaMemory-dev.NextSteps = IMPORTANT: After deployment, run "aws bedrock-ag
 ```bash
 aws bedrock-agentcore-control get-memory \
   --memory-id memory_ai_persona-XXXXXXXXXX \
-  --region us-east-1 \
+  --region <AWS_REGION> \
   --query 'memory.strategies[?type==`SUMMARIZATION`].strategyId' \
   --output text
 ```
@@ -292,7 +284,7 @@ summary-cGiRRh8umv
 ```bash
 aws bedrock-agentcore-control get-memory \
   --memory-id memory_ai_persona-XXXXXXXXXX \
-  --region us-east-1 \
+  --region <AWS_REGION> \
   --query 'memory.strategies[?type==`SEMANTIC`].strategyId' \
   --output text
 ```
@@ -424,7 +416,7 @@ CloudFormationではStrategy IDを直接取得できないため、AWS CLIを使
 ```bash
 aws bedrock-agentcore-control get-memory \
   --memory-id <MEMORY_ID> \
-  --region us-east-1 \
+  --region <AWS_REGION> \
   --query 'memory.strategies[?type==`SUMMARIZATION`].strategyId' \
   --output text
 ```
@@ -433,7 +425,7 @@ aws bedrock-agentcore-control get-memory \
 ```bash
 aws bedrock-agentcore-control get-memory \
   --memory-id <MEMORY_ID> \
-  --region us-east-1 \
+  --region <AWS_REGION> \
   --query 'memory.strategies[?type==`SEMANTIC`].strategyId' \
   --output text
 ```

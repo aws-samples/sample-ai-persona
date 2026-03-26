@@ -47,7 +47,7 @@ The system uses Amazon DynamoDB as its database backend:
 Configuration via environment variables:
 ```bash
 DYNAMODB_TABLE_PREFIX=AIPersona
-DYNAMODB_REGION=us-east-1
+DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 ```
 
 #### DynamoDB Best Practices

@@ -6,8 +6,9 @@
 # このスクリプトだけで、CDKの知識がなくてもAWSにデプロイできます。
 #
 # 使い方:
-#   1. プロジェクトをzipでCloudShellにアップロード
-#   2. unzip ai-persona.zip -d ai-persona && cd ai-persona
+#   1. CloudShellでリポジトリをクローン
+#      git clone https://github.com/aws-samples/sample-ai-persona.git
+#   2. cd sample-ai-persona
 #   3. chmod +x deploy.sh && ./deploy.sh
 #
 # オプション:

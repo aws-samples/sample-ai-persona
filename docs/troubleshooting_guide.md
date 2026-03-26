@@ -162,7 +162,7 @@ echo $DYNAMODB_TABLE_PREFIX
 
 3. テーブルの存在確認
 ```bash
-aws dynamodb list-tables --region us-east-1 | grep AIPersona
+aws dynamodb list-tables --region $DYNAMODB_REGION | grep AIPersona
 ```
 
 #### 問題: データベース接続エラー
@@ -188,7 +188,7 @@ cat .env | grep DYNAMODB
 **解決方法:**
 1. DynamoDBのキャパシティモードを確認
 ```bash
-aws dynamodb describe-table --table-name AIPersona_Discussions --region us-east-1
+aws dynamodb describe-table --table-name AIPersona_Discussions --region $DYNAMODB_REGION
 ```
 
 2. 必要に応じてオンデマンドモードへの切り替えを検討
