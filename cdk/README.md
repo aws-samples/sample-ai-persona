@@ -1,54 +1,24 @@
-# AI Persona CDK
+# AI ペルソナシステムの AWS CDK デプロイについて
 
 AI PersonaシステムをAWSにデプロイするためのCDKコードです。ECS Express Modeを使用してシンプルにデプロイします。
 
 ## アーキテクチャ
 
-```
-                    ┌─────────────────────────────────────────┐
-                    │           Cognito User Pool             │
-                    └───────────────────┬─────────────────────┘
-                                        │ (手動でALB統合)
-                    ┌───────────────────┼─────────────────────┐
-                    │     VPC (ai-persona-{env})              │
-                    │  ┌────────────────┴────────────────┐   │
-                    │  │   ECS Express Mode Service      │   │
-                    │  │   (自動管理: ALB, SG, AutoScale)│   │
-                    │  │   ai-persona-{env}:latest       │   │
-                    │  └───────────────┬─────────────────┘   │
-                    │                  │                      │
-                    │  ┌───────────────┼─────────────────┐   │
-                    │  │         DynamoDB Tables          │   │
-                    │  │  - Personas                      │   │
-                    │  │  - Discussions                   │   │
-                    │  │  - UploadedFiles                 │   │
-                    │  │  - SurveyTemplates               │   │
-                    │  │  - Surveys                       │   │
-                    │  │  - Datasets                      │   │
-                    │  │  - PersonaDatasetBindings        │   │
-                    │  │  - KnowledgeBases                │   │
-                    │  │  - PersonaKBBindings             │   │
-                    │  └─────────────────────────────────┘   │
-                    │                                         │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │      S3 Upload Bucket            │   │
-                    │  │  - File Storage                  │   │
-                    │  │  - Versioning Enabled            │   │
-                    │  └─────────────────────────────────┘   │
-                    │                                         │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │      Amazon Bedrock (Claude)     │   │
-                    │  │  - Direct Inference              │   │
-                    │  │  - Batch Inference (Survey)      │   │
-                    │  └─────────────────────────────────┘   │
-                    │                                         │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │   AgentCore Memory (Optional)    │   │
-                    │  │   - Summary Strategy             │   │
-                    │  │   - Semantic Strategy            │   │
-                    │  │   - Long-term Persona Memory     │   │
-                    │  └─────────────────────────────────┘   │
-                    └─────────────────────────────────────────┘
+```mermaid
+graph TB
+    User([ユーザー]) --> Cognito[Amazon Cognito]
+    Cognito -->|手動でALB統合| ALB
+
+    subgraph VPC["VPC"]
+        ALB[ALB] --> ECS[Amazon ECS]
+    end
+
+    ECR[Amazon ECR] -.->|イメージ取得| ECS
+    ECS --> DynamoDB[(Amazon DynamoDB)]
+    ECS --> S3[(Amazon S3)]
+    ECS --> Bedrock[Amazon Bedrock]
+    ECS --> Memory[AgentCore Memory]
+    Bedrock -->|Batch Inference| S3
 ```
 
 ## Stack構成
