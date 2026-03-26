@@ -85,34 +85,62 @@ async def persona_data_page(request: Request):
             "request": request,
             "title": "ペルソナデータ設定",
             "nemotron_status": nemotron_status,
+            "downloading": _nemotron_download_status["downloading"],
             "custom_datasets": custom_datasets,
         },
     )
 
 
-@router.post("/persona-data/download-nemotron", response_class=HTMLResponse)
-async def download_nemotron(request: Request):
-    """Nemotronデータセットをダウンロード"""
-    survey_service = service_factory.get_survey_service()
+_nemotron_download_status: dict = {"downloading": False, "error": None}
+
+
+def _download_nemotron_background() -> None:
+    """バックグラウンドでNemotronデータセットをダウンロードする。"""
     try:
-        loop = asyncio.get_event_loop()
-        status = await loop.run_in_executor(
-            executor, survey_service.download_nemotron_dataset
-        )
-        return templates.TemplateResponse(
-            "survey/partials/nemotron_status.html",
-            {"request": request, "nemotron_status": status, "success": True},
-        )
+        survey_service = service_factory.get_survey_service()
+        survey_service.download_nemotron_dataset()
     except Exception as e:
         logger.error(f"Failed to download Nemotron dataset: {e}")
+        _nemotron_download_status["error"] = str(e)
+    finally:
+        _nemotron_download_status["downloading"] = False
+
+
+@router.post("/persona-data/download-nemotron", response_class=HTMLResponse)
+async def download_nemotron(request: Request):
+    """Nemotronデータセットのダウンロードをバックグラウンドで開始"""
+    if _nemotron_download_status["downloading"]:
         return templates.TemplateResponse(
             "survey/partials/nemotron_status.html",
-            {
-                "request": request,
-                "nemotron_status": {"exists": False, "size_mb": 0},
-                "error": str(e),
-            },
+            {"request": request, "nemotron_status": {"exists": False, "size_mb": 0}, "downloading": True},
         )
+    _nemotron_download_status["downloading"] = True
+    _nemotron_download_status["error"] = None
+    asyncio.create_task(asyncio.to_thread(_download_nemotron_background))
+    return templates.TemplateResponse(
+        "survey/partials/nemotron_status.html",
+        {"request": request, "nemotron_status": {"exists": False, "size_mb": 0}, "downloading": True},
+    )
+
+
+@router.get("/persona-data/nemotron-status", response_class=HTMLResponse)
+async def nemotron_download_status(request: Request):
+    """Nemotronダウンロード状況をポーリングで返す"""
+    survey_service = service_factory.get_survey_service()
+    try:
+        status = survey_service.check_nemotron_dataset_status()
+    except Exception:
+        status = {"exists": False, "size_mb": 0}
+    return templates.TemplateResponse(
+        "survey/partials/nemotron_status.html",
+        {
+            "request": request,
+            "nemotron_status": status,
+            "downloading": _nemotron_download_status["downloading"],
+            "error": _nemotron_download_status["error"],
+            "success": status.get("exists", False) and not _nemotron_download_status["downloading"],
+        },
+    )
 
 
 @router.post("/persona-data/upload-custom", response_class=HTMLResponse)
@@ -413,8 +441,9 @@ async def survey_start_page(request: Request):
         elif custom_datasets:
             default_ds = f"custom:{custom_datasets[0]['name']}"
         else:
-            default_ds = "nemotron"
-        filter_values = survey_service.get_available_filter_values(datasource=default_ds)
+            default_ds = None
+        if default_ds:
+            filter_values = survey_service.get_available_filter_values(datasource=default_ds)
         # 各データソースのペルソナ数を取得
         if nemotron_available:
             datasource_counts["nemotron"] = survey_service._get_total_count("nemotron")

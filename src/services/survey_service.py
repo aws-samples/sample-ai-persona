@@ -154,9 +154,35 @@ class SurveyService:
     def download_nemotron_dataset(self) -> dict:
         """Nemotronデータセットをダウンロードし、S3にParquetとして配置する。"""
         self._parquet_s3_uri = None  # キャッシュクリア
-        self._duckdb_conn = None
-        self._filter_values_cache = None
-        self._ensure_parquet_on_s3()
+        self._duckdb_conns.pop("nemotron", None)
+        self._filter_values_cache.pop("nemotron", None)
+
+        bucket = self.s3_service.bucket_name
+        s3_uri = f"s3://{bucket}/{PARQUET_S3_KEY}"
+
+        try:
+            from datasets import load_dataset
+            import tempfile
+            import os
+
+            logger.info(f"Downloading dataset from Hugging Face: {DATASET_NAME}")
+            dataset = load_dataset(DATASET_NAME, split="train")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                parquet_path = os.path.join(tmpdir, "data.parquet")
+                dataset.to_parquet(parquet_path)
+                with open(parquet_path, "rb") as f:
+                    parquet_bytes = f.read()
+
+            self.s3_service.upload_file(parquet_bytes, PARQUET_S3_KEY)
+            logger.info(f"Parquet uploaded to S3: {s3_uri}")
+            self._parquet_s3_uri = s3_uri
+        except Exception as e:
+            logger.error(f"Failed to download Nemotron dataset: {e}")
+            raise SurveyServiceError(
+                f"Nemotronデータセットのダウンロードに失敗しました: {e}"
+            ) from e
+
         return self.check_nemotron_dataset_status()
 
     # =========================================================================
@@ -355,8 +381,8 @@ class SurveyService:
 
     def _ensure_parquet_on_s3(self) -> str:
         """
-        S3上にParquetファイルが存在することを保証する。
-        存在しなければHugging Faceからダウンロードし、Parquet形式でS3にアップロードする。
+        S3上にParquetファイルが存在することを確認する。
+        存在しない場合はエラーを投げる（ペルソナデータ設定から事前にダウンロードが必要）。
 
         Returns:
             str: S3上のParquetファイルのURI (s3://bucket/key)
@@ -374,33 +400,10 @@ class SurveyService:
             self._parquet_s3_uri = s3_uri
             return s3_uri
         except self.s3_service.s3_client.exceptions.ClientError:
-            pass  # 存在しない → ダウンロードして配置
-
-        try:
-            from datasets import load_dataset
-
-            logger.info(f"Downloading dataset from Hugging Face: {DATASET_NAME}")
-            dataset = load_dataset(DATASET_NAME, split="train")
-
-            # 一時ファイルにParquetとして保存してS3にアップロード
-            import tempfile
-            import os
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                parquet_path = os.path.join(tmpdir, "data.parquet")
-                dataset.to_parquet(parquet_path)
-                with open(parquet_path, "rb") as f:
-                    parquet_bytes = f.read()
-
-            self.s3_service.upload_file(parquet_bytes, PARQUET_S3_KEY)
-            logger.info(f"Parquet uploaded to S3: {s3_uri}")
-            self._parquet_s3_uri = s3_uri
-            return s3_uri
-        except Exception as e:
-            logger.error(f"Failed to prepare parquet on S3: {e}")
             raise SurveyServiceError(
-                f"ペルソナデータセットの準備に失敗しました: {e}"
-            ) from e
+                "Nemotronデータセットがまだダウンロードされていません。"
+                "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
+            )
 
     def _get_duckdb_conn(self, datasource: str = "nemotron") -> duckdb.DuckDBPyConnection:
         """

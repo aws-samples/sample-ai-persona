@@ -11,6 +11,21 @@
 {% if success is defined and success %}
 <div class="mt-2 text-sm text-green-600">✓ ダウンロードが完了しました。</div>
 {% endif %}
+{% elif downloading is defined and downloading %}
+<div class="bg-blue-50 border border-blue-200 rounded-lg p-4"
+     hx-get="/survey/persona-data/nemotron-status"
+     hx-target="#nemotron-status"
+     hx-swap="innerHTML"
+     hx-trigger="every 5s">
+    <div class="flex items-center gap-3 mb-2">
+        <svg class="animate-spin w-5 h-5 text-blue-600 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <p class="text-blue-800 font-medium text-sm">データセットをダウンロード中...</p>
+    </div>
+    <p class="text-blue-600 text-xs ml-8">データをダウンロードしています。完了まで数分かかる場合があります。このページを離れても処理は継続されます。</p>
+</div>
 {% else %}
 <div class="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg p-4">
     <div class="flex items-center gap-3">
@@ -22,14 +37,7 @@
     <button hx-post="/survey/persona-data/download-nemotron"
             hx-target="#nemotron-status"
             hx-swap="innerHTML"
-            hx-indicator="#dl-spinner"
             class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm flex-shrink-0">
-        <span id="dl-spinner" class="htmx-indicator">
-            <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-        </span>
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
         </svg>
