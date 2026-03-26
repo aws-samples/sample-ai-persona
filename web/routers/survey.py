@@ -402,6 +402,7 @@ async def survey_start_page(request: Request):
     filter_values = {}
     custom_datasets = []
     nemotron_available = False
+    datasource_counts = {}
     try:
         survey_service = service_factory.get_survey_service()
         nemotron_available = survey_service.check_nemotron_dataset_status().get("exists", False)
@@ -414,6 +415,11 @@ async def survey_start_page(request: Request):
         else:
             default_ds = "nemotron"
         filter_values = survey_service.get_available_filter_values(datasource=default_ds)
+        # 各データソースのペルソナ数を取得
+        if nemotron_available:
+            datasource_counts["nemotron"] = survey_service._get_total_count("nemotron")
+        for ds in custom_datasets:
+            datasource_counts[f"custom:{ds['name']}"] = survey_service._get_total_count(f"custom:{ds['name']}")
     except Exception as e:
         logger.warning(f"Failed to get filter values: {e}")
 
@@ -427,6 +433,7 @@ async def survey_start_page(request: Request):
             "filter_values": filter_values,
             "custom_datasets": custom_datasets,
             "nemotron_available": nemotron_available,
+            "datasource_counts": datasource_counts,
         },
     )
 

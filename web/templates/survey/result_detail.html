@@ -10,7 +10,7 @@
             <p class="text-gray-600 mt-1">{{ survey.description }}</p>
             {% endif %}
             <div class="flex items-center gap-4 mt-2">
-                <span class="text-sm text-gray-500">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</span>
+                <span class="text-sm text-gray-500"><time datetime="{{ survey.created_at.isoformat() }}Z">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time></span>
                 <span class="text-sm text-gray-500">{{ survey.persona_count }}名</span>
                 <span class="px-2 py-0.5 text-xs rounded-full
                     {% if survey.status == 'completed' %}bg-green-100 text-green-800
@@ -162,7 +162,7 @@
                 <div class="flex items-center gap-2 mb-4">
                     {{ icon_lightbulb("w-5 h-5 text-yellow-500") }}
                     <h3 class="text-lg font-semibold text-gray-900">インサイトレポート</h3>
-                    <span class="text-xs text-gray-500">{{ survey.insight_report.created_at.strftime('%Y/%m/%d %H:%M') }}</span>
+                    <span class="text-xs text-gray-500"><time datetime="{{ survey.insight_report.created_at.isoformat() }}Z">{{ survey.insight_report.created_at.strftime('%Y/%m/%d %H:%M') }}</time></span>
                 </div>
                 <div class="prose prose-slate max-w-none
                 prose-headings:font-bold prose-headings:text-gray-900

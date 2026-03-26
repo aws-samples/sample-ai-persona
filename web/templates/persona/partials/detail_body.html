@@ -222,6 +222,6 @@
 <!-- メタ情報 -->
 <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-500">
     <p><strong>ペルソナID:</strong> {{ persona.id }}</p>
-    <p><strong>作成日時:</strong> {{ persona.created_at.strftime('%Y年%m月%d日 %H:%M:%S') if persona.created_at else '不明' }}</p>
-    <p><strong>更新日時:</strong> {{ persona.updated_at.strftime('%Y年%m月%d日 %H:%M:%S') if persona.updated_at else '不明' }}</p>
+    <p><strong>作成日時:</strong> {% if persona.created_at %}<time datetime="{{ persona.created_at.isoformat() }}Z">{{ persona.created_at.strftime('%Y/%m/%d %H:%M:%S') }}</time>{% else %}不明{% endif %}</p>
+    <p><strong>更新日時:</strong> {% if persona.updated_at %}<time datetime="{{ persona.updated_at.isoformat() }}Z">{{ persona.updated_at.strftime('%Y/%m/%d %H:%M:%S') }}</time>{% else %}不明{% endif %}</p>
 </div>

@@ -28,6 +28,7 @@ data/
 
 # CDK
 cdk/node_modules/
+cdk/parameters_bk.ts
 # cdk/package-lock.json
 cdk.out/
 .cdk.staging/

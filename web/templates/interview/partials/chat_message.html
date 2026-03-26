@@ -10,7 +10,7 @@
             {% if message.timestamp %}
             <div class="flex justify-end mt-1">
                 <span class="text-xs text-gray-500 bg-white px-2 py-1 rounded-full shadow-sm">
-                    {{ message.timestamp.strftime('%H:%M') }}
+                    <time datetime="{{ message.timestamp.isoformat() }}Z" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time>
                 </span>
             </div>
             {% endif %}
@@ -43,7 +43,7 @@
                 <span class="font-semibold text-gray-900 text-sm">{{ message.persona_name }}</span>
                 <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">ペルソナ</span>
                 {% if message.timestamp %}
-                <span class="text-xs text-gray-400">{{ message.timestamp.strftime('%H:%M') }}</span>
+                <span class="text-xs text-gray-400"><time datetime="{{ message.timestamp.isoformat() }}Z" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time></span>
                 {% endif %}
             </div>
             <div class="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">

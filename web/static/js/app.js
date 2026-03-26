@@ -147,10 +147,37 @@ const storage = {
     }
 };
 
+// ローカルタイムゾーン変換
+function formatLocalTime(el) {
+    const iso = el.getAttribute('datetime');
+    if (!iso) return;
+    const d = new Date(iso);
+    if (isNaN(d)) return;
+    const fmt = el.dataset.fmt || 'datetime';
+    const opts = fmt === 'time'
+        ? {hour: '2-digit', minute: '2-digit'}
+        : fmt === 'date'
+        ? {year: 'numeric', month: '2-digit', day: '2-digit'}
+        : {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'};
+    el.textContent = d.toLocaleString('ja-JP', opts);
+}
+
+function convertAllTimes(root) {
+    (root || document).querySelectorAll('time[datetime]').forEach(formatLocalTime);
+}
+
+// htmxで動的に追加された要素にも対応
+document.body.addEventListener('htmx:afterSwap', function(evt) {
+    convertAllTimes(evt.detail.target);
+});
+
 // ページ読み込み完了時の処理
 document.addEventListener('DOMContentLoaded', function() {
     // ドラッグ＆ドロップの設定
     setupDragAndDrop('.border-dashed', '#file-input');
+    
+    // ローカルタイムゾーン変換
+    convertAllTimes();
     
     console.log('AIペルソナシステム (htmx版) initialized');
 });

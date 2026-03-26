@@ -233,7 +233,7 @@
                     <div class="flex items-center gap-2 mb-2 flex-wrap">
                         {{ icon_lightbulb("w-4 h-4 text-yellow-500") }}
                         <span class="text-xs text-gray-500">
-                            {{ memory.created_at.strftime('%Y年%m月%d日 %H:%M') if memory.created_at else '日時不明' }}
+                            {% if memory.created_at %}<time datetime="{{ memory.created_at.isoformat() }}Z">{{ memory.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}日時不明{% endif %}
                         </span>
                         {% if memory.metadata and memory.metadata.importance %}
                         <span class="px-2 py-0.5 text-xs rounded-full 

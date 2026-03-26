@@ -34,9 +34,9 @@
                     <p class="text-sm text-gray-500 mt-1">
                         {{ tmpl.questions|length }}問
                         {% if tmpl.images %} ・ 画像あり{% endif %} ・
-                        作成: {{ tmpl.created_at.strftime('%Y/%m/%d %H:%M') }}
+                        作成: <time datetime="{{ tmpl.created_at.isoformat() }}Z">{{ tmpl.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
                         {% if tmpl.updated_at != tmpl.created_at %}
-                        ・ 更新: {{ tmpl.updated_at.strftime('%Y/%m/%d %H:%M') }}
+                        ・ 更新: <time datetime="{{ tmpl.updated_at.isoformat() }}Z">{{ tmpl.updated_at.strftime('%Y/%m/%d %H:%M') }}</time>
                         {% endif %}
                     </p>
                     <div class="flex flex-wrap gap-2 mt-2">

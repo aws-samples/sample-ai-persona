@@ -33,37 +33,6 @@
           hx-indicator="#execute-spinner"
           @submit="prepareFilters()">
 
-        <!-- データソース選択 -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                {{ icon_users("w-5 h-5 text-purple-600") }} ペルソナデータソース
-            </label>
-            <select name="datasource" required
-                    hx-get="/survey/filter-options"
-                    hx-target="#filter-fields"
-                    hx-swap="innerHTML"
-                    hx-trigger="change"
-                    hx-include="[name='datasource']"
-                    @htmx:before-request.camel="document.getElementById('filter-overlay').classList.remove('hidden')"
-                    @htmx:after-request.camel="document.getElementById('filter-overlay').classList.add('hidden')"
-                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
-                {% if nemotron_available %}
-                <option value="nemotron">オープンデータ(Nemotron-Personas-Japan)</option>
-                {% endif %}
-                {% for ds in custom_datasets %}
-                <option value="custom:{{ ds.name }}">カスタムデータ（{{ ds.name }}）</option>
-                {% endfor %}
-                {% if not nemotron_available and not custom_datasets %}
-                <option value="" disabled selected>利用可能なデータセットがありません</option>
-                {% endif %}
-            </select>
-            {% if not nemotron_available and not custom_datasets %}
-            <p class="text-sm text-yellow-600 mt-2">
-                <a href="/survey/persona-data" class="underline">ペルソナデータ設定</a>からデータセットを準備してください。
-            </p>
-            {% endif %}
-        </div>
-
         <!-- テンプレート選択 -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
@@ -94,17 +63,39 @@
             </div>
         </div>
 
-        <!-- ペルソナ数 -->
+        <!-- データソース選択 -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                {{ icon_users("w-5 h-5 text-purple-600") }} 対象ペルソナ数
-                <span class="text-sm font-normal text-gray-500" x-text="personaCountLabel"></span>
+                {{ icon_users("w-5 h-5 text-purple-600") }} ペルソナデータソース
             </label>
-            <input type="number" name="persona_count" value="100" min="100" :max="maxPersonaCount" required
-                   class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
-            <p class="text-xs text-gray-500 mt-1" x-show="hasImages">
-                ⚠️ 画像付きテンプレートは最大1,000人までです
+            <select name="datasource" required
+                    x-model="currentDatasource"
+                    hx-get="/survey/filter-options"
+                    hx-target="#filter-fields"
+                    hx-swap="innerHTML"
+                    hx-trigger="change"
+                    hx-include="[name='datasource']"
+                    @htmx:before-request.camel="document.getElementById('filter-overlay').classList.remove('hidden')"
+                    @htmx:after-request.camel="document.getElementById('filter-overlay').classList.add('hidden')"
+                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+                {% if nemotron_available %}
+                <option value="nemotron">オープンデータ(Nemotron-Personas-Japan)</option>
+                {% endif %}
+                {% for ds in custom_datasets %}
+                <option value="custom:{{ ds.name }}">カスタムデータ（{{ ds.name }}）</option>
+                {% endfor %}
+                {% if not nemotron_available and not custom_datasets %}
+                <option value="" disabled selected>利用可能なデータセットがありません</option>
+                {% endif %}
+            </select>
+            <p class="text-sm text-gray-500 mt-2" x-show="datasourceCounts[currentDatasource]">
+                含まれるペルソナ数: <span class="font-semibold text-gray-700" x-text="(datasourceCounts[currentDatasource] || 0).toLocaleString()"></span> 人
             </p>
+            {% if not nemotron_available and not custom_datasets %}
+            <p class="text-sm text-yellow-600 mt-2">
+                <a href="/survey/persona-data" class="underline">ペルソナデータ設定</a>からデータセットを準備してください。
+            </p>
+            {% endif %}
         </div>
 
         <!-- 属性フィルタ -->
@@ -151,6 +142,19 @@
             </div>
         </div>
 
+        <!-- ペルソナ数 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                {{ icon_users("w-5 h-5 text-purple-600") }} 対象ペルソナ数
+                <span class="text-sm font-normal text-gray-500" x-text="personaCountLabel"></span>
+            </label>
+            <input type="number" name="persona_count" value="100" min="100" :max="maxPersonaCount" required
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+            <p class="text-xs text-gray-500 mt-1" x-show="hasImages">
+                ⚠️ 画像付きテンプレートは最大1,000人までです
+            </p>
+        </div>
+
         <!-- 実行ボタン -->
         <div class="flex justify-end gap-3">
             <a href="/survey" class="bg-gray-200 text-gray-700 px-6 py-2 rounded-md hover:bg-gray-300 transition-colors">
@@ -178,6 +182,8 @@ function surveyStartForm() {
     return {
         templateId: '',
         hasImages: false,
+        datasourceCounts: {{ datasource_counts | tojson }},
+        currentDatasource: document.querySelector('select[name="datasource"]')?.value || '',
         get maxPersonaCount() {
             return this.hasImages ? 1000 : 10000;
         },

@@ -46,7 +46,7 @@
         
         <!-- 作成日時 -->
         <p class="text-xs text-gray-400 mt-4">
-            作成: {{ persona.created_at.strftime('%Y/%m/%d %H:%M') if persona.created_at else '不明' }}
+            作成: {% if persona.created_at %}<time datetime="{{ persona.created_at.isoformat() }}Z">{{ persona.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
         </p>
     </div>
     {% endfor %}
