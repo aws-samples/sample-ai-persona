@@ -18,7 +18,7 @@ def mock_db():
 
 @pytest.fixture
 def manager(mock_db):
-    return PersonaManager(database_service=mock_db)
+    return PersonaManager(ai_service=Mock(), database_service=mock_db)
 
 
 class TestAddPersonaKnowledge:

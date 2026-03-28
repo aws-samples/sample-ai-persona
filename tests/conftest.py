@@ -215,8 +215,9 @@ def file_manager(temp_upload_dir) -> Generator:
 def persona_manager(mock_database_service) -> Generator:
     """テスト用PersonaManagerを提供"""
     from src.managers.persona_manager import PersonaManager
+    from unittest.mock import Mock
 
-    manager = PersonaManager(database_service=mock_database_service)
+    manager = PersonaManager(ai_service=Mock(), database_service=mock_database_service)
     yield manager
 
 

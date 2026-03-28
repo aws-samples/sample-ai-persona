@@ -5,6 +5,7 @@ Tests the rendering of agent mode discussions with rounds and facilitator messag
 
 import pytest
 from typing import List, Dict
+from unittest.mock import Mock
 
 from src.models.discussion import Discussion
 from src.models.message import Message
@@ -364,7 +365,7 @@ class TestAgentModeDiscussionDisplay:
 
         # Verify that the discussion can be used with DiscussionManager
         # (This validates the integration without making actual AI calls)
-        DiscussionManager()
+        DiscussionManager(ai_service=Mock(), database_service=Mock())
 
         # Verify the discussion structure is valid for insight generation
         assert len(discussion.messages) >= 2  # Minimum requirement

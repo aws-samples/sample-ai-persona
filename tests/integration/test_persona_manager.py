@@ -4,7 +4,7 @@ Tests the complete persona management workflow including AI service and database
 """
 
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.persona import Persona
@@ -145,8 +145,12 @@ class TestPersonaManagerIntegration:
             ],
         }
 
-    def test_persona_manager_initialization(self, mock_database_service):
+    @patch("src.managers.persona_manager.service_factory")
+    def test_persona_manager_initialization(self, mock_sf, mock_database_service):
         """Test persona manager initialization."""
+        mock_sf.get_ai_service.return_value = Mock(spec=AIService)
+        mock_sf.get_database_service.return_value = mock_database_service
+
         # Test with default services
         manager = PersonaManager()
         assert manager.ai_service is not None

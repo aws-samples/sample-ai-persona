@@ -27,8 +27,9 @@ def aws_region():
 
 
 @pytest.fixture
-def s3_service(s3_bucket_name, aws_region):
+def s3_service(s3_bucket_name, aws_region, monkeypatch):
     """モックS3サービス"""
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
     with mock_aws():
         # バケットを作成
         s3_client = boto3.client("s3", region_name=aws_region)

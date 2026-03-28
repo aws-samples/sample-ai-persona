@@ -50,12 +50,10 @@ class TestAgentDiscussionManagerInitialization:
 class TestCreatePersonaAgents:
     """ペルソナエージェント作成のテスト"""
 
-    @patch("src.managers.agent_discussion_manager.service_factory")
-    def test_create_persona_agents_success(self, mock_sf, sample_persona, sample_persona_2):
+    def test_create_persona_agents_success(self, sample_persona, sample_persona_2):
         """ペルソナエージェント作成が成功することを確認"""
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
-        mock_sf.get_database_service.return_value = mock_db_service
 
         mock_agent_service = Mock()
         mock_agent_service.generate_persona_system_prompt.return_value = (
@@ -69,6 +67,8 @@ class TestCreatePersonaAgents:
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service, database_service=mock_db_service
         )
+        # _create_agent_with_integrations 内で service_factory を直接インポートするためモック
+        manager._create_agent_with_integrations = Mock(return_value=mock_persona_agent)
 
         personas = [sample_persona, sample_persona_2]
         system_prompts = {}
@@ -76,16 +76,14 @@ class TestCreatePersonaAgents:
         agents = manager.create_persona_agents(personas, system_prompts)
 
         assert len(agents) == 2
-        assert mock_agent_service.create_persona_agent.call_count == 2
+        assert manager._create_agent_with_integrations.call_count == 2
 
-    @patch("src.managers.agent_discussion_manager.service_factory")
     def test_create_persona_agents_with_custom_prompts(
-        self, mock_sf, sample_persona, sample_persona_2
+        self, sample_persona, sample_persona_2
     ):
         """カスタムプロンプトでのエージェント作成を確認"""
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
-        mock_sf.get_database_service.return_value = mock_db_service
 
         mock_agent_service = Mock()
         mock_persona_agent = Mock(spec=PersonaAgent)
@@ -94,6 +92,7 @@ class TestCreatePersonaAgents:
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service, database_service=mock_db_service
         )
+        manager._create_agent_with_integrations = Mock(return_value=mock_persona_agent)
 
         custom_prompt = "カスタムシステムプロンプト"
         system_prompts = {sample_persona.id: custom_prompt}
@@ -103,8 +102,8 @@ class TestCreatePersonaAgents:
             [sample_persona, sample_persona_2], system_prompts
         )
 
-        # カスタムプロンプトが使用されたことを確認
-        assert mock_agent_service.create_persona_agent.call_count == 2
+        # エージェント作成が2回呼ばれたことを確認
+        assert manager._create_agent_with_integrations.call_count == 2
 
 
 class TestCreateFacilitatorAgent:

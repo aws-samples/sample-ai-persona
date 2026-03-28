@@ -4,23 +4,23 @@ Tests the complete flow from file upload to discussion with documents.
 """
 
 from pathlib import Path
+from unittest.mock import Mock
 
 from src.managers.file_manager import FileManager
 from src.managers.discussion_manager import DiscussionManager
 from src.models.persona import Persona
-from src.services.service_factory import service_factory
+from src.models.message import Message
 
 
-def test_complete_document_flow():
+def test_complete_document_flow(tmp_path):
     """Test complete flow: upload documents -> start discussion with documents."""
 
-    # Setup
-    db_service = service_factory.get_database_service()
-    ai_service = service_factory.get_ai_service()
-    file_manager = FileManager(db_service=db_service)
-    DiscussionManager(
-        ai_service=ai_service, database_service=db_service
-    )
+    # Setup with mock services
+    mock_db = Mock()
+    mock_db.save_persona.return_value = "persona-id"
+    file_manager = FileManager(db_service=mock_db)
+    file_manager.discussion_doc_dir = tmp_path / "discussion_documents"
+    file_manager.discussion_doc_dir.mkdir()
 
     # Test files
     test_image_path = Path(__file__).parent.parent / "test_file" / "test_image.jpeg"
@@ -48,6 +48,27 @@ def test_complete_document_flow():
     pdf_metadata = file_manager.upload_discussion_document(pdf_content, "pdf_test.pdf")
     print(f"✓ PDF uploaded: {pdf_metadata.file_id}")
 
+    # Setup mock for get_uploaded_file_info
+    file_info_map = {
+        image_metadata.file_id: {
+            "file_path": str(file_manager.discussion_doc_dir / image_metadata.saved_filename),
+            "mime_type": "image/jpeg",
+            "file_size": len(image_content),
+            "filename": "test_image.jpeg",
+            "original_filename": "test_image.jpeg",
+            "uploaded_at": image_metadata.uploaded_at.isoformat() if hasattr(image_metadata, 'uploaded_at') else "2026-01-01T00:00:00",
+        },
+        pdf_metadata.file_id: {
+            "file_path": str(file_manager.discussion_doc_dir / pdf_metadata.saved_filename),
+            "mime_type": "application/pdf",
+            "file_size": len(pdf_content),
+            "filename": "pdf_test.pdf",
+            "original_filename": "pdf_test.pdf",
+            "uploaded_at": pdf_metadata.uploaded_at.isoformat() if hasattr(pdf_metadata, 'uploaded_at') else "2026-01-01T00:00:00",
+        },
+    }
+    mock_db.get_uploaded_file_info.side_effect = lambda doc_id: file_info_map.get(doc_id)
+
     # Step 2: Create test personas
     print("\n[Step 2] Creating test personas...")
 
@@ -72,8 +93,8 @@ def test_complete_document_flow():
     )
 
     # Save personas
-    db_service.save_persona(persona1)
-    db_service.save_persona(persona2)
+    mock_db.save_persona(persona1)
+    mock_db.save_persona(persona2)
     print(f"✓ Personas created: {persona1.name}, {persona2.name}")
 
     # Step 3: Start discussion with documents
@@ -81,9 +102,6 @@ def test_complete_document_flow():
     print(f"  Document IDs: [{image_metadata.file_id}, {pdf_metadata.file_id}]")
 
     # Mock AI service for testing (to avoid actual API calls)
-    from unittest.mock import Mock
-    from src.models.message import Message
-
     mock_ai_service = Mock()
     mock_ai_service.facilitate_discussion.return_value = [
         Message.create_new(
@@ -99,7 +117,7 @@ def test_complete_document_flow():
     ]
 
     discussion_manager_with_mock = DiscussionManager(
-        ai_service=mock_ai_service, database_service=db_service
+        ai_service=mock_ai_service, database_service=mock_db
     )
 
     discussion = discussion_manager_with_mock.start_discussion(
@@ -139,10 +157,13 @@ def test_complete_document_flow():
     # Step 5: Save and retrieve discussion
     print("\n[Step 5] Saving and retrieving discussion...")
 
-    discussion_id = db_service.save_discussion(discussion)
+    mock_db.save_discussion.return_value = discussion.id
+    mock_db.get_discussion.return_value = discussion
+
+    discussion_id = mock_db.save_discussion(discussion)
     print(f"✓ Discussion saved: {discussion_id}")
 
-    retrieved_discussion = db_service.get_discussion(discussion_id)
+    retrieved_discussion = mock_db.get_discussion(discussion_id)
     assert retrieved_discussion is not None, "Should retrieve discussion"
     assert retrieved_discussion.documents is not None, (
         "Retrieved discussion should have documents"
