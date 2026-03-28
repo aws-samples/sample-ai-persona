@@ -14,9 +14,9 @@ Presentation → Application → Service → Agent → Data
 
 | Layer | Components | Responsibility |
 |-------|------------|----------------|
-| Presentation | `web/` | User interaction, input validation |
+| Presentation | `web/` (`main.py`, `routers/`, `templates/`, `middleware.py`, `sanitize.py`) | User interaction, input validation, security headers, input sanitization |
 | Application | `src/managers/` | Business logic, workflow orchestration |
-| Service | `src/services/` | External integrations (AI, DB, S3, Memory) |
+| Service | `src/services/` | External integrations (AI, DB, S3, Memory, KnowledgeBase) |
 | Agent | Persona/Facilitator Agents | Multi-agent discussions via Strands SDK |
 | Data | DynamoDB, S3, `uploads/` | Persistence |
 
@@ -25,7 +25,7 @@ Presentation → Application → Service → Agent → Data
 ### Managers (Application Layer)
 - All business logic lives here
 - Coordinate between services
-- Return domain models: `Persona`, `Discussion`, `Message`, `Insight`, `SurveyTemplate`, `Survey`
+- Return domain models: `Persona`, `Discussion`, `Message`, `Insight`, `InsightCategory`, `SurveyTemplate`, `Survey`, `InsightReport`, `VisualAnalysisData`, `MemoryEntry`
 - Never instantiate database services directly—use `ServiceFactory`
 - `InterviewManager`: Manages real-time chat sessions with personas
 - `AgentDiscussionManager`: Manages agent-driven deep discussions
@@ -35,11 +35,12 @@ Presentation → Application → Service → Agent → Data
 ### Services (Service Layer)
 - `AIService`: Amazon Bedrock direct calls (Converse API, multimodal support)
 - `AgentService`: Strands Agent SDK integration
-- `DatabaseService`/`DynamoDBService`: Data persistence
+- `DatabaseService`: Data persistence (DynamoDB)
 - `S3Service`: File storage (uploads, survey data, discussion documents)
 - `SurveyService`: Batch Inference job management
 - `MemoryService`: AgentCore Memory integration (summary + semantic strategies)
 - `MCPServerManager`: MCP server lifecycle for external dataset SQL queries
+- `knowledge_base/kb_tools.py`: Bedrock Knowledge Base retrieval tools for persona agents
 - No business logic—external integration only
 
 ### Agents
@@ -52,11 +53,11 @@ Presentation → Application → Service → Agent → Data
 
 | Mode | Manager | Speed | Use Case | Long-term Memory | Multimodal |
 |------|---------|-------|----------|------------------|------------|
-| Traditional | `DiscussionManager` | 3-5 min | Speed, simplicity | ❌ | ✅ |
+| Classic | `DiscussionManager` | 3-5 min | Speed, simplicity | ❌ | ✅ |
 | Agent | `AgentDiscussionManager` | 5-15 min | Depth, natural dialogue | ✅ | ✅ |
 | Interview | `InterviewManager` | Real-time | Direct Q&A with personas | ✅ | ✅ |
 
-Check `discussion.mode` field ("traditional", "agent", or "interview") to select manager.
+Check `discussion.mode` field ("classic", "agent", or "interview") to select manager.
 
 ## Data Models (`src/models/`)
 
@@ -66,12 +67,14 @@ All models are dataclasses with type hints:
 - `Message`: persona_id, content, timestamp, message_type, round_number
 - `Insight`: category, description, supporting_messages, confidence_score (dynamic 0-100%)
 - `InsightCategory`: custom category with name and description
-- `SurveyTemplate`: questions (single/multi choice, free text, scale), images
+- `SurveyTemplate`: questions (single/multi choice, free text, scale), `TemplateImage`
 - `Survey`: batch inference job tracking, results
 - `InsightReport`: AI-generated insight report for survey results
 - `VisualAnalysisData`: visual analysis data for survey charts
-- `Memory`: long-term memory entries (summary, semantic)
-- `Dataset`: external dataset metadata and persona linkage
+- `PersonaStatistics`: survey target persona statistics (demographics distribution)
+- `MemoryEntry`: long-term memory entries (summary, semantic)
+- `Dataset`: external dataset metadata (`DatasetColumn` for schema)
+- `PersonaDatasetBinding`: persona-dataset linkage with binding keys
 - `KnowledgeBase`: knowledge base metadata for persona knowledge
 - `PersonaKBBinding`: persona-knowledge base linkage
 
@@ -178,14 +181,18 @@ manager = SomeManager(database_service=db_service)
 | Type | Location | Approach |
 |------|----------|----------|
 | Unit | `tests/unit/` | Mock AI/Agent services |
-| Integration | `tests/integration/` | Real temp DB, mock AI |
+| Integration | `tests/integration/` | Mock DB, mock AI |
 | API | `tests/api/` | FastAPI TestClient |
 
 Shared fixtures in `tests/conftest.py`:
-- `temp_db_path`, `database_service` - DB fixtures
-- `sample_persona`, `sample_discussion` - Model fixtures
-- `mock_ai_service`, `mock_agent_service` - Mock fixtures
-- `client`, `async_client` - FastAPI test clients
+- `temp_upload_dir` - Temporary upload directory
+- `sample_persona`, `sample_persona_2` - Persona model fixtures
+- `sample_message`, `sample_insight` - Message/Insight fixtures
+- `sample_discussion`, `sample_interview_text` - Discussion fixtures
+- `mock_ai_service`, `mock_agent_service`, `mock_database_service` - Mock service fixtures
+- `file_manager`, `persona_manager` - Manager fixtures
+- `test_app`, `client` - FastAPI test client
+- `reset_singletons`, `env_dynamodb` - Environment fixtures
 
 Run: `uv run pytest`
 

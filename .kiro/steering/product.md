@@ -20,12 +20,14 @@ inclusion: always
 
 #### Generating from Interview Data
 - Upload N1 interview text files (loyal customer interviews)
+- Supported formats: `.txt`, `.md`
 - Generate AI personas using Amazon Bedrock Claude Sonnet 4.5
 - Display generated personas with edit and save capabilities
 - Store personas in DynamoDB database for reuse
 
 #### Generating Multiple Personas from Research Reports
-- Upload market research reports (PDF/Word/text)
+- Upload market research reports
+- Supported formats: `.pdf`, `.docx`, `.doc`, `.txt`, `.md`
 - Generate 1-10 personas at once from a single report
 - Strands Agent SDK-based analysis agent parses reports
 - Select which generated persona candidates to save
@@ -33,10 +35,11 @@ inclusion: always
 ### 2. Persona Discussion & Insight Generation
 
 - Select multiple personas for discussion participation
-- Three discussion modes: Traditional (fast), Agent (deep), Interview (real-time)
+- Three discussion modes: Classic (fast), Agent (deep), Interview (real-time)
 - Dynamic confidence scores (0-100%) for insights
 - Custom insight categories (1-10 categories per discussion)
 - Multimodal document support (images, PDFs) in all modes
+- Supported discussion document formats: `.png`, `.jpg`, `.jpeg`, `.pdf`
 - Save discussion results and insights for future reference
 
 ### 3. Interview Mode (Real-time Persona Interaction)
@@ -54,7 +57,8 @@ inclusion: always
 
 - Two memory strategies: Summary (discussion memory) and Semantic (knowledge/facts)
 - Per-persona memory isolation
-- Knowledge addition via manual input or file upload (PDF, Word, PowerPoint, Excel, text)
+- Knowledge addition via manual input or file upload
+- Supported knowledge file formats: `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.txt`, `.md`
 - markitdown-based automatic markdown conversion
 - Memory browsing and deletion in persona detail view
 
@@ -81,7 +85,7 @@ inclusion: always
 - **FastAPI + htmx application** with page-based navigation
 - **Manager pattern** for business logic (PersonaManager, DiscussionManager, AgentDiscussionManager, InterviewManager, FileManager, SurveyManager, DatasetManager)
 - **Service layer** for external integrations (AI, DB, S3, Memory, Survey, KnowledgeBase)
-- **Model classes** for data structures (Persona, Discussion, Message, Insight, InsightCategory, SurveyTemplate, Survey, InsightReport, VisualAnalysisData, Memory, Dataset, KnowledgeBase, PersonaKBBinding)
+- **Model classes** for data structures (Persona, Discussion, Message, Insight, InsightCategory, SurveyTemplate, TemplateImage, Survey, InsightReport, VisualAnalysisData, PersonaStatistics, MemoryEntry, Dataset, DatasetColumn, PersonaDatasetBinding, KnowledgeBase, PersonaKBBinding)
 - **Component-based UI** with Jinja2 templates, htmx, Alpine.js, Tailwind CSS
 
 ## Data Flow
@@ -96,7 +100,7 @@ inclusion: always
 ## Key Business Rules
 
 - Personas generated from uploaded interview files or research reports
-- Traditional discussions require minimum 2 personas, maximum recommended 5-6
+- Classic discussions require minimum 2 personas, maximum recommended 5-6
 - Interview mode supports 1-5 personas for direct interaction
 - Each discussion/interview generates both conversation logs and structured insights
 - All data persists in DynamoDB for cloud-based storage

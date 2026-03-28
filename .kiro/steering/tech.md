@@ -35,7 +35,7 @@ inclusion: always
 
 - **Manager Pattern**: Business logic in `src/managers/` (PersonaManager, DiscussionManager, AgentDiscussionManager, InterviewManager, FileManager, SurveyManager, DatasetManager)
 - **Service Layer**: External integrations in `src/services/` (ai_service, agent_service, database_service, s3_service, survey_service, memory/, knowledge_base/)
-- **Model Classes**: Data structures in `src/models/` (Persona, Discussion, Message, Insight, InsightCategory, SurveyTemplate, Survey, InsightReport, VisualAnalysisData, Memory, Dataset, KnowledgeBase, PersonaKBBinding)
+- **Model Classes**: Data structures in `src/models/` (Persona, Discussion, Message, Insight, InsightCategory, SurveyTemplate, TemplateImage, Survey, InsightReport, VisualAnalysisData, PersonaStatistics, MemoryEntry, Dataset, DatasetColumn, PersonaDatasetBinding, KnowledgeBase, PersonaKBBinding)
 
 ### Database Guidelines
 
@@ -72,10 +72,17 @@ DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 - Local: `uploads/` directory with UUID-based naming (when `S3_BUCKET_NAME` is not set)
 - AWS: Stored in S3 bucket (auto-created during CDK deployment)
 - Use FileManager for all file operations
-- Discussion documents: `discussion_documents/`
-- Survey images: `survey_images/`
-- Knowledge files: `knowledge_files/`
 - Implement proper file validation and error handling
+
+#### Supported File Formats by Feature
+
+| Feature | Formats | Directory |
+|---------|---------|-----------|
+| Persona generation (interview) | `.txt`, `.md` | `uploads/` |
+| Persona generation (report) | `.pdf`, `.docx`, `.doc`, `.txt`, `.md` | `uploads/` |
+| Discussion documents | `.png`, `.jpg`, `.jpeg`, `.pdf` | `discussion_documents/` |
+| Survey images | image files | `survey_images/` |
+| Knowledge files | `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.txt`, `.md` | `knowledge_files/` |
 
 ### AI Service Integration
 
@@ -85,6 +92,11 @@ DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 - Use structured prompts for consistent AI responses
 - Handle rate limiting and API errors gracefully
 - Batch Inference via `src/services/survey_service.py` for mass surveys
+
+### Security
+
+- `web/middleware.py`: Security headers (CSP, X-Frame-Options, etc.)
+- `web/sanitize.py`: Input sanitization for XSS prevention
 
 ### Testing Standards
 
@@ -107,6 +119,21 @@ DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 - Use hx-indicator for loading states
 - Follow RESTful URL patterns for htmx endpoints
 - SSE endpoints for real-time streaming (discussions, interviews)
+
+### Deployment
+
+- `Dockerfile`: Python 3.13 + uv, runs uvicorn on port 80
+- `deploy.sh`: Automated deployment script
+- `destroy.sh`: Automated teardown script
+- CDK infrastructure in `cdk/` (see `cdk.md` for details)
+
+### Utility Scripts (`scripts/`)
+
+- `create_dynamodb_tables.py`: DynamoDB table creation/migration
+- `generate_sample_personas.py`: Sample persona data generation
+- `generate_custom_sample.py`: Custom sample CSV generation
+- `create_bedrock_batch_role.py`: Bedrock Batch Inference IAM role setup
+- `build-css.sh`: Tailwind CSS build script
 
 ### Running the Application
 
