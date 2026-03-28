@@ -2,7 +2,7 @@
 Unit tests for Discussion Manager.
 """
 
-import unittest
+import pytest
 from unittest.mock import Mock
 from datetime import datetime
 
@@ -15,10 +15,10 @@ from src.services.ai_service import AIServiceError
 from src.services.database_service import DatabaseError
 
 
-class TestDiscussionManager(unittest.TestCase):
+class TestDiscussionManager:
     """Test cases for DiscussionManager class."""
 
-    def setUp(self):
+    def setup_method(self):
         """Set up test fixtures."""
         # Create mock services
         self.mock_ai_service = Mock()
@@ -81,18 +81,14 @@ class TestDiscussionManager(unittest.TestCase):
         ]
 
     def test_init_success(self):
-        """Test successful initialization."""
-        # Create fresh mock services for this test
         fresh_ai_service = Mock()
         fresh_database_service = Mock()
-
         manager = DiscussionManager(
             ai_service=fresh_ai_service, database_service=fresh_database_service
         )
-
-        self.assertIsNotNone(manager)
-        self.assertEqual(manager.ai_service, fresh_ai_service)
-        self.assertEqual(manager.database_service, fresh_database_service)
+        assert manager is not None
+        assert manager.ai_service == fresh_ai_service
+        assert manager.database_service == fresh_database_service
 
     def test_start_discussion_success(self):
         """Test successful discussion start."""
@@ -105,10 +101,10 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.start_discussion(personas, topic)
 
         # Verify result
-        self.assertIsInstance(result, Discussion)
-        self.assertEqual(result.topic, topic)
-        self.assertEqual(result.participants, [self.persona1.id, self.persona2.id])
-        self.assertEqual(len(result.messages), 2)
+        assert isinstance(result, Discussion)
+        assert result.topic == topic
+        assert result.participants == [self.persona1.id, self.persona2.id]
+        assert len(result.messages) == 2
 
         # Verify AI service was called correctly (with documents=None)
         self.mock_ai_service.facilitate_discussion.assert_called_once_with(
@@ -120,49 +116,49 @@ class TestDiscussionManager(unittest.TestCase):
         topic = "テストトピック"
 
         # Test with empty personas list
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion([], topic)
-        self.assertIn("議論参加ペルソナが指定されていません", str(context.exception))
+        assert "議論参加ペルソナが指定されていません" in str(exc_info.value)
 
         # Test with single persona
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion([self.persona1], topic)
-        self.assertIn("議論には最低2つのペルソナが必要です", str(context.exception))
+        assert "議論には最低2つのペルソナが必要です" in str(exc_info.value)
 
         # Test with too many personas
         personas = [self.persona1] * 6
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, topic)
-        self.assertIn("議論参加ペルソナは最大5つまでです", str(context.exception))
+        assert "議論参加ペルソナは最大5つまでです" in str(exc_info.value)
 
     def test_start_discussion_invalid_topic(self):
         """Test discussion start with invalid topic."""
         personas = [self.persona1, self.persona2]
 
         # Test with empty topic
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, "")
-        self.assertIn("議論トピックが空です", str(context.exception))
+        assert "議論トピックが空です" in str(exc_info.value)
 
         # Test with short topic
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, "短い")
-        self.assertIn("議論トピックが短すぎます", str(context.exception))
+        assert "議論トピックが短すぎます" in str(exc_info.value)
 
         # Test with long topic
         long_topic = "a" * 201
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, long_topic)
-        self.assertIn("議論トピックが長すぎます", str(context.exception))
+        assert "議論トピックが長すぎます" in str(exc_info.value)
 
     def test_start_discussion_duplicate_personas(self):
         """Test discussion start with duplicate personas."""
         topic = "テストトピック"
         personas = [self.persona1, self.persona1]  # Duplicate persona
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, topic)
-        self.assertIn("重複したペルソナが含まれています", str(context.exception))
+        assert "重複したペルソナが含まれています" in str(exc_info.value)
 
     def test_start_discussion_ai_service_error(self):
         """Test discussion start with AI service error."""
@@ -174,10 +170,10 @@ class TestDiscussionManager(unittest.TestCase):
             "AI error"
         )
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, topic)
 
-        self.assertIn("AI service error during discussion", str(context.exception))
+        assert "AI service error during discussion" in str(exc_info.value)
 
     def test_generate_insights_success(self):
         """Test successful insight generation."""
@@ -206,13 +202,13 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.generate_insights(discussion)
 
         # Verify result
-        self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 2)
-        self.assertIsInstance(result[0], Insight)
-        self.assertEqual(result[0].category, "顧客ニーズ")
-        self.assertEqual(result[0].confidence_score, 0.8)
-        self.assertEqual(result[1].category, "市場機会")
-        self.assertEqual(result[1].confidence_score, 0.75)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert isinstance(result[0], Insight)
+        assert result[0].category == "顧客ニーズ"
+        assert result[0].confidence_score == 0.8
+        assert result[1].category == "市場機会"
+        assert result[1].confidence_score == 0.75
 
         # Verify AI service was called correctly
         self.mock_ai_service.extract_insights.assert_called_once_with(
@@ -261,10 +257,10 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify result
-        self.assertEqual(len(result), 3)
-        self.assertEqual(result[0].category, "技術トレンド")
-        self.assertEqual(result[1].category, "ユーザー体験")
-        self.assertEqual(result[2].category, "技術トレンド")
+        assert len(result) == 3
+        assert result[0].category == "技術トレンド"
+        assert result[1].category == "ユーザー体験"
+        assert result[2].category == "技術トレンド"
 
         # Verify AI service was called with custom categories
         self.mock_ai_service.extract_insights.assert_called_once_with(
@@ -274,19 +270,17 @@ class TestDiscussionManager(unittest.TestCase):
     def test_generate_insights_invalid_discussion(self):
         """Test insight generation with invalid discussion."""
         # Test with None discussion
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.generate_insights(None)
-        self.assertIn("議論オブジェクトが無効です", str(context.exception))
+        assert "議論オブジェクトが無効です" in str(exc_info.value)
 
         # Test with discussion without messages
         empty_discussion = Discussion.create_new(
             topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
         )
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.generate_insights(empty_discussion)
-        self.assertIn(
-            "インサイト生成には最低2つのメッセージが必要です", str(context.exception)
-        )
+        assert "インサイト生成には最低2つのメッセージが必要です" in str(exc_info.value)
 
     def test_save_and_load_categories(self):
         """Test saving and loading categories to/from discussion config."""
@@ -309,8 +303,8 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify categories are saved
-        self.assertIsNotNone(updated_discussion.agent_config)
-        self.assertIn("insight_categories", updated_discussion.agent_config)
+        assert updated_discussion.agent_config is not None
+        assert "insight_categories" in updated_discussion.agent_config
 
         # Load categories from config
         loaded_categories = self.discussion_manager._load_categories_from_config(
@@ -318,10 +312,10 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify loaded categories
-        self.assertIsNotNone(loaded_categories)
-        self.assertEqual(len(loaded_categories), 2)
-        self.assertEqual(loaded_categories[0].name, "カテゴリー1")
-        self.assertEqual(loaded_categories[1].name, "カテゴリー2")
+        assert loaded_categories is not None
+        assert len(loaded_categories) == 2
+        assert loaded_categories[0].name == "カテゴリー1"
+        assert loaded_categories[1].name == "カテゴリー2"
 
     def test_generate_insights_ai_service_error(self):
         """Test insight generation with AI service error."""
@@ -335,12 +329,10 @@ class TestDiscussionManager(unittest.TestCase):
         # Mock AI service error
         self.mock_ai_service.extract_insights.side_effect = AIServiceError("AI error")
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.generate_insights(discussion)
 
-        self.assertIn(
-            "AI service error during insight generation", str(context.exception)
-        )
+        assert "AI service error during insight generation" in str(exc_info.value)
 
     def test_regenerate_insights_success(self):
         """Test successful insight regeneration."""
@@ -403,9 +395,9 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify result
-        self.assertEqual(len(result), 3)
-        self.assertEqual(result[0].category, "技術トレンド")
-        self.assertEqual(result[1].category, "ユーザー体験")
+        assert len(result) == 3
+        assert result[0].category == "技術トレンド"
+        assert result[1].category == "ユーザー体験"
 
         # Verify get_discussion was called
         self.mock_database_service.get_discussion.assert_called_once_with(discussion_id)
@@ -418,20 +410,18 @@ class TestDiscussionManager(unittest.TestCase):
 
         # Verify the saved discussion has new insights
         saved_discussion = self.mock_database_service.save_discussion.call_args[0][0]
-        self.assertEqual(len(saved_discussion.insights), 3)
-        self.assertNotEqual(
-            saved_discussion.insights[0].description, old_insights[0].description
-        )
+        assert len(saved_discussion.insights) == 3
+        assert saved_discussion.insights[0].description != old_insights[0].description
 
     def test_regenerate_insights_discussion_not_found(self):
         """Test insight regeneration when discussion not found."""
         # Mock get_discussion to return None
         self.mock_database_service.get_discussion.return_value = None
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.regenerate_insights("nonexistent-id")
 
-        self.assertIn("議論が見つかりません", str(context.exception))
+        assert "議論が見つかりません" in str(exc_info.value)
 
     def test_regenerate_insights_with_default_categories(self):
         """Test insight regeneration with default categories."""
@@ -474,11 +464,11 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.regenerate_insights(discussion_id)
 
         # Verify result
-        self.assertEqual(len(result), 3)
+        assert len(result) == 3
 
         # Verify AI service was called with None categories (will use default)
         call_args = self.mock_ai_service.extract_insights.call_args
-        self.assertEqual(call_args[1].get("categories"), None)
+        assert call_args[1].get("categories") == None
 
     def test_save_discussion_success(self):
         """Test successful discussion save."""
@@ -493,16 +483,16 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.save_discussion(discussion)
 
         # Verify result
-        self.assertEqual(result, discussion.id)
+        assert result == discussion.id
 
         # Verify database service was called correctly
         self.mock_database_service.save_discussion.assert_called_once_with(discussion)
 
     def test_save_discussion_invalid_discussion(self):
         """Test discussion save with invalid discussion."""
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.save_discussion(None)
-        self.assertIn("議論オブジェクトが無効です", str(context.exception))
+        assert "議論オブジェクトが無効です" in str(exc_info.value)
 
     def test_save_discussion_database_error(self):
         """Test discussion save with database error."""
@@ -515,10 +505,10 @@ class TestDiscussionManager(unittest.TestCase):
             "Database error"
         )
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.save_discussion(discussion)
 
-        self.assertIn("Database error while saving discussion", str(context.exception))
+        assert "Database error while saving discussion" in str(exc_info.value)
 
     def test_save_discussion_with_insights_success(self):
         """Test successful discussion save with insights."""
@@ -535,14 +525,14 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify result
-        self.assertEqual(result, discussion.id)
+        assert result == discussion.id
 
         # Verify database service was called
         self.mock_database_service.save_discussion.assert_called_once()
 
         # Verify the discussion passed to save_discussion has insights
         saved_discussion = self.mock_database_service.save_discussion.call_args[0][0]
-        self.assertEqual(len(saved_discussion.insights), 2)
+        assert len(saved_discussion.insights) == 2
 
     def test_get_discussion_success(self):
         """Test successful discussion retrieval."""
@@ -557,16 +547,16 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.get_discussion(discussion_id)
 
         # Verify result
-        self.assertEqual(result, expected_discussion)
+        assert result == expected_discussion
 
         # Verify database service was called correctly
         self.mock_database_service.get_discussion.assert_called_once_with(discussion_id)
 
     def test_get_discussion_invalid_id(self):
         """Test discussion retrieval with invalid ID."""
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.get_discussion("")
-        self.assertIn("議論IDが無効です", str(context.exception))
+        assert "議論IDが無効です" in str(exc_info.value)
 
     def test_get_discussion_database_error(self):
         """Test discussion retrieval with database error."""
@@ -577,12 +567,10 @@ class TestDiscussionManager(unittest.TestCase):
             "Database error"
         )
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.get_discussion(discussion_id)
 
-        self.assertIn(
-            "Database error while retrieving discussion", str(context.exception)
-        )
+        assert "Database error while retrieving discussion" in str(exc_info.value)
 
     def test_get_discussion_history_success(self):
         """Test successful discussion history retrieval."""
@@ -597,7 +585,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.get_discussion_history()
 
         # Verify result
-        self.assertEqual(result, expected_discussions)
+        assert result == expected_discussions
 
         # Verify database service was called correctly
         self.mock_database_service.get_discussions.assert_called_once()
@@ -619,7 +607,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.get_discussions_by_topic(topic_pattern)
 
         # Verify result
-        self.assertEqual(result, expected_discussions)
+        assert result == expected_discussions
 
         # Verify database service was called correctly
         self.mock_database_service.get_discussions_by_topic.assert_called_once_with(
@@ -641,7 +629,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.get_discussions_by_participant(persona_id)
 
         # Verify result
-        self.assertEqual(result, expected_discussions)
+        assert result == expected_discussions
 
         # Verify database service was called correctly
         self.mock_database_service.get_discussions_by_participant.assert_called_once_with(
@@ -658,7 +646,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.delete_discussion(discussion_id)
 
         # Verify result
-        self.assertTrue(result)
+        assert result
 
         # Verify database service was called correctly
         self.mock_database_service.delete_discussion.assert_called_once_with(
@@ -677,7 +665,7 @@ class TestDiscussionManager(unittest.TestCase):
         )
 
         # Verify result
-        self.assertTrue(result)
+        assert result
 
         # Verify database service was called correctly
         self.mock_database_service.update_discussion_insights.assert_called_once_with(
@@ -694,7 +682,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.get_discussion_count()
 
         # Verify result
-        self.assertEqual(result, expected_count)
+        assert result == expected_count
 
         # Verify database service was called correctly
         self.mock_database_service.get_discussion_count.assert_called_once()
@@ -709,7 +697,7 @@ class TestDiscussionManager(unittest.TestCase):
         result = self.discussion_manager.discussion_exists(discussion_id)
 
         # Verify result
-        self.assertTrue(result)
+        assert result
 
         # Verify database service was called correctly
         self.mock_database_service.discussion_exists.assert_called_once_with(
@@ -723,30 +711,30 @@ class TestDiscussionManager(unittest.TestCase):
         category1, description1 = (
             self.discussion_manager._extract_category_and_description(text1)
         )
-        self.assertEqual(category1, "顧客ニーズ")
-        self.assertEqual(description1, "効率性を重視する顧客層が存在する")
+        assert category1 == "顧客ニーズ"
+        assert description1 == "効率性を重視する顧客層が存在する"
 
         # Test with category pattern and dash
         text2 = "[市場機会] - 品質と効率性を両立した商品の需要がある"
         category2, description2 = (
             self.discussion_manager._extract_category_and_description(text2)
         )
-        self.assertEqual(category2, "市場機会")
-        self.assertEqual(description2, "品質と効率性を両立した商品の需要がある")
+        assert category2 == "市場機会"
+        assert description2 == "品質と効率性を両立した商品の需要がある"
 
         # Test without category pattern
         text3 = "これは重要なインサイトです"
         category3, description3 = (
             self.discussion_manager._extract_category_and_description(text3)
         )
-        self.assertEqual(category3, "その他")
-        self.assertEqual(description3, "これは重要なインサイトです")
+        assert category3 == "その他"
+        assert description3 == "これは重要なインサイトです"
 
 
-class TestDiscussionManagerWithDocuments(unittest.TestCase):
+class TestDiscussionManagerWithDocuments:
     """Test cases for DiscussionManager with document support."""
 
-    def setUp(self):
+    def setup_method(self):
         """Set up test fixtures."""
         self.mock_ai_service = Mock()
         self.mock_database_service = Mock()
@@ -810,24 +798,24 @@ class TestDiscussionManagerWithDocuments(unittest.TestCase):
             )
 
             # Verify
-            self.assertIsNotNone(discussion)
-            self.assertEqual(len(discussion.messages), 2)
-            self.assertIsNotNone(discussion.documents)
-            self.assertEqual(len(discussion.documents), 1)
-            self.assertEqual(discussion.documents[0]["filename"], "test.pdf")
+            assert discussion is not None
+            assert len(discussion.messages) == 2
+            assert discussion.documents is not None
+            assert len(discussion.documents) == 1
+            assert discussion.documents[0]["filename"] == "test.pdf"
 
             # Verify AI service was called with documents
             call_args = self.mock_ai_service.facilitate_discussion.call_args
-            self.assertIsNotNone(call_args[1].get("documents"))
+            assert call_args[1].get("documents") is not None
 
     def test_load_documents_not_found(self):
         """Test loading non-existent document."""
         self.mock_database_service.get_uploaded_file_info.return_value = None
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager._load_documents(["invalid_id"])
 
-        self.assertIn("ドキュメントが見つかりません", str(context.exception))
+        assert "ドキュメントが見つかりません" in str(exc_info.value)
 
     def test_load_documents_file_not_exists(self):
         """Test loading document with missing file."""
@@ -838,10 +826,10 @@ class TestDiscussionManagerWithDocuments(unittest.TestCase):
             "mime_type": "application/pdf",
         }
 
-        with self.assertRaises(DiscussionManagerError) as context:
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager._load_documents(["doc1"])
 
-        self.assertIn("ドキュメントファイルが存在しません", str(context.exception))
+        assert "ドキュメントファイルが存在しません" in str(exc_info.value)
 
     def test_load_documents_size_limit(self):
         """Test document total size limit."""
@@ -855,11 +843,7 @@ class TestDiscussionManagerWithDocuments(unittest.TestCase):
         from unittest.mock import patch
 
         with patch("pathlib.Path.exists", return_value=True):
-            with self.assertRaises(DiscussionManagerError) as context:
+            with pytest.raises(DiscussionManagerError) as exc_info:
                 self.discussion_manager._load_documents(["doc1"])
 
-            self.assertIn("合計サイズが制限を超えています", str(context.exception))
-
-
-if __name__ == "__main__":
-    unittest.main()
+            assert "合計サイズが制限を超えています" in str(exc_info.value)

@@ -2331,3 +2331,108 @@ class TestDiscussionCRUDOperationsProperties:
         assert retrieved1_deleted is None
         assert retrieved2_still_exists is not None
         assert retrieved2_still_exists.id == discussion2.id
+
+
+class TestKnowledgeBaseCRUDOperations:
+    """KnowledgeBase / PersonaKBBinding の DatabaseService CRUD テスト"""
+
+    @patch("boto3.client")
+    def _make_service(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_boto3_client.return_value = mock_client
+        mock_client.list_tables.return_value = {"TableNames": []}
+        return DatabaseService(table_prefix="Test", region="us-east-1"), mock_client
+
+    def test_save_and_get_knowledge_base(self):
+        from src.models.knowledge_base import KnowledgeBase
+        service, mock_client = self._make_service()
+        kb = KnowledgeBase.create_new("KB123", "テストKB", "説明")
+
+        stored = {}
+
+        def put_item(**kwargs):
+            stored[kwargs["Item"]["id"]["S"]] = kwargs["Item"]
+            return {}
+
+        def get_item(**kwargs):
+            item_id = kwargs["Key"]["id"]["S"]
+            if item_id in stored:
+                return {"Item": stored[item_id]}
+            return {}
+
+        mock_client.put_item.side_effect = put_item
+        mock_client.get_item.side_effect = get_item
+
+        service.save_knowledge_base(kb)
+        mock_client.put_item.assert_called_once()
+
+        result = service.get_knowledge_base(kb.id)
+        assert result is not None
+        assert result.knowledge_base_id == "KB123"
+
+    def test_get_knowledge_base_not_found(self):
+        service, mock_client = self._make_service()
+        mock_client.get_item.return_value = {}
+        result = service.get_knowledge_base("nonexistent")
+        assert result is None
+
+    def test_delete_knowledge_base(self):
+        service, mock_client = self._make_service()
+        mock_client.delete_item.return_value = {}
+        result = service.delete_knowledge_base("kb-1")
+        assert result is True
+        mock_client.delete_item.assert_called_once()
+
+    def test_save_and_get_kb_binding(self):
+        from src.models.knowledge_base import PersonaKBBinding
+        service, mock_client = self._make_service()
+        binding = PersonaKBBinding.create_new("p1", "kb1", {"key": "val"})
+
+        mock_client.put_item.return_value = {}
+        mock_client.scan.return_value = {"Items": [], "Count": 0}
+
+        service.save_kb_binding(binding)
+        mock_client.put_item.assert_called_once()
+
+    def test_delete_kb_binding(self):
+        service, mock_client = self._make_service()
+        mock_client.delete_item.return_value = {}
+        result = service.delete_kb_binding("binding-1")
+        assert result is True
+
+
+class TestUploadedFileCRUDOperations:
+    """UploadedFile の DatabaseService CRUD テスト"""
+
+    @patch("boto3.client")
+    def _make_service(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_boto3_client.return_value = mock_client
+        mock_client.list_tables.return_value = {"TableNames": []}
+        return DatabaseService(table_prefix="Test", region="us-east-1"), mock_client
+
+    def test_save_uploaded_file_info(self):
+        service, mock_client = self._make_service()
+        mock_client.put_item.return_value = {}
+        result = service.save_uploaded_file_info(
+            file_id="f1",
+            filename="uuid_test.txt",
+            file_path="uploads/uuid_test.txt",
+            file_size=1024,
+            file_hash="abc123",
+            mime_type="text/plain",
+        )
+        mock_client.put_item.assert_called_once()
+        assert result == "f1"
+
+    def test_get_uploaded_file_info_not_found(self):
+        service, mock_client = self._make_service()
+        mock_client.get_item.return_value = {}
+        result = service.get_uploaded_file_info("nonexistent")
+        assert result is None
+
+    def test_delete_uploaded_file_info(self):
+        service, mock_client = self._make_service()
+        mock_client.delete_item.return_value = {}
+        result = service.delete_uploaded_file_info("f1")
+        assert result is True

@@ -178,11 +178,13 @@ manager = SomeManager(database_service=db_service)
 
 ## Testing
 
-| Type | Location | Approach |
-|------|----------|----------|
-| Unit | `tests/unit/` | Mock AI/Agent services |
-| Integration | `tests/integration/` | Mock DB, mock AI |
-| API | `tests/api/` | FastAPI TestClient |
+| Type | Location | Approach | Marker |
+|------|----------|----------|--------|
+| Unit | `tests/unit/` | Mock AI/Agent services | `@pytest.mark.unit` (auto) |
+| Integration | `tests/integration/` | Mock DB, mock AI | `@pytest.mark.integration` (auto) |
+| API | `tests/api/` | FastAPI TestClient | `@pytest.mark.api` (auto) |
+
+Markers are auto-applied by each directory's `conftest.py`. Run by marker: `uv run pytest -m unit`
 
 Shared fixtures in `tests/conftest.py`:
 - `temp_upload_dir` - Temporary upload directory
@@ -191,10 +193,12 @@ Shared fixtures in `tests/conftest.py`:
 - `sample_discussion`, `sample_interview_text` - Discussion fixtures
 - `mock_ai_service`, `mock_agent_service`, `mock_database_service` - Mock service fixtures
 - `file_manager`, `persona_manager` - Manager fixtures
-- `test_app`, `client` - FastAPI test client
+- `test_app`, `client` - FastAPI test client (with `HX-Request` header for CSRF)
 - `reset_singletons`, `env_dynamodb` - Environment fixtures
 
 Run: `uv run pytest`
+
+CI: `.github/workflows/test.yml` runs `unit → integration / api` on push/PR.
 
 ## Critical Don'ts
 

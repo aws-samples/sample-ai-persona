@@ -660,3 +660,160 @@ class TestMarketReportTextExtraction:
         result = self.file_manager.extract_text_from_file(content, filename)
 
         assert "市場調査レポート" in result
+
+
+class TestFileManagerSurveyImage:
+    """upload_survey_image のテスト"""
+
+    def setup_method(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.mock_db_service = Mock()
+        self.mock_db_service.save_uploaded_file_info.return_value = "f1"
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.upload_dir = Path(self.temp_dir)
+            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
+            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
+            mock_config.is_allowed_file_extension = lambda f: False
+            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager.survey_images_dir = Path(self.temp_dir) / "survey_images"
+            self.file_manager.survey_images_dir.mkdir(exist_ok=True)
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_upload_survey_image_success(self):
+        # 最小限のPNG (1x1 pixel)
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        result = self.file_manager.upload_survey_image(png_header, "test.png")
+        assert result is not None
+        assert result.mime_type == "image/png"
+
+    def test_upload_survey_image_invalid_format(self):
+        with pytest.raises(FileUploadError, match="許可されていないファイル形式"):
+            self.file_manager.upload_survey_image(b"content", "test.txt")
+
+    def test_upload_survey_image_empty(self):
+        with pytest.raises(FileUploadError, match="ファイルが空"):
+            self.file_manager.upload_survey_image(b"", "test.png")
+
+    def test_upload_survey_image_too_large(self):
+        large_content = b"\x89PNG" + b"\x00" * (6 * 1024 * 1024)
+        with pytest.raises(FileUploadError, match="ファイルサイズが制限"):
+            self.file_manager.upload_survey_image(large_content, "test.png")
+
+
+class TestFileManagerKnowledgeFile:
+    """upload_knowledge_file のテスト"""
+
+    def setup_method(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.mock_db_service = Mock()
+        self.mock_db_service.save_uploaded_file_info.return_value = "f1"
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.upload_dir = Path(self.temp_dir)
+            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
+            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
+            mock_config.is_allowed_file_extension = lambda f: False
+            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager.knowledge_files_dir = Path(self.temp_dir) / "knowledge_files"
+            self.file_manager.knowledge_files_dir.mkdir(exist_ok=True)
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_upload_knowledge_file_txt(self):
+        content = ("テスト知識ファイルの内容です。" * 10).encode("utf-8")
+        metadata, markdown_text = self.file_manager.upload_knowledge_file(content, "knowledge.txt")
+        assert metadata is not None
+        assert "テスト知識ファイル" in markdown_text
+
+    def test_upload_knowledge_file_invalid_format(self):
+        with pytest.raises(FileUploadError):
+            self.file_manager.upload_knowledge_file(b"content", "test.exe")
+
+    def test_upload_knowledge_file_too_large(self):
+        large_content = b"x" * (11 * 1024 * 1024)
+        with pytest.raises(FileUploadError, match="ファイルサイズ"):
+            self.file_manager.upload_knowledge_file(large_content, "test.txt")
+
+
+class TestFileManagerConvertToMarkdown:
+    """convert_file_to_markdown のテスト"""
+
+    def setup_method(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.mock_db_service = Mock()
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.upload_dir = Path(self.temp_dir)
+            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
+            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
+            mock_config.is_allowed_file_extension = lambda f: False
+            self.file_manager = FileManager(self.mock_db_service)
+
+    def test_convert_txt_to_markdown(self):
+        content = "テストテキスト内容です。".encode("utf-8")
+        result = self.file_manager.convert_file_to_markdown(content, "test.txt")
+        assert "テストテキスト" in result
+
+    def test_convert_invalid_format(self):
+        with pytest.raises(FileUploadError, match="許可されていないファイル形式"):
+            self.file_manager.convert_file_to_markdown(b"content", "test.exe")
+
+    def test_convert_pdf_with_markitdown(self):
+        with patch("markitdown.MarkItDown") as mock_md_cls:
+            mock_instance = MagicMock()
+            mock_result = MagicMock()
+            mock_result.text_content = "PDF変換結果テキスト" * 5
+            mock_instance.convert_stream.return_value = mock_result
+            mock_md_cls.return_value = mock_instance
+
+            result = self.file_manager.convert_file_to_markdown(b"%PDF-1.4", "test.pdf")
+            assert "PDF変換結果" in result
+
+
+class TestFileManagerUtilities:
+    """cleanup_orphaned_files, get_file_statistics, bulk_delete_files, export_file_metadata, validate_system_health のテスト"""
+
+    def setup_method(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.mock_db_service = Mock()
+        self.mock_db_service.get_all_uploaded_files.return_value = []
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.upload_dir = Path(self.temp_dir)
+            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
+            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
+            mock_config.is_allowed_file_extension = lambda f: False
+            self.file_manager = FileManager(self.mock_db_service)
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_file_statistics_empty(self):
+        result = self.file_manager.get_file_statistics()
+        assert isinstance(result, dict)
+        assert result["total_files"] == 0
+
+    def test_bulk_delete_files(self):
+        self.mock_db_service.get_uploaded_file_info.return_value = None
+        result = self.file_manager.bulk_delete_files(["f1", "f2"])
+        assert isinstance(result, dict)
+        assert "f1" in result
+        assert "f2" in result
+
+    def test_export_file_metadata_empty(self):
+        result = self.file_manager.export_file_metadata()
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    def test_validate_system_health(self):
+        result = self.file_manager.validate_system_health()
+        assert isinstance(result, dict)
+        assert "upload_dir_exists" in result
+
+    def test_cleanup_orphaned_files(self):
+        result = self.file_manager.cleanup_orphaned_files()
+        assert isinstance(result, int)
+        assert result >= 0

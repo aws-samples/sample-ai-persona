@@ -148,17 +148,20 @@ class TestDeleteTemplate:
 
 
 class TestStartSurvey:
-    def test_rejects_persona_count_zero(self, manager):
+    def test_rejects_persona_count_below_minimum(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
         with pytest.raises(SurveyValidationError):
             manager.start_survey("tmpl-id", persona_count=0)
 
-    def test_rejects_persona_count_negative(self, manager):
+    def test_rejects_persona_count_negative(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
         with pytest.raises(SurveyValidationError):
             manager.start_survey("tmpl-id", persona_count=-1)
 
-    def test_rejects_persona_count_over_9999(self, manager):
+    def test_rejects_persona_count_over_limit(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
         with pytest.raises(SurveyValidationError):
-            manager.start_survey("tmpl-id", persona_count=10000)
+            manager.start_survey("tmpl-id", persona_count=10001)
 
     def test_rejects_missing_template(self, manager, mock_db):
         mock_db.get_survey_template.return_value = None

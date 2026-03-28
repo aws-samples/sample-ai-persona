@@ -54,6 +54,11 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (mocked external services)",
+    "api: API endpoint tests (FastAPI TestClient)",
+]
 
 [tool.black]
 line-length = 88

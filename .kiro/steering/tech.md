@@ -103,9 +103,12 @@ DYNAMODB_REGION=us-east-1  # デプロイ先リージョンに合わせて変更
 - Unit tests in `tests/unit/` for individual components
 - Integration tests in `tests/integration/` for workflow testing
 - API tests in `tests/api/` for endpoint testing
-- Use pytest as the testing framework
+- Use pytest as the testing framework (no unittest.TestCase)
+- Markers auto-applied per directory: `unit`, `integration`, `api`
+- Run by marker: `uv run pytest -m unit`
 - Mock external dependencies (AI service, file system) in unit tests
 - Test both success and error scenarios
+- API tests use `HX-Request` header by default (CSRF middleware)
 
 ### htmx UI Guidelines
 

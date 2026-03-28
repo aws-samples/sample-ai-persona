@@ -7,20 +7,16 @@ import pytest
 from unittest.mock import Mock, patch
 
 # bedrock_agentcoreモジュールが必要なテストをマーク
-pytestmark = pytest.mark.skipif(
-    not pytest.importorskip(
-        "bedrock_agentcore", reason="bedrock_agentcore is required"
-    ).loader,
-    reason="bedrock_agentcore is required for these tests",
-)
-
-# bedrock_agentcoreがインストールされているかチェック
 try:
     import bedrock_agentcore
-
     HAS_BEDROCK_AGENTCORE = True
 except ImportError:
     HAS_BEDROCK_AGENTCORE = False
+
+pytestmark = pytest.mark.skipif(
+    not HAS_BEDROCK_AGENTCORE,
+    reason="bedrock_agentcore is required for these tests",
+)
 
 
 class TestSessionManagerFactory:

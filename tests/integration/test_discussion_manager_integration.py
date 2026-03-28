@@ -3,7 +3,7 @@ Integration tests for Discussion Manager.
 Tests the discussion manager with mocked database and AI service.
 """
 
-import unittest
+import pytest
 from unittest.mock import Mock
 
 from src.managers.discussion_manager import DiscussionManager
@@ -14,10 +14,10 @@ from src.models.insight import Insight
 from src.services.ai_service import AIService
 
 
-class TestDiscussionManagerIntegration(unittest.TestCase):
+class TestDiscussionManagerIntegration:
     """Integration test cases for DiscussionManager."""
 
-    def setUp(self):
+    def setup_method(self):
         """Set up test fixtures with mocked services."""
         # Create mock database service
         self.discussions_storage = {}
@@ -175,7 +175,7 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
             },
         ]
 
-    def tearDown(self):
+    def teardown_method(self):
         """Clean up test fixtures."""
         pass
 
@@ -192,10 +192,10 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         discussion = self.discussion_manager.start_discussion(personas, topic)
 
         # Verify discussion was created correctly
-        self.assertIsInstance(discussion, Discussion)
-        self.assertEqual(discussion.topic, topic)
-        self.assertEqual(discussion.participants, [self.persona1.id, self.persona2.id])
-        self.assertEqual(len(discussion.messages), 4)
+        assert isinstance(discussion, Discussion)
+        assert discussion.topic == topic
+        assert discussion.participants == [self.persona1.id, self.persona2.id]
+        assert len(discussion.messages) == 4
 
         # Verify AI service was called correctly (with documents=None for no documents)
         self.mock_ai_service.facilitate_discussion.assert_called_once_with(
@@ -206,9 +206,9 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         insights = self.discussion_manager.generate_insights(discussion)
 
         # Verify insights were generated correctly
-        self.assertIsInstance(insights, list)
-        self.assertEqual(len(insights), 5)
-        self.assertIsInstance(insights[0], Insight)
+        assert isinstance(insights, list)
+        assert len(insights) == 5
+        assert isinstance(insights[0], Insight)
 
         # Verify AI service was called correctly
         self.mock_ai_service.extract_insights.assert_called_once_with(
@@ -221,17 +221,17 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         )
 
         # Verify discussion was saved
-        self.assertEqual(discussion_id, discussion.id)
+        assert discussion_id == discussion.id
 
         # Step 4: Retrieve saved discussion
         saved_discussion = self.discussion_manager.get_discussion(discussion_id)
 
         # Verify retrieved discussion
-        self.assertIsNotNone(saved_discussion)
-        self.assertEqual(saved_discussion.id, discussion.id)
-        self.assertEqual(saved_discussion.topic, topic)
-        self.assertEqual(len(saved_discussion.messages), 4)
-        self.assertEqual(len(saved_discussion.insights), 5)
+        assert saved_discussion is not None
+        assert saved_discussion.id == discussion.id
+        assert saved_discussion.topic == topic
+        assert len(saved_discussion.messages) == 4
+        assert len(saved_discussion.insights) == 5
 
         # Verify insight categories
         categories = [insight.category for insight in saved_discussion.insights]
@@ -242,7 +242,7 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
             "マーケティング",
             "その他",
         ]
-        self.assertEqual(categories, expected_categories)
+        assert categories == expected_categories
 
     def test_discussion_history_and_search(self):
         """Test discussion history and search functionality."""
@@ -277,29 +277,25 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
 
         # Test get discussion history
         history = self.discussion_manager.get_discussion_history()
-        self.assertEqual(len(history), 3)
+        assert len(history) == 3
 
         # Test search by topic
         marketing_discussions = self.discussion_manager.get_discussions_by_topic(
             "マーケティング"
         )
-        self.assertEqual(len(marketing_discussions), 1)
-        self.assertIn("マーケティング", marketing_discussions[0].topic)
+        assert len(marketing_discussions) == 1
+        assert "マーケティング" in marketing_discussions[0].topic
 
         # Test search by participant
         persona1_discussions = self.discussion_manager.get_discussions_by_participant(
             self.persona1.id
         )
-        self.assertEqual(
-            len(persona1_discussions), 3
-        )  # persona1 participated in all 3 discussions
+        assert len(persona1_discussions) == 3  # persona1 participated in all 3 discussions
 
         persona2_discussions = self.discussion_manager.get_discussions_by_participant(
             self.persona2.id
         )
-        self.assertEqual(
-            len(persona2_discussions), 3
-        )  # persona2 participated in all 3 discussions
+        assert len(persona2_discussions) == 3  # persona2 participated in all 3 discussions
 
     def test_discussion_insights_update(self):
         """Test updating insights for existing discussion."""
@@ -336,23 +332,23 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         success = self.discussion_manager.update_discussion_insights(
             discussion_id, insights
         )
-        self.assertTrue(success)
+        assert success
 
         # Retrieve updated discussion
         updated_discussion = self.discussion_manager.get_discussion(discussion_id)
-        self.assertIsNotNone(updated_discussion)
-        self.assertEqual(len(updated_discussion.insights), 2)
+        assert updated_discussion is not None
+        assert len(updated_discussion.insights) == 2
 
         # Verify insight content
         categories = [insight.category for insight in updated_discussion.insights]
-        self.assertIn("改善提案", categories)
-        self.assertIn("技術課題", categories)
+        assert "改善提案" in categories
+        assert "技術課題" in categories
 
     def test_discussion_count_and_existence(self):
         """Test discussion count and existence check functionality."""
         # Initial count should be 0
         initial_count = self.discussion_manager.get_discussion_count()
-        self.assertEqual(initial_count, 0)
+        assert initial_count == 0
 
         # Create and save a discussion (with 2 participants)
         discussion = Discussion.create_new(
@@ -377,29 +373,29 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
 
         # Count should be 1
         count_after_save = self.discussion_manager.get_discussion_count()
-        self.assertEqual(count_after_save, 1)
+        assert count_after_save == 1
 
         # Discussion should exist
         exists = self.discussion_manager.discussion_exists(discussion_id)
-        self.assertTrue(exists)
+        assert exists
 
         # Non-existent discussion should not exist
         non_existent_exists = self.discussion_manager.discussion_exists(
             "non-existent-id"
         )
-        self.assertFalse(non_existent_exists)
+        assert not non_existent_exists
 
         # Delete discussion
         deleted = self.discussion_manager.delete_discussion(discussion_id)
-        self.assertTrue(deleted)
+        assert deleted
 
         # Count should be 0 again
         count_after_delete = self.discussion_manager.get_discussion_count()
-        self.assertEqual(count_after_delete, 0)
+        assert count_after_delete == 0
 
         # Discussion should not exist
         exists_after_delete = self.discussion_manager.discussion_exists(discussion_id)
-        self.assertFalse(exists_after_delete)
+        assert not exists_after_delete
 
     def test_error_handling_with_real_database(self):
         """Test error handling with real database operations."""
@@ -407,11 +403,11 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         non_existent_discussion = self.discussion_manager.get_discussion(
             "non-existent-id"
         )
-        self.assertIsNone(non_existent_discussion)
+        assert non_existent_discussion is None
 
         # Test deleting non-existent discussion
         delete_result = self.discussion_manager.delete_discussion("non-existent-id")
-        self.assertFalse(delete_result)
+        assert not delete_result
 
         # Test updating insights for non-existent discussion
         insights = [
@@ -437,8 +433,4 @@ class TestDiscussionManagerIntegration(unittest.TestCase):
         update_result = self.discussion_manager.update_discussion_insights(
             "non-existent-id", insights
         )
-        self.assertFalse(update_result)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert not update_result

@@ -847,3 +847,74 @@ class TestInterviewManagerDocumentMetadata:
         assert len(discussion.documents) == 2
         assert discussion.documents[0]["filename"] == "test.png"
         assert discussion.documents[1]["filename"] == "doc.pdf"
+
+
+class TestInterviewManagerSessionStatus:
+    """get_session_status, cleanup_inactive_sessions, get_active_sessions_count のテスト"""
+
+    def setup_method(self):
+        self.mock_agent_service = Mock()
+        self.mock_database_service = Mock()
+        self.interview_manager = InterviewManager(
+            self.mock_agent_service, self.mock_database_service
+        )
+
+    def _create_session(self, session_id="s1", age_hours=0):
+        from datetime import timedelta
+        session = InterviewSession(
+            id=session_id,
+            participants=["p1"],
+            messages=[],
+            created_at=datetime.now() - timedelta(hours=age_hours),
+            is_saved=False,
+        )
+        self.interview_manager._active_sessions[session_id] = session
+        return session
+
+    def test_get_session_status_success(self):
+        self._create_session("s1")
+        status = self.interview_manager.get_session_status("s1")
+        assert status["session_id"] == "s1"
+        assert status["message_count"] == 0
+        assert status["agents_active"] is False
+        assert status["has_user_messages"] is False
+
+    def test_get_session_status_not_found(self):
+        with pytest.raises(InterviewManagerError):
+            self.interview_manager.get_session_status("nonexistent")
+
+    def test_get_session_status_with_messages(self):
+        session = self._create_session("s1")
+        msg = Message.create_new("user", "User", "質問", message_type="user_message")
+        session.messages.append(msg)
+        status = self.interview_manager.get_session_status("s1")
+        assert status["message_count"] == 1
+        assert status["has_user_messages"] is True
+        assert status["last_activity"] is not None
+
+    def test_get_active_sessions_count_empty(self):
+        assert self.interview_manager.get_active_sessions_count() == 0
+
+    def test_get_active_sessions_count(self):
+        self._create_session("s1")
+        self._create_session("s2")
+        assert self.interview_manager.get_active_sessions_count() == 2
+
+    def test_cleanup_inactive_sessions_removes_old(self):
+        self._create_session("old", age_hours=48)
+        self._create_session("new", age_hours=1)
+        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
+        assert cleaned == 1
+        assert "old" not in self.interview_manager._active_sessions
+        assert "new" in self.interview_manager._active_sessions
+
+    def test_cleanup_inactive_sessions_skips_saved(self):
+        session = self._create_session("old", age_hours=48)
+        session.is_saved = True
+        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
+        assert cleaned == 0
+
+    def test_cleanup_inactive_sessions_none_to_clean(self):
+        self._create_session("new", age_hours=1)
+        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
+        assert cleaned == 0

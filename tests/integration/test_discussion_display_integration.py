@@ -7,7 +7,7 @@ Note: このテストは pages.discussion_results モジュールに依存して
 DiscussionDisplayクラスは存在しないため、モデルとデータ処理のテストのみ実行します。
 """
 
-import unittest
+import pytest
 from datetime import datetime, timedelta
 import sys
 from pathlib import Path
@@ -21,10 +21,10 @@ from src.models.message import Message
 from src.models.persona import Persona
 
 
-class TestDiscussionDisplayIntegration(unittest.TestCase):
+class TestDiscussionDisplayIntegration:
     """議論表示機能の統合テストクラス"""
 
-    def setUp(self):
+    def setup_method(self):
         """テストセットアップ"""
         # テスト用ペルソナを作成
         self.personas = self._create_test_personas()
@@ -138,23 +138,23 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
             total_length += len(message.content)
 
         # 各ペルソナの発言数をチェック
-        self.assertGreater(message_counts[self.personas[0].id], 0)
-        self.assertGreater(message_counts[self.personas[1].id], 0)
+        assert message_counts[self.personas[0].id] > 0
+        assert message_counts[self.personas[1].id] > 0
 
         # 総文字数が正しく計算されているかチェック
         expected_total = sum(len(msg.content) for msg in self.discussion.messages)
-        self.assertEqual(total_length, expected_total)
+        assert total_length == expected_total
 
         # 平均文字数の計算
         avg_length = total_length / len(self.discussion.messages)
-        self.assertIsInstance(avg_length, float)
-        self.assertGreater(avg_length, 0)
+        assert isinstance(avg_length, float)
+        assert avg_length > 0
 
         # 参加率の計算
         for persona_id, count in message_counts.items():
             participation_rate = (count / len(self.discussion.messages)) * 100
-            self.assertGreaterEqual(participation_rate, 0)
-            self.assertLessEqual(participation_rate, 100)
+            assert participation_rate >= 0
+            assert participation_rate <= 100
 
     def test_discussion_duration_and_intervals(self):
         """議論時間と発言間隔の計算をテスト"""
@@ -163,7 +163,7 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
         if len(messages) >= 2:
             # 議論時間の計算
             duration = messages[-1].timestamp - messages[0].timestamp
-            self.assertGreaterEqual(duration.total_seconds(), 0)
+            assert duration.total_seconds() >= 0
 
             # 発言間隔の計算
             intervals = []
@@ -173,13 +173,13 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
 
             # すべての間隔が正の値であることを確認
             for interval in intervals:
-                self.assertGreater(interval, 0)
+                assert interval > 0
 
             # 平均間隔の計算
             if intervals:
                 avg_interval = sum(intervals) / len(intervals)
-                self.assertIsInstance(avg_interval, float)
-                self.assertGreater(avg_interval, 0)
+                assert isinstance(avg_interval, float)
+                assert avg_interval > 0
 
     def test_persona_message_extraction(self):
         """ペルソナ別メッセージ抽出をテスト"""
@@ -191,8 +191,8 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
 
             # 抽出されたメッセージがすべて該当ペルソナのものであることを確認
             for msg in persona_messages:
-                self.assertEqual(msg.persona_id, persona.id)
-                self.assertEqual(msg.persona_name, persona.name)
+                assert msg.persona_id == persona.id
+                assert msg.persona_name == persona.name
 
     def test_message_search_functionality(self):
         """メッセージ検索機能をテスト"""
@@ -208,7 +208,7 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
 
             # マッチしたメッセージにキーワードが含まれていることを確認
             for msg in matching_messages:
-                self.assertIn(keyword.lower(), msg.content.lower())
+                assert keyword.lower() in msg.content.lower()
 
     def test_discussion_flow_visualization_data(self):
         """議論の流れ可視化データをテスト"""
@@ -218,27 +218,27 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
         for i, message in enumerate(self.discussion.messages):
             # タイムスタンプが昇順であることを確認
             if previous_timestamp is not None:
-                self.assertGreaterEqual(message.timestamp, previous_timestamp)
+                assert message.timestamp >= previous_timestamp
 
             previous_timestamp = message.timestamp
 
             # メッセージ番号が正しく設定されているかチェック
             expected_number = i + 1
             # 実際のUI表示では expected_number が使用される
-            self.assertIsInstance(expected_number, int)
-            self.assertGreater(expected_number, 0)
+            assert isinstance(expected_number, int)
+            assert expected_number > 0
 
     def test_discussion_model_integrity(self):
         """議論モデルの整合性をテスト"""
         # 議論の基本属性を確認
-        self.assertIsNotNone(self.discussion.id)
-        self.assertIsNotNone(self.discussion.topic)
-        self.assertEqual(len(self.discussion.participants), 3)
-        self.assertEqual(len(self.discussion.messages), 5)
+        assert self.discussion.id is not None
+        assert self.discussion.topic is not None
+        assert len(self.discussion.participants) == 3
+        assert len(self.discussion.messages) == 5
 
         # 参加者IDが正しいことを確認
         for persona in self.personas:
-            self.assertIn(persona.id, self.discussion.participants)
+            assert persona.id in self.discussion.participants
 
     def test_message_filtering_logic(self):
         """メッセージフィルタリングロジックをテスト"""
@@ -250,7 +250,7 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
 
         # フィルタリング結果の検証
         for msg in filtered_by_persona:
-            self.assertEqual(msg.persona_id, persona_id)
+            assert msg.persona_id == persona_id
 
         # 検索キーワードでフィルタリング
         search_term = "ユーザー"
@@ -261,13 +261,9 @@ class TestDiscussionDisplayIntegration(unittest.TestCase):
         ]
 
         for msg in filtered_by_search:
-            self.assertIn(search_term.lower(), msg.content.lower())
+            assert search_term.lower() in msg.content.lower()
 
         # 逆順ソート
         reversed_messages = list(reversed(self.discussion.messages))
-        self.assertEqual(len(reversed_messages), len(self.discussion.messages))
-        self.assertEqual(reversed_messages[0], self.discussion.messages[-1])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(reversed_messages) == len(self.discussion.messages)
+        assert reversed_messages[0] == self.discussion.messages[-1]

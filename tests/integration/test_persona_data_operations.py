@@ -3,17 +3,17 @@ Integration tests for persona data operations.
 Tests the complete persona data lifecycle including validation and integrity checks.
 """
 
-import unittest
+import pytest
 from unittest.mock import Mock
 from datetime import datetime
 
 from src.models.persona import Persona
 
 
-class TestPersonaDataOperations(unittest.TestCase):
+class TestPersonaDataOperations:
     """Integration tests for persona data operations."""
 
-    def setUp(self):
+    def setup_method(self):
         """Set up test fixtures."""
         # Create mock database service
         self.personas_storage = {}
@@ -77,7 +77,7 @@ class TestPersonaDataOperations(unittest.TestCase):
         )
         self.mock_db_service.delete_all_personas.side_effect = mock_delete_all_personas
 
-    def tearDown(self):
+    def teardown_method(self):
         """Clean up test fixtures."""
         pass
 
@@ -96,20 +96,20 @@ class TestPersonaDataOperations(unittest.TestCase):
 
         # 1. Save persona
         saved_id = self.mock_db_service.save_persona(persona)
-        self.assertEqual(saved_id, persona.id)
+        assert saved_id == persona.id
 
         # 2. Verify persona exists
-        self.assertTrue(self.mock_db_service.persona_exists(persona.id))
+        assert self.mock_db_service.persona_exists(persona.id)
 
         # 3. Retrieve persona
         retrieved_persona = self.mock_db_service.get_persona(persona.id)
-        self.assertIsNotNone(retrieved_persona)
-        self.assertEqual(retrieved_persona.name, "田中太郎")
-        self.assertEqual(retrieved_persona.age, 35)
-        self.assertEqual(retrieved_persona.occupation, "プロダクトマネージャー")
-        self.assertEqual(len(retrieved_persona.values), 3)
-        self.assertEqual(len(retrieved_persona.pain_points), 3)
-        self.assertEqual(len(retrieved_persona.goals), 3)
+        assert retrieved_persona is not None
+        assert retrieved_persona.name == "田中太郎"
+        assert retrieved_persona.age == 35
+        assert retrieved_persona.occupation == "プロダクトマネージャー"
+        assert len(retrieved_persona.values) == 3
+        assert len(retrieved_persona.pain_points) == 3
+        assert len(retrieved_persona.goals) == 3
 
         # 4. Update persona
         updated_persona = retrieved_persona.update(
@@ -117,25 +117,25 @@ class TestPersonaDataOperations(unittest.TestCase):
             values=["ユーザー体験", "データ分析", "チームワーク", "イノベーション"],
         )
         update_result = self.mock_db_service.update_persona(updated_persona)
-        self.assertTrue(update_result)
+        assert update_result
 
         # 5. Verify update
         updated_retrieved = self.mock_db_service.get_persona(persona.id)
-        self.assertEqual(updated_retrieved.age, 36)
-        self.assertEqual(len(updated_retrieved.values), 4)
-        self.assertIn("イノベーション", updated_retrieved.values)
+        assert updated_retrieved.age == 36
+        assert len(updated_retrieved.values) == 4
+        assert "イノベーション" in updated_retrieved.values
 
         # 6. Check persona count
-        self.assertEqual(self.mock_db_service.get_persona_count(), 1)
+        assert self.mock_db_service.get_persona_count() == 1
 
         # 7. Delete persona
         delete_result = self.mock_db_service.delete_persona(persona.id)
-        self.assertTrue(delete_result)
+        assert delete_result
 
         # 8. Verify deletion
-        self.assertFalse(self.mock_db_service.persona_exists(persona.id))
-        self.assertIsNone(self.mock_db_service.get_persona(persona.id))
-        self.assertEqual(self.mock_db_service.get_persona_count(), 0)
+        assert not self.mock_db_service.persona_exists(persona.id)
+        assert self.mock_db_service.get_persona(persona.id) is None
+        assert self.mock_db_service.get_persona_count() == 0
 
     def test_multiple_personas_management(self):
         """Test managing multiple personas."""
@@ -155,40 +155,40 @@ class TestPersonaDataOperations(unittest.TestCase):
             self.mock_db_service.save_persona(persona)
 
         # Verify all personas are saved
-        self.assertEqual(self.mock_db_service.get_persona_count(), 5)
+        assert self.mock_db_service.get_persona_count() == 5
 
         # Retrieve all personas
         all_personas = self.mock_db_service.get_all_personas()
-        self.assertEqual(len(all_personas), 5)
+        assert len(all_personas) == 5
 
         # Test search by name
         search_results = self.mock_db_service.get_personas_by_name("ユーザー1")
-        self.assertEqual(len(search_results), 1)
-        self.assertEqual(search_results[0].name, "ユーザー1")
+        assert len(search_results) == 1
+        assert search_results[0].name == "ユーザー1"
 
         # Test search by occupation
         search_results = self.mock_db_service.get_personas_by_occupation("職業2")
-        self.assertEqual(len(search_results), 1)
-        self.assertEqual(search_results[0].occupation, "職業2")
+        assert len(search_results) == 1
+        assert search_results[0].occupation == "職業2"
 
         # Test partial name search
         search_results = self.mock_db_service.get_personas_by_name("ユーザー")
-        self.assertEqual(len(search_results), 5)
+        assert len(search_results) == 5
 
         # Delete all personas
         deleted_count = self.mock_db_service.delete_all_personas()
-        self.assertEqual(deleted_count, 5)
-        self.assertEqual(self.mock_db_service.get_persona_count(), 0)
+        assert deleted_count == 5
+        assert self.mock_db_service.get_persona_count() == 0
 
-    @unittest.skip(
-        "Persona model does not implement validation - validation is done at manager level"
+    @pytest.mark.skip(
+        reason="Persona model does not implement validation - validation is done at manager level"
     )
     def test_data_integrity_validation(self):
         """Test data integrity validation."""
         # Test various invalid data scenarios
 
         # Invalid ID
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             invalid_persona = Persona(
                 id="",
                 name="Test",
@@ -204,7 +204,7 @@ class TestPersonaDataOperations(unittest.TestCase):
             self.mock_db_service.save_persona(invalid_persona)
 
         # Invalid age (negative)
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             invalid_persona = Persona(
                 id="test-id",
                 name="Test",
@@ -220,7 +220,7 @@ class TestPersonaDataOperations(unittest.TestCase):
             self.mock_db_service.save_persona(invalid_persona)
 
         # Invalid age (too high)
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             invalid_persona = Persona(
                 id="test-id",
                 name="Test",
@@ -236,7 +236,7 @@ class TestPersonaDataOperations(unittest.TestCase):
             self.mock_db_service.save_persona(invalid_persona)
 
         # Invalid values (not a list)
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             invalid_persona = Persona(
                 id="test-id",
                 name="Test",
@@ -252,7 +252,7 @@ class TestPersonaDataOperations(unittest.TestCase):
             self.mock_db_service.save_persona(invalid_persona)
 
         # Invalid values content (non-string in list)
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             invalid_persona = Persona(
                 id="test-id",
                 name="Test",
@@ -289,21 +289,21 @@ class TestPersonaDataOperations(unittest.TestCase):
         retrieved = self.mock_db_service.get_persona(persona.id)
 
         # Verify Japanese text is preserved correctly
-        self.assertEqual(retrieved.name, "山田花子")
-        self.assertEqual(retrieved.occupation, "UXデザイナー")
-        self.assertIn("美術大学卒業後", retrieved.background)
-        self.assertIn("美しいデザイン", retrieved.values)
-        self.assertIn("技術的制約", retrieved.pain_points)
-        self.assertIn("デザインスキル向上", retrieved.goals)
+        assert retrieved.name == "山田花子"
+        assert retrieved.occupation == "UXデザイナー"
+        assert "美術大学卒業後" in retrieved.background
+        assert "美しいデザイン" in retrieved.values
+        assert "技術的制約" in retrieved.pain_points
+        assert "デザインスキル向上" in retrieved.goals
 
         # Test search with Japanese text
         search_results = self.mock_db_service.get_personas_by_name("山田")
-        self.assertEqual(len(search_results), 1)
-        self.assertEqual(search_results[0].name, "山田花子")
+        assert len(search_results) == 1
+        assert search_results[0].name == "山田花子"
 
         search_results = self.mock_db_service.get_personas_by_occupation("デザイナー")
-        self.assertEqual(len(search_results), 1)
-        self.assertEqual(search_results[0].occupation, "UXデザイナー")
+        assert len(search_results) == 1
+        assert search_results[0].occupation == "UXデザイナー"
 
     def test_edge_cases_and_boundary_conditions(self):
         """Test edge cases and boundary conditions."""
@@ -319,7 +319,7 @@ class TestPersonaDataOperations(unittest.TestCase):
         )
         self.mock_db_service.save_persona(persona_min_age)
         retrieved = self.mock_db_service.get_persona(persona_min_age.id)
-        self.assertEqual(retrieved.age, 0)
+        assert retrieved.age == 0
 
         # Test maximum age
         persona_max_age = Persona.create_new(
@@ -333,7 +333,7 @@ class TestPersonaDataOperations(unittest.TestCase):
         )
         self.mock_db_service.save_persona(persona_max_age)
         retrieved = self.mock_db_service.get_persona(persona_max_age.id)
-        self.assertEqual(retrieved.age, 150)
+        assert retrieved.age == 150
 
         # Test empty lists (valid)
         persona_empty_lists = Persona.create_new(
@@ -347,9 +347,9 @@ class TestPersonaDataOperations(unittest.TestCase):
         )
         self.mock_db_service.save_persona(persona_empty_lists)
         retrieved = self.mock_db_service.get_persona(persona_empty_lists.id)
-        self.assertEqual(len(retrieved.values), 0)
-        self.assertEqual(len(retrieved.pain_points), 0)
-        self.assertEqual(len(retrieved.goals), 0)
+        assert len(retrieved.values) == 0
+        assert len(retrieved.pain_points) == 0
+        assert len(retrieved.goals) == 0
 
         # Test very long strings
         long_background = "非常に長い背景情報。" * 100  # Very long text
@@ -364,7 +364,7 @@ class TestPersonaDataOperations(unittest.TestCase):
         )
         self.mock_db_service.save_persona(persona_long_text)
         retrieved = self.mock_db_service.get_persona(persona_long_text.id)
-        self.assertEqual(len(retrieved.background), len(long_background))
+        assert len(retrieved.background) == len(long_background)
 
     def test_concurrent_operations_simulation(self):
         """Test simulation of concurrent operations."""
@@ -388,12 +388,8 @@ class TestPersonaDataOperations(unittest.TestCase):
 
         # Verify final state
         final_persona = self.mock_db_service.get_persona(persona.id)
-        self.assertEqual(final_persona.age, 39)  # 30 + 9
+        assert final_persona.age == 39  # 30 + 9
 
         # Verify persona still exists and is valid
-        self.assertTrue(self.mock_db_service.persona_exists(persona.id))
-        self.assertEqual(self.mock_db_service.get_persona_count(), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert self.mock_db_service.persona_exists(persona.id)
+        assert self.mock_db_service.get_persona_count() == 1

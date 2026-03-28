@@ -236,11 +236,11 @@ def test_app():
 
 @pytest.fixture
 def client(test_app) -> Generator:
-    """同期テストクライアントを提供"""
+    """同期テストクライアントを提供（CSRF対策ヘッダー付き）"""
     try:
         from fastapi.testclient import TestClient
 
-        with TestClient(test_app) as c:
+        with TestClient(test_app, headers={"HX-Request": "true"}) as c:
             yield c
     except ImportError as e:
         pytest.skip(f"FastAPI TestClient not available: {e}")
@@ -279,8 +279,21 @@ def reset_singletons():
         discussion._persona_manager = None
         discussion._discussion_manager = None
         discussion._agent_discussion_manager = None
+        discussion._file_manager = None
         interview._persona_manager = None
         interview._interview_manager = None
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from web.routers import survey
+
+        survey._survey_manager = None
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from web.routers import settings
+
+        settings._dataset_manager = None
     except (ImportError, AttributeError):
         pass
 

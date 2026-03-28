@@ -428,3 +428,119 @@ class TestGenerateInsights:
         mock_ai_service_for_survey._invoke_model.side_effect = Exception("AI error")
         with pytest.raises(SurveyServiceError):
             survey_service.generate_insights("csv,data", sample_template)
+
+
+# =============================================================================
+# 追加テスト: 欠落メソッドのカバレッジ
+# =============================================================================
+
+
+class TestCompressImageForBatch:
+    """compress_image_for_batch のテスト"""
+
+    def test_compress_small_image(self):
+        from PIL import Image
+        img = Image.new("RGB", (100, 100), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        compressed, media_type = SurveyService.compress_image_for_batch(buf.getvalue())
+        assert media_type == "image/jpeg"
+        assert len(compressed) > 0
+
+    def test_compress_large_image_resizes(self):
+        from PIL import Image
+        img = Image.new("RGB", (2000, 1500), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        compressed, media_type = SurveyService.compress_image_for_batch(
+            buf.getvalue(), max_side=768
+        )
+        assert media_type == "image/jpeg"
+        # 圧縮後は元より小さいはず
+        assert len(compressed) < len(buf.getvalue())
+
+    def test_compress_rgba_image(self):
+        from PIL import Image
+        img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 128))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        compressed, media_type = SurveyService.compress_image_for_batch(buf.getvalue())
+        assert media_type == "image/jpeg"
+
+
+class TestParseCsvColumns:
+    """parse_csv_columns のテスト"""
+
+    def test_parse_basic_csv(self, survey_service: SurveyService):
+        csv_data = "name,age,sex\n田中,30,男\n佐藤,25,女\n".encode("utf-8")
+        result = survey_service.parse_csv_columns(csv_data)
+        assert "columns" in result
+        assert "name" in result["columns"]
+        assert "samples" in result
+        assert "auto_mapping" in result
+
+    def test_parse_csv_auto_mapping(self, survey_service: SurveyService):
+        csv_data = "persona,sex,age,occupation\nテスト,男,30,会社員\n".encode("utf-8")
+        result = survey_service.parse_csv_columns(csv_data)
+        assert "persona" in result["auto_mapping"]
+        assert "sex" in result["auto_mapping"]
+
+    def test_parse_empty_csv(self, survey_service: SurveyService):
+        with pytest.raises(SurveyServiceError):
+            survey_service.parse_csv_columns(b"")
+
+
+class TestFilterAndSamplePersonas:
+    """filter_and_sample_personas のテスト"""
+
+    def test_filter_and_sample(
+        self, survey_service: SurveyService, sample_persona_df: pl.DataFrame
+    ):
+        filtered = survey_service.filter_personas({"sex": "女"}, sample_persona_df)
+        result = survey_service.sample_personas(filtered, 2)
+        assert len(result) <= 2
+        assert all(row["sex"] == "女" for row in result.to_dicts())
+
+    def test_filter_and_sample_no_filters(
+        self, survey_service: SurveyService, sample_persona_df: pl.DataFrame
+    ):
+        filtered = survey_service.filter_personas({}, sample_persona_df)
+        result = survey_service.sample_personas(filtered, 10)
+        assert len(result) == 3  # 全件
+
+
+class TestInvalidateResultsCache:
+    """invalidate_results_cache のテスト"""
+
+    def test_invalidate_clears_cache(self, survey_service: SurveyService):
+        survey_service._csv_cache["path/to/results"] = b"cached_data"
+        survey_service.invalidate_results_cache("path/to/results")
+        assert "path/to/results" not in survey_service._csv_cache
+
+    def test_invalidate_nonexistent_key(self, survey_service: SurveyService):
+        # 存在しないキーでもエラーにならない
+        survey_service.invalidate_results_cache("nonexistent")
+
+
+class TestListAndDeleteCustomDatasets:
+    """list_custom_datasets / delete_custom_dataset のテスト"""
+
+    def test_list_custom_datasets_empty(
+        self, survey_service: SurveyService, mock_s3_service: Mock
+    ):
+        mock_s3_service.s3_client.list_objects_v2.return_value = {}
+        result = survey_service.list_custom_datasets()
+        assert isinstance(result, list)
+
+    def test_delete_custom_dataset(
+        self, survey_service: SurveyService, mock_s3_service: Mock
+    ):
+        mock_s3_service.s3_client.delete_objects.return_value = {}
+        mock_s3_service.s3_client.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "persona-dataset/custom/test.parquet"},
+                {"Key": "persona-dataset/custom/test.meta.json"},
+            ]
+        }
+        # エラーなく完了すればOK
+        survey_service.delete_custom_dataset("test")
