@@ -641,21 +641,16 @@ async def image_preview(file_path: str):
 
 
 def _get_image_preview_url(file_path: str) -> str:
-    """file_pathからプレビュー用URLを生成する"""
-    if not file_path:
+    """file_pathからプレビュー用URLを生成する（S3署名付きURL）"""
+    if not file_path or not file_path.startswith("s3://"):
         return ""
-    if file_path.startswith("s3://"):
-        try:
-            s3_service = service_factory.get_s3_service()
-            if s3_service:
-                return s3_service.generate_presigned_url(file_path, expiration=3600)
-        except Exception as e:
-            logger.warning(f"Failed to generate presigned URL: {e}")
-        return ""
-    # ローカルパスの場合
-    parts = file_path.replace("\\", "/").split("/")
-    filename = parts[-1]
-    return f"/survey-images/{filename}"
+    try:
+        s3_service = service_factory.get_s3_service()
+        if s3_service:
+            return s3_service.generate_presigned_url(file_path, expiration=3600)
+    except Exception as e:
+        logger.warning(f"Failed to generate presigned URL: {e}")
+    return ""
 
 
 # =========================================================================
