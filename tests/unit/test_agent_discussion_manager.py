@@ -50,10 +50,12 @@ class TestAgentDiscussionManagerInitialization:
 class TestCreatePersonaAgents:
     """ペルソナエージェント作成のテスト"""
 
-    def test_create_persona_agents_success(self, sample_persona, sample_persona_2):
+    @patch("src.managers.agent_discussion_manager.service_factory")
+    def test_create_persona_agents_success(self, mock_sf, sample_persona, sample_persona_2):
         """ペルソナエージェント作成が成功することを確認"""
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
+        mock_sf.get_database_service.return_value = mock_db_service
 
         mock_agent_service = Mock()
         mock_agent_service.generate_persona_system_prompt.return_value = (
@@ -76,12 +78,14 @@ class TestCreatePersonaAgents:
         assert len(agents) == 2
         assert mock_agent_service.create_persona_agent.call_count == 2
 
+    @patch("src.managers.agent_discussion_manager.service_factory")
     def test_create_persona_agents_with_custom_prompts(
-        self, sample_persona, sample_persona_2
+        self, mock_sf, sample_persona, sample_persona_2
     ):
         """カスタムプロンプトでのエージェント作成を確認"""
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
+        mock_sf.get_database_service.return_value = mock_db_service
 
         mock_agent_service = Mock()
         mock_persona_agent = Mock(spec=PersonaAgent)

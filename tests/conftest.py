@@ -199,9 +199,11 @@ def file_manager(temp_upload_dir) -> Generator:
     """テスト用FileManagerを提供"""
     from src.managers.file_manager import FileManager
     from pathlib import Path
+    from unittest.mock import Mock
 
-    # 一時ディレクトリを使用
-    manager = FileManager()
+    # モックDBサービスを使用してAWS接続を回避
+    mock_db = Mock()
+    manager = FileManager(db_service=mock_db)
     manager.upload_dir = Path(temp_upload_dir)
     manager.knowledge_files_dir = Path(temp_upload_dir) / "knowledge_files"
     manager.knowledge_files_dir.mkdir(exist_ok=True)

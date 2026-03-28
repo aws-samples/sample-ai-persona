@@ -177,8 +177,8 @@ class TestInterviewManager:
             "基本プロンプト"
         )
 
-        # create_persona_agents メソッドをモック
-        self.interview_manager.create_persona_agents = Mock(
+        # _create_interview_persona_agents メソッドをモック
+        self.interview_manager._create_interview_persona_agents = Mock(
             return_value=mock_persona_agents
         )
 
