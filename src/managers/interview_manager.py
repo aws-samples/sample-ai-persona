@@ -7,7 +7,7 @@ Extends AgentDiscussionManager for interview functionality.
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from ..models.persona import Persona
@@ -173,7 +173,7 @@ class InterviewManager(AgentDiscussionManager):
     def __init__(
         self,
         agent_service: AgentService = None,
-        database_service: Union[DatabaseService, "DynamoDBService"] = None,
+        database_service: Optional[DatabaseService] = None,
     ):
         """
         Initialize interview manager.

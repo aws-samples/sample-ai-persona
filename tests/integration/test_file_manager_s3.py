@@ -8,13 +8,13 @@ import pytest
 moto = pytest.importorskip("moto", reason="moto is required for S3 tests")
 mock_aws = moto.mock_aws
 
-import boto3
-from pathlib import Path
-from datetime import datetime
-from unittest.mock import Mock
+import boto3  # noqa: E402
+from pathlib import Path  # noqa: E402
+from datetime import datetime  # noqa: E402
+from unittest.mock import Mock  # noqa: E402
 
-from src.managers.file_manager import FileManager, FileUploadError
-from src.services.s3_service import S3Service
+from src.managers.file_manager import FileManager, FileUploadError  # noqa: E402
+from src.services.s3_service import S3Service  # noqa: E402
 
 
 @pytest.fixture

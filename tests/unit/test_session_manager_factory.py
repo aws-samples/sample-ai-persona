@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 # bedrock_agentcoreモジュールが必要なテストをマーク
 try:
-    import bedrock_agentcore
+    import bedrock_agentcore  # noqa: F401
     HAS_BEDROCK_AGENTCORE = True
 except ImportError:
     HAS_BEDROCK_AGENTCORE = False
@@ -514,7 +514,7 @@ class TestRetrieveOnlySessionManager:
         """register_hooksがretrieve_customer_contextのみを登録することを確認"""
         # strandsモジュールがない場合はスキップ
         try:
-            from strands.hooks import MessageAddedEvent
+            from strands.hooks import MessageAddedEvent  # noqa: F401
         except ImportError:
             pytest.skip("strands module is required for this test")
 

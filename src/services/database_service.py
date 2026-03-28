@@ -5,7 +5,7 @@ Handles DynamoDB database operations with retry logic and error handling.
 
 import logging
 import time
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
 from datetime import datetime
 from decimal import Decimal
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
@@ -16,6 +16,12 @@ from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
 from ..models.insight import Insight
+
+if TYPE_CHECKING:
+    from ..models.dataset import Dataset, PersonaDatasetBinding
+    from ..models.survey_template import SurveyTemplate
+    from ..models.survey import Survey
+    from ..models.knowledge_base import KnowledgeBase, PersonaKBBinding
 
 
 class DatabaseError(Exception):
@@ -183,7 +189,7 @@ class DatabaseService:
                             f"{operation_name} encountered {error_code} "
                             f"(attempt {attempt + 1}/{max_retries}), retrying in {delay}s"
                         )
-                        time.sleep(delay)  # noqa: arbitrary-sleep
+                        time.sleep(delay)  # noqa: S311
                         continue
                     else:
                         error_msg = (
@@ -230,7 +236,7 @@ class DatabaseService:
                         f"{operation_name} network error "
                         f"(attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}"
                     )
-                    time.sleep(delay)  # noqa: arbitrary-sleep
+                    time.sleep(delay)  # noqa: S311
                     continue
                 else:
                     error_msg = (
@@ -1006,66 +1012,6 @@ class DatabaseService:
             _query_by_occupation,
             operation_name=f"get_personas_by_occupation({occupation_pattern})",
         )
-
-    def persona_exists(self, persona_id: str) -> bool:
-        """
-        Check if a persona exists in DynamoDB.
-
-        Args:
-            persona_id: ID of persona to check
-
-        Returns:
-            True if persona exists, False otherwise
-
-        Raises:
-            DatabaseError: If check operation fails
-        """
-
-        def _exists():
-            response = self.dynamodb_client.get_item(
-                TableName=self.personas_table,
-                Key={"id": self.serializer.serialize(persona_id)},
-                # Only retrieve the key to minimize data transfer
-                ProjectionExpression="id",
-            )
-
-            return "Item" in response
-
-        return self._execute_with_retry(
-            _exists, operation_name=f"persona_exists({persona_id})"
-        )
-
-    def get_persona_count(self) -> int:
-        """
-        Get the total count of personas in DynamoDB.
-
-        Returns:
-            Number of personas
-
-        Raises:
-            DatabaseError: If count operation fails
-        """
-
-        def _count():
-            # Use scan with Select='COUNT' for efficient counting
-            response = self.dynamodb_client.scan(
-                TableName=self.personas_table, Select="COUNT"
-            )
-
-            count = response.get("Count", 0)
-
-            # Handle pagination to get accurate count
-            while "LastEvaluatedKey" in response:
-                response = self.dynamodb_client.scan(
-                    TableName=self.personas_table,
-                    Select="COUNT",
-                    ExclusiveStartKey=response["LastEvaluatedKey"],
-                )
-                count += response.get("Count", 0)
-
-            return count
-
-        return self._execute_with_retry(_count, operation_name="get_persona_count")
 
     def save_discussion(self, discussion: Discussion) -> str:
         """
@@ -2120,7 +2066,6 @@ class DatabaseService:
 
     def save_knowledge_base(self, kb: "KnowledgeBase") -> "KnowledgeBase":
         """Save a KnowledgeBase entry."""
-        from ..models.knowledge_base import KnowledgeBase
 
         def _save():
             item = {k: self.serializer.serialize(v) for k, v in kb.to_dict().items()}
@@ -2186,7 +2131,6 @@ class DatabaseService:
 
     def save_kb_binding(self, binding: "PersonaKBBinding") -> "PersonaKBBinding":
         """Save persona-KB binding. Overwrites existing binding for the persona."""
-        from ..models.knowledge_base import PersonaKBBinding
 
         def _save():
             # 既存の紐付けを削除（1ペルソナ:1KB制約）

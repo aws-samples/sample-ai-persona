@@ -4,7 +4,7 @@ Handles persona generation workflow, editing, and saving functionality.
 """
 
 import logging
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from ..models.persona import Persona
 from ..services.ai_service import AIService, AIServiceError
@@ -27,7 +27,7 @@ class PersonaManager:
     def __init__(
         self,
         ai_service: AIService = None,
-        database_service: Union[DatabaseService, "DynamoDBService"] = None,
+        database_service: Optional[DatabaseService] = None,
     ):
         """
         Initialize persona manager.

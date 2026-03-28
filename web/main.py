@@ -55,7 +55,7 @@ app.mount(
 templates = Jinja2Templates(directory=PROJECT_ROOT / "web" / "templates")
 
 
-from web.sanitize import render_markdown
+from web.sanitize import render_markdown  # noqa: E402
 
 
 # マークダウンフィルターを追加

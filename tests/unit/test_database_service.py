@@ -12,13 +12,13 @@ from datetime import datetime, timedelta
 hypothesis = pytest.importorskip(
     "hypothesis", reason="hypothesis is required for property-based tests"
 )
-from hypothesis import given, strategies as st
-from hypothesis import settings
-from src.services.database_service import DatabaseService, DatabaseError
-from src.models.persona import Persona
-from src.models.discussion import Discussion
-from src.models.message import Message
-from src.models.insight import Insight
+from hypothesis import given, strategies as st  # noqa: E402
+from hypothesis import settings  # noqa: E402
+from src.services.database_service import DatabaseService, DatabaseError  # noqa: E402
+from src.models.persona import Persona  # noqa: E402
+from src.models.discussion import Discussion  # noqa: E402
+from src.models.message import Message  # noqa: E402
+from src.models.insight import Insight  # noqa: E402
 
 
 class TestDatabaseServiceInitialization:

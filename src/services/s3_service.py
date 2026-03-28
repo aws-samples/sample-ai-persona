@@ -58,36 +58,6 @@ class S3Service:
             logger.error(f"Failed to upload file to S3: {error_code} - {str(e)}")
             raise Exception(f"S3へのアップロードに失敗しました: {error_code}")
 
-    def generate_presigned_url(self, s3_path: str, expiration: int = 300) -> str:
-        """
-        署名付きダウンロードURLを生成
-
-        Args:
-            s3_path: S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
-            expiration: URL有効期限（秒）デフォルト5分
-
-        Returns:
-            署名付きURL
-
-        Raises:
-            Exception: URL生成に失敗した場合
-        """
-        try:
-            s3_key = self._extract_key_from_path(s3_path)
-            url = self.s3_client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self.bucket_name, "Key": s3_key},
-                ExpiresIn=expiration,
-            )
-            logger.info(
-                f"Generated presigned URL for {s3_path} (expires in {expiration}s)"
-            )
-            return url
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "Unknown")
-            logger.error(f"Failed to generate presigned URL: {error_code} - {str(e)}")
-            raise Exception(f"署名付きURLの生成に失敗しました: {error_code}")
-
     def download_file(self, s3_path: str) -> bytes:
         """
         S3からファイルをダウンロード

@@ -358,7 +358,7 @@ class TestCSVOperations:
     def test_load_results_from_s3(
         self, survey_service: SurveyService, mock_s3_service: Mock
     ) -> None:
-        result = survey_service.load_results_from_s3("s3://bucket/path")
+        survey_service.load_results_from_s3("s3://bucket/path")
         mock_s3_service.download_file.assert_called_once_with("s3://bucket/path")
 
     def test_load_results_from_s3_error(

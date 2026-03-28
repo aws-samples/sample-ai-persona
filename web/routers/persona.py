@@ -216,7 +216,7 @@ async def save_persona(
             goals=[g.strip() for g in goals.split("\n") if g.strip()],
         )
 
-        saved_id = persona_manager.save_persona(persona)
+        persona_manager.save_persona(persona)
 
         return templates.TemplateResponse(
             "partials/success.html",

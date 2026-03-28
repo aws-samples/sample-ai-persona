@@ -176,7 +176,7 @@ async def create_dataset(
         ]
 
         dataset_manager = get_dataset_manager()
-        dataset = dataset_manager.upload_csv(
+        dataset_manager.upload_csv(
             file_content=content,
             filename=file.filename,
             name=name,

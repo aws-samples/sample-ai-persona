@@ -3,7 +3,6 @@ Integration tests for Discussion Manager.
 Tests the discussion manager with mocked database and AI service.
 """
 
-import pytest
 from unittest.mock import Mock
 
 from src.managers.discussion_manager import DiscussionManager

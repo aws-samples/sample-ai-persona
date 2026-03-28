@@ -1,6 +1,6 @@
 """PersonaManager の単体テスト（欠落メソッド分）"""
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.persona import Persona

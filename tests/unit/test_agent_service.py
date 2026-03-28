@@ -462,7 +462,7 @@ class TestPersonaAgentMultimodal:
 
         # 応答を取得
         prompt = "この画像について意見を述べてください"
-        response = self.persona_agent.respond(prompt)
+        self.persona_agent.respond(prompt)
 
         # エージェントがContentBlockリストで呼ばれたことを確認
         call_args = self.mock_agent.call_args[0][0]
@@ -482,7 +482,7 @@ class TestPersonaAgentMultimodal:
 
         # ドキュメントコンテンツなし
         prompt = "意見を述べてください"
-        response = self.persona_agent.respond(prompt)
+        self.persona_agent.respond(prompt)
 
         # エージェントがテキストのみで呼ばれたことを確認
         call_args = self.mock_agent.call_args[0][0]
@@ -502,7 +502,7 @@ class TestPersonaAgentMultimodal:
 
         # include_documents=Falseで応答を取得
         prompt = "意見を述べてください"
-        response = self.persona_agent.respond(prompt, include_documents=False)
+        self.persona_agent.respond(prompt, include_documents=False)
 
         # エージェントがテキストのみで呼ばれたことを確認
         call_args = self.mock_agent.call_args[0][0]

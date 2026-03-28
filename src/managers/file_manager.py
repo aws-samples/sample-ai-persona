@@ -8,12 +8,15 @@ import uuid
 import hashlib
 import mimetypes
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any, Union
+from typing import Optional, Tuple, List, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 
 from ..config import config
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+
+if TYPE_CHECKING:
+    from ..services.s3_service import S3Service
 
 
 class FileUploadError(Exception):
@@ -101,7 +104,7 @@ class FileManager:
 
     def __init__(
         self,
-        db_service: Optional[Union[DatabaseService, "DynamoDBService"]] = None,
+        db_service: Optional[DatabaseService] = None,
         s3_service: Optional["S3Service"] = None,
     ):
         """ファイルマネージャーの初期化"""
@@ -1112,7 +1115,6 @@ class FileManager:
             FileMetadata: ファイルメタデータ
         """
         file_id = str(uuid.uuid4())
-        file_extension = Path(original_filename).suffix
         saved_filename = f"{file_id}_{original_filename}"
         file_size = len(file_content)
         file_hash = hashlib.sha256(file_content).hexdigest()

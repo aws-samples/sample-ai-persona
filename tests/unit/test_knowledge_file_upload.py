@@ -12,8 +12,6 @@ class TestKnowledgeFileUpload:
 
     def test_unsupported_file_format(self, file_manager):
         """Test that unsupported file formats are rejected"""
-        content = b"test content"
-
         # Test format validation before markitdown import
         file_ext = Path("test.jpg").suffix.lower()
         assert file_ext not in file_manager.KNOWLEDGE_FILE_FORMATS

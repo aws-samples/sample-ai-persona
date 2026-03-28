@@ -95,7 +95,7 @@ class TestCreatePersonaAgents:
         system_prompts = {sample_persona.id: custom_prompt}
 
         # 最低2つのペルソナが必要
-        agents = manager.create_persona_agents(
+        manager.create_persona_agents(
             [sample_persona, sample_persona_2], system_prompts
         )
 

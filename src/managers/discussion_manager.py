@@ -4,7 +4,7 @@ Handles discussion setup, progress management, and insight generation functional
 """
 
 import logging
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
 
@@ -32,7 +32,7 @@ class DiscussionManager:
     def __init__(
         self,
         ai_service: AIService = None,
-        database_service: Union[DatabaseService, "DynamoDBService"] = None,
+        database_service: Optional[DatabaseService] = None,
     ):
         """
         Initialize discussion manager.

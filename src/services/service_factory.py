@@ -14,6 +14,7 @@ from ..config import config
 
 if TYPE_CHECKING:
     from .memory.memory_service import MemoryService
+    from .s3_service import S3Service
     from .survey_service import SurveyService
 
 

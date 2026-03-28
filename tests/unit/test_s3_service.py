@@ -9,9 +9,9 @@ import pytest
 moto = pytest.importorskip("moto", reason="moto is required for S3 tests")
 mock_aws = moto.mock_aws
 
-import boto3
+import boto3  # noqa: E402
 
-from src.services.s3_service import S3Service
+from src.services.s3_service import S3Service  # noqa: E402
 
 
 @pytest.fixture

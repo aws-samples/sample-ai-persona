@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-from web.sanitize import render_markdown
+from web.sanitize import render_markdown  # noqa: E402
 
 # マークダウンフィルターを追加
 templates.env.filters["markdown"] = render_markdown
@@ -162,7 +162,6 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)):
         parsed = survey_service.parse_csv_columns(content)
 
         # CSVバイト列を一時的にS3に保存（マッピング確定後に使用）
-        import base64 as b64mod
         temp_key = f"persona-dataset/temp/{file.filename}"
         survey_service.s3_service.upload_file(content, temp_key)
 
@@ -691,7 +690,7 @@ async def create_template(request: Request):
 
     manager = get_survey_manager()
     try:
-        tmpl = manager.create_template(
+        manager.create_template(
             name=name, questions=questions, images=images or None
         )
     except SurveyValidationError as e:

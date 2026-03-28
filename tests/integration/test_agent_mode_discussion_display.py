@@ -364,7 +364,7 @@ class TestAgentModeDiscussionDisplay:
 
         # Verify that the discussion can be used with DiscussionManager
         # (This validates the integration without making actual AI calls)
-        manager = DiscussionManager()
+        DiscussionManager()
 
         # Verify the discussion structure is valid for insight generation
         assert len(discussion.messages) >= 2  # Minimum requirement

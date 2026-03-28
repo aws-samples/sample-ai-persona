@@ -468,7 +468,7 @@ class TestDiscussionManager:
 
         # Verify AI service was called with None categories (will use default)
         call_args = self.mock_ai_service.extract_insights.call_args
-        assert call_args[1].get("categories") == None
+        assert call_args[1].get("categories") is None
 
     def test_save_discussion_success(self):
         """Test successful discussion save."""

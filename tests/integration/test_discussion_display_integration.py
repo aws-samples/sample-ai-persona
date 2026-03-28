@@ -7,7 +7,6 @@ Note: このテストは pages.discussion_results モジュールに依存して
 DiscussionDisplayクラスは存在しないため、モデルとデータ処理のテストのみ実行します。
 """
 
-import pytest
 from datetime import datetime, timedelta
 import sys
 from pathlib import Path
@@ -16,9 +15,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.discussion import Discussion
-from src.models.message import Message
-from src.models.persona import Persona
+from src.models.discussion import Discussion  # noqa: E402
+from src.models.message import Message  # noqa: E402
+from src.models.persona import Persona  # noqa: E402
 
 
 class TestDiscussionDisplayIntegration:

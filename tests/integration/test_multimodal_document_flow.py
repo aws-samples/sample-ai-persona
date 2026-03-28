@@ -9,18 +9,16 @@ from src.managers.file_manager import FileManager
 from src.managers.discussion_manager import DiscussionManager
 from src.models.persona import Persona
 from src.services.service_factory import service_factory
-from src.config import Config
 
 
 def test_complete_document_flow():
     """Test complete flow: upload documents -> start discussion with documents."""
 
     # Setup
-    config = Config()
     db_service = service_factory.get_database_service()
     ai_service = service_factory.get_ai_service()
     file_manager = FileManager(db_service=db_service)
-    discussion_manager = DiscussionManager(
+    DiscussionManager(
         ai_service=ai_service, database_service=db_service
     )
 
@@ -74,8 +72,8 @@ def test_complete_document_flow():
     )
 
     # Save personas
-    persona1_id = db_service.save_persona(persona1)
-    persona2_id = db_service.save_persona(persona2)
+    db_service.save_persona(persona1)
+    db_service.save_persona(persona2)
     print(f"✓ Personas created: {persona1.name}, {persona2.name}")
 
     # Step 3: Start discussion with documents

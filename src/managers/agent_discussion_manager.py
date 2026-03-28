@@ -4,7 +4,7 @@ Handles AI agent mode discussion setup, execution, and persistence.
 """
 
 import logging
-from typing import List, Dict, Union, Optional, Any
+from typing import List, Dict, Optional, Any
 
 from ..models.persona import Persona
 from ..models.discussion import Discussion
@@ -41,7 +41,7 @@ class AgentDiscussionManager:
     def __init__(
         self,
         agent_service: AgentService = None,
-        database_service: Union[DatabaseService, "DynamoDBService"] = None,
+        database_service: Optional[DatabaseService] = None,
     ):
         """
         Initialize agent discussion manager.

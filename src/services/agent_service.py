@@ -362,8 +362,6 @@ class FacilitatorAgent:
         Returns:
             str: 発言促進プロンプト
         """
-        persona_name = persona_agent.get_persona_name()
-
         if not context:
             # 最初の発言
             prompt = (

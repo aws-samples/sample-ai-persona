@@ -11,8 +11,8 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.discussion import Discussion
-from src.models.message import Message
+from src.models.discussion import Discussion  # noqa: E402
+from src.models.message import Message  # noqa: E402
 
 
 def test_discussion_mode_display_integration():
