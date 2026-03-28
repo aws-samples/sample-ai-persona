@@ -123,7 +123,7 @@ chmod +x deploy.sh
 cd sample-ai-persona
 git pull
 chmod +x deploy.sh
-./deploy.sh --skip-memory --skip-cognito --region <AWS_REGION>
+./deploy.sh --skip-cognito --region <AWS_REGION>
 ```
 - アプリケーションのみの変更の場合、新しいDockerイメージがECRにPUSHされます。
 - ECS Express Modeで新しいコンテナイメージに更新し、再度デプロイすることでアプリケーションが更新されます。
