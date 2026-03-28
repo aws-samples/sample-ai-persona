@@ -25,6 +25,7 @@ data/
 .kiro/specs/
 .kiro/hooks/
 .kiro/settings/
+.kiro/agents/
 
 # CDK
 cdk/node_modules/
