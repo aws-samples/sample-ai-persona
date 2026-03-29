@@ -3,7 +3,7 @@ REST API ルーター（JSON応答用）
 """
 
 import logging
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -55,7 +55,7 @@ class DiscussionResponse(BaseModel):
 
 
 @router.get("/personas", response_model=List[PersonaResponse])
-async def list_personas(search: Optional[str] = None):
+async def list_personas(search: Optional[str] = None) -> Any:
     """ペルソナ一覧取得API"""
     try:
         persona_manager = get_persona_manager()
@@ -89,7 +89,7 @@ async def list_personas(search: Optional[str] = None):
 
 
 @router.get("/personas/{persona_id}", response_model=PersonaResponse)
-async def get_persona(persona_id: str):
+async def get_persona(persona_id: str) -> Any:
     """ペルソナ詳細取得API"""
     try:
         persona_manager = get_persona_manager()
@@ -116,11 +116,11 @@ async def get_persona(persona_id: str):
 
 
 @router.get("/discussions")
-async def list_discussions():
+async def list_discussions() -> Any:
     """議論一覧取得API"""
     try:
         discussion_manager = get_discussion_manager()
-        discussions = discussion_manager.get_all_discussions()
+        discussions = discussion_manager.get_discussion_history()
 
         return [
             {
@@ -137,6 +137,6 @@ async def list_discussions():
 
 
 @router.get("/health")
-async def health():
+async def health() -> Any:
     """ヘルスチェックAPI"""
     return {"status": "ok"}

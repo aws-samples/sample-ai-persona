@@ -13,7 +13,7 @@ try:
     from strands import tool
 except ImportError:
 
-    def tool(func: Callable) -> Callable:
+    def tool(func: Callable) -> Callable:  # type: ignore[no-redef]
         return func
 
 
@@ -37,7 +37,7 @@ def _build_metadata_filter(metadata_filters: Dict[str, str]) -> dict:
 
 def create_kb_retrieval_tool(
     knowledge_base_id: str,
-    metadata_filters: Dict[str, str] = None,
+    metadata_filters: Dict[str, str] | None = None,
     region: str = "us-east-1",
 ) -> Callable:
     """

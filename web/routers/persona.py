@@ -5,11 +5,11 @@
 import logging
 import asyncio
 import re
-from typing import Optional
+from typing import Any, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-from cachetools import TTLCache
+from cachetools import TTLCache  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -58,7 +58,7 @@ def get_file_manager() -> FileManager:
 
 
 @router.get("/generation", response_class=HTMLResponse)
-async def persona_generation_page(request: Request):
+async def persona_generation_page(request: Request) -> Any:
     """ペルソナ生成ページ"""
     return templates.TemplateResponse(
         "persona/generation.html", {"request": request, "title": "AIペルソナ生成"}
@@ -66,7 +66,7 @@ async def persona_generation_page(request: Request):
 
 
 @router.get("/management", response_class=HTMLResponse)
-async def persona_management_page(request: Request):
+async def persona_management_page(request: Request) -> Any:
     """ペルソナ管理ページ"""
     try:
         persona_manager = get_persona_manager()
@@ -82,14 +82,14 @@ async def persona_management_page(request: Request):
 
 
 @router.post("/upload", response_class=HTMLResponse)
-async def upload_file(request: Request, file: UploadFile = File(...)):
+async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
     """ファイルアップロード処理（htmx対応）"""
     try:
         file_content = await file.read()
         file_manager = get_file_manager()
 
         saved_path, file_text, metadata = file_manager.upload_interview_file(
-            file_content, file.filename, allow_duplicates=False
+            file_content, file.filename, allow_duplicates=False  # type: ignore[arg-type]
         )
 
         # アップロード成功時のパーシャルHTMLを返す
@@ -139,7 +139,7 @@ def _generate_persona_sync(file_text: str) -> Persona:
 
 
 @router.post("/generate", response_class=HTMLResponse)
-async def generate_persona(request: Request, file_text: str = Form(...)):
+async def generate_persona(request: Request, file_text: str = Form(...)) -> Any:
     """ペルソナ生成処理（htmx対応）"""
     try:
         # 入力データの検証
@@ -200,7 +200,7 @@ async def save_persona(
     values: str = Form(...),
     pain_points: str = Form(...),
     goals: str = Form(...),
-):
+) -> Any:
     """ペルソナ保存処理（htmx対応）"""
     try:
         persona_manager = get_persona_manager()
@@ -236,7 +236,7 @@ async def save_persona(
 
 
 @router.get("/{persona_id}/edit", response_class=HTMLResponse)
-async def get_persona_edit_form(request: Request, persona_id: str):
+async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
     """ペルソナ編集フォームパーシャル（htmx対応）"""
     try:
         persona_manager = get_persona_manager()
@@ -272,7 +272,7 @@ async def update_persona(
     values: str = Form(...),
     pain_points: str = Form(...),
     goals: str = Form(...),
-):
+) -> Any:
     """ペルソナ更新処理（htmx対応）- 詳細画面用"""
     try:
         persona_manager = get_persona_manager()
@@ -331,7 +331,7 @@ async def update_persona(
 
 
 @router.get("/{persona_id}", response_class=HTMLResponse)
-async def get_persona_detail(request: Request, persona_id: str):
+async def get_persona_detail(request: Request, persona_id: str) -> Any:
     """ペルソナ詳細ページ"""
     try:
         persona_manager = get_persona_manager()
@@ -358,7 +358,7 @@ async def get_persona_detail(request: Request, persona_id: str):
 
 
 @router.delete("/{persona_id}", response_class=HTMLResponse)
-async def delete_persona(request: Request, persona_id: str):
+async def delete_persona(request: Request, persona_id: str) -> Any:
     """ペルソナ削除処理（htmx対応）"""
     try:
         persona_manager = get_persona_manager()
@@ -385,7 +385,7 @@ async def delete_persona(request: Request, persona_id: str):
 
 
 @router.get("/list/partial", response_class=HTMLResponse)
-async def get_persona_list_partial(request: Request, search: Optional[str] = None):
+async def get_persona_list_partial(request: Request, search: Optional[str] = None) -> Any:
     """ペルソナ一覧パーシャル（htmx対応）"""
     try:
         persona_manager = get_persona_manager()
@@ -493,7 +493,7 @@ def _parse_topic_content(content: str) -> dict | None:
 @router.get("/{persona_id}/memories", response_class=HTMLResponse)
 async def get_persona_memories(
     request: Request, persona_id: str, page: int = 1, strategy_type: str = "summary"
-):
+) -> Any:
     """
     ペルソナの長期記憶一覧を取得（htmx対応）
 
@@ -581,7 +581,7 @@ async def get_persona_memories(
 
 
 @router.delete("/{persona_id}/memories/{memory_id}", response_class=HTMLResponse)
-async def delete_persona_memory(request: Request, persona_id: str, memory_id: str):
+async def delete_persona_memory(request: Request, persona_id: str, memory_id: str) -> Any:
     """
     ペルソナの特定の記憶を削除（htmx対応）
 
@@ -652,7 +652,7 @@ async def delete_persona_memory(request: Request, persona_id: str, memory_id: st
 @router.delete("/{persona_id}/memories", response_class=HTMLResponse)
 async def delete_all_persona_memories(
     request: Request, persona_id: str, strategy_type: str = "summary"
-):
+) -> Any:
     """
     ペルソナの全記憶を削除（htmx対応）
 
@@ -806,7 +806,7 @@ async def add_persona_memory(
     topic_name: str = Form(...),
     topic_content: str = Form(...),
     strategy_type: str = Form(default="semantic"),
-):
+) -> Any:
     """
     ペルソナに手動で知識を追加（htmx対応）
 
@@ -884,7 +884,7 @@ async def add_persona_memory(
 @router.post("/{persona_id}/memories/upload-preview", response_class=HTMLResponse)
 async def upload_knowledge_file_preview(
     request: Request, persona_id: str, file: UploadFile = File(...)
-):
+) -> Any:
     """
     知識ファイルをアップロードしてプレビュー表示（htmx対応）
 
@@ -899,7 +899,7 @@ async def upload_knowledge_file_preview(
         # FileManagerで変換
         file_manager = get_file_manager()
         file_metadata, markdown_content = file_manager.upload_knowledge_file(
-            file_content, file.filename
+            file_content, file.filename  # type: ignore[arg-type]
         )
 
         # 内容の文字数チェック（10000文字制限）
@@ -921,7 +921,7 @@ async def upload_knowledge_file_preview(
             )
 
         # ファイル名から拡張子を除去してトピック名を生成
-        topic_name = Path(file.filename).stem
+        topic_name = Path(file.filename).stem  # type: ignore[arg-type]
 
         logger.info(
             f"Knowledge file uploaded for preview: {file.filename} (persona: {persona_id})"
@@ -971,7 +971,7 @@ async def upload_knowledge_file_preview(
 
 
 @router.get("/{persona_id}/kb-binding", response_class=HTMLResponse)
-async def get_kb_binding(request: Request, persona_id: str):
+async def get_kb_binding(request: Request, persona_id: str) -> Any:
     """ペルソナのナレッジベース紐付け情報を取得"""
     db_service = service_factory.get_database_service()
 
@@ -1002,7 +1002,7 @@ async def create_kb_binding(
     persona_id: str,
     kb_id: str = Form(...),
     metadata_filters_json: str = Form(default="{}"),
-):
+) -> Any:
     """ナレッジベース紐付けを作成（既存があれば上書き）"""
     import json
     from src.models.knowledge_base import PersonaKBBinding
@@ -1027,7 +1027,7 @@ async def create_kb_binding(
 
 
 @router.delete("/{persona_id}/kb-binding/{binding_id}", response_class=HTMLResponse)
-async def delete_kb_binding(request: Request, persona_id: str, binding_id: str):
+async def delete_kb_binding(request: Request, persona_id: str, binding_id: str) -> Any:
     """ナレッジベース紐付けを解除"""
     db_service = service_factory.get_database_service()
     db_service.delete_kb_binding(binding_id)
@@ -1040,7 +1040,7 @@ async def delete_kb_binding(request: Request, persona_id: str, binding_id: str):
 
 
 @router.get("/{persona_id}/dataset-bindings", response_class=HTMLResponse)
-async def get_dataset_bindings(request: Request, persona_id: str):
+async def get_dataset_bindings(request: Request, persona_id: str) -> Any:
     """ペルソナのデータセット紐付け一覧を取得"""
     db_service = service_factory.get_database_service()
 
@@ -1069,7 +1069,7 @@ async def create_dataset_binding(
     dataset_id: str = Form(...),
     key_name: str = Form(default=""),
     key_value: str = Form(default=""),
-):
+) -> Any:
     """データセット紐付けを作成"""
     from src.models.dataset import PersonaDatasetBinding
 
@@ -1093,7 +1093,7 @@ async def create_dataset_binding(
 @router.delete(
     "/{persona_id}/dataset-bindings/{binding_id}", response_class=HTMLResponse
 )
-async def delete_dataset_binding(request: Request, persona_id: str, binding_id: str):
+async def delete_dataset_binding(request: Request, persona_id: str, binding_id: str) -> Any:
     """データセット紐付けを削除"""
     db_service = service_factory.get_database_service()
     db_service.delete_binding(binding_id)
@@ -1115,7 +1115,7 @@ def _generate_multiple_personas_sync(
 @router.post("/generate-multiple", response_class=HTMLResponse)
 async def generate_multiple_personas(
     request: Request, file: UploadFile = File(...), persona_count: int = Form(...)
-):
+) -> Any:
     """市場調査レポートから複数ペルソナを生成（htmx対応）"""
     try:
         # 入力検証
@@ -1149,7 +1149,7 @@ async def generate_multiple_personas(
         loop = asyncio.get_event_loop()
         generated_personas = await loop.run_in_executor(
             executor,
-            _generate_multiple_personas_sync,
+            _generate_multiple_personas_sync,  # type: ignore[arg-type]
             file_content,
             file.filename,
             persona_count,
@@ -1189,7 +1189,7 @@ async def generate_multiple_personas(
 
 
 @router.post("/save-selected", response_class=HTMLResponse)
-async def save_selected_personas(request: Request, persona_ids: str = Form(...)):
+async def save_selected_personas(request: Request, persona_ids: str = Form(...)) -> Any:
     """選択された複数ペルソナを保存（htmx対応）"""
     try:
         # カンマ区切りのIDリストをパース

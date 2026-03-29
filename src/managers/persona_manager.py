@@ -26,7 +26,7 @@ class PersonaManager:
 
     def __init__(
         self,
-        ai_service: AIService = None,
+        ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
     ):
         """
@@ -274,13 +274,13 @@ class PersonaManager:
     def edit_persona(
         self,
         persona_id: str,
-        name: str = None,
-        age: int = None,
-        occupation: str = None,
-        background: str = None,
-        values: List[str] = None,
-        pain_points: List[str] = None,
-        goals: List[str] = None,
+        name: str | None = None,
+        age: int | None = None,
+        occupation: str | None = None,
+        background: str | None = None,
+        values: List[str] | None = None,
+        pain_points: List[str] | None = None,
+        goals: List[str] | None = None,
     ) -> Optional[Persona]:
         """
         Edit an existing persona with new values.

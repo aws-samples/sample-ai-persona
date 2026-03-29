@@ -69,7 +69,7 @@ class PersonaKBBinding:
 
     @classmethod
     def create_new(
-        cls, persona_id: str, kb_id: str, metadata_filters: Dict[str, str] = None
+        cls, persona_id: str, kb_id: str, metadata_filters: Dict[str, str] | None = None
     ) -> "PersonaKBBinding":
         return cls(
             id=str(uuid.uuid4()),

@@ -56,13 +56,13 @@ class Persona:
 
     def update(
         self,
-        name: str = None,
-        age: int = None,
-        occupation: str = None,
-        background: str = None,
-        values: List[str] = None,
-        pain_points: List[str] = None,
-        goals: List[str] = None,
+        name: str | None = None,
+        age: int | None = None,
+        occupation: str | None = None,
+        background: str | None = None,
+        values: List[str] | None = None,
+        pain_points: List[str] | None = None,
+        goals: List[str] | None = None,
     ) -> "Persona":
         """
         Update persona fields and return a new instance with updated timestamp.

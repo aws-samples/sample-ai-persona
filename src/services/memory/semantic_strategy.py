@@ -62,7 +62,7 @@ class SemanticStrategy(MemoryStrategy):
         else:
             self.memory_strategy_id = memory_strategy_id
 
-        self._client = None
+        self._client: Any = None
         if self.memory_strategy_id:
             self._init_client()
 
@@ -157,7 +157,7 @@ class SemanticStrategy(MemoryStrategy):
                 event_id,
             )
 
-            return event_id
+            return str(event_id)
 
         except Exception as e:
             logger.error("Failed to save semantic memory: %s", e)
@@ -235,7 +235,7 @@ class SemanticStrategy(MemoryStrategy):
                     memory_record_id,
                     namespace,
                 )
-                return memory_record_id
+                return str(memory_record_id)
 
             # 成功も失敗もない場合（通常は発生しない）
             logger.warning("No records returned from batch_create_memory_records")

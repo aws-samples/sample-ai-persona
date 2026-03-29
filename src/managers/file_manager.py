@@ -44,6 +44,7 @@ class FileMetadata:
         file_hash: str,
         mime_type: str,
         uploaded_at: datetime,
+        file_type: str = "persona_interview",
     ):
         self.file_id = file_id
         self.original_filename = original_filename
@@ -53,6 +54,7 @@ class FileMetadata:
         self.file_hash = file_hash
         self.mime_type = mime_type
         self.uploaded_at = uploaded_at
+        self.file_type = file_type
 
     def to_dict(self) -> Dict[str, Any]:
         """辞書形式に変換"""
@@ -884,7 +886,7 @@ class FileManager:
                 }
 
             file_sizes = [f.file_size for f in all_files]
-            file_types = {}
+            file_types: dict[str, int] = {}
 
             for metadata in all_files:
                 ext = Path(metadata.original_filename).suffix.lower()
@@ -946,7 +948,7 @@ class FileManager:
             Dict[str, Any]: システム健全性レポート
         """
         try:
-            health_report = {
+            health_report: Dict[str, Any] = {
                 "upload_dir_exists": self.upload_dir.exists(),
                 "upload_dir_writable": os.access(self.upload_dir, os.W_OK),
                 "database_accessible": False,
@@ -1130,9 +1132,8 @@ class FileManager:
             file_hash=file_hash,
             mime_type=mime_type,
             uploaded_at=uploaded_at,
+            file_type=file_type,
         )
-        # file_typeを属性として追加（メタデータ保存時に使用）
-        metadata.file_type = file_type
         return metadata
 
     def _save_file_securely(

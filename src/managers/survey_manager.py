@@ -233,7 +233,9 @@ class SurveyManager:
             filters=filters,
         )
         self.execute_survey(survey.id, filters)
-        return self.db.get_survey(survey.id)
+        result = self.db.get_survey(survey.id)
+        assert result is not None
+        return result
 
     def create_survey(
         self,

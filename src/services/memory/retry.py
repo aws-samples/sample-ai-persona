@@ -10,7 +10,7 @@ import functools
 import logging
 import random
 import time
-from typing import Callable, Optional, Tuple, Type, TypeVar
+from typing import Any,  Callable, Optional, Tuple, Type, TypeVar
 
 from botocore.exceptions import ClientError
 
@@ -103,7 +103,7 @@ def calculate_backoff_delay(
     if jitter:
         delay = delay * (0.5 + random.random())
 
-    return delay
+    return float(delay)
 
 
 def with_retry(
@@ -113,7 +113,7 @@ def with_retry(
     jitter: bool = True,
     retryable_exceptions: Optional[Tuple[Type[Exception], ...]] = None,
     on_retry: Optional[Callable[[Exception, int, float], None]] = None,
-):
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     指数バックオフでリトライするデコレータ
 
@@ -143,7 +143,7 @@ def with_retry(
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
+        def wrapper(*args: Any, **kwargs: Any) -> T:
             last_exception: Optional[Exception] = None
 
             for attempt in range(max_retries + 1):  # +1 for initial attempt
@@ -258,9 +258,9 @@ class RetryContext:
     def __enter__(self) -> "RetryContext":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Don't suppress exceptions
-        return False
+        pass
 
     def should_retry(self) -> bool:
         """リトライすべきかどうかを返す"""

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class DatasetManager:
     """データセット管理マネージャー"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.db_service = service_factory.get_database_service()
         self.s3_service = service_factory.get_s3_service()
 

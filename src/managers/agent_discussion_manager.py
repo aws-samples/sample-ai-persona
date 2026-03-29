@@ -40,7 +40,7 @@ class AgentDiscussionManager:
 
     def __init__(
         self,
-        agent_service: AgentService = None,
+        agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
     ):
         """
@@ -441,7 +441,7 @@ class AgentDiscussionManager:
             self.logger.info(f"Facilitator started discussion: {start_message}")
 
             # Execute discussion rounds
-            all_messages = []
+            all_messages: list[Any] = []
 
             while facilitator.should_continue():
                 facilitator.increment_round()
@@ -450,7 +450,7 @@ class AgentDiscussionManager:
                 self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
 
                 # Track who has spoken in this round and round messages
-                spoken_in_round = []
+                spoken_in_round: list[str] = []
                 round_messages = []
 
                 # Each persona speaks once per round
@@ -676,7 +676,7 @@ class AgentDiscussionManager:
             raise DiscussionFlowError("議論メッセージが少なすぎます")
 
         # Check that personas have messages
-        persona_message_count = {}
+        persona_message_count: dict[str, int] = {}
         for message in discussion.messages:
             if message.message_type == "statement":
                 persona_message_count[message.persona_id] = (
@@ -766,7 +766,7 @@ class AgentDiscussionManager:
         facilitator: FacilitatorAgent,
         enable_memory: bool = False,
         document_ids: Optional[List[str]] = None,
-    ):
+    ) -> Any:
         """
         Start and execute an AI agent mode discussion with streaming.
         Yields each message as it's generated.
@@ -883,7 +883,7 @@ class AgentDiscussionManager:
             self.logger.info(f"Facilitator started discussion: {start_message}")
 
             # Execute discussion rounds
-            all_messages = []
+            all_messages: list[Any] = []
 
             while facilitator.should_continue():
                 facilitator.increment_round()
@@ -892,7 +892,7 @@ class AgentDiscussionManager:
                 self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
 
                 # Track who has spoken in this round and round messages
-                spoken_in_round = []
+                spoken_in_round: list[str] = []
                 round_messages = []
 
                 # Each persona speaks once per round

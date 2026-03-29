@@ -2,6 +2,7 @@
 マスアンケート機能のルーター
 """
 
+from typing import Any
 import json
 import logging
 import asyncio
@@ -57,7 +58,7 @@ def get_survey_manager() -> SurveyManager:
 
 
 @router.get("/", response_class=HTMLResponse)
-async def survey_index(request: Request):
+async def survey_index(request: Request) -> Any:
     """アンケートTOP画面"""
     return templates.TemplateResponse(
         "survey/index.html",
@@ -66,7 +67,7 @@ async def survey_index(request: Request):
 
 
 @router.get("/persona-data", response_class=HTMLResponse)
-async def persona_data_page(request: Request):
+async def persona_data_page(request: Request) -> Any:
     """ペルソナデータ設定画面"""
     survey_service = service_factory.get_survey_service()
     nemotron_status = {"exists": False, "size_mb": 0}
@@ -107,7 +108,7 @@ def _download_nemotron_background() -> None:
 
 
 @router.post("/persona-data/download-nemotron", response_class=HTMLResponse)
-async def download_nemotron(request: Request):
+async def download_nemotron(request: Request) -> Any:
     """Nemotronデータセットのダウンロードをバックグラウンドで開始"""
     if _nemotron_download_status["downloading"]:
         return templates.TemplateResponse(
@@ -124,7 +125,7 @@ async def download_nemotron(request: Request):
 
 
 @router.get("/persona-data/nemotron-status", response_class=HTMLResponse)
-async def nemotron_download_status(request: Request):
+async def nemotron_download_status(request: Request) -> Any:
     """Nemotronダウンロード状況をポーリングで返す"""
     survey_service = service_factory.get_survey_service()
     try:
@@ -144,7 +145,7 @@ async def nemotron_download_status(request: Request):
 
 
 @router.post("/persona-data/upload-custom", response_class=HTMLResponse)
-async def upload_custom_step1(request: Request, file: UploadFile = File(...)):
+async def upload_custom_step1(request: Request, file: UploadFile = File(...)) -> Any:
     """Step1: CSVアップロード → カラム解析 → マッピングUI表示"""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         return templates.TemplateResponse(
@@ -186,7 +187,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)):
 
 
 @router.post("/persona-data/preview-prompt", response_class=HTMLResponse)
-async def preview_persona_prompt(request: Request):
+async def preview_persona_prompt(request: Request) -> Any:
     """マッピング設定に基づくシステムプロンプトのプレビューを返す。"""
     form = await request.form()
     temp_key = form.get("temp_key", "")
@@ -199,7 +200,7 @@ async def preview_persona_prompt(request: Request):
             column_mapping[std_col] = value
 
     # その他カラム情報を収集
-    extra_count = int(form.get("extra_count", "0"))
+    extra_count = int(form.get("extra_count", "0"))  # type: ignore[arg-type]
     extra_columns = []
     for i in range(extra_count):
         csv_col = form.get(f"extra_column_{i}", "")
@@ -224,11 +225,11 @@ async def preview_persona_prompt(request: Request):
             if csv_col and csv_col in df.columns and std_col != csv_col:
                 rename_map[csv_col] = std_col
         if rename_map:
-            df = df.rename(rename_map)
+            df = df.rename(rename_map)  # type: ignore[arg-type]
 
         row = df.row(0, named=True)
         preview_text = survey_service._build_system_prompt(
-            row, extra_columns=extra_columns or None
+            row, extra_columns=extra_columns or None  # type: ignore[arg-type]
         )
 
         return templates.TemplateResponse(
@@ -244,7 +245,7 @@ async def preview_persona_prompt(request: Request):
 
 
 @router.post("/persona-data/confirm-mapping", response_class=HTMLResponse)
-async def upload_custom_step2(request: Request):
+async def upload_custom_step2(request: Request) -> Any:
     """Step2: マッピング確定 → Parquet変換 → S3保存"""
     form = await request.form()
     filename = form.get("filename", "")
@@ -258,7 +259,7 @@ async def upload_custom_step2(request: Request):
             column_mapping[std_col] = value
 
     # その他カラム情報を収集
-    extra_count = int(form.get("extra_count", "0"))
+    extra_count = int(form.get("extra_count", "0"))  # type: ignore[arg-type]
     extra_columns = []
     for i in range(extra_count):
         csv_col = form.get(f"extra_column_{i}", "")
@@ -281,7 +282,7 @@ async def upload_custom_step2(request: Request):
         result = await loop.run_in_executor(
             executor,
             lambda: survey_service.upload_custom_dataset(
-                csv_bytes, filename, column_mapping, extra_columns
+                csv_bytes, filename, column_mapping, extra_columns  # type: ignore[arg-type]
             ),
         )
 
@@ -315,7 +316,7 @@ async def upload_custom_step2(request: Request):
     "/persona-data/custom/{name}/detail",
     response_class=HTMLResponse,
 )
-async def custom_dataset_detail(request: Request, name: str):
+async def custom_dataset_detail(request: Request, name: str) -> Any:
     """カスタムデータセットのマッピング情報を表示"""
     try:
         survey_service = service_factory.get_survey_service()
@@ -338,7 +339,7 @@ async def custom_dataset_detail(request: Request, name: str):
 
 
 @router.delete("/persona-data/custom/{name}", response_class=HTMLResponse)
-async def delete_custom_dataset(request: Request, name: str):
+async def delete_custom_dataset(request: Request, name: str) -> Any:
     """カスタムデータセットを削除"""
     try:
         survey_service = service_factory.get_survey_service()
@@ -356,7 +357,7 @@ async def delete_custom_dataset(request: Request, name: str):
 
 
 @router.get("/templates", response_class=HTMLResponse)
-async def templates_list(request: Request):
+async def templates_list(request: Request) -> Any:
     """テンプレート一覧画面"""
     try:
         manager = get_survey_manager()
@@ -371,7 +372,7 @@ async def templates_list(request: Request):
 
 
 @router.get("/templates/new", response_class=HTMLResponse)
-async def template_new(request: Request):
+async def template_new(request: Request) -> Any:
     """テンプレート作成画面"""
     return templates.TemplateResponse(
         "survey/template_form.html",
@@ -380,7 +381,7 @@ async def template_new(request: Request):
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
-async def template_edit(request: Request, template_id: str):
+async def template_edit(request: Request, template_id: str) -> Any:
     """テンプレート編集画面"""
     manager = get_survey_manager()
     tmpl = manager.get_template(template_id)
@@ -405,7 +406,7 @@ async def template_edit(request: Request, template_id: str):
 
 
 @router.get("/start", response_class=HTMLResponse)
-async def survey_start_page(request: Request):
+async def survey_start_page(request: Request) -> Any:
     """アンケート開始画面"""
     manager = get_survey_manager()
     try:
@@ -482,14 +483,14 @@ def _clean_filters(raw: dict) -> dict | None:
                 cleaned[k] = range_cleaned
         elif isinstance(v, list):
             if len(v) > 0:
-                cleaned[k] = v
+                cleaned[k] = v  # type: ignore[assignment]
         elif isinstance(v, str) and v:
-            cleaned[k] = v
+            cleaned[k] = v  # type: ignore[assignment]
     return cleaned or None
 
 
 @router.get("/filter-options", response_class=HTMLResponse)
-async def filter_options(request: Request):
+async def filter_options(request: Request) -> Any:
     """データソースに応じたフィルタ選択肢を返す"""
     datasource = request.query_params.get("datasource", "nemotron")
     survey_service = service_factory.get_survey_service()
@@ -505,7 +506,7 @@ async def filter_options(request: Request):
 
 
 @router.post("/preview", response_class=HTMLResponse)
-async def preview_personas(request: Request):
+async def preview_personas(request: Request) -> Any:
     """フィルタ条件に基づくペルソナプレビュー"""
     form = await request.form()
     filters_json = form.get("filters_json", "{}")
@@ -514,7 +515,7 @@ async def preview_personas(request: Request):
     logger.info(f"Preview request - filters_json: {filters_json}, datasource: {datasource}")
 
     try:
-        raw = json.loads(filters_json) if filters_json.strip() else {}
+        raw = json.loads(filters_json) if filters_json.strip() else {}  # type: ignore[arg-type,union-attr]
         logger.info(f"Preview request - raw filters: {raw}")
         filters = _clean_filters(raw) if raw else None
         logger.info(f"Preview request - cleaned filters: {filters}")
@@ -523,9 +524,9 @@ async def preview_personas(request: Request):
 
     try:
         survey_service = service_factory.get_survey_service()
-        total = survey_service.get_filtered_count(datasource=datasource)
-        count = survey_service.get_filtered_count(filters, datasource=datasource) if filters else total
-        stats = survey_service.get_preview_stats(filters, datasource=datasource)
+        total = survey_service.get_filtered_count(datasource=datasource)  # type: ignore[arg-type]
+        count = survey_service.get_filtered_count(filters, datasource=datasource) if filters else total  # type: ignore[arg-type]
+        stats = survey_service.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
 
     except Exception as e:
         logger.error(f"Preview failed: {e}")
@@ -547,7 +548,7 @@ async def preview_personas(request: Request):
 
 
 @router.get("/results", response_class=HTMLResponse)
-async def results_list(request: Request):
+async def results_list(request: Request) -> Any:
     """結果一覧画面"""
     manager = get_survey_manager()
     try:
@@ -562,7 +563,7 @@ async def results_list(request: Request):
 
 
 @router.get("/results/{survey_id}", response_class=HTMLResponse)
-async def result_detail(request: Request, survey_id: str):
+async def result_detail(request: Request, survey_id: str) -> Any:
     """結果詳細画面"""
     manager = get_survey_manager()
     survey = manager.get_survey(survey_id)
@@ -587,7 +588,7 @@ async def result_detail(request: Request, survey_id: str):
 
 
 @router.delete("/results/{survey_id}")
-async def delete_survey(survey_id: str):
+async def delete_survey(survey_id: str) -> Any:
     """アンケート削除"""
     manager = get_survey_manager()
     try:
@@ -604,7 +605,7 @@ async def delete_survey(survey_id: str):
 
 
 @router.post("/templates/upload-image")
-async def upload_survey_image(file: UploadFile = File(...)):
+async def upload_survey_image(file: UploadFile = File(...)) -> Any:
     """アンケートテンプレート用画像をアップロード"""
     try:
         from src.managers.file_manager import FileManager
@@ -614,7 +615,7 @@ async def upload_survey_image(file: UploadFile = File(...)):
             s3_service=service_factory.get_s3_service(),
         )
         file_content = await file.read()
-        metadata = file_manager.upload_survey_image(file_content, file.filename)
+        metadata = file_manager.upload_survey_image(file_content, file.filename)  # type: ignore[arg-type]
         return JSONResponse(
             {
                 "file_id": metadata.file_id,
@@ -630,7 +631,7 @@ async def upload_survey_image(file: UploadFile = File(...)):
 
 
 @router.get("/image-preview")
-async def image_preview(file_path: str):
+async def image_preview(file_path: str) -> Any:
     """画像のプレビューURL（署名付きURL）を返す"""
     url = _get_image_preview_url(file_path)
     if not url:
@@ -659,15 +660,15 @@ def _get_image_preview_url(file_path: str) -> str:
 
 
 @router.post("/templates", response_class=HTMLResponse)
-async def create_template(request: Request):
+async def create_template(request: Request) -> Any:
     """テンプレート保存"""
     form = await request.form()
-    name = form.get("name", "").strip()
+    name = form.get("name", "").strip()  # type: ignore[arg-type,union-attr]
     questions_json = form.get("questions_json", "[]")
     images_json = form.get("images_json", "[]")
 
     try:
-        questions_data = json.loads(questions_json)
+        questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
         return templates.TemplateResponse(
             "survey/partials/error_message.html",
@@ -676,7 +677,7 @@ async def create_template(request: Request):
         )
 
     try:
-        images_data = json.loads(images_json) if images_json.strip() else []
+        images_data = json.loads(images_json) if images_json.strip() else []  # type: ignore[arg-type,union-attr]
     except json.JSONDecodeError:
         images_data = []
 
@@ -708,15 +709,15 @@ async def create_template(request: Request):
 
 
 @router.put("/templates/{template_id}", response_class=HTMLResponse)
-async def update_template(request: Request, template_id: str):
+async def update_template(request: Request, template_id: str) -> Any:
     """テンプレート更新"""
     form = await request.form()
-    name = form.get("name", "").strip()
+    name = form.get("name", "").strip()  # type: ignore[arg-type,union-attr]
     questions_json = form.get("questions_json", "[]")
     images_json = form.get("images_json", "[]")
 
     try:
-        questions_data = json.loads(questions_json)
+        questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
         return templates.TemplateResponse(
             "survey/partials/error_message.html",
@@ -725,7 +726,7 @@ async def update_template(request: Request, template_id: str):
         )
 
     try:
-        images_data = json.loads(images_json) if images_json.strip() else []
+        images_data = json.loads(images_json) if images_json.strip() else []  # type: ignore[arg-type,union-attr]
     except json.JSONDecodeError:
         images_data = []
 
@@ -759,7 +760,7 @@ async def update_template(request: Request, template_id: str):
 
 
 @router.delete("/templates/{template_id}", response_class=HTMLResponse)
-async def delete_template(request: Request, template_id: str):
+async def delete_template(request: Request, template_id: str) -> Any:
     """テンプレート削除"""
     manager = get_survey_manager()
     try:
@@ -790,18 +791,18 @@ def _execute_survey_background(survey_id: str, filters: dict | None, datasource:
 
 
 @router.post("/execute", response_class=HTMLResponse)
-async def execute_survey(request: Request):
+async def execute_survey(request: Request) -> Any:
     """アンケート実行（ジョブ作成後、バックグラウンドで実行開始）"""
     form = await request.form()
     template_id = form.get("template_id", "")
-    name = form.get("name", "").strip()
-    description = form.get("description", "").strip()
+    name = form.get("name", "").strip()  # type: ignore[arg-type,union-attr]
+    description = form.get("description", "").strip()  # type: ignore[arg-type,union-attr]
     persona_count_str = form.get("persona_count", "100")
     filters_json = form.get("filters_json", "{}")
     datasource = form.get("datasource", "nemotron")
 
     try:
-        persona_count = int(persona_count_str)
+        persona_count = int(persona_count_str)  # type: ignore[arg-type]
     except (ValueError, TypeError):
         response = templates.TemplateResponse(
             "survey/partials/error_message.html",
@@ -813,7 +814,7 @@ async def execute_survey(request: Request):
         return response
 
     try:
-        raw = json.loads(filters_json) if filters_json.strip() else None
+        raw = json.loads(filters_json) if filters_json.strip() else None  # type: ignore[arg-type,union-attr]
         filters = _clean_filters(raw) if raw else None
     except json.JSONDecodeError:
         filters = None
@@ -823,7 +824,7 @@ async def execute_survey(request: Request):
     # 1. アンケートレコードを作成（バリデーション含む、即座に完了）
     try:
         survey = manager.create_survey(
-            template_id=template_id,
+            template_id=template_id,  # type: ignore[arg-type]
             name=name or None,
             description=description,
             persona_count=persona_count,
@@ -849,7 +850,7 @@ async def execute_survey(request: Request):
         return response
 
     # 2. バックグラウンドで実行を開始（デフォルトスレッドプールで実行し、executorを占有しない）
-    asyncio.create_task(asyncio.to_thread(_execute_survey_background, survey.id, filters, datasource))
+    asyncio.create_task(asyncio.to_thread(_execute_survey_background, survey.id, filters, datasource))  # type: ignore[arg-type]
 
     # 3. 開始メッセージを表示し、結果一覧へ自動遷移
     return templates.TemplateResponse(
@@ -864,7 +865,7 @@ async def execute_survey(request: Request):
 
 
 @router.get("/results/{survey_id}/download")
-async def download_csv(survey_id: str):
+async def download_csv(survey_id: str) -> Any:
     """CSVダウンロード（署名付きURLへリダイレクト）"""
     manager = get_survey_manager()
     try:
@@ -875,7 +876,7 @@ async def download_csv(survey_id: str):
 
 
 @router.get("/results/{survey_id}/personas", response_class=HTMLResponse)
-async def persona_statistics(request: Request, survey_id: str):
+async def persona_statistics(request: Request, survey_id: str) -> Any:
     """調査対象ペルソナ統計データ取得"""
     manager = get_survey_manager()
     try:
@@ -893,7 +894,7 @@ async def persona_statistics(request: Request, survey_id: str):
 
 
 @router.get("/results/{survey_id}/visual", response_class=HTMLResponse)
-async def visual_analysis(request: Request, survey_id: str):
+async def visual_analysis(request: Request, survey_id: str) -> Any:
     """ビジュアル分析データ取得"""
     manager = get_survey_manager()
     try:
@@ -911,7 +912,7 @@ async def visual_analysis(request: Request, survey_id: str):
 
 
 @router.post("/results/{survey_id}/report", response_class=HTMLResponse)
-async def generate_report(request: Request, survey_id: str):
+async def generate_report(request: Request, survey_id: str) -> Any:
     """インサイトレポート生成"""
     manager = get_survey_manager()
     try:

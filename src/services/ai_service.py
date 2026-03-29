@@ -45,7 +45,7 @@ class BedrockAPIError(AIServiceError):
 class AIService:
     """Amazon Bedrock を使用した AI サービス"""
 
-    def __init__(self, bedrock_client=None):
+    def __init__(self, bedrock_client: Any = None) -> None:
         """
         AI サービスの初期化
 
@@ -67,7 +67,7 @@ class AIService:
         else:
             self.bedrock_client = self._create_bedrock_client()
 
-    def _create_bedrock_client(self):
+    def _create_bedrock_client(self) -> Any:
         """Bedrock クライアントを作成"""
         if not boto3:
             raise BedrockConnectionError("boto3 がインストールされていません")
@@ -104,7 +104,7 @@ class AIService:
             self.logger.error(f"Bedrock クライアントの作成に失敗: {e}")
             raise BedrockConnectionError(f"Bedrock クライアントの作成に失敗: {e}")
 
-    def _retry_with_backoff(self, func, *args, **kwargs):
+    def _retry_with_backoff(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """
         指数バックオフでリトライを実行
         """
@@ -134,7 +134,7 @@ class AIService:
         self.logger.error(error_msg)
         raise BedrockAPIError(error_msg)
 
-    def _is_retryable_error(self, error) -> bool:
+    def _is_retryable_error(self, error: Exception) -> bool:
         """リトライ可能なエラーかどうかを判定"""
         if isinstance(error, ClientError):
             error_code = error.response.get("Error", {}).get("Code", "")
@@ -172,7 +172,7 @@ class AIService:
             response_body = json.loads(response["body"].read())
 
             if "content" in response_body and len(response_body["content"]) > 0:
-                return response_body["content"][0]["text"]
+                return str(response_body["content"][0]["text"])
             else:
                 raise BedrockAPIError("モデルからの応答が空です")
 
@@ -222,7 +222,7 @@ class AIService:
             if "output" in response and "message" in response["output"]:
                 message = response["output"]["message"]
                 if "content" in message and len(message["content"]) > 0:
-                    return message["content"][0]["text"]
+                    return str(message["content"][0]["text"])
 
             raise BedrockAPIError("Converse APIからの応答が空です")
 
@@ -813,7 +813,7 @@ JSON:"""
                 )
 
                 # 各ペルソナが最低1回は発言していることを確認
-                persona_message_count = {}
+                persona_message_count: dict[str, int] = {}
                 for message in messages:
                     persona_message_count[message.persona_id] = (
                         persona_message_count.get(message.persona_id, 0) + 1
@@ -875,7 +875,7 @@ JSON:"""
         personas: List[Persona],
         topic: str,
         documents: Optional[List[Dict[str, Any]]] = None,
-    ):
+    ) -> Any:
         """
         ペルソナ同士の議論を進行（ストリーミング版）
         各発言をyieldで返す

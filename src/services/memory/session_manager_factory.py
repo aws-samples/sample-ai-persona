@@ -34,7 +34,7 @@ def create_agentcore_session_manager(
     session_id: str,
     retrieval_config: Optional[Dict[str, Any]] = None,
     memory_mode: MemoryMode = "full",
-):
+) -> Any:
     """
     AgentCoreMemorySessionManagerを作成
 
@@ -147,7 +147,7 @@ def create_agentcore_session_manager(
             )
         else:
             # memory_mode == "full"
-            session_manager = base_session_manager
+            session_manager = base_session_manager  # type: ignore[assignment]
 
             logger.info(
                 f"Created AgentCoreMemorySessionManager (full mode): "

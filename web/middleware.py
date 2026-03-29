@@ -8,6 +8,7 @@ CSRF保護ミドルウェア
 - JS側の fetch() には X-Requested-With ヘッダーを明示的に付与する
 """
 
+from typing import Any
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -17,7 +18,7 @@ EXEMPT_PATHS = {"/health"}
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
         if (
             request.method in UNSAFE_METHODS
             and request.url.path not in EXEMPT_PATHS
@@ -31,4 +32,5 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                     content={"detail": "CSRF validation failed"},
                 )
-        return await call_next(request)
+        response = await call_next(request)
+        return response  # type: ignore[no-any-return]

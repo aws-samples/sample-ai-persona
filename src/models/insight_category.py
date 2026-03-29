@@ -16,8 +16,7 @@ class InsightCategory:
     name: str
     description: str
 
-    def __post_init__(self):
-        """Validate category fields."""
+    def __post_init__(self) -> None:
         if not self.name or len(self.name.strip()) == 0:
             raise ValueError("Category name cannot be empty")
         if len(self.name) > 50:

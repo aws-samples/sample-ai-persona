@@ -78,7 +78,7 @@ class S3Service:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
             file_content = response["Body"].read()
             logger.info(f"File downloaded successfully from {s3_path}")
-            return file_content
+            return bytes(file_content)
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "NoSuchKey":
@@ -154,7 +154,7 @@ class S3Service:
                 ExpiresIn=expiration,
             )
             logger.info(f"Generated presigned URL for {s3_path}")
-            return url
+            return str(url)
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(f"Failed to generate presigned URL: {error_code} - {str(e)}")

@@ -5,7 +5,7 @@ Handles DynamoDB database operations with retry logic and error handling.
 
 import logging
 import time
-from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Callable, TypeVar, TYPE_CHECKING
 from datetime import datetime
 from decimal import Decimal
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
@@ -28,6 +28,9 @@ class DatabaseError(Exception):
     """Custom exception for database-related errors."""
 
     pass
+
+
+_T = TypeVar("_T")
 
 
 class DatabaseService:
@@ -119,10 +122,10 @@ class DatabaseService:
 
     def _execute_with_retry(
         self,
-        operation: Callable[[], Any],
+        operation: Callable[[], _T],
         max_retries: int = 5,
         operation_name: str = "DynamoDB operation",
-    ) -> Any:
+    ) -> _T:
         """
         Execute DynamoDB operation with retry logic for transient errors.
 
@@ -330,7 +333,7 @@ class DatabaseService:
             Dictionary with database information
         """
         try:
-            info = {
+            info: Dict[str, Any] = {
                 "backend": "dynamodb",
                 "region": self.region,
                 "table_prefix": self.table_prefix,
@@ -419,7 +422,7 @@ class DatabaseService:
         # Convert messages to dictionaries
         messages_list = []
         for msg in discussion.messages:
-            msg_dict = {
+            msg_dict: Dict[str, Any] = {
                 "persona_id": msg.persona_id,
                 "persona_name": msg.persona_name,
                 "content": msg.content,
@@ -445,7 +448,7 @@ class DatabaseService:
             insights_list.append(insight_dict)
 
         # Build discussion dictionary
-        discussion_dict = {
+        discussion_dict: Dict[str, Any] = {
             "id": discussion.id,
             "topic": discussion.topic,
             "participants": discussion.participants,
@@ -501,7 +504,7 @@ class DatabaseService:
             Dictionary in DynamoDB format with type descriptors
         """
         # Build file info dictionary
-        file_dict = {
+        file_dict: Dict[str, Any] = {
             "id": file_id,
             "filename": filename,
             "original_filename": original_filename if original_filename else filename,
@@ -679,7 +682,7 @@ class DatabaseService:
             DatabaseError: If save operation fails
         """
 
-        def _save():
+        def _save() -> str:
             serialized_persona = self._serialize_persona(persona)
 
             self.dynamodb_client.put_item(
@@ -706,7 +709,7 @@ class DatabaseService:
             DatabaseError: If update operation fails
         """
 
-        def _update():
+        def _update() -> bool:
             serialized_persona = self._serialize_persona(persona)
 
             # Use put_item to replace the entire item (replaces all fields)
@@ -734,7 +737,7 @@ class DatabaseService:
             DatabaseError: If delete operation fails
         """
 
-        def _delete():
+        def _delete() -> bool:
             try:
                 self.dynamodb_client.delete_item(
                     TableName=self.personas_table,
@@ -765,7 +768,7 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get():
+        def _get() -> Optional[Persona]:
             response = self.dynamodb_client.get_item(
                 TableName=self.personas_table,
                 Key={"id": self.serializer.serialize(persona_id)},
@@ -801,11 +804,11 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get_all():
+        def _get_all() -> list[Persona]:
             personas = []
 
             # Build scan parameters
-            scan_params = {"TableName": self.personas_table}
+            scan_params: Dict[str, Any] = {"TableName": self.personas_table}
 
             if limit:
                 scan_params["Limit"] = limit
@@ -848,7 +851,7 @@ class DatabaseService:
             DatabaseError: If check operation fails
         """
 
-        def _exists():
+        def _exists() -> bool:
             response = self.dynamodb_client.get_item(
                 TableName=self.personas_table,
                 Key={"id": self.serializer.serialize(persona_id)},
@@ -873,13 +876,13 @@ class DatabaseService:
             DatabaseError: If count operation fails
         """
 
-        def _count():
+        def _count() -> int:
             # Use scan with Select='COUNT' for efficient counting
             response = self.dynamodb_client.scan(
                 TableName=self.personas_table, Select="COUNT"
             )
 
-            count = response.get("Count", 0)
+            count: int = response.get("Count", 0)
 
             # Handle pagination to get accurate count
             while "LastEvaluatedKey" in response:
@@ -888,7 +891,7 @@ class DatabaseService:
                     Select="COUNT",
                     ExclusiveStartKey=response["LastEvaluatedKey"],
                 )
-                count += response.get("Count", 0)
+                count += int(response.get("Count", 0))
 
             return count
 
@@ -914,11 +917,11 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_name():
+        def _query_by_name() -> list[Persona]:
             personas = []
 
             # Build scan parameters with filter expression
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.personas_table,
                 "FilterExpression": "contains(#name, :name_val)",
                 "ExpressionAttributeNames": {"#name": "name"},
@@ -973,11 +976,11 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_occupation():
+        def _query_by_occupation() -> list[Persona]:
             personas = []
 
             # Build scan parameters with filter expression
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.personas_table,
                 "FilterExpression": "contains(#occupation, :occupation_val)",
                 "ExpressionAttributeNames": {"#occupation": "occupation"},
@@ -1027,7 +1030,7 @@ class DatabaseService:
             DatabaseError: If save operation fails
         """
 
-        def _save():
+        def _save() -> str:
             serialized_discussion = self._serialize_discussion(discussion)
 
             self.dynamodb_client.put_item(
@@ -1054,7 +1057,7 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get():
+        def _get() -> Optional[Discussion]:
             response = self.dynamodb_client.get_item(
                 TableName=self.discussions_table,
                 Key={"id": self.serializer.serialize(discussion_id)},
@@ -1090,11 +1093,11 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get_all():
+        def _get_all() -> list[Discussion]:
             discussions = []
 
             # Build scan parameters
-            scan_params = {"TableName": self.discussions_table}
+            scan_params: Dict[str, Any] = {"TableName": self.discussions_table}
 
             if limit:
                 scan_params["Limit"] = limit
@@ -1137,7 +1140,7 @@ class DatabaseService:
             DatabaseError: If delete operation fails
         """
 
-        def _delete():
+        def _delete() -> bool:
             try:
                 self.dynamodb_client.delete_item(
                     TableName=self.discussions_table,
@@ -1174,11 +1177,11 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_topic():
+        def _query_by_topic() -> list[Discussion]:
             discussions = []
 
             # Build scan parameters with filter expression
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.discussions_table,
                 "FilterExpression": "contains(#topic, :topic_val)",
                 "ExpressionAttributeNames": {"#topic": "topic"},
@@ -1230,12 +1233,12 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_participant():
+        def _query_by_participant() -> list[Discussion]:
             discussions = []
 
             # Build scan parameters with filter expression
             # Check if persona_id is in the participants list
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.discussions_table,
                 "FilterExpression": "contains(participants, :persona_id)",
                 "ExpressionAttributeValues": {
@@ -1290,7 +1293,7 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_date_range():
+        def _query_by_date_range() -> list[Discussion]:
             discussions = []
 
             # Convert dates to ISO format strings
@@ -1298,7 +1301,7 @@ class DatabaseService:
             end_iso = end_date.isoformat()
 
             # Build scan parameters with filter expression
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.discussions_table,
                 "FilterExpression": "#created_at BETWEEN :start_date AND :end_date",
                 "ExpressionAttributeNames": {"#created_at": "created_at"},
@@ -1354,11 +1357,11 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_by_mode():
+        def _query_by_mode() -> list[Discussion]:
             discussions = []
 
             # Build scan parameters with filter expression
-            scan_params = {
+            scan_params: Dict[str, Any] = {
                 "TableName": self.discussions_table,
                 "FilterExpression": "#mode = :mode_val",
                 "ExpressionAttributeNames": {"#mode": "mode"},
@@ -1407,7 +1410,7 @@ class DatabaseService:
             DatabaseError: If check operation fails
         """
 
-        def _exists():
+        def _exists() -> bool:
             response = self.dynamodb_client.get_item(
                 TableName=self.discussions_table,
                 Key={"id": self.serializer.serialize(discussion_id)},
@@ -1432,13 +1435,13 @@ class DatabaseService:
             DatabaseError: If count operation fails
         """
 
-        def _count():
+        def _count() -> int:
             # Use scan with Select='COUNT' for efficient counting
             response = self.dynamodb_client.scan(
                 TableName=self.discussions_table, Select="COUNT"
             )
 
-            count = response.get("Count", 0)
+            count: int = response.get("Count", 0)
 
             # Handle pagination to get accurate count
             while "LastEvaluatedKey" in response:
@@ -1447,7 +1450,7 @@ class DatabaseService:
                     Select="COUNT",
                     ExclusiveStartKey=response["LastEvaluatedKey"],
                 )
-                count += response.get("Count", 0)
+                count += int(response.get("Count", 0))
 
             return count
 
@@ -1470,7 +1473,7 @@ class DatabaseService:
             DatabaseError: If update operation fails
         """
 
-        def _update():
+        def _update() -> bool:
             # Convert insights to dictionaries
             insights_list = []
             for insight in insights:
@@ -1529,11 +1532,11 @@ class DatabaseService:
             DatabaseError: If query operation fails
         """
 
-        def _query_insights_by_category():
+        def _query_insights_by_category() -> list[dict[str, Any]]:
             insights_result = []
 
             # Scan all discussions
-            scan_params = {"TableName": self.discussions_table}
+            scan_params: Dict[str, Any] = {"TableName": self.discussions_table}
 
             response = self.dynamodb_client.scan(**scan_params)
 
@@ -1605,7 +1608,7 @@ class DatabaseService:
             DatabaseError: If save operation fails
         """
 
-        def _save():
+        def _save() -> str:
             serialized_file = self._serialize_file_info(
                 file_id=file_id,
                 filename=filename,
@@ -1642,7 +1645,7 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get():
+        def _get() -> Optional[Dict[str, Any]]:
             response = self.dynamodb_client.get_item(
                 TableName=self.files_table,
                 Key={"id": self.serializer.serialize(file_id)},
@@ -1675,11 +1678,11 @@ class DatabaseService:
             DatabaseError: If retrieval operation fails
         """
 
-        def _get_all():
+        def _get_all() -> list[dict[str, Any]]:
             files = []
 
             # Build scan parameters
-            scan_params = {"TableName": self.files_table}
+            scan_params: Dict[str, Any] = {"TableName": self.files_table}
 
             if limit:
                 scan_params["Limit"] = limit
@@ -1721,7 +1724,7 @@ class DatabaseService:
             DatabaseError: If delete operation fails
         """
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.files_table,
                 Key={"id": self.serializer.serialize(file_id)},
@@ -1738,7 +1741,7 @@ class DatabaseService:
     def save_dataset(self, dataset: "Dataset") -> "Dataset":
         """Save dataset to DynamoDB."""
 
-        def _save():
+        def _save() -> "Dataset":
             item = {
                 "id": self.serializer.serialize(dataset.id),
                 "name": self.serializer.serialize(dataset.name),
@@ -1770,7 +1773,7 @@ class DatabaseService:
         """Get dataset by ID."""
         from ..models.dataset import Dataset, DatasetColumn
 
-        def _get():
+        def _get() -> Optional["Dataset"]:
             response = self.dynamodb_client.get_item(
                 TableName=self.datasets_table,
                 Key={"id": self.serializer.serialize(dataset_id)},
@@ -1793,7 +1796,7 @@ class DatabaseService:
         """Get all datasets."""
         from ..models.dataset import Dataset, DatasetColumn
 
-        def _get_all():
+        def _get_all() -> List["Dataset"]:
             datasets = []
             response = self.dynamodb_client.scan(TableName=self.datasets_table)
             for raw_item in response.get("Items", []):
@@ -1811,7 +1814,7 @@ class DatabaseService:
     def delete_dataset(self, dataset_id: str) -> bool:
         """Delete dataset by ID."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.datasets_table,
                 Key={"id": self.serializer.serialize(dataset_id)},
@@ -1827,7 +1830,7 @@ class DatabaseService:
     def save_binding(self, binding: "PersonaDatasetBinding") -> "PersonaDatasetBinding":
         """Save persona-dataset binding."""
 
-        def _save():
+        def _save() -> "PersonaDatasetBinding":
             item = {
                 "id": self.serializer.serialize(binding.id),
                 "persona_id": self.serializer.serialize(binding.persona_id),
@@ -1846,7 +1849,7 @@ class DatabaseService:
         """Get all bindings for a persona."""
         from ..models.dataset import PersonaDatasetBinding
 
-        def _get():
+        def _get() -> List["PersonaDatasetBinding"]:
             bindings = []
             response = self.dynamodb_client.scan(
                 TableName=self.bindings_table,
@@ -1870,7 +1873,7 @@ class DatabaseService:
     def delete_binding(self, binding_id: str) -> bool:
         """Delete binding by ID."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.bindings_table,
                 Key={"id": self.serializer.serialize(binding_id)},
@@ -1911,7 +1914,7 @@ class DatabaseService:
     def save_survey_template(self, template: "SurveyTemplate") -> str:
         """Save a SurveyTemplate to DynamoDB. Returns the template ID."""
 
-        def _save():
+        def _save() -> str:
             item = self._serialize_survey_template(template)
             self.dynamodb_client.put_item(
                 TableName=self.survey_templates_table, Item=item
@@ -1925,7 +1928,7 @@ class DatabaseService:
     def get_survey_template(self, template_id: str) -> Optional["SurveyTemplate"]:
         """Get a SurveyTemplate by ID."""
 
-        def _get():
+        def _get() -> Optional["SurveyTemplate"]:
             response = self.dynamodb_client.get_item(
                 TableName=self.survey_templates_table,
                 Key={"id": self.serializer.serialize(template_id)},
@@ -1941,7 +1944,7 @@ class DatabaseService:
     def get_all_survey_templates(self) -> List["SurveyTemplate"]:
         """Get all SurveyTemplates."""
 
-        def _get_all():
+        def _get_all() -> List["SurveyTemplate"]:
             templates = []
             response = self.dynamodb_client.scan(TableName=self.survey_templates_table)
             for raw_item in response.get("Items", []):
@@ -1955,7 +1958,7 @@ class DatabaseService:
     def update_survey_template(self, template: "SurveyTemplate") -> bool:
         """Update an existing SurveyTemplate. Returns True on success."""
 
-        def _update():
+        def _update() -> bool:
             item = self._serialize_survey_template(template)
             self.dynamodb_client.put_item(
                 TableName=self.survey_templates_table, Item=item
@@ -1969,7 +1972,7 @@ class DatabaseService:
     def delete_survey_template(self, template_id: str) -> bool:
         """Delete a SurveyTemplate by ID. Returns True on success."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.survey_templates_table,
                 Key={"id": self.serializer.serialize(template_id)},
@@ -2001,7 +2004,7 @@ class DatabaseService:
     def save_survey(self, survey: "Survey") -> str:
         """Save a Survey to DynamoDB. Returns the survey ID."""
 
-        def _save():
+        def _save() -> str:
             item = self._serialize_survey(survey)
             self.dynamodb_client.put_item(TableName=self.surveys_table, Item=item)
             return survey.id
@@ -2013,7 +2016,7 @@ class DatabaseService:
     def get_survey(self, survey_id: str) -> Optional["Survey"]:
         """Get a Survey by ID."""
 
-        def _get():
+        def _get() -> Optional["Survey"]:
             response = self.dynamodb_client.get_item(
                 TableName=self.surveys_table,
                 Key={"id": self.serializer.serialize(survey_id)},
@@ -2027,7 +2030,7 @@ class DatabaseService:
     def get_all_surveys(self) -> List["Survey"]:
         """Get all Surveys."""
 
-        def _get_all():
+        def _get_all() -> List["Survey"]:
             surveys = []
             response = self.dynamodb_client.scan(TableName=self.surveys_table)
             for raw_item in response.get("Items", []):
@@ -2039,7 +2042,7 @@ class DatabaseService:
     def update_survey(self, survey: "Survey") -> bool:
         """Update an existing Survey. Returns True on success."""
 
-        def _update():
+        def _update() -> bool:
             item = self._serialize_survey(survey)
             self.dynamodb_client.put_item(TableName=self.surveys_table, Item=item)
             return True
@@ -2051,7 +2054,7 @@ class DatabaseService:
     def delete_survey(self, survey_id: str) -> bool:
         """Delete a Survey by ID. Returns True on success."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.surveys_table,
                 Key={"id": self.serializer.serialize(survey_id)},
@@ -2067,7 +2070,7 @@ class DatabaseService:
     def save_knowledge_base(self, kb: "KnowledgeBase") -> "KnowledgeBase":
         """Save a KnowledgeBase entry."""
 
-        def _save():
+        def _save() -> "KnowledgeBase":
             item = {k: self.serializer.serialize(v) for k, v in kb.to_dict().items()}
             self.dynamodb_client.put_item(TableName=self.kb_table, Item=item)
             return kb
@@ -2080,7 +2083,7 @@ class DatabaseService:
         """Get a KnowledgeBase by internal ID."""
         from ..models.knowledge_base import KnowledgeBase
 
-        def _get():
+        def _get() -> Optional["KnowledgeBase"]:
             response = self.dynamodb_client.get_item(
                 TableName=self.kb_table,
                 Key={"id": self.serializer.serialize(kb_id)},
@@ -2099,7 +2102,7 @@ class DatabaseService:
         """Get all registered KnowledgeBases."""
         from ..models.knowledge_base import KnowledgeBase
 
-        def _get_all():
+        def _get_all() -> List["KnowledgeBase"]:
             kbs = []
             response = self.dynamodb_client.scan(TableName=self.kb_table)
             for raw_item in response.get("Items", []):
@@ -2116,7 +2119,7 @@ class DatabaseService:
     def delete_knowledge_base(self, kb_id: str) -> bool:
         """Delete a KnowledgeBase by ID."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.kb_table,
                 Key={"id": self.serializer.serialize(kb_id)},
@@ -2132,7 +2135,7 @@ class DatabaseService:
     def save_kb_binding(self, binding: "PersonaKBBinding") -> "PersonaKBBinding":
         """Save persona-KB binding. Overwrites existing binding for the persona."""
 
-        def _save():
+        def _save() -> "PersonaKBBinding":
             # 既存の紐付けを削除（1ペルソナ:1KB制約）
             existing = self.get_kb_binding_by_persona(binding.persona_id)
             if existing:
@@ -2156,7 +2159,7 @@ class DatabaseService:
         """Get KB binding for a persona (at most one)."""
         from ..models.knowledge_base import PersonaKBBinding
 
-        def _get():
+        def _get() -> Optional["PersonaKBBinding"]:
             response = self.dynamodb_client.scan(
                 TableName=self.persona_kb_bindings_table,
                 FilterExpression="persona_id = :pid",
@@ -2179,7 +2182,7 @@ class DatabaseService:
     def delete_kb_binding(self, binding_id: str) -> bool:
         """Delete KB binding by ID."""
 
-        def _delete():
+        def _delete() -> bool:
             self.dynamodb_client.delete_item(
                 TableName=self.persona_kb_bindings_table,
                 Key={"id": self.serializer.serialize(binding_id)},
