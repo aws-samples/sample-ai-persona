@@ -81,6 +81,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 ## テスト
 
 ```bash
+uv sync --extra dev
 uv run pytest                          # 全テスト
 uv run pytest -m unit                  # 単体テスト（マーカー指定）
 uv run pytest -m integration           # 統合テスト（マーカー指定）
@@ -91,9 +92,10 @@ uv run pytest --cov=src --cov-report=html  # カバレッジ付き
 ## 開発
 
 ```bash
+uv sync --extra dev
 uv run ruff check .          # リント
 uv run ruff check --fix .    # 自動修正
-uv run mypy src/             # 型チェック
+uv run mypy src/ web/             # 型チェック
 ```
 
 <details>
