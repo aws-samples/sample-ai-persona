@@ -13,8 +13,8 @@ try:
     from strands.models import BedrockModel
 except ImportError:
     # Strands SDKがインストールされていない場合のフォールバック
-    Agent = None
-    BedrockModel = None
+    Agent = None  # type: ignore[assignment,misc]
+    BedrockModel = None  # type: ignore[assignment,misc]
 
 from ..config import config
 from ..models.persona import Persona
@@ -74,7 +74,7 @@ class PersonaAgent:
         )
 
     def respond(
-        self, prompt: str, context: List[Message] = None, include_documents: bool = True
+        self, prompt: str, context: List[Message] | None = None, include_documents: bool = True
     ) -> str:
         """
         プロンプトに対して応答を生成
@@ -118,7 +118,7 @@ class PersonaAgent:
             self.logger.error(error_msg)
             raise AgentCommunicationError(error_msg)
 
-    def _extract_text_from_result(self, result, agent=None) -> str:
+    def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """
         AgentResultからテキストコンテンツを抽出
 
@@ -170,7 +170,7 @@ class PersonaAgent:
             return str(result)
 
     def _build_prompt_with_context(
-        self, prompt: str, context: List[Message] = None
+        self, prompt: str, context: List[Message] | None = None
     ) -> str:
         """
         コンテキストを含めたプロンプトを構築
@@ -395,7 +395,7 @@ class FacilitatorAgent:
         self.current_round += 1
         self.logger.info(f"ラウンド {self.current_round}/{self.rounds} に進みました")
 
-    def _extract_text_from_result(self, result, agent=None) -> str:
+    def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """
         AgentResultからテキストコンテンツを抽出
 
@@ -472,7 +472,7 @@ class AgentService:
     Strands Agent SDKを使用したエージェント管理サービス
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize agent service"""
         self.logger = logging.getLogger(__name__)
 
@@ -485,28 +485,28 @@ class AgentService:
 
         self.logger.info("Agent Serviceを初期化しました")
 
-    def _create_tool_logging_callback(self, agent_name: str):
+    def _create_tool_logging_callback(self, agent_name: str) -> Any:
         """ツールコールをログするコールバックハンドラーを作成"""
         from strands.handlers.callback_handler import PrintingCallbackHandler
 
         logger = self.logger
 
         class ToolLoggingCallback(PrintingCallbackHandler):
-            def on_tool_start(self, tool, input_data, **kwargs):
+            def on_tool_start(self, tool: Any, input_data: Any, **kwargs: Any) -> None:
                 tool_name = getattr(tool, "name", str(tool))
                 input_str = str(input_data)[:500]
                 logger.info(
                     f"[{agent_name}] ツール開始: {tool_name} | 入力: {input_str}"
                 )
 
-            def on_tool_end(self, tool, result, **kwargs):
+            def on_tool_end(self, tool: Any, result: Any, **kwargs: Any) -> None:
                 tool_name = getattr(tool, "name", str(tool))
                 result_str = str(result)[:1000]
                 logger.info(
                     f"[{agent_name}] ツール完了: {tool_name} | 結果: {result_str}"
                 )
 
-            def on_tool_error(self, tool, error, **kwargs):
+            def on_tool_error(self, tool: Any, error: Any, **kwargs: Any) -> None:
                 tool_name = getattr(tool, "name", str(tool))
                 logger.error(
                     f"[{agent_name}] ツールエラー: {tool_name} | エラー: {error}"
@@ -611,7 +611,7 @@ class AgentService:
                         session_manager = create_agentcore_session_manager(
                             actor_id=persona.id,
                             session_id=session_id,
-                            memory_mode=effective_memory_mode,
+                            memory_mode=effective_memory_mode,  # type: ignore[arg-type]
                         )
 
                         if session_manager:
@@ -817,7 +817,7 @@ class AgentService:
         knowledge_base_id: str,
         kb_name: str,
         kb_description: str = "",
-        metadata_filters: Dict[str, str] = None,
+        metadata_filters: Dict[str, str] | None = None,
         enable_memory: bool = False,
         session_id: Optional[str] = None,
         memory_mode: str = "full",
@@ -843,7 +843,7 @@ class AgentService:
         # KB検索ツールを作成
         kb_tool = create_kb_retrieval_tool(
             knowledge_base_id=knowledge_base_id,
-            metadata_filters=metadata_filters,
+            metadata_filters=metadata_filters or {},
             region=config.AWS_REGION,
         )
 
@@ -942,7 +942,7 @@ class AgentService:
         )
 
     def _enhance_prompt_with_kb_info(
-        self, base_prompt: str, kb_name: str, kb_description: str, metadata_filters: Dict[str, str] = None
+        self, base_prompt: str, kb_name: str, kb_description: str, metadata_filters: Dict[str, str] | None = None
     ) -> str:
         """ナレッジベース情報をシステムプロンプトに追加"""
         filter_desc = ""
@@ -1124,7 +1124,7 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
 
         try:
             model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID, region=config.AWS_REGION
+                model_id=config.BEDROCK_MODEL_ID, region=config.AWS_REGION  # type: ignore[call-arg]
             )
 
             agent = Agent(

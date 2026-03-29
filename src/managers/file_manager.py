@@ -884,7 +884,7 @@ class FileManager:
                 }
 
             file_sizes = [f.file_size for f in all_files]
-            file_types = {}
+            file_types: dict[str, int] = {}
 
             for metadata in all_files:
                 ext = Path(metadata.original_filename).suffix.lower()
@@ -967,9 +967,9 @@ class FileManager:
                     file_path = Path(metadata.file_path)
 
                     if not file_path.exists():
-                        health_report["missing_files"].append(metadata.file_id)
+                        health_report["missing_files"].append(metadata.file_id)  # type: ignore[attr-defined]
                     elif not self.verify_file_integrity(metadata.file_id):
-                        health_report["corrupted_files"].append(metadata.file_id)
+                        health_report["corrupted_files"].append(metadata.file_id)  # type: ignore[attr-defined]
 
             except Exception:
                 health_report["database_accessible"] = False
@@ -1132,7 +1132,7 @@ class FileManager:
             uploaded_at=uploaded_at,
         )
         # file_typeを属性として追加（メタデータ保存時に使用）
-        metadata.file_type = file_type
+        metadata.file_type = file_type  # type: ignore[attr-defined]
         return metadata
 
     def _save_file_securely(

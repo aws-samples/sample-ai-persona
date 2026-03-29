@@ -23,7 +23,7 @@ try:
     from strands import tool
 except ImportError:
     # Strands SDKがインストールされていない場合のフォールバック
-    def tool(func: Callable) -> Callable:
+    def tool(func: Callable) -> Callable:  # type: ignore[no-redef]
         """Fallback decorator when strands is not installed"""
         return func
 

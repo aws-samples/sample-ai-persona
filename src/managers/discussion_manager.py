@@ -31,7 +31,7 @@ class DiscussionManager:
 
     def __init__(
         self,
-        ai_service: AIService = None,
+        ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
     ):
         """
@@ -752,7 +752,7 @@ class DiscussionManager:
             raise DiscussionManagerError("議論メッセージが少なすぎます")
 
         # Check that all personas have at least one message
-        persona_message_count = {}
+        persona_message_count: dict[str, int] = {}
         for message in discussion.messages:
             persona_message_count[message.persona_id] = (
                 persona_message_count.get(message.persona_id, 0) + 1

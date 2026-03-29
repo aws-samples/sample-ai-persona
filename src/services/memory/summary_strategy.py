@@ -77,7 +77,7 @@ class SummaryStrategy(MemoryStrategy):
         else:
             self.memory_strategy_id = memory_strategy_id
 
-        self._client = None
+        self._client: Any = None
         self._init_client()
 
     def _init_client(self) -> None:
@@ -178,7 +178,7 @@ class SummaryStrategy(MemoryStrategy):
                 event_id,
             )
 
-            return event_id
+            return str(event_id)
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")

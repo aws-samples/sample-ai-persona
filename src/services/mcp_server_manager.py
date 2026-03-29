@@ -23,7 +23,7 @@ def get_mcp_manager() -> "MCPServerManager":
 class MCPServerManager:
     """MotherDuck MCPサーバー管理"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._enabled = False
         self._mcp_client: Optional[Any] = None
         self._lock = threading.Lock()

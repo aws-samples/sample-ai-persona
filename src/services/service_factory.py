@@ -35,7 +35,7 @@ class ServiceFactory:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         """初期化（一度だけ実行される）"""
         if hasattr(self, "_initialized"):
             return
@@ -213,7 +213,7 @@ class ServiceFactory:
                     self.logger.info("Creating new SurveyService instance")
                     self._survey_service = SurveyService(
                         ai_service=ai_service,
-                        s3_service=s3_service,
+                        s3_service=s3_service,  # type: ignore[arg-type]
                     )
         return self._survey_service
 

@@ -127,10 +127,10 @@ class SurveyService:
         img = Image.open(io.BytesIO(image_bytes))
         # リサイズ（長辺がmax_sideを超える場合のみ）
         if max(img.size) > max_side:
-            img.thumbnail((max_side, max_side), Image.LANCZOS)
+            img.thumbnail((max_side, max_side), Image.LANCZOS)  # type: ignore[attr-defined]
         # RGBA→RGB変換（JPEG保存用）
         if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
+            img = img.convert("RGB")  # type: ignore[assignment]
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality)
         return buf.getvalue(), "image/jpeg"
@@ -248,7 +248,7 @@ class SurveyService:
         try:
             bucket = self.s3_service.bucket_name
             raw = self.s3_service.download_file(f"s3://{bucket}/{meta_key}")
-            return json.loads(raw.decode("utf-8"))
+            return dict(json.loads(raw.decode("utf-8")))
         except Exception:
             return None
 
@@ -481,7 +481,7 @@ class SurveyService:
     def _get_total_count(self, datasource: str = "nemotron") -> int:
         """データセットの総レコード数を取得する。"""
         df = self._query_duckdb("SELECT count(*) AS cnt FROM personas", datasource=datasource)
-        return df["cnt"][0]
+        return int(df["cnt"][0])
 
     # =========================================================================
     # ペルソナデータ管理
@@ -769,7 +769,7 @@ class SurveyService:
             params if params else None,
             datasource=datasource,
         )
-        return df["cnt"][0]
+        return int(df["cnt"][0])
 
     def get_preview_stats(
         self, filters: Optional[Dict[str, Any]] = None,
@@ -1589,7 +1589,7 @@ class SurveyService:
             if answer_col not in df.columns:
                 continue
 
-            analysis = {
+            analysis: Dict[str, Any] = {
                 "question_id": q.id,
                 "question_text": q.text,
                 "question_type": q.question_type,
@@ -1622,7 +1622,7 @@ class SurveyService:
 
     def _summarize_demographics(self, df: pl.DataFrame) -> Dict[str, Any]:
         """人口統計情報を集計"""
-        demo = {}
+        demo: Dict[str, Any] = {}
 
         # 性別分布
         if "sex" in df.columns:
@@ -1632,9 +1632,9 @@ class SurveyService:
         if "age" in df.columns:
             age_col = df["age"].cast(pl.Float64, strict=False)
             demo["age"] = {
-                "mean": float(age_col.mean()) if age_col.mean() else 0,
-                "min": int(age_col.min()) if age_col.min() else 0,
-                "max": int(age_col.max()) if age_col.max() else 0,
+                "mean": float(age_col.mean()) if age_col.mean() is not None else 0,  # type: ignore[arg-type]
+                "min": int(age_col.min()) if age_col.min() is not None else 0,  # type: ignore[arg-type]
+                "max": int(age_col.max()) if age_col.max() is not None else 0,  # type: ignore[arg-type]
             }
 
         # 地域分布（上位5件）
@@ -1705,9 +1705,9 @@ class SurveyService:
         valid_df = df.filter(numeric_col.is_not_null())
 
         return {
-            "mean": round(float(numeric_col.mean()), 2) if numeric_col.mean() else 0,
-            "median": float(numeric_col.median()) if numeric_col.median() else 0,
-            "std": round(float(numeric_col.std()), 2) if numeric_col.std() else 0,
+            "mean": round(float(numeric_col.mean()), 2) if numeric_col.mean() is not None else 0,  # type: ignore[arg-type]
+            "median": float(numeric_col.median()) if numeric_col.median() is not None else 0,  # type: ignore[arg-type]
+            "std": round(float(numeric_col.std()), 2) if numeric_col.std() is not None else 0,  # type: ignore[arg-type]
             "distribution": valid_df.group_by(answer_col)
             .agg(pl.count())
             .sort(answer_col)

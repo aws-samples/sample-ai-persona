@@ -172,7 +172,7 @@ class InterviewManager(AgentDiscussionManager):
 
     def __init__(
         self,
-        agent_service: AgentService = None,
+        agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
     ):
         """
@@ -467,7 +467,7 @@ class InterviewManager(AgentDiscussionManager):
             self.logger.error(error_msg)
             raise InterviewAgentError(error_msg)
 
-    def save_interview_session(self, session_id: str, session_name: str = None) -> str:
+    def save_interview_session(self, session_id: str, session_name: str | None = None) -> str:
         """
         Save an interview session to the database with enhanced validation and error handling.
 
@@ -712,14 +712,14 @@ class InterviewManager(AgentDiscussionManager):
 
     def _create_agent_with_integrations(
         self,
-        persona,
+        persona: Any,
         system_prompt: str,
         enable_memory: bool,
-        session_id,
+        session_id: Any,
         memory_mode: str,
         enable_dataset: bool,
         enable_kb: bool,
-    ):
+    ) -> Any:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。両方同時に有効化可能。"""
         from src.services.service_factory import service_factory
 
@@ -1195,7 +1195,7 @@ class InterviewManager(AgentDiscussionManager):
         return None
 
     def _create_discussion_from_session(
-        self, session: InterviewSession, session_name: str = None
+        self, session: InterviewSession, session_name: str | None = None
     ) -> Discussion:
         """
         Create Discussion object from interview session.
