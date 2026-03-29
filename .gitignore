@@ -26,6 +26,7 @@ data/
 .kiro/hooks/
 .kiro/settings/
 .kiro/agents/
+.kiro/steering/deploy.md
 
 # CDK
 cdk/node_modules/
