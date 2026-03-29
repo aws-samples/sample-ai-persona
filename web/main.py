@@ -1,9 +1,9 @@
-from typing import Any
 """
 AIペルソナシステム - メインアプリケーション
 FastAPI + Jinja2 + htmxベースのWebアプリケーション
 """
 
+from typing import Any
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager

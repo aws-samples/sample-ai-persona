@@ -1,4 +1,3 @@
-from typing import Any
 """
 CSRF保護ミドルウェア
 
@@ -9,6 +8,7 @@ CSRF保護ミドルウェア
 - JS側の fetch() には X-Requested-With ヘッダーを明示的に付与する
 """
 
+from typing import Any
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware

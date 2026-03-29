@@ -1,8 +1,8 @@
-from typing import Any
 """
 マスアンケート機能のルーター
 """
 
+from typing import Any
 import json
 import logging
 import asyncio
