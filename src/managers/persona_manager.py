@@ -676,7 +676,7 @@ class PersonaManager:
 
             # 各記憶にパース済みトピック情報を付与
             for memory in page_memories:
-                memory.topic = self._parse_topic_content(memory.content)  # type: ignore[attr-defined]
+                memory.topic = self._parse_topic_content(memory.content)
 
             return (page_memories, page, total_pages)
 

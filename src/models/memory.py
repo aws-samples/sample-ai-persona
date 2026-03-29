@@ -20,6 +20,7 @@ class MemoryEntry:
     metadata: Dict[str, Any] = field(default_factory=dict)  # 追加メタデータ
     created_at: datetime = field(default_factory=datetime.now)
     relevance_score: Optional[float] = None  # 検索時の関連度スコア
+    topic: Optional[Dict[str, Any]] = None  # パース済みトピック情報（表示用）
 
     def to_dict(self) -> Dict[str, Any]:
         """辞書に変換"""
