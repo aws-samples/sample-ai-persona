@@ -5,7 +5,7 @@
 import logging
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse
@@ -34,7 +34,7 @@ def get_dataset_manager() -> DatasetManager:
 
 
 @router.get("/", response_class=HTMLResponse)
-async def settings_page(request: Request):
+async def settings_page(request: Request) -> Any:
     """システム設定ページ"""
     dataset_manager = get_dataset_manager()
     mcp_manager = get_mcp_manager()
@@ -59,7 +59,7 @@ async def settings_page(request: Request):
 
 
 @router.post("/mcp/toggle", response_class=HTMLResponse)
-async def toggle_mcp(request: Request, enabled: bool = Form(...)):
+async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
     """MCP有効/無効切り替え"""
     mcp_manager = get_mcp_manager()
     success = mcp_manager.toggle(enabled)
@@ -78,7 +78,7 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)):
 
 
 @router.get("/mcp/status", response_class=HTMLResponse)
-async def mcp_status(request: Request):
+async def mcp_status(request: Request) -> Any:
     """MCP状態取得"""
     mcp_manager = get_mcp_manager()
     return templates.TemplateResponse(
@@ -88,7 +88,7 @@ async def mcp_status(request: Request):
 
 
 @router.get("/datasets", response_class=HTMLResponse)
-async def list_datasets(request: Request):
+async def list_datasets(request: Request) -> Any:
     """データセット一覧"""
     dataset_manager = get_dataset_manager()
     datasets = dataset_manager.get_datasets()
@@ -101,7 +101,7 @@ async def list_datasets(request: Request):
 
 
 @router.get("/datasets/form", response_class=HTMLResponse)
-async def dataset_form(request: Request, dataset_id: Optional[str] = None):
+async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> Any:
     """データセットフォーム（新規/編集）"""
     dataset = None
     if dataset_id:
@@ -114,9 +114,9 @@ async def dataset_form(request: Request, dataset_id: Optional[str] = None):
 
 
 @router.post("/datasets/analyze", response_class=HTMLResponse)
-async def analyze_csv(request: Request, file: UploadFile = File(...)):
+async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     """CSVファイルのスキーマを解析"""
-    if not file.filename.endswith(".csv"):
+    if not file.filename.endswith(".csv"):  # type: ignore[union-attr]
         return templates.TemplateResponse(
             "partials/error.html",
             {"request": request, "message": "CSVファイルのみアップロード可能です"},
@@ -159,7 +159,7 @@ async def create_dataset(
     description: str = Form(""),
     notes: str = Form(""),
     columns_json: str = Form(...),
-):
+) -> Any:
     """データセット作成"""
     try:
         content = await file.read()
@@ -178,7 +178,7 @@ async def create_dataset(
         dataset_manager = get_dataset_manager()
         dataset_manager.upload_csv(
             file_content=content,
-            filename=file.filename,
+            filename=file.filename,  # type: ignore[arg-type]
             name=name,
             description=description,
             notes=notes,
@@ -210,7 +210,7 @@ async def update_dataset(
     description: str = Form(""),
     notes: str = Form(""),
     columns_json: str = Form(...),
-):
+) -> Any:
     """データセット更新"""
     try:
         columns_data = json.loads(columns_json)
@@ -252,7 +252,7 @@ async def update_dataset(
 
 
 @router.delete("/datasets/{dataset_id}", response_class=HTMLResponse)
-async def delete_dataset(request: Request, dataset_id: str):
+async def delete_dataset(request: Request, dataset_id: str) -> Any:
     """データセット削除"""
     dataset_manager = get_dataset_manager()
     success = dataset_manager.delete_dataset(dataset_id)
@@ -274,7 +274,7 @@ async def delete_dataset(request: Request, dataset_id: str):
 
 # JSON API（他のページから使用）
 @router.get("/api/datasets")
-async def api_list_datasets():
+async def api_list_datasets() -> Any:
     """データセット一覧API"""
     dataset_manager = get_dataset_manager()
     datasets = dataset_manager.get_datasets()
@@ -282,7 +282,7 @@ async def api_list_datasets():
 
 
 @router.get("/api/mcp/status")
-async def api_mcp_status():
+async def api_mcp_status() -> Any:
     """MCP状態API"""
     mcp_manager = get_mcp_manager()
     return {"enabled": mcp_manager.is_running()}
@@ -292,7 +292,7 @@ async def api_mcp_status():
 
 
 @router.get("/knowledge-bases", response_class=HTMLResponse)
-async def list_knowledge_bases(request: Request):
+async def list_knowledge_bases(request: Request) -> Any:
     """ナレッジベース一覧"""
     db_service = service_factory.get_database_service()
     knowledge_bases = db_service.get_all_knowledge_bases()
@@ -310,7 +310,7 @@ async def create_knowledge_base(
     knowledge_base_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
-):
+) -> Any:
     """ナレッジベース登録"""
     try:
         db_service = service_factory.get_database_service()
@@ -338,7 +338,7 @@ async def create_knowledge_base(
 
 
 @router.delete("/knowledge-bases/{kb_id}", response_class=HTMLResponse)
-async def delete_knowledge_base(request: Request, kb_id: str):
+async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
     """ナレッジベース削除"""
     db_service = service_factory.get_database_service()
     db_service.delete_knowledge_base(kb_id)
@@ -354,7 +354,7 @@ async def delete_knowledge_base(request: Request, kb_id: str):
 
 # JSON API（他のページから使用）
 @router.get("/api/knowledge-bases")
-async def api_list_knowledge_bases():
+async def api_list_knowledge_bases() -> Any:
     """ナレッジベース一覧API"""
     db_service = service_factory.get_database_service()
     knowledge_bases = db_service.get_all_knowledge_bases()

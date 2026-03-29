@@ -132,7 +132,7 @@ async def create_interview_session(
     memory_mode: str = Form("full"),
     enable_dataset: bool = Form(False),
     enable_kb: bool = Form(False),
-):
+) -> Any:
     """インタビューセッション作成エンドポイント（拡張エラーハンドリング）"""
     try:
         # Enhanced input validation
@@ -210,7 +210,7 @@ async def create_interview_session(
         loop = asyncio.get_event_loop()
         interview_manager = get_interview_manager()
 
-        def create_session_sync():
+        def create_session_sync() -> Any:
             return interview_manager.start_interview_session(
                 personas,
                 enable_memory=enable_memory,
@@ -275,7 +275,7 @@ async def create_interview_session(
 
 
 @router.get("/chat/{session_id}", response_class=HTMLResponse)
-async def interview_chat_page(request: Request, session_id: str):
+async def interview_chat_page(request: Request, session_id: str) -> Any:
     """インタビューチャットページ（拡張エラーハンドリング）"""
     try:
         interview_manager = get_interview_manager()
@@ -340,7 +340,7 @@ async def send_message(
     session_id: str,
     message: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
-):
+) -> Any:
     """メッセージ送信エンドポイント（マルチモーダル対応）"""
     logger.info(
         f"Received message request for session {session_id} (files: {len(files) if files else 0})"
@@ -384,9 +384,9 @@ async def send_message(
         document_contents = []
         if files:
             for file in files:
-                if file.filename and file.size > 0:
+                if file.filename and file.size > 0:  # type: ignore[operator]
                     # ファイルサイズチェック
-                    if file.size > MAX_FILE_SIZE:
+                    if file.size > MAX_FILE_SIZE:  # type: ignore[operator]
                         return JSONResponse(
                             {
                                 "error": f"ファイル '{file.filename}' が大きすぎます（最大10MB）",
@@ -430,7 +430,7 @@ async def send_message(
         document_metadata = []
         if files:
             for file in files:
-                if file.filename and file.size > 0:
+                if file.filename and file.size > 0:  # type: ignore[operator]
                     content_type = file.content_type or ""
                     if content_type in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES:
                         document_metadata.append(
@@ -447,7 +447,7 @@ async def send_message(
         # 同期的なメッセージ処理を非同期で実行
         loop = asyncio.get_event_loop()
 
-        def send_message_sync():
+        def send_message_sync() -> Any:
             return interview_manager.send_user_message(
                 session_id,
                 message.strip(),
@@ -526,7 +526,7 @@ async def send_message(
 
 
 @router.get("/{session_id}/messages", response_class=JSONResponse)
-async def get_messages(request: Request, session_id: str):
+async def get_messages(request: Request, session_id: str) -> Any:
     """メッセージ履歴取得エンドポイント"""
     try:
         interview_manager = get_interview_manager()
@@ -566,7 +566,7 @@ async def get_messages(request: Request, session_id: str):
 
 
 @router.get("/{session_id}/status", response_class=JSONResponse)
-async def get_session_status(request: Request, session_id: str):
+async def get_session_status(request: Request, session_id: str) -> Any:
     """インタビューセッション状態取得エンドポイント"""
     try:
         interview_manager = get_interview_manager()
@@ -574,7 +574,7 @@ async def get_session_status(request: Request, session_id: str):
         # 同期的な状態取得を非同期で実行
         loop = asyncio.get_event_loop()
 
-        def get_status_sync():
+        def get_status_sync() -> Any:
             return interview_manager.get_session_status(session_id)
 
         status = await loop.run_in_executor(executor, get_status_sync)
@@ -596,13 +596,13 @@ async def get_session_status(request: Request, session_id: str):
 @router.post("/{session_id}/save", response_class=JSONResponse)
 async def save_interview_session(
     request: Request, session_id: str, session_name: str = Form(...)
-):
+) -> Any:
     """インタビューセッション保存エンドポイント（拡張エラーハンドリング）"""
     try:
         interview_manager = get_interview_manager()
 
         # セッション状態を確認
-        def get_session_status_sync():
+        def get_session_status_sync() -> Any:
             try:
                 return interview_manager.get_session_status(session_id)
             except InterviewSessionNotFoundError as e:
@@ -693,7 +693,7 @@ async def save_interview_session(
             )
 
         # 同期的な保存処理を非同期で実行
-        def save_session_sync():
+        def save_session_sync() -> Any:
             return interview_manager.save_interview_session(session_id, session_name)
 
         discussion_id = await loop.run_in_executor(executor, save_session_sync)
@@ -755,7 +755,7 @@ async def save_interview_session(
 
 
 @router.delete("/{session_id}", response_class=JSONResponse)
-async def end_interview_session(request: Request, session_id: str):
+async def end_interview_session(request: Request, session_id: str) -> Any:
     """インタビューセッション終了エンドポイント"""
     try:
         interview_manager = get_interview_manager()
@@ -763,7 +763,7 @@ async def end_interview_session(request: Request, session_id: str):
         # 同期的な終了処理を非同期で実行
         loop = asyncio.get_event_loop()
 
-        def end_session_sync():
+        def end_session_sync() -> Any:
             interview_manager.end_interview_session(session_id)
 
         await loop.run_in_executor(executor, end_session_sync)
@@ -785,7 +785,7 @@ async def end_interview_session(request: Request, session_id: str):
 
 # リアルタイムメッセージ送受信のためのSSEエンドポイント
 @router.get("/{session_id}/stream")
-async def stream_interview_messages(request: Request, session_id: str):
+async def stream_interview_messages(request: Request, session_id: str) -> Any:
     """インタビューメッセージのリアルタイムストリーミング（SSE）"""
     try:
         interview_manager = get_interview_manager()
@@ -793,7 +793,7 @@ async def stream_interview_messages(request: Request, session_id: str):
         # セッションの存在確認
         session = interview_manager.get_interview_session(session_id)
 
-        async def event_generator():
+        async def event_generator() -> Any:
             # 初期メッセージを送信
             yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
@@ -849,7 +849,7 @@ async def stream_interview_messages(request: Request, session_id: str):
 
 
 @router.post("/cleanup", response_class=JSONResponse)
-async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24):
+async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24) -> Any:
     """非アクティブなインタビューセッションのクリーンアップ"""
     try:
         interview_manager = get_interview_manager()
@@ -857,7 +857,7 @@ async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24):
         # 同期的なクリーンアップ処理を非同期で実行
         loop = asyncio.get_event_loop()
 
-        def cleanup_sync():
+        def cleanup_sync() -> Any:
             return interview_manager.cleanup_inactive_sessions(max_age_hours)
 
         cleaned_count = await loop.run_in_executor(executor, cleanup_sync)
@@ -880,7 +880,7 @@ async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24):
 
 
 @router.get("/stats", response_class=JSONResponse)
-async def get_interview_stats(request: Request):
+async def get_interview_stats(request: Request) -> Any:
     """インタビューシステムの統計情報取得"""
     try:
         interview_manager = get_interview_manager()
@@ -888,7 +888,7 @@ async def get_interview_stats(request: Request):
         # 同期的な統計取得を非同期で実行
         loop = asyncio.get_event_loop()
 
-        def get_stats_sync():
+        def get_stats_sync() -> Any:
             active_count = interview_manager.get_active_sessions_count()
             return {
                 "active_sessions": active_count,

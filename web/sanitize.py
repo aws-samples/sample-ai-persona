@@ -1,6 +1,6 @@
 """Markdown→HTML変換時のXSS対策サニタイズユーティリティ"""
 
-import markdown
+import markdown  # type: ignore[import-untyped]
 import nh3
 
 # markdownフィルタで許可するHTMLタグ

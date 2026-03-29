@@ -1,3 +1,4 @@
+from typing import Any
 """
 AIペルソナシステム - メインアプリケーション
 FastAPI + Jinja2 + htmxベースのWebアプリケーション
@@ -28,7 +29,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> Any:
     """アプリケーションのライフサイクル管理"""
     logger.info("AIペルソナシステムを起動中...")
     yield
@@ -71,7 +72,7 @@ app.include_router(survey.router, prefix="/survey", tags=["survey"])
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request) -> Any:
     """トップページ"""
     return templates.TemplateResponse(
         "index.html", {"request": request, "title": "AIペルソナシステム"}
@@ -79,7 +80,7 @@ async def index(request: Request):
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> Any:
     """ヘルスチェック"""
     return {"status": "healthy", "version": "0.1.0"}
 
