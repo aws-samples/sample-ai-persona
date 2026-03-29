@@ -147,7 +147,7 @@ class TestDiscussionsAPIEndpoint:
     def test_list_discussions_empty(self, mock_get_manager, client):
         """議論が存在しない場合、空のリストを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_discussions.return_value = []
+        mock_manager.get_discussion_history.return_value = []
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/discussions")
@@ -161,7 +161,7 @@ class TestDiscussionsAPIEndpoint:
     ):
         """議論が存在する場合、正しいデータを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_discussions.return_value = [sample_discussion]
+        mock_manager.get_discussion_history.return_value = [sample_discussion]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/discussions")
@@ -178,7 +178,7 @@ class TestDiscussionsAPIEndpoint:
     def test_list_discussions_error_handling(self, mock_get_manager, client):
         """エラー発生時に500エラーを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_discussions.side_effect = Exception("Database error")
+        mock_manager.get_discussion_history.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/discussions")
