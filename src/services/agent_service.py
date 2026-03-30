@@ -361,7 +361,7 @@ class FacilitatorAgent:
                     "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
                     "- 議論を通じて明らかになった主要な結論\n"
                     "- 参加者間で合意に至った点と残った対立点\n"
-                    "- 商品企画やマーケティング戦略への具体的な示唆\n"
+                    "- 議論テーマの目的に対する具体的な示唆\n"
                     "5-7文で最終まとめを作成してください。"
                 )
 
@@ -398,6 +398,7 @@ class FacilitatorAgent:
         current = self.current_round
         total = self.rounds
         persona_id = persona_agent.get_persona_id()
+        is_first_round = current == 1
 
         if not context and not round_summaries:
             # ラウンド1・最初の発言
@@ -447,10 +448,11 @@ class FacilitatorAgent:
                     parts.append("")
 
             # ラウンドフェーズ別の指示
-            if current <= total * 0.3:
+            if is_first_round:
                 parts.append(
-                    "このラウンドでは、他の参加者の意見に対してあなたが同意できる点・できない点を"
-                    "率直に述べてください。「なぜそう思うのか」を具体的な経験に基づいて説明してください。"
+                    "このラウンドでは、まずあなた自身の体験を共有してください。"
+                    "このテーマに関連する日常の具体的な場面を挙げて、そこで感じたこと・困ったことを話し、"
+                    "他の参加者の体験も踏まえて意見を述べてください。"
                 )
             elif current < total:
                 parts.append(

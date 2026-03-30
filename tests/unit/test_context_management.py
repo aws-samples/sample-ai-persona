@@ -170,15 +170,15 @@ class TestFacilitatorPromptWithSummaries:
         assert "佐藤" in prompt
 
     def test_early_round_phase_instruction(self):
-        """序盤ラウンド: 率直な意見・同意/不同意を促す指示"""
+        """ラウンド1: 自分の体験を共有する指示"""
         self.facilitator.current_round = 1
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"), get_persona_id=Mock(return_value="p1"))
         summaries = ["ラウンド1の要約"]
-        recent = [Message.create_new("p1", "佐藤", "意見です")]
+        recent = [Message.create_new("p2", "佐藤", "意見です")]
         prompt = self.facilitator.create_prompt_for_persona(
             persona_agent, "テーマ", recent, round_summaries=summaries
         )
-        assert "同意" in prompt or "率直" in prompt
+        assert "体験" in prompt
 
     def test_mid_round_phase_instruction(self):
         """中盤ラウンド: 考えの変化・新たな観点を促す指示"""
