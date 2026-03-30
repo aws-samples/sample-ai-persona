@@ -7,6 +7,7 @@ SPEC: 20260330-1606_agent-discussion-context-management
 from datetime import datetime
 from unittest.mock import Mock, patch
 
+from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.models.message import Message
 from src.models.persona import Persona
 from src.services.agent_service import FacilitatorAgent, PersonaAgent
@@ -201,3 +202,165 @@ class TestSummarizeRoundImproved:
         prompt = call_args[0][0] if call_args[0] else call_args[1].get("prompt", "")
         assert "共通点" in prompt or "対立点" in prompt
         assert "深掘り" in prompt or "論点" in prompt
+
+
+class TestAgentDiscussionContextManagement:
+    """AgentDiscussionManager のコンテキスト管理テスト
+
+    SPEC: 20260330-1606_agent-discussion-context-management
+    """
+
+    def _setup_manager_and_mocks(self, sample_persona, sample_persona_2, rounds=2):
+        """共通セットアップ"""
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+
+        manager = AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+        # ペルソナエージェント（messages属性をリストで持つ）
+        mock_agent_1 = Mock(spec=PersonaAgent)
+        mock_agent_1.get_persona_id.return_value = sample_persona.id
+        mock_agent_1.get_persona_name.return_value = sample_persona.name
+        mock_agent_1.respond.return_value = "テスト応答1"
+        mock_agent_1.clear_conversation_history = Mock()
+
+        mock_agent_2 = Mock(spec=PersonaAgent)
+        mock_agent_2.get_persona_id.return_value = sample_persona_2.id
+        mock_agent_2.get_persona_name.return_value = sample_persona_2.name
+        mock_agent_2.respond.return_value = "テスト応答2"
+        mock_agent_2.clear_conversation_history = Mock()
+
+        persona_agents = [mock_agent_1, mock_agent_2]
+
+        # ファシリテータ
+        mock_facilitator = Mock(spec=FacilitatorAgent)
+        # should_continue: True for each round, then False
+        mock_facilitator.should_continue.side_effect = [True] * rounds + [False]
+        mock_facilitator.start_discussion.return_value = "議論を開始します"
+        # select_next_speaker: each round has 2 speakers + None
+        speaker_sequence = []
+        for _ in range(rounds):
+            speaker_sequence.extend([mock_agent_1, mock_agent_2, None])
+        mock_facilitator.select_next_speaker.side_effect = speaker_sequence
+        mock_facilitator.summarize_round.return_value = "ラウンドの要約"
+        mock_facilitator.increment_round.return_value = None
+        mock_facilitator.current_round = 0
+        mock_facilitator.rounds = rounds
+        mock_facilitator.additional_instructions = ""
+        mock_facilitator.clear_conversation_history = Mock()
+
+        # increment_round で current_round を更新
+        def _increment():
+            mock_facilitator.current_round += 1
+        mock_facilitator.increment_round.side_effect = _increment
+
+        return manager, persona_agents, mock_facilitator
+
+    def test_history_cleared_between_rounds(self, sample_persona, sample_persona_2):
+        """ラウンド2以降で会話履歴がクリアされること"""
+        manager, persona_agents, facilitator = self._setup_manager_and_mocks(
+            sample_persona, sample_persona_2, rounds=2
+        )
+
+        manager.start_agent_discussion(
+            personas=[sample_persona, sample_persona_2],
+            topic="テストトピック",
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+        )
+
+        # ラウンド2開始時にクリアが呼ばれること
+        for agent in persona_agents:
+            agent.clear_conversation_history.assert_called_once()
+        facilitator.clear_conversation_history.assert_called_once()
+
+    def test_history_not_cleared_in_round_1(self, sample_persona, sample_persona_2):
+        """ラウンド1ではクリアされないこと"""
+        manager, persona_agents, facilitator = self._setup_manager_and_mocks(
+            sample_persona, sample_persona_2, rounds=1
+        )
+
+        manager.start_agent_discussion(
+            personas=[sample_persona, sample_persona_2],
+            topic="テストトピック",
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+        )
+
+        for agent in persona_agents:
+            agent.clear_conversation_history.assert_not_called()
+        facilitator.clear_conversation_history.assert_not_called()
+
+    def test_round_summaries_passed_to_prompt(self, sample_persona, sample_persona_2):
+        """ラウンド要約がプロンプト生成に渡されること"""
+        manager, persona_agents, facilitator = self._setup_manager_and_mocks(
+            sample_persona, sample_persona_2, rounds=2
+        )
+
+        manager.start_agent_discussion(
+            personas=[sample_persona, sample_persona_2],
+            topic="テストトピック",
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+        )
+
+        # ラウンド2のcreate_prompt_for_persona呼び出しを確認
+        calls = facilitator.create_prompt_for_persona.call_args_list
+        # ラウンド2の呼び出し（3番目以降）にround_summariesが渡されていること
+        round2_calls = calls[2:]  # ラウンド1: 2回、ラウンド2: 2回
+        for call in round2_calls:
+            kwargs = call[1] if call[1] else {}
+            assert "round_summaries" in kwargs
+            assert kwargs["round_summaries"] == ["ラウンドの要約"]
+
+    def test_respond_called_with_none_context(self, sample_persona, sample_persona_2):
+        """respond()がcontext=Noneで呼ばれること（二重コンテキスト防止）"""
+        manager, persona_agents, facilitator = self._setup_manager_and_mocks(
+            sample_persona, sample_persona_2, rounds=1
+        )
+
+        manager.start_agent_discussion(
+            personas=[sample_persona, sample_persona_2],
+            topic="テストトピック",
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+        )
+
+        # 全てのrespond呼び出しでcontext=Noneであること
+        for agent in persona_agents:
+            for call in agent.respond.call_args_list:
+                args = call[0]
+                context_arg = args[1] if len(args) > 1 else call[1].get("context")
+                assert context_arg is None
+
+    def test_streaming_history_cleared_between_rounds(
+        self, sample_persona, sample_persona_2
+    ):
+        """ストリーミング版でもラウンド間で履歴がクリアされること"""
+        manager, persona_agents, facilitator = self._setup_manager_and_mocks(
+            sample_persona, sample_persona_2, rounds=2
+        )
+
+        # ストリーミング版はジェネレータなので全て消費する
+        results = list(
+            manager.start_agent_discussion_streaming(
+                personas=[sample_persona, sample_persona_2],
+                topic="テストトピック",
+                persona_agents=persona_agents,
+                facilitator=facilitator,
+            )
+        )
+
+        # ラウンド2開始時にクリアが呼ばれること
+        for agent in persona_agents:
+            agent.clear_conversation_history.assert_called_once()
+        facilitator.clear_conversation_history.assert_called_once()
+
+        # 結果にメッセージとcompleteが含まれること
+        message_results = [r for r in results if r[0] == "message"]
+        complete_results = [r for r in results if r[0] == "complete"]
+        assert len(message_results) > 0
+        assert len(complete_results) == 1
