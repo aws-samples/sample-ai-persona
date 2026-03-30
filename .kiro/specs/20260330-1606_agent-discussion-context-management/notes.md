@@ -26,3 +26,11 @@ Guidelines:
 
 ---
 **Created**: 2026-03-30
+
+### [2026-03-30 16:30] 実装完了
+- Step 1: `clear_conversation_history()` を PersonaAgent / FacilitatorAgent に追加。`agent.messages` は通常のPython listなので `clear()` で安全にリセット可能。
+- Step 2: `create_prompt_for_persona()` に `round_summaries` パラメータ追加。要約 + 直近3件（ファシリテータ含む）のプロンプト構成。`summarize_round()` に構造的な要約指示を追加。
+- Step 3: `_build_prompt_with_context()` を簡素化。コンテキストは `create_prompt_for_persona()` で構築済みのため、二重付加を防止。
+- Step 4: `start_agent_discussion()` / `start_agent_discussion_streaming()` のラウンドループに `round_summaries` 蓄積 + ラウンド間リセットを適用。
+- テスト: 19テスト新規作成、既存606テスト含め625テスト全パス。
+- 発見: ストリーミング版と非ストリーミング版でほぼ同一のラウンドループコードが重複している。将来的にリファクタリングの余地あり。
