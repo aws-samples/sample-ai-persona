@@ -195,6 +195,12 @@ class PersonaAgent:
 
         return f"これまでの議論:\n{context_text}\n\n{prompt}"
 
+    def clear_conversation_history(self) -> None:
+        """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
+        if self.agent and hasattr(self.agent, "messages"):
+            self.agent.messages.clear()
+            self.logger.info(f"ペルソナ {self.persona.name} の会話履歴をクリアしました")
+
     def get_persona_id(self) -> str:
         """ペルソナIDを取得"""
         return self.persona.id
@@ -394,6 +400,12 @@ class FacilitatorAgent:
         """ラウンドをインクリメント"""
         self.current_round += 1
         self.logger.info(f"ラウンド {self.current_round}/{self.rounds} に進みました")
+
+    def clear_conversation_history(self) -> None:
+        """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
+        if self.agent and hasattr(self.agent, "messages"):
+            self.agent.messages.clear()
+            self.logger.info("ファシリテータの会話履歴をクリアしました")
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """
