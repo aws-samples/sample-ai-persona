@@ -96,6 +96,7 @@ class TestFacilitatorPromptWithSummaries:
 
     def test_first_round_no_summaries(self):
         """ラウンド1: 要約なし、コンテキストなし"""
+        self.facilitator.current_round = 1
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         prompt = self.facilitator.create_prompt_for_persona(
             persona_agent, "新商品について", []
@@ -105,6 +106,7 @@ class TestFacilitatorPromptWithSummaries:
 
     def test_with_round_summaries(self):
         """ラウンド2以降: 要約コンテキストが含まれること"""
+        self.facilitator.current_round = 3
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         summaries = [
             "ラウンド1では価格と品質のトレードオフが議論された",
@@ -124,7 +126,8 @@ class TestFacilitatorPromptWithSummaries:
         assert "鈴木" in prompt
 
     def test_with_summaries_no_recent(self):
-        """要約ありだが直近発言なし（ラウンド最初の発言者で前ラウンドの発言がない場合）"""
+        """要約ありだが直近発言なし"""
+        self.facilitator.current_round = 2
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         summaries = ["ラウンド1の要約内容"]
         prompt = self.facilitator.create_prompt_for_persona(
@@ -135,6 +138,7 @@ class TestFacilitatorPromptWithSummaries:
 
     def test_recent_messages_include_facilitator(self):
         """直近発言にファシリテータの要約が含まれること"""
+        self.facilitator.current_round = 2
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         summaries = ["ラウンド1の要約"]
         recent = [
@@ -150,6 +154,7 @@ class TestFacilitatorPromptWithSummaries:
 
     def test_backward_compatibility_no_summaries_param(self):
         """round_summaries未指定でも動作すること（後方互換性）"""
+        self.facilitator.current_round = 2
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         recent = [Message.create_new("p1", "佐藤", "意見です")]
         prompt = self.facilitator.create_prompt_for_persona(
@@ -157,6 +162,39 @@ class TestFacilitatorPromptWithSummaries:
         )
         assert "テーマ" in prompt
         assert "佐藤" in prompt
+
+    def test_early_round_phase_instruction(self):
+        """序盤ラウンド: 率直な意見・同意/不同意を促す指示"""
+        self.facilitator.current_round = 1
+        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        summaries = ["ラウンド1の要約"]
+        recent = [Message.create_new("p1", "佐藤", "意見です")]
+        prompt = self.facilitator.create_prompt_for_persona(
+            persona_agent, "テーマ", recent, round_summaries=summaries
+        )
+        assert "同意" in prompt or "率直" in prompt
+
+    def test_mid_round_phase_instruction(self):
+        """中盤ラウンド: 考えの変化・新たな観点を促す指示"""
+        self.facilitator.current_round = 3
+        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        summaries = ["要約1", "要約2"]
+        recent = [Message.create_new("p1", "佐藤", "意見です")]
+        prompt = self.facilitator.create_prompt_for_persona(
+            persona_agent, "テーマ", recent, round_summaries=summaries
+        )
+        assert "変化" in prompt or "気づ" in prompt
+
+    def test_final_round_phase_instruction(self):
+        """最終ラウンド: 結論を促す指示"""
+        self.facilitator.current_round = 5
+        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        summaries = ["要約1", "要約2", "要約3", "要約4"]
+        recent = [Message.create_new("p1", "佐藤", "意見です")]
+        prompt = self.facilitator.create_prompt_for_persona(
+            persona_agent, "テーマ", recent, round_summaries=summaries
+        )
+        assert "最終" in prompt or "結論" in prompt
 
 
 class TestPersonaAgentBuildPrompt:
@@ -200,7 +238,7 @@ class TestSummarizeRoundImproved:
         call_args = self.mock_agent.call_args
         prompt = call_args[0][0] if call_args[0] else call_args[1].get("prompt", "")
         assert "共通点" in prompt or "対立点" in prompt
-        assert "深掘り" in prompt or "論点" in prompt
+        assert "問い" in prompt
 
     def test_summarize_round_with_previous_summaries(self):
         """過去の要約が含まれること"""
