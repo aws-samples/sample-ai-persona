@@ -449,7 +449,7 @@
             <textarea name="topic"
                       x-model="topic"
                       rows="3"
-                      placeholder="例: 新しいスマートフォンアプリの機能について、どのような要素が最も重要だと思いますか？"
+                      placeholder="例: サブスクリプション型フィットネスアプリの価格設定について。20-30代の働く女性が継続利用したくなる価格帯と機能の組み合わせを探りたい。"
                       :required="mode !== 'interview'"
                       :disabled="mode === 'interview'"
                       :class="mode === 'interview' ? 
@@ -458,7 +458,7 @@
             <p class="text-sm mt-2 mb-6" 
                :class="mode === 'interview' ? 'text-gray-400' : 'text-gray-500'">
                 <span x-show="mode === 'interview'">インタビューモードでは、リアルタイムでペルソナと対話します。</span>
-                <span x-show="mode !== 'interview'">具体的で明確な質問にすると、より深い議論が生まれます。</span>
+                <span x-show="mode !== 'interview'">テーマに加えて「何のために議論するか」の目的も書くと、より深い議論が生まれます。</span>
             </p>
             
             <!-- ドキュメントアップロード（議論モードのみ） -->
