@@ -331,7 +331,7 @@ class FacilitatorAgent:
             )
 
             # プロンプト構築
-            parts = [f"議論テーマ「{topic}」のラウンド{round_number}が完了しました。\n"]
+            parts = [f"議論テーマ「{topic}」のラウンド{round_number}/{self.rounds}が完了しました。\n"]
 
             # 過去ラウンドの要約を含める
             if previous_summaries:
@@ -343,14 +343,27 @@ class FacilitatorAgent:
             parts.append(f"## ラウンド{round_number}の発言")
             parts.append(statements_text)
             parts.append("")
-            parts.append(
-                "以下の観点で簡潔に要約してください:\n"
-                "- 各参加者の主要な意見や立場\n"
-                "- 参加者間の共通点や対立点\n"
-                "- まだ掘り下げられていない重要な観点\n"
-                "- 次のラウンドで各参加者に答えてほしい具体的な問い（1-2個）\n"
-                "3-5文で要約し、最後に問いかけで締めてください。"
-            )
+
+            if round_number < self.rounds:
+                parts.append(
+                    "以下の観点で簡潔に要約してください:\n"
+                    "- 各参加者の主要な意見や立場\n"
+                    "- 参加者間の共通点や対立点\n"
+                    "- まだ掘り下げられていない重要な観点\n"
+                    "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                    f"残り{self.rounds - round_number}ラウンドです。"
+                )
+                if self.rounds - round_number <= 2:
+                    parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
+                parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+            else:
+                parts.append(
+                    "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
+                    "- 議論を通じて明らかになった主要な結論\n"
+                    "- 参加者間で合意に至った点と残った対立点\n"
+                    "- 商品企画やマーケティング戦略への具体的な示唆\n"
+                    "5-7文で最終まとめを作成してください。"
+                )
 
             prompt = "\n".join(parts)
 
