@@ -404,7 +404,7 @@ class FacilitatorAgent:
                 recent_messages = context[-3:] if len(context) > 3 else context
                 parts.append("## 直近の発言")
                 for msg in recent_messages:
-                    parts.append(f"- {msg.persona_name}: {msg.content[:200]}")
+                    parts.append(f"- {msg.persona_name}: {msg.content}")
                 parts.append("")
 
             # ラウンドフェーズ別の指示
