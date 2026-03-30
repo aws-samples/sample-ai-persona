@@ -137,7 +137,7 @@ class TestFacilitatorPromptWithSummaries:
         assert "直近の発言" not in prompt
 
     def test_recent_messages_include_facilitator(self):
-        """直近発言にファシリテータの要約が含まれること"""
+        """ファシリテータの要約が専用セクションで表示されること"""
         self.facilitator.current_round = 2
         persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
         summaries = ["ラウンド1の要約"]
@@ -147,10 +147,15 @@ class TestFacilitatorPromptWithSummaries:
             Message.create_new("p2", "鈴木", "賛成です", message_type="statement"),
         ]
         prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent, round_summaries=summaries
+            persona_agent, "テーマ", recent, round_summaries=summaries,
+            latest_facilitator_message="論点整理: 次は価格について",
         )
-        assert "ファシリテータ" in prompt
+        # ファシリテータの問いかけが専用セクションに表示される
+        assert "ファシリテータからの問いかけ" in prompt
         assert "論点整理" in prompt
+        # 直近発言にはペルソナの発言のみ
+        assert "佐藤" in prompt
+        assert "鈴木" in prompt
 
     def test_backward_compatibility_no_summaries_param(self):
         """round_summaries未指定でも動作すること（後方互換性）"""

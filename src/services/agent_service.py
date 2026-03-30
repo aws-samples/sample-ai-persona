@@ -367,6 +367,7 @@ class FacilitatorAgent:
     def create_prompt_for_persona(
         self, persona_agent: PersonaAgent, topic: str, context: List[Message],
         round_summaries: List[str] | None = None,
+        latest_facilitator_message: str | None = None,
     ) -> str:
         """
         ペルソナエージェントへの発言促進プロンプトを生成
@@ -376,6 +377,7 @@ class FacilitatorAgent:
             topic: 議論テーマ
             context: 直近の発言メッセージ（all_messages[-3:]）
             round_summaries: 各ラウンドの要約リスト
+            latest_facilitator_message: ファシリテータの最新要約（問いかけ含む）
 
         Returns:
             str: 発言促進プロンプト
@@ -399,13 +401,22 @@ class FacilitatorAgent:
                     parts.append(f"ラウンド{i}: {summary}")
                 parts.append("")
 
-            # 直近の生発言
-            if context:
-                recent_messages = context[-3:] if len(context) > 3 else context
-                parts.append("## 直近の発言")
-                for msg in recent_messages:
-                    parts.append(f"- {msg.persona_name}: {msg.content}")
+            # ファシリテータからの問いかけ（常に表示）
+            if latest_facilitator_message:
+                parts.append("## ファシリテータからの問いかけ")
+                parts.append(latest_facilitator_message)
                 parts.append("")
+
+            # 直近の生発言（ファシリテータ以外）
+            if context:
+                recent_statements = [
+                    msg for msg in context if msg.persona_id != "facilitator"
+                ][-3:]
+                if recent_statements:
+                    parts.append("## 直近の発言")
+                    for msg in recent_statements:
+                        parts.append(f"- {msg.persona_name}: {msg.content}")
+                    parts.append("")
 
             # ラウンドフェーズ別の指示
             if current <= total * 0.3:
@@ -423,6 +434,9 @@ class FacilitatorAgent:
                     "最終ラウンドです。これまでの議論を踏まえて、あなたが最も重要だと感じたポイントと、"
                     "具体的にどうすべきかについて、あなたの立場から結論を述べてください。"
                 )
+
+            if latest_facilitator_message:
+                parts.append("\nファシリテータの問いかけにも必ず触れてください。")
 
             prompt = "\n".join(parts)
 

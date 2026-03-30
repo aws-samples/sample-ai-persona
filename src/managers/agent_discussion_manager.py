@@ -477,6 +477,7 @@ class AgentDiscussionManager:
                     prompt = facilitator.create_prompt_for_persona(
                         speaker, topic, all_messages[-3:],
                         round_summaries=round_summaries if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
 
                     # Get persona's response (context=None, already in prompt)
@@ -934,6 +935,7 @@ class AgentDiscussionManager:
                     prompt = facilitator.create_prompt_for_persona(
                         speaker, topic, all_messages[-3:],
                         round_summaries=round_summaries if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
 
                     # Get persona's response (context=None, already in prompt)
