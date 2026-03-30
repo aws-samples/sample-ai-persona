@@ -296,7 +296,8 @@ class FacilitatorAgent:
         return selected_agent
 
     def summarize_round(
-        self, round_number: int, round_messages: List[Message], topic: str
+        self, round_number: int, round_messages: List[Message], topic: str,
+        previous_summaries: List[str] | None = None,
     ) -> str:
         """
         ラウンドの議論を要約
@@ -305,6 +306,7 @@ class FacilitatorAgent:
             round_number: ラウンド番号
             round_messages: そのラウンドのメッセージリスト
             topic: 議論トピック
+            previous_summaries: 過去ラウンドの要約リスト
 
         Returns:
             str: ラウンドの要約
@@ -328,21 +330,31 @@ class FacilitatorAgent:
                 [f"- {msg.persona_name}: {msg.content}" for msg in statements]
             )
 
-            prompt = (
-                f"議論テーマ「{topic}」のラウンド{round_number}が完了しました。\n\n"
-                f"このラウンドの発言:\n{statements_text}\n\n"
-                f"以下の観点で簡潔に要約してください:\n"
-                f"- 各参加者の主要な意見や立場\n"
-                f"- 参加者間の共通点や対立点\n"
-                f"- 新たに出た視点や気づき\n"
-                f"- 次のラウンドで深掘りすべき論点\n"
-                f"3-5文で要約してください。"
+            # プロンプト構築
+            parts = [f"議論テーマ「{topic}」のラウンド{round_number}が完了しました。\n"]
+
+            # 過去ラウンドの要約を含める
+            if previous_summaries:
+                parts.append("## これまでの議論の流れ")
+                for i, summary in enumerate(previous_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+            parts.append(f"## ラウンド{round_number}の発言")
+            parts.append(statements_text)
+            parts.append("")
+            parts.append(
+                "以下の観点で簡潔に要約してください:\n"
+                "- 各参加者の主要な意見や立場\n"
+                "- 参加者間の共通点や対立点\n"
+                "- 新たに出た視点や気づき\n"
+                "- 次のラウンドで深掘りすべき論点\n"
+                "3-5文で要約してください。"
             )
 
-            # エージェントに要約を生成させる（Strands Agent SDKの正しいAPI）
-            result = self.agent(prompt)
+            prompt = "\n".join(parts)
 
-            # AgentResultからテキストコンテンツを正しく抽出
+            result = self.agent(prompt)
             summary = self._extract_text_from_result(result, self.agent)
             self.logger.info(f"ラウンド{round_number}の議論を要約しました")
             return summary

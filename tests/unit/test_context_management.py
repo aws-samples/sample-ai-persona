@@ -197,11 +197,37 @@ class TestSummarizeRoundImproved:
         ]
         self.facilitator.summarize_round(1, messages, "新商品")
 
-        # エージェントに渡されたプロンプトを検証
         call_args = self.mock_agent.call_args
         prompt = call_args[0][0] if call_args[0] else call_args[1].get("prompt", "")
         assert "共通点" in prompt or "対立点" in prompt
         assert "深掘り" in prompt or "論点" in prompt
+
+    def test_summarize_round_with_previous_summaries(self):
+        """過去の要約が含まれること"""
+        self.mock_agent.return_value = "ラウンド2の要約"
+        messages = [
+            Message.create_new("p1", "田中", "具体的な価格帯は...", message_type="statement"),
+        ]
+        prev = ["ラウンド1では価格vs品質が論点になった"]
+        self.facilitator.summarize_round(2, messages, "新商品", previous_summaries=prev)
+
+        call_args = self.mock_agent.call_args
+        prompt = call_args[0][0]
+        assert "これまでの議論の流れ" in prompt
+        assert "ラウンド1" in prompt
+        assert "価格vs品質" in prompt
+
+    def test_summarize_round_without_previous_summaries(self):
+        """ラウンド1では過去要約セクションが含まれないこと"""
+        self.mock_agent.return_value = "ラウンド1の要約"
+        messages = [
+            Message.create_new("p1", "田中", "意見です", message_type="statement"),
+        ]
+        self.facilitator.summarize_round(1, messages, "新商品")
+
+        call_args = self.mock_agent.call_args
+        prompt = call_args[0][0]
+        assert "これまでの議論の流れ" not in prompt
 
 
 class TestAgentDiscussionContextManagement:

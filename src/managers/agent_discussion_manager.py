@@ -512,7 +512,8 @@ class AgentDiscussionManager:
                 if round_messages:
                     try:
                         round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic
+                            current_round, round_messages, topic,
+                            previous_summaries=round_summaries if round_summaries else None,
                         )
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
@@ -971,7 +972,8 @@ class AgentDiscussionManager:
                 if round_messages:
                     try:
                         round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic
+                            current_round, round_messages, topic,
+                            previous_summaries=round_summaries if round_summaries else None,
                         )
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
