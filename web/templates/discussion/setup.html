@@ -220,11 +220,15 @@
                       url += `&document_ids=${encodeURIComponent(docIds)}`;
                   }
                   const eventSource = new EventSource(url);
+                  let discussionComplete = false;
                   
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
                       
-                      if (data.type === 'participants') {
+                      if (data.type === 'keepalive') {
+                          // keep-alive: 何もしない（接続維持のみ）
+                          return;
+                      } else if (data.type === 'participants') {
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
@@ -284,6 +288,7 @@
                           container.scrollTop = container.scrollHeight;
                           
                       } else if (data.type === 'complete') {
+                          discussionComplete = true;
                           eventSource.close();
                           // 従来の議論完了画面を取得して表示
                           loading.innerHTML = `
@@ -311,14 +316,21 @@
                                   `;
                               });
                       } else if (data.type === 'error') {
+                          discussionComplete = true;
                           eventSource.close();
                           loading.innerHTML = `<p class='text-red-600'>エラー: ${data.message}</p>`;
                       }
                   };
                   
                   eventSource.onerror = function() {
-                      eventSource.close();
-                      loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                      if (discussionComplete) {
+                          return; // 正常完了後の切断は無視
+                      }
+                      // EventSource.CONNECTING(0) = ブラウザが自動再接続中 → 待つ
+                      // EventSource.CLOSED(2) = 再接続不可 → エラー表示
+                      if (eventSource.readyState === EventSource.CLOSED) {
+                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                      }
                   };
               }
           }">

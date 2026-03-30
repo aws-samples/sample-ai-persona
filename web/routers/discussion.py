@@ -458,12 +458,16 @@ async def stream_discussion(
             # 別スレッドで同期ジェネレータを実行
             executor.submit(run_sync_generator)
 
-            # キューからイベントを取り出して順次yield
+            # キューからイベントを取り出して順次yield（keep-alive付き）
             while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                yield event
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    if event is None:
+                        break
+                    yield event
+                except asyncio.TimeoutError:
+                    # 15秒間データがなければkeep-aliveを送信
+                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             event_generator(),
