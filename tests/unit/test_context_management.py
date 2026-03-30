@@ -95,13 +95,14 @@ class TestFacilitatorPromptWithSummaries:
         self.facilitator = FacilitatorAgent(5, "", self.mock_agent)
 
     def test_first_round_no_summaries(self):
-        """ラウンド1: 要約なし、コンテキストなし"""
+        """ラウンド1: 具体的なエピソードを引き出す問いかけ"""
         self.facilitator.current_round = 1
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"), get_persona_id=Mock(return_value="p1"))
         prompt = self.facilitator.create_prompt_for_persona(
             persona_agent, "新商品について", []
         )
         assert "新商品について" in prompt
+        assert "具体的な場面" in prompt or "エピソード" in prompt
         assert "これまでの議論の要約" not in prompt
 
     def test_with_round_summaries(self):

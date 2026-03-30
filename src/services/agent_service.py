@@ -397,22 +397,26 @@ class FacilitatorAgent:
         """
         current = self.current_round
         total = self.rounds
+        persona_id = persona_agent.get_persona_id()
 
         if not context and not round_summaries:
             # ラウンド1・最初の発言
             prompt = (
-                f"議論テーマ「{topic}」について、あなたの立場から率直に意見を述べてください。\n"
-                f"あなたの実体験や生活実感に基づいて、具体的なエピソードを交えて話してください。"
+                f"議論テーマ「{topic}」について話し合います。\n\n"
+                f"まず、あなたの日常生活の中でこのテーマに関連する具体的な場面を一つ挙げて、"
+                f"そこで感じたこと・困ったこと・考えたことを話してください。"
             )
         else:
             parts = [f"「{topic}」についての議論を続けてください。\n"]
 
-            # 要約コンテキスト
+            # 要約コンテキスト（最新の要約は「問いかけ」セクションで表示するため除外）
             if round_summaries:
-                parts.append("## これまでの議論の要約")
-                for i, summary in enumerate(round_summaries, 1):
-                    parts.append(f"ラウンド{i}: {summary}")
-                parts.append("")
+                past_summaries = round_summaries[:-1] if latest_facilitator_message else round_summaries
+                if past_summaries:
+                    parts.append("## これまでの議論の要約")
+                    for i, summary in enumerate(past_summaries, 1):
+                        parts.append(f"ラウンド{i}: {summary}")
+                    parts.append("")
 
             # ファシリテータからの問いかけ（常に表示）
             if latest_facilitator_message:
@@ -420,14 +424,25 @@ class FacilitatorAgent:
                 parts.append(latest_facilitator_message)
                 parts.append("")
 
-            # 直近の生発言（ファシリテータ以外）
+            # 自分の前回発言（一貫性のため）
             if context:
-                recent_statements = [
-                    msg for msg in context if msg.persona_id != "facilitator"
+                own_previous = [
+                    msg for msg in context if msg.persona_id == persona_id
+                ]
+                if own_previous:
+                    parts.append("## あなたの前回の発言")
+                    parts.append(own_previous[-1].content)
+                    parts.append("")
+
+            # 直近の他ペルソナの発言
+            if context:
+                recent_others = [
+                    msg for msg in context
+                    if msg.persona_id != "facilitator" and msg.persona_id != persona_id
                 ][-3:]
-                if recent_statements:
-                    parts.append("## 直近の発言")
-                    for msg in recent_statements:
+                if recent_others:
+                    parts.append("## 直近の他の参加者の発言")
+                    for msg in recent_others:
                         parts.append(f"- {msg.persona_name}: {msg.content}")
                     parts.append("")
 
@@ -449,7 +464,7 @@ class FacilitatorAgent:
                 )
 
             if latest_facilitator_message:
-                parts.append("\nファシリテータの問いかけにも必ず触れてください。")
+                parts.append("\nファシリテータの問いかけの観点にも着目してください。")
 
             prompt = "\n".join(parts)
 
@@ -869,6 +884,10 @@ class AgentService:
 
 # 目標・願望
 {chr(10).join(f"- {goal}" for goal in persona_dict["goals"])}
+
+# この議論の目的
+この議論は、商品企画やマーケティング戦略に活用するためのリアルな消費者の声を集めることを目的としています。
+あなたの率直な意見、本音、具体的な生活体験が、より良い商品やサービスの開発につながります。
 
 # 議論での振る舞い
 - あなたの立場から率直に意見を述べてください。同意できない点は遠慮なく指摘してください

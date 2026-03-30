@@ -474,8 +474,9 @@ class AgentDiscussionManager:
                         break
 
                     # Create prompt with round summaries + recent messages
+                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages[-3:],
+                        speaker, topic, all_messages[-10:],
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
@@ -932,8 +933,9 @@ class AgentDiscussionManager:
                         break
 
                     # Create prompt with round summaries + recent messages
+                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages[-3:],
+                        speaker, topic, all_messages[-10:],
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
