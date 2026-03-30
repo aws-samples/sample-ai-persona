@@ -5,7 +5,7 @@ SPEC: 20260330-1606_agent-discussion-context-management
 """
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.models.message import Message
