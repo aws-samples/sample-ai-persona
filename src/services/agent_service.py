@@ -339,6 +339,12 @@ class FacilitatorAgent:
             prompt = (
                 f"議論テーマ「{topic}」のラウンド{round_number}が完了しました。\n\n"
                 f"このラウンドの発言:\n{statements_text}\n\n"
+                f"以下の観点で簡潔に要約してください:\n"
+                f"- 各参加者の主要な意見や立場\n"
+                f"- 参加者間の共通点や対立点\n"
+                f"- 新たに出た視点や気づき\n"
+                f"- 次のラウンドで深掘りすべき論点\n"
+                f"3-5文で要約してください。"
             )
 
             # エージェントに要約を生成させる（Strands Agent SDKの正しいAPI）
@@ -355,7 +361,8 @@ class FacilitatorAgent:
             raise AgentCommunicationError(error_msg)
 
     def create_prompt_for_persona(
-        self, persona_agent: PersonaAgent, topic: str, context: List[Message]
+        self, persona_agent: PersonaAgent, topic: str, context: List[Message],
+        round_summaries: List[str] | None = None,
     ) -> str:
         """
         ペルソナエージェントへの発言促進プロンプトを生成
@@ -363,32 +370,40 @@ class FacilitatorAgent:
         Args:
             persona_agent: 対象ペルソナエージェント
             topic: 議論テーマ
-            context: これまでの議論コンテキスト
+            context: 直近の発言メッセージ（all_messages[-3:]）
+            round_summaries: 各ラウンドの要約リスト
 
         Returns:
             str: 発言促進プロンプト
         """
-        if not context:
+        if not context and not round_summaries:
             # 最初の発言
             prompt = (
                 f"議論テーマ「{topic}」について、あなたの視点から意見を述べてください。\n"
                 f"あなたの価値観、背景、課題、目標を踏まえて、具体的に発言してください。"
             )
         else:
-            # 他のペルソナの発言を受けての発言
-            recent_messages = context[-3:] if len(context) > 3 else context
-            context_summary = "\n".join(
-                [
-                    f"- {msg.persona_name}: {msg.content[:100]}..."
-                    for msg in recent_messages
-                ]
-            )
+            parts = [f"これまでの議論を踏まえて、「{topic}」について意見を述べてください。\n"]
 
-            prompt = (
-                f"これまでの議論を踏まえて、「{topic}」について意見を述べてください。\n\n"
-                f"最近の発言:\n{context_summary}\n\n"
-                f"他の参加者の意見に対する反応や、自分自身の価値観や考え方に基づいた視点を提供してください。"
+            # 要約コンテキスト
+            if round_summaries:
+                parts.append("## これまでの議論の要約")
+                for i, summary in enumerate(round_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+            # 直近の生発言
+            if context:
+                recent_messages = context[-3:] if len(context) > 3 else context
+                parts.append("## 直近の発言")
+                for msg in recent_messages:
+                    parts.append(f"- {msg.persona_name}: {msg.content[:200]}")
+                parts.append("")
+
+            parts.append(
+                "他の参加者の意見に対する反応や、自分自身の価値観や考え方に基づいた視点を提供してください。"
             )
+            prompt = "\n".join(parts)
 
         return prompt
 
