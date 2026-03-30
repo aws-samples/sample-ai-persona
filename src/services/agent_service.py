@@ -175,25 +175,17 @@ class PersonaAgent:
         """
         コンテキストを含めたプロンプトを構築
 
+        コンテキストはFacilitatorAgent.create_prompt_for_persona()で構築済みのため、
+        二重付加を防止しpromptをそのまま返す。
+
         Args:
-            prompt: 基本プロンプト
-            context: 議論コンテキスト
+            prompt: 基本プロンプト（構築済み）
+            context: 議論コンテキスト（未使用、後方互換性のため残す）
 
         Returns:
-            str: 構築されたプロンプト
+            str: プロンプト（そのまま）
         """
-        if not context:
-            return prompt
-
-        # コンテキストを文字列化
-        context_text = "\n".join(
-            [
-                f"{msg.persona_name}: {msg.content}"
-                for msg in context[-5:]  # 最新5件のみ
-            ]
-        )
-
-        return f"これまでの議論:\n{context_text}\n\n{prompt}"
+        return prompt
 
     def clear_conversation_history(self) -> None:
         """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
