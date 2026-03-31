@@ -365,6 +365,12 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
         success = persona_manager.delete_persona(persona_id)
 
         if success:
+            referer = request.headers.get("hx-current-url", "")
+            if f"/persona/{persona_id}" in referer:
+                return HTMLResponse(
+                    content="",
+                    headers={"HX-Redirect": "/persona/management"},
+                )
             return templates.TemplateResponse(
                 "partials/success.html",
                 {"request": request, "message": "ペルソナを削除しました"},

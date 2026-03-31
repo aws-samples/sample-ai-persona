@@ -1192,8 +1192,8 @@ class SurveyService:
         self,
         bedrock_client: Any,
         job_arn: str,
-        poll_interval: int = 30,
-        max_wait: int = 10800,
+        poll_interval: int = 60,
+        max_wait: int = 18000,
     ) -> Optional[List[Dict[str, Any]]]:
         """バッチ推論ジョブの完了をポーリングする。"""
         elapsed = 0

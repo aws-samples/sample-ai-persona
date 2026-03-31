@@ -897,6 +897,12 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
         success = discussion_manager.delete_discussion(discussion_id)
 
         if success:
+            referer = request.headers.get("hx-current-url", "")
+            if f"/discussion/{discussion_id}" in referer:
+                return HTMLResponse(
+                    content="",
+                    headers={"HX-Redirect": "/discussion/results"},
+                )
             return templates.TemplateResponse(
                 "partials/success.html",
                 {"request": request, "message": "議論を削除しました"},
