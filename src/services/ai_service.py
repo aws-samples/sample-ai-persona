@@ -1184,11 +1184,12 @@ JSON:"""
         topic: str = "",
     ) -> str:
         """インサイト抽出用のプロンプトを作成"""
-        # ペルソナの発言とファシリテータの分析を分離
-        persona_statements = [
+        # ペルソナの最終ラウンド発言とファシリテータの要約を分離
+        max_round = max((msg.round_number or 0) for msg in messages)
+        persona_final_statements = [
             f"**{msg.persona_name}**: {msg.content}"
             for msg in messages
-            if msg.persona_id != "facilitator"
+            if msg.persona_id != "facilitator" and msg.round_number == max_round
         ]
         facilitator_summaries = [
             f"ラウンド{msg.round_number}: {msg.content}"
@@ -1196,7 +1197,7 @@ JSON:"""
             if msg.persona_id == "facilitator"
         ]
 
-        persona_text = "\n".join(persona_statements)
+        persona_text = "\n".join(persona_final_statements)
         facilitator_text = "\n".join(facilitator_summaries) if facilitator_summaries else ""
 
         # カテゴリーがNoneの場合はデフォルトを使用
@@ -1219,12 +1220,12 @@ JSON:"""
 
         prompt = f"""以下のペルソナ議論を分析し、議論テーマの目的に沿った実践的なインサイトを抽出してください。
 {topic_section}
-# ペルソナの発言
+# ペルソナの最終ラウンドの発言
 {persona_text}
 """
         if facilitator_text:
             prompt += f"""
-# ファシリテータの分析（参考情報）
+# 各ラウンドのファシリテータ要約（議論の流れ）
 {facilitator_text}
 """
 
