@@ -454,6 +454,8 @@ class AgentDiscussionManager:
                 if current_round > 1:
                     for agent in persona_agents:
                         agent.clear_conversation_history()
+                        if document_contents:
+                            agent.set_document_contents(document_contents.copy())
                     facilitator.clear_conversation_history()
                     self.logger.info(
                         f"Cleared conversation history for round {current_round}"
@@ -913,6 +915,8 @@ class AgentDiscussionManager:
                 if current_round > 1:
                     for agent in persona_agents:
                         agent.clear_conversation_history()
+                        if document_contents:
+                            agent.set_document_contents(document_contents.copy())
                     facilitator.clear_conversation_history()
                     self.logger.info(
                         f"Cleared conversation history for round {current_round}"
