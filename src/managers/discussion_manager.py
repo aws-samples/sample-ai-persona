@@ -154,7 +154,7 @@ class DiscussionManager:
         try:
             # Extract insights using AI service (now returns structured data)
             insight_data_list = self.ai_service.extract_insights(
-                discussion.messages, categories=categories
+                discussion.messages, categories=categories, topic=discussion.topic
             )
 
             # Convert structured data to Insight objects

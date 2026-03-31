@@ -558,10 +558,12 @@ class TestAIService:
         """インサイト抽出プロンプト作成のテスト"""
         messages = [
             Message.create_new(
-                persona_id="1", persona_name="田中太郎", content="テストメッセージ1"
+                persona_id="1", persona_name="田中太郎", content="テストメッセージ1",
+                round_number=1,
             ),
             Message.create_new(
-                persona_id="2", persona_name="佐藤花子", content="テストメッセージ2"
+                persona_id="2", persona_name="佐藤花子", content="テストメッセージ2",
+                round_number=1,
             ),
         ]
 
@@ -572,7 +574,6 @@ class TestAIService:
         assert "**田中太郎**: テストメッセージ1" in prompt
         assert "**佐藤花子**: テストメッセージ2" in prompt
         assert "インサイト" in prompt
-        assert "マーケティング" in prompt
 
     def test_parse_and_validate_persona_success(self):
         """ペルソナ解析・検証成功のテスト"""

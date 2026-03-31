@@ -1043,6 +1043,7 @@ JSON:"""
         self,
         discussion_messages: List[Message],
         categories: Optional[List[InsightCategory]] = None,
+        topic: str = "",
     ) -> List[Dict[str, Any]]:
         """
         議論メッセージからインサイトを抽出
@@ -1080,7 +1081,7 @@ JSON:"""
             f"インサイト抽出を開始します (メッセージ数: {len(discussion_messages)}, 総文字数: {total_chars}, カテゴリー数: {len(categories)})"
         )
 
-        prompt = self._create_insight_extraction_prompt(discussion_messages, categories)
+        prompt = self._create_insight_extraction_prompt(discussion_messages, categories, topic)
 
         try:
             response = self._retry_with_backoff(self._invoke_model, prompt)
@@ -1179,12 +1180,25 @@ JSON:"""
         return prompt
 
     def _create_insight_extraction_prompt(
-        self, messages: List[Message], categories: Optional[List[InsightCategory]]
+        self, messages: List[Message], categories: Optional[List[InsightCategory]],
+        topic: str = "",
     ) -> str:
         """インサイト抽出用のプロンプトを作成"""
-        discussion_text = "\n".join(
-            [f"**{msg.persona_name}**: {msg.content}" for msg in messages]
-        )
+        # ペルソナの最終ラウンド発言とファシリテータの要約を分離
+        max_round = max((msg.round_number or 0) for msg in messages)
+        persona_final_statements = [
+            f"**{msg.persona_name}**: {msg.content}"
+            for msg in messages
+            if msg.persona_id != "facilitator" and (msg.round_number or 0) > max_round - 3
+        ]
+        facilitator_summaries = [
+            f"ラウンド{msg.round_number}: {msg.content}"
+            for msg in messages
+            if msg.persona_id == "facilitator"
+        ]
+
+        persona_text = "\n".join(persona_final_statements)
+        facilitator_text = "\n".join(facilitator_summaries) if facilitator_summaries else ""
 
         # カテゴリーがNoneの場合はデフォルトを使用
         if categories is None:
@@ -1202,11 +1216,20 @@ JSON:"""
         category_names = [cat.name for cat in categories]
         category_names_str = "、".join([f'"{name}"' for name in category_names])
 
-        prompt = f"""あなたはマーケティング戦略コンサルタントとして、以下のペルソナ議論を分析し、商品企画・マーケティング戦略に活用できる実践的なインサイトを抽出してください。
+        topic_section = f"\n# 議論テーマと目的\n{topic}\n" if topic else ""
 
-# 議論内容
-{discussion_text}
+        prompt = f"""以下のペルソナ議論を分析し、議論テーマの目的に沿った実践的なインサイトを抽出してください。
+{topic_section}
+# ペルソナの直近の発言
+{persona_text}
+"""
+        if facilitator_text:
+            prompt += f"""
+# 各ラウンドのファシリテータ要約（議論の流れ）
+{facilitator_text}
+"""
 
+        prompt += f"""
 # インサイト抽出の観点
 以下の{len(categories)}つのカテゴリーから、議論内容に基づいた具体的で実践的なインサイトを抽出してください：
 {categories_section}
@@ -1239,7 +1262,7 @@ JSON:"""
 # 重要な注意事項
 - 各インサイトは議論内容に基づいた根拠のある内容にする
 - 抽象的な表現ではなく、具体的で実行可能な示唆を提供
-- マーケティング・商品企画の実務で活用できるレベルの詳細度
+- 議論テーマの目的に沿った実務で活用できるレベルの詳細度
 - 最低3個、最大10個程度のインサイトを抽出
 - カテゴリーは{category_names_str}のいずれかを使用
 - 信頼度スコアは議論内容の根拠の強さに基づいて適切に設定

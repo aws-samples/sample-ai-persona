@@ -442,12 +442,24 @@ class AgentDiscussionManager:
 
             # Execute discussion rounds
             all_messages: list[Any] = []
+            round_summaries: list[str] = []
 
             while facilitator.should_continue():
                 facilitator.increment_round()
                 current_round = facilitator.current_round
 
                 self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+
+                # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
+                if current_round > 1:
+                    for agent in persona_agents:
+                        agent.clear_conversation_history()
+                        if document_contents:
+                            agent.set_document_contents(document_contents.copy())
+                    facilitator.clear_conversation_history()
+                    self.logger.info(
+                        f"Cleared conversation history for round {current_round}"
+                    )
 
                 # Track who has spoken in this round and round messages
                 spoken_in_round: list[str] = []
@@ -463,14 +475,17 @@ class AgentDiscussionManager:
                     if speaker is None:
                         break
 
-                    # Create prompt for persona
+                    # Create prompt with round summaries + recent messages
+                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages
+                        speaker, topic, all_messages[-10:],
+                        round_summaries=round_summaries if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
 
-                    # Get persona's response
+                    # Get persona's response (context=None, already in prompt)
                     try:
-                        statement = speaker.respond(prompt, all_messages)
+                        statement = speaker.respond(prompt, None)
 
                         # Create message for persona statement
                         message = Message.create_new(
@@ -501,8 +516,12 @@ class AgentDiscussionManager:
                 if round_messages:
                     try:
                         round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic
+                            current_round, round_messages, topic,
+                            previous_summaries=round_summaries if round_summaries else None,
                         )
+
+                        # 要約を蓄積（次ラウンドのコンテキストとして使用）
+                        round_summaries.append(round_summary)
 
                         # Create message for round summary
                         summary_message = Message.create_new(
@@ -884,12 +903,24 @@ class AgentDiscussionManager:
 
             # Execute discussion rounds
             all_messages: list[Any] = []
+            round_summaries: list[str] = []
 
             while facilitator.should_continue():
                 facilitator.increment_round()
                 current_round = facilitator.current_round
 
                 self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+
+                # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
+                if current_round > 1:
+                    for agent in persona_agents:
+                        agent.clear_conversation_history()
+                        if document_contents:
+                            agent.set_document_contents(document_contents.copy())
+                    facilitator.clear_conversation_history()
+                    self.logger.info(
+                        f"Cleared conversation history for round {current_round}"
+                    )
 
                 # Track who has spoken in this round and round messages
                 spoken_in_round: list[str] = []
@@ -905,14 +936,17 @@ class AgentDiscussionManager:
                     if speaker is None:
                         break
 
-                    # Create prompt for persona
+                    # Create prompt with round summaries + recent messages
+                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages
+                        speaker, topic, all_messages[-10:],
+                        round_summaries=round_summaries if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
                     )
 
-                    # Get persona's response
+                    # Get persona's response (context=None, already in prompt)
                     try:
-                        statement = speaker.respond(prompt, all_messages)
+                        statement = speaker.respond(prompt, None)
 
                         # Create message for persona statement
                         message = Message.create_new(
@@ -946,8 +980,12 @@ class AgentDiscussionManager:
                 if round_messages:
                     try:
                         round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic
+                            current_round, round_messages, topic,
+                            previous_summaries=round_summaries if round_summaries else None,
                         )
+
+                        # 要約を蓄積（次ラウンドのコンテキストとして使用）
+                        round_summaries.append(round_summary)
 
                         # Create message for round summary
                         summary_message = Message.create_new(

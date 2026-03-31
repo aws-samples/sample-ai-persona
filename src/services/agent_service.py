@@ -175,25 +175,23 @@ class PersonaAgent:
         """
         コンテキストを含めたプロンプトを構築
 
+        コンテキストはFacilitatorAgent.create_prompt_for_persona()で構築済みのため、
+        二重付加を防止しpromptをそのまま返す。
+
         Args:
-            prompt: 基本プロンプト
-            context: 議論コンテキスト
+            prompt: 基本プロンプト（構築済み）
+            context: 議論コンテキスト（未使用、後方互換性のため残す）
 
         Returns:
-            str: 構築されたプロンプト
+            str: プロンプト（そのまま）
         """
-        if not context:
-            return prompt
+        return prompt
 
-        # コンテキストを文字列化
-        context_text = "\n".join(
-            [
-                f"{msg.persona_name}: {msg.content}"
-                for msg in context[-5:]  # 最新5件のみ
-            ]
-        )
-
-        return f"これまでの議論:\n{context_text}\n\n{prompt}"
+    def clear_conversation_history(self) -> None:
+        """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
+        if self.agent and hasattr(self.agent, "messages"):
+            self.agent.messages.clear()
+            self.logger.info(f"ペルソナ {self.persona.name} の会話履歴をクリアしました")
 
     def get_persona_id(self) -> str:
         """ペルソナIDを取得"""
@@ -298,7 +296,8 @@ class FacilitatorAgent:
         return selected_agent
 
     def summarize_round(
-        self, round_number: int, round_messages: List[Message], topic: str
+        self, round_number: int, round_messages: List[Message], topic: str,
+        previous_summaries: List[str] | None = None,
     ) -> str:
         """
         ラウンドの議論を要約
@@ -307,6 +306,7 @@ class FacilitatorAgent:
             round_number: ラウンド番号
             round_messages: そのラウンドのメッセージリスト
             topic: 議論トピック
+            previous_summaries: 過去ラウンドの要約リスト
 
         Returns:
             str: ラウンドの要約
@@ -330,15 +330,44 @@ class FacilitatorAgent:
                 [f"- {msg.persona_name}: {msg.content}" for msg in statements]
             )
 
-            prompt = (
-                f"議論テーマ「{topic}」のラウンド{round_number}が完了しました。\n\n"
-                f"このラウンドの発言:\n{statements_text}\n\n"
-            )
+            # プロンプト構築
+            parts = [f"議論テーマ「{topic}」のラウンド{round_number}/{self.rounds}が完了しました。\n"]
 
-            # エージェントに要約を生成させる（Strands Agent SDKの正しいAPI）
+            # 過去ラウンドの要約を含める
+            if previous_summaries:
+                parts.append("## これまでの議論の流れ")
+                for i, summary in enumerate(previous_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+            parts.append(f"## ラウンド{round_number}の発言")
+            parts.append(statements_text)
+            parts.append("")
+
+            if round_number < self.rounds:
+                parts.append(
+                    "以下の観点で簡潔に要約してください:\n"
+                    "- 各参加者の主要な意見や立場\n"
+                    "- 参加者間の共通点や対立点\n"
+                    "- まだ掘り下げられていない重要な観点\n"
+                    "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                    f"残り{self.rounds - round_number}ラウンドです。"
+                )
+                if self.rounds - round_number <= 2:
+                    parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
+                parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+            else:
+                parts.append(
+                    "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
+                    "- 議論を通じて明らかになった主要な結論\n"
+                    "- 参加者間で合意に至った点と残った対立点\n"
+                    "- 議論テーマの目的に対する具体的な示唆\n"
+                    "5-7文で最終まとめを作成してください。"
+                )
+
+            prompt = "\n".join(parts)
+
             result = self.agent(prompt)
-
-            # AgentResultからテキストコンテンツを正しく抽出
             summary = self._extract_text_from_result(result, self.agent)
             self.logger.info(f"ラウンド{round_number}の議論を要約しました")
             return summary
@@ -349,7 +378,9 @@ class FacilitatorAgent:
             raise AgentCommunicationError(error_msg)
 
     def create_prompt_for_persona(
-        self, persona_agent: PersonaAgent, topic: str, context: List[Message]
+        self, persona_agent: PersonaAgent, topic: str, context: List[Message],
+        round_summaries: List[str] | None = None,
+        latest_facilitator_message: str | None = None,
     ) -> str:
         """
         ペルソナエージェントへの発言促進プロンプトを生成
@@ -357,32 +388,87 @@ class FacilitatorAgent:
         Args:
             persona_agent: 対象ペルソナエージェント
             topic: 議論テーマ
-            context: これまでの議論コンテキスト
+            context: 直近の発言メッセージ（all_messages[-3:]）
+            round_summaries: 各ラウンドの要約リスト
+            latest_facilitator_message: ファシリテータの最新要約（問いかけ含む）
 
         Returns:
             str: 発言促進プロンプト
         """
-        if not context:
-            # 最初の発言
+        current = self.current_round
+        total = self.rounds
+        persona_id = persona_agent.get_persona_id()
+        is_first_round = current == 1
+
+        if not context and not round_summaries:
+            # ラウンド1・最初の発言
             prompt = (
-                f"議論テーマ「{topic}」について、あなたの視点から意見を述べてください。\n"
-                f"あなたの価値観、背景、課題、目標を踏まえて、具体的に発言してください。"
+                f"議論テーマ「{topic}」について話し合います。\n\n"
+                f"まず、あなたの日常生活の中でこのテーマに関連する具体的な場面を一つ挙げて、"
+                f"そこで感じたこと・困ったこと・考えたことを率直に話してください。"
             )
         else:
-            # 他のペルソナの発言を受けての発言
-            recent_messages = context[-3:] if len(context) > 3 else context
-            context_summary = "\n".join(
-                [
-                    f"- {msg.persona_name}: {msg.content[:100]}..."
-                    for msg in recent_messages
-                ]
-            )
+            parts = [f"「{topic}」についての議論を続けてください。\n"]
 
-            prompt = (
-                f"これまでの議論を踏まえて、「{topic}」について意見を述べてください。\n\n"
-                f"最近の発言:\n{context_summary}\n\n"
-                f"他の参加者の意見に対する反応や、自分自身の価値観や考え方に基づいた視点を提供してください。"
-            )
+            # 要約コンテキスト（最新の要約は「問いかけ」セクションで表示するため除外）
+            if round_summaries:
+                past_summaries = round_summaries[:-1] if latest_facilitator_message else round_summaries
+                if past_summaries:
+                    parts.append("## これまでの議論の要約")
+                    for i, summary in enumerate(past_summaries, 1):
+                        parts.append(f"ラウンド{i}: {summary}")
+                    parts.append("")
+
+            # ファシリテータからの問いかけ（常に表示）
+            if latest_facilitator_message:
+                parts.append("## ファシリテータからの問いかけ")
+                parts.append(latest_facilitator_message)
+                parts.append("")
+
+            # 自分の前回発言（一貫性のため）
+            if context:
+                own_previous = [
+                    msg for msg in context if msg.persona_id == persona_id
+                ]
+                if own_previous:
+                    parts.append("## あなたの前回の発言")
+                    parts.append(own_previous[-1].content)
+                    parts.append("")
+
+            # 直近の他ペルソナの発言
+            if context:
+                recent_others = [
+                    msg for msg in context
+                    if msg.persona_id != "facilitator" and msg.persona_id != persona_id
+                ][-3:]
+                if recent_others:
+                    parts.append("## 直近の他の参加者の発言")
+                    for msg in recent_others:
+                        parts.append(f"- {msg.persona_name}: {msg.content}")
+                    parts.append("")
+
+            # ラウンドフェーズ別の指示
+            if is_first_round:
+                parts.append(
+                    "このラウンドでは、まずあなた自身の体験を共有してください。"
+                    "このテーマに関連する日常の具体的な場面を挙げて、そこで感じたこと・困ったことを話し、"
+                    "他の参加者の体験も踏まえて意見を述べてください。"
+                )
+            elif current < total:
+                parts.append(
+                    "議論が深まってきました。他の参加者の意見を踏まえて、あなたの考えに変化はありますか？"
+                    "新たに気づいたことや、まだ議論されていない重要な観点があれば提起してください。"
+                )
+            else:
+                parts.append(
+                    "最終ラウンドです。これまでの議論を踏まえて、あなたが最も重要だと感じたポイントと、"
+                    "具体的にどうすべきかについて、あなたの立場から結論を述べてください。"
+                )
+
+            if latest_facilitator_message:
+                parts.append("\nファシリテータの問いかけの観点にも着目してください。")
+
+            prompt = "\n".join(parts)
 
         return prompt
 
@@ -394,6 +480,12 @@ class FacilitatorAgent:
         """ラウンドをインクリメント"""
         self.current_round += 1
         self.logger.info(f"ラウンド {self.current_round}/{self.rounds} に進みました")
+
+    def clear_conversation_history(self) -> None:
+        """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
+        if self.agent and hasattr(self.agent, "messages"):
+            self.agent.messages.clear()
+            self.logger.info("ファシリテータの会話履歴をクリアしました")
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """
@@ -740,23 +832,23 @@ class AgentService:
         prompt = f"""あなたは議論のファシリテータです。{rounds}ラウンドの議論を進行管理します。
 
 # 役割
-- 議論の進行を管理する
-- 各ラウンドの議論を要約する
-- 建設的で生産的な議論を促進する
+- 議論の進行を管理し、深い洞察を引き出す
+- 各ラウンドの議論を要約し、次の議論の方向性を示す
+- 表面的な合意に留まらず、本質的な議論を促進する
 
 # 進行方針
 - 各ラウンドで全ペルソナが1回ずつ発言する
 - 発言順序はランダムに決定される
-- ラウンド終了後に、そのラウンドの議論全体を要約する
-- 議論が脱線しないよう適切に誘導する
+- ラウンド終了後に、議論全体を要約し次ラウンドへの問いかけを行う
+- 議論が表面的になっていたら「なぜそう思うのか」「具体的にはどういう場面か」と掘り下げる
 
 # ラウンド要約のポイント
-- 各参加者の主要な意見や提案を簡潔にまとめる
-- 共通点や対立点があれば言及する
-- 議論の進展や新しい視点があれば強調する
-- 3-4文程度で要約し、議論の流れを整理する
-- 次のラウンドへの橋渡しとなるような要約を心がける
-- 最終ラウンドでは、ここまでの議論のまとめに入ってください
+- 各参加者の主要な意見や立場を簡潔にまとめる
+- 共通点や対立点を明確にする
+- まだ掘り下げられていない重要な観点を指摘する
+- 各ペルソナに次のラウンドで答えてほしい具体的な問いを提示する
+- 3-5文で要約し、最後に問いかけで締める
+- 最終ラウンドでは、議論全体の結論と実践的な示唆をまとめる
 """
 
         if additional_instructions:
@@ -795,17 +887,21 @@ class AgentService:
 # 目標・願望
 {chr(10).join(f"- {goal}" for goal in persona_dict["goals"])}
 
+# この議論の目的
+あなたの率直な意見、本音、具体的な生活体験が求められています。
+議論のテーマに記載された目的を意識して発言してください。
+
 # 議論での振る舞い
-- あなたの価値観、背景、課題、目標に基づいて発言してください
-- 他の参加者の意見を尊重しながら、自分の視点を明確に表現してください
-- 具体的な経験や例を交えて、説得力のある発言を心がけてください
-- 議論を通じて新たな気づきや学びを得ることを目指してください
+- あなたの立場から率直に意見を述べてください。同意できない点は遠慮なく指摘してください
+- 抽象的な意見ではなく、あなたの実体験や生活実感に基づいた具体的なエピソードを交えて話してください
+- 他の参加者の意見に違和感があれば、なぜそう感じるのか正直に伝えてください
+- 「なんとなく」ではなく、あなたの価値観や課題に紐づけて理由を明確にしてください
 
 # 重要な注意事項
 - あなたは{persona_dict["name"]}です。この人格を一貫して維持してください
-- 発言は自然で現実的な会話として成立するようにしてください
-- 他のペルソナの発言に対して、あなたの視点から建設的に意見を述べてください
-- 発言の出力構造は実際にペルソナが発言しているかのような口語的な文体にしてください。（##などで文章を区切る必要はありません。）
+- {persona_dict["age"]}歳の{persona_dict["occupation"]}として自然な口調で話してください
+- 発言は実際の会話のような口語体にしてください（##などの見出しは不要です）
+- 1回の発言は500文字以内に収めてください。長すぎる発言は避けてください
 """
 
         return prompt

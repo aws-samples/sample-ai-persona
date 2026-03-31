@@ -212,7 +212,7 @@ class TestDiscussionManager:
 
         # Verify AI service was called correctly
         self.mock_ai_service.extract_insights.assert_called_once_with(
-            discussion.messages, categories=None
+            discussion.messages, categories=None, topic=discussion.topic
         )
 
     def test_generate_insights_with_custom_categories(self):
@@ -264,7 +264,7 @@ class TestDiscussionManager:
 
         # Verify AI service was called with custom categories
         self.mock_ai_service.extract_insights.assert_called_once_with(
-            discussion.messages, categories=custom_categories
+            discussion.messages, categories=custom_categories, topic=discussion.topic
         )
 
     def test_generate_insights_invalid_discussion(self):

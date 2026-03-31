@@ -211,7 +211,7 @@ class TestDiscussionManagerIntegration:
 
         # Verify AI service was called correctly
         self.mock_ai_service.extract_insights.assert_called_once_with(
-            discussion.messages, categories=None
+            discussion.messages, categories=None, topic=discussion.topic
         )
 
         # Step 3: Save discussion with insights

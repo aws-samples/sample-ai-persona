@@ -220,11 +220,15 @@
                       url += `&document_ids=${encodeURIComponent(docIds)}`;
                   }
                   const eventSource = new EventSource(url);
+                  let discussionComplete = false;
                   
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
                       
-                      if (data.type === 'participants') {
+                      if (data.type === 'keepalive') {
+                          // keep-alive: 何もしない（接続維持のみ）
+                          return;
+                      } else if (data.type === 'participants') {
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
@@ -284,6 +288,7 @@
                           container.scrollTop = container.scrollHeight;
                           
                       } else if (data.type === 'complete') {
+                          discussionComplete = true;
                           eventSource.close();
                           // 従来の議論完了画面を取得して表示
                           loading.innerHTML = `
@@ -311,14 +316,21 @@
                                   `;
                               });
                       } else if (data.type === 'error') {
+                          discussionComplete = true;
                           eventSource.close();
                           loading.innerHTML = `<p class='text-red-600'>エラー: ${data.message}</p>`;
                       }
                   };
                   
                   eventSource.onerror = function() {
-                      eventSource.close();
-                      loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                      if (discussionComplete) {
+                          return; // 正常完了後の切断は無視
+                      }
+                      // EventSource.CONNECTING(0) = ブラウザが自動再接続中 → 待つ
+                      // EventSource.CLOSED(2) = 再接続不可 → エラー表示
+                      if (eventSource.readyState === EventSource.CLOSED) {
+                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                      }
                   };
               }
           }">
@@ -437,7 +449,7 @@
             <textarea name="topic"
                       x-model="topic"
                       rows="3"
-                      placeholder="例: 新しいスマートフォンアプリの機能について、どのような要素が最も重要だと思いますか？"
+                      placeholder="例: サブスクリプション型フィットネスアプリの価格設定について。20-30代の働く女性が継続利用したくなる価格帯と機能の組み合わせを探りたい。"
                       :required="mode !== 'interview'"
                       :disabled="mode === 'interview'"
                       :class="mode === 'interview' ? 
@@ -446,7 +458,7 @@
             <p class="text-sm mt-2 mb-6" 
                :class="mode === 'interview' ? 'text-gray-400' : 'text-gray-500'">
                 <span x-show="mode === 'interview'">インタビューモードでは、リアルタイムでペルソナと対話します。</span>
-                <span x-show="mode !== 'interview'">具体的で明確な質問にすると、より深い議論が生まれます。</span>
+                <span x-show="mode !== 'interview'">テーマに加えて「何のために議論するか」の目的も書くと、より深い議論が生まれます。</span>
             </p>
             
             <!-- ドキュメントアップロード（議論モードのみ） -->
