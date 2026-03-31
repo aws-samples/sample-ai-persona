@@ -1189,7 +1189,7 @@ JSON:"""
         persona_final_statements = [
             f"**{msg.persona_name}**: {msg.content}"
             for msg in messages
-            if msg.persona_id != "facilitator" and msg.round_number == max_round
+            if msg.persona_id != "facilitator" and (msg.round_number or 0) > max_round - 3
         ]
         facilitator_summaries = [
             f"ラウンド{msg.round_number}: {msg.content}"
@@ -1220,7 +1220,7 @@ JSON:"""
 
         prompt = f"""以下のペルソナ議論を分析し、議論テーマの目的に沿った実践的なインサイトを抽出してください。
 {topic_section}
-# ペルソナの最終ラウンドの発言
+# ペルソナの直近の発言
 {persona_text}
 """
         if facilitator_text:
