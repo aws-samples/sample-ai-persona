@@ -133,17 +133,22 @@ chmod +x deploy.sh
 
 #### コード更新時の再デプロイ
 
-- (注意)更新前にALBとCognitoの紐付けを一度解除する必要があります。ECSサービスの再デプロイに失敗します。
+- **(注意)更新前にALBとCognitoの紐付けを一度解除する必要があります。** ECSサービスの再デプロイに失敗します。
 - Cognitoは作成済みの場合はスキップしてください。
 
 ```bash
 cd sample-ai-persona
 git pull
 chmod +x deploy.sh
+
+# 1. AWSコンソールでALBのCognito認証ルールを一時解除
+# 2. デプロイ実行
 ./deploy.sh --skip-cognito --region <AWS_REGION>
+# 3. デプロイ完了後、ALBのCognito認証ルールを再設定
 ```
 - アプリケーションのみの変更の場合、新しいDockerイメージがECRにPUSHされます。
 - ECS Express Modeで新しいコンテナイメージに更新し、再度デプロイすることでアプリケーションが更新されます。
+- CloudFrontの設定変更がある場合、反映に数分かかることがあります。
 
 ### 環境削除
 
@@ -443,7 +448,9 @@ aws bedrock-agentcore-control get-memory \
 - バージョニングが有効化されており、誤削除時の復元が可能です
 
 ## ECSサービスのアップデート時の注意
-- ECSサービスやAIペルソナメインスタックで更新時、手動で設定したALB統合でCognitoを一度外してから、デプロイを行う（リスナールールでCognito統合されている場合、更新時にエラーが出る）
+- ECSサービスやAIペルソナメインスタックの更新時、手動で設定したALBのCognito認証ルールを一度外してから、デプロイを行う（リスナールールでCognito統合されている場合、更新時にエラーが出る）
+- デプロイ完了後、ALBのCognito認証ルールを再設定する
+- CloudFrontの設定変更がある場合、反映に数分かかることがある
 
 ## トラブルシューティング
 

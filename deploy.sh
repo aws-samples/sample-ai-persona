@@ -275,5 +275,7 @@ echo -e "${GREEN}╠════════════════════
 echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"
-echo -e "${GREEN}║${NC}    ./deploy.sh --skip-memory --skip-cognito --env ${ENV_NAME}"
+echo -e "${GREEN}║${NC}    1. ALBのCognito認証ルールを一時解除"
+echo -e "${GREEN}║${NC}    2. ./deploy.sh --skip-memory --skip-cognito --region ${REGION}"
+echo -e "${GREEN}║${NC}    3. ALBのCognito認証ルールを再設定"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
