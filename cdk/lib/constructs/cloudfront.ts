@@ -55,9 +55,10 @@ const authenticator = new Authenticator({
   userPoolId: '${cognitoUserPoolId}',
   userPoolAppId: '${cognitoUserPoolAppId}',
   userPoolDomain: '${cognitoUserPoolDomain}',
-  cookieExpirationDays: 1,
+  cookieExpirationDays: 30,
   httpOnly: true,
   sameSite: 'Lax',
+  logLevel: 'warn',
 });
 exports.handler = async (request) => authenticator.handle(request);
 `;
