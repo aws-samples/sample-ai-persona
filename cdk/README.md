@@ -404,7 +404,7 @@ npx cdk destroy AIPersonaEcr-dev
 
 ## Cognito認証
 
-CloudFront Lambda@Edge + [cognito-at-edge](https://github.com/awslabs/cognito-at-edge) ライブラリで認証を実装しています。ALBへの手動Cognito統合は不要です。
+CloudFront Lambda@Edge + [cognito-at-edge](https://github.com/awslabs/cognito-at-edge) ライブラリで認証を実装しています。
 
 ### 認証フロー
 
