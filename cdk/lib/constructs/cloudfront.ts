@@ -118,22 +118,6 @@ exports.handler = async (request) => authenticator.handle(request);
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
     });
 
-    // CloudFront Function: append trailing slash to root URL
-    // Without this, https://xxx.cloudfront.net (no slash) causes redirect_mismatch
-    const trailingSlashFunction = new cloudfront.Function(this, 'TrailingSlash', {
-      functionName: `ai-persona-trailing-slash-${envName}`,
-      code: cloudfront.FunctionCode.fromInline(`
-function handler(event) {
-  var request = event.request;
-  if (request.uri === '') {
-    request.uri = '/';
-  }
-  return request;
-}
-`),
-      runtime: cloudfront.FunctionRuntime.JS_2_0,
-    });
-
     // CloudFront Distribution
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `AI Persona - ${envName}`,
@@ -143,10 +127,6 @@ function handler(event) {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        functionAssociations: [{
-          function: trailingSlashFunction,
-          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
-        }],
         edgeLambdas: [{
           functionVersion: authFunction.currentVersion,
           eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
