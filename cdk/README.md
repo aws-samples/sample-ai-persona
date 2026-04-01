@@ -137,8 +137,9 @@ chmod +x deploy.sh
 cd sample-ai-persona
 git pull
 chmod +x deploy.sh
-./deploy.sh --skip-cognito --region <AWS_REGION>
+./deploy.sh --skip-memory --skip-cognito --region <AWS_REGION>
 ```
+- `--skip-memory` `--skip-cognito` を指定しても、既存スタックから設定を自動取得するため、Lambda@Edge認証やMemory設定は維持されます
 - アプリケーションのみの変更の場合、新しいDockerイメージがECRにPUSHされます。
 - ECS Express Modeで新しいコンテナイメージに更新し、再度デプロイすることでアプリケーションが更新されます。
 - CloudFrontの設定変更がある場合、反映に数分かかることがあります。

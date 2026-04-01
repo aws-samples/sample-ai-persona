@@ -239,7 +239,7 @@ if [[ "${SKIP_MEMORY}" == "false" ]]; then
 else
   log_info "長期記憶機能をスキップします"
 
-  # 既存のMemoryスタックからIDを取得してparameters.tsに反映
+  # 既存のMemoryスタックからIDを取得してparameters.tsに反映（再デプロイ時のリセット防止）
   if aws cloudformation describe-stacks --stack-name "AIPersonaMemory-${ENV_NAME}" --region "${REGION}" > /dev/null 2>&1; then
     log_info "既存のMemoryスタックからIDを取得中..."
     MEMORY_ID=$(aws cloudformation describe-stacks \
@@ -299,7 +299,7 @@ if [[ "${SKIP_COGNITO}" == "false" ]]; then
 else
   log_info "Cognito認証をスキップします"
 
-  # 既存のCognitoスタックからIDを取得してparameters.tsに反映
+  # 既存のCognitoスタックからIDを取得してparameters.tsに反映（再デプロイ時のリセット防止）
   if aws cloudformation describe-stacks --stack-name "AIPersonaCognito-${ENV_NAME}" --region "${REGION}" > /dev/null 2>&1; then
     log_info "既存のCognitoスタックからIDを取得中..."
     COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks \
@@ -377,5 +377,5 @@ echo -e "${GREEN}╠════════════════════
 echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"
-echo -e "${GREEN}║${NC}    ./deploy.sh --skip-cognito --region ${REGION}"
+echo -e "${GREEN}║${NC}    ./deploy.sh --skip-memory --skip-cognito --region ${REGION}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
