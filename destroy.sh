@@ -66,6 +66,7 @@ PROJECT_ROOT="${SCRIPT_DIR}"
 # スタック名定義
 COGNITO_STACK="AIPersonaCognito-${ENV_NAME}"
 MAIN_STACK="AIPersona-${ENV_NAME}"
+WAF_STACK="AIPersonaWaf-${ENV_NAME}"
 MEMORY_STACK="AIPersonaMemory-${ENV_NAME}"
 ECR_STACK="AIPersonaEcr-${ENV_NAME}"
 
@@ -77,7 +78,7 @@ stack_exists() {
 }
 
 STACKS_TO_DELETE=()
-for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
+for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${WAF_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
   if stack_exists "${stack}"; then
     log_info "  存在: ${stack}"
     STACKS_TO_DELETE+=("${stack}")
@@ -146,18 +147,27 @@ else
   log_info "Step 2: ${MAIN_STACK} はスキップ"
 fi
 
-# 3. Memory Stack
+# 3. WAF Stack (us-east-1)
+if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
+  log_step "Step 3: WAF Stackの削除 (us-east-1)"
+  npx cdk destroy "${WAF_STACK}" --force --region us-east-1 2>&1
+  log_info "${WAF_STACK} を削除しました"
+else
+  log_info "Step 3: ${WAF_STACK} はスキップ"
+fi
+
+# 4. Memory Stack
 if stack_exists "${MEMORY_STACK}"; then
-  log_step "Step 3: AgentCore Memory Stackの削除"
+  log_step "Step 4: AgentCore Memory Stackの削除"
   npx cdk destroy "${MEMORY_STACK}" --force --region "${REGION}" 2>&1
   log_info "${MEMORY_STACK} を削除しました"
 else
-  log_info "Step 3: ${MEMORY_STACK} はスキップ"
+  log_info "Step 4: ${MEMORY_STACK} はスキップ"
 fi
 
-# 4. ECR Stack
+# 5. ECR Stack
 if stack_exists "${ECR_STACK}"; then
-  log_step "Step 4: ECR Stackの削除"
+  log_step "Step 5: ECR Stackの削除"
 
   # ECRリポジトリ内のイメージを削除
   ECR_REPO=$(aws cloudformation describe-stack-resources \
@@ -177,7 +187,7 @@ if stack_exists "${ECR_STACK}"; then
   npx cdk destroy "${ECR_STACK}" --force --region "${REGION}" 2>&1
   log_info "${ECR_STACK} を削除しました"
 else
-  log_info "Step 4: ${ECR_STACK} はスキップ"
+  log_info "Step 5: ${ECR_STACK} はスキップ"
 fi
 
 # ===== 完了 =====
