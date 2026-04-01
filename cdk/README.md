@@ -348,7 +348,6 @@ aws cognito-idp update-user-pool-client \
   --allowed-o-auth-scopes openid email profile \
   --allowed-o-auth-flows-user-pool-client \
   --supported-identity-providers COGNITO \
-  --no-generate-secret
 ```
 
 ### 手動での環境削除
@@ -434,7 +433,6 @@ aws cognito-idp update-user-pool-client \
   --allowed-o-auth-scopes openid email profile \
   --allowed-o-auth-flows-user-pool-client \
   --supported-identity-providers COGNITO \
-  --no-generate-secret
 ```
 
 ## 注意事項

@@ -359,8 +359,7 @@ if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGN
     --logout-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
     --allowed-o-auth-flows code \
     --allowed-o-auth-scopes openid email profile \
-    --allowed-o-auth-flows-user-pool-client \
-    --no-generate-secret 2>&1 || {
+    --allowed-o-auth-flows-user-pool-client 2>&1 || {
     log_warn "callbackUrl自動更新に失敗しました。Cognitoコンソールで手動設定してください"
     log_warn "  Callback URL: https://${CLOUDFRONT_DOMAIN}/"
   }
