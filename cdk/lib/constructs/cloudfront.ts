@@ -3,7 +3,6 @@ import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -11,7 +10,8 @@ export interface CloudFrontDistributionProps {
   loadBalancerArn: string;
   expressEndpoint: string;
   envName: string;
-  enableWaf?: boolean;
+  /** WAF WebACL ARN (from WafStack in us-east-1) */
+  webAclArn?: string;
   cognitoRegion: string;
   cognitoUserPoolId: string;
   cognitoUserPoolAppId: string;
@@ -26,7 +26,7 @@ export class CloudFrontDistribution extends Construct {
     super(scope, id);
 
     const {
-      loadBalancerArn, expressEndpoint, envName, enableWaf = true,
+      loadBalancerArn, expressEndpoint, envName, webAclArn,
       cognitoRegion, cognitoUserPoolId, cognitoUserPoolAppId, cognitoUserPoolDomain,
     } = props;
 
@@ -72,40 +72,6 @@ exports.handler = async (request) => authenticator.handle(request);
       memorySize: 128,
       timeout: cdk.Duration.seconds(5),
     });
-
-    // WAF WebACL
-    let webAclArn: string | undefined;
-    if (enableWaf) {
-      const webAcl = new wafv2.CfnWebACL(this, 'WebAcl', {
-        defaultAction: { allow: {} },
-        scope: 'CLOUDFRONT',
-        visibilityConfig: {
-          cloudWatchMetricsEnabled: true,
-          metricName: `ai-persona-waf-${envName}`,
-          sampledRequestsEnabled: true,
-        },
-        name: `ai-persona-waf-${envName}`,
-        rules: [
-          {
-            name: 'AWSManagedRulesCommonRuleSet',
-            priority: 1,
-            overrideAction: { none: {} },
-            statement: {
-              managedRuleGroupStatement: { vendorName: 'AWS', name: 'AWSManagedRulesCommonRuleSet' },
-            },
-            visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AWSManagedRulesCommonRuleSet', sampledRequestsEnabled: true },
-          },
-          {
-            name: 'RateLimit',
-            priority: 2,
-            action: { block: {} },
-            statement: { rateBasedStatement: { limit: 2000, aggregateKeyType: 'IP' } },
-            visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'RateLimit', sampledRequestsEnabled: true },
-          },
-        ],
-      });
-      webAclArn = webAcl.attrArn;
-    }
 
     // Origin Request Policy (exclude Host for Express Mode ALB routing)
     const originRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'OriginRequestPolicy', {

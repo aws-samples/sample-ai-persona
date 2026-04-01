@@ -12,6 +12,7 @@ import { AppParameter } from '../parameters';
 export interface AIPersonaStackProps extends StackProps {
   parameter: AppParameter;
   ecrRepository: ecr.IRepository;
+  webAclArn?: string;
 }
 
 export class AIPersonaStack extends Stack {
@@ -21,7 +22,7 @@ export class AIPersonaStack extends Stack {
   constructor(scope: Construct, id: string, props: AIPersonaStackProps) {
     super(scope, id, props);
 
-    const { parameter, ecrRepository } = props;
+    const { parameter, ecrRepository, webAclArn } = props;
     const isProd = parameter.envName === 'prod';
 
     const database = new Database(this, 'Database', {
@@ -82,7 +83,7 @@ export class AIPersonaStack extends Stack {
       loadBalancerArn: service.loadBalancerArn,
       expressEndpoint: service.endpoint,
       envName: parameter.envName,
-      enableWaf: parameter.enableWaf,
+      webAclArn,
       cognitoRegion: this.region,
       cognitoUserPoolId: parameter.cognitoUserPoolId,
       cognitoUserPoolAppId: parameter.cognitoUserPoolAppId,
