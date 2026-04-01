@@ -46,7 +46,7 @@ export class CognitoStack extends Stack {
     });
 
     this.userPoolClient = this.userPool.addClient('AlbClient', {
-      generateSecret: true,
+      generateSecret: false,
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
