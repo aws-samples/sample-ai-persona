@@ -300,13 +300,6 @@ log_info "CloudFrontドメイン: https://${CLOUDFRONT_DOMAIN}"
 if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGNITO_CLIENT_ID}" ]]; then
   log_step "Step 9: Cognito callbackUrl更新"
 
-  COGNITO_CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
-    --user-pool-id "${COGNITO_USER_POOL_ID}" \
-    --client-id "${COGNITO_CLIENT_ID}" \
-    --region "${REGION}" \
-    --query "UserPoolClient.ClientSecret" \
-    --output text)
-
   aws cognito-idp update-user-pool-client \
     --user-pool-id "${COGNITO_USER_POOL_ID}" \
     --client-id "${COGNITO_CLIENT_ID}" \
@@ -317,8 +310,7 @@ if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGN
     --allowed-o-auth-flows code \
     --allowed-o-auth-scopes openid email profile \
     --allowed-o-auth-flows-user-pool-client \
-    --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH \
-    --generate-secret > /dev/null 2>&1 || {
+    --no-generate-secret 2>&1 || {
     log_warn "callbackUrl自動更新に失敗しました。Cognitoコンソールで手動設定してください"
     log_warn "  Callback URL: https://${CLOUDFRONT_DOMAIN}/"
   }
