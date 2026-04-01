@@ -6,6 +6,7 @@ import { UploadBucket } from './constructs/upload-bucket';
 import { ExpressService } from './constructs/express-service';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
 import { Vpc } from './constructs/vpc';
+import { CloudFrontDistribution } from './constructs/cloudfront';
 import { AppParameter } from '../parameters';
 
 export interface AIPersonaStackProps extends StackProps {
@@ -14,7 +15,7 @@ export interface AIPersonaStackProps extends StackProps {
 }
 
 export class AIPersonaStack extends Stack {
-  public readonly serviceEndpoint: string;
+  public readonly cloudFrontDomainName: string;
 
   constructor(scope: Construct, id: string, props: AIPersonaStackProps) {
     super(scope, id, props);
@@ -28,7 +29,7 @@ export class AIPersonaStack extends Stack {
       removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 
-    // VPC
+    // VPC (Private Subnet + NAT Gateway)
     const { vpc } = new Vpc(this, 'Vpc', {
       envName: parameter.envName,
     });
@@ -45,13 +46,11 @@ export class AIPersonaStack extends Stack {
       bucket: uploadBucket.bucket,
     });
 
-    // AgentCore Memory IDとStrategy IDはparameters.tsから取得
-    // AgentCoreMemoryStackを先にデプロイして、IDを取得してください
+    // AgentCore Memory IDs
     const agentCoreMemoryId = parameter.agentCoreMemoryId;
     const summaryMemoryStrategyId = parameter.summaryMemoryStrategyId;
     const semanticMemoryStrategyId = parameter.semanticMemoryStrategyId;
 
-    // IDが設定されていない場合は警告
     if (!agentCoreMemoryId || !summaryMemoryStrategyId) {
       console.warn('WARNING: AgentCore Memory IDs are not configured in parameters.ts');
       console.warn('Please deploy AgentCoreMemoryStack first and update parameters.ts');
@@ -60,7 +59,7 @@ export class AIPersonaStack extends Stack {
       console.warn('WARNING: Semantic Memory Strategy ID is not configured in parameters.ts');
     }
 
-    // ECS Express Mode Service
+    // ECS Express Mode Service (Private Subnet → Internal ALB)
     const service = new ExpressService(this, 'Service', {
       vpc,
       ecrRepository,
@@ -92,13 +91,27 @@ export class AIPersonaStack extends Stack {
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
     });
 
-    this.serviceEndpoint = service.endpoint;
+    // CloudFront + VPC Origin + WAF
+    const cdn = new CloudFrontDistribution(this, 'CloudFront', {
+      loadBalancerArn: service.loadBalancerArn,
+      expressEndpoint: service.endpoint,
+      envName: parameter.envName,
+      enableWaf: parameter.enableWaf,
+    });
+
+    this.cloudFrontDomainName = cdn.domainName;
 
     // Outputs
-    new CfnOutput(this, 'ServiceEndpoint', {
+    new CfnOutput(this, 'CloudFrontDomainName', {
+      value: cdn.domainName,
+      description: 'CloudFront Domain Name (use this to access the application)',
+      exportName: `${id}-CloudFrontDomainName`,
+    });
+
+    new CfnOutput(this, 'InternalServiceEndpoint', {
       value: service.endpoint,
-      description: 'ECS Express Service Endpoint',
-      exportName: `${id}-ServiceEndpoint`,
+      description: 'ECS Express Internal Service Endpoint (not directly accessible)',
+      exportName: `${id}-InternalServiceEndpoint`,
     });
 
     new CfnOutput(this, 'PersonasTableName', {

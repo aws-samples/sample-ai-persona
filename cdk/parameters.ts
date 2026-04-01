@@ -14,6 +14,9 @@ export interface AppParameter {
   containerCpu: string;
   containerMemory: string;
   
+  // CloudFront + WAF設定
+  enableWaf?: boolean;
+  
   // AgentCore Memory設定
   // AgentCoreMemoryStackをデプロイ後、出力されたIDをここに設定してください
   // Memory IDの取得: CloudFormation OutputまたはAWS CLIで確認
@@ -51,6 +54,9 @@ export const devParameter: AppParameter = {
   containerCpu: '1024',
   containerMemory: '4096',
   
+  // CloudFront + WAF設定
+  enableWaf: true,
+  
   // AgentCore Memory設定
   // TODO: AgentCoreMemoryStackをデプロイ後、以下のIDを設定してください
   // 1. cdk deploy AIPersonaMemory-dev を実行
@@ -86,6 +92,9 @@ export const prodParameter: AppParameter = {
   
   containerCpu: '2048',
   containerMemory: '8192',
+  
+  // CloudFront + WAF設定
+  enableWaf: true,
   
   // AgentCore Memory設定
   // TODO: AgentCoreMemoryStackをデプロイ後、以下のIDを設定してください

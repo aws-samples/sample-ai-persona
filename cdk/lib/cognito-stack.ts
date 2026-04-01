@@ -5,7 +5,8 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 export interface CognitoStackProps extends StackProps {
   envName: string;
   domainPrefix: string;
-  serviceEndpoint: string;
+  /** CloudFront distribution domain name (e.g., d1234.cloudfront.net) */
+  cloudFrontDomainName: string;
 }
 
 export class CognitoStack extends Stack {
@@ -16,12 +17,12 @@ export class CognitoStack extends Stack {
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
 
-    const { envName, domainPrefix, serviceEndpoint } = props;
+    const { envName, domainPrefix, cloudFrontDomainName } = props;
     const isProd = envName === 'prod';
 
-    // Callback URLs based on service endpoint (add https:// scheme)
-    const callbackUrls = [`https://${serviceEndpoint}/oauth2/idpresponse`];
-    const logoutUrls = [`https://${serviceEndpoint}/`];
+    // Callback URLs using CloudFront domain
+    const callbackUrls = [`https://${cloudFrontDomainName}/oauth2/idpresponse`];
+    const logoutUrls = [`https://${cloudFrontDomainName}/`];
 
     // User Pool
     this.userPool = new cognito.UserPool(this, 'Default', {
@@ -70,7 +71,7 @@ export class CognitoStack extends Stack {
       {
         userPoolId: this.userPool.userPoolId,
         clientId: this.userPoolClient.userPoolClientId,
-        useCognitoProvidedValues: true, // デフォルトのスタイルを使用する場合は true に設定
+        useCognitoProvidedValues: true,
       }
     );
     managedLoginBranding.node.addDependency(this.userPool);
@@ -102,7 +103,7 @@ export class CognitoStack extends Stack {
 
     new CfnOutput(this, 'CallbackUrl', {
       value: callbackUrls[0],
-      description: 'OAuth Callback URL',
+      description: 'OAuth Callback URL (via CloudFront)',
     });
   }
 }

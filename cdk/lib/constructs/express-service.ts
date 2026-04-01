@@ -31,6 +31,7 @@ export interface ExpressServiceProps {
 export class ExpressService extends Construct {
   public readonly service: ecs.CfnExpressGatewayService;
   public readonly endpoint: string;
+  public readonly loadBalancerArn: string;
 
   constructor(scope: Construct, id: string, props: ExpressServiceProps) {
     super(scope, id);
@@ -133,14 +134,11 @@ export class ExpressService extends Construct {
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
           actions: [
-            // Memory operations
             'bedrock-agentcore:GetMemory',
             'bedrock-agentcore:ListMemories',
-            // Event operations (short-term memory)
             'bedrock-agentcore:CreateEvent',
             'bedrock-agentcore:ListEvents',
             'bedrock-agentcore:GetEvent',
-            // Memory record operations (long-term memory)
             'bedrock-agentcore:CreateMemoryRecord',
             'bedrock-agentcore:BatchCreateMemoryRecords',
             'bedrock-agentcore:ListMemoryRecords',
@@ -148,7 +146,6 @@ export class ExpressService extends Construct {
             'bedrock-agentcore:DeleteMemoryRecord',
             'bedrock-agentcore:SearchMemoryRecords',
             'bedrock-agentcore:RetrieveMemoryRecords',
-            // Invoke/Retrieve operations
             'bedrock-agentcore:InvokeMemory',
             'bedrock-agentcore:RetrieveMemory',
           ],
@@ -198,7 +195,7 @@ export class ExpressService extends Construct {
       vpc,
     });
 
-    // ECS Express Gateway Service
+    // ECS Express Gateway Service — Private Subnet → Internal ALB
     this.service = new ecs.CfnExpressGatewayService(this, 'Default', {
       cluster: cluster.clusterName,
       serviceName: `ai-persona-${envName}`,
@@ -209,7 +206,7 @@ export class ExpressService extends Construct {
       memory: containerMemory,
       healthCheckPath: '/health',
       networkConfiguration: {
-        subnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PUBLIC }).subnetIds,
+        subnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
       },
       primaryContainer: {
         image: `${ecrRepository.repositoryUri}:latest`,
@@ -222,14 +219,8 @@ export class ExpressService extends Construct {
       },
     });
 
-    // Ensure IGW and routes are fully configured before Express Mode evaluates subnets,
-    // otherwise it may misidentify public subnets as private and create an internal ALB.
-    const publicSubnets = vpc.selectSubnets({ subnetType: ec2.SubnetType.PUBLIC });
-    for (const subnet of publicSubnets.subnets) {
-      this.service.node.addDependency(subnet.internetConnectivityEstablished);
-    }
-
-    // Get endpoint from service
+    // Get endpoint and ALB ARN from service
     this.endpoint = this.service.attrEndpoint;
+    this.loadBalancerArn = this.service.attrEcsManagedResourceArnsIngressPathLoadBalancerArn;
   }
 }

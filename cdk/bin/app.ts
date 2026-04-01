@@ -14,8 +14,6 @@ const envName = app.node.tryGetContext('env') || 'dev';
 const parameter = envName === 'prod' ? prodParameter : devParameter;
 
 // Step 0: AgentCore Memory Stack（オプション）
-// このスタックは独立してデプロイし、出力されたIDをparameters.tsに設定してから
-// メインスタックをデプロイしてください
 const memoryStack = new AgentCoreMemoryStack(app, `AIPersonaMemory-${parameter.envName}`, {
   env: parameter.env,
   parameter,
@@ -30,7 +28,7 @@ const ecrStack = new EcrStack(app, `AIPersonaEcr-${parameter.envName}`, {
 });
 
 // Step 2: Main Stack（ECR Stackに依存）
-// 注意: AgentCoreMemoryStackをデプロイし、parameters.tsにIDを設定してからデプロイしてください
+// CloudFront + VPC Origin + WAF + Private Subnet構成
 const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
   env: parameter.env,
   parameter,
@@ -39,13 +37,12 @@ const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
 });
 mainStack.addDependency(ecrStack);
 
-// Step 3: Cognito Stack（Main Stackに依存、サービスエンドポイントを使用）
+// Step 3: Cognito Stack（Main Stackに依存、CloudFrontドメインを使用）
 const cognitoStack = new CognitoStack(app, `AIPersonaCognito-${parameter.envName}`, {
   env: parameter.env,
   envName: parameter.envName,
   domainPrefix: parameter.cognitoDomainPrefix,
-  serviceEndpoint: mainStack.serviceEndpoint,
+  cloudFrontDomainName: mainStack.cloudFrontDomainName,
   description: `AI Persona Cognito User Pool - ${parameter.envName}`,
 });
 cognitoStack.addDependency(mainStack);
-

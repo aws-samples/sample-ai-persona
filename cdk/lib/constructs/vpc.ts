@@ -15,11 +15,16 @@ export class Vpc extends Construct {
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       vpcName: `ai-persona-${props.envName}`,
       maxAzs: 2,
-      natGateways: 0,
+      natGateways: 1,
       subnetConfiguration: [
         {
           name: 'Public',
           subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+        {
+          name: 'Private',
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
           cidrMask: 24,
         },
       ],
