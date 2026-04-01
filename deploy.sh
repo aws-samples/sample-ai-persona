@@ -94,10 +94,12 @@ if [[ "${ENV_NAME}" == "prod" ]]; then
   TABLE_PREFIX="AIPersona"
   CONTAINER_CPU="2048"
   CONTAINER_MEMORY="8192"
+  ENABLE_WAF="true"
 else
   TABLE_PREFIX="AIPersonaDev"
   CONTAINER_CPU="1024"
   CONTAINER_MEMORY="4096"
+  ENABLE_WAF="false"
 fi
 
 cat > "${PROJECT_ROOT}/cdk/parameters.ts" << PARAMS_EOF
@@ -135,7 +137,7 @@ export const devParameter: AppParameter = {
   cognitoDomainPrefix: '${COGNITO_DOMAIN_PREFIX}',
   containerCpu: '${CONTAINER_CPU}',
   containerMemory: '${CONTAINER_MEMORY}',
-  enableWaf: false,
+  enableWaf: ${ENABLE_WAF},
   cognitoUserPoolId: '',
   cognitoUserPoolAppId: '',
   cognitoUserPoolDomain: '',
