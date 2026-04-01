@@ -14,10 +14,6 @@ graph TB
         subgraph Private["Private Subnet"]
             ALB[Internal ALB] --> ECS[Amazon ECS]
         end
-        subgraph Public["Public Subnet"]
-            NAT[NAT Gateway]
-        end
-        ECS -->|Egress| NAT
     end
 
     Cognito[Amazon Cognito] -.->|認証| CloudFront
