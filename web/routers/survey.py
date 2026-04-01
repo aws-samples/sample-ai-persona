@@ -57,7 +57,7 @@ def get_survey_manager() -> SurveyManager:
 # =========================================================================
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("", response_class=HTMLResponse)
 async def survey_index(request: Request) -> Any:
     """アンケートTOP画面"""
     return templates.TemplateResponse(
