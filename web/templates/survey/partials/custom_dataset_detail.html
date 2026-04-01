@@ -1,6 +1,7 @@
+{% from "components/icons.html" import icon_cog %}
 <div class="bg-white border border-gray-200 rounded-lg p-4 mt-2 mb-2">
     <div class="flex items-center justify-between mb-3">
-        <h4 class="text-sm font-semibold text-gray-800">📋 {{ name }} のマッピング情報</h4>
+        <h4 class="text-sm font-semibold text-gray-800">{{ icon_cog("w-4 h-4 inline") }} {{ name }} のマッピング情報</h4>
         <button type="button" onclick="this.closest('.bg-white').remove()"
                 class="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
     </div>
