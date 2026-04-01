@@ -136,7 +136,11 @@ if stack_exists "${MAIN_STACK}"; then
     log_warn "不要な場合はAWSコンソールまたはCLIで手動削除してください"
   fi
 
-  npx cdk destroy "${MAIN_STACK}" --force --region "${REGION}" 2>&1
+  npx cdk destroy "${MAIN_STACK}" --force --region "${REGION}" 2>&1 || {
+    log_warn "${MAIN_STACK} の削除に失敗しました"
+    log_warn "Lambda@Edgeのレプリカ削除に時間がかかっている可能性があります"
+    log_warn "数時間後に再度 ./destroy.sh を実行してください"
+  }
   log_info "${MAIN_STACK} を削除しました"
 else
   log_info "Step 2: ${MAIN_STACK} はスキップ"
