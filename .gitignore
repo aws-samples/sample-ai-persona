@@ -40,3 +40,4 @@ cdk/cdk.context.json
 tailwindcss
 .hypothesis/
 .DS_Store
+cdk/lambda/auth-at-edge/node_modules/

@@ -77,12 +77,16 @@ export class AIPersonaStack extends Stack {
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
     });
 
-    // CloudFront + VPC Origin + WAF
+    // CloudFront + VPC Origin + WAF + Lambda@Edge Auth
     const cdn = new CloudFrontDistribution(this, 'CloudFront', {
       loadBalancerArn: service.loadBalancerArn,
       expressEndpoint: service.endpoint,
       envName: parameter.envName,
       enableWaf: parameter.enableWaf,
+      cognitoRegion: this.region,
+      cognitoUserPoolId: parameter.cognitoUserPoolId,
+      cognitoUserPoolAppId: parameter.cognitoUserPoolAppId,
+      cognitoUserPoolDomain: parameter.cognitoUserPoolDomain,
     });
 
     this.cloudFrontDomainName = cdn.domainName;
@@ -97,21 +101,6 @@ export class AIPersonaStack extends Stack {
     new CfnOutput(this, 'InternalServiceEndpoint', {
       value: service.endpoint,
       description: 'Express Mode Internal Endpoint',
-      exportName: `${id}-InternalServiceEndpoint`,
-    });
-
-    // Outputs for manual Cognito-ALB auth setup
-    new CfnOutput(this, 'ManagedALBArn', {
-      value: service.loadBalancerArn,
-      description: 'Express Mode managed ALB ARN (for manual Cognito auth setup)',
-    });
-    new CfnOutput(this, 'ManagedListenerArn', {
-      value: service.listenerArn,
-      description: 'Express Mode managed Listener ARN (for manual Cognito auth rule)',
-    });
-    new CfnOutput(this, 'ManagedCertificateArn', {
-      value: service.certificateArn,
-      description: 'Express Mode managed ACM Certificate ARN',
     });
 
     new CfnOutput(this, 'PersonasTableName', { value: database.personasTable.tableName });

@@ -26,7 +26,16 @@ const ecrStack = new EcrStack(app, `AIPersonaEcr-${parameter.envName}`, {
   description: `AI Persona ECR Repository - ${parameter.envName}`,
 });
 
-// Step 2: Main Stack (ECS Express + CloudFront + WAF)
+// Step 2: Cognito Stack（先にデプロイ、IDをparameters.tsに設定）
+const cognitoStack = new CognitoStack(app, `AIPersonaCognito-${parameter.envName}`, {
+  env: parameter.env,
+  envName: parameter.envName,
+  domainPrefix: parameter.cognitoDomainPrefix,
+  description: `AI Persona Cognito User Pool - ${parameter.envName}`,
+});
+
+// Step 3: Main Stack (ECS Express + CloudFront + WAF + Lambda@Edge Auth)
+// 注意: CognitoStackをデプロイ後、parameters.tsにCognito IDを設定してからデプロイ
 const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
   env: parameter.env,
   parameter,
@@ -34,14 +43,3 @@ const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
   description: `AI Persona System - ${parameter.envName} environment`,
 });
 mainStack.addDependency(ecrStack);
-
-// Step 3: Cognito Stack (callback URLs use CloudFront domain)
-const cognitoStack = new CognitoStack(app, `AIPersonaCognito-${parameter.envName}`, {
-  env: parameter.env,
-  envName: parameter.envName,
-  domainPrefix: parameter.cognitoDomainPrefix,
-  cloudFrontDomainName: mainStack.cloudFrontDomainName,
-  serviceEndpoint: mainStack.serviceEndpoint,
-  description: `AI Persona Cognito User Pool - ${parameter.envName}`,
-});
-cognitoStack.addDependency(mainStack);

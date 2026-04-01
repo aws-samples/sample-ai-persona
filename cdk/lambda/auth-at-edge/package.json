@@ -1,0 +1,8 @@
+{
+  "name": "auth-at-edge",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "cognito-at-edge": "^1.5.4"
+  }
+}

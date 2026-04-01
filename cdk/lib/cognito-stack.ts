@@ -5,8 +5,6 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 export interface CognitoStackProps extends StackProps {
   envName: string;
   domainPrefix: string;
-  cloudFrontDomainName: string;
-  serviceEndpoint: string;
 }
 
 export class CognitoStack extends Stack {
@@ -17,18 +15,13 @@ export class CognitoStack extends Stack {
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
 
-    const { envName, domainPrefix, cloudFrontDomainName, serviceEndpoint } = props;
+    const { envName, domainPrefix } = props;
     const isProd = envName === 'prod';
 
-    // Callback URLs: CloudFront domain + Express Mode endpoint (for ALB Cognito auth)
-    const callbackUrls = [
-      `https://${cloudFrontDomainName}/oauth2/idpresponse`,
-      `https://${serviceEndpoint}/oauth2/idpresponse`,
-    ];
-    const logoutUrls = [
-      `https://${cloudFrontDomainName}/`,
-      `https://${serviceEndpoint}/`,
-    ];
+    // Callback URLs: placeholder — update after CloudFront deployment
+    // CloudFrontドメイン確定後にCognitoコンソールまたは再デプロイで更新
+    const callbackUrls = ['https://localhost/oauth2/idpresponse'];
+    const logoutUrls = ['https://localhost/'];
 
     this.userPool = new cognito.UserPool(this, 'Default', {
       userPoolName: `ai-persona-${envName}`,
@@ -77,26 +70,18 @@ export class CognitoStack extends Stack {
     // Outputs
     new CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
-      description: 'Cognito User Pool ID',
+      description: 'Cognito User Pool ID — set in parameters.ts cognitoUserPoolId',
       exportName: `${id}-UserPoolId`,
     });
     new CfnOutput(this, 'UserPoolClientId', {
       value: this.userPoolClient.userPoolClientId,
-      description: 'Cognito User Pool Client ID',
+      description: 'Cognito User Pool Client ID — set in parameters.ts cognitoUserPoolAppId',
       exportName: `${id}-UserPoolClientId`,
     });
     new CfnOutput(this, 'UserPoolDomainName', {
-      value: this.userPoolDomain.domainName,
-      description: 'Cognito User Pool Domain Name',
+      value: `${this.userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
+      description: 'Cognito Domain — set in parameters.ts cognitoUserPoolDomain',
       exportName: `${id}-UserPoolDomainName`,
-    });
-    new CfnOutput(this, 'CognitoDomainUrl', {
-      value: `https://${this.userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
-      description: 'Cognito Domain URL',
-    });
-    new CfnOutput(this, 'CallbackUrls', {
-      value: callbackUrls.join(', '),
-      description: 'OAuth Callback URLs (CloudFront + Express endpoint)',
     });
   }
 }

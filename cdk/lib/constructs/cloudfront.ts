@@ -2,15 +2,20 @@ import { Construct } from 'constructs';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface CloudFrontDistributionProps {
-  /** ALB ARN from Express Mode */
   loadBalancerArn: string;
-  /** Express Mode endpoint domain */
   expressEndpoint: string;
   envName: string;
   enableWaf?: boolean;
+  cognitoRegion: string;
+  cognitoUserPoolId: string;
+  cognitoUserPoolAppId: string;
+  cognitoUserPoolDomain: string;
 }
 
 export class CloudFrontDistribution extends Construct {
@@ -20,9 +25,12 @@ export class CloudFrontDistribution extends Construct {
   constructor(scope: Construct, id: string, props: CloudFrontDistributionProps) {
     super(scope, id);
 
-    const { loadBalancerArn, expressEndpoint, envName, enableWaf = true } = props;
+    const {
+      loadBalancerArn, expressEndpoint, envName, enableWaf = true,
+      cognitoRegion, cognitoUserPoolId, cognitoUserPoolAppId, cognitoUserPoolDomain,
+    } = props;
 
-    // VPC Origin via L1 (Express Mode ALB ARN is a deploy-time token)
+    // VPC Origin via L1
     const cfnVpcOrigin = new cloudfront.CfnVpcOrigin(this, 'VpcOrigin', {
       vpcOriginEndpointConfig: {
         arn: loadBalancerArn,
@@ -37,6 +45,31 @@ export class CloudFrontDistribution extends Construct {
     const vpcOrigin = cloudfront.VpcOrigin.fromVpcOriginAttributes(this, 'VpcOriginL2', {
       vpcOriginId: cfnVpcOrigin.attrId,
       domainName: expressEndpoint,
+    });
+
+    // Lambda@Edge: inject Cognito config into index.js at synth time
+    const lambdaDir = path.join(__dirname, '../../lambda/auth-at-edge');
+    const indexContent = `const { Authenticator } = require('cognito-at-edge');
+const authenticator = new Authenticator({
+  region: '${cognitoRegion}',
+  userPoolId: '${cognitoUserPoolId}',
+  userPoolAppId: '${cognitoUserPoolAppId}',
+  userPoolDomain: '${cognitoUserPoolDomain}',
+  cookieExpirationDays: 1,
+  httpOnly: true,
+  sameSite: 'Lax',
+});
+exports.handler = async (request) => authenticator.handle(request);
+`;
+    fs.writeFileSync(path.join(lambdaDir, 'index.js'), indexContent);
+
+    const authFunction = new cloudfront.experimental.EdgeFunction(this, 'AuthAtEdge', {
+      functionName: `ai-persona-auth-edge-${envName}`,
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(lambdaDir),
+      memorySize: 128,
+      timeout: cdk.Duration.seconds(5),
     });
 
     // WAF WebACL
@@ -73,29 +106,18 @@ export class CloudFrontDistribution extends Construct {
       webAclArn = webAcl.attrArn;
     }
 
-    // Origin Request Policy: forward all EXCEPT Host header.
-    // Express Mode ALB routes by Host (*.ecs.<region>.on.aws).
-    // ALL_VIEWER forwards the CloudFront domain as Host, causing ALB 404.
-    // By excluding Host, CloudFront sends the origin domain name as Host instead.
+    // Origin Request Policy (exclude Host for Express Mode ALB routing)
     const originRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'OriginRequestPolicy', {
       originRequestPolicyName: `ai-persona-orp-${envName}`,
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
-        'Accept',
-        'Accept-Language',
-        'Content-Type',
-        'Referer',
-        'User-Agent',
-        'X-Requested-With',
-        'HX-Request',
-        'HX-Current-URL',
-        'HX-Target',
-        'HX-Trigger',
+        'Accept', 'Accept-Language', 'Content-Type', 'Referer', 'User-Agent',
+        'X-Requested-With', 'HX-Request', 'HX-Current-URL', 'HX-Target', 'HX-Trigger',
       ),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
     });
 
-    // CloudFront Distribution — HTTPS to Express Mode ALB
+    // CloudFront Distribution
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `AI Persona - ${envName}`,
       defaultBehavior: {
@@ -104,6 +126,10 @@ export class CloudFrontDistribution extends Construct {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        edgeLambdas: [{
+          functionVersion: authFunction.currentVersion,
+          eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+        }],
       },
       webAclId: webAclArn,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
