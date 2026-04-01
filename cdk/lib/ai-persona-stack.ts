@@ -34,6 +34,7 @@ export class AIPersonaStack extends Stack {
     const uploadBucket = new UploadBucket(this, 'UploadBucket', {
       bucketNamePrefix: parameter.dynamoDbTablePrefix,
       accountId: this.account,
+      region: this.region,
       removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 

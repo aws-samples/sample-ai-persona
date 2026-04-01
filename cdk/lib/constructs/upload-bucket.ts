@@ -5,6 +5,7 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 export interface UploadBucketProps {
   bucketNamePrefix: string;
   accountId: string;
+  region: string;
   removalPolicy: RemovalPolicy;
 }
 
@@ -14,11 +15,11 @@ export class UploadBucket extends Construct {
   constructor(scope: Construct, id: string, props: UploadBucketProps) {
     super(scope, id);
 
-    const { bucketNamePrefix, accountId, removalPolicy } = props;
+    const { bucketNamePrefix, accountId, region, removalPolicy } = props;
 
     // S3 Bucket for file uploads
     this.bucket = new s3.Bucket(this, 'Bucket', {
-      bucketName: `${bucketNamePrefix.toLowerCase()}-uploads-${accountId}`,
+      bucketName: `${bucketNamePrefix.toLowerCase()}-uploads-${accountId}-${region}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
