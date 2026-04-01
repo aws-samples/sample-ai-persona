@@ -73,6 +73,28 @@ export class CloudFrontDistribution extends Construct {
       webAclArn = webAcl.attrArn;
     }
 
+    // Origin Request Policy: forward all EXCEPT Host header.
+    // Express Mode ALB routes by Host (*.ecs.<region>.on.aws).
+    // ALL_VIEWER forwards the CloudFront domain as Host, causing ALB 404.
+    // By excluding Host, CloudFront sends the origin domain name as Host instead.
+    const originRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'OriginRequestPolicy', {
+      originRequestPolicyName: `ai-persona-orp-${envName}`,
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+        'Accept',
+        'Accept-Language',
+        'Content-Type',
+        'Referer',
+        'User-Agent',
+        'X-Requested-With',
+        'HX-Request',
+        'HX-Current-URL',
+        'HX-Target',
+        'HX-Trigger',
+      ),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+    });
+
     // CloudFront Distribution — HTTPS to Express Mode ALB
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `AI Persona - ${envName}`,
@@ -80,7 +102,7 @@ export class CloudFrontDistribution extends Construct {
         origin: origins.VpcOrigin.withVpcOrigin(vpcOrigin),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+        originRequestPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
       },
       webAclId: webAclArn,
