@@ -5,13 +5,11 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 
 export interface CloudFrontDistributionProps {
-  /** ALB ARN from Express Mode (CfnExpressGatewayService GetAtt) */
+  /** ALB ARN from Express Mode */
   loadBalancerArn: string;
-  /** Express Mode endpoint domain (e.g., de-xxx.ecs.us-east-1.on.aws) */
+  /** Express Mode endpoint domain */
   expressEndpoint: string;
-  /** Environment name */
   envName: string;
-  /** Enable WAF */
   enableWaf?: boolean;
 }
 
@@ -24,28 +22,24 @@ export class CloudFrontDistribution extends Construct {
 
     const { loadBalancerArn, expressEndpoint, envName, enableWaf = true } = props;
 
-    // Create VPC Origin via L1 (CfnVpcOrigin) since Express Mode ALB ARN
-    // is a deploy-time token and we can't use fromAttributes without DNS name
+    // VPC Origin via L1 (Express Mode ALB ARN is a deploy-time token)
     const cfnVpcOrigin = new cloudfront.CfnVpcOrigin(this, 'VpcOrigin', {
       vpcOriginEndpointConfig: {
         arn: loadBalancerArn,
         httpPort: 80,
         httpsPort: 443,
-        originProtocolPolicy: 'http-only',
+        originProtocolPolicy: 'https-only',
         originSslProtocols: ['TLSv1.2'],
         name: `ai-persona-origin-${envName}`,
       },
     });
 
-    // Import VPC Origin as L2 for use with Distribution
-    const vpcOrigin = cloudfront.VpcOrigin.fromVpcOriginAttributes(
-      this, 'VpcOriginL2', {
-        vpcOriginId: cfnVpcOrigin.attrId,
-        domainName: expressEndpoint,
-      },
-    );
+    const vpcOrigin = cloudfront.VpcOrigin.fromVpcOriginAttributes(this, 'VpcOriginL2', {
+      vpcOriginId: cfnVpcOrigin.attrId,
+      domainName: expressEndpoint,
+    });
 
-    // WAF WebACL (scope: CLOUDFRONT requires us-east-1 deployment)
+    // WAF WebACL
     let webAclArn: string | undefined;
     if (enableWaf) {
       const webAcl = new wafv2.CfnWebACL(this, 'WebAcl', {
@@ -63,39 +57,23 @@ export class CloudFrontDistribution extends Construct {
             priority: 1,
             overrideAction: { none: {} },
             statement: {
-              managedRuleGroupStatement: {
-                vendorName: 'AWS',
-                name: 'AWSManagedRulesCommonRuleSet',
-              },
+              managedRuleGroupStatement: { vendorName: 'AWS', name: 'AWSManagedRulesCommonRuleSet' },
             },
-            visibilityConfig: {
-              cloudWatchMetricsEnabled: true,
-              metricName: 'AWSManagedRulesCommonRuleSet',
-              sampledRequestsEnabled: true,
-            },
+            visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AWSManagedRulesCommonRuleSet', sampledRequestsEnabled: true },
           },
           {
             name: 'RateLimit',
             priority: 2,
             action: { block: {} },
-            statement: {
-              rateBasedStatement: {
-                limit: 2000,
-                aggregateKeyType: 'IP',
-              },
-            },
-            visibilityConfig: {
-              cloudWatchMetricsEnabled: true,
-              metricName: 'RateLimit',
-              sampledRequestsEnabled: true,
-            },
+            statement: { rateBasedStatement: { limit: 2000, aggregateKeyType: 'IP' } },
+            visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'RateLimit', sampledRequestsEnabled: true },
           },
         ],
       });
       webAclArn = webAcl.attrArn;
     }
 
-    // CloudFront Distribution with VPC Origin
+    // CloudFront Distribution — HTTPS to Express Mode ALB
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `AI Persona - ${envName}`,
       defaultBehavior: {
@@ -112,12 +90,10 @@ export class CloudFrontDistribution extends Construct {
 
     this.domainName = this.distribution.distributionDomainName;
 
-    // Outputs
     new cdk.CfnOutput(this, 'DistributionDomainName', {
       value: this.distribution.distributionDomainName,
       description: 'CloudFront Distribution Domain Name',
     });
-
     new cdk.CfnOutput(this, 'DistributionId', {
       value: this.distribution.distributionId,
       description: 'CloudFront Distribution ID',

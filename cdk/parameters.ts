@@ -55,7 +55,7 @@ export const devParameter: AppParameter = {
   containerMemory: '4096',
   
   // CloudFront + WAF設定
-  enableWaf: true,
+  enableWaf: false,
   
   // AgentCore Memory設定
   // TODO: AgentCoreMemoryStackをデプロイ後、以下のIDを設定してください
