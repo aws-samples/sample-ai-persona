@@ -111,6 +111,9 @@ export interface AppParameter {
   containerCpu: string;
   containerMemory: string;
   enableWaf?: boolean;
+  cognitoUserPoolId: string;
+  cognitoUserPoolAppId: string;
+  cognitoUserPoolDomain: string;
   agentCoreMemoryId: string;
   summaryMemoryStrategyId: string;
   semanticMemoryStrategyId: string;
@@ -133,6 +136,9 @@ export const devParameter: AppParameter = {
   containerCpu: '${CONTAINER_CPU}',
   containerMemory: '${CONTAINER_MEMORY}',
   enableWaf: false,
+  cognitoUserPoolId: '',
+  cognitoUserPoolAppId: '',
+  cognitoUserPoolDomain: '',
   agentCoreMemoryId: '',
   summaryMemoryStrategyId: '',
   semanticMemoryStrategyId: '',
@@ -234,35 +240,89 @@ else
   log_info "長期記憶機能をスキップします"
 fi
 
+# ===== Cognito デプロイ（メインスタックより先） =====
+if [[ "${SKIP_COGNITO}" == "false" ]]; then
+  log_step "Step 7: Cognito認証のデプロイ"
+
+  cd "${PROJECT_ROOT}/cdk"
+  npx cdk deploy "AIPersonaCognito-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
+
+  COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaCognito-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+    --output text)
+  COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaCognito-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+    --output text)
+  COGNITO_DOMAIN=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaCognito-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolDomainName'].OutputValue" \
+    --output text)
+
+  log_info "Cognito User Pool ID: ${COGNITO_USER_POOL_ID}"
+  log_info "Cognito Client ID: ${COGNITO_CLIENT_ID}"
+  log_info "Cognito Domain: ${COGNITO_DOMAIN}"
+
+  sed -i "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  sed -i "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  sed -i "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  log_info "parameters.ts にCognito設定を反映しました"
+else
+  log_info "Cognito認証をスキップします"
+fi
+
 # ===== メインスタック デプロイ =====
-log_step "Step 7: メインスタック（DynamoDB + ECS）のデプロイ"
+log_step "Step 8: メインスタック（ECS + CloudFront + Lambda@Edge認証）のデプロイ"
 
 cd "${PROJECT_ROOT}/cdk"
+
+# Lambda@Edge依存関係インストール
+if [[ -f "${PROJECT_ROOT}/cdk/lambda/auth-at-edge/package.json" ]]; then
+  cd "${PROJECT_ROOT}/cdk/lambda/auth-at-edge"
+  npm install --silent 2>/dev/null
+  cd "${PROJECT_ROOT}/cdk"
+fi
+
 npx cdk deploy "AIPersona-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
 
-SERVICE_ENDPOINT=$(aws cloudformation describe-stacks \
-  --stack-name "AIPersona-${ENV_NAME}" \
-  --region "${REGION}" \
-  --query "Stacks[0].Outputs[?OutputKey=='InternalServiceEndpoint'].OutputValue" \
-  --output text)
 CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
   --stack-name "AIPersona-${ENV_NAME}" \
   --region "${REGION}" \
   --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
   --output text)
 log_info "CloudFrontドメイン: https://${CLOUDFRONT_DOMAIN}"
-log_info "内部エンドポイント: https://${SERVICE_ENDPOINT}"
 
-# ===== Cognito（オプション）=====
-if [[ "${SKIP_COGNITO}" == "false" ]]; then
-  log_step "Step 8: Cognito認証のデプロイ"
+# ===== Cognito callbackUrl更新（CloudFrontドメイン確定後） =====
+if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGNITO_CLIENT_ID}" ]]; then
+  log_step "Step 9: Cognito callbackUrl更新"
 
-  cd "${PROJECT_ROOT}/cdk"
-  npx cdk deploy "AIPersonaCognito-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
-  log_warn "ALBへのCognito認証の統合は手動で行ってください"
-  log_warn "  参考: cdk/README.md の「Cognito認証の手動設定」セクション"
-else
-  log_info "Cognito認証をスキップします"
+  COGNITO_CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
+    --user-pool-id "${COGNITO_USER_POOL_ID}" \
+    --client-id "${COGNITO_CLIENT_ID}" \
+    --region "${REGION}" \
+    --query "UserPoolClient.ClientSecret" \
+    --output text)
+
+  aws cognito-idp update-user-pool-client \
+    --user-pool-id "${COGNITO_USER_POOL_ID}" \
+    --client-id "${COGNITO_CLIENT_ID}" \
+    --region "${REGION}" \
+    --supported-identity-providers COGNITO \
+    --callback-urls "https://${CLOUDFRONT_DOMAIN}/" \
+    --logout-urls "https://${CLOUDFRONT_DOMAIN}/" \
+    --allowed-o-auth-flows code \
+    --allowed-o-auth-scopes openid email profile \
+    --allowed-o-auth-flows-user-pool-client \
+    --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH \
+    --generate-secret > /dev/null 2>&1 || {
+    log_warn "callbackUrl自動更新に失敗しました。Cognitoコンソールで手動設定してください"
+    log_warn "  Callback URL: https://${CLOUDFRONT_DOMAIN}/"
+  }
+  log_info "Cognito callbackUrlを https://${CLOUDFRONT_DOMAIN}/ に更新しました"
 fi
 
 # ===== 完了 =====
@@ -275,7 +335,5 @@ echo -e "${GREEN}╠════════════════════
 echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"
-echo -e "${GREEN}║${NC}    1. ALBのCognito認証ルールを一時解除"
-echo -e "${GREEN}║${NC}    2. ./deploy.sh --skip-memory --skip-cognito --region ${REGION}"
-echo -e "${GREEN}║${NC}    3. ALBのCognito認証ルールを再設定"
+echo -e "${GREEN}║${NC}    ./deploy.sh --skip-cognito --region ${REGION}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
