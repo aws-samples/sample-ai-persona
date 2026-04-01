@@ -238,6 +238,31 @@ if [[ "${SKIP_MEMORY}" == "false" ]]; then
   fi
 else
   log_info "長期記憶機能をスキップします"
+
+  # 既存のMemoryスタックからIDを取得してparameters.tsに反映
+  if aws cloudformation describe-stacks --stack-name "AIPersonaMemory-${ENV_NAME}" --region "${REGION}" > /dev/null 2>&1; then
+    log_info "既存のMemoryスタックからIDを取得中..."
+    MEMORY_ID=$(aws cloudformation describe-stacks \
+      --stack-name "AIPersonaMemory-${ENV_NAME}" \
+      --region "${REGION}" \
+      --query "Stacks[0].Outputs[?OutputKey=='MemoryId'].OutputValue" \
+      --output text)
+    if [[ -n "${MEMORY_ID}" && "${MEMORY_ID}" != "None" ]]; then
+      SUMMARY_STRATEGY_ID=$(aws bedrock-agentcore-control get-memory \
+        --memory-id "${MEMORY_ID}" --region "${REGION}" \
+        --query 'memory.strategies[?type==`SUMMARIZATION`].strategyId' \
+        --output text 2>/dev/null || echo "")
+      SEMANTIC_STRATEGY_ID=$(aws bedrock-agentcore-control get-memory \
+        --memory-id "${MEMORY_ID}" --region "${REGION}" \
+        --query 'memory.strategies[?type==`SEMANTIC`].strategyId' \
+        --output text 2>/dev/null || echo "")
+
+      sed -i "s/agentCoreMemoryId: ''/agentCoreMemoryId: '${MEMORY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      sed -i "s/summaryMemoryStrategyId: ''/summaryMemoryStrategyId: '${SUMMARY_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      sed -i "s/semanticMemoryStrategyId: ''/semanticMemoryStrategyId: '${SEMANTIC_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      log_info "既存のMemory設定をparameters.tsに反映しました"
+    fi
+  fi
 fi
 
 # ===== Cognito デプロイ（メインスタックより先） =====
@@ -273,6 +298,31 @@ if [[ "${SKIP_COGNITO}" == "false" ]]; then
   log_info "parameters.ts にCognito設定を反映しました"
 else
   log_info "Cognito認証をスキップします"
+
+  # 既存のCognitoスタックからIDを取得してparameters.tsに反映
+  if aws cloudformation describe-stacks --stack-name "AIPersonaCognito-${ENV_NAME}" --region "${REGION}" > /dev/null 2>&1; then
+    log_info "既存のCognitoスタックからIDを取得中..."
+    COGNITO_USER_POOL_ID=$(aws cloudformation describe-stacks \
+      --stack-name "AIPersonaCognito-${ENV_NAME}" \
+      --region "${REGION}" \
+      --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+      --output text)
+    COGNITO_CLIENT_ID=$(aws cloudformation describe-stacks \
+      --stack-name "AIPersonaCognito-${ENV_NAME}" \
+      --region "${REGION}" \
+      --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+      --output text)
+    COGNITO_DOMAIN=$(aws cloudformation describe-stacks \
+      --stack-name "AIPersonaCognito-${ENV_NAME}" \
+      --region "${REGION}" \
+      --query "Stacks[0].Outputs[?OutputKey=='UserPoolDomainName'].OutputValue" \
+      --output text)
+
+    sed -i "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed -i "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed -i "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    log_info "既存のCognito設定をparameters.tsに反映しました"
+  fi
 fi
 
 # ===== メインスタック デプロイ =====
