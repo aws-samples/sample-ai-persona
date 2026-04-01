@@ -20,7 +20,7 @@ graph TB
         ECS -->|Egress| NAT
     end
 
-    Cognito[Amazon Cognito] -->|手動でALB統合| ALB
+    Cognito[Amazon Cognito] -->|Lambda@Edge認証| CloudFront
     ECR[Amazon ECR] -.->|イメージ取得| ECS
     ECS --> DynamoDB[(Amazon DynamoDB)]
     ECS --> S3[(Amazon S3)]
@@ -35,7 +35,7 @@ graph TB
 - **VPC Origin**: CloudFrontからInternal ALBへのプライベート接続
 - **Private Subnet**: ECSタスクにパブリックIPなし
 - **Internal ALB**: Express Modeが自動管理（ACM証明書 + HTTPSリスナー自動作成）
-- **Cognito認証**: ALBリスナールールに手動設定（Express Modeの制約）
+- **Cognito認証**: CloudFront Lambda@Edge + cognito-at-edgeライブラリで自動認証（手動設定不要）
 
 ## Stack構成
 
@@ -43,8 +43,8 @@ graph TB
 |----------|------|----------|
 | AIPersonaMemory-{env} | AgentCore Memory（長期記憶） | なし |
 | AIPersonaEcr-{env} | ECRリポジトリ | なし |
-| AIPersona-{env} | VPC + DynamoDB + ECS Express + CloudFront + WAF | AIPersonaEcr |
-| AIPersonaCognito-{env} | Cognito User Pool | AIPersona |
+| AIPersona-{env} | VPC + DynamoDB + ECS Express + CloudFront + WAF + Lambda@Edge認証 | AIPersonaEcr |
+| AIPersonaCognito-{env} | Cognito User Pool | なし（先行デプロイ） |
 
 ## 開発環境
 - Docker（Docker buildにはx86環境推奨）
@@ -117,12 +117,9 @@ chmod +x deploy.sh
 
 > デフォルトのデプロイ先は `us-east-1` です。他のリージョンにデプロイする場合は `--region` を指定してください（例: `--region us-west-2`, `--region ap-northeast-1`）。
 
-全自動で ECR → Docker ビルド → AgentCore Memory → DynamoDB + ECS → Cognito がデプロイされます。
+全自動で ECR → Docker ビルド → Cognito → AgentCore Memory → ECS + CloudFront + Lambda@Edge認証 → callbackUrl更新 がデプロイされます。
 
-> **注意**: Cognito認証のALB統合は手動設定が必要です。デプロイ完了後に表示される手順に従ってください。
-- デプロイ後、ECS Express Modeで自動作成されたALBのリスナールールにCognito認証を紐づけます。
-- ALBのセキュリティグループのアウトバウンド通信を「HTTPS、Anywhere-IPv4」で追加します。
-- セルフサインアップはデフォルト有効。不要な場合は、Cognitoユーザプールの設定で「サインアップ」を無効にするのを推奨
+> セルフサインアップはデフォルト有効。不要な場合は、Cognitoユーザプールの設定で「サインアップ」を無効にするのを推奨
 
 #### オプション
 
@@ -311,22 +308,51 @@ export const devParameter: AppParameter = {
 };
 ```
 
-### 7. Main Stackのデプロイ
-
-```bash
-npx cdk deploy AIPersona-dev
-```
-
-### 8. Cognito Stackのデプロイ
-
-Main Stackのサービスエンドポイントを使用してCognitoを設定します。
+### 7. Cognito Stackのデプロイ（認証を使用する場合）
 
 ```bash
 npx cdk deploy AIPersonaCognito-dev
 ```
-- デプロイ後、ECS Express Modeで自動作成されたALBのリスナールールにCognito認証を紐づけます。
-- ALBのセキュリティグループのアウトバウンド通信を「HTTPS、Anywhere-IPv4」で追加します。
-- セルフサインアップはデフォルト有効。不要な場合は、Cognitoユーザプールの設定で「サインアップ」を無効にするのを推奨
+
+デプロイ完了後、出力されたIDを`parameters.ts`に設定します：
+
+```typescript
+cognitoUserPoolId: 'us-east-1_XXXXXXXXX',       // UserPoolId出力値
+cognitoUserPoolAppId: 'xxxxxxxxxxxxxxxxxx',       // UserPoolClientId出力値
+cognitoUserPoolDomain: 'xxx.auth.us-east-1.amazoncognito.com',  // UserPoolDomainName出力値
+```
+
+### 8. Main Stackのデプロイ
+
+```bash
+# Lambda@Edge依存関係のインストール
+cd lambda/auth-at-edge && npm install && cd ../..
+
+npx cdk deploy AIPersona-dev
+```
+
+### 9. CognitoのcallbackUrl更新
+
+メインスタックのデプロイ後、CloudFrontドメインが確定するので、CognitoのcallbackUrlを更新します：
+
+```bash
+CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+  --stack-name AIPersona-dev --region <AWS_REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
+  --output text)
+
+aws cognito-idp update-user-pool-client \
+  --user-pool-id <USER_POOL_ID> \
+  --client-id <CLIENT_ID> \
+  --region <AWS_REGION> \
+  --callback-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
+  --logout-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
+  --allowed-o-auth-flows code \
+  --allowed-o-auth-scopes openid email profile \
+  --allowed-o-auth-flows-user-pool-client \
+  --supported-identity-providers COGNITO \
+  --no-generate-secret
+```
 
 ### 手動での環境削除
 
@@ -405,12 +431,13 @@ aws cognito-idp update-user-pool-client \
   --user-pool-id <USER_POOL_ID> \
   --client-id <CLIENT_ID> \
   --region <REGION> \
-  --callback-urls "https://<CLOUDFRONT_DOMAIN>/" \
-  --logout-urls "https://<CLOUDFRONT_DOMAIN>/" \
+  --callback-urls "https://<CLOUDFRONT_DOMAIN>" "https://<CLOUDFRONT_DOMAIN>/" \
+  --logout-urls "https://<CLOUDFRONT_DOMAIN>" "https://<CLOUDFRONT_DOMAIN>/" \
   --allowed-o-auth-flows code \
   --allowed-o-auth-scopes openid email profile \
   --allowed-o-auth-flows-user-pool-client \
-  --supported-identity-providers COGNITO
+  --supported-identity-providers COGNITO \
+  --no-generate-secret
 ```
 
 ## 注意事項
@@ -486,6 +513,7 @@ aws bedrock-agentcore-control get-memory \
 
 ### Cognito認証エラー
 
-1. CallbackUrlにCloudFrontドメインとExpressエンドポイントの両方が登録されているか確認
-2. Cognito Domainがグローバルで一意か確認
-3. ALBのリスナールールにCognito認証アクションが正しく設定されているか確認
+1. `redirect_mismatch`: CognitoのcallbackUrlにCloudFrontドメイン（末尾スラッシュあり/なし両方）が登録されているか確認
+2. `503 ERROR (Lambda function invalid)`: Lambda@Edgeのcognito-at-edge node_modulesがデプロイされているか確認（`cd cdk/lambda/auth-at-edge && npm install`）
+3. Cognito Domainがグローバルで一意か確認
+4. parameters.tsのcognitoUserPoolId/AppId/Domainが正しく設定されているか確認
