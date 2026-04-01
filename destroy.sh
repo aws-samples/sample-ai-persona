@@ -78,7 +78,7 @@ stack_exists() {
 }
 
 STACKS_TO_DELETE=()
-for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${WAF_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
+for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
   if stack_exists "${stack}"; then
     log_info "  存在: ${stack}"
     STACKS_TO_DELETE+=("${stack}")
@@ -86,6 +86,13 @@ for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${WAF_STACK}" "${MEMORY_STACK}"
     log_info "  なし: ${stack} (スキップ)"
   fi
 done
+# WAF Stack は us-east-1 に作成されるため別途確認
+if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
+  log_info "  存在: ${WAF_STACK} (us-east-1)"
+  STACKS_TO_DELETE+=("${WAF_STACK}")
+else
+  log_info "  なし: ${WAF_STACK} (スキップ)"
+fi
 
 if [[ ${#STACKS_TO_DELETE[@]} -eq 0 ]]; then
   log_info "削除対象のスタックがありません。"
