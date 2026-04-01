@@ -492,7 +492,6 @@ aws bedrock-agentcore-control get-memory \
 - バージョニングが有効化されており、誤削除時の復元が可能です
 
 ## ECSサービスのアップデート時の注意
-- Lambda@Edge認証のため、ALBのCognito手動設定の解除/再設定は不要
 - CloudFrontの設定変更がある場合、反映に数分かかることがある
 - Lambda@Edgeの更新はCloudFrontのデプロイに含まれる
 
@@ -513,3 +512,6 @@ aws bedrock-agentcore-control get-memory \
 2. `503 ERROR (Lambda function invalid)`: Lambda@Edgeのcognito-at-edge node_modulesがデプロイされているか確認（`cd cdk/lambda/auth-at-edge && npm install`）
 3. Cognito Domainがグローバルで一意か確認
 4. parameters.tsのcognitoUserPoolId/AppId/Domainが正しく設定されているか確認
+
+### メインスタックの削除エラー
+- Lambda@Edgeのレプリカ削除に時間がかかっている可能性があります。少し時間を置き、再度 ./destroy.sh を実行してください
