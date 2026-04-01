@@ -162,17 +162,16 @@
                     </div>
                     
                     <div class="flex-1 relative">
-                        <input type="text" 
-                               id="message-input"
+                        <textarea id="message-input"
                                placeholder="質問やメッセージを入力してください..."
-                               class="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 pr-12 text-sm"
-                               required
-                               maxlength="500">
-                        <div class="absolute right-3 top-1/2 transform -translate-y-1/2">
+                               class="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:ring-2 focus:ring-purple-500 focus:border-purple-500 pr-12 text-sm resize-none overflow-hidden"
+                               rows="1"
+                               maxlength="500"></textarea>
+                        <div class="absolute right-3 bottom-3">
                             <span id="char-counter" class="text-xs text-gray-400">0/500</span>
                         </div>
                     </div>
-                    <button type="submit" 
+                    <button type="button" 
                             id="send-button"
                             class="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-3 rounded-2xl hover:from-purple-700 hover:to-purple-800 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none">
                         <span id="send-button-text">{{ icon_paper_airplane("w-4 h-4") }} </span>
@@ -187,7 +186,7 @@
             <!-- 入力ヒント -->
             <div class="mt-2 text-xs text-gray-500 flex items-center gap-4 flex-wrap">
                 <span>💡 具体的な質問をすると、より詳しい回答が得られます</span>
-                <span>⏎ Enterキーで送信</span>
+                <span>⌘/Ctrl+Enter で送信 · Enter で改行</span>
                 <span>📎 画像・PDF・テキストファイルを添付可能（最大10MB）</span>
             </div>
         </div>
@@ -312,6 +311,25 @@ function initializeChat() {
         e.stopPropagation();
         return false;
     });
+
+    // IME対応: compositionフラグで変換中を追跡
+    let isComposing = false;
+    messageInput.addEventListener('compositionstart', () => { isComposing = true; });
+    messageInput.addEventListener('compositionend', () => { isComposing = false; });
+
+    // Ctrl/Cmd+Enter で送信（Enterは改行としてそのまま動作）
+    messageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !isComposing && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            sendButton.click();
+        }
+    });
+
+    // textarea 自動リサイズ
+    messageInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
     
     // ファイル添付ボタンのクリックイベント
     if (attachButton && fileInput) {
@@ -336,19 +354,6 @@ function initializeChat() {
             } else {
                 charCounter.classList.remove('text-red-500');
                 charCounter.classList.add('text-gray-400');
-            }
-        });
-    }
-    
-    // Enterキーでの送信
-    if (messageInput) {
-        messageInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const message = messageInput.value.trim();
-                if (message || selectedFiles.length > 0) {
-                    sendMessage(message);
-                }
             }
         });
     }
@@ -494,6 +499,7 @@ async function sendMessage(message) {
         // ユーザーメッセージを即座に表示（添付ファイル情報も含む）
         addUserMessage(message, selectedFiles);
         messageInput.value = '';
+        messageInput.style.height = 'auto';
         if (charCounter) charCounter.textContent = '0/500';
         
         // ローディング表示
