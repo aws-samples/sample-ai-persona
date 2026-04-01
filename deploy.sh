@@ -110,6 +110,7 @@ export interface AppParameter {
   cognitoDomainPrefix: string;
   containerCpu: string;
   containerMemory: string;
+  enableWaf?: boolean;
   agentCoreMemoryId: string;
   summaryMemoryStrategyId: string;
   semanticMemoryStrategyId: string;
@@ -131,6 +132,7 @@ export const devParameter: AppParameter = {
   cognitoDomainPrefix: '${COGNITO_DOMAIN_PREFIX}',
   containerCpu: '${CONTAINER_CPU}',
   containerMemory: '${CONTAINER_MEMORY}',
+  enableWaf: false,
   agentCoreMemoryId: '',
   summaryMemoryStrategyId: '',
   semanticMemoryStrategyId: '',
@@ -241,9 +243,15 @@ npx cdk deploy "AIPersona-${ENV_NAME}" --require-approval never --region "${REGI
 SERVICE_ENDPOINT=$(aws cloudformation describe-stacks \
   --stack-name "AIPersona-${ENV_NAME}" \
   --region "${REGION}" \
-  --query "Stacks[0].Outputs[?OutputKey=='ServiceEndpoint'].OutputValue" \
+  --query "Stacks[0].Outputs[?OutputKey=='InternalServiceEndpoint'].OutputValue" \
   --output text)
-log_info "サービスエンドポイント: https://${SERVICE_ENDPOINT}"
+CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+  --stack-name "AIPersona-${ENV_NAME}" \
+  --region "${REGION}" \
+  --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
+  --output text)
+log_info "CloudFrontドメイン: https://${CLOUDFRONT_DOMAIN}"
+log_info "内部エンドポイント: https://${SERVICE_ENDPOINT}"
 
 # ===== Cognito（オプション）=====
 if [[ "${SKIP_COGNITO}" == "false" ]]; then
@@ -264,7 +272,7 @@ echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║  AI Persona System デプロイ完了                             ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${SERVICE_ENDPOINT}${NC}"
+echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"
 echo -e "${GREEN}║${NC}    ./deploy.sh --skip-memory --skip-cognito --env ${ENV_NAME}"
