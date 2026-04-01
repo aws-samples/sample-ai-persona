@@ -20,7 +20,7 @@ graph TB
         ECS -->|Egress| NAT
     end
 
-    Cognito[Amazon Cognito] -->|Lambda@Edge認証| CloudFront
+    Cognito[Amazon Cognito] -.->|認証| CloudFront
     ECR[Amazon ECR] -.->|イメージ取得| ECS
     ECS --> DynamoDB[(Amazon DynamoDB)]
     ECS --> S3[(Amazon S3)]
