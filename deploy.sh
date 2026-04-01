@@ -312,8 +312,8 @@ if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGN
     --client-id "${COGNITO_CLIENT_ID}" \
     --region "${REGION}" \
     --supported-identity-providers COGNITO \
-    --callback-urls "https://${CLOUDFRONT_DOMAIN}/" \
-    --logout-urls "https://${CLOUDFRONT_DOMAIN}/" \
+    --callback-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
+    --logout-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
     --allowed-o-auth-flows code \
     --allowed-o-auth-scopes openid email profile \
     --allowed-o-auth-flows-user-pool-client \
