@@ -63,7 +63,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 |---------|------|------|
 | 1 | **ペルソナデータ設定** | オープンデータセット（Nemotron）のDLや自社顧客データ（CSV）のアップロード・カラムマッピング |
 | 2 | **テンプレート管理** | 選択式・自由記述・スケール評価の質問作成、画像添付 |
-| 3 | **アンケート開始** | データソース選択、属性フィルタ、Bedrock Batch Inferenceで非同期実行 |
+| 3 | **アンケート開始** | ペルソナデータソース選択、属性フィルタ、サンプリング数、アンケートジョブ開始 |
 | 4 | **結果表示** | CSVダウンロード、ビジュアル分析（棒グラフ）、AIインサイトレポート |
 
 詳細な使用方法は [ユーザーガイド](docs/user_guide.md) を参照してください。
@@ -75,7 +75,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
 | AI | Amazon Bedrock (Claude Sonnet 4.5 / Haiku 4.5), Strands Agent SDK |
 | データ | DynamoDB, DuckDB, Polars, S3 |
-| インフラ | AWS CDK (TypeScript), ECS Express Mode, ECR, Cognito |
+| インフラ | AWS CDK (TypeScript), ECS Express Mode, CloudFront, Lambda@Edge, WAF, ECR, Cognito |
 | リアルタイム | Server-Sent Events (SSE) |
 
 ## テスト
