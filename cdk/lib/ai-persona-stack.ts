@@ -6,61 +6,52 @@ import { UploadBucket } from './constructs/upload-bucket';
 import { ExpressService } from './constructs/express-service';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
 import { Vpc } from './constructs/vpc';
+import { CloudFrontDistribution } from './constructs/cloudfront';
 import { AppParameter } from '../parameters';
 
 export interface AIPersonaStackProps extends StackProps {
   parameter: AppParameter;
   ecrRepository: ecr.IRepository;
+  webAclArn?: string;
 }
 
 export class AIPersonaStack extends Stack {
+  public readonly cloudFrontDomainName: string;
   public readonly serviceEndpoint: string;
 
   constructor(scope: Construct, id: string, props: AIPersonaStackProps) {
     super(scope, id, props);
 
-    const { parameter, ecrRepository } = props;
+    const { parameter, ecrRepository, webAclArn } = props;
     const isProd = parameter.envName === 'prod';
 
-    // Database (DynamoDB)
     const database = new Database(this, 'Database', {
       tablePrefix: parameter.dynamoDbTablePrefix,
       removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 
-    // VPC
-    const { vpc } = new Vpc(this, 'Vpc', {
-      envName: parameter.envName,
-    });
+    const { vpc } = new Vpc(this, 'Vpc', { envName: parameter.envName });
 
-    // S3 Bucket for file uploads
     const uploadBucket = new UploadBucket(this, 'UploadBucket', {
       bucketNamePrefix: parameter.dynamoDbTablePrefix,
       accountId: this.account,
+      region: this.region,
       removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 
-    // Bedrock Batch Inference IAM Role
     const bedrockBatchRole = new BedrockBatchRole(this, 'BedrockBatchRole', {
       bucket: uploadBucket.bucket,
     });
 
-    // AgentCore Memory IDとStrategy IDはparameters.tsから取得
-    // AgentCoreMemoryStackを先にデプロイして、IDを取得してください
     const agentCoreMemoryId = parameter.agentCoreMemoryId;
     const summaryMemoryStrategyId = parameter.summaryMemoryStrategyId;
     const semanticMemoryStrategyId = parameter.semanticMemoryStrategyId;
 
-    // IDが設定されていない場合は警告
     if (!agentCoreMemoryId || !summaryMemoryStrategyId) {
       console.warn('WARNING: AgentCore Memory IDs are not configured in parameters.ts');
-      console.warn('Please deploy AgentCoreMemoryStack first and update parameters.ts');
-    }
-    if (!semanticMemoryStrategyId) {
-      console.warn('WARNING: Semantic Memory Strategy ID is not configured in parameters.ts');
     }
 
-    // ECS Express Mode Service
+    // ECS Express Mode (Private Subnet → Internal ALB with auto HTTPS)
     const service = new ExpressService(this, 'Service', {
       vpc,
       ecrRepository,
@@ -68,15 +59,10 @@ export class AIPersonaStack extends Stack {
       containerCpu: parameter.containerCpu,
       containerMemory: parameter.containerMemory,
       dynamoDbTables: [
-        database.personasTable,
-        database.discussionsTable,
-        database.uploadedFilesTable,
-        database.datasetsTable,
-        database.bindingsTable,
-        database.surveyTemplatesTable,
-        database.surveysTable,
-        database.knowledgeBasesTable,
-        database.personaKBBindingsTable,
+        database.personasTable, database.discussionsTable, database.uploadedFilesTable,
+        database.datasetsTable, database.bindingsTable,
+        database.surveyTemplatesTable, database.surveysTable,
+        database.knowledgeBasesTable, database.personaKBBindingsTable,
       ],
       dynamoDbTablePrefix: parameter.dynamoDbTablePrefix,
       awsRegion: this.region,
@@ -92,49 +78,43 @@ export class AIPersonaStack extends Stack {
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
     });
 
+    // CloudFront + VPC Origin + WAF + Lambda@Edge Auth
+    const cdn = new CloudFrontDistribution(this, 'CloudFront', {
+      loadBalancerArn: service.loadBalancerArn,
+      expressEndpoint: service.endpoint,
+      envName: parameter.envName,
+      webAclArn,
+      cognitoRegion: this.region,
+      cognitoUserPoolId: parameter.cognitoUserPoolId,
+      cognitoUserPoolAppId: parameter.cognitoUserPoolAppId,
+      cognitoUserPoolDomain: parameter.cognitoUserPoolDomain,
+    });
+
+    this.cloudFrontDomainName = cdn.domainName;
     this.serviceEndpoint = service.endpoint;
 
-    // Outputs
-    new CfnOutput(this, 'ServiceEndpoint', {
+    // --- Outputs ---
+    new CfnOutput(this, 'CloudFrontDomainName', {
+      value: cdn.domainName,
+      description: 'CloudFront Domain Name (primary access point)',
+      exportName: `${id}-CloudFrontDomainName`,
+    });
+    new CfnOutput(this, 'InternalServiceEndpoint', {
       value: service.endpoint,
-      description: 'ECS Express Service Endpoint',
-      exportName: `${id}-ServiceEndpoint`,
+      description: 'Express Mode Internal Endpoint',
     });
 
-    new CfnOutput(this, 'PersonasTableName', {
-      value: database.personasTable.tableName,
-      description: 'DynamoDB Personas Table Name',
-    });
-
-    new CfnOutput(this, 'DiscussionsTableName', {
-      value: database.discussionsTable.tableName,
-      description: 'DynamoDB Discussions Table Name',
-    });
-
-    new CfnOutput(this, 'UploadedFilesTableName', {
-      value: database.uploadedFilesTable.tableName,
-      description: 'DynamoDB UploadedFiles Table Name',
-    });
-
+    new CfnOutput(this, 'PersonasTableName', { value: database.personasTable.tableName });
+    new CfnOutput(this, 'DiscussionsTableName', { value: database.discussionsTable.tableName });
+    new CfnOutput(this, 'UploadedFilesTableName', { value: database.uploadedFilesTable.tableName });
     new CfnOutput(this, 'UploadBucketName', {
       value: uploadBucket.bucket.bucketName,
-      description: 'S3 Upload Bucket Name',
       exportName: `${id}-UploadBucketName`,
     });
-
-    new CfnOutput(this, 'SurveyTemplatesTableName', {
-      value: database.surveyTemplatesTable.tableName,
-      description: 'DynamoDB SurveyTemplates Table Name',
-    });
-
-    new CfnOutput(this, 'SurveysTableName', {
-      value: database.surveysTable.tableName,
-      description: 'DynamoDB Surveys Table Name',
-    });
-
+    new CfnOutput(this, 'SurveyTemplatesTableName', { value: database.surveyTemplatesTable.tableName });
+    new CfnOutput(this, 'SurveysTableName', { value: database.surveysTable.tableName });
     new CfnOutput(this, 'BedrockBatchRoleArn', {
       value: bedrockBatchRole.role.roleArn,
-      description: 'Bedrock Batch Inference IAM Role ARN',
       exportName: `${id}-BedrockBatchRoleArn`,
     });
   }

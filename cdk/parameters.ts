@@ -9,10 +9,17 @@ export interface AppParameter {
   
   // Cognito設定
   cognitoDomainPrefix: string;
+  // Cognito認証設定（CognitoStackデプロイ後に設定）
+  cognitoUserPoolId: string;
+  cognitoUserPoolAppId: string;
+  cognitoUserPoolDomain: string;
   
   // ECS Express Mode設定
   containerCpu: string;
   containerMemory: string;
+  
+  // CloudFront + WAF設定
+  enableWaf?: boolean;
   
   // AgentCore Memory設定
   // AgentCoreMemoryStackをデプロイ後、出力されたIDをここに設定してください
@@ -47,9 +54,19 @@ export const devParameter: AppParameter = {
   
   dynamoDbTablePrefix: 'AIPersonaDev',
   cognitoDomainPrefix: 'ai-persona-dev', // 一意のPrefixにする必要があるため末尾にランダムな文字列かアカウントIDを付与することを推奨：例: 'ai-persona-dev-ABC1234xyz-12345678910'
+  // Cognito認証設定（CognitoStackデプロイ後に設定）
+  // 1. cdk deploy AIPersonaCognito-dev を実行
+  // 2. 出力されたUserPoolId, UserPoolClientId, CognitoDomainUrlを設定
+  // 3. メインスタックを再デプロイ: cdk deploy AIPersona-dev
+  cognitoUserPoolId: '', // 例: 'us-east-1_XXXXXXXXX'
+  cognitoUserPoolAppId: '', // 例: 'xxxxxxxxxxxxxxxxxxxxxxxxxx'
+  cognitoUserPoolDomain: '', // 例: 'ai-persona-dev-xxx.auth.us-east-1.amazoncognito.com'
   
   containerCpu: '1024',
   containerMemory: '4096',
+  
+  // CloudFront + WAF設定
+  enableWaf: false,
   
   // AgentCore Memory設定
   // TODO: AgentCoreMemoryStackをデプロイ後、以下のIDを設定してください
@@ -83,9 +100,15 @@ export const prodParameter: AppParameter = {
   
   dynamoDbTablePrefix: 'AIPersona',
   cognitoDomainPrefix: 'ai-persona-prod', // 一意のPrefixにする必要があるため末尾にランダムな文字列かアカウントIDを付与することを推奨：例: 'ai-persona-dev-ABC1234xyz-12345678910'
+  cognitoUserPoolId: '',
+  cognitoUserPoolAppId: '',
+  cognitoUserPoolDomain: '',
   
   containerCpu: '2048',
   containerMemory: '8192',
+  
+  // CloudFront + WAF設定
+  enableWaf: true,
   
   // AgentCore Memory設定
   // TODO: AgentCoreMemoryStackをデプロイ後、以下のIDを設定してください

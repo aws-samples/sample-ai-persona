@@ -66,6 +66,7 @@ PROJECT_ROOT="${SCRIPT_DIR}"
 # スタック名定義
 COGNITO_STACK="AIPersonaCognito-${ENV_NAME}"
 MAIN_STACK="AIPersona-${ENV_NAME}"
+WAF_STACK="AIPersonaWaf-${ENV_NAME}"
 MEMORY_STACK="AIPersonaMemory-${ENV_NAME}"
 ECR_STACK="AIPersonaEcr-${ENV_NAME}"
 
@@ -85,6 +86,13 @@ for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"
     log_info "  なし: ${stack} (スキップ)"
   fi
 done
+# WAF Stack は us-east-1 に作成されるため別途確認
+if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
+  log_info "  存在: ${WAF_STACK} (us-east-1)"
+  STACKS_TO_DELETE+=("${WAF_STACK}")
+else
+  log_info "  なし: ${WAF_STACK} (スキップ)"
+fi
 
 if [[ ${#STACKS_TO_DELETE[@]} -eq 0 ]]; then
   log_info "削除対象のスタックがありません。"
@@ -112,15 +120,27 @@ if [[ "${FORCE}" == "false" ]]; then
 fi
 
 cd "${PROJECT_ROOT}/cdk"
-npm install --silent 2>/dev/null
+
+delete_stack() {
+  local stack_name="$1"
+  local region="$2"
+  aws cloudformation delete-stack --stack-name "${stack_name}" --region "${region}"
+  log_info "${stack_name} の削除を開始しました。完了を待機中..."
+  aws cloudformation wait stack-delete-complete --stack-name "${stack_name}" --region "${region}" 2>&1 || {
+    log_warn "${stack_name} の削除に失敗またはタイムアウトしました"
+    log_warn "Lambda@Edgeのレプリカ削除に時間がかかっている可能性があります"
+    log_warn "数時間後に再度 ./destroy.sh を実行してください"
+    return 1
+  }
+  log_info "${stack_name} を削除しました"
+}
 
 # ===== 削除実行（依存関係の逆順） =====
 
 # 1. Cognito Stack
 if stack_exists "${COGNITO_STACK}"; then
   log_step "Step 1: Cognito Stackの削除"
-  npx cdk destroy "${COGNITO_STACK}" --force --region "${REGION}" 2>&1
-  log_info "${COGNITO_STACK} を削除しました"
+  delete_stack "${COGNITO_STACK}" "${REGION}"
 else
   log_info "Step 1: ${COGNITO_STACK} はスキップ"
 fi
@@ -129,33 +149,36 @@ fi
 if stack_exists "${MAIN_STACK}"; then
   log_step "Step 2: メインスタックの削除"
 
-  # prod環境はRemovalPolicy.RETAINのため、S3バケット・DynamoDBテーブルはスタック削除後も残ります
-  # 必要に応じて手動で削除してください
   if [[ "${ENV_NAME}" == "prod" ]]; then
     log_warn "prod環境のため、S3バケットとDynamoDBテーブルはスタック削除後も残ります"
     log_warn "不要な場合はAWSコンソールまたはCLIで手動削除してください"
   fi
 
-  npx cdk destroy "${MAIN_STACK}" --force --region "${REGION}" 2>&1
-  log_info "${MAIN_STACK} を削除しました"
+  delete_stack "${MAIN_STACK}" "${REGION}"
 else
   log_info "Step 2: ${MAIN_STACK} はスキップ"
 fi
 
-# 3. Memory Stack
-if stack_exists "${MEMORY_STACK}"; then
-  log_step "Step 3: AgentCore Memory Stackの削除"
-  npx cdk destroy "${MEMORY_STACK}" --force --region "${REGION}" 2>&1
-  log_info "${MEMORY_STACK} を削除しました"
+# 3. WAF Stack (us-east-1)
+if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
+  log_step "Step 3: WAF Stackの削除 (us-east-1)"
+  delete_stack "${WAF_STACK}" "us-east-1"
 else
-  log_info "Step 3: ${MEMORY_STACK} はスキップ"
+  log_info "Step 3: ${WAF_STACK} はスキップ"
 fi
 
-# 4. ECR Stack
-if stack_exists "${ECR_STACK}"; then
-  log_step "Step 4: ECR Stackの削除"
+# 4. Memory Stack
+if stack_exists "${MEMORY_STACK}"; then
+  log_step "Step 4: AgentCore Memory Stackの削除"
+  delete_stack "${MEMORY_STACK}" "${REGION}"
+else
+  log_info "Step 4: ${MEMORY_STACK} はスキップ"
+fi
 
-  # ECRリポジトリ内のイメージを削除
+# 5. ECR Stack
+if stack_exists "${ECR_STACK}"; then
+  log_step "Step 5: ECR Stackの削除"
+
   ECR_REPO=$(aws cloudformation describe-stack-resources \
     --stack-name "${ECR_STACK}" --region "${REGION}" \
     --query "StackResources[?ResourceType=='AWS::ECR::Repository'].PhysicalResourceId" \
@@ -170,10 +193,9 @@ if stack_exists "${ECR_STACK}"; then
     fi
   fi
 
-  npx cdk destroy "${ECR_STACK}" --force --region "${REGION}" 2>&1
-  log_info "${ECR_STACK} を削除しました"
+  delete_stack "${ECR_STACK}" "${REGION}"
 else
-  log_info "Step 4: ${ECR_STACK} はスキップ"
+  log_info "Step 5: ${ECR_STACK} はスキップ"
 fi
 
 # ===== 完了 =====

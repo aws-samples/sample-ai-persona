@@ -6,11 +6,11 @@ inclusion: manual
 
 ## 1. アーキテクチャ概要
 
-ECS Express Mode上でFastAPIアプリケーションを実行し、DynamoDB・S3・Bedrock・AgentCore Memoryと連携するサーバーレスアーキテクチャ。Cognitoによる認証付き。
+ECS Express Mode上でFastAPIアプリケーションを実行し、DynamoDB・S3・Bedrock・AgentCore Memoryと連携するサーバーレスアーキテクチャ。CloudFront + Lambda@Edge（cognito-at-edge）による認証付き。
 
 デプロイ順序:
 ```
-AgentCoreMemory → ECR → AIPersona (メイン) → Cognito
+ECR → AgentCoreMemory → Cognito → AIPersona (メイン) → callbackUrl更新
 ```
 
 ## 2. Stack一覧
@@ -20,8 +20,8 @@ AgentCoreMemory → ECR → AIPersona (メイン) → Cognito
 |----------|------|----------|
 | AIPersonaMemory-{env} | AgentCore Memory（長期記憶）。独立デプロイ後、IDをparameters.tsに設定 | なし |
 | AIPersonaEcr-{env} | ECRリポジトリ（コンテナイメージ格納） | なし |
-| AIPersona-{env} | メインスタック（DynamoDB, S3, ECS Express, IAM） | AIPersonaEcr-{env} |
-| AIPersonaCognito-{env} | Cognito User Pool（認証） | AIPersona-{env} |
+| AIPersonaCognito-{env} | Cognito User Pool（認証）。先行デプロイ後、IDをparameters.tsに設定 | なし |
+| AIPersona-{env} | メインスタック（DynamoDB, S3, ECS Express, CloudFront, VPC Origin, Lambda@Edge認証, WAF） | AIPersonaEcr-{env} |
 
 ## 3. Construct設計
 * Construct IDのSuffixに`Construct`を付けないでください。
@@ -30,10 +30,11 @@ AgentCoreMemory → ECR → AIPersona (メイン) → Cognito
 | Construct ID | 説明 |
 |-------------|------|
 | Database | DynamoDBテーブル9個（Personas, Discussions, UploadedFiles, Datasets, PersonaDatasetBindings, SurveyTemplates, Surveys, KnowledgeBases, PersonaKBBindings）。GSI付き |
-| Vpc | VPC（Public Subnet x2 AZ、NAT Gateway なし） |
+| Vpc | VPC（Public Subnet x2 AZ（NAT Gateway用）、Private Subnet x2 AZ（ECS用）、NAT Gateway x1） |
 | UploadBucket | S3バケット（ファイルアップロード、バッチ推論入出力） |
 | BedrockBatchRole | Bedrock Batch Inference用IAMロール（S3読み書き + モデル呼び出し） |
-| ExpressService | ECS Express Mode Service（ECSクラスタ、タスク定義、IAMロール、環境変数設定） |
+| ExpressService | ECS Express Mode Service（Private Subnet配置、Internal ALB自動管理） |
+| CloudFrontDistribution | CloudFront + VPC Origin + Lambda@Edge認証 + WAF（prod） |
 | AgentCoreMemory | AgentCore Memory（Summary + Semantic戦略）。CfnMemoryリソース |
 
 ### パラメータ設計
@@ -45,8 +46,12 @@ AgentCoreMemory → ECR → AIPersona (メイン) → Cognito
 | envName | 環境名（dev / prod） |
 | dynamoDbTablePrefix | DynamoDBテーブル名プレフィックス |
 | cognitoDomainPrefix | Cognito User Poolドメインプレフィックス（一意にする必要あり） |
+| cognitoUserPoolId | Cognito User Pool ID（CognitoStackデプロイ後に設定） |
+| cognitoUserPoolAppId | Cognito Client ID（CognitoStackデプロイ後に設定） |
+| cognitoUserPoolDomain | Cognito Domain（CognitoStackデプロイ後に設定） |
 | containerCpu | ECSコンテナCPU（dev: 1024, prod: 2048） |
 | containerMemory | ECSコンテナメモリ（dev: 4096, prod: 8192） |
+| enableWaf | CloudFront WAF有効化（dev: false, prod: true） |
 | agentCoreMemoryId | AgentCore Memory ID（デプロイ後に設定） |
 | summaryMemoryStrategyId | Summary Strategy ID（デプロイ後にCLIで取得して設定） |
 | semanticMemoryStrategyId | Semantic Strategy ID（デプロイ後にCLIで取得して設定） |
@@ -65,6 +70,10 @@ AgentCoreMemory → ECR → AIPersona (メイン) → Cognito
 - `aws-cdk-lib/aws-ecr` - ECRリポジトリ
 - `aws-cdk-lib/aws-iam` - IAMロール
 - `aws-cdk-lib/aws-cognito` - Cognito User Pool
+- `aws-cdk-lib/aws-cloudfront` - CloudFront Distribution, VPC Origin, EdgeFunction
+- `aws-cdk-lib/aws-cloudfront-origins` - VPC Origin Source
+- `aws-cdk-lib/aws-lambda` - Lambda@Edge関数
+- `aws-cdk-lib/aws-wafv2` - WAF WebACL
 - `aws-cdk-lib/aws-bedrockagentcore` - AgentCore Memory（CfnMemory）
 
 ## 5. ディレクトリ構造
@@ -80,11 +89,17 @@ cdk/
 │   ├── agentcore-memory-stack.ts  # AgentCore Memoryスタック
 │   └── constructs/
 │       ├── database.ts            # DynamoDBテーブル群
-│       ├── vpc.ts                 # VPC
+│       ├── vpc.ts                 # VPC（Private + Public + NAT Gateway）
 │       ├── upload-bucket.ts       # S3バケット
 │       ├── bedrock-batch-role.ts  # Batch Inference IAMロール
-│       ├── express-service.ts     # ECS Express Mode Service
+│       ├── express-service.ts     # ECS Express Mode Service（Private Subnet）
+│       ├── cloudfront.ts          # CloudFront + VPC Origin + Lambda@Edge + WAF
 │       └── agentcore-memory.ts    # AgentCore Memory
+├── lambda/
+│   └── auth-at-edge/             # Lambda@Edge認証関数（cognito-at-edge）
+│       ├── index.js              # ハンドラー（CDK synth時に動的生成）
+│       ├── package.json
+│       └── node_modules/         # cognito-at-edgeライブラリ
 ├── parameters.ts          # 環境別パラメータ（dev / prod）
 ├── cdk.json              # CDK設定
 ├── package.json
@@ -92,7 +107,12 @@ cdk/
 ```
 
 ## 6. その他の注意事項
-- AgentCoreMemoryStackは独立して先にデプロイし、出力されたMemory IDとStrategy ID（AWS CLIで取得）を`parameters.ts`に手動設定してからメインスタックをデプロイする
+- CognitoStackは先行デプロイし、出力されたUser Pool ID/Client ID/Domainを`parameters.ts`に設定してからメインスタックをデプロイする
+- メインスタックデプロイ後、CognitoのcallbackUrlをCloudFrontドメインに更新する必要がある（deploy.shでは自動実行）
+- AgentCoreMemoryStackは独立して先にデプロイし、出力されたMemory IDとStrategy ID（AWS CLIで取得）を`parameters.ts`に手動設定する
 - `cognitoDomainPrefix`はグローバルで一意にする必要があるため、末尾にアカウントIDやランダム文字列を付与することを推奨
-- ECS Express ModeはPublic Subnetを使用。IGWとルートが完全に構成されてからサービスを作成するよう依存関係を設定済み
+- ECS Express ModeはPrivate Subnetに配置。Internal ALBが自動作成される
+- CloudFront VPC OriginでInternal ALBに接続。Lambda@Edge（cognito-at-edge）で認証
+- Lambda@Edgeは環境変数をサポートしないため、Cognito設定はCDK synth時にindex.jsに埋め込む
+- Lambda@Edge削除時はレプリカの削除に数時間かかる場合がある
 - 本番環境（prod）ではRemovalPolicy.RETAINを使用し、開発環境（dev）ではRemovalPolicy.DESTROYを使用

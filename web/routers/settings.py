@@ -33,7 +33,7 @@ def get_dataset_manager() -> DatasetManager:
     return _dataset_manager
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("", response_class=HTMLResponse)
 async def settings_page(request: Request) -> Any:
     """システム設定ページ"""
     dataset_manager = get_dataset_manager()
