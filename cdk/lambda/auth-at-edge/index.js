@@ -4,8 +4,10 @@ const authenticator = new Authenticator({
   userPoolId: '',
   userPoolAppId: '',
   userPoolDomain: '',
-  cookieExpirationDays: 1,
+  cookieExpirationDays: 30,
+  cookiePath: '/',
   httpOnly: true,
   sameSite: 'Lax',
+  logLevel: 'warn',
 });
 exports.handler = async (request) => authenticator.handle(request);
