@@ -1,11 +1,14 @@
+// NOTE: This file is overwritten by cdk synth (see cdk/lib/constructs/cloudfront.ts)
 const { Authenticator } = require('cognito-at-edge');
 const authenticator = new Authenticator({
   region: 'us-east-1',
   userPoolId: '',
   userPoolAppId: '',
   userPoolDomain: '',
-  cookieExpirationDays: 1,
+  cookieExpirationDays: 30,
+  cookiePath: '/',
   httpOnly: true,
   sameSite: 'Lax',
+  logLevel: 'warn',
 });
 exports.handler = async (request) => authenticator.handle(request);
