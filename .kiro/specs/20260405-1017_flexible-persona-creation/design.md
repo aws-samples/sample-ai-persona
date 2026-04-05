@@ -55,10 +55,36 @@ DATA_TYPE_PROMPTS = {
   + カスタムプロンプト（任意）
   + アップロードデータ内容
   + 生成数指定
-  + 出力フォーマット指示
   → ペルソナ作成エージェント
-  → JSON配列でペルソナ出力
+  → agent.structured_output(PersonaList) でStructured Output取得
+  → パースエラーなしでペルソナリスト取得
 ```
+
+### Structured Output
+
+Strands SDK の `agent.structured_output(output_model)` を使用:
+
+```python
+from pydantic import BaseModel, Field
+
+class PersonaOutput(BaseModel):
+    name: str = Field(description="日本人の名前（姓 名）")
+    age: int = Field(description="年齢")
+    occupation: str = Field(description="職業")
+    background: str = Field(description="背景・経歴")
+    values: list[str] = Field(description="価値観（3-5個）")
+    pain_points: list[str] = Field(description="課題・悩み（3-5個）")
+    goals: list[str] = Field(description="目標・願望（3-5個）")
+
+class PersonaListOutput(BaseModel):
+    personas: list[PersonaOutput] = Field(description="生成されたペルソナのリスト")
+
+# 使用方法
+result = agent(prompt)  # まず通常実行
+persona_list = agent.structured_output(PersonaListOutput)  # 構造化出力取得
+```
+
+これにより、JSONパースエラーを完全に防止し、型安全にペルソナを取得できる。
 
 ### ファイル処理
 
@@ -83,8 +109,8 @@ DATA_TYPE_PROMPTS = {
 
 ### Reusable
 - `FileManager.extract_text_from_file()` — テキスト抽出
-- `AgentService._parse_personas_from_response()` — レスポンスパース
 - `PersonaManager._validate_generated_persona()` — ペルソナ検証
+- `MCPServerManager` — MotherDuck MCPクライアント管理
 - `persona/partials/persona_candidates.html` — 候補表示UI
 - `persona/partials/generated_persona.html` — 単一ペルソナ表示UI
 

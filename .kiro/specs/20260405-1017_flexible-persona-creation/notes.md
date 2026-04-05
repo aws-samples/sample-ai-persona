@@ -48,3 +48,15 @@ Guidelines:
 - 既存の `MCPServerManager` + `create_persona_agent_with_dataset()` パターンを参考に実装
 - テキスト系データ（インタビュー、レポート）はテキスト抽出→プロンプトに埋め込み
 - CSV系データはMotherDuck MCPでエージェントがSQL分析→ペルソナ生成
+
+### [2026-04-05 10:27] Structured Output採用
+
+**Facts**:
+- Strands SDK に `agent.structured_output(output_model: Type[T])` メソッドが存在
+- Pydantic BaseModel を渡すと、会話履歴から構造化データを抽出してくれる
+- pydantic は strands-agents の依存に含まれている（追加インストール不要）
+
+**Decisions**:
+- `PersonaListOutput(BaseModel)` を定義し、`agent.structured_output()` でペルソナリストを取得
+- 既存の `_parse_personas_from_response()` の正規表現JSONパースは不要に
+- これによりJSONパースエラーを完全に防止
