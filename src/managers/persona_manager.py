@@ -140,25 +140,65 @@ class PersonaManager:
 
             file_manager = FileManager()
             texts = []
+            csv_temp_paths: list[str] = []
+
             for content, filename in file_contents:
-                text = file_manager.extract_text_from_file(content, filename)
-                texts.append(f"--- {filename} ---\n{text}")
+                if filename.lower().endswith(".csv"):
+                    # CSVはMCP分析用に一時ファイルとして保存
+                    import tempfile
+                    import os
+
+                    # エンコーディング検出してUTF-8で保存
+                    for encoding in ("utf-8", "shift_jis", "euc-jp"):
+                        try:
+                            decoded = content.decode(encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        raise PersonaManagerError("CSVファイルのエンコーディングを検出できません")
+
+                    tmp = tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".csv", delete=False, encoding="utf-8"
+                    )
+                    tmp.write(decoded)
+                    tmp.close()
+                    csv_temp_paths.append(tmp.name)
+
+                    # プレビュー（先頭20行）をテキストとして追加
+                    lines = decoded.splitlines()
+                    preview = "\n".join(lines[:20])
+                    if len(lines) > 20:
+                        preview += f"\n... (全{len(lines)}行)"
+                    texts.append(f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n{preview}")
+                else:
+                    text = file_manager.extract_text_from_file(content, filename)
+                    texts.append(f"--- {filename} ---\n{text}")
+
             combined_text = "\n\n".join(texts)
 
             # CSV系データはMCPを使用
-            use_mcp = data_type in ("purchase", "review") and any(
-                fn.lower().endswith(".csv") for _, fn in file_contents
-            )
+            use_mcp = len(csv_temp_paths) > 0
 
-            agent_service = AgentService()
-            personas = agent_service.generate_personas_with_agent(
-                data_text=combined_text,
-                data_type=data_type,
-                persona_count=persona_count,
-                data_description=data_description,
-                custom_prompt=custom_prompt,
-                use_mcp=use_mcp,
-            )
+            try:
+                agent_service = AgentService()
+                personas = agent_service.generate_personas_with_agent(
+                    data_text=combined_text,
+                    data_type=data_type,
+                    persona_count=persona_count,
+                    data_description=data_description,
+                    custom_prompt=custom_prompt,
+                    use_mcp=use_mcp,
+                    csv_paths=csv_temp_paths if csv_temp_paths else None,
+                )
+            finally:
+                # 一時CSVファイルを削除
+                import os
+                for p in csv_temp_paths:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
 
             for persona in personas:
                 self._validate_generated_persona(persona)

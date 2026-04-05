@@ -1502,6 +1502,7 @@ JSON配列:"""
         data_description: str | None = None,
         custom_prompt: str | None = None,
         use_mcp: bool = False,
+        csv_paths: list[str] | None = None,
     ) -> List[Persona]:
         """
         汎用ペルソナ生成（Structured Output使用）
@@ -1513,6 +1514,7 @@ JSON配列:"""
             data_description: データ説明（other時）
             custom_prompt: カスタムプロンプト
             use_mcp: MotherDuck MCP使用
+            csv_paths: 一時CSVファイルパスのリスト（MCP分析用）
 
         Returns:
             List[Persona]: 生成されたペルソナリスト
@@ -1544,8 +1546,27 @@ JSON配列:"""
 
 # データ
 {data_text}
+"""
 
-{persona_count}個のペルソナを生成してください。"""
+            # CSVファイルがある場合、SQL分析の指示を追加
+            if csv_paths:
+                csv_info = "\n".join(
+                    f"- `{p}` （queryツールで `SELECT * FROM read_csv('{p}')` で参照可能）"
+                    for p in csv_paths
+                )
+                prompt += f"""
+# CSVデータの分析指示
+以下のCSVファイルにアクセスできます。queryツールを使ってSQLで分析してください。
+
+{csv_info}
+
+## 分析手順
+1. まず `SELECT * FROM read_csv('パス') LIMIT 5` でデータ構造を確認
+2. 集計・分析クエリでデータの傾向を把握（例: 属性分布、購買パターン、レビュー傾向）
+3. 分析結果に基づいてペルソナを生成
+"""
+
+            prompt += f"\n{persona_count}個のペルソナを生成してください。"
 
             self.logger.info(f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})")
             agent(prompt)
