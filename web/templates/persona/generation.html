@@ -155,12 +155,14 @@
 <script>
 function updateFileList(input) {
     const fileList = document.getElementById('file-list');
-    if (input.files.length === 0) {
-        fileList.innerHTML = '';
-        return;
-    }
-    const names = Array.from(input.files).map(f => f.name);
-    fileList.innerHTML = names.map(n => `<span class="inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1">${n}</span>`).join('');
+    fileList.innerHTML = '';
+    if (input.files.length === 0) return;
+    Array.from(input.files).forEach(f => {
+        const span = document.createElement('span');
+        span.className = 'inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1';
+        span.textContent = f.name;
+        fileList.appendChild(span);
+    });
 }
 </script>
 {% endblock %}
