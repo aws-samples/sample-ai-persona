@@ -108,7 +108,7 @@ class PersonaManager:
         persona_count: int,
         data_description: str | None = None,
         custom_prompt: str | None = None,
-    ) -> list[Persona]:
+    ) -> tuple[list[Persona], list[dict[str, str]]]:
         """
         統一ペルソナ生成
 

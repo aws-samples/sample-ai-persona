@@ -1568,7 +1568,7 @@ JSON配列:"""
         custom_prompt: str | None = None,
         use_mcp: bool = False,
         csv_paths: list[str] | None = None,
-    ) -> List[Persona]:
+    ) -> tuple[List[Persona], list[dict[str, str]]]:
         """
         汎用ペルソナ生成（Structured Output使用）
 

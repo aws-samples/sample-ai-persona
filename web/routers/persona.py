@@ -30,7 +30,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
 # main.pyと同じmarkdownフィルターを登録
-from web.sanitize import render_markdown
+from web.sanitize import render_markdown  # noqa: E402
 templates.env.filters["markdown"] = render_markdown
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
