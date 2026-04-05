@@ -157,7 +157,9 @@
     <!-- 生成結果表示エリア -->
     <div id="generation-result"></div>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
 function updateFileList(input) {
     const fileList = document.getElementById('file-list');
@@ -175,6 +177,7 @@ function startGeneration() {
     const form = document.getElementById('generate-form');
     const formData = new FormData(form);
     const btn = document.getElementById('generate-btn');
+    const btnOriginalHTML = btn.innerHTML;
     const progress = document.getElementById('generation-progress');
     const thinkingStream = document.getElementById('thinking-stream');
     const progressText = document.getElementById('progress-text');
@@ -201,9 +204,8 @@ function startGeneration() {
                 if (done) return;
                 buffer += decoder.decode(value, { stream: true });
 
-                // SSEイベントをパース
                 const events = buffer.split('\n\n');
-                buffer = events.pop(); // 未完了の最後の部分を保持
+                buffer = events.pop();
 
                 events.forEach(eventStr => {
                     if (!eventStr.trim()) return;
@@ -235,12 +237,8 @@ function startGeneration() {
                     } else if (eventType === 'result') {
                         progress.classList.add('hidden');
                         result.innerHTML = data;
-                        // htmxの再初期化
                         if (window.htmx) htmx.process(result);
-                        // Alpine.jsの再初期化
-                        if (window.Alpine) {
-                            Alpine.initTree(result);
-                        }
+                        if (window.Alpine) Alpine.initTree(result);
                     } else if (eventType === 'error') {
                         progress.classList.add('hidden');
                         result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">' + data + '</p></div>';
@@ -257,7 +255,7 @@ function startGeneration() {
         result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">通信エラーが発生しました</p></div>';
     }).finally(() => {
         btn.disabled = false;
-        btn.innerHTML = '{{ icon_sparkles("w-4 h-4") }} ペルソナを生成';
+        btn.innerHTML = btnOriginalHTML;
     });
 }
 </script>
