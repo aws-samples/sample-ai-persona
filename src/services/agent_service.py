@@ -1436,6 +1436,7 @@ JSON配列:"""
         data_type: str,
         data_description: str | None = None,
         custom_prompt: str | None = None,
+        use_mcp: bool = False,
     ) -> Any:
         """
         汎用ペルソナ生成エージェントを作成
@@ -1444,6 +1445,7 @@ JSON配列:"""
             data_type: データ種別 (interview, market_report, review, purchase, other)
             data_description: データの説明（data_type="other"の場合に使用）
             custom_prompt: カスタムプロンプト（任意）
+            use_mcp: MotherDuck MCPツールを付与するか
 
         Returns:
             Agent: ペルソナ生成エージェント
@@ -1530,14 +1532,28 @@ JSON配列:"""
                 region_name=config.AWS_REGION,
                 **filtered_credentials,
             )
+            tools = []
+
+            if use_mcp:
+                from .mcp_server_manager import get_mcp_manager
+
+                mcp_manager = get_mcp_manager()
+                if not mcp_manager.is_running():
+                    mcp_manager.start()
+                if mcp_manager.is_running():
+                    mcp_tools = mcp_manager.get_tools()
+                    if mcp_tools:
+                        tools.extend(mcp_tools)
+                        self.logger.info(f"Added {len(mcp_tools)} MCP tools")
 
             agent = Agent(
                 name="PersonaGenerator",
                 model=model,
                 system_prompt=system_prompt,
+                tools=tools if tools else None,
             )
 
-            self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type})")
+            self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})")
             return agent
 
         except Exception as e:
@@ -1550,6 +1566,8 @@ JSON配列:"""
         persona_count: int,
         data_description: str | None = None,
         custom_prompt: str | None = None,
+        use_mcp: bool = False,
+        csv_paths: list[str] | None = None,
     ) -> tuple[List[Persona], list[dict[str, str]]]:
         """
         汎用ペルソナ生成（Structured Output使用）
@@ -1560,6 +1578,8 @@ JSON配列:"""
             persona_count: 生成数
             data_description: データ説明（other時）
             custom_prompt: カスタムプロンプト
+            use_mcp: MotherDuck MCP使用
+            csv_paths: 一時CSVファイルパスのリスト（MCP分析用）
 
         Returns:
             List[Persona]: 生成されたペルソナリスト
@@ -1584,14 +1604,34 @@ JSON配列:"""
                 data_type=data_type,
                 data_description=data_description,
                 custom_prompt=custom_prompt,
+                use_mcp=use_mcp,
             )
 
             prompt = f"""以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。
 
 # データ
 {data_text}
+"""
 
-{persona_count}個のペルソナを生成してください。"""
+            # CSVファイルがある場合、SQL分析の指示を追加
+            if csv_paths:
+                csv_info = "\n".join(
+                    f"- `{p}` （queryツールで `SELECT * FROM read_csv('{p}')` で参照可能）"
+                    for p in csv_paths
+                )
+                prompt += f"""
+# CSVデータの分析指示
+以下のCSVファイルにアクセスできます。queryツールを使ってSQLで分析してください。
+
+{csv_info}
+
+## 分析手順
+1. まず `SELECT * FROM read_csv('パス') LIMIT 5` でデータ構造を確認
+2. 集計・分析クエリでデータの傾向を把握（例: 属性分布、購買パターン、レビュー傾向）
+3. 分析結果に基づいてペルソナを生成
+"""
+
+            prompt += f"\n{persona_count}個のペルソナを生成してください。"
 
             self.logger.info(f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})")
             agent(prompt)
