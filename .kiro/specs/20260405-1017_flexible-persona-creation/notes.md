@@ -35,3 +35,16 @@ Guidelines:
 
 ---
 **Created**: 2026-04-05
+
+### [2026-04-05 10:25] SPEC修正 - 命名変更 & MotherDuck MCP連携
+
+**Facts**:
+- ユーザーフィードバック: `flexible` 命名はわかりにくい → `/persona/generate` をそのまま使う
+- CSV系データ（購買データ、レビューデータ等）の場合、MotherDuck MCPを流用してデータ分析する方針に変更
+
+**Decisions**:
+- エンドポイント: `/persona/generate` を置き換え、`/persona/upload` を拡張
+- `AgentService.create_persona_generation_agent()` でデータ種別に応じてMotherDuck MCPツールを付与
+- 既存の `MCPServerManager` + `create_persona_agent_with_dataset()` パターンを参考に実装
+- テキスト系データ（インタビュー、レポート）はテキスト抽出→プロンプトに埋め込み
+- CSV系データはMotherDuck MCPでエージェントがSQL分析→ペルソナ生成

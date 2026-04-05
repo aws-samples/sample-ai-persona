@@ -2,16 +2,14 @@
 
 ## API Design
 
-### 新規エンドポイント
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/persona/upload-files` | 複数ファイルアップロード（htmx） |
-| POST | `/persona/generate-flexible` | 統一ペルソナ生成（htmx） |
+### エンドポイント変更
+| Method | Path | Description | 変更 |
+|--------|------|-------------|------|
+| POST | `/persona/upload` | 複数ファイルアップロード（htmx） | 既存を拡張 |
+| POST | `/persona/generate` | 統一ペルソナ生成（htmx） | 既存を置き換え |
 
 ### 廃止エンドポイント
-- `POST /persona/upload` → `POST /persona/upload-files` に統合
-- `POST /persona/generate` → `POST /persona/generate-flexible` に統合
-- `POST /persona/generate-multiple` → `POST /persona/generate-flexible` に統合
+- `POST /persona/generate-multiple` → `POST /persona/generate` に統合
 
 ## Components
 
@@ -24,10 +22,12 @@
 - `web/routers/persona.py` — 新規エンドポイント追加、旧エンドポイント廃止
 
 #### Application Layer
-- `src/managers/persona_manager.py` — `generate_personas_flexible()` メソッド追加
+- `src/managers/persona_manager.py` — `generate_personas()` メソッド追加（統一生成）
 
 #### Service Layer
-- `src/services/agent_service.py` — `generate_personas_flexible()` メソッド追加（汎用ペルソナ生成エージェント）
+- `src/services/agent_service.py` — `create_persona_generation_agent()` メソッド追加（汎用ペルソナ生成エージェント）
+  - データ種別が「購買データ」「レビューデータ」等のCSV系の場合、MotherDuck MCPツールを付与してデータ分析可能にする
+  - `MCPServerManager` 経由でMotherDuck MCPクライアントを取得し、エージェントのadditional_toolsに追加
 
 ### 新規コンポーネント
 - `web/templates/persona/partials/uploaded_files.html` — アップロード済みファイル一覧パーシャル
@@ -70,12 +70,13 @@ DATA_TYPE_PROMPTS = {
 ### UIフロー（htmx）
 
 ```
-[ファイルアップロード] → hx-post="/persona/upload-files"
+[ファイルアップロード] → hx-post="/persona/upload"
   → #uploaded-files にファイル一覧表示
 
-[生成ボタン] → hx-post="/persona/generate-flexible"
+[生成ボタン] → hx-post="/persona/generate"
   → フォームデータ: data_type, data_description, custom_prompt, persona_count, file_ids
   → #persona-result にペルソナ候補表示
+  → データ種別がCSV系の場合、エージェントがMotherDuck MCPでデータ分析→ペルソナ生成
 
 [保存] → 既存の保存フローを再利用
 ```
@@ -88,8 +89,8 @@ DATA_TYPE_PROMPTS = {
 - `persona/partials/generated_persona.html` — 単一ペルソナ表示UI
 
 ### New
-- `PersonaManager.generate_personas_flexible()` — 統一ペルソナ生成メソッド
-- `AgentService.generate_personas_flexible()` — 汎用ペルソナ生成エージェント
+- `PersonaManager.generate_personas()` — 統一ペルソナ生成メソッド
+- `AgentService.create_persona_generation_agent()` — 汎用ペルソナ生成エージェント（MotherDuck MCP連携対応）
 - `web/templates/persona/generation.html` — 統一UI（全面書き換え）
 - `web/templates/persona/partials/uploaded_files.html` — ファイル一覧パーシャル
 
