@@ -257,7 +257,14 @@ function startGeneration() {
                 if (window.Alpine) Alpine.initTree(result);
             } else if (eventType === 'error') {
                 progress.classList.add('hidden');
-                result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">' + data + '</p></div>';
+                const errDiv = document.createElement('div');
+                errDiv.className = 'bg-red-50 border border-red-200 rounded-lg p-4';
+                const errP = document.createElement('p');
+                errP.className = 'text-red-800 text-sm';
+                errP.textContent = data;
+                errDiv.appendChild(errP);
+                result.innerHTML = '';
+                result.appendChild(errDiv);
             } else if (eventType === 'done') {
                 progress.classList.add('hidden');
             }
