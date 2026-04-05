@@ -101,6 +101,75 @@ class PersonaManager:
             self.logger.error(error_msg)
             raise PersonaManagerError(error_msg)
 
+    def generate_personas(
+        self,
+        file_contents: list[tuple[bytes, str]],
+        data_type: str,
+        persona_count: int,
+        data_description: str | None = None,
+        custom_prompt: str | None = None,
+    ) -> list[Persona]:
+        """
+        統一ペルソナ生成
+
+        Args:
+            file_contents: (ファイル内容, ファイル名) のリスト
+            data_type: データ種別 (interview, market_report, review, purchase, other)
+            persona_count: 生成数 (1-10)
+            data_description: データ説明（data_type="other"時）
+            custom_prompt: カスタムプロンプト
+
+        Returns:
+            list[Persona]: 生成されたペルソナリスト
+        """
+        from ..services.agent_service import AgentService, AgentServiceError
+
+        if persona_count < 1 or persona_count > 10:
+            raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
+
+        if not file_contents:
+            raise PersonaManagerError("ファイルが選択されていません")
+
+        self.logger.info(
+            f"統一ペルソナ生成開始 (data_type={data_type}, count={persona_count}, files={len(file_contents)})"
+        )
+
+        try:
+            # 全ファイルからテキスト抽出・結合
+            from ..managers.file_manager import FileManager, FileUploadError
+
+            file_manager = FileManager()
+            texts = []
+            for content, filename in file_contents:
+                text = file_manager.extract_text_from_file(content, filename)
+                texts.append(f"--- {filename} ---\n{text}")
+            combined_text = "\n\n".join(texts)
+
+            # CSV系データはMCPを使用
+            use_mcp = data_type in ("purchase", "review") and any(
+                fn.lower().endswith(".csv") for _, fn in file_contents
+            )
+
+            agent_service = AgentService()
+            personas = agent_service.generate_personas_with_agent(
+                data_text=combined_text,
+                data_type=data_type,
+                persona_count=persona_count,
+                data_description=data_description,
+                custom_prompt=custom_prompt,
+                use_mcp=use_mcp,
+            )
+
+            self.logger.info(f"統一ペルソナ生成完了: {len(personas)}個")
+            return personas
+
+        except FileUploadError as e:
+            raise PersonaManagerError(f"ファイル処理エラー: {e}")
+        except AgentServiceError as e:
+            raise PersonaManagerError(f"エージェントサービスエラー: {e}")
+        except Exception as e:
+            raise PersonaManagerError(f"予期しないエラー: {e}")
+
     def save_persona(self, persona: Persona) -> str:
         """
         Save a persona to the database.

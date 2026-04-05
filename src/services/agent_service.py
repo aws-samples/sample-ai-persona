@@ -1402,3 +1402,176 @@ JSON配列:"""
         except Exception as e:
             self.logger.error(f"ペルソナパースエラー: {e}")
             raise AgentServiceError(f"ペルソナパースエラー: {e}")
+
+    # --- Flexible Persona Generation ---
+
+    def create_persona_generation_agent(
+        self,
+        data_type: str,
+        data_description: str | None = None,
+        custom_prompt: str | None = None,
+        use_mcp: bool = False,
+    ) -> Any:
+        """
+        汎用ペルソナ生成エージェントを作成
+
+        Args:
+            data_type: データ種別 (interview, market_report, review, purchase, other)
+            data_description: データの説明（data_type="other"の場合に使用）
+            custom_prompt: カスタムプロンプト（任意）
+            use_mcp: MotherDuck MCPツールを付与するか
+
+        Returns:
+            Agent: ペルソナ生成エージェント
+        """
+        if Agent is None or BedrockModel is None:
+            raise AgentInitializationError(
+                "Strands Agent SDKがインストールされていません"
+            )
+
+        DATA_TYPE_PROMPTS = {
+            "interview": "以下はN1インタビュー・顧客ヒアリングのデータです。発言内容から読み取れる価値観、課題、行動パターンを分析してペルソナを生成してください。",
+            "market_report": "以下は市場調査・分析レポートです。市場セグメント、顧客行動パターン、デモグラフィック情報を分析してペルソナを生成してください。",
+            "review": "以下は商品レビュー・口コミデータです。ユーザーの満足点、不満点、利用シーン、期待を分析してペルソナを生成してください。",
+            "purchase": "以下は購買データ・トランザクションデータです。購買パターン、嗜好、ライフスタイルを分析してペルソナを生成してください。",
+        }
+
+        base_prompt = DATA_TYPE_PROMPTS.get(data_type)
+        if base_prompt is None:
+            base_prompt = f"以下は「{data_description or 'ユーザー提供データ'}」です。データ内容を分析してペルソナを生成してください。"
+
+        system_prompt = f"""あなたはデータからリアルで具体的なペルソナを生成する専門家です。
+
+# 役割
+{base_prompt}
+
+# 分析アプローチ
+- データ全体を俯瞰し、異なる顧客像を抽出
+- 各ペルソナが明確に区別できるよう、特徴的な違いを強調
+- 実在しそうなリアルで具体的なペルソナを作成
+- 日本市場を想定した日本人のペルソナを生成
+
+# ペルソナの構成要素
+各ペルソナには以下を含めてください：
+- name: 日本人の名前（姓 名）
+- age: 年齢（数値）
+- occupation: 職業
+- background: 背景・経歴・ライフスタイル
+- values: 価値観（3-5個）
+- pain_points: 課題・悩み（3-5個）
+- goals: 目標・願望（3-5個）
+"""
+
+        if custom_prompt:
+            system_prompt += f"\n# ユーザーからの追加指示\n{custom_prompt}\n"
+
+        try:
+            model = self._create_bedrock_model()
+            tools = []
+
+            if use_mcp:
+                from .mcp_server_manager import get_mcp_manager
+
+                mcp_manager = get_mcp_manager()
+                if not mcp_manager.is_running():
+                    mcp_manager.start()
+                if mcp_manager.is_running():
+                    mcp_tools = mcp_manager.get_tools()
+                    if mcp_tools:
+                        tools.extend(mcp_tools)
+                        self.logger.info(f"Added {len(mcp_tools)} MCP tools")
+
+            agent = Agent(
+                name="PersonaGenerator",
+                model=model,
+                system_prompt=system_prompt,
+                tools=tools if tools else None,
+            )
+
+            self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})")
+            return agent
+
+        except Exception as e:
+            raise AgentInitializationError(f"ペルソナ生成エージェント作成エラー: {e}")
+
+    def generate_personas_with_agent(
+        self,
+        data_text: str,
+        data_type: str,
+        persona_count: int,
+        data_description: str | None = None,
+        custom_prompt: str | None = None,
+        use_mcp: bool = False,
+    ) -> List[Persona]:
+        """
+        汎用ペルソナ生成（Structured Output使用）
+
+        Args:
+            data_text: データテキスト
+            data_type: データ種別
+            persona_count: 生成数
+            data_description: データ説明（other時）
+            custom_prompt: カスタムプロンプト
+            use_mcp: MotherDuck MCP使用
+
+        Returns:
+            List[Persona]: 生成されたペルソナリスト
+        """
+        from pydantic import BaseModel, Field
+
+        class PersonaOutput(BaseModel):
+            name: str = Field(description="日本人の名前（姓 名）")
+            age: int = Field(description="年齢")
+            occupation: str = Field(description="職業")
+            background: str = Field(description="背景・経歴")
+            values: list[str] = Field(description="価値観（3-5個）")
+            pain_points: list[str] = Field(description="課題・悩み（3-5個）")
+            goals: list[str] = Field(description="目標・願望（3-5個）")
+
+        class PersonaListOutput(BaseModel):
+            personas: list[PersonaOutput] = Field(description="生成されたペルソナのリスト")
+
+        agent = None
+        try:
+            agent = self.create_persona_generation_agent(
+                data_type=data_type,
+                data_description=data_description,
+                custom_prompt=custom_prompt,
+                use_mcp=use_mcp,
+            )
+
+            prompt = f"""以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。
+
+# データ
+{data_text}
+
+{persona_count}個のペルソナを生成してください。"""
+
+            self.logger.info(f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})")
+            agent(prompt)
+
+            # Structured Outputで型安全に取得
+            result = agent.structured_output(PersonaListOutput)
+
+            personas = []
+            for p in result.personas:
+                persona = Persona.create_new(
+                    name=p.name,
+                    age=p.age,
+                    occupation=p.occupation,
+                    background=p.background,
+                    values=p.values,
+                    pain_points=p.pain_points,
+                    goals=p.goals,
+                )
+                self._validate_generated_persona(persona)
+                personas.append(persona)
+
+            self.logger.info(f"{len(personas)}個のペルソナ生成完了")
+            return personas
+
+        except Exception as e:
+            raise AgentServiceError(f"ペルソナ生成エラー: {e}")
+        finally:
+            if agent is not None:
+                self.logger.debug("ペルソナ生成エージェント処理完了")

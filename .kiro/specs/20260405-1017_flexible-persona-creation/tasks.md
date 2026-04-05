@@ -3,16 +3,16 @@
 ## Implementation Checklist
 
 ### Backend
-- [ ] `AgentService.create_persona_generation_agent(data_type, data_description, custom_prompt, persona_count, use_mcp)` 実装
-- [ ] `PersonaManager.generate_personas(file_contents, data_type, data_description, custom_prompt, persona_count)` 実装
-- [ ] `POST /persona/upload` エンドポイント拡張（複数ファイル対応）
-- [ ] `POST /persona/generate` エンドポイント置き換え（統一ペルソナ生成）
-- [ ] 旧エンドポイント（`/persona/generate-multiple`）の廃止
+- [x] `AgentService.create_persona_generation_agent(data_type, data_description, custom_prompt, persona_count, use_mcp)` 実装
+- [x] `PersonaManager.generate_personas(file_contents, data_type, data_description, custom_prompt, persona_count)` 実装
+- [x] `POST /persona/upload` エンドポイント拡張（複数ファイル対応）
+- [x] `POST /persona/generate` エンドポイント置き換え（統一ペルソナ生成）
+- [x] 旧エンドポイント（`/persona/generate-multiple`）の廃止
 
 ### Frontend
-- [ ] `web/templates/persona/generation.html` 統一UIに書き換え
-- [ ] `web/templates/persona/partials/uploaded_files.html` 新規作成
-- [ ] ファイルアップロード → データ種別選択 → プロンプト → 生成のフロー実装
+- [x] `web/templates/persona/generation.html` 統一UIに書き換え
+- [x] `web/templates/persona/partials/uploaded_files.html` 新規作成 → 不要（統一フォームで直接ファイル選択）
+- [x] ファイルアップロード → データ種別選択 → プロンプト → 生成のフロー実装
 
 ## Validation
 - [ ] インタビューデータ（プリセット）で1ペルソナ生成が動作する

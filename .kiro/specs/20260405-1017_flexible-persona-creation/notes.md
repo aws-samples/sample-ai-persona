@@ -60,3 +60,25 @@ Guidelines:
 - `PersonaListOutput(BaseModel)` を定義し、`agent.structured_output()` でペルソナリストを取得
 - 既存の `_parse_personas_from_response()` の正規表現JSONパースは不要に
 - これによりJSONパースエラーを完全に防止
+
+### [2026-04-05 10:29] 実装完了
+
+**Facts**:
+- `AgentService.create_persona_generation_agent()` 実装: データ種別ごとのベースプロンプト + MCP連携
+- `AgentService.generate_personas_with_agent()` 実装: Structured Output (`PersonaListOutput`) で型安全にペルソナ取得
+- `PersonaManager.generate_personas()` 実装: ファイルテキスト抽出→エージェント呼び出し
+- `POST /persona/generate` 置き換え: 複数ファイル + data_type + custom_prompt + persona_count を受け取る統一エンドポイント
+- `POST /persona/generate-multiple` 削除
+- `generation.html` 全面書き換え: 4ステップUI（ファイル→データ種別→プロンプト→生成）
+- `FileManager`: CSV対応追加 (`.csv` を `MARKET_REPORT_FORMATS` に追加、デコード処理追加)
+- `uploaded_files.html` パーシャルは不要と判断（フォーム内で直接ファイル選択するため）
+
+**Decisions**:
+- 1ペルソナ生成時は `generated_persona.html`、複数時は `persona_candidates.html` を使い分け
+- `_generate_personas_sync` ヘルパーで ThreadPoolExecutor 経由の非同期実行を維持
+- CSV系データ（purchase, review）でCSVファイルがある場合のみ `use_mcp=True`
+- 旧 `upload` エンドポイントはそのまま残す（他で使われている可能性）
+
+**Impressions**:
+- Structured Output により `_parse_personas_from_response` の正規表現パースが不要に
+- UIは4ステップのウィザード形式で直感的
