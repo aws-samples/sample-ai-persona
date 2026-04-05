@@ -182,7 +182,7 @@ class PersonaManager:
 
             try:
                 agent_service = AgentService()
-                personas = agent_service.generate_personas_with_agent(
+                personas, thinking_log = agent_service.generate_personas_with_agent(
                     data_text=combined_text,
                     data_type=data_type,
                     persona_count=persona_count,
@@ -204,7 +204,7 @@ class PersonaManager:
                 self._validate_generated_persona(persona)
 
             self.logger.info(f"統一ペルソナ生成完了: {len(personas)}個")
-            return personas
+            return personas, thinking_log
 
         except FileUploadError as e:
             raise PersonaManagerError(f"ファイル処理エラー: {e}")

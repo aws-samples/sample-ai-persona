@@ -1405,6 +1405,32 @@ JSON配列:"""
 
     # --- Flexible Persona Generation ---
 
+    @staticmethod
+    def _extract_thinking_log(agent: Any) -> list[dict[str, str]]:
+        """エージェントのメッセージ履歴から思考ログを抽出"""
+        log: list[dict[str, str]] = []
+        for msg in getattr(agent, "messages", []):
+            role = msg.get("role", "")
+            for block in msg.get("content", []):
+                if not isinstance(block, dict):
+                    continue
+                if "text" in block and role == "assistant":
+                    log.append({"type": "thinking", "content": block["text"]})
+                elif "toolUse" in block:
+                    tool = block["toolUse"]
+                    name = tool.get("name", "unknown")
+                    input_str = str(tool.get("input", ""))[:500]
+                    log.append({"type": "tool_call", "content": f"🔧 {name}: {input_str}"})
+                elif "toolResult" in block:
+                    result_content = block["toolResult"].get("content", [])
+                    text_parts = []
+                    for part in result_content:
+                        if isinstance(part, dict) and "text" in part:
+                            text_parts.append(part["text"][:500])
+                    if text_parts:
+                        log.append({"type": "tool_result", "content": "\n".join(text_parts)})
+        return log
+
     def create_persona_generation_agent(
         self,
         data_type: str,
@@ -1571,6 +1597,9 @@ JSON配列:"""
             self.logger.info(f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})")
             agent(prompt)
 
+            # 思考ログを抽出
+            thinking_log = self._extract_thinking_log(agent)
+
             # Structured Outputで型安全に取得
             result = agent.structured_output(PersonaListOutput)
 
@@ -1588,7 +1617,7 @@ JSON配列:"""
                 personas.append(persona)
 
             self.logger.info(f"{len(personas)}個のペルソナ生成完了")
-            return personas
+            return personas, thinking_log
 
         except Exception as e:
             raise AgentServiceError(f"ペルソナ生成エラー: {e}")

@@ -144,7 +144,7 @@ def _generate_personas_sync(
     persona_count: int,
     data_description: str | None,
     custom_prompt: str | None,
-) -> list:
+) -> tuple[list, list[dict[str, str]]]:
     """同期的な統一ペルソナ生成処理（スレッドプールで実行）"""
     persona_manager = get_persona_manager()
     return persona_manager.generate_personas(
@@ -194,7 +194,7 @@ async def generate_persona(
         )
 
         loop = asyncio.get_event_loop()
-        generated_personas = await loop.run_in_executor(
+        generated_personas, thinking_log = await loop.run_in_executor(
             executor,
             _generate_personas_sync,
             file_contents,
@@ -214,11 +214,11 @@ async def generate_persona(
         if len(generated_personas) == 1:
             return templates.TemplateResponse(
                 "persona/partials/generated_persona.html",
-                {"request": request, "persona": generated_personas[0]},
+                {"request": request, "persona": generated_personas[0], "thinking_log": thinking_log},
             )
         return templates.TemplateResponse(
             "persona/partials/persona_candidates.html",
-            {"request": request, "personas": generated_personas},
+            {"request": request, "personas": generated_personas, "thinking_log": thinking_log},
         )
 
     except PersonaManagerError as e:
