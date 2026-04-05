@@ -145,7 +145,6 @@ class PersonaManager:
             for content, filename in file_contents:
                 if filename.lower().endswith(".csv"):
                     # CSVはMCP分析用に一時ファイルとして保存
-                    import tempfile
                     import os
 
                     # エンコーディング検出してUTF-8で保存
