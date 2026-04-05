@@ -224,11 +224,13 @@ function startGeneration() {
             if (!eventStr.trim()) return;
             const lines = eventStr.split('\n');
             let eventType = '';
-            let data = '';
+            let dataLines = [];
             lines.forEach(line => {
                 if (line.startsWith('event: ')) eventType = line.slice(7);
-                if (line.startsWith('data: ')) data = line.slice(6);
+                if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+                else if (line === 'data:') dataLines.push('');
             });
+            const data = dataLines.join('\n');
             if (!eventType) return;
 
             if (eventType === 'progress') {

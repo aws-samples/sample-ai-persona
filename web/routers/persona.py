@@ -249,8 +249,10 @@ async def generate_persona(
 
 
 def _sse_event(event_type: str, data: str) -> str:
-    """SSEイベントをフォーマット"""
-    return f"event: {event_type}\ndata: {data}\n\n"
+    """SSEイベントをフォーマット（複数行データ対応）"""
+    lines = data.split("\n") if data else [""]
+    data_lines = "\n".join(f"data: {line}" for line in lines)
+    return f"event: {event_type}\n{data_lines}\n\n"
 
 
 def _sse_error(message: str) -> StreamingResponse:
