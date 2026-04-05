@@ -170,8 +170,7 @@ async def generate_persona(
     custom_prompt: str = Form(""),
     files: list[UploadFile] = File(...),
 ) -> Any:
-    """統一ペルソナ生成（SSEストリーミング・リアルタイム思考ログ）"""
-    import queue as queue_mod
+    """統一ペルソナ生成（SSEストリーミング）"""
 
     # 入力検証
     if persona_count < 1 or persona_count > 10:
@@ -191,181 +190,52 @@ async def generate_persona(
         f"統一ペルソナ生成開始(SSE) - data_type={data_type}, count={persona_count}, files={len(file_contents)}"
     )
 
-    event_queue: queue_mod.Queue[tuple[str, str] | None] = queue_mod.Queue()
+    async def event_generator() -> Any:
+        yield _sse_event("progress", "データを分析中...")
 
-    def run_generation() -> None:
-        """バックグラウンドスレッドでエージェント実行、思考ログをキューにリアルタイム送信"""
+        # バックグラウンドで生成実行
+        future = executor.submit(
+            _generate_personas_sync,
+            file_contents,
+            data_type,
+            persona_count,
+            data_description or None,
+            custom_prompt or None,
+        )
+
+        # 完了まで keepalive を送信し続ける
+        while not future.done():
+            await asyncio.sleep(3)
+            yield _sse_event("keepalive", "")
+
         try:
-            persona_manager = get_persona_manager()
+            generated_personas, thinking_log = future.result()
 
-            # PersonaManager.generate_personas のロジックをインラインで実行
-            # （キューへのリアルタイム送信が必要なため）
-            file_manager = get_file_manager()
-            texts = []
-            csv_temp_paths: list[str] = []
+            logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
-            for content_bytes, filename in file_contents:
-                if filename.lower().endswith(".csv"):
-                    import uuid as uuid_mod
-                    for enc in ("utf-8", "shift_jis", "euc-jp"):
-                        try:
-                            decoded = content_bytes.decode(enc)
-                            break
-                        except UnicodeDecodeError:
-                            continue
-                    else:
-                        event_queue.put(("error", "CSVファイルのエンコーディングを検出できません"))
-                        event_queue.put(None)
-                        return
-                    csv_path = f"/tmp/persona_csv_{uuid_mod.uuid4().hex[:8]}.csv"
-                    with open(csv_path, "w", encoding="utf-8") as fout:
-                        fout.write(decoded)
-                    csv_temp_paths.append(csv_path)
-                    lines = decoded.splitlines()
-                    preview = "\n".join(lines[:20])
-                    if len(lines) > 20:
-                        preview += f"\n... (全{len(lines)}行)"
-                    texts.append(f"--- {filename} (CSV) ---\n{preview}")
-                else:
-                    text = file_manager.extract_text_from_file(content_bytes, filename)
-                    texts.append(f"--- {filename} ---\n{text}")
-
-            combined_text = "\n\n".join(texts)
-            use_mcp = len(csv_temp_paths) > 0
-
-            from src.services.agent_service import AgentService
-            agent_service = AgentService()
-            agent = agent_service.create_persona_generation_agent(
-                data_type=data_type,
-                data_description=data_description or None,
-                custom_prompt=custom_prompt or None,
-                use_mcp=use_mcp,
-            )
-
-            # ストリーミングコールバック
-            from strands.handlers.callback_handler import PrintingCallbackHandler
-
-            class StreamingCallback(PrintingCallbackHandler):
-                def on_tool_start(self, tool: Any, input_data: Any, **kwargs: Any) -> None:
-                    tool_name = getattr(tool, "name", str(tool))
-                    event_queue.put(("thinking", json.dumps(
-                        {"type": "tool_call", "content": f"🔧 {tool_name}: {str(input_data)[:300]}"},
-                        ensure_ascii=False,
-                    )))
-
-                def on_tool_end(self, tool: Any, result: Any, **kwargs: Any) -> None:
-                    event_queue.put(("thinking", json.dumps(
-                        {"type": "tool_result", "content": str(result)[:500]},
-                        ensure_ascii=False,
-                    )))
-
-            agent.callback_handler = StreamingCallback()
-
-            # プロンプト構築・実行
-            prompt = f"以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。\n\n# データ\n{combined_text}"
-            if csv_temp_paths:
-                csv_info = "\n".join(f"- `{p}` （queryツールで `SELECT * FROM read_csv('{p}')` で参照可能）" for p in csv_temp_paths)
-                prompt += f"\n\n# CSVデータの分析指示\nqueryツールでSQL分析してください。\n{csv_info}\n\n1. `SELECT * FROM read_csv('パス') LIMIT 5` で構造確認\n2. 集計クエリでデータ傾向を把握\n3. 分析結果に基づいてペルソナ生成"
-            prompt += f"\n\n{persona_count}個のペルソナを生成してください。"
-
-            event_queue.put(("progress", "エージェントがデータを分析中..."))
-            agent(prompt)
-
-            # 思考テキストを送信
-            for msg in getattr(agent, "messages", []):
-                if msg.get("role") == "assistant":
-                    for block in msg.get("content", []):
-                        if isinstance(block, dict) and "text" in block:
-                            event_queue.put(("thinking", json.dumps(
-                                {"type": "thinking", "content": block["text"]}, ensure_ascii=False,
-                            )))
-
-            # Structured Output
-            from pydantic import BaseModel, Field
-
-            class PersonaOutput(BaseModel):
-                name: str = Field(description="名前")
-                age: int = Field(description="年齢")
-                occupation: str = Field(description="職業")
-                background: str = Field(description="背景")
-                values: list[str] = Field(description="価値観")
-                pain_points: list[str] = Field(description="課題")
-                goals: list[str] = Field(description="目標")
-
-            class PersonaListOutput(BaseModel):
-                personas: list[PersonaOutput] = Field(description="ペルソナリスト")
-
-            event_queue.put(("progress", "ペルソナを構造化中..."))
-            result_data = agent.structured_output(PersonaListOutput)
-
-            personas = []
-            for p in result_data.personas:
-                persona = Persona.create_new(
-                    name=p.name, age=p.age, occupation=p.occupation,
-                    background=p.background, values=p.values,
-                    pain_points=p.pain_points, goals=p.goals,
-                )
-                persona_manager._validate_generated_persona(persona)
+            for persona in generated_personas:
                 _temp_personas_cache[persona.id] = persona
-                personas.append(persona)
 
-            # 一時ファイル削除
-            import os
-            for p_path in csv_temp_paths:
-                try:
-                    os.unlink(p_path)
-                except OSError:
-                    pass
+            # 思考ログを送信
+            for entry in thinking_log:
+                yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
 
-            event_queue.put(("personas", json.dumps([p.id for p in personas], ensure_ascii=False)))
-            event_queue.put(None)
+            # 結果HTMLを送信
+            if len(generated_personas) == 1:
+                html = templates.get_template(
+                    "persona/partials/generated_persona.html"
+                ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+            else:
+                html = templates.get_template(
+                    "persona/partials/persona_candidates.html"
+                ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+
+            yield _sse_event("result", html)
+            yield _sse_event("done", "")
 
         except Exception as e:
             logger.error(f"ペルソナ生成エラー: {e}")
-            event_queue.put(("error", str(e)))
-            event_queue.put(None)
-
-    async def event_generator() -> Any:
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(executor, run_generation)
-
-        yield _sse_event("progress", "データを分析中...")
-
-        while True:
-            try:
-                event = await loop.run_in_executor(
-                    None, lambda: event_queue.get(timeout=1)
-                )
-            except Exception:
-                yield _sse_event("keepalive", "")
-                continue
-
-            if event is None:
-                break
-
-            event_type, data = event
-
-            if event_type == "error":
-                yield _sse_event("error", data)
-                return
-            elif event_type == "personas":
-                persona_ids = json.loads(data)
-                personas = [_temp_personas_cache[pid] for pid in persona_ids if pid in _temp_personas_cache]
-
-                if len(personas) == 1:
-                    html = templates.get_template(
-                        "persona/partials/generated_persona.html"
-                    ).render(request=request, persona=personas[0], thinking_log=[])
-                else:
-                    html = templates.get_template(
-                        "persona/partials/persona_candidates.html"
-                    ).render(request=request, personas=personas, thinking_log=[])
-
-                yield _sse_event("result", html)
-            else:
-                yield _sse_event(event_type, data)
-
-        yield _sse_event("done", "")
+            yield _sse_event("error", str(e))
 
     return StreamingResponse(
         event_generator(),
