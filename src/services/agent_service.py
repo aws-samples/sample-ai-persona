@@ -1522,7 +1522,16 @@ JSON配列:"""
             system_prompt += f"\n# ユーザーからの追加指示\n{custom_prompt}\n"
 
         try:
-            model = self._create_bedrock_model()
+            # ペルソナ生成はデータ分析の品質が重要なためSonnetを使用
+            credentials = config.get_aws_credentials()
+            filtered_credentials = {
+                k: v for k, v in credentials.items() if v is not None and k != "region_name"
+            }
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+                **filtered_credentials,
+            )
             tools = []
 
             if use_mcp:
