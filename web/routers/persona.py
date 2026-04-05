@@ -233,7 +233,7 @@ async def generate_persona(
             yield _sse_event("result", html)
             yield _sse_event("done", "")
 
-        except Exception as e:
+        except Exception:
             # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
             logger.error("ペルソナ生成エラーが発生しました。", exc_info=True)
             yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。時間をおいて再度お試しください。")
