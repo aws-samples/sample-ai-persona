@@ -158,12 +158,12 @@ class PersonaManager:
                     else:
                         raise PersonaManagerError("CSVファイルのエンコーディングを検出できません")
 
-                    tmp = tempfile.NamedTemporaryFile(
-                        mode="w", suffix=".csv", delete=False, encoding="utf-8"
-                    )
-                    tmp.write(decoded)
-                    tmp.close()
-                    csv_temp_paths.append(tmp.name)
+                    # /tmp直下にシンプルなパスで保存（LLMがパスを正確にコピーできるように）
+                    import uuid
+                    csv_path = f"/tmp/persona_csv_{uuid.uuid4().hex[:8]}.csv"
+                    with open(csv_path, "w", encoding="utf-8") as f:
+                        f.write(decoded)
+                    csv_temp_paths.append(csv_path)
 
                     # プレビュー（先頭20行）をテキストとして追加
                     lines = decoded.splitlines()
