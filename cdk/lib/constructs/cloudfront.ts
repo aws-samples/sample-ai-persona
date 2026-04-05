@@ -90,7 +90,7 @@ exports.handler = async (request) => authenticator.handle(request);
       comment: `AI Persona - ${envName}`,
       defaultBehavior: {
         origin: origins.VpcOrigin.withVpcOrigin(vpcOrigin, {
-          readTimeout: cdk.Duration.seconds(180),
+          readTimeout: cdk.Duration.seconds(120),
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
