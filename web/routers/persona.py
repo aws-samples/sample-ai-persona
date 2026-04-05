@@ -4,6 +4,7 @@
 
 import logging
 import asyncio
+import json
 import re
 from typing import Any, Optional
 from pathlib import Path
@@ -11,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+
+# main.pyと同じmarkdownフィルターを登録
+from web.sanitize import render_markdown  # noqa: E402
+templates.env.filters["markdown"] = render_markdown
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
@@ -138,55 +143,128 @@ def _generate_persona_sync(file_text: str) -> Persona:
     return persona_manager.generate_persona_from_interview(file_text)
 
 
-@router.post("/generate", response_class=HTMLResponse)
-async def generate_persona(request: Request, file_text: str = Form(...)) -> Any:
-    """ペルソナ生成処理（htmx対応）"""
-    try:
-        # 入力データの検証
-        if not file_text or not file_text.strip():
-            logger.warning("空のファイルテキストでペルソナ生成が試行されました")
-            return templates.TemplateResponse(
-                "partials/error.html",
-                {"request": request, "error": "インタビューテキストが空です"},
-                status_code=400,
-            )
+def _generate_personas_sync(
+    file_contents: list[tuple[bytes, str]],
+    data_type: str,
+    persona_count: int,
+    data_description: str | None,
+    custom_prompt: str | None,
+) -> tuple[list, list[dict[str, str]]]:
+    """同期的な統一ペルソナ生成処理（スレッドプールで実行）"""
+    persona_manager = get_persona_manager()
+    return persona_manager.generate_personas(
+        file_contents=file_contents,
+        data_type=data_type,
+        persona_count=persona_count,
+        data_description=data_description,
+        custom_prompt=custom_prompt,
+    )
 
-        logger.info(f"ペルソナ生成開始 - テキスト長: {len(file_text)} 文字")
 
-        # 同期的なAI処理をスレッドプールで非同期実行
-        loop = asyncio.get_event_loop()
-        generated_persona = await loop.run_in_executor(
-            executor, _generate_persona_sync, file_text
+@router.post("/generate", response_class=StreamingResponse)
+async def generate_persona(
+    request: Request,
+    data_type: str = Form(...),
+    persona_count: int = Form(1),
+    data_description: str = Form(""),
+    custom_prompt: str = Form(""),
+    files: list[UploadFile] = File(...),
+) -> Any:
+    """統一ペルソナ生成（SSEストリーミング）"""
+
+    # 入力検証
+    if persona_count < 1 or persona_count > 10:
+        return _sse_error("ペルソナ数は1-10の範囲で指定してください")
+
+    # ファイル読み込み
+    file_contents: list[tuple[bytes, str]] = []
+    for f in files:
+        content = await f.read()
+        if content and f.filename:
+            file_contents.append((content, f.filename))
+
+    if not file_contents:
+        return _sse_error("ファイルをアップロードしてください")
+
+    logger.info(
+        f"統一ペルソナ生成開始(SSE) - data_type={data_type}, count={persona_count}, files={len(file_contents)}"
+    )
+
+    async def event_generator() -> Any:
+        yield _sse_event("progress", "データを分析中...")
+
+        # バックグラウンドで生成実行
+        future = executor.submit(
+            _generate_personas_sync,
+            file_contents,
+            data_type,
+            persona_count,
+            data_description or None,
+            custom_prompt or None,
         )
 
-        logger.info(f"ペルソナ生成成功: {generated_persona.name}")
+        # 完了まで keepalive を送信し続ける
+        while not future.done():
+            await asyncio.sleep(3)
+            yield _sse_event("keepalive", "")
 
-        return templates.TemplateResponse(
-            "persona/partials/generated_persona.html",
-            {"request": request, "persona": generated_persona},
-        )
-    except PersonaManagerError as e:
-        logger.error(f"ペルソナ生成エラー: {e}")
-        # より詳細なエラー情報をログに記録
-        import traceback
+        try:
+            generated_personas, thinking_log = future.result()
 
-        logger.error(f"ペルソナ生成エラーの詳細: {traceback.format_exc()}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": f"ペルソナ生成エラー: {str(e)}"},
-            status_code=500,
-        )
-    except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
-        # より詳細なエラー情報をログに記録
-        import traceback
+            logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
-        logger.error(f"予期しないエラーの詳細: {traceback.format_exc()}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの生成中にエラーが発生しました"},
-            status_code=500,
-        )
+            for persona in generated_personas:
+                _temp_personas_cache[persona.id] = persona
+
+            # 思考ログを送信
+            for entry in thinking_log:
+                yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
+
+            # 結果HTMLを送信
+            if len(generated_personas) == 1:
+                html = templates.get_template(
+                    "persona/partials/generated_persona.html"
+                ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+            else:
+                html = templates.get_template(
+                    "persona/partials/persona_candidates.html"
+                ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+
+            yield _sse_event("result", html)
+            yield _sse_event("done", "")
+
+        except Exception:
+            # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
+            logger.error("ペルソナ生成エラーが発生しました。", exc_info=True)
+            yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。時間をおいて再度お試しください。")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse_event(event_type: str, data: str) -> str:
+    """SSEイベントをフォーマット（複数行データ対応）"""
+    lines = data.split("\n") if data else [""]
+    data_lines = "\n".join(f"data: {line}" for line in lines)
+    return f"event: {event_type}\n{data_lines}\n\n"
+
+
+def _sse_error(message: str) -> StreamingResponse:
+    """SSEエラーレスポンスを返す"""
+    async def gen() -> Any:
+        yield _sse_event("error", message)
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/save", response_class=HTMLResponse)
@@ -1106,92 +1184,6 @@ async def delete_dataset_binding(request: Request, persona_id: str, binding_id: 
     logger.info(f"Deleted dataset binding: {binding_id}")
 
     return await get_dataset_bindings(request, persona_id)
-
-
-def _generate_multiple_personas_sync(
-    file_content: bytes, filename: str, persona_count: int
-) -> list:
-    """同期的な複数ペルソナ生成処理（スレッドプールで実行）"""
-    persona_manager = get_persona_manager()
-    return persona_manager.generate_personas_from_market_report(
-        file_content, filename, persona_count
-    )
-
-
-@router.post("/generate-multiple", response_class=HTMLResponse)
-async def generate_multiple_personas(
-    request: Request, file: UploadFile = File(...), persona_count: int = Form(...)
-) -> Any:
-    """市場調査レポートから複数ペルソナを生成（htmx対応）"""
-    try:
-        # 入力検証
-        if persona_count < 1 or persona_count > 10:
-            logger.warning(f"無効なペルソナ数: {persona_count}")
-            return templates.TemplateResponse(
-                "partials/error.html",
-                {
-                    "request": request,
-                    "error": "ペルソナ数は1-10の範囲で指定してください",
-                },
-                status_code=400,
-            )
-
-        # ファイル読み込み
-        file_content = await file.read()
-        if not file_content:
-            logger.warning("空のファイルがアップロードされました")
-            return templates.TemplateResponse(
-                "partials/error.html",
-                {"request": request, "error": "ファイルが空です"},
-                status_code=400,
-            )
-
-        logger.info(
-            f"複数ペルソナ生成開始 - ファイル: {file.filename}, "
-            f"サイズ: {len(file_content)} bytes, ペルソナ数: {persona_count}"
-        )
-
-        # 同期的なAI処理をスレッドプールで非同期実行
-        loop = asyncio.get_event_loop()
-        generated_personas = await loop.run_in_executor(
-            executor,
-            _generate_multiple_personas_sync,  # type: ignore[arg-type]
-            file_content,
-            file.filename,
-            persona_count,
-        )
-
-        logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
-
-        # 生成されたペルソナをTTLキャッシュに保存（30分で自動削除）
-        for persona in generated_personas:
-            _temp_personas_cache[persona.id] = persona
-
-        return templates.TemplateResponse(
-            "persona/partials/persona_candidates.html",
-            {"request": request, "personas": generated_personas},
-        )
-
-    except PersonaManagerError as e:
-        logger.error(f"複数ペルソナ生成エラー: {e}")
-        import traceback
-
-        logger.error(f"エラー詳細: {traceback.format_exc()}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": f"ペルソナ生成エラー: {str(e)}"},
-            status_code=500,
-        )
-    except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
-        import traceback
-
-        logger.error(f"エラー詳細: {traceback.format_exc()}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの生成中にエラーが発生しました"},
-            status_code=500,
-        )
 
 
 @router.post("/save-selected", response_class=HTMLResponse)

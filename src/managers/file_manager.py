@@ -97,7 +97,7 @@ class FileManager:
     KNOWLEDGE_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
     # 市場調査レポートの許可形式
-    MARKET_REPORT_FORMATS = {".pdf", ".docx", ".doc", ".txt", ".md"}
+    MARKET_REPORT_FORMATS = {".pdf", ".docx", ".doc", ".txt", ".md", ".csv"}
     MARKET_REPORT_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
     # アンケート画像の許可形式
@@ -324,6 +324,19 @@ class FileManager:
                                 "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
                                 "テキストファイルをアップロードしてください。"
                             )
+            elif file_ext == ".csv":
+                # CSVファイルはテキストとして読み込み
+                for encoding in ("utf-8", "shift_jis", "euc-jp"):
+                    try:
+                        text = file_content.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    raise FileUploadError(
+                        "CSVファイルとして読み取れません。"
+                        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードしてください。"
+                    )
             else:
                 # PDF/Wordの場合はmarkitdownで変換
                 md = MarkItDown()

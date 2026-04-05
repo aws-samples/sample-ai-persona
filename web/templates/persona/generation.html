@@ -1,182 +1,289 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_sparkles, icon_document, icon_upload %}
+{% from "components/icons.html" import icon_sparkles, icon_document, icon_upload, icon_chat, icon_lightbulb, icon_bolt, icon_plus %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto" x-data="{ activeTab: 'interview' }">
+<div class="max-w-4xl mx-auto" x-data="{ dataType: 'interview', showDescription: false }">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
-    <p class="text-gray-600 mb-8">ペルソナに関するデータをアップロードして、AIペルソナを自動構築します。</p>
-    
-    <!-- タブナビゲーション -->
-    <div class="bg-white rounded-lg shadow-md mb-6">
-        <div class="border-b border-gray-200">
-            <nav class="flex -mb-px">
-                <button @click="activeTab = 'interview'"
-                        :class="activeTab === 'interview' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
-                        class="w-1/2 py-4 px-6 text-center border-b-2 font-medium text-sm transition-colors">
-                    {{ icon_document("w-5 h-5 inline mr-2") }}
-                    インタビューデータ
-                </button>
-                <button @click="activeTab = 'report'"
-                        :class="activeTab === 'report' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
-                        class="w-1/2 py-4 px-6 text-center border-b-2 font-medium text-sm transition-colors">
-                    {{ icon_sparkles("w-5 h-5 inline mr-2") }}
-                    調査・分析レポート
-                </button>
-            </nav>
-        </div>
-    </div>
-    
-    <!-- インタビューデータタブ -->
-    <div x-show="activeTab === 'interview'" x-transition>
-        <!-- ステップガイド -->
-        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
-            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} ペルソナ生成の流れ</h3>
-            <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
-                <li>発言やインタビューテキストファイル（.txt, .md）を準備</li>
-                <li>ファイルをアップロード（最大10MB）</li>
-                <li>AIがペルソナを自動生成（30-60秒）</li>
-                <li>生成されたペルソナを確認・編集</li>
-                <li>ペルソナを保存して完了</li>
-            </ol>
-        </div>
-        
-        <!-- ファイルアップロードセクション -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_upload("w-5 h-5 text-gray-600") }} ペルソナ関連ファイルのアップロード</h2>
-            
-            <div class="mb-4 p-4 bg-gray-50 rounded-md">
-                <p class="text-sm text-gray-600">
-                    <strong>対応ファイル形式:</strong> テキストファイル (.txt, .md)<br>
-                    <strong>最大ファイルサイズ:</strong> 10MB<br>
-                    <strong>エンコーディング:</strong> UTF-8, Shift_JIS, EUC-JP
-                </p>
-            </div>
-            
-            <form hx-post="/persona/upload"
-                  hx-target="#upload-result"
-                  hx-swap="innerHTML"
-                  hx-encoding="multipart/form-data"
-                  hx-indicator="#upload-spinner">
-                
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors" id="interview-drop-zone">
-                    <input type="file" 
-                           name="file" 
-                           id="file-input"
-                           accept=".txt,.md"
-                           required
-                           class="hidden"
-                           onchange="updateFileName(this, 'selected-file')">
-                    <label for="file-input" class="cursor-pointer">
-                        <div class="flex justify-center mb-2 text-gray-400">{{ icon_document("w-12 h-12") }}</div>
-                        <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
-                        <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
-                    </label>
-                    <p id="selected-file" class="mt-4 text-blue-600 font-medium"></p>
-                </div>
-                
-                <div class="mt-4 flex items-center justify-between">
-                    <button type="submit" 
-                            class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            id="upload-btn">
-                        <span class="htmx-indicator" id="upload-spinner">
-                            <span class="spinner inline-block mr-2"></span>
-                        </span>
-                        {{ icon_upload("w-4 h-4 inline mr-1") }} アップロード
-                    </button>
-                </div>
-            </form>
-        </div>
-        
-        <!-- アップロード結果表示エリア -->
-        <div id="upload-result"></div>
-        
-        <!-- ペルソナ生成結果表示エリア -->
-        <div id="persona-result"></div>
-    </div>
-    
-    <!-- 調査・分析レポートタブ -->
-    <div x-show="activeTab === 'report'" x-transition>
-        <!-- ステップガイド -->
-        <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-8">
-            <h3 class="font-semibold text-purple-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-5 h-5") }} 複数ペルソナ生成の流れ</h3>
-            <ol class="list-decimal list-inside text-purple-800 text-sm space-y-1">
-                <li>レポートファイル（.pdf, .docx, .txt, .md）を準備</li>
-                <li>ファイルをアップロードし、生成するペルソナ数を指定（1-10個）</li>
-                <li>AIがレポートを分析して複数ペルソナを生成（5-15分）</li>
-                <li>生成されたペルソナ候補を確認</li>
-                <li>保存したいペルソナを選択して保存</li>
-            </ol>
-        </div>
-        
-        <!-- ファイルアップロードセクション -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_upload("w-5 h-5 text-gray-600") }} 資料のアップロード</h2>
-            
-            <div class="mb-4 p-4 bg-gray-50 rounded-md">
-                <p class="text-sm text-gray-600">
-                    <strong>対応ファイル形式:</strong> PDF (.pdf), Word (.docx, .doc), テキスト (.txt, .md)<br>
-                    <strong>最大ファイルサイズ:</strong> 10MB<br>
-                    <strong>推奨内容:</strong> 市場調査レポート、顧客分析資料、マーケティングレポートなど
-                </p>
-            </div>
-            
-            <form hx-post="/persona/generate-multiple"
-                  hx-target="#multiple-result"
-                  hx-swap="innerHTML"
-                  hx-encoding="multipart/form-data"
-                  hx-indicator="#multiple-spinner">
-                
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-purple-400 transition-colors" id="report-drop-zone">
-                    <input type="file" 
-                           name="file" 
-                           id="report-file-input"
-                           accept=".pdf,.docx,.doc,.txt,.md"
-                           required
-                           class="hidden"
-                           onchange="updateFileName(this, 'selected-report-file')">
-                    <label for="report-file-input" class="cursor-pointer">
-                        <div class="flex justify-center mb-2 text-gray-400">{{ icon_document("w-12 h-12") }}</div>
-                        <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
-                        <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
-                    </label>
-                    <p id="selected-report-file" class="mt-4 text-purple-600 font-medium"></p>
-                </div>
-                
-                <div class="mt-4">
-                    <label for="persona-count" class="block text-sm font-medium text-gray-700 mb-2">
-                        生成するペルソナ数
-                    </label>
-                    <input type="number" 
-                           name="persona_count" 
-                           id="persona-count"
-                           min="1" 
-                           max="10" 
-                           value="3"
-                           required
-                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <p class="text-xs text-gray-500 mt-1">1-10個の範囲で指定してください（推奨: 3-5個）</p>
-                </div>
-                
-                <div class="mt-4 flex items-center justify-between">
-                    <button type="submit" 
-                            class="bg-purple-600 text-white px-6 py-2 rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            id="generate-multiple-btn">
-                        <span class="htmx-indicator" id="multiple-spinner">
-                            <span class="spinner inline-block mr-2"></span>
-                        </span>
-                        {{ icon_sparkles("w-4 h-4 inline mr-1") }} ペルソナを生成
-                    </button>
-                </div>
-            </form>
-        </div>
-        
-        <!-- 複数ペルソナ生成結果表示エリア -->
-        <div id="multiple-result"></div>
-    </div>
-</div>
+    <p class="text-gray-600 mb-8">データをアップロードし、作成したいペルソナの指示を入力してAIペルソナを生成します。</p>
 
+    <form id="generate-form">
+
+        <!-- Step 1: ファイルアップロード -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">1</span>
+                データファイルのアップロード
+            </h2>
+            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となるデータファイルを選択してください（複数可）</p>
+
+            <div class="mb-3 p-3 bg-gray-50 rounded-md ml-9">
+                <p class="text-xs text-gray-500">
+                    <strong>対応形式:</strong> .txt, .md, .pdf, .docx, .doc, .csv　｜　<strong>最大:</strong> 10MB/ファイル
+                </p>
+            </div>
+
+            <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors ml-9" id="drop-zone">
+                <input type="file"
+                       name="files"
+                       id="file-input"
+                       accept=".txt,.md,.pdf,.docx,.doc,.csv"
+                       multiple
+                       required
+                       class="hidden"
+                       onchange="updateFileList(this)">
+                <label for="file-input" class="cursor-pointer">
+                    <div class="flex justify-center mb-2 text-gray-400">{{ icon_upload("w-10 h-10") }}</div>
+                    <p class="text-gray-600 text-sm">クリックしてファイルを選択、またはドラッグ＆ドロップ</p>
+                </label>
+                <div id="file-list" class="mt-3 text-sm text-blue-600 font-medium"></div>
+            </div>
+        </div>
+
+        <!-- Step 2: データ種別選択 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">2</span>
+                データ種別の選択
+            </h2>
+            <p class="text-sm text-gray-500 mb-4 ml-9">アップロードしたデータの種類を選択してください</p>
+
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3 ml-9">
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="interview" x-model="dataType" class="peer sr-only" checked>
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-gray-500">{{ icon_chat("w-6 h-6") }}</div>
+                        <div class="text-sm font-medium text-gray-700">インタビュー</div>
+                    </div>
+                </label>
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="market_report" x-model="dataType" class="peer sr-only">
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-gray-500">{{ icon_document("w-6 h-6") }}</div>
+                        <div class="text-sm font-medium text-gray-700">市場調査レポート</div>
+                    </div>
+                </label>
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="review" x-model="dataType" class="peer sr-only">
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-gray-500">{{ icon_lightbulb("w-6 h-6") }}</div>
+                        <div class="text-sm font-medium text-gray-700">レビューデータ</div>
+                    </div>
+                </label>
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="purchase" x-model="dataType" class="peer sr-only">
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-gray-500">{{ icon_bolt("w-6 h-6") }}</div>
+                        <div class="text-sm font-medium text-gray-700">購買データ</div>
+                    </div>
+                </label>
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="other" x-model="dataType" class="peer sr-only">
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-blue-500 peer-checked:bg-blue-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-gray-500">{{ icon_plus("w-6 h-6") }}</div>
+                        <div class="text-sm font-medium text-gray-700">その他</div>
+                    </div>
+                </label>
+            </div>
+
+            <!-- その他の場合のデータ説明入力 -->
+            <div x-show="dataType === 'other'" x-transition class="mt-4 ml-9">
+                <label for="data_description" class="block text-sm font-medium text-gray-700 mb-1">データの説明</label>
+                <input type="text"
+                       name="data_description"
+                       id="data_description"
+                       placeholder="例: 顧客満足度調査の回答データ"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+            </div>
+        </div>
+
+        <!-- Step 3: カスタムプロンプト -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">3</span>
+                ペルソナ作成の指示
+                <span class="text-xs text-gray-400 font-normal">（任意）</span>
+            </h2>
+            <p class="text-sm text-gray-500 mb-4 ml-9">作成したいペルソナの特徴や条件を自然言語で指定できます</p>
+
+            <div class="ml-9">
+                <textarea name="custom_prompt"
+                          id="custom_prompt"
+                          rows="3"
+                          placeholder="例: 30代女性で製品に不満を持つペルソナを作って / ヘビーユーザーとライトユーザーの2タイプを作成して"
+                          class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y"></textarea>
+            </div>
+        </div>
+
+        <!-- Step 4: 生成数 & 実行 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">4</span>
+                生成設定
+            </h2>
+
+            <div class="flex items-end gap-6 ml-9">
+                <div>
+                    <label for="persona_count" class="block text-sm font-medium text-gray-700 mb-1">生成数</label>
+                    <input type="number"
+                           name="persona_count"
+                           id="persona_count"
+                           min="1" max="10" value="1"
+                           required
+                           class="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    <span class="text-xs text-gray-500 ml-1">（1-10）</span>
+                </div>
+
+                <button type="button"
+                        id="generate-btn"
+                        onclick="startGeneration()"
+                        class="bg-blue-600 text-white px-8 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                    {{ icon_sparkles("w-4 h-4") }} ペルソナを生成
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <!-- 進捗表示エリア -->
+    <div id="generation-progress" class="hidden mb-6">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <span class="spinner"></span>
+                <span id="progress-text" class="text-sm text-gray-700">データを分析中...</span>
+            </div>
+            <div id="thinking-stream" class="space-y-2 max-h-64 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <!-- 生成結果表示エリア -->
+    <div id="generation-result"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
-// ドラッグ＆ドロップは app.js の setupDragAndDrop で設定済み
-// （DOMContentLoaded で #interview-drop-zone, #report-drop-zone に適用）
+function updateFileList(input) {
+    const fileList = document.getElementById('file-list');
+    fileList.innerHTML = '';
+    if (input.files.length === 0) return;
+    Array.from(input.files).forEach(f => {
+        const span = document.createElement('span');
+        span.className = 'inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1';
+        span.textContent = f.name;
+        fileList.appendChild(span);
+    });
+}
+
+function startGeneration() {
+    const form = document.getElementById('generate-form');
+    const formData = new FormData(form);
+    const btn = document.getElementById('generate-btn');
+    const btnOriginalHTML = btn.innerHTML;
+    const progress = document.getElementById('generation-progress');
+    const thinkingStream = document.getElementById('thinking-stream');
+    const progressText = document.getElementById('progress-text');
+    const result = document.getElementById('generation-result');
+
+    // UI更新
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    progress.classList.remove('hidden');
+    thinkingStream.innerHTML = '';
+    result.innerHTML = '';
+
+    fetch('/persona/generate', {
+        method: 'POST',
+        body: formData,
+        headers: { 'HX-Request': 'true' },
+    }).then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function processChunk() {
+            return reader.read().then(({ done, value }) => {
+                if (done) {
+                    // 残りバッファを処理
+                    if (buffer.trim()) processEvents(buffer);
+                    return;
+                }
+                buffer += decoder.decode(value, { stream: true });
+
+                // 完全なイベント（\n\nで区切られた部分）を処理
+                let idx;
+                while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                    const eventStr = buffer.substring(0, idx);
+                    buffer = buffer.substring(idx + 2);
+                    processEvents(eventStr);
+                }
+
+                return processChunk();
+            });
+        }
+
+        function processEvents(eventStr) {
+            if (!eventStr.trim()) return;
+            const lines = eventStr.split('\n');
+            let eventType = '';
+            let dataLines = [];
+            lines.forEach(line => {
+                if (line.startsWith('event: ')) eventType = line.slice(7);
+                if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+                else if (line === 'data:') dataLines.push('');
+            });
+            const data = dataLines.join('\n');
+            if (!eventType) return;
+
+            if (eventType === 'progress') {
+                progressText.textContent = data;
+            } else if (eventType === 'thinking') {
+                try {
+                    const entry = JSON.parse(data);
+                    const div = document.createElement('div');
+                    if (entry.type === 'thinking') {
+                        div.className = 'text-sm text-gray-700 bg-gray-50 rounded p-2';
+                    } else if (entry.type === 'tool_call') {
+                        div.className = 'text-xs text-blue-700 bg-blue-50 rounded p-2 font-mono';
+                    } else if (entry.type === 'tool_result') {
+                        div.className = 'text-xs text-green-700 bg-green-50 rounded p-2 font-mono max-h-32 overflow-y-auto';
+                    }
+                    div.textContent = entry.content;
+                    thinkingStream.appendChild(div);
+                    thinkingStream.scrollTop = thinkingStream.scrollHeight;
+                } catch(e) {}
+            } else if (eventType === 'result') {
+                progress.classList.add('hidden');
+                result.innerHTML = data;
+                if (window.htmx) htmx.process(result);
+                if (window.Alpine) Alpine.initTree(result);
+                // innerHTML挿入ではscriptが実行されないため、手動で実行
+                result.querySelectorAll('script').forEach(function(oldScript) {
+                    var newScript = document.createElement('script');
+                    newScript.textContent = oldScript.textContent;
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+            } else if (eventType === 'error') {
+                progress.classList.add('hidden');
+                const errDiv = document.createElement('div');
+                errDiv.className = 'bg-red-50 border border-red-200 rounded-lg p-4';
+                const errP = document.createElement('p');
+                errP.className = 'text-red-800 text-sm';
+                errP.textContent = data;
+                errDiv.appendChild(errP);
+                result.innerHTML = '';
+                result.appendChild(errDiv);
+            } else if (eventType === 'done') {
+                progress.classList.add('hidden');
+            }
+        }
+
+        return processChunk();
+    }).catch(err => {
+        progress.classList.add('hidden');
+        result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">通信エラーが発生しました</p></div>';
+    }).finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = btnOriginalHTML;
+    });
+}
 </script>
 {% endblock %}

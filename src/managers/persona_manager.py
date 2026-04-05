@@ -101,6 +101,117 @@ class PersonaManager:
             self.logger.error(error_msg)
             raise PersonaManagerError(error_msg)
 
+    def generate_personas(
+        self,
+        file_contents: list[tuple[bytes, str]],
+        data_type: str,
+        persona_count: int,
+        data_description: str | None = None,
+        custom_prompt: str | None = None,
+    ) -> tuple[list[Persona], list[dict[str, str]]]:
+        """
+        統一ペルソナ生成
+
+        Args:
+            file_contents: (ファイル内容, ファイル名) のリスト
+            data_type: データ種別 (interview, market_report, review, purchase, other)
+            persona_count: 生成数 (1-10)
+            data_description: データ説明（data_type="other"時）
+            custom_prompt: カスタムプロンプト
+
+        Returns:
+            list[Persona]: 生成されたペルソナリスト
+        """
+        from ..services.agent_service import AgentService, AgentServiceError
+
+        if persona_count < 1 or persona_count > 10:
+            raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
+
+        if not file_contents:
+            raise PersonaManagerError("ファイルが選択されていません")
+
+        self.logger.info(
+            f"統一ペルソナ生成開始 (data_type={data_type}, count={persona_count}, files={len(file_contents)})"
+        )
+
+        try:
+            # 全ファイルからテキスト抽出・結合
+            from ..managers.file_manager import FileManager, FileUploadError
+
+            file_manager = FileManager()
+            texts = []
+            csv_temp_paths: list[str] = []
+
+            for content, filename in file_contents:
+                if filename.lower().endswith(".csv"):
+                    # CSVはMCP分析用に一時ファイルとして保存
+                    import os
+
+                    # エンコーディング検出してUTF-8で保存
+                    for encoding in ("utf-8", "shift_jis", "euc-jp"):
+                        try:
+                            decoded = content.decode(encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        raise PersonaManagerError("CSVファイルのエンコーディングを検出できません")
+
+                    # /tmp直下にシンプルなパスで保存（LLMがパスを正確にコピーできるように）
+                    import uuid
+                    csv_path = f"/tmp/persona_csv_{uuid.uuid4().hex[:8]}.csv"
+                    with open(csv_path, "w", encoding="utf-8") as f:
+                        f.write(decoded)
+                    csv_temp_paths.append(csv_path)
+
+                    # プレビュー（先頭20行）をテキストとして追加
+                    lines = decoded.splitlines()
+                    preview = "\n".join(lines[:20])
+                    if len(lines) > 20:
+                        preview += f"\n... (全{len(lines)}行)"
+                    texts.append(f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n{preview}")
+                else:
+                    text = file_manager.extract_text_from_file(content, filename)
+                    texts.append(f"--- {filename} ---\n{text}")
+
+            combined_text = "\n\n".join(texts)
+
+            # CSV系データはMCPを使用
+            use_mcp = len(csv_temp_paths) > 0
+
+            try:
+                agent_service = AgentService()
+                personas, thinking_log = agent_service.generate_personas_with_agent(
+                    data_text=combined_text,
+                    data_type=data_type,
+                    persona_count=persona_count,
+                    data_description=data_description,
+                    custom_prompt=custom_prompt,
+                    use_mcp=use_mcp,
+                    csv_paths=csv_temp_paths if csv_temp_paths else None,
+                )
+            finally:
+                # 一時CSVファイルを削除
+                import os
+                for p in csv_temp_paths:
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+            for persona in personas:
+                self._validate_generated_persona(persona)
+
+            self.logger.info(f"統一ペルソナ生成完了: {len(personas)}個")
+            return personas, thinking_log
+
+        except FileUploadError as e:
+            raise PersonaManagerError(f"ファイル処理エラー: {e}")
+        except AgentServiceError as e:
+            raise PersonaManagerError(f"エージェントサービスエラー: {e}")
+        except Exception as e:
+            raise PersonaManagerError(f"予期しないエラー: {e}")
+
     def save_persona(self, persona: Persona) -> str:
         """
         Save a persona to the database.

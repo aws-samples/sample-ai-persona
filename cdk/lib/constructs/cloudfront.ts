@@ -89,7 +89,9 @@ exports.handler = async (request) => authenticator.handle(request);
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `AI Persona - ${envName}`,
       defaultBehavior: {
-        origin: origins.VpcOrigin.withVpcOrigin(vpcOrigin),
+        origin: origins.VpcOrigin.withVpcOrigin(vpcOrigin, {
+          readTimeout: cdk.Duration.seconds(120),
+        }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy,

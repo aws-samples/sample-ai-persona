@@ -123,38 +123,138 @@ class TestFileUploadEndpoint:
 class TestPersonaGenerateEndpoint:
     """ペルソナ生成エンドポイントのテスト"""
 
+    @patch("web.routers.persona._temp_personas_cache", {})
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_success(self, mock_get_manager, client, sample_persona):
-        """ペルソナ生成が成功することを確認"""
+        """ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
-        mock_manager.generate_persona_from_interview.return_value = sample_persona
+        mock_manager.generate_personas.return_value = ([sample_persona], [])
         mock_get_manager.return_value = mock_manager
+
+        file_content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        files = [
+            ("files", ("interview.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+        ]
 
         response = client.post(
             "/persona/generate",
+            files=files,
             data={
-                "file_text": "十分な長さのインタビューテキスト。これはテスト用のテキストです。"
+                "data_type": "interview",
+                "persona_count": 1,
+                "data_description": "",
+                "custom_prompt": "",
             },
         )
 
         assert response.status_code == 200
-        assert "田中花子" in response.text
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        assert "event: result" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_empty_text(self, mock_get_manager, client):
-        """空のテキストでエラーを返すことを確認"""
-        response = client.post("/persona/generate", data={"file_text": ""})
+        """空のファイルでエラーを返すことを確認（SSE）"""
+        files = [
+            ("files", ("empty.txt", BytesIO(b""), "text/plain")),
+        ]
 
-        # FastAPIは空文字列を422で拒否する場合がある
-        assert response.status_code in [400, 422]
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "interview",
+                "persona_count": 1,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_generate_whitespace_only(self, mock_get_manager, client):
-        """空白のみのテキストでエラーを返すことを確認"""
-        response = client.post("/persona/generate", data={"file_text": "   "})
+    def test_generate_invalid_count(self, mock_get_manager, client):
+        """無効なペルソナ数でエラーを返すことを確認（SSE）"""
+        file_content = "テスト用テキスト。" * 10
+        files = [
+            ("files", ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+        ]
 
-        assert response.status_code == 400
-        assert "インタビューテキストが空です" in response.text
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "interview",
+                "persona_count": 0,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
+
+    @patch("web.routers.persona._temp_personas_cache", {})
+    @patch("web.routers.persona.get_persona_manager")
+    def test_generate_multiple_success(
+        self, mock_get_manager, client, sample_persona, sample_persona_2
+    ):
+        """複数ペルソナ生成が成功することを確認（SSE）"""
+        mock_manager = Mock()
+        mock_manager.generate_personas.return_value = (
+            [sample_persona, sample_persona_2],
+            [{"type": "thinking", "content": "分析中..."}],
+        )
+        mock_get_manager.return_value = mock_manager
+
+        file_content = "これは市場調査レポートです。" * 50
+        files = [
+            ("files", ("report.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+        ]
+
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "market_report",
+                "persona_count": 2,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: result" in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_generate_manager_error(self, mock_get_manager, client):
+        """PersonaManagerErrorが適切に処理されることを確認（SSE）"""
+        from src.managers.persona_manager import PersonaManagerError
+
+        mock_manager = Mock()
+        mock_manager.generate_personas.side_effect = PersonaManagerError(
+            "生成エラー"
+        )
+        mock_get_manager.return_value = mock_manager
+
+        file_content = "テスト用テキスト。" * 10
+        files = [
+            ("files", ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+        ]
+
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "interview",
+                "persona_count": 1,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
 
 
 class TestPersonaSaveEndpoint:
@@ -340,115 +440,6 @@ class TestPersonaListPartialEndpoint:
         response = client.get("/persona/list/partial?search=田中")
 
         assert response.status_code == 200
-
-
-class TestMultiplePersonaGenerationEndpoint:
-    """複数ペルソナ生成エンドポイントのテスト"""
-
-    @patch("web.routers.persona._temp_personas_cache", {})
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_multiple_success(
-        self, mock_get_manager, client, sample_persona, sample_persona_2
-    ):
-        """複数ペルソナ生成が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.generate_personas_from_market_report.return_value = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_manager.return_value = mock_manager
-
-        file_content = "これは市場調査レポートです。" * 50
-        files = {
-            "file": (
-                "report.pdf",
-                BytesIO(file_content.encode("utf-8")),
-                "application/pdf",
-            )
-        }
-
-        response = client.post(
-            "/persona/generate-multiple", files=files, data={"persona_count": 2}
-        )
-
-        assert response.status_code == 200
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_multiple_invalid_count_low(self, mock_get_manager, client):
-        """ペルソナ数が0以下でエラーを返すことを確認"""
-        file_content = "これは市場調査レポートです。" * 50
-        files = {
-            "file": (
-                "report.pdf",
-                BytesIO(file_content.encode("utf-8")),
-                "application/pdf",
-            )
-        }
-
-        response = client.post(
-            "/persona/generate-multiple", files=files, data={"persona_count": 0}
-        )
-
-        assert response.status_code == 400
-        assert "1-10の範囲" in response.text
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_multiple_invalid_count_high(self, mock_get_manager, client):
-        """ペルソナ数が11以上でエラーを返すことを確認"""
-        file_content = "これは市場調査レポートです。" * 50
-        files = {
-            "file": (
-                "report.pdf",
-                BytesIO(file_content.encode("utf-8")),
-                "application/pdf",
-            )
-        }
-
-        response = client.post(
-            "/persona/generate-multiple", files=files, data={"persona_count": 11}
-        )
-
-        assert response.status_code == 400
-        assert "1-10の範囲" in response.text
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_multiple_empty_file(self, mock_get_manager, client):
-        """空ファイルでエラーを返すことを確認"""
-        files = {"file": ("report.pdf", BytesIO(b""), "application/pdf")}
-
-        response = client.post(
-            "/persona/generate-multiple", files=files, data={"persona_count": 2}
-        )
-
-        assert response.status_code == 400
-        assert "ファイルが空です" in response.text
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_multiple_manager_error(self, mock_get_manager, client):
-        """PersonaManagerErrorが適切に処理されることを確認"""
-        from src.managers.persona_manager import PersonaManagerError
-
-        mock_manager = Mock()
-        mock_manager.generate_personas_from_market_report.side_effect = (
-            PersonaManagerError("レポート解析エラー")
-        )
-        mock_get_manager.return_value = mock_manager
-
-        file_content = "これは市場調査レポートです。" * 50
-        files = {
-            "file": (
-                "report.pdf",
-                BytesIO(file_content.encode("utf-8")),
-                "application/pdf",
-            )
-        }
-
-        response = client.post(
-            "/persona/generate-multiple", files=files, data={"persona_count": 2}
-        )
-
-        assert response.status_code == 500
-        assert "ペルソナ生成エラー" in response.text
 
 
 class TestSaveSelectedPersonasEndpoint:
