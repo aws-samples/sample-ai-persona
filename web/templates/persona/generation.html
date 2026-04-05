@@ -255,6 +255,12 @@ function startGeneration() {
                 result.innerHTML = data;
                 if (window.htmx) htmx.process(result);
                 if (window.Alpine) Alpine.initTree(result);
+                // innerHTML挿入ではscriptが実行されないため、手動で実行
+                result.querySelectorAll('script').forEach(function(oldScript) {
+                    var newScript = document.createElement('script');
+                    newScript.textContent = oldScript.textContent;
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
             } else if (eventType === 'error') {
                 progress.classList.add('hidden');
                 const errDiv = document.createElement('div');
