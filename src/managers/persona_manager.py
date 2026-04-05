@@ -160,6 +160,9 @@ class PersonaManager:
                 use_mcp=use_mcp,
             )
 
+            for persona in personas:
+                self._validate_generated_persona(persona)
+
             self.logger.info(f"統一ペルソナ生成完了: {len(personas)}個")
             return personas
 

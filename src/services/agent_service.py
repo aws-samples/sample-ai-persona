@@ -1564,7 +1564,6 @@ JSON配列:"""
                     pain_points=p.pain_points,
                     goals=p.goals,
                 )
-                self._validate_generated_persona(persona)
                 personas.append(persona)
 
             self.logger.info(f"{len(personas)}個のペルソナ生成完了")
