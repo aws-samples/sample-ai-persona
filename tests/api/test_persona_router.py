@@ -126,7 +126,7 @@ class TestPersonaGenerateEndpoint:
     @patch("web.routers.persona._temp_personas_cache", {})
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_success(self, mock_get_manager, client, sample_persona):
-        """ペルソナ生成が成功することを確認"""
+        """ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
         mock_manager.generate_personas.return_value = ([sample_persona], [])
         mock_get_manager.return_value = mock_manager
@@ -148,11 +148,12 @@ class TestPersonaGenerateEndpoint:
         )
 
         assert response.status_code == 200
-        assert "田中花子" in response.text
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        assert "event: result" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_empty_text(self, mock_get_manager, client):
-        """空のファイルでエラーを返すことを確認"""
+        """空のファイルでエラーを返すことを確認（SSE）"""
         files = [
             ("files", ("empty.txt", BytesIO(b""), "text/plain")),
         ]
@@ -168,12 +169,12 @@ class TestPersonaGenerateEndpoint:
             },
         )
 
-        assert response.status_code == 400
-        assert "ファイルをアップロード" in response.text
+        assert response.status_code == 200
+        assert "event: error" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_invalid_count(self, mock_get_manager, client):
-        """無効なペルソナ数でエラーを返すことを確認"""
+        """無効なペルソナ数でエラーを返すことを確認（SSE）"""
         file_content = "テスト用テキスト。" * 10
         files = [
             ("files", ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
@@ -190,15 +191,15 @@ class TestPersonaGenerateEndpoint:
             },
         )
 
-        assert response.status_code == 400
-        assert "1-10の範囲" in response.text
+        assert response.status_code == 200
+        assert "event: error" in response.text
 
     @patch("web.routers.persona._temp_personas_cache", {})
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_multiple_success(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """複数ペルソナ生成が成功することを確認"""
+        """複数ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
         mock_manager.generate_personas.return_value = (
             [sample_persona, sample_persona_2],
@@ -223,10 +224,11 @@ class TestPersonaGenerateEndpoint:
         )
 
         assert response.status_code == 200
+        assert "event: result" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_manager_error(self, mock_get_manager, client):
-        """PersonaManagerErrorが適切に処理されることを確認"""
+        """PersonaManagerErrorが適切に処理されることを確認（SSE）"""
         from src.managers.persona_manager import PersonaManagerError
 
         mock_manager = Mock()
@@ -251,8 +253,8 @@ class TestPersonaGenerateEndpoint:
             },
         )
 
-        assert response.status_code == 500
-        assert "ペルソナ生成エラー" in response.text
+        assert response.status_code == 200
+        assert "event: error" in response.text
 
 
 class TestPersonaSaveEndpoint:

@@ -6,11 +6,7 @@
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     <p class="text-gray-600 mb-8">データをアップロードし、作成したいペルソナの指示を入力してAIペルソナを生成します。</p>
 
-    <form hx-post="/persona/generate"
-          hx-target="#generation-result"
-          hx-swap="innerHTML"
-          hx-encoding="multipart/form-data"
-          hx-indicator="#generate-spinner">
+    <form id="generate-form">
 
         <!-- Step 1: ファイルアップロード -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -137,16 +133,26 @@
                     <span class="text-xs text-gray-500 ml-1">（1-10）</span>
                 </div>
 
-                <button type="submit"
+                <button type="button"
+                        id="generate-btn"
+                        onclick="startGeneration()"
                         class="bg-blue-600 text-white px-8 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
-                    <span class="htmx-indicator" id="generate-spinner">
-                        <span class="spinner inline-block mr-1"></span>
-                    </span>
                     {{ icon_sparkles("w-4 h-4") }} ペルソナを生成
                 </button>
             </div>
         </div>
     </form>
+
+    <!-- 進捗表示エリア -->
+    <div id="generation-progress" class="hidden mb-6">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <span class="spinner"></span>
+                <span id="progress-text" class="text-sm text-gray-700">データを分析中...</span>
+            </div>
+            <div id="thinking-stream" class="space-y-2 max-h-64 overflow-y-auto"></div>
+        </div>
+    </div>
 
     <!-- 生成結果表示エリア -->
     <div id="generation-result"></div>
@@ -162,6 +168,96 @@ function updateFileList(input) {
         span.className = 'inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1';
         span.textContent = f.name;
         fileList.appendChild(span);
+    });
+}
+
+function startGeneration() {
+    const form = document.getElementById('generate-form');
+    const formData = new FormData(form);
+    const btn = document.getElementById('generate-btn');
+    const progress = document.getElementById('generation-progress');
+    const thinkingStream = document.getElementById('thinking-stream');
+    const progressText = document.getElementById('progress-text');
+    const result = document.getElementById('generation-result');
+
+    // UI更新
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    progress.classList.remove('hidden');
+    thinkingStream.innerHTML = '';
+    result.innerHTML = '';
+
+    fetch('/persona/generate', {
+        method: 'POST',
+        body: formData,
+        headers: { 'HX-Request': 'true' },
+    }).then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function processChunk() {
+            return reader.read().then(({ done, value }) => {
+                if (done) return;
+                buffer += decoder.decode(value, { stream: true });
+
+                // SSEイベントをパース
+                const events = buffer.split('\n\n');
+                buffer = events.pop(); // 未完了の最後の部分を保持
+
+                events.forEach(eventStr => {
+                    if (!eventStr.trim()) return;
+                    const lines = eventStr.split('\n');
+                    let eventType = '';
+                    let data = '';
+                    lines.forEach(line => {
+                        if (line.startsWith('event: ')) eventType = line.slice(7);
+                        if (line.startsWith('data: ')) data = line.slice(6);
+                    });
+
+                    if (eventType === 'progress') {
+                        progressText.textContent = data;
+                    } else if (eventType === 'thinking') {
+                        try {
+                            const entry = JSON.parse(data);
+                            const div = document.createElement('div');
+                            if (entry.type === 'thinking') {
+                                div.className = 'text-sm text-gray-700 bg-gray-50 rounded p-2';
+                            } else if (entry.type === 'tool_call') {
+                                div.className = 'text-xs text-blue-700 bg-blue-50 rounded p-2 font-mono';
+                            } else if (entry.type === 'tool_result') {
+                                div.className = 'text-xs text-green-700 bg-green-50 rounded p-2 font-mono max-h-32 overflow-y-auto';
+                            }
+                            div.textContent = entry.content;
+                            thinkingStream.appendChild(div);
+                            thinkingStream.scrollTop = thinkingStream.scrollHeight;
+                        } catch(e) {}
+                    } else if (eventType === 'result') {
+                        progress.classList.add('hidden');
+                        result.innerHTML = data;
+                        // htmxの再初期化
+                        if (window.htmx) htmx.process(result);
+                        // Alpine.jsの再初期化
+                        if (window.Alpine) {
+                            Alpine.initTree(result);
+                        }
+                    } else if (eventType === 'error') {
+                        progress.classList.add('hidden');
+                        result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">' + data + '</p></div>';
+                    }
+                });
+
+                return processChunk();
+            });
+        }
+
+        return processChunk();
+    }).catch(err => {
+        progress.classList.add('hidden');
+        result.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-800 text-sm">通信エラーが発生しました</p></div>';
+    }).finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '{{ icon_sparkles("w-4 h-4") }} ペルソナを生成';
     });
 }
 </script>

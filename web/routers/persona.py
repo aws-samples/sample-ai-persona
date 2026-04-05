@@ -4,6 +4,7 @@
 
 import logging
 import asyncio
+import json
 import re
 from typing import Any, Optional
 from pathlib import Path
@@ -11,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
@@ -160,7 +161,7 @@ def _generate_personas_sync(
     )
 
 
-@router.post("/generate", response_class=HTMLResponse)
+@router.post("/generate", response_class=StreamingResponse)
 async def generate_persona(
     request: Request,
     data_type: str = Form(...),
@@ -169,76 +170,97 @@ async def generate_persona(
     custom_prompt: str = Form(""),
     files: list[UploadFile] = File(...),
 ) -> Any:
-    """統一ペルソナ生成（htmx対応）"""
-    try:
-        # 入力検証
-        if persona_count < 1 or persona_count > 10:
-            return templates.TemplateResponse(
-                "partials/error.html",
-                {"request": request, "error": "ペルソナ数は1-10の範囲で指定してください"},
-                status_code=400,
+    """統一ペルソナ生成（SSEストリーミング）"""
+
+    # 入力検証
+    if persona_count < 1 or persona_count > 10:
+        return _sse_error("ペルソナ数は1-10の範囲で指定してください")
+
+    # ファイル読み込み
+    file_contents: list[tuple[bytes, str]] = []
+    for f in files:
+        content = await f.read()
+        if content and f.filename:
+            file_contents.append((content, f.filename))
+
+    if not file_contents:
+        return _sse_error("ファイルをアップロードしてください")
+
+    logger.info(
+        f"統一ペルソナ生成開始(SSE) - data_type={data_type}, count={persona_count}, files={len(file_contents)}"
+    )
+
+    async def event_generator() -> Any:
+        try:
+            # 進捗: 開始
+            yield _sse_event("progress", "データを分析中...")
+
+            loop = asyncio.get_event_loop()
+            generated_personas, thinking_log = await loop.run_in_executor(
+                executor,
+                _generate_personas_sync,
+                file_contents,
+                data_type,
+                persona_count,
+                data_description or None,
+                custom_prompt or None,
             )
 
-        # ファイル読み込み
-        file_contents: list[tuple[bytes, str]] = []
-        for f in files:
-            content = await f.read()
-            if content and f.filename:
-                file_contents.append((content, f.filename))
+            logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
-        if not file_contents:
-            return templates.TemplateResponse(
-                "partials/error.html",
-                {"request": request, "error": "ファイルをアップロードしてください"},
-                status_code=400,
-            )
+            # TTLキャッシュに保存
+            for persona in generated_personas:
+                _temp_personas_cache[persona.id] = persona
 
-        logger.info(
-            f"統一ペルソナ生成開始 - data_type={data_type}, count={persona_count}, files={len(file_contents)}"
-        )
+            # 思考ログを送信
+            for entry in thinking_log:
+                yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
 
-        loop = asyncio.get_event_loop()
-        generated_personas, thinking_log = await loop.run_in_executor(
-            executor,
-            _generate_personas_sync,
-            file_contents,
-            data_type,
-            persona_count,
-            data_description or None,
-            custom_prompt or None,
-        )
+            # 結果HTMLを送信
+            if len(generated_personas) == 1:
+                html = templates.get_template(
+                    "persona/partials/generated_persona.html"
+                ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+            else:
+                html = templates.get_template(
+                    "persona/partials/persona_candidates.html"
+                ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
 
-        logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
+            yield _sse_event("result", html)
+            yield _sse_event("done", "")
 
-        # TTLキャッシュに保存
-        for persona in generated_personas:
-            _temp_personas_cache[persona.id] = persona
+        except PersonaManagerError as e:
+            logger.error(f"ペルソナ生成エラー: {e}")
+            yield _sse_event("error", str(e))
+        except Exception as e:
+            logger.error(f"予期しないエラー: {e}")
+            yield _sse_event("error", "ペルソナの生成中にエラーが発生しました")
 
-        # 1個の場合は単一表示、複数の場合は候補表示
-        if len(generated_personas) == 1:
-            return templates.TemplateResponse(
-                "persona/partials/generated_persona.html",
-                {"request": request, "persona": generated_personas[0], "thinking_log": thinking_log},
-            )
-        return templates.TemplateResponse(
-            "persona/partials/persona_candidates.html",
-            {"request": request, "personas": generated_personas, "thinking_log": thinking_log},
-        )
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
-    except PersonaManagerError as e:
-        logger.error(f"ペルソナ生成エラー: {e}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": f"ペルソナ生成エラー: {str(e)}"},
-            status_code=500,
-        )
-    except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの生成中にエラーが発生しました"},
-            status_code=500,
-        )
+
+def _sse_event(event_type: str, data: str) -> str:
+    """SSEイベントをフォーマット"""
+    return f"event: {event_type}\ndata: {data}\n\n"
+
+
+def _sse_error(message: str) -> StreamingResponse:
+    """SSEエラーレスポンスを返す"""
+    async def gen() -> Any:
+        yield _sse_event("error", message)
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/save", response_class=HTMLResponse)
