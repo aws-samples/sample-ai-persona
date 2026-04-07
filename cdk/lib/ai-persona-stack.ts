@@ -24,6 +24,7 @@ export class AIPersonaStack extends Stack {
 
     const { parameter, ecrRepository, webAclArn } = props;
     const isProd = parameter.envName === 'prod';
+    const imageTag = this.node.tryGetContext('imageTag') as string | undefined;
 
     const database = new Database(this, 'Database', {
       tablePrefix: parameter.dynamoDbTablePrefix,
@@ -76,6 +77,7 @@ export class AIPersonaStack extends Stack {
       batchInferenceModelId: parameter.batchInferenceModelId,
       surveyS3Prefix: parameter.surveyS3Prefix,
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
+      imageTag,
     });
 
     // CloudFront + VPC Origin + WAF + Lambda@Edge Auth

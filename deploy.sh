@@ -184,14 +184,17 @@ cd "${PROJECT_ROOT}"
 aws ecr get-login-password --region "${REGION}" | \
   docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
-log_info "Dockerイメージをビルド中..."
+IMAGE_TAG=$(date +%Y%m%d%H%M%S)
+log_info "Dockerイメージをビルド中... (tag: ${IMAGE_TAG})"
 docker build -t ai-persona .
 
+docker tag ai-persona:latest "${ECR_REPO_URI}:${IMAGE_TAG}"
 docker tag ai-persona:latest "${ECR_REPO_URI}:latest"
 
 log_info "ECRにプッシュ中..."
+docker push "${ECR_REPO_URI}:${IMAGE_TAG}"
 docker push "${ECR_REPO_URI}:latest"
-log_info "Dockerイメージのプッシュ完了"
+log_info "Dockerイメージのプッシュ完了 (tag: ${IMAGE_TAG})"
 
 # ===== AgentCore Memory（オプション）=====
 if [[ "${SKIP_MEMORY}" == "false" ]]; then
@@ -339,7 +342,7 @@ if [[ -f "${PROJECT_ROOT}/cdk/lambda/auth-at-edge/package.json" ]]; then
   cd "${PROJECT_ROOT}/cdk"
 fi
 
-npx cdk deploy "AIPersona-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
+npx cdk deploy "AIPersona-${ENV_NAME}" --require-approval never --region "${REGION}" -c "imageTag=${IMAGE_TAG}" 2>&1
 
 CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
   --stack-name "AIPersona-${ENV_NAME}" \
