@@ -144,7 +144,7 @@ chmod +x deploy.sh
 ```
 - `--skip-memory` `--skip-cognito` を指定しても、既存スタックから設定を自動取得するため、Lambda@Edge認証やMemory設定は維持されます
 - アプリケーションのみの変更の場合、新しいDockerイメージがECRにPUSHされます。
-- ECS Express Modeで新しいコンテナイメージに更新し、再度デプロイすることでアプリケーションが更新されます。
+- タイムスタンプベースのイメージタグにより、`cdk deploy`時にECSタスク定義が自動更新され、ローリングデプロイが実行されます。
 - CloudFrontの設定変更がある場合、反映に数分かかることがあります。
 - Lambda@Edge認証のため、ALBのCognito手動設定の解除/再設定は不要です。
 
@@ -225,9 +225,12 @@ docker build -t ai-persona .
 docker build --platform linux/amd64 -t ai-persona .
 
 # タグ付け
+IMAGE_TAG=$(date +%Y%m%d%H%M%S)
+docker tag ai-persona:latest <ECR_REPOSITORY_URI>:${IMAGE_TAG}
 docker tag ai-persona:latest <ECR_REPOSITORY_URI>:latest
 
 # プッシュ
+docker push <ECR_REPOSITORY_URI>:${IMAGE_TAG}
 docker push <ECR_REPOSITORY_URI>:latest
 ```
 
@@ -328,7 +331,7 @@ cognitoUserPoolDomain: 'xxx.auth.us-east-1.amazoncognito.com',  // UserPoolDomai
 # Lambda@Edge依存関係のインストール
 cd lambda/auth-at-edge && npm install && cd ../..
 
-npx cdk deploy AIPersona-dev
+npx cdk deploy AIPersona-dev -c "imageTag=${IMAGE_TAG}"
 ```
 
 ### 9. CognitoのcallbackUrl更新
