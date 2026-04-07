@@ -24,6 +24,7 @@ export interface ExpressServiceProps {
   uploadBucket: s3.IBucket;
   bedrockBatchRoleArn: string;
   batchInferenceModelId: string;
+  imageTag?: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
 }
@@ -151,7 +152,7 @@ export class ExpressService extends Construct {
         subnets: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
       },
       primaryContainer: {
-        image: `${ecrRepository.repositoryUri}:latest`,
+        image: `${ecrRepository.repositoryUri}:${props.imageTag ?? 'latest'}`,
         containerPort: 80,
         environment,
       },
