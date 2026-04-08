@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from src.managers.persona_manager import PersonaManager
 from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
-from src.managers.file_manager import FileManager
+from src.managers.file_manager import FileManager, FileUploadError
 from src.services.service_factory import service_factory
 from src.models.discussion import Discussion
 from src.models.insight_category import InsightCategory
@@ -161,11 +161,11 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
             }
         )
 
+    except FileUploadError as e:
+        logger.error(f"ドキュメントアップロードエラー: {e}")
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.error(f"ドキュメントアップロードエラー: {e}")
-        from src.managers.file_manager import FileUploadError
-        if isinstance(e, FileUploadError):
-            return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse({"error": "ドキュメントのアップロードに失敗しました"}, status_code=400)
 
 
