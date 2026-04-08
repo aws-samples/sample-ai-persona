@@ -163,7 +163,10 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
 
     except Exception as e:
         logger.error(f"ドキュメントアップロードエラー: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        from src.managers.file_manager import FileUploadError
+        if isinstance(e, FileUploadError):
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": "ドキュメントのアップロードに失敗しました"}, status_code=400)
 
 
 @router.get("/result-partial/{discussion_id}", response_class=HTMLResponse)
@@ -483,7 +486,7 @@ async def stream_discussion(
         return StreamingResponse(
             iter(
                 [
-                    f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                    f"data: {json.dumps({'type': 'error', 'message': '議論の実行中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
                 ]
             ),
             media_type="text/event-stream",

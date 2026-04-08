@@ -333,8 +333,8 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
     except Exception as e:
         logger.error(f"Failed to load dataset detail: {e}")
         return HTMLResponse(
-            f'<div class="text-red-600 text-sm p-2">'
-            f"詳細の取得に失敗しました: {e}</div>"
+            '<div class="text-red-600 text-sm p-2">'
+            "詳細の取得に失敗しました</div>"
         )
 
 
@@ -352,7 +352,7 @@ async def delete_custom_dataset(request: Request, name: str) -> Any:
     except Exception as e:
         logger.error(f"Failed to delete custom dataset: {e}")
         return HTMLResponse(
-            f'<div class="text-red-600 text-sm">削除に失敗しました: {e}</div>'
+            '<div class="text-red-600 text-sm">削除に失敗しました</div>'
         )
 
 
@@ -627,7 +627,7 @@ async def upload_survey_image(file: UploadFile = File(...)) -> Any:
         )
     except Exception as e:
         logger.error(f"Survey image upload error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": "画像のアップロードに失敗しました"}, status_code=400)
 
 
 @router.get("/image-preview")

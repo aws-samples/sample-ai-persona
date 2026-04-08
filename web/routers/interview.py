@@ -241,7 +241,7 @@ async def create_interview_session(
     except InterviewValidationError as e:
         logger.error(f"Interview validation error: {e}")
         return JSONResponse(
-            {"error": str(e), "error_type": "validation_error"}, status_code=400
+            {"error": "入力内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
         )
     except InterviewAgentError as e:
         logger.error(f"Interview agent error: {e}")
@@ -249,7 +249,6 @@ async def create_interview_session(
             {
                 "error": "AIエージェントの初期化に失敗しました。しばらく待ってから再試行してください。",
                 "error_type": "agent_error",
-                "technical_details": str(e),
             },
             status_code=503,
         )
@@ -259,7 +258,6 @@ async def create_interview_session(
             {
                 "error": "セッションの作成に失敗しました。再試行してください。",
                 "error_type": "session_error",
-                "technical_details": str(e),
             },
             status_code=500,
         )
@@ -499,7 +497,7 @@ async def send_message(
     except InterviewValidationError as e:
         logger.error(f"Validation error: {e}")
         return JSONResponse(
-            {"error": str(e), "error_type": "validation_error"}, status_code=400
+            {"error": "入力内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
         )
     except InterviewAgentError as e:
         logger.error(f"Agent error: {e}")
@@ -507,7 +505,6 @@ async def send_message(
             {
                 "error": "AIエージェントとの通信に失敗しました。しばらく待ってから再試行してください。",
                 "error_type": "agent_error",
-                "technical_details": str(e),
             },
             status_code=503,
         )
@@ -557,7 +554,7 @@ async def get_messages(request: Request, session_id: str) -> Any:
 
     except InterviewManagerError as e:
         logger.error(f"Error getting messages: {e}")
-        return JSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"error": "メッセージ履歴が見つかりません"}, status_code=404)
     except Exception as e:
         logger.error(f"Unexpected error getting messages: {e}")
         return JSONResponse(
@@ -585,7 +582,7 @@ async def get_session_status(request: Request, session_id: str) -> Any:
 
     except InterviewManagerError as e:
         logger.error(f"Error getting session status: {e}")
-        return JSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"error": "セッションが見つかりません"}, status_code=404)
     except Exception as e:
         logger.error(f"Unexpected error getting session status: {e}")
         return JSONResponse(
@@ -728,7 +725,7 @@ async def save_interview_session(
     except InterviewValidationError as e:
         logger.error(f"Validation error during save: {e}")
         return JSONResponse(
-            {"error": str(e), "error_type": "validation_error"}, status_code=400
+            {"error": "保存内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
         )
     except InterviewPersistenceError as e:
         logger.error(f"Persistence error during save: {e}")
@@ -736,7 +733,6 @@ async def save_interview_session(
             {
                 "error": "データベースへの保存に失敗しました。しばらく待ってから再試行してください。",
                 "error_type": "persistence_error",
-                "technical_details": str(e),
             },
             status_code=503,
         )
@@ -774,7 +770,7 @@ async def end_interview_session(request: Request, session_id: str) -> Any:
 
     except InterviewManagerError as e:
         logger.error(f"Error ending interview session: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": "インタビューセッションの終了に失敗しました"}, status_code=400)
     except Exception as e:
         logger.error(f"Unexpected error ending interview session: {e}")
         return JSONResponse(
