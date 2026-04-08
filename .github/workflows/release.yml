@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['pyproject.toml']
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check version change
+        id: version
+        run: |
+          CURRENT=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          PREVIOUS=$(git show HEAD~1:pyproject.toml 2>/dev/null | grep '^version' | head -1 | sed 's/.*"\(.*\)"/\1/' || echo "")
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "changed=$( [ "$CURRENT" != "$PREVIOUS" ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+
+      - name: Create release tag
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          VERSION="v${{ steps.version.outputs.current }}"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v${{ steps.version.outputs.current }}"
+          gh release create "$VERSION" --generate-notes --title "$VERSION"

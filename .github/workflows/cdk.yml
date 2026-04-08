@@ -1,0 +1,34 @@
+name: CDK
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['cdk/**']
+  pull_request:
+    branches: [main, develop]
+    paths: ['cdk/**']
+
+permissions:
+  contents: read
+
+jobs:
+  synth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: cdk
+        run: npm ci
+
+      - name: TypeScript compile check
+        working-directory: cdk
+        run: npx tsc --noEmit
+
+      - name: CDK synth
+        working-directory: cdk
+        run: npx cdk synth --no-staging
