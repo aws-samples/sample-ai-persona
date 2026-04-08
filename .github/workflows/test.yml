@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 env:
   AWS_DEFAULT_REGION: us-east-1
   DYNAMODB_TABLE_PREFIX: Test
