@@ -163,7 +163,7 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
 
     except FileUploadError as e:
         logger.error(f"ドキュメントアップロードエラー: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": e.user_message}, status_code=400)
     except Exception as e:
         logger.error(f"ドキュメントアップロードエラー: {e}")
         return JSONResponse({"error": "ドキュメントのアップロードに失敗しました"}, status_code=400)

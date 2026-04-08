@@ -20,9 +20,11 @@ if TYPE_CHECKING:
 
 
 class FileUploadError(Exception):
-    """ファイルアップロード関連のエラー"""
+    """ファイルアップロード関連のエラー（ユーザー向けバリデーションメッセージ）"""
 
-    pass
+    @property
+    def user_message(self) -> str:
+        return self.args[0] if self.args else "ファイルのアップロードに失敗しました"
 
 
 class FileSecurityError(Exception):
