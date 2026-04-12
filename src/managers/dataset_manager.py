@@ -282,7 +282,8 @@ class DatasetManager:
             count_result = conn.execute(
                 f"SELECT COUNT(*) FROM dataset{where_sql}", params
             )
-            total_count = count_result.fetchone()[0]
+            count_row = count_result.fetchone()
+            total_count = count_row[0] if count_row else 0
 
             # データ取得
             result = conn.execute(
@@ -304,6 +305,8 @@ class DatasetManager:
         conn = duckdb.connect(":memory:")
 
         if s3_path.startswith("s3://"):
+            if not self.s3_service:
+                raise ValueError("S3 service is not configured")
             conn.execute("INSTALL httpfs; LOAD httpfs;")
 
             import boto3
