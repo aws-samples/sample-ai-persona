@@ -1161,6 +1161,16 @@ async def create_dataset_binding(
 
     binding_keys = {}
     if key_name and key_value:
+        # カラム名の存在チェック
+        dataset = db_service.get_dataset(dataset_id)
+        if dataset:
+            valid_columns = {col.name for col in dataset.columns}
+            if key_name not in valid_columns:
+                return templates.TemplateResponse(
+                    "partials/error.html",
+                    {"request": request, "error": f"カラム「{key_name}」はデータセットに存在しません"},
+                    status_code=400,
+                )
         binding_keys[key_name] = key_value
 
     binding = PersonaDatasetBinding.create_new(

@@ -76,7 +76,12 @@
                 <form id="binding-form-{{ dataset.id }}">
                     <div class="space-y-3 mb-4">
                         <div class="flex gap-2">
-                            <input type="text" name="key_name" placeholder="キー名 (例: user_id)" class="flex-1 border rounded px-3 py-2 text-sm">
+                            <select name="key_name" class="flex-1 border rounded px-3 py-2 text-sm bg-white">
+                                <option value="">キー列を選択</option>
+                                {% for col in dataset.columns %}
+                                <option value="{{ col.name }}">{{ col.name }} ({{ col.data_type }})</option>
+                                {% endfor %}
+                            </select>
                             <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm">
                         </div>
                     </div>
