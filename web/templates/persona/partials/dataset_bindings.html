@@ -4,7 +4,7 @@
 {% else %}
 <div class="space-y-3">
     {% for dataset in datasets %}
-    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false }">
+    <div class="border border-gray-200 rounded-lg p-4 overflow-hidden" x-data="{ showModal: false }">
         <div class="flex items-center justify-between">
             <div class="flex-1">
                 <h4 class="font-medium text-gray-900">{{ dataset.name }}</h4>
@@ -38,7 +38,7 @@
                     キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
                 </div>
                 {% endif %}
-                <div id="dataset-preview-{{ binding.id }}"></div>
+                <div id="dataset-preview-{{ binding.id }}" class="min-w-0 overflow-x-auto"></div>
                 {% else %}
                 <button
                     @click="showModal = true"
