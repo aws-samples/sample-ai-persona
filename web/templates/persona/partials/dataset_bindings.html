@@ -4,7 +4,7 @@
 {% else %}
 <div class="space-y-3">
     {% for dataset in datasets %}
-    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false }">
+    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false, showPreview: false }">
         <div class="flex items-center justify-between">
             <div class="flex-1">
                 <h4 class="font-medium text-gray-900">{{ dataset.name }}</h4>
@@ -25,12 +25,37 @@
                         hx-confirm="この紐付けを解除しますか？"
                         class="text-red-500 hover:text-red-700 text-sm"
                     >解除</button>
+                    <button
+                        hx-get="/persona/{{ persona_id }}/dataset-bindings/{{ binding.id }}/preview"
+                        hx-target="#dataset-preview-modal-{{ binding.id }}"
+                        hx-swap="innerHTML"
+                        @click="showPreview = true"
+                        class="text-cyan-600 hover:text-cyan-800 text-sm font-medium"
+                    >プレビュー</button>
                 </div>
                 {% if binding.binding_keys %}
                 <div class="mt-2 text-xs text-gray-500">
                     キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
                 </div>
                 {% endif %}
+                <!-- プレビューモーダル -->
+                <div x-show="showPreview" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+                    <div class="fixed inset-0 bg-black/50" @click="showPreview = false"></div>
+                    <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full mx-4 max-h-[80vh] flex flex-col">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold">{{ dataset.name }} - データプレビュー</h3>
+                            <button @click="showPreview = false" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                        <div id="dataset-preview-modal-{{ binding.id }}" class="overflow-auto flex-1">
+                            <div class="flex items-center justify-center py-8">
+                                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-cyan-600"></div>
+                                <span class="ml-2 text-gray-500 text-sm">読み込み中...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 {% else %}
                 <button
                     @click="showModal = true"
@@ -51,22 +76,27 @@
                 <form id="binding-form-{{ dataset.id }}">
                     <div class="space-y-3 mb-4">
                         <div class="flex gap-2">
-                            <input type="text" name="key_name" placeholder="キー名 (例: user_id)" class="flex-1 border rounded px-3 py-2 text-sm">
+                            <select name="key_name" class="flex-1 border rounded px-3 py-2 text-sm bg-white">
+                                <option value="">キー列を選択</option>
+                                {% for col in dataset.columns %}
+                                <option value="{{ col.name }}">{{ col.name }} ({{ col.data_type }})</option>
+                                {% endfor %}
+                            </select>
                             <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm">
                         </div>
                     </div>
                     <input type="hidden" name="dataset_id" value="{{ dataset.id }}">
                 </form>
                 
+                <div id="binding-error-{{ dataset.id }}"></div>
                 <div class="flex justify-end gap-2">
                     <button type="button" @click="showModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
                     <button 
                         type="button"
                         hx-post="/persona/{{ persona_id }}/dataset-bindings"
-                        hx-target="#dataset-binding-content"
+                        hx-target="#binding-error-{{ dataset.id }}"
                         hx-swap="innerHTML"
                         hx-include="#binding-form-{{ dataset.id }}"
-                        @click="showModal = false"
                         class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700"
                     >紐付ける</button>
                 </div>

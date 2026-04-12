@@ -1,0 +1,36 @@
+<!-- データセットプレビューテーブル -->
+{% if error %}
+<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+    データの取得中にエラーが発生しました: {{ error }}
+</div>
+{% elif rows|length == 0 %}
+<div class="bg-gray-50 border border-gray-200 text-gray-500 px-4 py-3 rounded-md text-sm">
+    該当するデータがありません
+</div>
+{% else %}
+<div class="border border-gray-200 rounded-lg overflow-hidden">
+    <div class="px-3 py-2 bg-gray-50 text-xs text-gray-500 border-b">
+        {{ total_count }}件中 {{ rows|length }}件を表示
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+            <thead class="bg-gray-50">
+                <tr>
+                    {% for col in columns %}
+                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for row in rows %}
+                <tr class="hover:bg-gray-50">
+                    {% for val in row %}
+                    <td class="px-3 py-2 text-gray-700 whitespace-nowrap max-w-xs truncate" title="{{ val }}">{{ val }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
