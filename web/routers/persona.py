@@ -1169,14 +1169,12 @@ async def create_dataset_binding(
                 return templates.TemplateResponse(
                     "partials/error.html",
                     {"request": request, "error": f"カラム「{key_name}」はデータセットに存在しません"},
-                    status_code=400,
                 )
         binding_keys[key_name] = key_value
     else:
         return templates.TemplateResponse(
             "partials/error.html",
             {"request": request, "error": "キー列と値を入力してください"},
-            status_code=400,
         )
 
     binding = PersonaDatasetBinding.create_new(
@@ -1186,8 +1184,11 @@ async def create_dataset_binding(
     db_service.save_binding(binding)
     logger.info(f"Created dataset binding: persona={persona_id}, dataset={dataset_id}")
 
-    # 更新された一覧を返す
-    return await get_dataset_bindings(request, persona_id)
+    # 成功時は一覧全体を更新（ターゲットをリダイレクト）
+    response = await get_dataset_bindings(request, persona_id)
+    response.headers["HX-Retarget"] = "#dataset-binding-content"
+    response.headers["HX-Reswap"] = "innerHTML"
+    return response
 
 
 @router.delete(
