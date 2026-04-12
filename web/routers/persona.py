@@ -1186,6 +1186,30 @@ async def delete_dataset_binding(request: Request, persona_id: str, binding_id: 
     return await get_dataset_bindings(request, persona_id)
 
 
+@router.get(
+    "/{persona_id}/dataset-bindings/{binding_id}/preview", response_class=HTMLResponse
+)
+async def preview_dataset_binding(
+    request: Request, persona_id: str, binding_id: str
+) -> Any:
+    """紐付けデータセットのプレビュー表示"""
+    try:
+        from src.managers.dataset_manager import DatasetManager
+
+        manager = DatasetManager()
+        data = manager.preview_binding_data(persona_id, binding_id)
+        return templates.TemplateResponse(
+            "persona/partials/dataset_preview.html",
+            {"request": request, **data},
+        )
+    except Exception as e:
+        logger.error(f"Dataset preview error: {e}")
+        return templates.TemplateResponse(
+            "persona/partials/dataset_preview.html",
+            {"request": request, "columns": [], "rows": [], "total_count": 0, "error": str(e)},
+        )
+
+
 @router.post("/save-selected", response_class=HTMLResponse)
 async def save_selected_personas(request: Request, persona_ids: str = Form(...)) -> Any:
     """選択された複数ペルソナを保存（htmx対応）"""

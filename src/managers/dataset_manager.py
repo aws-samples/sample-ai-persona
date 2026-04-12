@@ -5,9 +5,12 @@ Dataset Manager - データセットのビジネスロジック
 import csv
 import io
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+
+import duckdb
 
 from ..models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
 from ..services.service_factory import service_factory
@@ -238,3 +241,91 @@ class DatasetManager:
             bindings.append(binding)
 
         return bindings
+
+    # ==================== Preview Operations ====================
+
+    def preview_binding_data(
+        self, persona_id: str, binding_id: str, limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        紐付けのbinding_keysでフィルタしたデータをプレビュー取得
+
+        Returns:
+            {"columns": [str, ...], "rows": [[val, ...], ...], "total_count": int}
+        """
+        bindings = self.db_service.get_bindings_by_persona(persona_id)
+        binding = next((b for b in bindings if b.id == binding_id), None)
+        if not binding:
+            raise ValueError(f"Binding not found: {binding_id}")
+
+        dataset = self.db_service.get_dataset(binding.dataset_id)
+        if not dataset:
+            raise ValueError(f"Dataset not found: {binding.dataset_id}")
+
+        # DuckDB接続・クエリ
+        conn = self._create_duckdb_conn(dataset.s3_path)
+        try:
+            valid_columns = {col.name for col in dataset.columns}
+            where_clauses = []
+            params: List[Any] = []
+            for key, value in binding.binding_keys.items():
+                if key not in valid_columns:
+                    raise ValueError(f"Invalid column name: {key}")
+                where_clauses.append(f'"{key}" = ${len(params) + 1}')
+                params.append(value)
+
+            where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+            # 件数取得
+            count_result = conn.execute(
+                f"SELECT COUNT(*) FROM dataset{where_sql}", params
+            )
+            total_count = count_result.fetchone()[0]
+
+            # データ取得
+            result = conn.execute(
+                f"SELECT * FROM dataset{where_sql} LIMIT {int(limit)}", params
+            )
+            columns = [desc[0] for desc in result.description]
+            rows = result.fetchall()
+
+            return {
+                "columns": columns,
+                "rows": [list(row) for row in rows],
+                "total_count": total_count,
+            }
+        finally:
+            conn.close()
+
+    def _create_duckdb_conn(self, s3_path: str) -> duckdb.DuckDBPyConnection:
+        """データセットのS3パスからDuckDB接続を作成"""
+        conn = duckdb.connect(":memory:")
+
+        if s3_path.startswith("s3://"):
+            conn.execute("INSTALL httpfs; LOAD httpfs;")
+
+            import boto3
+            session = boto3.Session()
+            credentials = session.get_credentials()
+            if credentials:
+                creds = credentials.get_frozen_credentials()
+                conn.execute("SET s3_access_key_id = $1;", [creds.access_key])
+                conn.execute("SET s3_secret_access_key = $1;", [creds.secret_key])
+                if creds.token:
+                    conn.execute("SET s3_session_token = $1;", [creds.token])
+            conn.execute(
+                "SET s3_region = $1;", [self.s3_service.region_name]
+            )
+
+            if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/]+", s3_path):
+                raise ValueError(f"Invalid S3 URI format: {s3_path}")
+
+            read_fn = "read_parquet" if s3_path.endswith(".parquet") else "read_csv_auto"
+            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{s3_path}');")
+        else:
+            # ローカルファイル
+            local_path = s3_path.replace("local://", "")
+            read_fn = "read_parquet" if local_path.endswith(".parquet") else "read_csv_auto"
+            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');")
+
+        return conn

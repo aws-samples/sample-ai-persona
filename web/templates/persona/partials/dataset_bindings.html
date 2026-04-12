@@ -25,12 +25,20 @@
                         hx-confirm="この紐付けを解除しますか？"
                         class="text-red-500 hover:text-red-700 text-sm"
                     >解除</button>
+                    <button
+                        hx-get="/persona/{{ persona_id }}/dataset-bindings/{{ binding.id }}/preview"
+                        hx-target="#dataset-preview-{{ binding.id }}"
+                        hx-swap="innerHTML"
+                        class="text-cyan-600 hover:text-cyan-800 text-sm font-medium"
+                        @click="$el.dataset.open = $el.dataset.open === 'true' ? 'false' : 'true'"
+                    >プレビュー ▼</button>
                 </div>
                 {% if binding.binding_keys %}
                 <div class="mt-2 text-xs text-gray-500">
                     キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
                 </div>
                 {% endif %}
+                <div id="dataset-preview-{{ binding.id }}"></div>
                 {% else %}
                 <button
                     @click="showModal = true"
