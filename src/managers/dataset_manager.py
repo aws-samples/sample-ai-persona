@@ -271,6 +271,8 @@ class DatasetManager:
             for key, value in binding.binding_keys.items():
                 if key not in valid_columns:
                     raise ValueError(f"Invalid column name: {key}")
+                if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", key):
+                    raise ValueError(f"Unsafe column name: {key}")
                 where_clauses.append(f'"{key}" = ${len(params) + 1}')
                 params.append(value)
 
@@ -325,7 +327,8 @@ class DatasetManager:
         else:
             # ローカルファイル
             local_path = s3_path.replace("local://", "")
+            if ".." in local_path or not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9.\-_/]*", local_path):
+                raise ValueError(f"Invalid local path format: {local_path}")
             read_fn = "read_parquet" if local_path.endswith(".parquet") else "read_csv_auto"
-            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');")
-
+            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');")  # nosemgrep: sqlalchemy-execute-raw-query
         return conn

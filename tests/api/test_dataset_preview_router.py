@@ -42,7 +42,7 @@ class TestDatasetPreviewEndpoint:
             )
 
         assert response.status_code == 200
-        assert "エラー" in response.text or "Binding not found" in response.text
+        assert "データの取得に失敗しました" in response.text
 
     def test_preview_empty_data(self, client):
         """データが0件の場合にメッセージが表示される"""

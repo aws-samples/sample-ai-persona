@@ -79,6 +79,18 @@ class TestPreviewBindingData:
             with pytest.raises(ValueError, match="Invalid column name"):
                 dataset_manager.preview_binding_data("persona-001", "bind-001")
 
+    def test_unsafe_column_name_rejected(self, dataset_manager, sample_binding, sample_dataset):
+        """SQLインジェクションを含むカラム名が拒否される"""
+        sample_dataset.columns.append(DatasetColumn(name='a" OR 1=1--', data_type="string"))
+        sample_binding.binding_keys = {'a" OR 1=1--': "value"}
+        dataset_manager._mock_db.get_bindings_by_persona.return_value = [sample_binding]
+        dataset_manager._mock_db.get_dataset.return_value = sample_dataset
+
+        mock_conn = MagicMock()
+        with patch.object(dataset_manager, "_create_duckdb_conn", return_value=mock_conn):
+            with pytest.raises(ValueError, match="Unsafe column name"):
+                dataset_manager.preview_binding_data("persona-001", "bind-001")
+
     def test_successful_preview(self, dataset_manager, sample_binding, sample_dataset):
         """正常にプレビューデータを取得"""
         dataset_manager._mock_db.get_bindings_by_persona.return_value = [sample_binding]
@@ -153,3 +165,8 @@ class TestCreateDuckdbConn:
 
             with pytest.raises(ValueError, match="Invalid S3 URI"):
                 dataset_manager._create_duckdb_conn("s3://bucket/path; DROP TABLE x")
+
+    def test_invalid_local_path_rejected(self, dataset_manager):
+        """パストラバーサルを含むローカルパスが拒否される"""
+        with pytest.raises(ValueError, match="Invalid local path"):
+            dataset_manager._create_duckdb_conn("local://../../etc/passwd")

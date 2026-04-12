@@ -1206,7 +1206,7 @@ async def preview_dataset_binding(
         logger.error(f"Dataset preview error: {e}")
         return templates.TemplateResponse(
             "persona/partials/dataset_preview.html",
-            {"request": request, "columns": [], "rows": [], "total_count": 0, "error": str(e)},
+            {"request": request, "columns": [], "rows": [], "total_count": 0, "error": "データの取得に失敗しました"},
         )
 
 
