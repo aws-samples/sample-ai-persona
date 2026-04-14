@@ -20,6 +20,7 @@ export interface AppParameter {
   
   // CloudFront + WAF設定
   enableWaf?: boolean;
+  allowedIpAddresses?: string[]; // CIDR形式 例: ['203.0.113.0/24', '198.51.100.1/32']
   
   // AgentCore Memory設定
   // AgentCoreMemoryStackをデプロイ後、出力されたIDをここに設定してください

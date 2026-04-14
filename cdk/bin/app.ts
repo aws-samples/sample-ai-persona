@@ -41,6 +41,7 @@ if (parameter.enableWaf) {
   const wafStack = new WafStack(app, `AIPersonaWaf-${parameter.envName}`, {
     env: { account: parameter.env?.account, region: 'us-east-1' },
     envName: parameter.envName,
+    allowedIpAddresses: parameter.allowedIpAddresses,
     crossRegionReferences: true,
     description: `AI Persona WAF WebACL - ${parameter.envName} (us-east-1)`,
   });
