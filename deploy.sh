@@ -113,6 +113,8 @@ export interface AppParameter {
   containerCpu: string;
   containerMemory: string;
   enableWaf?: boolean;
+  allowedIpAddresses?: string[];
+  selfSignUpEnabled?: boolean;
   cognitoUserPoolId: string;
   cognitoUserPoolAppId: string;
   cognitoUserPoolDomain: string;
@@ -138,6 +140,8 @@ export const devParameter: AppParameter = {
   containerCpu: '${CONTAINER_CPU}',
   containerMemory: '${CONTAINER_MEMORY}',
   enableWaf: ${ENABLE_WAF},
+  // allowedIpAddresses: ['x.x.x.x/32'], // IP制限する場合はenableWaf: trueと併せて設定
+  // selfSignUpEnabled: true, // セルフサインアップを有効にする場合
   cognitoUserPoolId: '',
   cognitoUserPoolAppId: '',
   cognitoUserPoolDomain: '',
