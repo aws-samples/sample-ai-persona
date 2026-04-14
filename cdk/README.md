@@ -334,7 +334,7 @@ cognitoUserPoolDomain: 'xxx.auth.us-east-1.amazoncognito.com',  // UserPoolDomai
 
 ### 8. WAF Stackのデプロイ（IP制限を使用する場合）
 
-**IP制限が不要な場合は、このステップをスキップして手順9に進んでください。**
+**WAFの機能（IP制限、レートリミットなど）が不要な場合は、このステップをスキップして手順9に進んでください。**
 
 `parameters.ts`でWAFとIP制限を設定します：
 
@@ -394,10 +394,13 @@ npx cdk destroy AIPersonaCognito-dev
 aws s3 rm s3://<BUCKET_NAME> --recursive
 npx cdk destroy AIPersona-dev
 
-# 3. Memory Stack
+# 3. WAF Stack（使用している場合、us-east-1にデプロイされている）
+npx cdk destroy AIPersonaWaf-dev
+
+# 4. Memory Stack
 npx cdk destroy AIPersonaMemory-dev
 
-# 4. ECR Stack（イメージを先に削除）
+# 5. ECR Stack（イメージを先に削除）
 aws ecr batch-delete-image --repository-name ai-persona-dev \
   --image-ids "$(aws ecr list-images --repository-name ai-persona-dev --query 'imageIds[*]' --output json)"
 npx cdk destroy AIPersonaEcr-dev
