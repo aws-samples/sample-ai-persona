@@ -118,7 +118,7 @@ chmod +x deploy.sh
 
 全自動で ECR → Docker ビルド → Cognito → AgentCore Memory → ECS + CloudFront + Lambda@Edge認証 → callbackUrl更新 がデプロイされます。
 
-> セルフサインアップはデフォルト有効。不要な場合は、Cognitoユーザプールの設定で「サインアップ」を無効にするのを推奨
+> セルフサインアップはデフォルト無効（管理者がユーザーを作成）。有効にする場合は `--self-signup` オプションを指定してください。
 
 #### オプション
 
@@ -128,6 +128,12 @@ chmod +x deploy.sh
 
 # Cognito認証をスキップ（初回以降）
 ./deploy.sh --skip-cognito
+
+# セルフサインアップを有効化
+./deploy.sh --self-signup
+
+# WAF IP制限（カンマ区切りCIDR、WAFは自動有効化）
+./deploy.sh --allowed-ips "203.0.113.0/24,198.51.100.1/32"
 
 # 両方スキップ
 ./deploy.sh --skip-memory --skip-cognito
