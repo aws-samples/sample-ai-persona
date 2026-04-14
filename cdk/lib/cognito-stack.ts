@@ -5,6 +5,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 export interface CognitoStackProps extends StackProps {
   envName: string;
   domainPrefix: string;
+  selfSignUpEnabled?: boolean;
 }
 
 export class CognitoStack extends Stack {
@@ -15,7 +16,7 @@ export class CognitoStack extends Stack {
   constructor(scope: Construct, id: string, props: CognitoStackProps) {
     super(scope, id, props);
 
-    const { envName, domainPrefix } = props;
+    const { envName, domainPrefix, selfSignUpEnabled = false } = props;
     const isProd = envName === 'prod';
 
     // Callback URLs: placeholder — update after CloudFront deployment
@@ -25,7 +26,7 @@ export class CognitoStack extends Stack {
 
     this.userPool = new cognito.UserPool(this, 'Default', {
       userPoolName: `ai-persona-${envName}`,
-      selfSignUpEnabled: true,
+      selfSignUpEnabled,
       signInAliases: { email: true },
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },

@@ -32,6 +32,7 @@ new CognitoStack(app, `AIPersonaCognito-${parameter.envName}`, {
   env: parameter.env,
   envName: parameter.envName,
   domainPrefix: parameter.cognitoDomainPrefix,
+  selfSignUpEnabled: parameter.selfSignUpEnabled,
   description: `AI Persona Cognito User Pool - ${parameter.envName}`,
 });
 

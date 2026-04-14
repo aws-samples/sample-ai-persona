@@ -9,6 +9,7 @@ export interface AppParameter {
   
   // Cognito設定
   cognitoDomainPrefix: string;
+  selfSignUpEnabled?: boolean; // セルフサインアップの有効/無効（デフォルト: false）
   // Cognito認証設定（CognitoStackデプロイ後に設定）
   cognitoUserPoolId: string;
   cognitoUserPoolAppId: string;
