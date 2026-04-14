@@ -14,6 +14,8 @@
 # オプション:
 #   --skip-memory    長期記憶機能（AgentCore Memory）をスキップ
 #   --skip-cognito   Cognito認証をスキップ
+#   --self-signup    Cognitoセルフサインアップを有効化
+#   --allowed-ips IPs WAF IP制限（カンマ区切りCIDR）
 #   --env ENV_NAME   環境名を指定（デフォルト: dev）
 #   --region REGION  リージョンを指定（デフォルト: us-east-1）
 ###############################################################################
@@ -24,6 +26,8 @@ ENV_NAME="dev"
 REGION="us-east-1"
 SKIP_MEMORY=false
 SKIP_COGNITO=false
+SELF_SIGNUP=false
+ALLOWED_IPS=""
 
 # カラー出力
 RED='\033[0;31m'
@@ -42,12 +46,16 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --skip-memory)  SKIP_MEMORY=true; shift ;;
     --skip-cognito) SKIP_COGNITO=true; shift ;;
+    --self-signup)  SELF_SIGNUP=true; shift ;;
+    --allowed-ips)  ALLOWED_IPS="$2"; shift 2 ;;
     --env)          ENV_NAME="$2"; shift 2 ;;
     --region)       REGION="$2"; shift 2 ;;
     -h|--help)
       echo "使い方: ./deploy.sh [オプション]"
       echo "  --skip-memory    長期記憶機能をスキップ"
       echo "  --skip-cognito   Cognito認証をスキップ"
+      echo "  --self-signup    Cognitoセルフサインアップを有効化"
+      echo "  --allowed-ips IPs WAF IP制限（カンマ区切りCIDR、例: '203.0.113.0/24,198.51.100.1/32'）"
       echo "  --env NAME       環境名 (デフォルト: dev)"
       echo "  --region REGION  リージョン (デフォルト: us-east-1)"
       exit 0 ;;
@@ -102,6 +110,11 @@ else
   ENABLE_WAF="false"
 fi
 
+# --allowed-ips 指定時はWAFを自動有効化
+if [[ -n "${ALLOWED_IPS}" ]]; then
+  ENABLE_WAF="true"
+fi
+
 cat > "${PROJECT_ROOT}/cdk/parameters.ts" << PARAMS_EOF
 import { Environment } from 'aws-cdk-lib';
 
@@ -113,6 +126,8 @@ export interface AppParameter {
   containerCpu: string;
   containerMemory: string;
   enableWaf?: boolean;
+  allowedIpAddresses?: string[];
+  selfSignUpEnabled?: boolean;
   cognitoUserPoolId: string;
   cognitoUserPoolAppId: string;
   cognitoUserPoolDomain: string;
@@ -138,6 +153,8 @@ export const devParameter: AppParameter = {
   containerCpu: '${CONTAINER_CPU}',
   containerMemory: '${CONTAINER_MEMORY}',
   enableWaf: ${ENABLE_WAF},
+  allowedIpAddresses: [$(if [[ -n "${ALLOWED_IPS}" ]]; then echo "${ALLOWED_IPS}" | sed "s/[^,]*/'&'/g" | sed 's/^,//;s/,$//'; fi)],
+  selfSignUpEnabled: ${SELF_SIGNUP},
   cognitoUserPoolId: '',
   cognitoUserPoolAppId: '',
   cognitoUserPoolDomain: '',

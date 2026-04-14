@@ -9,6 +9,7 @@ export interface AppParameter {
   
   // Cognito設定
   cognitoDomainPrefix: string;
+  selfSignUpEnabled?: boolean; // セルフサインアップの有効/無効（デフォルト: false）
   // Cognito認証設定（CognitoStackデプロイ後に設定）
   cognitoUserPoolId: string;
   cognitoUserPoolAppId: string;
@@ -20,6 +21,7 @@ export interface AppParameter {
   
   // CloudFront + WAF設定
   enableWaf?: boolean;
+  allowedIpAddresses?: string[]; // CIDR形式 例: ['203.0.113.0/24', '198.51.100.1/32']
   
   // AgentCore Memory設定
   // AgentCoreMemoryStackをデプロイ後、出力されたIDをここに設定してください

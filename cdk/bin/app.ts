@@ -32,6 +32,7 @@ new CognitoStack(app, `AIPersonaCognito-${parameter.envName}`, {
   env: parameter.env,
   envName: parameter.envName,
   domainPrefix: parameter.cognitoDomainPrefix,
+  selfSignUpEnabled: parameter.selfSignUpEnabled,
   description: `AI Persona Cognito User Pool - ${parameter.envName}`,
 });
 
@@ -41,10 +42,15 @@ if (parameter.enableWaf) {
   const wafStack = new WafStack(app, `AIPersonaWaf-${parameter.envName}`, {
     env: { account: parameter.env?.account, region: 'us-east-1' },
     envName: parameter.envName,
+    allowedIpAddresses: parameter.allowedIpAddresses,
     crossRegionReferences: true,
     description: `AI Persona WAF WebACL - ${parameter.envName} (us-east-1)`,
   });
   webAclArn = wafStack.webAclArn;
+}
+
+if (!parameter.enableWaf && parameter.allowedIpAddresses?.length) {
+  throw new Error('allowedIpAddresses is set but enableWaf is false. Enable WAF or remove the IP list.');
 }
 
 // Step 4: Main Stack (ECS Express + CloudFront + Lambda@Edge Auth)

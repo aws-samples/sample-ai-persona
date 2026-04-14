@@ -4,6 +4,7 @@ import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 
 export interface WafStackProps extends StackProps {
   envName: string;
+  allowedIpAddresses?: string[];
 }
 
 export class WafStack extends Stack {
@@ -12,10 +13,32 @@ export class WafStack extends Stack {
   constructor(scope: Construct, id: string, props: WafStackProps) {
     super(scope, id, props);
 
-    const { envName } = props;
+    const { envName, allowedIpAddresses } = props;
+    const hasIpRestriction = allowedIpAddresses && allowedIpAddresses.length > 0;
+
+    // IP制限用のIPセットとルール
+    const ipRules: wafv2.CfnWebACL.RuleProperty[] = [];
+    if (hasIpRestriction) {
+      const ipSet = new wafv2.CfnIPSet(this, 'AllowedIpSet', {
+        name: `ai-persona-allowed-ips-${envName}`,
+        scope: 'CLOUDFRONT',
+        ipAddressVersion: 'IPV4',
+        addresses: allowedIpAddresses,
+      });
+
+      ipRules.push({
+        name: 'AllowedIpAddresses',
+        priority: 0,
+        action: { allow: {} },
+        statement: {
+          ipSetReferenceStatement: { arn: ipSet.attrArn },
+        },
+        visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AllowedIpAddresses', sampledRequestsEnabled: true },
+      });
+    }
 
     const webAcl = new wafv2.CfnWebACL(this, 'WebAcl', {
-      defaultAction: { allow: {} },
+      defaultAction: hasIpRestriction ? { block: {} } : { allow: {} },
       scope: 'CLOUDFRONT',
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
@@ -24,6 +47,7 @@ export class WafStack extends Stack {
       },
       name: `ai-persona-waf-${envName}`,
       rules: [
+        ...ipRules,
         {
           name: 'AWSManagedRulesCommonRuleSet',
           priority: 1,
