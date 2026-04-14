@@ -48,6 +48,10 @@ if (parameter.enableWaf) {
   webAclArn = wafStack.webAclArn;
 }
 
+if (!parameter.enableWaf && parameter.allowedIpAddresses?.length) {
+  throw new Error('allowedIpAddresses is set but enableWaf is false. Enable WAF or remove the IP list.');
+}
+
 // Step 4: Main Stack (ECS Express + CloudFront + Lambda@Edge Auth)
 const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
   env: parameter.env,
