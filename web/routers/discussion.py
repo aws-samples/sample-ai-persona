@@ -950,3 +950,121 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
             {"request": request, "error": "インサイトの取得に失敗しました"},
             status_code=500,
         )
+
+
+# =============================================================================
+# レポート関連エンドポイント
+# =============================================================================
+
+
+@router.post("/{discussion_id}/report/generate")
+async def generate_report(
+    request: Request,
+    discussion_id: str,
+    template_type: str = Form(...),
+    custom_prompt: Optional[str] = Form(None),
+):
+    """レポートを生成する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        report = discussion_manager.generate_report(
+            discussion_id=discussion_id,
+            template_type=template_type,
+            custom_prompt=custom_prompt or None,
+        )
+
+        return HTMLResponse(
+            content=f"<div id='report-content'>{report.content}</div>",
+        )
+    except Exception as e:
+        logger.error(f"レポート生成エラー: {e}")
+        return HTMLResponse(
+            content=f"<div class='text-red-600'>{e}</div>",
+            status_code=400,
+        )
+
+
+@router.get("/{discussion_id}/report/{report_id}")
+async def get_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str,
+):
+    """レポート内容を取得する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion = discussion_manager.get_discussion(discussion_id)
+        if not discussion:
+            return HTMLResponse(content="議論が見つかりません", status_code=404)
+
+        report = next((r for r in discussion.reports if r.id == report_id), None)
+        if not report:
+            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+
+        return HTMLResponse(
+            content=f"<div id='report-content'>{report.content}</div>",
+        )
+    except Exception as e:
+        logger.error(f"レポート取得エラー: {e}")
+        return HTMLResponse(content="レポートの取得に失敗しました", status_code=500)
+
+
+@router.get("/{discussion_id}/report/{report_id}/export")
+async def export_report(
+    discussion_id: str,
+    report_id: str,
+    format: str = "md",
+):
+    """レポートをファイルエクスポートする"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion = discussion_manager.get_discussion(discussion_id)
+        if not discussion:
+            return HTMLResponse(content="議論が見つかりません", status_code=404)
+
+        report = next((r for r in discussion.reports if r.id == report_id), None)
+        if not report:
+            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+
+        content = report.content
+        if format == "txt":
+            # Markdown記法を除去
+            import re
+            content = re.sub(r"#{1,6}\s*", "", content)
+            content = re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", content)
+            content = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", content)
+
+        timestamp = report.created_at.strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{report.template_type}_{timestamp}.{format}"
+
+        from fastapi.responses import Response
+        return Response(
+            content=content,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.error(f"レポートエクスポートエラー: {e}")
+        return HTMLResponse(content="エクスポートに失敗しました", status_code=500)
+
+
+@router.delete("/{discussion_id}/report/{report_id}")
+async def delete_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str,
+):
+    """レポートを削除する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion_manager.delete_report(
+            discussion_id=discussion_id,
+            report_id=report_id,
+        )
+        return HTMLResponse(content="<div>レポートを削除しました</div>")
+    except Exception as e:
+        logger.error(f"レポート削除エラー: {e}")
+        return HTMLResponse(
+            content=f"<div class='text-red-600'>{e}</div>",
+            status_code=400,
+        )
