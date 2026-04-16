@@ -12,6 +12,7 @@ from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.insight import Insight
 from ..models.insight_category import InsightCategory
+from ..models.discussion_report import DiscussionReport
 from ..services.ai_service import AIService, AIServiceError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
@@ -1020,3 +1021,85 @@ class DiscussionManager:
         except Exception as e:
             self.logger.warning(f"Failed to load categories from config: {e}")
             return None
+
+    def generate_report(
+        self,
+        discussion_id: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+    ) -> DiscussionReport:
+        """
+        議論からレポートを生成してDBに保存する。
+
+        Args:
+            discussion_id: 議論ID
+            template_type: テンプレート種別 ("summary", "review", "custom")
+            custom_prompt: カスタムプロンプト
+
+        Returns:
+            生成されたDiscussionReport
+
+        Raises:
+            DiscussionManagerError: 議論が見つからない場合やAIエラー
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        try:
+            insights_data = [
+                {
+                    "category": ins.category,
+                    "description": ins.description,
+                    "confidence_score": ins.confidence_score,
+                }
+                for ins in discussion.insights
+            ]
+
+            content = self.ai_service.generate_discussion_report(
+                messages=discussion.messages,
+                insights=insights_data,
+                topic=discussion.topic,
+                template_type=template_type,
+                custom_prompt=custom_prompt,
+            )
+
+            report = DiscussionReport.create_new(
+                template_type=template_type,
+                content=content,
+                custom_prompt=custom_prompt,
+            )
+
+            discussion.reports.append(report)
+            self.database_service.save_discussion(discussion)
+            return report
+
+        except AIServiceError as e:
+            raise DiscussionManagerError(f"レポート生成エラー: {e}")
+
+    def delete_report(self, discussion_id: str, report_id: str) -> bool:
+        """
+        議論からレポートを削除する。
+
+        Args:
+            discussion_id: 議論ID
+            report_id: レポートID
+
+        Returns:
+            True if deleted
+
+        Raises:
+            DiscussionManagerError: 議論やレポートが見つからない場合
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        original_len = len(discussion.reports)
+        discussion.reports = [r for r in discussion.reports if r.id != report_id]
+
+        if len(discussion.reports) == original_len:
+            raise DiscussionManagerError("レポートが見つかりません")
+
+        self.database_service.save_discussion(discussion)
+        return True
