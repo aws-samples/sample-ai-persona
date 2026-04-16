@@ -58,7 +58,7 @@
         </div>
 
         <!-- 生成ボタン -->
-        <form hx-post="/discussion/{{ discussion_id }}/report/generate"
+        <form hx-post="/discussion/{{ discussion.id }}/report/generate"
               hx-target="#report-display"
               hx-swap="innerHTML"
               hx-indicator="#report-loading"
@@ -88,7 +88,7 @@
         <div class="space-y-2">
             {% for report in discussion.reports|reverse %}
             <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3 border border-gray-200 hover:border-gray-300 transition-colors">
-                <button hx-get="/discussion/{{ discussion_id }}/report/{{ report.id }}"
+                <button hx-get="/discussion/{{ discussion.id }}/report/{{ report.id }}"
                         hx-target="#report-display"
                         hx-swap="innerHTML"
                         class="flex items-center gap-3 text-left flex-1"
@@ -106,13 +106,13 @@
                     {% endif %}
                 </button>
                 <div class="flex items-center gap-1 ml-2">
-                    <a href="/discussion/{{ discussion_id }}/report/{{ report.id }}/export?format=md"
+                    <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=md"
                        class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 transition-colors"
                        title="Markdownでエクスポート">MD</a>
-                    <a href="/discussion/{{ discussion_id }}/report/{{ report.id }}/export?format=txt"
+                    <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=txt"
                        class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 transition-colors"
                        title="テキストでエクスポート">TXT</a>
-                    <button hx-delete="/discussion/{{ discussion_id }}/report/{{ report.id }}"
+                    <button hx-delete="/discussion/{{ discussion.id }}/report/{{ report.id }}"
                             hx-confirm="このレポートを削除しますか？"
                             hx-target="closest div.flex"
                             hx-swap="outerHTML"
