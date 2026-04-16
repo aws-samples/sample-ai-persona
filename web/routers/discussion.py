@@ -973,9 +973,17 @@ async def generate_report(
             custom_prompt=custom_prompt or None,
         )
 
+        # 更新後の議論を取得してreportsセクション全体を再描画
+        discussion = discussion_manager.get_discussion(discussion_id)
+
         return templates.TemplateResponse(
-            "discussion/partials/report_content.html",
-            {"request": request, "report": report},
+            "discussion/partials/reports.html",
+            {
+                "request": request,
+                "discussion": discussion,
+                "discussion_id": discussion_id,
+                "latest_report": report,
+            },
         )
     except Exception as e:
         logger.error(f"レポート生成エラー: {e}")
