@@ -62,8 +62,6 @@
               hx-target="#reports-container"
               hx-swap="innerHTML"
               hx-indicator="#report-loading">
-              @htmx:before-request="generating = true"
-              @htmx:after-request="generating = false">
             <input type="hidden" name="template_type" :value="selectedTemplate">
             <input type="hidden" name="custom_prompt" :value="showCustomPrompt ? document.getElementById('custom-prompt-input')?.value : ''">
             <button type="submit"
