@@ -973,8 +973,9 @@ async def generate_report(
             custom_prompt=custom_prompt or None,
         )
 
-        return HTMLResponse(
-            content=f"<div id='report-content'>{report.content}</div>",
+        return templates.TemplateResponse(
+            "discussion/partials/report_content.html",
+            {"request": request, "report": report},
         )
     except Exception as e:
         logger.error(f"レポート生成エラー: {e}")
@@ -1001,8 +1002,9 @@ async def get_report(
         if not report:
             return HTMLResponse(content="レポートが見つかりません", status_code=404)
 
-        return HTMLResponse(
-            content=f"<div id='report-content'>{report.content}</div>",
+        return templates.TemplateResponse(
+            "discussion/partials/report_content.html",
+            {"request": request, "report": report},
         )
     except Exception as e:
         logger.error(f"レポート取得エラー: {e}")

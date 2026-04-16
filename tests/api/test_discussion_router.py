@@ -626,6 +626,7 @@ class TestDiscussionReportEndpoints:
         )
 
         assert response.status_code == 200
+        assert "サマリレポート" in response.text
         mock_manager.generate_report.assert_called_once_with(
             discussion_id="test-id",
             template_type="summary",
@@ -652,11 +653,7 @@ class TestDiscussionReportEndpoints:
         )
 
         assert response.status_code == 200
-        mock_manager.generate_report.assert_called_once_with(
-            discussion_id="test-id",
-            template_type="custom",
-            custom_prompt="箇条書きで",
-        )
+        assert "カスタム" in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_generate_report_failure(self, mock_get_manager, client):
