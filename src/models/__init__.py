@@ -4,6 +4,7 @@ Core data models for the AI Persona System.
 
 from .persona import Persona
 from .discussion import Discussion
+from .discussion_report import DiscussionReport
 from .message import Message
 from .insight import Insight
 from .insight_category import InsightCategory
@@ -15,6 +16,7 @@ from .survey import Survey, InsightReport, VisualAnalysisData
 __all__ = [
     "Persona",
     "Discussion",
+    "DiscussionReport",
     "Message",
     "Insight",
     "InsightCategory",
