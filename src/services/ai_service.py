@@ -1583,3 +1583,64 @@ JSON:"""
                 insights.append(insight)
 
         return insights
+
+    def generate_discussion_report(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        議論データからテンプレートに基づくレポートを生成
+
+        Args:
+            messages: 議論メッセージのリスト
+            insights: 抽出済みインサイトのリスト
+            topic: 議論トピック
+            template_type: テンプレート種別 ("summary", "review", "custom")
+            custom_prompt: カスタムプロンプト (template_type == "custom" の場合)
+
+        Returns:
+            str: 生成されたレポート（Markdown形式）
+        """
+        system_prompt = self._build_report_system_prompt(
+            topic, template_type, custom_prompt
+        )
+
+        # 議論コンテキストを構築
+        context_parts = [f"## 議論トピック\n{topic}\n"]
+        context_parts.append("## 議論ログ")
+        for msg in messages:
+            context_parts.append(f"**{msg.persona_name}**: {msg.content}")
+        context_parts.append("\n## 抽出済みインサイト")
+        for ins in insights:
+            context_parts.append(
+                f"- [{ins.get('category', '')}] {ins.get('description', '')} (信頼度: {ins.get('confidence_score', 0)})"
+            )
+
+        user_content = "\n".join(context_parts)
+
+        converse_messages = [
+            {"role": "user", "content": [{"text": user_content}]}
+        ]
+
+        return self._invoke_converse_api(
+            converse_messages, system_prompts=[{"text": system_prompt}]
+        )
+
+    def _build_report_system_prompt(
+        self, topic: str, template_type: str, custom_prompt: Optional[str] = None
+    ) -> str:
+        """テンプレート種別に応じたシステムプロンプトを構築"""
+        base = f"あなたは議論分析の専門家です。以下の議論データ（トピック: {topic}）に基づいてレポートを生成してください。出力はMarkdown形式で記述してください。"
+
+        if template_type == "summary":
+            return f"{base}\n\n以下の構成でサマリレポートを作成してください:\n1. 参加ペルソナの概要\n2. ペルソナ毎の意見まとめ\n3. 主要インサイト\n4. Next Actionの提案"
+        elif template_type == "review":
+            return f"{base}\n\nレビューコメント形式で出力してください。各コメントには「該当箇所」「指摘内容」「重要度（高/中/低）」を含めてください。"
+        elif template_type == "custom" and custom_prompt:
+            return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
+        else:
+            return base

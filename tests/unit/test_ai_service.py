@@ -884,5 +884,116 @@ class TestAIService:
             assert len(messages) >= 2
 
 
+class TestGenerateDiscussionReport:
+    """generate_discussion_report のテストクラス"""
+
+    def setup_method(self):
+        self.mock_bedrock_client = Mock()
+        self.ai_service = AIService(bedrock_client=self.mock_bedrock_client)
+
+        self.test_messages = [
+            Message.create_new(
+                persona_id="p1",
+                persona_name="田中太郎",
+                content="この製品は使いやすいと思います",
+                message_type="statement",
+            ),
+            Message.create_new(
+                persona_id="p2",
+                persona_name="佐藤花子",
+                content="デザインが改善されるとさらに良くなります",
+                message_type="statement",
+            ),
+        ]
+
+        self.test_insights = [
+            {
+                "category": "顧客ニーズ",
+                "description": "使いやすさが重要視されている",
+                "confidence_score": 0.8,
+            }
+        ]
+
+    def test_generate_summary_report(self):
+        """サマリレポート生成テスト"""
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [{"text": "# サマリレポート\n\n## 参加ペルソナ\n- 田中太郎"}]
+                }
+            }
+        }
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ):
+            result = self.ai_service.generate_discussion_report(
+                messages=self.test_messages,
+                insights=self.test_insights,
+                topic="製品レビュー",
+                template_type="summary",
+            )
+            assert "サマリレポート" in result
+            self.ai_service.bedrock_client.converse.assert_called_once()
+
+    def test_generate_review_report(self):
+        """レビューコメント生成テスト"""
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [{"text": "# レビューコメント\n\n| 該当箇所 | 指摘内容 |"}]
+                }
+            }
+        }
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ):
+            result = self.ai_service.generate_discussion_report(
+                messages=self.test_messages,
+                insights=self.test_insights,
+                topic="製品レビュー",
+                template_type="review",
+            )
+            assert "レビューコメント" in result
+
+    def test_generate_custom_report(self):
+        """カスタムプロンプトレポート生成テスト"""
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [{"text": "- ポイント1\n- ポイント2"}]
+                }
+            }
+        }
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ):
+            result = self.ai_service.generate_discussion_report(
+                messages=self.test_messages,
+                insights=self.test_insights,
+                topic="製品レビュー",
+                template_type="custom",
+                custom_prompt="箇条書きでまとめて",
+            )
+            assert "ポイント" in result
+
+    def test_generate_report_includes_topic_in_prompt(self):
+        """プロンプトにトピックが含まれることを確認"""
+        mock_response = {
+            "output": {"message": {"content": [{"text": "レポート内容"}]}}
+        }
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ) as mock_converse:
+            self.ai_service.generate_discussion_report(
+                messages=self.test_messages,
+                insights=self.test_insights,
+                topic="新機能の評価",
+                template_type="summary",
+            )
+            call_args = mock_converse.call_args
+            system_prompt = call_args[1]["system"][0]["text"]
+            assert "新機能の評価" in system_prompt
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

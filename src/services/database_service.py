@@ -467,6 +467,10 @@ class DatabaseService:
         if discussion.documents is not None:
             discussion_dict["documents"] = discussion.documents
 
+        # Add reports if present
+        if discussion.reports:
+            discussion_dict["reports"] = [r.to_dict() for r in discussion.reports]
+
         # Use boto3 TypeSerializer to convert to DynamoDB format
         serialized = {}
         for key, value in discussion_dict.items():
@@ -612,6 +616,14 @@ class DatabaseService:
         # Convert ISO datetime string back to datetime object
         created_at = datetime.fromisoformat(deserialized["created_at"])
 
+        from ..models.discussion_report import DiscussionReport
+
+        # Convert reports from dictionaries to DiscussionReport objects
+        reports = [
+            DiscussionReport.from_dict(r)
+            for r in deserialized.get("reports", [])
+        ]
+
         # Create Discussion object
         return Discussion(
             id=deserialized["id"],
@@ -623,6 +635,7 @@ class DatabaseService:
             mode=deserialized.get("mode", "classic"),
             agent_config=deserialized.get("agent_config"),
             documents=deserialized.get("documents"),
+            reports=reports,
         )
 
     def _deserialize_file_info(self, item: Dict[str, Any]) -> Dict[str, Any]:
