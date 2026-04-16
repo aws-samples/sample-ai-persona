@@ -964,7 +964,7 @@ async def generate_report(
     template_type: str = Form(...),
     custom_prompt: Optional[str] = Form(None),
 ):
-    """レポートを生成する"""
+    """レポートをプレビュー生成する（DB保存しない）"""
     try:
         discussion_manager = get_discussion_manager()
         report = discussion_manager.generate_report(
@@ -973,20 +973,58 @@ async def generate_report(
             custom_prompt=custom_prompt or None,
         )
 
-        # 更新後の議論を取得してreportsセクション全体を再描画
-        discussion = discussion_manager.get_discussion(discussion_id)
+        return templates.TemplateResponse(
+            "discussion/partials/report_preview.html",
+            {
+                "request": request,
+                "report": report,
+                "discussion_id": discussion_id,
+            },
+        )
+    except Exception as e:
+        logger.error(f"レポート生成エラー: {e}")
+        return HTMLResponse(
+            content=f"<div class='text-red-600'>{e}</div>",
+            status_code=400,
+        )
 
+
+@router.post("/{discussion_id}/report/save")
+async def save_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str = Form(...),
+    template_type: str = Form(...),
+    content: str = Form(...),
+    custom_prompt: Optional[str] = Form(None),
+):
+    """プレビュー済みレポートをDBに保存する"""
+    try:
+        from src.models.discussion_report import DiscussionReport
+
+        report = DiscussionReport(
+            id=report_id,
+            template_type=template_type,
+            content=content,
+            created_at=datetime.now(),
+            custom_prompt=custom_prompt or None,
+        )
+
+        discussion_manager = get_discussion_manager()
+        discussion_manager.save_report(discussion_id=discussion_id, report=report)
+
+        # 保存後、reportsセクション全体を再描画
+        discussion = discussion_manager.get_discussion(discussion_id)
         return templates.TemplateResponse(
             "discussion/partials/reports.html",
             {
                 "request": request,
                 "discussion": discussion,
                 "discussion_id": discussion_id,
-                "latest_report": report,
             },
         )
     except Exception as e:
-        logger.error(f"レポート生成エラー: {e}")
+        logger.error(f"レポート保存エラー: {e}")
         return HTMLResponse(
             content=f"<div class='text-red-600'>{e}</div>",
             status_code=400,

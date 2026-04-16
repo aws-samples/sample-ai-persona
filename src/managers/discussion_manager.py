@@ -1029,7 +1029,7 @@ class DiscussionManager:
         custom_prompt: Optional[str] = None,
     ) -> DiscussionReport:
         """
-        議論からレポートを生成してDBに保存する。
+        議論からレポートをプレビュー生成する（DB保存しない）。
 
         Args:
             discussion_id: 議論ID
@@ -1037,7 +1037,7 @@ class DiscussionManager:
             custom_prompt: カスタムプロンプト
 
         Returns:
-            生成されたDiscussionReport
+            生成されたDiscussionReport（未保存）
 
         Raises:
             DiscussionManagerError: 議論が見つからない場合やAIエラー
@@ -1064,18 +1064,32 @@ class DiscussionManager:
                 custom_prompt=custom_prompt,
             )
 
-            report = DiscussionReport.create_new(
+            return DiscussionReport.create_new(
                 template_type=template_type,
                 content=content,
                 custom_prompt=custom_prompt,
             )
 
-            discussion.reports.append(report)
-            self.database_service.save_discussion(discussion)
-            return report
-
         except AIServiceError as e:
             raise DiscussionManagerError(f"レポート生成エラー: {e}")
+
+    def save_report(self, discussion_id: str, report: DiscussionReport) -> None:
+        """
+        生成済みレポートをDBに保存する。
+
+        Args:
+            discussion_id: 議論ID
+            report: 保存するDiscussionReport
+
+        Raises:
+            DiscussionManagerError: 議論が見つからない場合
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        discussion.reports.append(report)
+        self.database_service.save_discussion(discussion)
 
     def delete_report(self, discussion_id: str, report_id: str) -> bool:
         """

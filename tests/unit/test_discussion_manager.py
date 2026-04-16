@@ -875,10 +875,9 @@ class TestDiscussionManagerReports:
         ]
 
     def test_generate_report_summary(self):
-        """サマリレポート生成・保存テスト"""
+        """サマリレポート生成テスト（DB保存しない）"""
         self.mock_database_service.get_discussion.return_value = self.discussion
         self.mock_ai_service.generate_discussion_report.return_value = "# サマリ"
-        self.mock_database_service.save_discussion.return_value = self.discussion.id
 
         report = self.manager.generate_report(
             discussion_id=self.discussion.id,
@@ -889,13 +888,12 @@ class TestDiscussionManagerReports:
         assert report.content == "# サマリ"
         assert report.custom_prompt is None
         self.mock_ai_service.generate_discussion_report.assert_called_once()
-        self.mock_database_service.save_discussion.assert_called_once()
+        self.mock_database_service.save_discussion.assert_not_called()
 
     def test_generate_report_custom(self):
-        """カスタムプロンプトレポート生成テスト"""
+        """カスタムプロンプトレポート生成テスト（DB保存しない）"""
         self.mock_database_service.get_discussion.return_value = self.discussion
         self.mock_ai_service.generate_discussion_report.return_value = "カスタム結果"
-        self.mock_database_service.save_discussion.return_value = self.discussion.id
 
         report = self.manager.generate_report(
             discussion_id=self.discussion.id,

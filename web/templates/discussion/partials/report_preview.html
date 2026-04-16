@@ -1,0 +1,48 @@
+<!-- レポートプレビュー（未保存） -->
+<div class="bg-amber-50 border border-amber-200 rounded-lg p-6">
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">プレビュー（未保存）</span>
+            {% if report.template_type == 'summary' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-800">サマリレポート</span>
+            {% elif report.template_type == 'review' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">レビューコメント</span>
+            {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-800">カスタム</span>
+            {% endif %}
+        </div>
+        <form hx-post="/discussion/{{ discussion_id }}/report/save"
+              hx-target="#reports-container"
+              hx-swap="innerHTML">
+            <input type="hidden" name="report_id" value="{{ report.id }}">
+            <input type="hidden" name="template_type" value="{{ report.template_type }}">
+            <input type="hidden" name="content" value="{{ report.content|e }}">
+            {% if report.custom_prompt %}
+            <input type="hidden" name="custom_prompt" value="{{ report.custom_prompt|e }}">
+            {% endif %}
+            <button type="submit"
+                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                保存する
+            </button>
+        </form>
+    </div>
+    <div class="prose prose-slate max-w-none
+                prose-headings:font-bold prose-headings:text-gray-900
+                prose-h1:text-2xl prose-h1:mb-4 prose-h1:mt-6
+                prose-h2:text-xl prose-h2:mb-3 prose-h2:mt-5
+                prose-h3:text-lg prose-h3:mb-2 prose-h3:mt-4
+                prose-p:text-gray-700 prose-p:mb-3 prose-p:leading-relaxed
+                prose-ul:my-3 prose-ul:list-disc prose-ul:pl-6
+                prose-ol:my-3 prose-ol:list-decimal prose-ol:pl-6
+                prose-li:mb-1
+                prose-strong:text-gray-900 prose-strong:font-semibold
+                prose-table:my-4 prose-table:border-collapse
+                prose-th:border prose-th:border-gray-300 prose-th:bg-gray-100 prose-th:px-4 prose-th:py-2 prose-th:font-semibold
+                prose-td:border prose-td:border-gray-300 prose-td:px-4 prose-td:py-2
+                prose-hr:my-6 prose-hr:border-gray-300">
+        {{ report.content | markdown | safe }}
+    </div>
+</div>

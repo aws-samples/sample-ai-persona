@@ -59,7 +59,7 @@
 
         <!-- 生成ボタン -->
         <form hx-post="/discussion/{{ discussion.id }}/report/generate"
-              hx-target="#reports-container"
+              hx-target="#report-display"
               hx-swap="innerHTML"
               hx-indicator="#report-loading">
             <input type="hidden" name="template_type" :value="selectedTemplate">
@@ -124,11 +124,6 @@
 
     <!-- レポート表示エリア -->
     <div id="report-display">
-        {% if latest_report is defined and latest_report %}
-            {% with report=latest_report %}
-                {% include "discussion/partials/report_content.html" %}
-            {% endwith %}
-        {% else %}
         <div id="report-loading" class="htmx-indicator flex items-center justify-center py-8">
             <svg class="animate-spin h-6 w-6 text-emerald-600 mr-2" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -136,6 +131,5 @@
             </svg>
             <span class="text-sm text-gray-500">レポートを生成しています...</span>
         </div>
-        {% endif %}
     </div>
 </div>

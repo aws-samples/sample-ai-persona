@@ -612,19 +612,13 @@ class TestDiscussionReportEndpoints:
     def test_generate_report_success(self, mock_get_manager, client):
         """レポート生成が成功することを確認"""
         from src.models.discussion_report import DiscussionReport
-        from src.models.discussion import Discussion
 
         mock_report = DiscussionReport.create_new(
             template_type="summary", content="# サマリレポート"
         )
-        mock_discussion = Discussion.create_new(
-            topic="テスト", participants=["p1"]
-        )
-        mock_discussion.reports = [mock_report]
 
         mock_manager = Mock()
         mock_manager.generate_report.return_value = mock_report
-        mock_manager.get_discussion.return_value = mock_discussion
         mock_get_manager.return_value = mock_manager
 
         response = client.post(
@@ -639,21 +633,15 @@ class TestDiscussionReportEndpoints:
     def test_generate_report_custom(self, mock_get_manager, client):
         """カスタムプロンプトでレポート生成できることを確認"""
         from src.models.discussion_report import DiscussionReport
-        from src.models.discussion import Discussion
 
         mock_report = DiscussionReport.create_new(
             template_type="custom",
             content="カスタム結果",
             custom_prompt="箇条書きで",
         )
-        mock_discussion = Discussion.create_new(
-            topic="テスト", participants=["p1"]
-        )
-        mock_discussion.reports = [mock_report]
 
         mock_manager = Mock()
         mock_manager.generate_report.return_value = mock_report
-        mock_manager.get_discussion.return_value = mock_discussion
         mock_get_manager.return_value = mock_manager
 
         response = client.post(
