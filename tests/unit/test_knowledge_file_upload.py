@@ -93,6 +93,7 @@ class TestPersonaKnowledgeAddition:
         self, persona_manager, sample_persona, mock_database_service
     ):
         """Test that knowledge within 10000 character limit passes validation"""
+        from unittest.mock import patch
         from src.managers.persona_manager import PersonaManagerError
 
         # Mock get_persona to return the sample persona
@@ -102,10 +103,12 @@ class TestPersonaKnowledgeAddition:
         topic_content = "A" * 5000  # 5000 chars, within limit
 
         # This will fail at memory service check, but validation should pass
-        with pytest.raises(PersonaManagerError) as exc_info:
-            persona_manager.add_persona_knowledge(
-                sample_persona.id, topic_name, topic_content
-            )
+        with patch("src.managers.persona_manager.service_factory") as mock_sf:
+            mock_sf.get_memory_service.return_value = None
+            with pytest.raises(PersonaManagerError) as exc_info:
+                persona_manager.add_persona_knowledge(
+                    sample_persona.id, topic_name, topic_content
+                )
 
         # Should fail at memory service, not at validation
         assert "長期記憶機能が無効" in str(exc_info.value)

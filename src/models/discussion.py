@@ -2,7 +2,7 @@
 Discussion data model for the AI Persona System.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import json
@@ -10,6 +10,7 @@ import uuid
 
 from .message import Message
 from .insight import Insight
+from .discussion_report import DiscussionReport
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Discussion:
     mode: str = "classic"  # "classic", "agent", or "interview"
     agent_config: Optional[Dict[str, Any]] = None  # AI agent mode configuration
     documents: Optional[List[Dict[str, Any]]] = None  # Attached documents metadata
+    reports: List[DiscussionReport] = field(default_factory=list)  # Generated reports
 
     @classmethod
     def create_new(
@@ -82,6 +84,7 @@ class Discussion:
             mode=self.mode,
             agent_config=self.agent_config,
             documents=self.documents,
+            reports=self.reports,
         )
 
     def add_insight(self, insight: Insight) -> "Discussion":
@@ -99,6 +102,7 @@ class Discussion:
             mode=self.mode,
             agent_config=self.agent_config,
             documents=self.documents,
+            reports=self.reports,
         )
 
     def get_messages_by_persona(self, persona_id: str) -> List[Message]:
@@ -184,6 +188,7 @@ class Discussion:
         # Convert nested objects to dictionaries
         data["messages"] = [msg.to_dict() for msg in self.messages]
         data["insights"] = [insight.to_dict() for insight in self.insights]
+        data["reports"] = [report.to_dict() for report in self.reports]
         # agent_config is already a dict or None, no conversion needed
         return data
 
@@ -205,6 +210,9 @@ class Discussion:
         data.setdefault("mode", "classic")
         data.setdefault("agent_config", None)
         data.setdefault("documents", None)
+        data["reports"] = [
+            DiscussionReport.from_dict(r) for r in data.get("reports", [])
+        ]
         return cls(**data)
 
     def to_json(self) -> str:

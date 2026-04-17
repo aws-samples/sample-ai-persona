@@ -950,3 +950,190 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
             {"request": request, "error": "インサイトの取得に失敗しました"},
             status_code=500,
         )
+
+
+# =============================================================================
+# レポート関連エンドポイント
+# =============================================================================
+
+
+@router.get("/{discussion_id}/report/generate")
+async def generate_report_stream(
+    request: Request,
+    discussion_id: str,
+    template_type: str = "summary",
+    custom_prompt: Optional[str] = None,
+) -> Any:
+    """レポートをSSEストリーミングで生成する"""
+    if template_type not in ("summary", "review", "custom"):
+        def error_gen() -> Any:
+            yield f'data: {json.dumps({"type": "error", "message": "無効なテンプレート種別です"}, ensure_ascii=False)}\n\n'
+        return StreamingResponse(error_gen(), media_type="text/event-stream")
+
+    def stream_generator() -> Any:
+        try:
+            discussion_manager = get_discussion_manager()
+            for chunk in discussion_manager.generate_report_streaming(
+                discussion_id=discussion_id,
+                template_type=template_type,
+                custom_prompt=custom_prompt or None,
+            ):
+                data = json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"レポート生成エラー: {e}")
+            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{discussion_id}/report/save")
+async def save_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str = Form(...),
+    template_type: str = Form(...),
+    content: str = Form(...),
+    custom_prompt: Optional[str] = Form(None),
+) -> Any:
+    """プレビュー済みレポートをDBに保存する"""
+    try:
+        from src.models.discussion_report import DiscussionReport
+
+        report = DiscussionReport(
+            id=report_id,
+            template_type=template_type,
+            content=content,
+            created_at=datetime.now(),
+            custom_prompt=custom_prompt or None,
+        )
+
+        discussion_manager = get_discussion_manager()
+        discussion_manager.save_report(discussion_id=discussion_id, report=report)
+
+        # 保存後、reportsセクション全体を再描画
+        discussion = discussion_manager.get_discussion(discussion_id)
+        response = templates.TemplateResponse(
+            "discussion/partials/reports.html",
+            {
+                "request": request,
+                "discussion": discussion,
+                "discussion_id": discussion_id,
+            },
+        )
+        response.headers["HX-Retarget"] = "#reports-container"
+        return response
+    except Exception as e:
+        logger.error(f"レポート保存エラー: {e}")
+        from src.models.discussion_report import DiscussionReport as DR
+        report = DR(
+            id=report_id,
+            template_type=template_type,
+            content=content,
+            created_at=datetime.now(),
+            custom_prompt=custom_prompt or None,
+        )
+        return templates.TemplateResponse(
+            "discussion/partials/report_preview.html",
+            {
+                "request": request,
+                "report": report,
+                "discussion_id": discussion_id,
+                "save_error": str(e),
+            },
+        )
+
+
+@router.get("/{discussion_id}/report/{report_id}")
+async def get_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str,
+) -> Any:
+    """レポート内容を取得する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion = discussion_manager.get_discussion(discussion_id)
+        if not discussion:
+            return HTMLResponse(content="議論が見つかりません", status_code=404)
+
+        report = next((r for r in discussion.reports if r.id == report_id), None)
+        if not report:
+            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+
+        return templates.TemplateResponse(
+            "discussion/partials/report_content.html",
+            {"request": request, "report": report},
+        )
+    except Exception as e:
+        logger.error(f"レポート取得エラー: {e}")
+        return HTMLResponse(content="レポートの取得に失敗しました", status_code=500)
+
+
+@router.get("/{discussion_id}/report/{report_id}/export")
+async def export_report(
+    discussion_id: str,
+    report_id: str,
+    format: str = "md",
+) -> Any:
+    """レポートをファイルエクスポートする"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion = discussion_manager.get_discussion(discussion_id)
+        if not discussion:
+            return HTMLResponse(content="議論が見つかりません", status_code=404)
+
+        report = next((r for r in discussion.reports if r.id == report_id), None)
+        if not report:
+            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+
+        content = report.content
+        if format == "txt":
+            # Markdown記法を除去
+            import re
+            content = re.sub(r"#{1,6}\s*", "", content)
+            content = re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", content)
+            content = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", content)
+
+        timestamp = report.created_at.strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{report.template_type}_{timestamp}.{format}"
+
+        from fastapi.responses import Response
+        return Response(
+            content=content,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.error(f"レポートエクスポートエラー: {e}")
+        return HTMLResponse(content="エクスポートに失敗しました", status_code=500)
+
+
+@router.delete("/{discussion_id}/report/{report_id}")
+async def delete_report(
+    request: Request,
+    discussion_id: str,
+    report_id: str,
+) -> Any:
+    """レポートを削除する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion_manager.delete_report(
+            discussion_id=discussion_id,
+            report_id=report_id,
+        )
+        return HTMLResponse(content="<div>レポートを削除しました</div>")
+    except Exception as e:
+        logger.error(f"レポート削除エラー: {e}")
+        from markupsafe import escape
+        return HTMLResponse(
+            content=f"<div class='text-red-600'>{escape(str(e))}</div>",
+            status_code=400,
+        )

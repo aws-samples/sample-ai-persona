@@ -1,0 +1,224 @@
+<!-- レポート生成・一覧パーシャル -->
+<div x-data="{ selectedTemplate: 'summary', showCustomPrompt: false, generating: false }"
+     id="report-generator">
+    <!-- レポート生成フォーム -->
+    <div class="mb-6">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">テンプレートを選択</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+            <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false"
+                    :class="selectedTemplate === 'summary' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-gray-200 hover:border-gray-300'"
+                    class="border rounded-lg p-3 text-left transition-all">
+                <div class="flex items-center gap-2 mb-1">
+                    <svg class="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">サマリレポート</span>
+                </div>
+                <p class="text-xs text-gray-500">インタビューとインサイトのサマリ</p>
+            </button>
+            <button type="button" @click="selectedTemplate = 'review'; showCustomPrompt = false"
+                    :class="selectedTemplate === 'review' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'"
+                    class="border rounded-lg p-3 text-left transition-all">
+                <div class="flex items-center gap-2 mb-1">
+                    <svg class="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">レビューコメント</span>
+                </div>
+                <p class="text-xs text-gray-500">該当箇所、指摘内容、重要度</p>
+            </button>
+            <button type="button" @click="selectedTemplate = 'custom'; showCustomPrompt = true"
+                    :class="selectedTemplate === 'custom' ? 'border-purple-500 bg-purple-50 ring-1 ring-purple-500' : 'border-gray-200 hover:border-gray-300'"
+                    class="border rounded-lg p-3 text-left transition-all">
+                <div class="flex items-center gap-2 mb-1">
+                    <svg class="w-4 h-4 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">カスタム</span>
+                </div>
+                <p class="text-xs text-gray-500">自由にプロンプトを入力して出力形式を指定</p>
+            </button>
+        </div>
+
+        <!-- カスタムプロンプト入力 -->
+        <div x-show="showCustomPrompt" x-transition class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 mb-1">カスタムプロンプト</label>
+            <textarea id="custom-prompt-input"
+                      rows="3"
+                      class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                      placeholder="例: 箇条書きで主要な発見を5つにまとめてください"></textarea>
+        </div>
+
+        <!-- 生成ボタン -->
+        <button type="button"
+                id="generate-report-btn"
+                @click="window.__generateReport(selectedTemplate, showCustomPrompt, $data)"
+                :disabled="generating"
+                class="bg-emerald-600 text-white px-6 py-2.5 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg x-show="!generating" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+            </svg>
+            <svg x-show="generating" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span x-text="generating ? 'レポート生成中...' : 'レポートを生成'"></span>
+        </button>
+    </div>
+
+    <!-- 生成済みレポート一覧 -->
+    {% if discussion.reports %}
+    <div class="mb-4">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">生成済みレポート ({{ discussion.reports|length }}/3件)</h3>
+        <div class="space-y-2">
+            {% for report in discussion.reports|reverse %}
+            <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3 border border-gray-200 hover:border-gray-300 transition-colors">
+                <button hx-get="/discussion/{{ discussion.id }}/report/{{ report.id }}"
+                        hx-target="#report-display"
+                        hx-swap="innerHTML"
+                        class="flex items-center gap-3 text-left flex-1">
+                    {% if report.template_type == 'summary' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-800">サマリ</span>
+                    {% elif report.template_type == 'review' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">レビュー</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-800">カスタム</span>
+                    {% endif %}
+                    <span class="text-sm text-gray-600">{{ report.created_at.strftime('%Y/%m/%d %H:%M') }}</span>
+                    {% if report.custom_prompt %}
+                    <span class="text-xs text-gray-400 truncate max-w-xs">{{ report.custom_prompt[:50] }}{% if report.custom_prompt|length > 50 %}...{% endif %}</span>
+                    {% endif %}
+                </button>
+                <div class="flex items-center gap-1 ml-2">
+                    <div class="relative" x-data="{ open: false }">
+                        <button @click="open = !open" @click.outside="open = false"
+                                class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-200 transition-colors"
+                                title="エクスポート">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                            </svg>
+                        </button>
+                        <div x-show="open" x-transition
+                             class="absolute right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 whitespace-nowrap">
+                            <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=md"
+                               class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">Markdown (.md)</a>
+                            <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=txt"
+                               class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">テキスト (.txt)</a>
+                        </div>
+                    </div>
+                    <button hx-delete="/discussion/{{ discussion.id }}/report/{{ report.id }}"
+                            hx-confirm="このレポートを削除しますか？"
+                            hx-target="closest div.flex"
+                            hx-swap="outerHTML"
+                            class="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- レポート表示エリア -->
+    <div id="report-display"></div>
+</div>
+
+<script>
+window.__generateReport = function(template, showCustomPrompt, alpineData) {
+    var discussionId = '{{ discussion.id }}';
+    if (alpineData.generating) return;
+
+    var display = document.getElementById('report-display');
+    var prompt = showCustomPrompt ? (document.getElementById('custom-prompt-input')?.value || '') : '';
+    var url = '/discussion/' + discussionId + '/report/generate?template_type=' + template;
+    if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
+
+    alpineData.generating = true;
+
+    var streamDiv = document.createElement('div');
+    streamDiv.className = 'bg-gray-50 rounded-lg border border-gray-200 p-6';
+    streamDiv.innerHTML = '<div class="flex items-center gap-2 mb-3"><span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">生成中...</span></div><div id="stream-output" class="prose prose-slate max-w-none"></div>';
+    display.innerHTML = '';
+    display.appendChild(streamDiv);
+
+    var fullContent = '';
+    var output = document.getElementById('stream-output');
+    var es = new EventSource(url);
+
+    es.onmessage = function(e) {
+        var data = JSON.parse(e.data);
+        if (data.type === 'chunk') {
+            fullContent += data.content;
+            output.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));
+            output.scrollTop = output.scrollHeight;
+        } else if (data.type === 'done') {
+            es.close();
+            alpineData.generating = false;
+            _buildPreview(display, fullContent, template, prompt, discussionId);
+        } else if (data.type === 'error') {
+            es.close();
+            alpineData.generating = false;
+            display.innerHTML = '<div class="text-red-600 p-4">' + DOMPurify.sanitize(data.message) + '</div>';
+        }
+    };
+    es.onerror = function() {
+        es.close();
+        alpineData.generating = false;
+        if (!fullContent) {
+            display.innerHTML = '<div class="text-red-600 p-4">接続エラーが発生しました</div>';
+        }
+    };
+};
+
+function _buildPreview(display, content, template, prompt, discussionId) {
+    var reportId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
+
+    var container = document.createElement('div');
+    container.className = 'bg-amber-50 border border-amber-200 rounded-lg p-6';
+
+    var header = document.createElement('div');
+    header.className = 'flex items-center justify-between mb-4';
+
+    var badge = document.createElement('span');
+    badge.className = 'px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800';
+    badge.textContent = 'プレビュー（未保存）';
+    header.appendChild(badge);
+
+    var form = document.createElement('form');
+    form.setAttribute('hx-post', '/discussion/' + discussionId + '/report/save');
+    form.setAttribute('hx-target', '#reports-container');
+    form.setAttribute('hx-swap', 'innerHTML');
+
+    function addHidden(name, value) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+    }
+    addHidden('report_id', reportId);
+    addHidden('template_type', template);
+    addHidden('content', content);
+    if (prompt) addHidden('custom_prompt', prompt);
+
+    var btn = document.createElement('button');
+    btn.type = 'submit';
+    btn.className = 'bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-flex items-center gap-2';
+    btn.innerHTML = '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg> 保存する';
+    form.appendChild(btn);
+    header.appendChild(form);
+    container.appendChild(header);
+
+    var rendered = document.createElement('div');
+    rendered.className = 'prose prose-slate max-w-none';
+    rendered.innerHTML = DOMPurify.sanitize(marked.parse(content));
+    container.appendChild(rendered);
+
+    display.innerHTML = '';
+    display.appendChild(container);
+    htmx.process(display);
+}
+</script>

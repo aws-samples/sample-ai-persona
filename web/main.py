@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> Any:
 app = FastAPI(
     title="AIペルソナシステム",
     description="AIペルソナを生成し、議論を通じてインサイトを生成",
-    version="0.4.1",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -82,5 +82,5 @@ async def index(request: Request) -> Any:
 @app.get("/health")
 async def health_check() -> Any:
     """ヘルスチェック"""
-    return {"status": "healthy", "version": "0.4.1"}
+    return {"status": "healthy", "version": "0.5.0"}
 

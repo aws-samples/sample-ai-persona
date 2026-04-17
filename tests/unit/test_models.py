@@ -552,3 +552,43 @@ class TestMessageInterviewExtensions:
         }
         discussion = Discussion.from_dict(old_data)
         assert discussion.documents is None
+
+    def test_discussion_with_reports(self):
+        from src.models.discussion_report import DiscussionReport
+
+        report = DiscussionReport.create_new(
+            template_type="summary",
+            content="# サマリ",
+        )
+        discussion = Discussion.create_new(
+            topic="レポートテスト", participants=["persona1"]
+        )
+        discussion.reports = [report]
+
+        data = discussion.to_dict()
+        assert len(data["reports"]) == 1
+        assert data["reports"][0]["template_type"] == "summary"
+
+        restored = Discussion.from_dict(data)
+        assert len(restored.reports) == 1
+        assert restored.reports[0].id == report.id
+        assert restored.reports[0].content == "# サマリ"
+
+    def test_discussion_backward_compatibility_no_reports(self):
+        old_data = {
+            "id": "old-id",
+            "topic": "Old discussion",
+            "participants": ["persona1"],
+            "messages": [],
+            "insights": [],
+            "created_at": "2026-01-26T20:00:00",
+            "mode": "classic",
+        }
+        discussion = Discussion.from_dict(old_data)
+        assert discussion.reports == []
+
+    def test_discussion_default_reports_empty(self):
+        discussion = Discussion.create_new(
+            topic="デフォルトテスト", participants=["persona1"]
+        )
+        assert discussion.reports == []

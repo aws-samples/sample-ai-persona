@@ -847,3 +847,127 @@ class TestDiscussionManagerWithDocuments:
                 self.discussion_manager._load_documents(["doc1"])
 
             assert "合計サイズが制限を超えています" in str(exc_info.value)
+
+
+class TestDiscussionManagerReports:
+    """Test cases for report generation and deletion."""
+
+    def setup_method(self):
+        self.mock_ai_service = Mock()
+        self.mock_database_service = Mock()
+        self.manager = DiscussionManager(
+            ai_service=self.mock_ai_service,
+            database_service=self.mock_database_service,
+        )
+
+        self.discussion = Discussion.create_new(
+            topic="テスト議論", participants=["p1", "p2"]
+        )
+        msg1 = Message.create_new(
+            persona_id="p1", persona_name="田中", content="意見A", message_type="statement"
+        )
+        msg2 = Message.create_new(
+            persona_id="p2", persona_name="佐藤", content="意見B", message_type="statement"
+        )
+        self.discussion = self.discussion.add_message(msg1).add_message(msg2)
+        self.discussion.insights = [
+            Insight(category="ニーズ", description="テストインサイト", supporting_messages=[], confidence_score=0.8)
+        ]
+
+    def test_generate_report_summary(self):
+        """サマリレポート生成テスト（DB保存しない）"""
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_ai_service.generate_discussion_report.return_value = "# サマリ"
+
+        report = self.manager.generate_report(
+            discussion_id=self.discussion.id,
+            template_type="summary",
+        )
+
+        assert report.template_type == "summary"
+        assert report.content == "# サマリ"
+        assert report.custom_prompt is None
+        self.mock_ai_service.generate_discussion_report.assert_called_once()
+        self.mock_database_service.save_discussion.assert_not_called()
+
+    def test_generate_report_custom(self):
+        """カスタムプロンプトレポート生成テスト（DB保存しない）"""
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_ai_service.generate_discussion_report.return_value = "カスタム結果"
+
+        report = self.manager.generate_report(
+            discussion_id=self.discussion.id,
+            template_type="custom",
+            custom_prompt="箇条書きで",
+        )
+
+        assert report.template_type == "custom"
+        assert report.custom_prompt == "箇条書きで"
+
+    def test_generate_report_discussion_not_found(self):
+        """存在しない議論のレポート生成テスト"""
+        self.mock_database_service.get_discussion.return_value = None
+
+        with pytest.raises(DiscussionManagerError, match="議論が見つかりません"):
+            self.manager.generate_report(
+                discussion_id="nonexistent",
+                template_type="summary",
+            )
+
+    def test_delete_report(self):
+        """レポート削除テスト"""
+        from src.models.discussion_report import DiscussionReport
+
+        report = DiscussionReport.create_new(template_type="summary", content="テスト")
+        self.discussion.reports = [report]
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_database_service.save_discussion.return_value = self.discussion.id
+
+        result = self.manager.delete_report(
+            discussion_id=self.discussion.id,
+            report_id=report.id,
+        )
+
+        assert result is True
+        saved_discussion = self.mock_database_service.save_discussion.call_args[0][0]
+        assert len(saved_discussion.reports) == 0
+
+    def test_delete_report_not_found(self):
+        """存在しないレポートの削除テスト"""
+        self.mock_database_service.get_discussion.return_value = self.discussion
+
+        with pytest.raises(DiscussionManagerError, match="レポートが見つかりません"):
+            self.manager.delete_report(
+                discussion_id=self.discussion.id,
+                report_id="nonexistent",
+            )
+
+    def test_save_report_success(self):
+        """レポート保存テスト"""
+        from src.models.discussion_report import DiscussionReport
+
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_database_service.save_discussion.return_value = self.discussion.id
+
+        report = DiscussionReport.create_new(template_type="summary", content="テスト")
+        self.manager.save_report(self.discussion.id, report)
+
+        saved = self.mock_database_service.save_discussion.call_args[0][0]
+        assert len(saved.reports) == 1
+        assert saved.reports[0].id == report.id
+
+    def test_save_report_exceeds_limit(self):
+        """レポート3件上限テスト"""
+        from src.models.discussion_report import DiscussionReport
+
+        self.discussion.reports = [
+            DiscussionReport.create_new(template_type="summary", content=f"r{i}")
+            for i in range(3)
+        ]
+        self.mock_database_service.get_discussion.return_value = self.discussion
+
+        with pytest.raises(DiscussionManagerError, match="最大3件"):
+            self.manager.save_report(
+                self.discussion.id,
+                DiscussionReport.create_new(template_type="summary", content="4th"),
+            )

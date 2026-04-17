@@ -189,6 +189,7 @@ class AIService:
         self,
         messages: List[Dict[str, Any]],
         system_prompts: Optional[List[Dict[str, str]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """
         Bedrock Converse APIを呼び出し（マルチモーダル対応）
@@ -208,7 +209,7 @@ class AIService:
                 "modelId": self.model_id,
                 "messages": messages,
                 "inferenceConfig": {
-                    "maxTokens": self.max_tokens,
+                    "maxTokens": max_tokens or self.max_tokens,
                     "temperature": self.temperature,
                 },
             }
@@ -1583,3 +1584,156 @@ JSON:"""
                 insights.append(insight)
 
         return insights
+
+    def generate_discussion_report(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+        personas: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """
+        議論データからテンプレートに基づくレポートを生成
+
+        Args:
+            messages: 議論メッセージのリスト
+            insights: 抽出済みインサイトのリスト
+            topic: 議論トピック
+            template_type: テンプレート種別 ("summary", "review", "custom")
+            custom_prompt: カスタムプロンプト (template_type == "custom" の場合)
+            personas: 参加ペルソナのプロフィール情報
+
+        Returns:
+            str: 生成されたレポート（Markdown形式）
+        """
+        system_prompt = self._build_report_system_prompt(
+            topic, template_type, custom_prompt
+        )
+        converse_messages = self._build_report_context(
+            messages, insights, topic, personas
+        )
+
+        return self._invoke_converse_api(
+            converse_messages, system_prompts=[{"text": system_prompt}],
+            max_tokens=12000,
+        )
+
+    def generate_discussion_report_streaming(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+        personas: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
+        """
+        議論データからレポートをストリーミング生成する。
+
+        Yields:
+            str: テキストチャンク
+        """
+        system_prompt = self._build_report_system_prompt(
+            topic, template_type, custom_prompt
+        )
+        converse_messages = self._build_report_context(
+            messages, insights, topic, personas
+        )
+
+        response = self.bedrock_client.converse_stream(
+            modelId=self.model_id,
+            messages=converse_messages,
+            system=[{"text": system_prompt}],
+            inferenceConfig={
+                "maxTokens": 12000,
+                "temperature": self.temperature,
+            },
+        )
+
+        for event in response.get("stream", []):
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    yield delta["text"]
+
+    def _build_report_context(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        personas: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """レポート生成用のコンテキストメッセージを構築する"""
+        context_parts = [f"## 議論トピック\n{topic}\n"]
+
+        if personas:
+            context_parts.append("## 参加ペルソナのプロフィール")
+            for p in personas:
+                context_parts.append(
+                    f"### {p['name']}（{p['age']}歳 / {p['occupation']}）\n"
+                    f"- 価値観: {', '.join(p.get('values', []))}\n"
+                    f"- 課題: {', '.join(p.get('pain_points', []))}\n"
+                    f"- 目標: {', '.join(p.get('goals', []))}"
+                )
+
+        context_parts.append("\n## 議論ログ")
+        for msg in messages:
+            context_parts.append(f"**{msg.persona_name}**: {msg.content}")
+        context_parts.append("\n## 抽出済みインサイト")
+        for ins in insights:
+            context_parts.append(
+                f"- [{ins.get('category', '')}] {ins.get('description', '')} (信頼度: {ins.get('confidence_score', 0)})"
+            )
+
+        user_content = "\n".join(context_parts)
+        return [{"role": "user", "content": [{"text": user_content}]}]
+
+    def _build_report_system_prompt(
+        self, topic: str, template_type: str, custom_prompt: Optional[str] = None
+    ) -> str:
+        """テンプレート種別に応じたシステムプロンプトを構築"""
+        base = (
+            f"あなたは定性調査の分析専門家です。"
+            f"以下の議論・インタビューデータ（トピック: {topic}）を分析し、"
+            f"施策やアクションに繋がる実用的なレポートを生成してください。"
+            f"出力はMarkdown形式で記述してください。"
+            f"簡潔かつ要点を絞った記述を心がけ、冗長な説明は避けてください。"
+        )
+
+        if template_type == "summary":
+            return (
+                f"{base}\n\n"
+                "以下の構成でレポートを作成してください:\n\n"
+                "## 1. エグゼクティブサマリ\n"
+                "議論全体の要点を3-5行で簡潔にまとめる。\n\n"
+                "## 2. 参加ペルソナの概要\n"
+                "各ペルソナの属性と特徴的な価値観・課題を2-3行で紹介。\n\n"
+                "## 3. 主要な発見（Key Findings）\n"
+                "3-5個に絞り、各発見について以下を記述:\n"
+                "- **根拠**: どのペルソナの具体的な発言か（引用）\n"
+                "- **背景**: その発言の背景にある価値観や課題\n"
+                "- **合意度**: 他のペルソナも同意しているか、対立意見はあるか\n"
+                "- **意味合い**: この発見がビジネスにとって何を意味するか\n\n"
+                "## 4. 示唆と推奨アクション\n"
+                "各施策について「どの発見から導かれたか」を明記し、表形式で整理。\n"
+                "表の列: 根拠となる発見 / 施策内容 / 対象セグメント / 期待効果（具体的に） / 優先度（高/中/低）。5件以内。\n\n"
+                "## 5. 追加調査が必要な領域\n"
+                "2-3個を箇条書きで、ペルソナ間で意見が分かれた点や検証が不十分な仮説を挙げる。"
+            )
+        elif template_type == "review":
+            return (
+                f"{base}\n\n"
+                "レビューコメント形式で出力してください。5-10件に絞ってください。\n"
+                "各コメントには以下を含めてください:\n"
+                "- **該当箇所**: 議論中の具体的な発言や論点\n"
+                "- **指摘内容**: その箇所から読み取れる課題・機会・リスク\n"
+                "- **重要度**: 高/中/低\n"
+                "- **推奨アクション**: この指摘に対して取るべき具体的なアクション\n\n"
+                "表形式で整理してください。"
+            )
+        elif template_type == "custom" and custom_prompt:
+            return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
+        else:
+            return base
