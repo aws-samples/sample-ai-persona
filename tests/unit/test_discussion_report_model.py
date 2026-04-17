@@ -4,8 +4,6 @@ Unit tests for DiscussionReport model.
 
 from datetime import datetime
 
-import pytest
-
 from src.models.discussion_report import DiscussionReport
 
 
