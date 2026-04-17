@@ -174,7 +174,7 @@ window.__generateReport = function(template, showCustomPrompt, alpineData) {
 };
 
 function _buildPreview(display, content, template, prompt, discussionId) {
-    var reportId = (crypto.randomUUID || function() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }); })();
+    var reportId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
 
     var container = document.createElement('div');
     container.className = 'bg-amber-50 border border-amber-200 rounded-lg p-6';
