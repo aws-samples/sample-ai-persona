@@ -1611,11 +1611,63 @@ JSON:"""
         system_prompt = self._build_report_system_prompt(
             topic, template_type, custom_prompt
         )
+        converse_messages = self._build_report_context(
+            messages, insights, topic, personas
+        )
 
-        # 議論コンテキストを構築
+        return self._invoke_converse_api(
+            converse_messages, system_prompts=[{"text": system_prompt}],
+            max_tokens=8000,
+        )
+
+    def generate_discussion_report_streaming(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+        personas: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """
+        議論データからレポートをストリーミング生成する。
+
+        Yields:
+            str: テキストチャンク
+        """
+        system_prompt = self._build_report_system_prompt(
+            topic, template_type, custom_prompt
+        )
+        converse_messages = self._build_report_context(
+            messages, insights, topic, personas
+        )
+
+        response = self.bedrock_client.converse_stream(
+            modelId=self.model_id,
+            messages=converse_messages,
+            system=[{"text": system_prompt}],
+            inferenceConfig={
+                "maxTokens": 8000,
+                "temperature": self.temperature,
+            },
+        )
+
+        for event in response.get("stream", []):
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    yield delta["text"]
+
+    def _build_report_context(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        personas: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """レポート生成用のコンテキストメッセージを構築する"""
         context_parts = [f"## 議論トピック\n{topic}\n"]
 
-        # ペルソナプロフィール
         if personas:
             context_parts.append("## 参加ペルソナのプロフィール")
             for p in personas:
@@ -1636,15 +1688,7 @@ JSON:"""
             )
 
         user_content = "\n".join(context_parts)
-
-        converse_messages = [
-            {"role": "user", "content": [{"text": user_content}]}
-        ]
-
-        return self._invoke_converse_api(
-            converse_messages, system_prompts=[{"text": system_prompt}],
-            max_tokens=8000,
-        )
+        return [{"role": "user", "content": [{"text": user_content}]}]
 
     def _build_report_system_prompt(
         self, topic: str, template_type: str, custom_prompt: Optional[str] = None

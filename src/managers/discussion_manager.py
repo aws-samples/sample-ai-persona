@@ -1088,6 +1088,53 @@ class DiscussionManager:
         except AIServiceError as e:
             raise DiscussionManagerError(f"レポート生成エラー: {e}")
 
+    def generate_report_streaming(
+        self,
+        discussion_id: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+    ):
+        """
+        議論からレポートをストリーミング生成する。
+
+        Yields:
+            str: テキストチャンク
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        insights_data = [
+            {
+                "category": ins.category,
+                "description": ins.description,
+                "confidence_score": ins.confidence_score,
+            }
+            for ins in discussion.insights
+        ]
+
+        personas_data = []
+        for pid in discussion.participants:
+            persona = self.database_service.get_persona(pid)
+            if persona:
+                personas_data.append({
+                    "name": persona.name,
+                    "age": persona.age,
+                    "occupation": persona.occupation,
+                    "values": persona.values,
+                    "pain_points": persona.pain_points,
+                    "goals": persona.goals,
+                })
+
+        yield from self.ai_service.generate_discussion_report_streaming(
+            messages=discussion.messages,
+            insights=insights_data,
+            topic=discussion.topic,
+            template_type=template_type,
+            custom_prompt=custom_prompt,
+            personas=personas_data,
+        )
+
     def save_report(self, discussion_id: str, report: DiscussionReport) -> None:
         """
         生成済みレポートをDBに保存する。

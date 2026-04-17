@@ -58,21 +58,73 @@
         </div>
 
         <!-- 生成ボタン -->
-        <form hx-post="/discussion/{{ discussion.id }}/report/generate"
-              hx-target="#report-display"
-              hx-swap="innerHTML"
-              hx-indicator="#report-loading">
-            <input type="hidden" name="template_type" :value="selectedTemplate">
-            <input type="hidden" name="custom_prompt" :value="showCustomPrompt ? document.getElementById('custom-prompt-input')?.value : ''">
-            <button type="submit"
-                    :disabled="generating"
-                    class="bg-emerald-600 text-white px-6 py-2.5 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
-                </svg>
-                レポートを生成
-            </button>
-        </form>
+        <button type="button"
+                @click="
+                    generating = true;
+                    const display = document.getElementById('report-display');
+                    const template = selectedTemplate;
+                    const prompt = showCustomPrompt ? (document.getElementById('custom-prompt-input')?.value || '') : '';
+                    let url = '/discussion/{{ discussion.id }}/report/generate?template_type=' + template;
+                    if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
+
+                    display.innerHTML = '<div class=&quot;bg-gray-50 rounded-lg border border-gray-200 p-6&quot;><div class=&quot;flex items-center gap-2 mb-3&quot;><span class=&quot;px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800&quot;>生成中...</span></div><pre id=&quot;stream-output&quot; class=&quot;whitespace-pre-wrap text-sm text-gray-700 font-sans&quot;></pre></div>';
+                    let fullContent = '';
+                    const output = document.getElementById('stream-output');
+                    const es = new EventSource(url);
+                    es.onmessage = function(e) {
+                        const data = JSON.parse(e.data);
+                        if (data.type === 'chunk') {
+                            fullContent += data.content;
+                            output.textContent = fullContent;
+                            output.scrollTop = output.scrollHeight;
+                        } else if (data.type === 'done') {
+                            es.close();
+                            generating = false;
+                            // 完了後、保存フォーム付きプレビューを表示
+                            display.innerHTML = `<div class=&quot;bg-amber-50 border border-amber-200 rounded-lg p-6&quot;>
+                                <div class=&quot;flex items-center justify-between mb-4&quot;>
+                                    <span class=&quot;px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800&quot;>プレビュー（未保存）</span>
+                                    <form hx-post=&quot;/discussion/{{ discussion.id }}/report/save&quot; hx-target=&quot;#report-display&quot; hx-swap=&quot;innerHTML&quot;>
+                                        <input type=&quot;hidden&quot; name=&quot;report_id&quot; value=&quot;` + crypto.randomUUID() + `&quot;>
+                                        <input type=&quot;hidden&quot; name=&quot;template_type&quot; value=&quot;` + template + `&quot;>
+                                        <input type=&quot;hidden&quot; name=&quot;content&quot; value=&quot;` + fullContent.replace(/&/g,'&amp;amp;').replace(/\x22/g,'&amp;quot;').replace(/</g,'&amp;lt;') + `&quot;>
+                                        ` + (prompt ? `<input type=&quot;hidden&quot; name=&quot;custom_prompt&quot; value=&quot;` + prompt.replace(/&/g,'&amp;amp;').replace(/\x22/g,'&amp;quot;') + `&quot;>` : '') + `
+                                        <button type=&quot;submit&quot; class=&quot;bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-flex items-center gap-2&quot;>
+                                            <svg class=&quot;w-4 h-4&quot; fill=&quot;none&quot; viewBox=&quot;0 0 24 24&quot; stroke-width=&quot;1.5&quot; stroke=&quot;currentColor&quot;><path stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; d=&quot;M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3&quot; /></svg>
+                                            保存する
+                                        </button>
+                                    </form>
+                                </div>
+                                <div id=&quot;report-rendered&quot; class=&quot;prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-gray-900 prose-p:text-gray-700 prose-p:mb-3&quot;></div>
+                            </div>`;
+                            // Markdownレンダリング: サーバーに依頼せずプレーンテキストで表示
+                            document.getElementById('report-rendered').innerText = fullContent;
+                            htmx.process(display);
+                        } else if (data.type === 'error') {
+                            es.close();
+                            generating = false;
+                            display.innerHTML = '<div class=&quot;text-red-600 p-4&quot;>' + data.message + '</div>';
+                        }
+                    };
+                    es.onerror = function() {
+                        es.close();
+                        generating = false;
+                        if (!fullContent) {
+                            display.innerHTML = '<div class=&quot;text-red-600 p-4&quot;>接続エラーが発生しました</div>';
+                        }
+                    };
+                "
+                :disabled="generating"
+                class="bg-emerald-600 text-white px-6 py-2.5 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg x-show="!generating" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+            </svg>
+            <svg x-show="generating" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span x-text="generating ? 'レポート生成中...' : 'レポートを生成'"></span>
+        </button>
     </div>
 
     <!-- 生成済みレポート一覧 -->
@@ -131,15 +183,6 @@
         </div>
     </div>
     {% endif %}
-
-    <!-- ローディング表示 -->
-    <div id="report-loading" class="htmx-indicator flex items-center justify-center py-8">
-        <svg class="animate-spin h-6 w-6 text-emerald-600 mr-2" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-        <span class="text-sm text-gray-500">レポートを生成しています...</span>
-    </div>
 
     <!-- レポート表示エリア -->
     <div id="report-display"></div>

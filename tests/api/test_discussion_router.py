@@ -610,62 +610,48 @@ class TestDiscussionReportEndpoints:
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_generate_report_success(self, mock_get_manager, client):
-        """レポート生成が成功することを確認"""
-        from src.models.discussion_report import DiscussionReport
-
-        mock_report = DiscussionReport.create_new(
-            template_type="summary", content="# サマリレポート"
-        )
-
+        """レポートSSEストリーミングが成功することを確認"""
         mock_manager = Mock()
-        mock_manager.generate_report.return_value = mock_report
+        mock_manager.generate_report_streaming.return_value = iter(["# サマリ", "レポート"])
         mock_get_manager.return_value = mock_manager
 
-        response = client.post(
-            "/discussion/test-id/report/generate",
-            data={"template_type": "summary"},
+        response = client.get(
+            "/discussion/test-id/report/generate?template_type=summary",
         )
 
         assert response.status_code == 200
-        mock_manager.generate_report.assert_called_once()
+        assert "text/event-stream" in response.headers["content-type"]
+        mock_manager.generate_report_streaming.assert_called_once()
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_generate_report_custom(self, mock_get_manager, client):
-        """カスタムプロンプトでレポート生成できることを確認"""
-        from src.models.discussion_report import DiscussionReport
-
-        mock_report = DiscussionReport.create_new(
-            template_type="custom",
-            content="カスタム結果",
-            custom_prompt="箇条書きで",
-        )
-
+        """カスタムプロンプトでSSEストリーミングできることを確認"""
         mock_manager = Mock()
-        mock_manager.generate_report.return_value = mock_report
+        mock_manager.generate_report_streaming.return_value = iter(["カスタム結果"])
         mock_get_manager.return_value = mock_manager
 
-        response = client.post(
-            "/discussion/test-id/report/generate",
-            data={"template_type": "custom", "custom_prompt": "箇条書きで"},
+        response = client.get(
+            "/discussion/test-id/report/generate?template_type=custom&custom_prompt=箇条書きで",
         )
 
         assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_generate_report_failure(self, mock_get_manager, client):
-        """レポート生成失敗時にエラーを返すことを確認"""
+        """レポート生成失敗時にSSEでエラーを返すことを確認"""
         from src.managers.discussion_manager import DiscussionManagerError
 
         mock_manager = Mock()
-        mock_manager.generate_report.side_effect = DiscussionManagerError("議論が見つかりません")
+        mock_manager.generate_report_streaming.side_effect = DiscussionManagerError("議論が見つかりません")
         mock_get_manager.return_value = mock_manager
 
-        response = client.post(
-            "/discussion/test-id/report/generate",
-            data={"template_type": "summary"},
+        response = client.get(
+            "/discussion/test-id/report/generate?template_type=summary",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 200
+        assert "error" in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_delete_report_success(self, mock_get_manager, client):

@@ -957,36 +957,36 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
 # =============================================================================
 
 
-@router.post("/{discussion_id}/report/generate")
-async def generate_report(
+@router.get("/{discussion_id}/report/generate")
+async def generate_report_stream(
     request: Request,
     discussion_id: str,
-    template_type: str = Form(...),
-    custom_prompt: Optional[str] = Form(None),
+    template_type: str = "summary",
+    custom_prompt: Optional[str] = None,
 ):
-    """レポートをプレビュー生成する（DB保存しない）"""
-    try:
-        discussion_manager = get_discussion_manager()
-        report = discussion_manager.generate_report(
-            discussion_id=discussion_id,
-            template_type=template_type,
-            custom_prompt=custom_prompt or None,
-        )
+    """レポートをSSEストリーミングで生成する"""
+    def stream_generator():
+        try:
+            discussion_manager = get_discussion_manager()
+            for chunk in discussion_manager.generate_report_streaming(
+                discussion_id=discussion_id,
+                template_type=template_type,
+                custom_prompt=custom_prompt or None,
+            ):
+                data = json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
 
-        return templates.TemplateResponse(
-            "discussion/partials/report_preview.html",
-            {
-                "request": request,
-                "report": report,
-                "discussion_id": discussion_id,
-            },
-        )
-    except Exception as e:
-        logger.error(f"レポート生成エラー: {e}")
-        return HTMLResponse(
-            content=f"<div class='text-red-600'>{e}</div>",
-            status_code=400,
-        )
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"レポート生成エラー: {e}")
+            data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{discussion_id}/report/save")
