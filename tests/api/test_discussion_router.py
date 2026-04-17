@@ -714,3 +714,70 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         # Markdown記法が除去されていること
         assert "#" not in response.text or "レポート内容" in response.text
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_save_report_success(self, mock_get_manager, client):
+        """レポート保存が成功することを確認"""
+        from src.models.discussion import Discussion
+
+        mock_discussion = Discussion.create_new(topic="テスト", participants=["p1"])
+        mock_manager = Mock()
+        mock_manager.save_report.return_value = None
+        mock_manager.get_discussion.return_value = mock_discussion
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            "/discussion/test-id/report/save",
+            data={
+                "report_id": "r1",
+                "template_type": "summary",
+                "content": "# テスト",
+            },
+        )
+
+        assert response.status_code == 200
+        mock_manager.save_report.assert_called_once()
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_get_report_success(self, mock_get_manager, client):
+        """保存済みレポート取得が成功することを確認"""
+        from src.models.discussion_report import DiscussionReport
+
+        mock_report = DiscussionReport.create_new(
+            template_type="summary", content="# 保存済みレポート"
+        )
+        discussion = Mock()
+        discussion.reports = [mock_report]
+
+        mock_manager = Mock()
+        mock_manager.get_discussion.return_value = discussion
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get(f"/discussion/test-id/report/{mock_report.id}")
+
+        assert response.status_code == 200
+        assert "保存済みレポート" in response.text
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_get_report_not_found(self, mock_get_manager, client):
+        """存在しないレポートの取得で404を返すことを確認"""
+        discussion = Mock()
+        discussion.reports = []
+
+        mock_manager = Mock()
+        mock_manager.get_discussion.return_value = discussion
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/discussion/test-id/report/nonexistent")
+
+        assert response.status_code == 404
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_generate_report_invalid_template_type(self, mock_get_manager, client):
+        """無効なtemplate_typeが拒否されることを確認"""
+        response = client.get(
+            "/discussion/test-id/report/generate?template_type=invalid",
+        )
+
+        assert response.status_code == 200
+        assert "error" in response.text

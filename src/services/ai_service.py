@@ -1628,7 +1628,7 @@ JSON:"""
         template_type: str,
         custom_prompt: Optional[str] = None,
         personas: Optional[List[Dict[str, Any]]] = None,
-    ):
+    ) -> Any:
         """
         議論データからレポートをストリーミング生成する。
 

@@ -941,3 +941,33 @@ class TestDiscussionManagerReports:
                 discussion_id=self.discussion.id,
                 report_id="nonexistent",
             )
+
+    def test_save_report_success(self):
+        """レポート保存テスト"""
+        from src.models.discussion_report import DiscussionReport
+
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_database_service.save_discussion.return_value = self.discussion.id
+
+        report = DiscussionReport.create_new(template_type="summary", content="テスト")
+        self.manager.save_report(self.discussion.id, report)
+
+        saved = self.mock_database_service.save_discussion.call_args[0][0]
+        assert len(saved.reports) == 1
+        assert saved.reports[0].id == report.id
+
+    def test_save_report_exceeds_limit(self):
+        """レポート3件上限テスト"""
+        from src.models.discussion_report import DiscussionReport
+
+        self.discussion.reports = [
+            DiscussionReport.create_new(template_type="summary", content=f"r{i}")
+            for i in range(3)
+        ]
+        self.mock_database_service.get_discussion.return_value = self.discussion
+
+        with pytest.raises(DiscussionManagerError, match="最大3件"):
+            self.manager.save_report(
+                self.discussion.id,
+                DiscussionReport.create_new(template_type="summary", content="4th"),
+            )

@@ -963,9 +963,14 @@ async def generate_report_stream(
     discussion_id: str,
     template_type: str = "summary",
     custom_prompt: Optional[str] = None,
-):
+) -> Any:
     """レポートをSSEストリーミングで生成する"""
-    def stream_generator():
+    if template_type not in ("summary", "review", "custom"):
+        def error_gen() -> Any:
+            yield f'data: {json.dumps({"type": "error", "message": "無効なテンプレート種別です"}, ensure_ascii=False)}\n\n'
+        return StreamingResponse(error_gen(), media_type="text/event-stream")
+
+    def stream_generator() -> Any:
         try:
             discussion_manager = get_discussion_manager()
             for chunk in discussion_manager.generate_report_streaming(
@@ -997,7 +1002,7 @@ async def save_report(
     template_type: str = Form(...),
     content: str = Form(...),
     custom_prompt: Optional[str] = Form(None),
-):
+) -> Any:
     """プレビュー済みレポートをDBに保存する"""
     try:
         from src.models.discussion_report import DiscussionReport
@@ -1051,7 +1056,7 @@ async def get_report(
     request: Request,
     discussion_id: str,
     report_id: str,
-):
+) -> Any:
     """レポート内容を取得する"""
     try:
         discussion_manager = get_discussion_manager()
@@ -1077,7 +1082,7 @@ async def export_report(
     discussion_id: str,
     report_id: str,
     format: str = "md",
-):
+) -> Any:
     """レポートをファイルエクスポートする"""
     try:
         discussion_manager = get_discussion_manager()
@@ -1116,7 +1121,7 @@ async def delete_report(
     request: Request,
     discussion_id: str,
     report_id: str,
-):
+) -> Any:
     """レポートを削除する"""
     try:
         discussion_manager = get_discussion_manager()
@@ -1127,7 +1132,8 @@ async def delete_report(
         return HTMLResponse(content="<div>レポートを削除しました</div>")
     except Exception as e:
         logger.error(f"レポート削除エラー: {e}")
+        from markupsafe import escape
         return HTMLResponse(
-            content=f"<div class='text-red-600'>{e}</div>",
+            content=f"<div class='text-red-600'>{escape(str(e))}</div>",
             status_code=400,
         )

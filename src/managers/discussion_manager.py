@@ -1047,28 +1047,7 @@ class DiscussionManager:
             raise DiscussionManagerError("議論が見つかりません")
 
         try:
-            insights_data = [
-                {
-                    "category": ins.category,
-                    "description": ins.description,
-                    "confidence_score": ins.confidence_score,
-                }
-                for ins in discussion.insights
-            ]
-
-            # 参加ペルソナのプロフィール情報を取得
-            personas_data = []
-            for pid in discussion.participants:
-                persona = self.database_service.get_persona(pid)
-                if persona:
-                    personas_data.append({
-                        "name": persona.name,
-                        "age": persona.age,
-                        "occupation": persona.occupation,
-                        "values": persona.values,
-                        "pain_points": persona.pain_points,
-                        "goals": persona.goals,
-                    })
+            insights_data, personas_data = self._get_report_context(discussion)
 
             content = self.ai_service.generate_discussion_report(
                 messages=discussion.messages,
@@ -1088,22 +1067,8 @@ class DiscussionManager:
         except AIServiceError as e:
             raise DiscussionManagerError(f"レポート生成エラー: {e}")
 
-    def generate_report_streaming(
-        self,
-        discussion_id: str,
-        template_type: str,
-        custom_prompt: Optional[str] = None,
-    ):
-        """
-        議論からレポートをストリーミング生成する。
-
-        Yields:
-            str: テキストチャンク
-        """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
-
+    def _get_report_context(self, discussion: Discussion) -> tuple:
+        """レポート生成用のインサイトデータとペルソナデータを取得する"""
         insights_data = [
             {
                 "category": ins.category,
@@ -1112,7 +1077,6 @@ class DiscussionManager:
             }
             for ins in discussion.insights
         ]
-
         personas_data = []
         for pid in discussion.participants:
             persona = self.database_service.get_persona(pid)
@@ -1125,6 +1089,25 @@ class DiscussionManager:
                     "pain_points": persona.pain_points,
                     "goals": persona.goals,
                 })
+        return insights_data, personas_data
+
+    def generate_report_streaming(
+        self,
+        discussion_id: str,
+        template_type: str,
+        custom_prompt: Optional[str] = None,
+    ) -> Any:
+        """
+        議論からレポートをストリーミング生成する。
+
+        Yields:
+            str: テキストチャンク
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        insights_data, personas_data = self._get_report_context(discussion)
 
         yield from self.ai_service.generate_discussion_report_streaming(
             messages=discussion.messages,

@@ -1,19 +1,11 @@
 <!-- レポート生成・一覧パーシャル -->
-<div x-data="{
-    selectedTemplate: 'summary',
-    showCustomPrompt: false,
-    generating: false,
-    activeReportId: null,
-    selectTemplate(type) {
-        this.selectedTemplate = type;
-        this.showCustomPrompt = type === 'custom';
-    }
-}">
+<div x-data="{ selectedTemplate: 'summary', showCustomPrompt: false, generating: false }"
+     id="report-generator">
     <!-- レポート生成フォーム -->
     <div class="mb-6">
         <h3 class="text-sm font-semibold text-gray-700 mb-3">テンプレートを選択</h3>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-            <button type="button" @click="selectTemplate('summary')"
+            <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false"
                     :class="selectedTemplate === 'summary' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
@@ -22,9 +14,9 @@
                     </svg>
                     <span class="text-sm font-semibold text-gray-900">サマリレポート</span>
                 </div>
-                <p class="text-xs text-gray-500">インタビューとインサイトのサマリレポート</p>
+                <p class="text-xs text-gray-500">インタビューとインサイトのサマリ</p>
             </button>
-            <button type="button" @click="selectTemplate('review')"
+            <button type="button" @click="selectedTemplate = 'review'; showCustomPrompt = false"
                     :class="selectedTemplate === 'review' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
@@ -35,7 +27,7 @@
                 </div>
                 <p class="text-xs text-gray-500">該当箇所、指摘内容、重要度</p>
             </button>
-            <button type="button" @click="selectTemplate('custom')"
+            <button type="button" @click="selectedTemplate = 'custom'; showCustomPrompt = true"
                     :class="selectedTemplate === 'custom' ? 'border-purple-500 bg-purple-50 ring-1 ring-purple-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
@@ -59,61 +51,8 @@
 
         <!-- 生成ボタン -->
         <button type="button"
-                @click="
-                    generating = true;
-                    const display = document.getElementById('report-display');
-                    const template = selectedTemplate;
-                    const prompt = showCustomPrompt ? (document.getElementById('custom-prompt-input')?.value || '') : '';
-                    let url = '/discussion/{{ discussion.id }}/report/generate?template_type=' + template;
-                    if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
-
-                    display.innerHTML = '<div class=&quot;bg-gray-50 rounded-lg border border-gray-200 p-6&quot;><div class=&quot;flex items-center gap-2 mb-3&quot;><span class=&quot;px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800&quot;>生成中...</span></div><pre id=&quot;stream-output&quot; class=&quot;whitespace-pre-wrap text-sm text-gray-700 font-sans&quot;></pre></div>';
-                    let fullContent = '';
-                    const output = document.getElementById('stream-output');
-                    const es = new EventSource(url);
-                    es.onmessage = function(e) {
-                        const data = JSON.parse(e.data);
-                        if (data.type === 'chunk') {
-                            fullContent += data.content;
-                            output.textContent = fullContent;
-                            output.scrollTop = output.scrollHeight;
-                        } else if (data.type === 'done') {
-                            es.close();
-                            generating = false;
-                            // 完了後、保存フォーム付きプレビューを表示
-                            display.innerHTML = `<div class=&quot;bg-amber-50 border border-amber-200 rounded-lg p-6&quot;>
-                                <div class=&quot;flex items-center justify-between mb-4&quot;>
-                                    <span class=&quot;px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800&quot;>プレビュー（未保存）</span>
-                                    <form hx-post=&quot;/discussion/{{ discussion.id }}/report/save&quot; hx-target=&quot;#report-display&quot; hx-swap=&quot;innerHTML&quot;>
-                                        <input type=&quot;hidden&quot; name=&quot;report_id&quot; value=&quot;` + crypto.randomUUID() + `&quot;>
-                                        <input type=&quot;hidden&quot; name=&quot;template_type&quot; value=&quot;` + template + `&quot;>
-                                        <input type=&quot;hidden&quot; name=&quot;content&quot; value=&quot;` + fullContent.replace(/&/g,'&amp;amp;').replace(/\x22/g,'&amp;quot;').replace(/</g,'&amp;lt;') + `&quot;>
-                                        ` + (prompt ? `<input type=&quot;hidden&quot; name=&quot;custom_prompt&quot; value=&quot;` + prompt.replace(/&/g,'&amp;amp;').replace(/\x22/g,'&amp;quot;') + `&quot;>` : '') + `
-                                        <button type=&quot;submit&quot; class=&quot;bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-flex items-center gap-2&quot;>
-                                            <svg class=&quot;w-4 h-4&quot; fill=&quot;none&quot; viewBox=&quot;0 0 24 24&quot; stroke-width=&quot;1.5&quot; stroke=&quot;currentColor&quot;><path stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; d=&quot;M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3&quot; /></svg>
-                                            保存する
-                                        </button>
-                                    </form>
-                                </div>
-                                <div id=&quot;report-rendered&quot; class=&quot;prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-gray-900 prose-p:text-gray-700 prose-p:mb-3&quot;></div>
-                            </div>`;
-                            // Markdownレンダリング: サーバーに依頼せずプレーンテキストで表示
-                            document.getElementById('report-rendered').innerText = fullContent;
-                            htmx.process(display);
-                        } else if (data.type === 'error') {
-                            es.close();
-                            generating = false;
-                            display.innerHTML = '<div class=&quot;text-red-600 p-4&quot;>' + data.message + '</div>';
-                        }
-                    };
-                    es.onerror = function() {
-                        es.close();
-                        generating = false;
-                        if (!fullContent) {
-                            display.innerHTML = '<div class=&quot;text-red-600 p-4&quot;>接続エラーが発生しました</div>';
-                        }
-                    };
-                "
+                id="generate-report-btn"
+                @click="window.__generateReport(selectedTemplate, showCustomPrompt, $data)"
                 :disabled="generating"
                 class="bg-emerald-600 text-white px-6 py-2.5 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             <svg x-show="!generating" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -137,8 +76,7 @@
                 <button hx-get="/discussion/{{ discussion.id }}/report/{{ report.id }}"
                         hx-target="#report-display"
                         hx-swap="innerHTML"
-                        class="flex items-center gap-3 text-left flex-1"
-                        @click="activeReportId = '{{ report.id }}'">
+                        class="flex items-center gap-3 text-left flex-1">
                     {% if report.template_type == 'summary' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-800">サマリ</span>
                     {% elif report.template_type == 'review' %}
@@ -187,3 +125,100 @@
     <!-- レポート表示エリア -->
     <div id="report-display"></div>
 </div>
+
+<script>
+window.__generateReport = function(template, showCustomPrompt, alpineData) {
+    var discussionId = '{{ discussion.id }}';
+    if (alpineData.generating) return;
+
+    var display = document.getElementById('report-display');
+    var prompt = showCustomPrompt ? (document.getElementById('custom-prompt-input')?.value || '') : '';
+    var url = '/discussion/' + discussionId + '/report/generate?template_type=' + template;
+    if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
+
+    alpineData.generating = true;
+
+    var streamDiv = document.createElement('div');
+    streamDiv.className = 'bg-gray-50 rounded-lg border border-gray-200 p-6';
+    streamDiv.innerHTML = '<div class="flex items-center gap-2 mb-3"><span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">生成中...</span></div><div id="stream-output" class="prose prose-slate max-w-none"></div>';
+    display.innerHTML = '';
+    display.appendChild(streamDiv);
+
+    var fullContent = '';
+    var output = document.getElementById('stream-output');
+    var es = new EventSource(url);
+
+    es.onmessage = function(e) {
+        var data = JSON.parse(e.data);
+        if (data.type === 'chunk') {
+            fullContent += data.content;
+            output.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));
+            output.scrollTop = output.scrollHeight;
+        } else if (data.type === 'done') {
+            es.close();
+            alpineData.generating = false;
+            _buildPreview(display, fullContent, template, prompt, discussionId);
+        } else if (data.type === 'error') {
+            es.close();
+            alpineData.generating = false;
+            display.innerHTML = '<div class="text-red-600 p-4">' + DOMPurify.sanitize(data.message) + '</div>';
+        }
+    };
+    es.onerror = function() {
+        es.close();
+        alpineData.generating = false;
+        if (!fullContent) {
+            display.innerHTML = '<div class="text-red-600 p-4">接続エラーが発生しました</div>';
+        }
+    };
+};
+
+function _buildPreview(display, content, template, prompt, discussionId) {
+    var reportId = (crypto.randomUUID || function() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }); })();
+
+    var container = document.createElement('div');
+    container.className = 'bg-amber-50 border border-amber-200 rounded-lg p-6';
+
+    var header = document.createElement('div');
+    header.className = 'flex items-center justify-between mb-4';
+
+    var badge = document.createElement('span');
+    badge.className = 'px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800';
+    badge.textContent = 'プレビュー（未保存）';
+    header.appendChild(badge);
+
+    var form = document.createElement('form');
+    form.setAttribute('hx-post', '/discussion/' + discussionId + '/report/save');
+    form.setAttribute('hx-target', '#reports-container');
+    form.setAttribute('hx-swap', 'innerHTML');
+
+    function addHidden(name, value) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+    }
+    addHidden('report_id', reportId);
+    addHidden('template_type', template);
+    addHidden('content', content);
+    if (prompt) addHidden('custom_prompt', prompt);
+
+    var btn = document.createElement('button');
+    btn.type = 'submit';
+    btn.className = 'bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-flex items-center gap-2';
+    btn.innerHTML = '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg> 保存する';
+    form.appendChild(btn);
+    header.appendChild(form);
+    container.appendChild(header);
+
+    var rendered = document.createElement('div');
+    rendered.className = 'prose prose-slate max-w-none';
+    rendered.innerHTML = DOMPurify.sanitize(marked.parse(content));
+    container.appendChild(rendered);
+
+    display.innerHTML = '';
+    display.appendChild(container);
+    htmx.process(display);
+}
+</script>
