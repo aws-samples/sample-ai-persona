@@ -189,122 +189,129 @@
     </div>
     {% endif %}
     
-    <!-- 議論内容 -->
-    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
-        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_chat("w-5 h-5 text-green-600") }} 議論内容</h2>
-        
-        {% if discussion.messages %}
-        {# ペルソナごとの色を定義 #}
-        {% set persona_colors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'] %}
-        
-        <div class="space-y-3 discussion-messages max-h-screen overflow-y-auto">
-            {% for message in discussion.messages %}
-            {% if message.message_type == 'user_message' %}
-            {# ユーザーメッセージ - インタビューモード専用 #}
-            <div class="flex justify-end my-4">
-                <div class="max-w-xs lg:max-w-md">
-                    <div class="flex items-center gap-2 mb-1 justify-end">
-                        <span class="text-xs text-gray-500">あなた</span>
-                        <div class="w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center">
-                            <span class="text-white font-bold text-sm">U</span>
-                        </div>
-                    </div>
-                    <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-none shadow-sm">
-                        <p class="whitespace-pre-wrap">{{ message.content }}</p>
-                    </div>
-                </div>
-            </div>
-            {% elif message.message_type in ['facilitation', 'summary'] or message.persona_id == 'facilitator' %}
-            {# ファシリテーターの発言 - 中央寄せ #}
-            <div class="flex justify-center my-4">
-                <div class="facilitator-bubble">
-                    <div class="flex items-center gap-2 mb-2">
-                        <div class="w-7 h-7 rounded-full facilitator-avatar flex items-center justify-center">
-                            {{ icon_cpu_chip("w-4 h-4 text-white") }}
-                        </div>
-                        <span class="font-semibold">ファシリテーター</span>
-                        {% if message.round_number %}
-                        <span class="ml-auto text-xs bg-white/20 px-2 py-0.5 rounded-full">ラウンド {{ message.round_number }}</span>
-                        {% endif %}
-                    </div>
-                    <div class="whitespace-pre-wrap prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
-                </div>
-            </div>
-            {% else %}
-            {# ペルソナの発言 - チャット風 #}
-            {# persona_idからインデックスを取得して色を決定 #}
-            {% set color_index = discussion.participants.index(message.persona_id) if message.persona_id in discussion.participants else 0 %}
-            {% set color = persona_colors[color_index % persona_colors|length] %}
-            {% set persona = participant_personas.get(message.persona_id) if participant_personas else None %}
-            <div class="flex gap-2.5 message-item">
-                {# アバター #}
-                <div class="flex-shrink-0">
-                    <div class="w-10 h-10 rounded-full persona-avatar-{{ color }} flex items-center justify-center shadow-md">
-                        <span class="text-white font-bold text-sm">{{ (message.persona_name or 'P')[0] }}</span>
-                    </div>
-                </div>
-                {# 発言内容 #}
-                <div class="flex-1 min-w-0">
-                    <div class="flex items-baseline gap-2 mb-1">
-                        <span class="font-semibold persona-name-{{ color }}">{{ message.persona_name if message.persona_name else 'ペルソナ' }}</span>
-                        {% if persona %}
-                        <span class="text-xs text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</span>
-                        {% endif %}
-                        {% if message.round_number %}
-                        <span class="text-xs text-gray-400 ml-auto">R{{ message.round_number }}</span>
-                        {% endif %}
-                    </div>
-                    <div class="persona-bubble-{{ color }} border rounded-2xl rounded-tl-none shadow-sm">
-                        <div class="text-gray-800 prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-            {% endfor %}
+    <!-- タブUI: 議論内容 / インサイト / レポート生成 -->
+    <div x-data="{ activeTab: 'discussion' }" class="mb-6">
+        <!-- タブヘッダー -->
+        <div class="flex border-b border-gray-200 bg-white rounded-t-lg shadow-md px-2">
+            <button @click="activeTab = 'discussion'"
+                    :class="activeTab === 'discussion' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
+                {{ icon_chat("w-4 h-4") }} 議論内容
+                <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">{{ discussion.messages|length }}</span>
+            </button>
+            <button @click="activeTab = 'insights'"
+                    :class="activeTab === 'insights' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
+                {{ icon_lightbulb("w-4 h-4") }} インサイト
+                <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">{{ discussion.insights|length }}</span>
+            </button>
+            <button @click="activeTab = 'reports'"
+                    :class="activeTab === 'reports' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                レポート
+                {% if discussion.reports %}<span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">{{ discussion.reports|length }}</span>{% endif %}
+            </button>
         </div>
-        {% else %}
-        <p class="text-gray-500 text-center py-8">議論内容がありません</p>
-        {% endif %}
-    </div>
-    
-    <!-- インサイト -->
-    {% if discussion.insights or discussion.mode != 'interview' %}
-    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_lightbulb("w-5 h-5 text-yellow-500") }} インサイト</h2>
-        
-        <!-- カスタムカテゴリー情報 -->
-        {% if custom_categories %}
-        <details class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <summary class="text-sm font-medium text-blue-900 cursor-pointer hover:text-blue-700">
-                {{ icon_lightbulb("w-4 h-4 inline") }} 使用されたカテゴリーを表示 ({{ custom_categories|length }}個)
-            </summary>
-            <div class="space-y-2 mt-3">
-                {% for category in custom_categories %}
-                <div class="bg-white rounded p-2 border border-blue-100">
-                    <p class="text-sm font-semibold text-gray-900">{{ category.name }}</p>
-                    <p class="text-xs text-gray-600">{{ category.description }}</p>
+
+        <!-- タブコンテンツ -->
+        <!-- 議論内容 -->
+        <div x-show="activeTab === 'discussion'" class="bg-white rounded-b-lg shadow-md p-4">
+            {% if discussion.messages %}
+            {% set persona_colors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'] %}
+            <div class="space-y-3 discussion-messages max-h-screen overflow-y-auto">
+                {% for message in discussion.messages %}
+                {% if message.message_type == 'user_message' %}
+                <div class="flex justify-end my-4">
+                    <div class="max-w-xs lg:max-w-md">
+                        <div class="flex items-center gap-2 mb-1 justify-end">
+                            <span class="text-xs text-gray-500">あなた</span>
+                            <div class="w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center">
+                                <span class="text-white font-bold text-sm">U</span>
+                            </div>
+                        </div>
+                        <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-none shadow-sm">
+                            <p class="whitespace-pre-wrap">{{ message.content }}</p>
+                        </div>
+                    </div>
                 </div>
+                {% elif message.message_type in ['facilitation', 'summary'] or message.persona_id == 'facilitator' %}
+                <div class="flex justify-center my-4">
+                    <div class="facilitator-bubble">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-7 h-7 rounded-full facilitator-avatar flex items-center justify-center">
+                                {{ icon_cpu_chip("w-4 h-4 text-white") }}
+                            </div>
+                            <span class="font-semibold">ファシリテーター</span>
+                            {% if message.round_number %}
+                            <span class="ml-auto text-xs bg-white/20 px-2 py-0.5 rounded-full">ラウンド {{ message.round_number }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="whitespace-pre-wrap prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
+                    </div>
+                </div>
+                {% else %}
+                {% set color_index = discussion.participants.index(message.persona_id) if message.persona_id in discussion.participants else 0 %}
+                {% set color = persona_colors[color_index % persona_colors|length] %}
+                {% set persona = participant_personas.get(message.persona_id) if participant_personas else None %}
+                <div class="flex gap-2.5 message-item">
+                    <div class="flex-shrink-0">
+                        <div class="w-10 h-10 rounded-full persona-avatar-{{ color }} flex items-center justify-center shadow-md">
+                            <span class="text-white font-bold text-sm">{{ (message.persona_name or 'P')[0] }}</span>
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-baseline gap-2 mb-1">
+                            <span class="font-semibold persona-name-{{ color }}">{{ message.persona_name if message.persona_name else 'ペルソナ' }}</span>
+                            {% if persona %}
+                            <span class="text-xs text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</span>
+                            {% endif %}
+                            {% if message.round_number %}
+                            <span class="text-xs text-gray-400 ml-auto">R{{ message.round_number }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="persona-bubble-{{ color }} border rounded-2xl rounded-tl-none shadow-sm">
+                            <div class="text-gray-800 prose prose-sm max-w-none">{{ message.content | markdown | safe }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
                 {% endfor %}
             </div>
-        </details>
-        {% endif %}
-        
-        <div id="insights-container">
-            {% include "discussion/partials/insights.html" with context %}
+            {% else %}
+            <p class="text-gray-500 text-center py-8">議論内容がありません</p>
+            {% endif %}
         </div>
-    </div>
-    {% endif %}
 
-    <!-- レポート生成 -->
-    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <svg class="w-5 h-5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-            </svg>
-            レポート生成
-        </h2>
-        <div id="reports-container">
-            {% include "discussion/partials/reports.html" with context %}
+        <!-- インサイト -->
+        <div x-show="activeTab === 'insights'" class="bg-white rounded-b-lg shadow-md p-6">
+            {% if custom_categories %}
+            <details class="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <summary class="text-sm font-medium text-blue-900 cursor-pointer hover:text-blue-700">
+                    {{ icon_lightbulb("w-4 h-4 inline") }} 使用されたカテゴリーを表示 ({{ custom_categories|length }}個)
+                </summary>
+                <div class="space-y-2 mt-3">
+                    {% for category in custom_categories %}
+                    <div class="bg-white rounded p-2 border border-blue-100">
+                        <p class="text-sm font-semibold text-gray-900">{{ category.name }}</p>
+                        <p class="text-xs text-gray-600">{{ category.description }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+            <div id="insights-container">
+                {% include "discussion/partials/insights.html" with context %}
+            </div>
+        </div>
+
+        <!-- レポート生成 -->
+        <div x-show="activeTab === 'reports'" class="bg-white rounded-b-lg shadow-md p-6">
+            <div id="reports-container">
+                {% include "discussion/partials/reports.html" with context %}
+            </div>
         </div>
     </div>
     
