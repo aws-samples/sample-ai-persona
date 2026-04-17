@@ -984,7 +984,7 @@ async def generate_report_stream(
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"レポート生成エラー: {e}")
-            data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
+            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
             yield f"data: {data}\n\n"
 
     return StreamingResponse(
