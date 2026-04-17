@@ -1015,7 +1015,7 @@ async def save_report(
 
         # 保存後、reportsセクション全体を再描画
         discussion = discussion_manager.get_discussion(discussion_id)
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             "discussion/partials/reports.html",
             {
                 "request": request,
@@ -1023,11 +1023,26 @@ async def save_report(
                 "discussion_id": discussion_id,
             },
         )
+        response.headers["HX-Retarget"] = "#reports-container"
+        return response
     except Exception as e:
         logger.error(f"レポート保存エラー: {e}")
-        return HTMLResponse(
-            content=f"<div class='text-red-600'>{e}</div>",
-            status_code=400,
+        from src.models.discussion_report import DiscussionReport as DR
+        report = DR(
+            id=report_id,
+            template_type=template_type,
+            content=content,
+            created_at=datetime.now(),
+            custom_prompt=custom_prompt or None,
+        )
+        return templates.TemplateResponse(
+            "discussion/partials/report_preview.html",
+            {
+                "request": request,
+                "report": report,
+                "discussion_id": discussion_id,
+                "save_error": str(e),
+            },
         )
 
 

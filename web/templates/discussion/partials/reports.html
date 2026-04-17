@@ -22,7 +22,7 @@
                     </svg>
                     <span class="text-sm font-semibold text-gray-900">サマリレポート</span>
                 </div>
-                <p class="text-xs text-gray-500">ペルソナ概要、意見まとめ、インサイト、Next Action</p>
+                <p class="text-xs text-gray-500">インタビューとインサイトのサマリレポート</p>
             </button>
             <button type="button" @click="selectTemplate('review')"
                     :class="selectedTemplate === 'review' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'"
@@ -78,7 +78,7 @@
     <!-- 生成済みレポート一覧 -->
     {% if discussion.reports %}
     <div class="mb-4">
-        <h3 class="text-sm font-semibold text-gray-700 mb-3">生成済みレポート ({{ discussion.reports|length }}件)</h3>
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">生成済みレポート ({{ discussion.reports|length }}/3件)</h3>
         <div class="space-y-2">
             {% for report in discussion.reports|reverse %}
             <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3 border border-gray-200 hover:border-gray-300 transition-colors">
@@ -100,12 +100,22 @@
                     {% endif %}
                 </button>
                 <div class="flex items-center gap-1 ml-2">
-                    <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=md"
-                       class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 transition-colors"
-                       title="Markdownでエクスポート">MD</a>
-                    <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=txt"
-                       class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 transition-colors"
-                       title="テキストでエクスポート">TXT</a>
+                    <div class="relative" x-data="{ open: false }">
+                        <button @click="open = !open" @click.outside="open = false"
+                                class="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-200 transition-colors"
+                                title="エクスポート">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                            </svg>
+                        </button>
+                        <div x-show="open" x-transition
+                             class="absolute right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10 whitespace-nowrap">
+                            <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=md"
+                               class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">Markdown (.md)</a>
+                            <a href="/discussion/{{ discussion.id }}/report/{{ report.id }}/export?format=txt"
+                               class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">テキスト (.txt)</a>
+                        </div>
+                    </div>
                     <button hx-delete="/discussion/{{ discussion.id }}/report/{{ report.id }}"
                             hx-confirm="このレポートを削除しますか？"
                             hx-target="closest div.flex"

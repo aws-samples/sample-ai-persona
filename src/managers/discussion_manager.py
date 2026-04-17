@@ -1056,12 +1056,27 @@ class DiscussionManager:
                 for ins in discussion.insights
             ]
 
+            # 参加ペルソナのプロフィール情報を取得
+            personas_data = []
+            for pid in discussion.participants:
+                persona = self.database_service.get_persona(pid)
+                if persona:
+                    personas_data.append({
+                        "name": persona.name,
+                        "age": persona.age,
+                        "occupation": persona.occupation,
+                        "values": persona.values,
+                        "pain_points": persona.pain_points,
+                        "goals": persona.goals,
+                    })
+
             content = self.ai_service.generate_discussion_report(
                 messages=discussion.messages,
                 insights=insights_data,
                 topic=discussion.topic,
                 template_type=template_type,
                 custom_prompt=custom_prompt,
+                personas=personas_data,
             )
 
             return DiscussionReport.create_new(
@@ -1082,11 +1097,14 @@ class DiscussionManager:
             report: 保存するDiscussionReport
 
         Raises:
-            DiscussionManagerError: 議論が見つからない場合
+            DiscussionManagerError: 議論が見つからない場合や上限超過
         """
         discussion = self.database_service.get_discussion(discussion_id)
         if not discussion:
             raise DiscussionManagerError("議論が見つかりません")
+
+        if len(discussion.reports) >= 3:
+            raise DiscussionManagerError("レポートは最大3件まで保存できます。不要なレポートを削除してください。")
 
         discussion.reports.append(report)
         self.database_service.save_discussion(discussion)

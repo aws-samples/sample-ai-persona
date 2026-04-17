@@ -12,7 +12,7 @@
             {% endif %}
         </div>
         <form hx-post="/discussion/{{ discussion_id }}/report/save"
-              hx-target="#reports-container"
+              hx-target="#report-display"
               hx-swap="innerHTML">
             <input type="hidden" name="report_id" value="{{ report.id }}">
             <input type="hidden" name="template_type" value="{{ report.template_type }}">
@@ -29,6 +29,11 @@
             </button>
         </form>
     </div>
+    {% if save_error is defined and save_error %}
+    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm mt-3">
+        {{ save_error }}
+    </div>
+    {% endif %}
     <div class="prose prose-slate max-w-none
                 prose-headings:font-bold prose-headings:text-gray-900
                 prose-h1:text-2xl prose-h1:mb-4 prose-h1:mt-6

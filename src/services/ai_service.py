@@ -189,6 +189,7 @@ class AIService:
         self,
         messages: List[Dict[str, Any]],
         system_prompts: Optional[List[Dict[str, str]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """
         Bedrock Converse APIを呼び出し（マルチモーダル対応）
@@ -208,7 +209,7 @@ class AIService:
                 "modelId": self.model_id,
                 "messages": messages,
                 "inferenceConfig": {
-                    "maxTokens": self.max_tokens,
+                    "maxTokens": max_tokens or self.max_tokens,
                     "temperature": self.temperature,
                 },
             }
@@ -1591,6 +1592,7 @@ JSON:"""
         topic: str,
         template_type: str,
         custom_prompt: Optional[str] = None,
+        personas: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         議論データからテンプレートに基づくレポートを生成
@@ -1601,6 +1603,7 @@ JSON:"""
             topic: 議論トピック
             template_type: テンプレート種別 ("summary", "review", "custom")
             custom_prompt: カスタムプロンプト (template_type == "custom" の場合)
+            personas: 参加ペルソナのプロフィール情報
 
         Returns:
             str: 生成されたレポート（Markdown形式）
@@ -1611,7 +1614,19 @@ JSON:"""
 
         # 議論コンテキストを構築
         context_parts = [f"## 議論トピック\n{topic}\n"]
-        context_parts.append("## 議論ログ")
+
+        # ペルソナプロフィール
+        if personas:
+            context_parts.append("## 参加ペルソナのプロフィール")
+            for p in personas:
+                context_parts.append(
+                    f"### {p['name']}（{p['age']}歳 / {p['occupation']}）\n"
+                    f"- 価値観: {', '.join(p.get('values', []))}\n"
+                    f"- 課題: {', '.join(p.get('pain_points', []))}\n"
+                    f"- 目標: {', '.join(p.get('goals', []))}"
+                )
+
+        context_parts.append("\n## 議論ログ")
         for msg in messages:
             context_parts.append(f"**{msg.persona_name}**: {msg.content}")
         context_parts.append("\n## 抽出済みインサイト")
@@ -1627,19 +1642,53 @@ JSON:"""
         ]
 
         return self._invoke_converse_api(
-            converse_messages, system_prompts=[{"text": system_prompt}]
+            converse_messages, system_prompts=[{"text": system_prompt}],
+            max_tokens=8000,
         )
 
     def _build_report_system_prompt(
         self, topic: str, template_type: str, custom_prompt: Optional[str] = None
     ) -> str:
         """テンプレート種別に応じたシステムプロンプトを構築"""
-        base = f"あなたは議論分析の専門家です。以下の議論データ（トピック: {topic}）に基づいてレポートを生成してください。出力はMarkdown形式で記述してください。"
+        base = (
+            f"あなたは定性調査の分析専門家です。"
+            f"以下の議論・インタビューデータ（トピック: {topic}）を分析し、"
+            f"施策やアクションに繋がる実用的なレポートを生成してください。"
+            f"出力はMarkdown形式で記述してください。"
+        )
 
         if template_type == "summary":
-            return f"{base}\n\n以下の構成でサマリレポートを作成してください:\n1. 参加ペルソナの概要\n2. ペルソナ毎の意見まとめ\n3. 主要インサイト\n4. Next Actionの提案"
+            return (
+                f"{base}\n\n"
+                "以下の構成でレポートを作成してください:\n\n"
+                "## 1. エグゼクティブサマリ\n"
+                "議論全体の要点を3-5行で簡潔にまとめる。\n\n"
+                "## 2. 参加ペルソナの概要\n"
+                "各ペルソナの属性（年齢・職業・価値観）を簡潔に紹介。\n\n"
+                "## 3. 主要な発見（Key Findings）\n"
+                "議論から得られた重要な発見を、ペルソナの発言を根拠として記述。"
+                "各発見には「どのペルソナが」「何を」「なぜそう考えるか（価値観・課題との関連）」を含める。\n\n"
+                "## 4. 示唆（Implications）\n"
+                "発見から導かれるビジネス上の示唆。"
+                "ペルソナ間の共通点・相違点から見えるセグメント特性や潜在ニーズを分析。\n\n"
+                "## 5. 推奨アクション\n"
+                "示唆に基づく具体的な施策提案を優先度付きで記述。"
+                "各施策には「施策内容」「期待効果」「優先度（高/中/低）」「難易度（高/中/低）」を含める。"
+                "表形式で整理すること。\n\n"
+                "## 6. 追加調査が必要な領域\n"
+                "今回の議論では十分に検証できなかった仮説や、さらに深掘りすべきテーマを挙げる。"
+            )
         elif template_type == "review":
-            return f"{base}\n\nレビューコメント形式で出力してください。各コメントには「該当箇所」「指摘内容」「重要度（高/中/低）」を含めてください。"
+            return (
+                f"{base}\n\n"
+                "レビューコメント形式で出力してください。\n"
+                "各コメントには以下を含めてください:\n"
+                "- **該当箇所**: 議論中の具体的な発言や論点\n"
+                "- **指摘内容**: その箇所から読み取れる課題・機会・リスク\n"
+                "- **重要度**: 高/中/低\n"
+                "- **推奨アクション**: この指摘に対して取るべき具体的なアクション\n\n"
+                "表形式で整理してください。"
+            )
         elif template_type == "custom" and custom_prompt:
             return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
         else:
