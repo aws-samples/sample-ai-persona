@@ -928,10 +928,11 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             manager.save_insight_report(survey_id, "".join(full_content))
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except (SurveyManagerError, SurveyExecutionError) as e:
-            data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
+            logger.warning("レポート生成エラー (survey_id=%s): %s", survey_id, e)
+            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
             yield f"data: {data}\n\n"
-        except Exception as e:
-            logger.error(f"レポート生成エラー: {e}")
+        except Exception:
+            logger.exception("レポート生成中に予期しないエラーが発生しました (survey_id=%s)", survey_id)
             data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
             yield f"data: {data}\n\n"
 
