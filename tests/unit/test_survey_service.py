@@ -430,6 +430,41 @@ class TestGenerateInsights:
             survey_service.generate_insights("csv,data", sample_template)
 
 
+class TestGenerateInsightsStreaming:
+    """generate_insights_streaming のテスト"""
+
+    def test_yields_chunks(
+        self,
+        survey_service: SurveyService,
+        sample_template: SurveyTemplate,
+        mock_ai_service_for_survey: Mock,
+    ) -> None:
+        mock_ai_service_for_survey.bedrock_client.converse_stream.return_value = {
+            "stream": [
+                {"contentBlockDelta": {"delta": {"text": "chunk1"}}},
+                {"contentBlockDelta": {"delta": {"text": "chunk2"}}},
+            ]
+        }
+        mock_ai_service_for_survey._retry_with_backoff.side_effect = lambda fn: fn()
+
+        chunks = list(survey_service.generate_insights_streaming("csv,data", sample_template))
+        assert chunks == ["chunk1", "chunk2"]
+
+    def test_empty_stream(
+        self,
+        survey_service: SurveyService,
+        sample_template: SurveyTemplate,
+        mock_ai_service_for_survey: Mock,
+    ) -> None:
+        mock_ai_service_for_survey.bedrock_client.converse_stream.return_value = {
+            "stream": []
+        }
+        mock_ai_service_for_survey._retry_with_backoff.side_effect = lambda fn: fn()
+
+        chunks = list(survey_service.generate_insights_streaming("csv,data", sample_template))
+        assert chunks == []
+
+
 # =============================================================================
 # 追加テスト: 欠落メソッドのカバレッジ
 # =============================================================================

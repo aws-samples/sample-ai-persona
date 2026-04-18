@@ -675,6 +675,58 @@ class SurveyManager:
                 f"レポート生成に失敗しました。再試行してください: {e}"
             ) from e
 
+    def generate_insight_report_streaming(self, survey_id: str) -> Any:
+        """
+        インサイトレポートをストリーミング生成する。
+
+        Args:
+            survey_id: アンケートID
+
+        Yields:
+            str: テキストチャンク
+        """
+        survey = self.db.get_survey(survey_id)
+        if survey is None:
+            raise SurveyManagerError(f"アンケートが見つかりません: {survey_id}")
+        if not survey.s3_result_path:
+            raise SurveyManagerError(
+                f"アンケート結果がまだ生成されていません: {survey_id}"
+            )
+
+        template = self.db.get_survey_template(survey.template_id)
+        if template is None:
+            raise SurveyManagerError(
+                f"テンプレートが見つかりません: {survey.template_id}"
+            )
+
+        csv_bytes = self.survey_service.load_results_from_s3(survey.s3_result_path)
+        csv_text = csv_bytes.decode("utf-8-sig")
+
+        yield from self.survey_service.generate_insights_streaming(csv_text, template)
+
+    def save_insight_report(self, survey_id: str, content: str) -> InsightReport:
+        """
+        ストリーミング生成済みのレポートを保存する。
+
+        Args:
+            survey_id: アンケートID
+            content: レポート内容（Markdown）
+
+        Returns:
+            InsightReport: 保存されたレポート
+        """
+        survey = self.db.get_survey(survey_id)
+        if survey is None:
+            raise SurveyManagerError(f"アンケートが見つかりません: {survey_id}")
+
+        report = InsightReport.create_new(survey_id=survey_id, content=content)
+        survey.insight_report = report
+        survey.updated_at = datetime.now()
+        self.db.update_survey(survey)
+
+        logger.info(f"Insight report saved for survey: {survey_id}")
+        return report
+
     def get_persona_statistics(self, survey_id: str) -> PersonaStatistics:
         """
         CSVデータからペルソナの統計情報を集計する。

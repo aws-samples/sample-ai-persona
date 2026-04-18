@@ -310,3 +310,48 @@ class TestGenerateInsightReport:
         mock_db.get_survey.return_value = survey
         with pytest.raises(SurveyManagerError, match="まだ生成されていません"):
             manager.generate_insight_report(survey.id)
+
+
+# =============================================================================
+# ストリーミングレポート生成・保存
+# =============================================================================
+
+
+class TestGenerateInsightReportStreaming:
+    def test_yields_chunks(self, manager, mock_db, mock_survey_service):
+        template = SurveyTemplate.create_new("T", [Question.create_free_text("Q")])
+        survey = Survey.create_new("S", "", template.id, 10)
+        survey.s3_result_path = "s3://bucket/results.csv"
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = template
+        mock_survey_service.load_results_from_s3.return_value = b"data"
+        mock_survey_service.generate_insights_streaming.return_value = iter(["a", "b"])
+
+        chunks = list(manager.generate_insight_report_streaming(survey.id))
+        assert chunks == ["a", "b"]
+
+    def test_raises_when_no_survey(self, manager):
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            list(manager.generate_insight_report_streaming("bad-id"))
+
+    def test_raises_when_no_results(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "t1", 10)
+        survey.s3_result_path = None
+        mock_db.get_survey.return_value = survey
+        with pytest.raises(SurveyManagerError, match="まだ生成されていません"):
+            list(manager.generate_insight_report_streaming(survey.id))
+
+
+class TestSaveInsightReport:
+    def test_saves_report(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "t1", 10)
+        mock_db.get_survey.return_value = survey
+
+        result = manager.save_insight_report(survey.id, "# Report content")
+        assert result.survey_id == survey.id
+        assert result.content == "# Report content"
+        mock_db.update_survey.assert_called_once()
+
+    def test_raises_when_no_survey(self, manager):
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            manager.save_insight_report("bad-id", "content")

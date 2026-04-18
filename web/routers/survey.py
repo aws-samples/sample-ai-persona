@@ -12,7 +12,7 @@ from pathlib import Path
 
 import polars as pl
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.survey_manager import (
@@ -911,31 +911,36 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     )
 
 
-@router.post("/results/{survey_id}/report", response_class=HTMLResponse)
-async def generate_report(request: Request, survey_id: str) -> Any:
-    """インサイトレポート生成"""
-    manager = get_survey_manager()
-    try:
-        loop = asyncio.get_event_loop()
-        report = await loop.run_in_executor(
-            executor, manager.generate_insight_report, survey_id
-        )
-    except SurveyManagerError as e:
-        return templates.TemplateResponse(
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
-        )
-    except SurveyExecutionError as e:
-        return templates.TemplateResponse(
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=500,
-        )
-    return templates.TemplateResponse(
-        "survey/partials/report_display.html",
-        {"request": request, "report": report},
+@router.get("/results/{survey_id}/report/generate")
+async def generate_report_stream(request: Request, survey_id: str) -> Any:
+    """インサイトレポートをSSEストリーミングで生成し、完了時に自動保存する"""
+
+    def stream_generator() -> Any:
+        try:
+            manager = get_survey_manager()
+            full_content = []
+            for chunk in manager.generate_insight_report_streaming(survey_id):
+                full_content.append(chunk)
+                data = json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+
+            # 自動保存
+            manager.save_insight_report(survey_id, "".join(full_content))
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        except (SurveyManagerError, SurveyExecutionError) as e:
+            data = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+        except Exception as e:
+            logger.error(f"レポート生成エラー: {e}")
+            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 
 # =========================================================================

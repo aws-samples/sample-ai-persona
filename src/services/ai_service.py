@@ -1642,15 +1642,18 @@ JSON:"""
             messages, insights, topic, personas
         )
 
-        response = self.bedrock_client.converse_stream(
-            modelId=self.model_id,
-            messages=converse_messages,
-            system=[{"text": system_prompt}],
-            inferenceConfig={
-                "maxTokens": 12000,
-                "temperature": self.temperature,
-            },
-        )
+        def _call_stream() -> Any:
+            return self.bedrock_client.converse_stream(
+                modelId=self.model_id,
+                messages=converse_messages,
+                system=[{"text": system_prompt}],
+                inferenceConfig={
+                    "maxTokens": 12000,
+                    "temperature": self.temperature,
+                },
+            )
+
+        response = self._retry_with_backoff(_call_stream)
 
         for event in response.get("stream", []):
             if "contentBlockDelta" in event:
