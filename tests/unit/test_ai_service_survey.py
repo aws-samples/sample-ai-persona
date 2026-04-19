@@ -141,3 +141,42 @@ class TestGenerateSurveyQuestionsDraft:
     def test_empty_messages_raises(self, ai_service: AIService) -> None:
         with pytest.raises(AIServiceError):
             ai_service.generate_survey_questions_draft([])
+
+    def test_template_name_included(self, ai_service: AIService) -> None:
+        payload = json.dumps(
+            {
+                "template_name": "新商品購入意向調査",
+                "summary": "概要",
+                "questions": [
+                    {
+                        "question_type": "free_text",
+                        "text": "自由記述",
+                        "options": [],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        ai_service.bedrock_client.converse.return_value = _mock_converse_response(payload)
+        result = ai_service.generate_survey_questions_draft(
+            [{"role": "user", "content": "調査"}]
+        )
+        assert result["template_name"] == "新商品購入意向調査"
+
+    def test_template_name_truncated(self, ai_service: AIService) -> None:
+        long = "あ" * 100
+        payload = json.dumps(
+            {
+                "template_name": long,
+                "summary": "",
+                "questions": [
+                    {"question_type": "free_text", "text": "q", "options": []}
+                ],
+            },
+            ensure_ascii=False,
+        )
+        ai_service.bedrock_client.converse.return_value = _mock_converse_response(payload)
+        result = ai_service.generate_survey_questions_draft(
+            [{"role": "user", "content": "調査"}]
+        )
+        assert len(result["template_name"]) == 50

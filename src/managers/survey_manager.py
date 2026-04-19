@@ -231,6 +231,7 @@ class SurveyManager:
         self._validate_questions(questions)
         return {
             "summary": raw.get("summary", ""),
+            "template_name": raw.get("template_name", ""),
             "questions": [q.to_dict() for q in questions],
         }
 

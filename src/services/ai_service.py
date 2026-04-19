@@ -1878,4 +1878,5 @@ JSON:"""
             raise AIServiceError("設問ドラフトの 'questions' が空またはリストではありません")
 
         data["summary"] = str(data.get("summary", "") or "").strip()
+        data["template_name"] = str(data.get("template_name", "") or "").strip()[:50]
         return data

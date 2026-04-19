@@ -111,6 +111,15 @@ class TestGenerateAIQuestionsDraft:
         assert q0["options"] == ["毎日", "時々", "使わない"]
         assert "id" in q0
 
+    def test_template_name_passed_through(self, mgr_with_ai: SurveyManager) -> None:
+        draft = self._good_draft()
+        draft["template_name"] = "新商品購入意向調査"
+        mgr_with_ai.ai_service.generate_survey_questions_draft.return_value = draft
+        result = mgr_with_ai.generate_ai_questions_draft(
+            [{"role": "user", "content": "x"}]
+        )
+        assert result["template_name"] == "新商品購入意向調査"
+
     def test_multiple_choice_with_insufficient_options_raises(
         self, mgr_with_ai: SurveyManager
     ) -> None:

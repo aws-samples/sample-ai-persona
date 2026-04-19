@@ -357,10 +357,16 @@ function templateForm() {
                     _key: keyCounter++,
                 }));
                 this.questions.push(...newQuestions);
+                // テンプレート名が未入力なら AI の提案を自動入力
+                let nameMsg = '';
+                if (data.template_name && !this.name.trim()) {
+                    this.name = data.template_name;
+                    nameMsg = `\nテンプレート名を「${data.template_name}」に設定しました。`;
+                }
                 const summary = data.summary ? `\n（${data.summary}）` : '';
                 this.aiMessages.push({
                     role: 'assistant',
-                    content: `${newQuestions.length}問のドラフトを左側のフォームに追加しました。内容を確認・修正して保存してください。${summary}`
+                    content: `${newQuestions.length}問のドラフトを左側のフォームに追加しました。内容を確認・修正して保存してください。${nameMsg}${summary}`
                 });
             } catch (e) {
                 this.aiError = 'ドラフト生成に失敗しました: ' + e.message;
