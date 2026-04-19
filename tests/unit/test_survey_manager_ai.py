@@ -66,6 +66,13 @@ class TestGenerateAIChatResponse:
         with pytest.raises(SurveyValidationError):
             mgr_with_ai.generate_ai_chat_response(msgs)
 
+    def test_too_long_message_raises(self, mgr_with_ai: SurveyManager) -> None:
+        long_content = "あ" * 2001
+        with pytest.raises(SurveyValidationError):
+            mgr_with_ai.generate_ai_chat_response(
+                [{"role": "user", "content": long_content}]
+            )
+
 
 class TestGenerateAIQuestionsDraft:
     def _good_draft(self) -> dict:

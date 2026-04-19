@@ -183,6 +183,7 @@ class SurveyManager:
     # =========================================================================
 
     _MAX_AI_MESSAGES = 40  # 会話履歴の最大件数（ユーザー+AI合計）
+    _MAX_AI_MESSAGE_LENGTH = 2000  # 1メッセージあたりの最大文字数
 
     def _validate_ai_messages(self, messages: List[Dict[str, str]]) -> None:
         if not isinstance(messages, list) or not messages:
@@ -199,6 +200,10 @@ class SurveyManager:
             content = m.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise SurveyValidationError("会話履歴に空のメッセージが含まれています")
+            if len(content) > self._MAX_AI_MESSAGE_LENGTH:
+                raise SurveyValidationError(
+                    f"1メッセージは{self._MAX_AI_MESSAGE_LENGTH}文字以内にしてください"
+                )
 
     def generate_ai_chat_response(self, messages: List[Dict[str, str]]) -> str:
         """AIチャットヒアリングの1ターンを処理してassistant発言を返す。"""
