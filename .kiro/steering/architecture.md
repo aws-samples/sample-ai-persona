@@ -138,6 +138,7 @@ Persona Data Setup → Template → Datasource Selection → Batch Inference Job
 ```
 
 - **Persona data sources**: Nemotron (open dataset) or custom CSV upload with column mapping
+- **AI-assisted template generation**: SurveyManager orchestrates Bedrock Converse API for chat-based hearing + JSON-schema-constrained question draft generation (stateless; frontend holds conversation history)
 - Custom CSV → Polars read → column mapping/rename → Parquet conversion → S3
 - DuckDB connections cached per datasource (thread-safe, no shared state)
 - DuckDB + Polars for memory-efficient persona data processing
