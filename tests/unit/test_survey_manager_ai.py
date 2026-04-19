@@ -51,9 +51,7 @@ class TestGenerateAIChatResponse:
 
     def test_invalid_role_raises(self, mgr_with_ai: SurveyManager) -> None:
         with pytest.raises(SurveyValidationError):
-            mgr_with_ai.generate_ai_chat_response(
-                [{"role": "system", "content": "x"}]
-            )
+            mgr_with_ai.generate_ai_chat_response([{"role": "system", "content": "x"}])
 
     def test_last_must_be_user(self, mgr_with_ai: SurveyManager) -> None:
         with pytest.raises(SurveyValidationError):
@@ -143,9 +141,7 @@ class TestGenerateAIQuestionsDraft:
         ]
         mgr_with_ai.ai_service.generate_survey_questions_draft.return_value = draft
         with pytest.raises(SurveyValidationError):
-            mgr_with_ai.generate_ai_questions_draft(
-                [{"role": "user", "content": "x"}]
-            )
+            mgr_with_ai.generate_ai_questions_draft([{"role": "user", "content": "x"}])
 
     def test_invalid_question_type_raises(self, mgr_with_ai: SurveyManager) -> None:
         draft = {
@@ -156,22 +152,16 @@ class TestGenerateAIQuestionsDraft:
         }
         mgr_with_ai.ai_service.generate_survey_questions_draft.return_value = draft
         with pytest.raises(SurveyValidationError):
-            mgr_with_ai.generate_ai_questions_draft(
-                [{"role": "user", "content": "x"}]
-            )
+            mgr_with_ai.generate_ai_questions_draft([{"role": "user", "content": "x"}])
 
     def test_missing_text_raises(self, mgr_with_ai: SurveyManager) -> None:
         draft = {
             "summary": "",
-            "questions": [
-                {"question_type": "free_text", "text": "", "options": []}
-            ],
+            "questions": [{"question_type": "free_text", "text": "", "options": []}],
         }
         mgr_with_ai.ai_service.generate_survey_questions_draft.return_value = draft
         with pytest.raises(SurveyValidationError):
-            mgr_with_ai.generate_ai_questions_draft(
-                [{"role": "user", "content": "x"}]
-            )
+            mgr_with_ai.generate_ai_questions_draft([{"role": "user", "content": "x"}])
 
     def test_max_selections_clamped_when_not_allow_multiple(
         self, mgr_with_ai: SurveyManager

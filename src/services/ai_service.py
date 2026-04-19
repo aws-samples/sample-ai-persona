@@ -1817,11 +1817,13 @@ JSON:"""
             raise AIServiceError("有効なメッセージがありません")
 
         try:
-            return self._retry_with_backoff(
-                self._invoke_converse_api,
-                converse_messages,
-                system_prompts=[{"text": self._SURVEY_CHAT_SYSTEM_PROMPT}],
-                max_tokens=1024,
+            return str(
+                self._retry_with_backoff(
+                    self._invoke_converse_api,
+                    converse_messages,
+                    system_prompts=[{"text": self._SURVEY_CHAT_SYSTEM_PROMPT}],
+                    max_tokens=1024,
+                )
             )
         except AIServiceError:
             raise
@@ -1875,9 +1877,13 @@ JSON:"""
             raise AIServiceError(f"設問ドラフトのJSON解析に失敗: {e}")
 
         if not isinstance(data, dict) or "questions" not in data:
-            raise AIServiceError("設問ドラフトのJSONに 'questions' フィールドがありません")
+            raise AIServiceError(
+                "設問ドラフトのJSONに 'questions' フィールドがありません"
+            )
         if not isinstance(data["questions"], list) or not data["questions"]:
-            raise AIServiceError("設問ドラフトの 'questions' が空またはリストではありません")
+            raise AIServiceError(
+                "設問ドラフトの 'questions' が空またはリストではありません"
+            )
 
         data["summary"] = str(data.get("summary", "") or "").strip()
         data["template_name"] = str(data.get("template_name", "") or "").strip()[:50]

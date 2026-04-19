@@ -211,7 +211,9 @@ class SurveyManager:
             raise SurveyManagerError("AIService が利用できません")
         self._validate_ai_messages(messages)
         if messages[-1].get("role") != "user":
-            raise SurveyValidationError("最後のメッセージはユーザー発言である必要があります")
+            raise SurveyValidationError(
+                "最後のメッセージはユーザー発言である必要があります"
+            )
         return self.ai_service.chat_for_survey(messages)
 
     def generate_ai_questions_draft(
@@ -227,9 +229,7 @@ class SurveyManager:
         self._validate_ai_messages(messages)
 
         raw = self.ai_service.generate_survey_questions_draft(messages)
-        questions = [
-            self._build_question_from_ai(q) for q in raw.get("questions", [])
-        ]
+        questions = [self._build_question_from_ai(q) for q in raw.get("questions", [])]
         if not questions:
             raise SurveyManagerError("AIが有効な設問を生成できませんでした")
         # 既存ルールに沿うかチェック（選択式は2つ以上の選択肢必須）
@@ -248,7 +248,9 @@ class SurveyManager:
         if not text:
             raise SurveyValidationError("AI生成の設問に質問文がありません")
         if qtype == "multiple_choice":
-            options = [str(o).strip() for o in data.get("options", []) if str(o).strip()]
+            options = [
+                str(o).strip() for o in data.get("options", []) if str(o).strip()
+            ]
             allow_multiple = bool(data.get("allow_multiple", False))
             try:
                 max_selections = int(data.get("max_selections", 0) or 0)

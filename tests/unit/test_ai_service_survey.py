@@ -157,7 +157,9 @@ class TestGenerateSurveyQuestionsDraft:
             },
             ensure_ascii=False,
         )
-        ai_service.bedrock_client.converse.return_value = _mock_converse_response(payload)
+        ai_service.bedrock_client.converse.return_value = _mock_converse_response(
+            payload
+        )
         result = ai_service.generate_survey_questions_draft(
             [{"role": "user", "content": "調査"}]
         )
@@ -175,7 +177,9 @@ class TestGenerateSurveyQuestionsDraft:
             },
             ensure_ascii=False,
         )
-        ai_service.bedrock_client.converse.return_value = _mock_converse_response(payload)
+        ai_service.bedrock_client.converse.return_value = _mock_converse_response(
+            payload
+        )
         result = ai_service.generate_survey_questions_draft(
             [{"role": "user", "content": "調査"}]
         )
