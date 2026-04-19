@@ -1552,6 +1552,42 @@ class SurveyService:
                 f"インサイトレポートの生成に失敗しました: {e}"
             ) from e
 
+    def generate_insights_streaming(
+        self, results_csv: str, template: SurveyTemplate
+    ) -> Any:
+        """
+        アンケート結果からインサイトレポートをストリーミング生成する。
+
+        Args:
+            results_csv: CSV形式のアンケート結果テキスト
+            template: アンケートテンプレート
+
+        Yields:
+            str: テキストチャンク
+        """
+        summary = self._generate_statistical_summary(results_csv, template)
+        prompt = self._build_insight_prompt(summary, template)
+
+        converse_messages = [{"role": "user", "content": [{"text": prompt}]}]
+
+        def _call_stream() -> Any:
+            return self.ai_service.bedrock_client.converse_stream(
+                modelId=self.ai_service.model_id,
+                messages=converse_messages,
+                inferenceConfig={
+                    "maxTokens": 8000,
+                    "temperature": self.ai_service.temperature,
+                },
+            )
+
+        response = self.ai_service._retry_with_backoff(_call_stream)
+
+        for event in response.get("stream", []):
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    yield delta["text"]
+
     def _generate_statistical_summary(
         self, results_csv: str, template: SurveyTemplate
     ) -> Dict[str, Any]:

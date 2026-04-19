@@ -182,25 +182,64 @@
                 </div>
             </div>
             {% else %}
-            <div class="bg-white rounded-lg shadow-md p-6 text-center">
+            <div id="report-generate-area" class="bg-white rounded-lg shadow-md p-6 text-center">
                 <div class="flex justify-center mb-4 text-yellow-500">{{ icon_lightbulb("w-12 h-12") }}</div>
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">インサイトレポート</h3>
                 <p class="text-gray-600 text-sm mb-4">AIがアンケート結果を分析し、インサイトを抽出します。</p>
-                <button hx-post="/survey/results/{{ survey.id }}/report"
-                        hx-target="#report-content"
-                        hx-swap="innerHTML"
-                        hx-indicator="#report-spinner"
-                        hx-request='{"timeout":300000}'
+                <button onclick="startReportGeneration('{{ survey.id }}')"
+                        id="report-generate-btn"
                         class="inline-flex items-center gap-2 bg-yellow-500 text-white px-6 py-2 rounded-md hover:bg-yellow-600 transition-colors">
-                    <span id="report-spinner" class="htmx-indicator">
-                        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
-                    </span>
                     {{ icon_lightbulb("w-4 h-4") }} レポートを生成
                 </button>
             </div>
+            <script>
+            function startReportGeneration(surveyId) {
+                var btn = document.getElementById('report-generate-btn');
+                var area = document.getElementById('report-generate-area');
+                btn.disabled = true;
+                btn.classList.add('opacity-50', 'cursor-not-allowed');
+                area.classList.remove('text-center');
+
+                area.innerHTML = '<div class="bg-gray-50 rounded-lg border border-gray-200 p-6">'
+                    + '<div class="flex items-center gap-2 mb-3">'
+                    + '<svg class="animate-spin w-4 h-4 text-yellow-600" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>'
+                    + '<span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">生成中...</span>'
+                    + '</div>'
+                    + '<div id="stream-output" class="prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-gray-900 prose-p:text-gray-700 prose-p:mb-3 prose-ul:my-3 prose-ul:list-disc prose-ul:pl-6 prose-li:mb-1 prose-strong:text-gray-900 prose-table:my-4 prose-table:border-collapse prose-th:border prose-th:border-gray-300 prose-th:bg-gray-100 prose-th:px-4 prose-th:py-2 prose-td:border prose-td:border-gray-300 prose-td:px-4 prose-td:py-2"></div>'
+                    + '</div>';
+
+                var fullContent = '';
+                var output = document.getElementById('stream-output');
+                var es = new EventSource('/survey/results/' + surveyId + '/report/generate');
+
+                es.onmessage = function(e) {
+                    var data = JSON.parse(e.data);
+                    if (data.type === 'chunk') {
+                        fullContent += data.content;
+                        output.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));
+                        output.scrollTop = output.scrollHeight;
+                    } else if (data.type === 'done') {
+                        es.close();
+                        var badge = area.querySelector('.bg-amber-100');
+                        if (badge) {
+                            badge.textContent = '✅ 保存済み';
+                            badge.className = 'px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800';
+                        }
+                        var spinner = area.querySelector('.animate-spin');
+                        if (spinner) spinner.remove();
+                    } else if (data.type === 'error') {
+                        es.close();
+                        area.innerHTML = '<div class="text-red-600 p-4">' + DOMPurify.sanitize(data.message) + '</div>';
+                    }
+                };
+                es.onerror = function() {
+                    es.close();
+                    if (!fullContent) {
+                        area.innerHTML = '<div class="text-red-600 p-4">接続エラーが発生しました。再読み込みしてください。</div>';
+                    }
+                };
+            }
+            </script>
             {% endif %}
         </div>
     </div>
