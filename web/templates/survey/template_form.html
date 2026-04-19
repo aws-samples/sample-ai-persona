@@ -225,9 +225,14 @@
             </template>
             <template x-for="(msg, i) in aiMessages" :key="i">
                 <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
-                    <div x-text="msg.content"
-                         :class="msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-800'"
-                         class="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words"></div>
+                    <template x-if="msg.role === 'user'">
+                        <div x-text="msg.content"
+                             class="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words bg-indigo-600 text-white"></div>
+                    </template>
+                    <template x-if="msg.role === 'assistant'">
+                        <div x-html="renderMarkdown(msg.content)"
+                             class="max-w-[85%] rounded-lg px-3 py-2 text-sm break-words bg-gray-100 text-gray-800 prose prose-sm prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-headings:my-1 prose-pre:my-1"></div>
+                    </template>
                 </div>
             </template>
             <div x-show="aiLoading" class="flex justify-start">

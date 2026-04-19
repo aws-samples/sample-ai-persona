@@ -4118,6 +4118,11 @@ video {
   --tw-ring-color: rgb(147 197 253 / var(--tw-ring-opacity, 1));
 }
 
+.prose-headings\:my-1 :is(:where(h1, h2, h3, h4, h5, h6, th):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
 .prose-headings\:font-bold :is(:where(h1, h2, h3, h4, h5, h6, th):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
   font-weight: 700;
 }
@@ -4166,6 +4171,11 @@ video {
   line-height: 1.75rem;
 }
 
+.prose-p\:my-1 :is(:where(p):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
 .prose-p\:mb-3 :is(:where(p):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
   margin-bottom: 0.75rem;
 }
@@ -4188,6 +4198,16 @@ video {
   color: rgb(17 24 39 / var(--tw-text-opacity, 1));
 }
 
+.prose-pre\:my-1 :is(:where(pre):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.prose-ol\:my-1 :is(:where(ol):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
 .prose-ol\:my-3 :is(:where(ol):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
   margin-top: 0.75rem;
   margin-bottom: 0.75rem;
@@ -4199,6 +4219,11 @@ video {
 
 .prose-ol\:pl-6 :is(:where(ol):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
   padding-left: 1.5rem;
+}
+
+.prose-ul\:my-1 :is(:where(ul):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
 }
 
 .prose-ul\:my-3 :is(:where(ul):not(:where([class~="not-prose"],[class~="not-prose"] *))) {
