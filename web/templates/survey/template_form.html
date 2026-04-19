@@ -242,10 +242,13 @@
         <!-- 入力エリア -->
         <div class="border-t border-gray-200 p-3 space-y-2">
             <textarea x-model="aiInput"
-                      @keydown.enter.prevent="if(!$event.shiftKey) sendAIChat()"
+                      x-ref="aiTextarea"
+                      @compositionstart="aiComposing = true"
+                      @compositionend="aiComposing = false"
+                      @keydown="onAIKeydown($event)"
                       :disabled="aiLoading"
                       rows="2"
-                      placeholder="調査目的やターゲットを入力... (Enter送信, Shift+Enter改行)"
+                      placeholder="調査目的やターゲットを入力..."
                       class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 resize-none"></textarea>
             <div class="flex gap-2">
                 <button type="button" @click="sendAIChat()"
@@ -261,7 +264,7 @@
                 </button>
             </div>
             <p class="text-[11px] text-gray-500 leading-relaxed">
-                「ドラフト生成」を押すと、ここまでの会話からAIが設問を生成し、左側のフォームの末尾に追加します。
+                ⌘/Ctrl+Enter で送信 · Enter で改行。「ドラフト生成」で設問がフォームの末尾に追加されます。
             </p>
         </div>
     </div>
