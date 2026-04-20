@@ -421,7 +421,11 @@ async def template_ai_chat(request: Request) -> JSONResponse:
             executor, manager.generate_ai_chat_response, messages
         )
     except SurveyValidationError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        logger.info(f"AI chat validation error: {e}")
+        return JSONResponse(
+            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            status_code=400,
+        )
     except Exception as e:
         logger.error(f"AI chat failed: {e}")
         return JSONResponse({"error": "AIの応答生成に失敗しました"}, status_code=500)
@@ -443,7 +447,11 @@ async def template_ai_generate(request: Request) -> JSONResponse:
             executor, manager.generate_ai_questions_draft, messages
         )
     except SurveyValidationError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        logger.info(f"AI draft validation error: {e}")
+        return JSONResponse(
+            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            status_code=400,
+        )
     except Exception as e:
         logger.error(f"AI draft generation failed: {e}")
         return JSONResponse(
