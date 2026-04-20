@@ -233,6 +233,9 @@ class AIService:
             raise BedrockAPIError(
                 f"Converse API呼び出しエラー ({error_code}): {error_msg}"
             )
+        except BotoCoreError:
+            # 接続エラー等はそのまま re-raise して _retry_with_backoff でリトライさせる
+            raise
         except Exception as e:
             if isinstance(e, BedrockAPIError):
                 raise
