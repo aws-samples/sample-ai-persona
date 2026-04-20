@@ -70,6 +70,7 @@ inclusion: always
 - **Datasource selection**: Choose between Nemotron or custom datasets at survey start
 - Bedrock Batch Inference for async large-scale inference
 - Survey templates: single/multi choice, free text, scale questions, image attachments
+- **AI-assisted template generation**: Chat-based hearing → AI drafts 3–8 questions (and template name) via Bedrock, user reviews/edits in existing UI
 - Attribute filtering: dynamically updated based on selected datasource
 - Result analysis: CSV download, visual charts, AI insight reports
 - DuckDB + Polars for memory-efficient data processing (thread-safe per-datasource connections)

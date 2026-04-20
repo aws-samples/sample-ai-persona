@@ -2,17 +2,28 @@
 {% from "components/icons.html" import icon_document, icon_plus, icon_trash, icon_arrow_left, icon_check %}
 
 {% block content %}
-<div class="max-w-3xl mx-auto" x-data="templateForm()">
-    <div class="flex justify-between items-center mb-8">
+<div class="flex flex-col lg:flex-row gap-6 mx-auto transition-all"
+     x-data="templateForm()"
+     :class="showAIPanel ? 'max-w-6xl' : 'max-w-3xl'">
+<div class="flex-1 min-w-0">
+    <div class="flex justify-between items-center mb-8 gap-3 flex-wrap">
         <div>
             <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">
                 {{ icon_document("w-8 h-8 text-teal-600") }}
                 {% if template %}テンプレート編集{% else %}テンプレート作成{% endif %}
             </h1>
         </div>
-        <a href="/survey/templates" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
-            {{ icon_arrow_left("w-4 h-4") }} 一覧に戻る
-        </a>
+        <div class="flex gap-2">
+            <button type="button" @click="toggleAIPanel()"
+                    class="px-4 py-2 rounded-md text-sm flex items-center gap-1.5 transition-colors"
+                    :class="showAIPanel ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <span x-text="showAIPanel ? 'AIを閉じる' : 'AIで生成'"></span>
+            </button>
+            <a href="/survey/templates" class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5 text-sm">
+                {{ icon_arrow_left("w-4 h-4") }} 一覧に戻る
+            </a>
+        </div>
     </div>
 
     <!-- エラーメッセージ表示エリア -->
@@ -190,6 +201,81 @@
         </div>
     </form>
 </div>
+
+<!-- 右側: AIアシスタントパネル -->
+<aside x-show="showAIPanel" x-transition class="w-full lg:w-96 lg:flex-shrink-0 lg:sticky lg:top-4 lg:self-start">
+    <div class="bg-white rounded-lg shadow-md border border-indigo-100 flex flex-col" style="height: calc(100vh - 6rem); min-height: 500px;">
+        <!-- ヘッダ -->
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-indigo-50 rounded-t-lg">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                <h3 class="text-sm font-semibold text-gray-900">AIアシスタント</h3>
+            </div>
+            <button type="button" @click="toggleAIPanel()" class="text-gray-400 hover:text-gray-600" title="閉じる">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <!-- 会話履歴 -->
+        <div class="flex-1 overflow-y-auto p-3 space-y-3" x-ref="aiChatLog">
+            <template x-if="aiMessages.length === 0">
+                <div class="text-xs text-gray-500 bg-gray-50 rounded p-3 leading-relaxed">
+                    調査したい目的や想定ターゲット、重視したい観点などを入力してください。AIがヒアリングしたうえでアンケート設問のドラフトを生成します。
+                </div>
+            </template>
+            <template x-for="(msg, i) in aiMessages" :key="i">
+                <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
+                    <template x-if="msg.role === 'user'">
+                        <div x-text="msg.content"
+                             class="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words bg-indigo-600 text-white"></div>
+                    </template>
+                    <template x-if="msg.role === 'assistant'">
+                        <div x-html="renderMarkdown(msg.content)"
+                             class="max-w-[85%] rounded-lg px-3 py-2 text-sm break-words bg-gray-100 text-gray-800 prose prose-sm prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-headings:my-1 prose-pre:my-1"></div>
+                    </template>
+                </div>
+            </template>
+            <div x-show="aiLoading" class="flex justify-start">
+                <div class="bg-gray-100 text-gray-500 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
+                    <svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    <span x-text="aiLoadingLabel"></span>
+                </div>
+            </div>
+            <div x-show="aiError" class="bg-red-50 border border-red-200 text-red-700 rounded p-2 text-xs" x-text="aiError"></div>
+        </div>
+
+        <!-- 入力エリア -->
+        <div class="border-t border-gray-200 p-3 space-y-2">
+            <textarea x-model="aiInput"
+                      x-ref="aiTextarea"
+                      @compositionstart="aiComposing = true"
+                      @compositionend="aiComposing = false"
+                      @keydown="onAIKeydown($event)"
+                      :disabled="aiLoading"
+                      rows="2"
+                      placeholder="調査目的やターゲットを入力..."
+                      class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500 resize-none"></textarea>
+            <div class="flex gap-2">
+                <button type="button" @click="sendAIChat()"
+                        :disabled="aiLoading || !aiInput.trim()"
+                        class="flex-1 bg-indigo-600 text-white px-3 py-2 rounded-md hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm flex items-center justify-center gap-1.5">
+                    送信
+                </button>
+                <button type="button" @click="generateAIQuestions()"
+                        :disabled="aiLoading || aiMessages.length === 0"
+                        class="flex-1 bg-teal-600 text-white px-3 py-2 rounded-md hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm flex items-center justify-center gap-1.5"
+                        title="ここまでの会話から設問ドラフトを生成してフォームに追加します">
+                    ドラフト生成
+                </button>
+            </div>
+            <p class="text-[11px] text-gray-500 leading-relaxed">
+                ⌘/Ctrl+Enter で送信 · Enter で改行。「ドラフト生成」で設問がフォームの末尾に追加されます。
+            </p>
+        </div>
+    </div>
+</aside>
+
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -209,6 +295,113 @@ function templateForm() {
         questions: initialQuestions.map(q => ({...q, _key: keyCounter++})),
         images: initialImages.map(img => ({...img})),
         uploading: false,
+
+        // --- AI アシスタント（Issue #23） ---
+        showAIPanel: false,
+        aiMessages: [],       // [{role:'user'|'assistant', content:string}]
+        aiInput: '',
+        aiLoading: false,
+        aiLoadingLabel: '考えています...',
+        aiError: '',
+        aiComposing: false,
+
+        toggleAIPanel() {
+            this.showAIPanel = !this.showAIPanel;
+        },
+
+        renderMarkdown(text) {
+            if (!text) return '';
+            try {
+                const html = window.marked ? marked.parse(text, {breaks: true}) : text;
+                return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+            } catch (e) {
+                return text;
+            }
+        },
+
+        onAIKeydown(e) {
+            if (this.aiComposing || e.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                this.sendAIChat();
+            }
+        },
+
+        _scrollChatToBottom() {
+            this.$nextTick(() => {
+                const el = this.$refs.aiChatLog;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+        },
+
+        async _postAI(url, body) {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify(body),
+            });
+            const data = await resp.json().catch(() => ({error: '応答の解析に失敗しました'}));
+            if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            return data;
+        },
+
+        async sendAIChat() {
+            const text = this.aiInput.trim();
+            if (!text || this.aiLoading) return;
+            this.aiError = '';
+            this.aiMessages.push({role: 'user', content: text});
+            this.aiInput = '';
+            this._scrollChatToBottom();
+            this.aiLoading = true;
+            this.aiLoadingLabel = '考えています...';
+            try {
+                const data = await this._postAI('/survey/templates/ai-chat', {messages: this.aiMessages});
+                this.aiMessages.push({role: 'assistant', content: data.assistant_message || ''});
+            } catch (e) {
+                this.aiError = 'AIとの対話でエラーが発生しました: ' + e.message;
+            } finally {
+                this.aiLoading = false;
+                this._scrollChatToBottom();
+            }
+        },
+
+        async generateAIQuestions() {
+            if (this.aiLoading || this.aiMessages.length === 0) return;
+            this.aiError = '';
+            this.aiLoading = true;
+            this.aiLoadingLabel = '設問を生成しています...';
+            try {
+                const data = await this._postAI('/survey/templates/ai-generate', {messages: this.aiMessages});
+                const newQuestions = (data.questions || []).map(q => ({
+                    question_type: q.question_type,
+                    text: q.text || '',
+                    options: Array.isArray(q.options) ? q.options : [],
+                    allow_multiple: !!q.allow_multiple,
+                    max_selections: Number(q.max_selections || 0),
+                    _key: keyCounter++,
+                }));
+                this.questions.push(...newQuestions);
+                // テンプレート名が未入力なら AI の提案を自動入力
+                let nameMsg = '';
+                if (data.template_name && !this.name.trim()) {
+                    this.name = data.template_name;
+                    nameMsg = `\nテンプレート名を「${data.template_name}」に設定しました。`;
+                }
+                const summary = data.summary ? `\n（${data.summary}）` : '';
+                this.aiMessages.push({
+                    role: 'assistant',
+                    content: `${newQuestions.length}問のドラフトを左側のフォームに追加しました。内容を確認・修正して保存してください。${nameMsg}${summary}`
+                });
+            } catch (e) {
+                this.aiError = 'ドラフト生成に失敗しました: ' + e.message;
+            } finally {
+                this.aiLoading = false;
+                this._scrollChatToBottom();
+            }
+        },
 
         async handleFileSelect(event) {
             const files = event.target.files;

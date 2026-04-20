@@ -233,6 +233,9 @@ class AIService:
             raise BedrockAPIError(
                 f"Converse API呼び出しエラー ({error_code}): {error_msg}"
             )
+        except BotoCoreError:
+            # 接続エラー等はそのまま re-raise して _retry_with_backoff でリトライさせる
+            raise
         except Exception as e:
             if isinstance(e, BedrockAPIError):
                 raise
@@ -1740,3 +1743,151 @@ JSON:"""
             return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
         else:
             return base
+
+    # =========================================================================
+    # アンケートAI生成（Issue #23）
+    # =========================================================================
+
+    _SURVEY_CHAT_SYSTEM_PROMPT = (
+        "あなたはユーザー調査・アンケート設計の専門家として、ユーザーがアンケートテンプレートを"
+        "作成するのを支援するアシスタントです。\n\n"
+        "【対話方針】\n"
+        "- 調査目的・想定ターゲット・聞きたい観点を不足なくヒアリングする。\n"
+        "- 不明点は一度に1〜2問程度の簡潔な質問で尋ねる。\n"
+        "- 既に十分情報が集まったと判断したら、『ドラフトを生成する準備ができました。右のパネルの「ドラフト生成」ボタンを押してください。』と案内する。\n"
+        "- 回答は日本語で、親しみやすく簡潔に。Markdown記号は控えめに。\n"
+        "- アンケート項目の具体的なJSONは出力せず、あくまで対話でヒアリングに徹する。"
+    )
+
+    _SURVEY_DRAFT_SYSTEM_PROMPT = (
+        "あなたはユーザー調査・アンケート設計の専門家です。これまでのユーザーとのヒアリング会話を踏まえ、"
+        "調査目的に沿った適切なアンケート設問のドラフトを生成してください。\n\n"
+        "【要件】\n"
+        "- 設問数は3〜8問の範囲で、調査内容に応じて過不足ないよう判断する。\n"
+        "- 設問タイプは以下3種類のみ使用:\n"
+        "  - multiple_choice: 選択式。options配列に2つ以上の選択肢を入れる。複数回答可なら allow_multiple=true。複数回答数に上限を設ける場合 max_selections を 1 以上に、無制限なら 0。\n"
+        "  - free_text: 自由記述。options は空配列。\n"
+        "  - scale_rating: 1〜5のスケール評価。options は空配列。\n"
+        "- 設問文は簡潔で回答者が一意に解釈できる表現にする。\n"
+        "- 必要に応じて選択式・自由記述・スケール評価をバランスよく組み合わせる。\n"
+        "- template_name はアンケート内容を端的に表す30文字以内の日本語の名称にする。\n\n"
+        "【出力形式】\n"
+        "以下の JSON のみを出力してください。前置き・後書き・Markdownコードブロックは一切不要です。\n\n"
+        "{\n"
+        '  "template_name": "アンケートテンプレート名",\n'
+        '  "summary": "生成した設問の狙いを1〜2行で説明",\n'
+        '  "questions": [\n'
+        "    {\n"
+        '      "question_type": "multiple_choice",\n'
+        '      "text": "...",\n'
+        '      "options": ["選択肢1", "選択肢2"],\n'
+        '      "allow_multiple": false,\n'
+        '      "max_selections": 0\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    @staticmethod
+    def _to_converse_messages(messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """[{role, content}] -> Converse API用のメッセージ配列に変換"""
+        converted: List[Dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = (m.get("content") or "").strip()
+            if not content or role not in ("user", "assistant"):
+                continue
+            converted.append({"role": role, "content": [{"text": content}]})
+        return converted
+
+    def chat_for_survey(self, messages: List[Dict[str, str]]) -> str:
+        """アンケートヒアリング用のマルチターン会話。
+
+        Args:
+            messages: [{"role": "user"|"assistant", "content": "..."}, ...] の会話履歴
+                     （最後のメッセージは user 発言であることを想定）
+
+        Returns:
+            assistantの返答テキスト
+        """
+        if not messages:
+            raise AIServiceError("会話履歴が空です")
+        if messages[-1].get("role") != "user":
+            raise AIServiceError("最後のメッセージは user である必要があります")
+
+        converse_messages = self._to_converse_messages(messages)
+        if not converse_messages:
+            raise AIServiceError("有効なメッセージがありません")
+
+        try:
+            return str(
+                self._retry_with_backoff(
+                    self._invoke_converse_api,
+                    converse_messages,
+                    system_prompts=[{"text": self._SURVEY_CHAT_SYSTEM_PROMPT}],
+                    max_tokens=1024,
+                )
+            )
+        except AIServiceError:
+            raise
+        except Exception as e:
+            raise AIServiceError(f"アンケートヒアリング中にエラーが発生: {e}")
+
+    def generate_survey_questions_draft(
+        self, messages: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """会話履歴から設問ドラフトを生成して JSON 辞書を返す。
+
+        Returns:
+            {"summary": str, "questions": [ {question_type, text, options, allow_multiple, max_selections}, ... ]}
+        """
+        if not messages:
+            raise AIServiceError("会話履歴が空です")
+
+        # 会話履歴 + 「ドラフト生成指示」を最後に追加
+        converse_messages = self._to_converse_messages(messages)
+        converse_messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": (
+                            "これまでのヒアリング内容に基づいて、アンケートの設問ドラフトを"
+                            "指定のJSONスキーマに厳密に従って生成してください。"
+                        )
+                    }
+                ],
+            }
+        )
+
+        try:
+            response = self._retry_with_backoff(
+                self._invoke_converse_api,
+                converse_messages,
+                system_prompts=[{"text": self._SURVEY_DRAFT_SYSTEM_PROMPT}],
+                max_tokens=4096,
+            )
+        except AIServiceError:
+            raise
+        except Exception as e:
+            raise AIServiceError(f"設問ドラフト生成中にエラーが発生: {e}")
+
+        try:
+            json_str = self._extract_json_from_response(response, prefer_array=False)
+            data = json.loads(json_str)
+        except (AIServiceError, json.JSONDecodeError) as e:
+            self.logger.error(f"ドラフトJSON解析失敗: {e} / response={response[:500]}")
+            raise AIServiceError(f"設問ドラフトのJSON解析に失敗: {e}")
+
+        if not isinstance(data, dict) or "questions" not in data:
+            raise AIServiceError(
+                "設問ドラフトのJSONに 'questions' フィールドがありません"
+            )
+        if not isinstance(data["questions"], list) or not data["questions"]:
+            raise AIServiceError(
+                "設問ドラフトの 'questions' が空またはリストではありません"
+            )
+
+        data["summary"] = str(data.get("summary", "") or "").strip()
+        data["template_name"] = str(data.get("template_name", "") or "").strip()[:50]
+        return data

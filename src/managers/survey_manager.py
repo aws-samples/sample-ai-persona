@@ -15,6 +15,7 @@ from src.models.survey import (
     VisualAnalysisData,
 )
 from src.models.survey_template import Question, SurveyTemplate, TemplateImage
+from src.services.ai_service import AIService
 from src.services.database_service import DatabaseService
 from src.services.survey_service import SurveyService
 
@@ -46,9 +47,11 @@ class SurveyManager:
         self,
         database_service: DatabaseService,
         survey_service: SurveyService,
+        ai_service: Optional[AIService] = None,
     ) -> None:
         self.db = database_service
         self.survey_service = survey_service
+        self.ai_service = ai_service
 
     # =========================================================================
     # テンプレート管理
@@ -174,6 +177,98 @@ class SurveyManager:
         for img in images:
             if not img.name or not img.name.strip():
                 raise SurveyValidationError("画像には名前を設定してください")
+
+    # =========================================================================
+    # アンケートAI生成（Issue #23）
+    # =========================================================================
+
+    _MAX_AI_MESSAGES = 40  # 会話履歴の最大件数（ユーザー+AI合計）
+    _MAX_AI_MESSAGE_LENGTH = 2000  # 1メッセージあたりの最大文字数
+
+    def _validate_ai_messages(self, messages: List[Dict[str, str]]) -> None:
+        if not isinstance(messages, list) or not messages:
+            raise SurveyValidationError("会話履歴が空です")
+        if len(messages) > self._MAX_AI_MESSAGES:
+            raise SurveyValidationError(
+                f"会話履歴が長すぎます（最大 {self._MAX_AI_MESSAGES} 件）"
+            )
+        for m in messages:
+            if not isinstance(m, dict):
+                raise SurveyValidationError("会話履歴の形式が不正です")
+            if m.get("role") not in ("user", "assistant"):
+                raise SurveyValidationError("会話履歴に不正な role が含まれています")
+            content = m.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise SurveyValidationError("会話履歴に空のメッセージが含まれています")
+            if len(content) > self._MAX_AI_MESSAGE_LENGTH:
+                raise SurveyValidationError(
+                    f"1メッセージは{self._MAX_AI_MESSAGE_LENGTH}文字以内にしてください"
+                )
+
+    def generate_ai_chat_response(self, messages: List[Dict[str, str]]) -> str:
+        """AIチャットヒアリングの1ターンを処理してassistant発言を返す。"""
+        if self.ai_service is None:
+            raise SurveyManagerError("AIService が利用できません")
+        self._validate_ai_messages(messages)
+        if messages[-1].get("role") != "user":
+            raise SurveyValidationError(
+                "最後のメッセージはユーザー発言である必要があります"
+            )
+        return self.ai_service.chat_for_survey(messages)
+
+    def generate_ai_questions_draft(
+        self, messages: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """会話履歴からアンケート設問ドラフトを生成して返す。
+
+        Returns:
+            {"summary": str, "questions": [Question.to_dict(), ...]}
+        """
+        if self.ai_service is None:
+            raise SurveyManagerError("AIService が利用できません")
+        self._validate_ai_messages(messages)
+
+        raw = self.ai_service.generate_survey_questions_draft(messages)
+        questions = [self._build_question_from_ai(q) for q in raw.get("questions", [])]
+        if not questions:
+            raise SurveyManagerError("AIが有効な設問を生成できませんでした")
+        # 既存ルールに沿うかチェック（選択式は2つ以上の選択肢必須）
+        self._validate_questions(questions)
+        return {
+            "summary": raw.get("summary", ""),
+            "template_name": raw.get("template_name", ""),
+            "questions": [q.to_dict() for q in questions],
+        }
+
+    @staticmethod
+    def _build_question_from_ai(data: Dict[str, Any]) -> Question:
+        """AI生成のJSON 1件を Question に変換する。不正値は安全側に丸める。"""
+        qtype = str(data.get("question_type", "")).strip()
+        text = str(data.get("text", "")).strip()
+        if not text:
+            raise SurveyValidationError("AI生成の設問に質問文がありません")
+        if qtype == "multiple_choice":
+            options = [
+                str(o).strip() for o in data.get("options", []) if str(o).strip()
+            ]
+            allow_multiple = bool(data.get("allow_multiple", False))
+            try:
+                max_selections = int(data.get("max_selections", 0) or 0)
+            except (TypeError, ValueError):
+                max_selections = 0
+            if max_selections < 0 or max_selections > len(options):
+                max_selections = 0
+            return Question.create_multiple_choice(
+                text=text,
+                options=options,
+                allow_multiple=allow_multiple,
+                max_selections=max_selections if allow_multiple else 0,
+            )
+        if qtype == "free_text":
+            return Question.create_free_text(text=text)
+        if qtype == "scale_rating":
+            return Question.create_scale_rating(text=text)
+        raise SurveyValidationError(f"AI生成の設問タイプが不正です: {qtype}")
 
     @staticmethod
     def _validate_persona_count(count: int, has_images: bool = False) -> None:

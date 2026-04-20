@@ -45,9 +45,11 @@ def get_survey_manager() -> SurveyManager:
     if _survey_manager is None:
         db_service = service_factory.get_database_service()
         survey_service = service_factory.get_survey_service()
+        ai_service = service_factory.get_ai_service()
         _survey_manager = SurveyManager(
             database_service=db_service,
             survey_service=survey_service,
+            ai_service=ai_service,
         )
     return _survey_manager
 
@@ -378,6 +380,85 @@ async def template_new(request: Request) -> Any:
         "survey/template_form.html",
         {"request": request, "title": "テンプレート作成", "template": None},
     )
+
+
+# -------------------------------------------------------------------------
+# アンケートAI生成（Issue #23）
+# -------------------------------------------------------------------------
+
+
+def _parse_ai_messages(payload: Any) -> list[dict[str, str]]:
+    """リクエストbodyから会話履歴(messages)をパース。"""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="リクエストボディが不正です")
+    raw = payload.get("messages")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="messages はリストである必要があります")
+    normalized: list[dict[str, str]] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            raise HTTPException(status_code=400, detail="messages の要素が不正です")
+        role = str(m.get("role", "")).strip()
+        content = str(m.get("content", "")).strip()
+        if role not in ("user", "assistant") or not content:
+            raise HTTPException(status_code=400, detail="messages の role/content が不正です")
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+@router.post("/templates/ai-chat")
+async def template_ai_chat(request: Request) -> JSONResponse:
+    """AIアンケート作成ヒアリングの1ターンを処理する。"""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSONの解析に失敗しました")
+    messages = _parse_ai_messages(payload)
+
+    manager = get_survey_manager()
+    try:
+        assistant_message = await asyncio.get_event_loop().run_in_executor(
+            executor, manager.generate_ai_chat_response, messages
+        )
+    except SurveyValidationError as e:
+        logger.info(f"AI chat validation error: {e}")
+        return JSONResponse(
+            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            status_code=400,
+        )
+    except Exception as e:
+        logger.error(f"AI chat failed: {e}")
+        return JSONResponse({"error": "AIの応答生成に失敗しました"}, status_code=500)
+    return JSONResponse({"assistant_message": assistant_message})
+
+
+@router.post("/templates/ai-generate")
+async def template_ai_generate(request: Request) -> JSONResponse:
+    """AIがアンケート設問ドラフトを生成する。"""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSONの解析に失敗しました")
+    messages = _parse_ai_messages(payload)
+
+    manager = get_survey_manager()
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            executor, manager.generate_ai_questions_draft, messages
+        )
+    except SurveyValidationError as e:
+        logger.info(f"AI draft validation error: {e}")
+        return JSONResponse(
+            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            status_code=400,
+        )
+    except Exception as e:
+        logger.error(f"AI draft generation failed: {e}")
+        return JSONResponse(
+            {"error": "設問ドラフトの生成に失敗しました。もう少し会話を続けてから再度お試しください。"},
+            status_code=500,
+        )
+    return JSONResponse(result)
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
