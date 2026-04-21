@@ -1196,13 +1196,13 @@ class TestPersonaCRUDOperations:
 
     @patch("boto3.client")
     def test_get_all_personas(self, mock_boto3_client):
-        """Test retrieving all personas."""
+        """Test retrieving personas with cursor-based pagination via GSI query."""
         # Mock boto3 client
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
 
-        # Mock scan response with two personas
-        mock_client.scan.return_value = {
+        # Mock query response (GSI CreatedAtIndex) with two personas
+        mock_client.query.return_value = {
             "Items": [
                 {
                     "id": {"S": "persona-1"},
@@ -1231,21 +1231,24 @@ class TestPersonaCRUDOperations:
                     "type": {"S": "persona"},
                 },
             ]
+            # No LastEvaluatedKey => next_cursor is None
         }
         mock_boto3_client.return_value = mock_client
 
         service = DatabaseService(table_prefix="Test")
 
-        # Get all personas
-        personas = service.get_all_personas()
+        personas, next_cursor = service.get_all_personas()
 
-        # Verify scan was called
-        mock_client.scan.assert_called_once()
+        # Verify query (not scan) was called with GSI
+        mock_client.query.assert_called_once()
+        call_kwargs = mock_client.query.call_args.kwargs
+        assert call_kwargs["IndexName"] == "CreatedAtIndex"
+        assert call_kwargs["ScanIndexForward"] is False
 
-        # Verify personas were returned
         assert len(personas) == 2
         assert personas[0].id == "persona-1"
         assert personas[1].id == "persona-2"
+        assert next_cursor is None
 
     @patch("boto3.client")
     def test_persona_exists_true(self, mock_boto3_client):
@@ -1283,24 +1286,19 @@ class TestPersonaCRUDOperations:
 
     @patch("boto3.client")
     def test_get_persona_count(self, mock_boto3_client):
-        """Test getting the count of personas."""
-        # Mock boto3 client
+        """Test getting the count of personas via GSI query."""
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
-        mock_client.scan.return_value = {"Count": 5}
+        mock_client.query.return_value = {"Count": 5}
         mock_boto3_client.return_value = mock_client
 
         service = DatabaseService(table_prefix="Test")
-
-        # Get persona count
         count = service.get_persona_count()
 
-        # Verify scan was called with Select='COUNT'
-        mock_client.scan.assert_called_once()
-        call_args = mock_client.scan.call_args
-        assert call_args[1]["Select"] == "COUNT"
-
-        # Verify count
+        mock_client.query.assert_called_once()
+        call_kwargs = mock_client.query.call_args.kwargs
+        assert call_kwargs["IndexName"] == "CreatedAtIndex"
+        assert call_kwargs["Select"] == "COUNT"
         assert count == 5
 
     @patch("boto3.client")

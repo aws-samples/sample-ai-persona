@@ -4,7 +4,7 @@ Handles persona generation workflow, editing, and saving functionality.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
 
 from ..models.persona import Persona
 from ..services.ai_service import AIService, AIServiceError
@@ -282,20 +282,35 @@ class PersonaManager:
             self.logger.error(error_msg)
             raise PersonaManagerError(error_msg)
 
-    def get_all_personas(self) -> List[Persona]:
+    def get_all_personas(
+        self,
+        limit: int = 20,
+        cursor: Optional[Dict[str, Any]] = None,
+        search_all: bool = False,
+    ) -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
         """
-        Retrieve all personas from the database.
+        Retrieve personas with cursor-based pagination.
+
+        Args:
+            limit: Page size (default 20).
+            cursor: LastEvaluatedKey from previous call.
+            search_all: If True, fall back to full scan (for search queries
+                that cannot be satisfied by GSI Query).
 
         Returns:
-            List of Persona objects ordered by creation date (newest first)
+            Tuple of (personas, next_cursor). next_cursor is None if no more pages.
 
         Raises:
             PersonaManagerError: If retrieval operation fails
         """
         try:
-            personas = self.database_service.get_all_personas()
-            self.logger.info(f"Retrieved {len(personas)} personas from database")
-            return personas
+            personas, next_cursor = self.database_service.get_all_personas(
+                limit=limit, cursor=cursor, search_all=search_all
+            )
+            self.logger.info(
+                f"Retrieved {len(personas)} personas (next_cursor={'yes' if next_cursor else 'no'})"
+            )
+            return personas, next_cursor
 
         except DatabaseError as e:
             error_msg = f"Database error while retrieving all personas: {e}"
@@ -305,6 +320,14 @@ class PersonaManager:
             error_msg = f"Unexpected error while retrieving all personas: {e}"
             self.logger.error(error_msg)
             raise PersonaManagerError(error_msg)
+
+    def get_all_personas_full(self) -> List[Persona]:
+        """
+        Retrieve every persona (scan-based). Use sparingly; prefer cursor
+        pagination via get_all_personas() for UI listings.
+        """
+        personas, _ = self.get_all_personas(search_all=True)
+        return personas
 
     def update_persona(self, persona: Persona) -> bool:
         """
@@ -465,8 +488,7 @@ class PersonaManager:
             PersonaManagerError: If count operation fails
         """
         try:
-            personas = self.get_all_personas()
-            return len(personas)
+            return self.database_service.get_persona_count()
 
         except PersonaManagerError:
             # Re-raise PersonaManagerError
@@ -521,7 +543,7 @@ class PersonaManager:
             return []
 
         try:
-            all_personas = self.get_all_personas()
+            all_personas = self.get_all_personas_full()
             query_lower = query.strip().lower()
 
             matching_personas = []

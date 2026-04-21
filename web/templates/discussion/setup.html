@@ -17,14 +17,12 @@
         </ol>
     </div>
     
-    {% if personas %}
     <form hx-post="/discussion/start"
           hx-target="#discussion-result"
           hx-swap="innerHTML"
           hx-indicator="#discussion-spinner"
           x-data="{ 
               mode: 'traditional',
-              selectedPersonas: [], 
               topic: '', 
               rounds: 3, 
               additionalInstructions: '',
@@ -131,14 +129,15 @@
                   files.forEach(file => this.uploadFile(file));
               },
               startInterviewSession() {
-                  if (this.selectedPersonas.length < 1 || !this.selectedPersonas.length) {
+                  const selected = this.$store.discussionSetup.selectedPersonas;
+                  if (selected.length < 1) {
                       alert('インタビューには最低1つのペルソナが必要です');
                       return;
                   }
                   
                   // インタビューセッション作成
                   const formData = new FormData();
-                  this.selectedPersonas.forEach(id => formData.append('persona_ids', id));
+                  selected.forEach(p => formData.append('persona_ids', p.id));
                   formData.append('enable_memory', this.enableMemory);
                   formData.append('memory_mode', this.memoryMode);
                   formData.append('enable_dataset', this.enableDataset);
@@ -164,7 +163,7 @@
                   });
               },
               startStreamingDiscussion() {
-                  if (this.selectedPersonas.length < 2 || !this.topic.trim()) return;
+                  if (this.$store.discussionSetup.selectedPersonas.length < 2 || !this.topic.trim()) return;
                   
                   const resultDiv = document.getElementById('discussion-result');
                   // ストリーミング議論UIを表示
@@ -205,7 +204,7 @@
                   }
                   
                   // モードに応じたURLを構築
-                  let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.selectedPersonas.join(','))}&mode=${this.mode}`;
+                  let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.$store.discussionSetup.selectedPersonas.map(p => p.id).join(','))}&mode=${this.mode}`;
                   if (this.mode === 'agent') {
                       url += `&rounds=${this.rounds}&additional_instructions=${encodeURIComponent(this.additionalInstructions)}&enable_memory=${this.enableMemory}&memory_mode=${this.memoryMode}&enable_dataset=${this.enableDataset}&enable_kb=${this.enableKB}`;
                   }
@@ -402,38 +401,39 @@
                 <span x-show="mode !== 'interview'">議論に参加させるペルソナを選択してください（最低2体、最大5体推奨）</span>
             </p>
             
-            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {% for persona in personas %}
-                <label class="relative cursor-pointer">
-                    <input type="checkbox" 
-                           name="persona_ids" 
-                           value="{{ persona.id }}"
-                           x-model="selectedPersonas"
-                           class="peer sr-only">
-                    <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all">
-                        <div class="flex items-start justify-between">
-                            <div>
-                                <h4 class="font-semibold text-gray-900">{{ persona.name }}</h4>
-                                <p class="text-sm text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</p>
-                            </div>
-                            <div class="w-5 h-5 border-2 border-gray-300 rounded peer-checked:bg-blue-500 peer-checked:border-blue-500 flex items-center justify-center">
-                                <svg class="w-3 h-3 text-white hidden peer-checked:block" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
-                                </svg>
-                            </div>
-                        </div>
-                        <p class="text-xs text-gray-400 mt-2 line-clamp-2">
-                            {{ persona.background[:80] }}...
-                        </p>
-                    </div>
-                </label>
-                {% endfor %}
+            <!-- 選択中ペルソナのチップエリア -->
+            <template x-if="$store.discussionSetup.selectedPersonas.length > 0">
+                <div class="flex flex-wrap gap-2 mb-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+                    <template x-for="p in $store.discussionSetup.selectedPersonas" :key="p.id">
+                        <span class="inline-flex items-center gap-1 px-3 py-1 bg-white text-blue-800 text-sm rounded-full shadow-sm border border-blue-200">
+                            <span x-text="p.name" class="font-medium"></span>
+                            <span class="text-xs text-blue-500" x-text="'(' + p.occupation + ')'"></span>
+                            <button type="button"
+                                    @click="$store.discussionSetup.remove(p.id)"
+                                    class="ml-1 text-blue-400 hover:text-blue-700 font-bold">×</button>
+                        </span>
+                    </template>
+                </div>
+            </template>
+
+            <!-- ペルソナ一覧（htmx 遅延ロード） -->
+            <div hx-get="/persona/list/partial?selectable=1"
+                 hx-trigger="load"
+                 hx-target="this"
+                 hx-swap="innerHTML"
+                 class="max-h-96 overflow-y-auto">
+                <p class="text-center text-gray-400 py-8">読み込み中...</p>
             </div>
+
+            <!-- フォーム送信用: 選択中ペルソナ ID を hidden input として動的生成 -->
+            <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'hidden-' + p.id">
+                <input type="hidden" name="persona_ids" :value="p.id">
+            </template>
             
-            <p class="text-sm mt-4" :class="(mode === 'interview' ? selectedPersonas.length >= 1 : selectedPersonas.length >= 2) ? 'text-green-600' : 'text-red-600'">
-                <span x-text="selectedPersonas.length"></span>体選択中
-                <span x-show="mode === 'interview' && selectedPersonas.length < 1">（最低1体必要）</span>
-                <span x-show="mode !== 'interview' && selectedPersonas.length < 2">（最低2体必要）</span>
+            <p class="text-sm mt-4" :class="(mode === 'interview' ? $store.discussionSetup.selectedPersonas.length >= 1 : $store.discussionSetup.selectedPersonas.length >= 2) ? 'text-green-600' : 'text-red-600'">
+                <span x-text="$store.discussionSetup.selectedPersonas.length"></span>体選択中
+                <span x-show="mode === 'interview' && $store.discussionSetup.selectedPersonas.length < 1">（最低1体必要）</span>
+                <span x-show="mode !== 'interview' && $store.discussionSetup.selectedPersonas.length < 2">（最低2体必要）</span>
             </p>
         </div>
         
@@ -809,7 +809,7 @@
             <button type="button"
                     x-show="mode === 'interview'"
                     @click="startInterviewSession()"
-                    :disabled="selectedPersonas.length < 1"
+                    :disabled="$store.discussionSetup.selectedPersonas.length < 1"
                     class="bg-purple-600 text-white px-8 py-3 rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
                 {{ icon_chat("w-5 h-5") }} インタビューを開始
             </button>
@@ -817,7 +817,7 @@
             <!-- 通常モード用ボタン -->
             <button type="submit"
                     x-show="mode !== 'interview' && !streamingMode"
-                    :disabled="selectedPersonas.length < 2 || !topic.trim()"
+                    :disabled="$store.discussionSetup.selectedPersonas.length < 2 || !topic.trim()"
                     class="bg-blue-600 text-white px-8 py-3 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
                 <span class="htmx-indicator" id="discussion-spinner">
                     <span class="spinner inline-block mr-2"></span>
@@ -829,7 +829,7 @@
             <button type="button"
                     x-show="mode !== 'interview' && streamingMode"
                     @click="startStreamingDiscussion()"
-                    :disabled="selectedPersonas.length < 2 || !topic.trim()"
+                    :disabled="$store.discussionSetup.selectedPersonas.length < 2 || !topic.trim()"
                     class="bg-green-600 text-white px-8 py-3 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold flex items-center gap-2">
                 {{ icon_bolt("w-5 h-5") }} リアルタイム議論を開始
             </button>
@@ -838,19 +838,6 @@
     
     <!-- 議論結果表示エリア -->
     <div id="discussion-result" class="mt-8"></div>
-    
-    {% else %}
-    <!-- ペルソナがない場合 -->
-    <div class="bg-gray-50 rounded-lg p-12 text-center">
-        <div class="flex justify-center mb-4 text-gray-400">{{ icon_users("w-16 h-16") }}</div>
-        <h3 class="text-xl font-semibold text-gray-700 mb-2">ペルソナがありません</h3>
-        <p class="text-gray-500 mb-6">議論を開始するには、まずペルソナを生成してください。</p>
-        <a href="/persona/generation" 
-           class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
-            {{ icon_sparkles("w-4 h-4") }} ペルソナを生成する
-        </a>
-    </div>
-    {% endif %}
 </div>
 
 <!-- 議論中のローディング表示 -->
@@ -874,6 +861,31 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
     if (evt.detail.elt.getAttribute('hx-post') === '/discussion/start') {
         document.getElementById('discussion-loading').classList.add('hidden');
     }
+});
+
+// Alpine.store を登録（htmx で差し替えられる DOM からもアクセス可能）
+document.addEventListener('alpine:init', () => {
+    Alpine.store('discussionSetup', {
+        selectedPersonas: [],
+        isSelected(id) {
+            return this.selectedPersonas.some(p => p.id === id);
+        },
+        toggle(el) {
+            const id = el.dataset.personaId;
+            if (el.checked) {
+                this.selectedPersonas.push({
+                    id: id,
+                    name: el.dataset.personaName,
+                    occupation: el.dataset.personaOccupation,
+                });
+            } else {
+                this.selectedPersonas = this.selectedPersonas.filter(p => p.id !== id);
+            }
+        },
+        remove(id) {
+            this.selectedPersonas = this.selectedPersonas.filter(p => p.id !== id);
+        },
+    });
 });
 </script>
 {% endblock %}

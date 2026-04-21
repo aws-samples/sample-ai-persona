@@ -37,8 +37,10 @@
     </div>
     
     <!-- ペルソナ一覧 -->
-    <div id="persona-list">
-        {% include "persona/partials/persona_list.html" %}
+    <div id="persona-list"
+         hx-get="/persona/list/partial"
+         hx-trigger="load"
+         hx-swap="innerHTML">
     </div>
 </div>
 {% endblock %}

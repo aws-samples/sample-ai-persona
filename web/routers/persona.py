@@ -72,17 +72,10 @@ async def persona_generation_page(request: Request) -> Any:
 
 @router.get("/management", response_class=HTMLResponse)
 async def persona_management_page(request: Request) -> Any:
-    """ペルソナ管理ページ"""
-    try:
-        persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
-    except Exception as e:
-        logger.error(f"ペルソナ一覧取得エラー: {e}")
-        personas = []
-
+    """ペルソナ管理ページ（ペルソナ一覧は htmx で遅延ロード）"""
     return templates.TemplateResponse(
         "persona/management.html",
-        {"request": request, "title": "ペルソナ管理", "personas": personas},
+        {"request": request, "title": "ペルソナ管理"},
     )
 
 
@@ -469,15 +462,27 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
 
 
 @router.get("/list/partial", response_class=HTMLResponse)
-async def get_persona_list_partial(request: Request, search: Optional[str] = None) -> Any:
-    """ペルソナ一覧パーシャル（htmx対応）"""
+async def get_persona_list_partial(
+    request: Request,
+    search: Optional[str] = None,
+    cursor: Optional[str] = None,
+    selectable: bool = False,
+    append: bool = False,
+) -> Any:
+    """ペルソナ一覧パーシャル（htmx対応・カーソル型ページング）。
+
+    append=True は「もっと見る」で追加読込する差分 HTML を返す（既存の
+    グリッドに追記 + hx-swap-oob で次ボタンを差し替え）。
+    """
+    from ._pagination import decode_cursor, encode_cursor
+
     try:
         persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
-
-        # 検索フィルタリング
-        if search:
-            search_lower = search.lower()
+        search_query = (search or "").strip()
+        if search_query:
+            # 検索時は全件 scan フォールバックし、Python 側で部分一致フィルタ
+            personas, _ = persona_manager.get_all_personas(search_all=True)
+            search_lower = search_query.lower()
             personas = [
                 p
                 for p in personas
@@ -485,10 +490,23 @@ async def get_persona_list_partial(request: Request, search: Optional[str] = Non
                 or search_lower in p.occupation.lower()
                 or search_lower in p.background.lower()
             ]
+            next_cursor_encoded: Optional[str] = None
+        else:
+            personas, next_cursor = persona_manager.get_all_personas(
+                limit=21, cursor=decode_cursor(cursor)
+            )
+            next_cursor_encoded = encode_cursor(next_cursor)
 
         return templates.TemplateResponse(
             "persona/partials/persona_list.html",
-            {"request": request, "personas": personas},
+            {
+                "request": request,
+                "personas": personas,
+                "next_cursor": next_cursor_encoded,
+                "selectable": selectable,
+                "search": search_query,
+                "is_append": append,
+            },
         )
     except Exception as e:
         logger.error(f"ペルソナ一覧取得エラー: {e}")

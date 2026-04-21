@@ -122,17 +122,10 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
-    """議論設定ページ"""
-    try:
-        persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
-    except Exception as e:
-        logger.error(f"ペルソナ一覧取得エラー: {e}")
-        personas = []
-
+    """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
     return templates.TemplateResponse(
         "discussion/setup.html",
-        {"request": request, "title": "議論設定", "personas": personas},
+        {"request": request, "title": "議論設定"},
     )
 
 

@@ -59,7 +59,7 @@ async def list_personas(search: Optional[str] = None) -> Any:
     """ペルソナ一覧取得API"""
     try:
         persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
+        personas = persona_manager.get_all_personas_full()
 
         if search:
             search_lower = search.lower()
