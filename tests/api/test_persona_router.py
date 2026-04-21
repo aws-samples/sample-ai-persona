@@ -39,15 +39,15 @@ class TestPersonaManagementPage:
     def test_management_page_with_personas(
         self, mock_get_manager, client, sample_persona
     ):
-        """ペルソナが存在する場合、一覧が表示されることを確認"""
+        """ペルソナ管理ページが正常に読み込まれることを確認（一覧は htmx 遅延ロード）"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/management")
 
         assert response.status_code == 200
-        assert "田中花子" in response.text
+        # ペルソナ一覧は htmx で遅延ロードされるため、初期HTMLには含まれない
+        assert "hx-get" in response.text
 
 
 class TestFileUploadEndpoint:
@@ -421,7 +421,7 @@ class TestPersonaListPartialEndpoint:
     def test_list_partial_success(self, mock_get_manager, client, sample_persona):
         """ペルソナ一覧パーシャルが正常に返されることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona]
+        mock_manager.get_all_personas.return_value = ([sample_persona], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/list/partial")
@@ -434,7 +434,7 @@ class TestPersonaListPartialEndpoint:
     ):
         """検索フィルタが機能することを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona, sample_persona_2]
+        mock_manager.get_all_personas.return_value = ([sample_persona, sample_persona_2], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/list/partial?search=田中")

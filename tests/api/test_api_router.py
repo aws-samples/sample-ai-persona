@@ -25,7 +25,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_empty(self, mock_get_manager, client):
         """ペルソナが存在しない場合、空のリストを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = []
+        mock_manager.get_all_personas_full.return_value = []
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
@@ -37,7 +37,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_with_data(self, mock_get_manager, client, sample_persona):
         """ペルソナが存在する場合、正しいデータを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona]
+        mock_manager.get_all_personas_full.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
@@ -58,7 +58,7 @@ class TestPersonasAPIEndpoint:
     ):
         """検索パラメータでフィルタリングできることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona, sample_persona_2]
+        mock_manager.get_all_personas_full.return_value = [sample_persona, sample_persona_2]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas?search=田中")
@@ -74,7 +74,7 @@ class TestPersonasAPIEndpoint:
     ):
         """職業での検索が機能することを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona, sample_persona_2]
+        mock_manager.get_all_personas_full.return_value = [sample_persona, sample_persona_2]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas?search=商品開発")
@@ -88,7 +88,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_error_handling(self, mock_get_manager, client):
         """エラー発生時に500エラーを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.side_effect = Exception("Database error")
+        mock_manager.get_all_personas_full.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
@@ -147,7 +147,7 @@ class TestDiscussionsAPIEndpoint:
     def test_list_discussions_empty(self, mock_get_manager, client):
         """議論が存在しない場合、空のリストを返す"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = []
+        mock_manager.get_discussion_history.return_value = ([], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/discussions")
@@ -161,7 +161,7 @@ class TestDiscussionsAPIEndpoint:
     ):
         """議論が存在する場合、正しいデータを返す"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = [sample_discussion]
+        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/discussions")

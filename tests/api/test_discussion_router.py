@@ -14,7 +14,7 @@ class TestDiscussionSetupPage:
     def test_setup_page_loads(self, mock_get_manager, client):
         """議論設定ページが正常に読み込まれることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = []
+        # personas no longer fetched in setup (htmx lazy load)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/setup")
@@ -28,7 +28,7 @@ class TestDiscussionSetupPage:
     ):
         """ペルソナが存在する場合、選択肢として表示されることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = [sample_persona, sample_persona_2]
+        # personas no longer fetched in setup (htmx lazy load)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/setup")
@@ -43,7 +43,7 @@ class TestDiscussionResultsPage:
     def test_results_page_loads(self, mock_get_manager, client):
         """議論結果ページが正常に読み込まれることを確認"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = []
+        mock_manager.get_discussion_history.return_value = ([], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/results")
@@ -56,7 +56,7 @@ class TestDiscussionResultsPage:
     ):
         """議論が存在する場合、一覧が表示されることを確認"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = [sample_discussion]
+        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/results")
@@ -69,7 +69,7 @@ class TestDiscussionResultsPage:
     ):
         """モードでフィルタリングできることを確認"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = [sample_discussion]
+        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/results?mode=classic")
@@ -80,7 +80,7 @@ class TestDiscussionResultsPage:
     def test_results_page_search(self, mock_get_manager, client, sample_discussion):
         """検索機能が動作することを確認"""
         mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = [sample_discussion]
+        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/discussion/results?search=マーケティング")
