@@ -81,11 +81,15 @@
 {% if not is_append %}
 </div>
 {% endif %}
+<p id="discussion-count-footer" class="text-sm text-gray-500 mt-4 text-center"
+   {% if is_append %}hx-swap-oob="true"{% endif %}>
+    {% if next_cursor %}次あり{% else %}これで全て{% endif %}
+</p>
 
 {% if next_cursor %}
 <div id="load-more-discussion" class="text-center mt-6"
      {% if is_append %}hx-swap-oob="true"{% endif %}>
-    <button hx-get="/discussion/results?cursor={{ next_cursor }}{% if current_mode %}&mode={{ current_mode }}{% endif %}{% if current_sort %}&sort={{ current_sort }}{% endif %}&append=1"
+    <button hx-get="/discussion/results?cursor={{ next_cursor }}{% if current_mode %}&mode={{ current_mode }}{% endif %}{% if current_sort %}&sort={{ current_sort }}{% endif %}{% if current_search %}&search={{ current_search|urlencode }}{% endif %}&append=1"
             hx-target="#discussion-grid"
             hx-swap="beforeend"
             class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">

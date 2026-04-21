@@ -84,11 +84,15 @@
 {% if not is_append %}
 </div>
 {% endif %}
+<p id="persona-count-footer" class="text-sm text-gray-500 mt-4 text-center"
+   {% if is_append %}hx-swap-oob="true"{% endif %}>
+    {% if total_count is not none %}全{{ total_count }}件{% endif %}{% if next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
+</p>
 
 {% if next_cursor %}
 <div id="load-more-persona" class="text-center mt-6"
      {% if is_append %}hx-swap-oob="true"{% endif %}>
-    <button hx-get="/persona/list/partial?cursor={{ next_cursor }}{% if selectable %}&selectable=1{% endif %}&append=1"
+    <button hx-get="/persona/list/partial?cursor={{ next_cursor }}{% if selectable %}&selectable=1{% endif %}{% if search %}&search={{ search|urlencode }}{% endif %}&append=1"
             hx-target="#persona-grid"
             hx-swap="beforeend"
             class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">

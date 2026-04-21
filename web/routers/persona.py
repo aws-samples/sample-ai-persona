@@ -21,6 +21,7 @@ from src.models.persona import Persona
 from src.services.service_factory import service_factory
 from src.services.s3_service import S3Service
 from src.config import config
+from ._pagination import decode_cursor, encode_cursor
 
 # 一時ペルソナ用TTLキャッシュ（30分で自動削除、最大1000件）
 _temp_personas_cache: TTLCache = TTLCache(maxsize=1000, ttl=1800)
@@ -474,13 +475,12 @@ async def get_persona_list_partial(
     append=True は「もっと見る」で追加読込する差分 HTML を返す（既存の
     グリッドに追記 + hx-swap-oob で次ボタンを差し替え）。
     """
-    from ._pagination import decode_cursor, encode_cursor
-
     try:
         persona_manager = get_persona_manager()
         search_query = (search or "").strip()
+        total_count: Optional[int] = None
         if search_query:
-            # 検索時は全件 scan フォールバックし、Python 側で部分一致フィルタ
+            # 検索時は全件 scan フォールバックし、Python 側で部分一致フィルタ（最大100件）
             personas, _ = persona_manager.get_all_personas(search_all=True)
             search_lower = search_query.lower()
             personas = [
@@ -489,13 +489,18 @@ async def get_persona_list_partial(
                 if search_lower in p.name.lower()
                 or search_lower in p.occupation.lower()
                 or search_lower in p.background.lower()
-            ]
+            ][:100]
             next_cursor_encoded: Optional[str] = None
         else:
             personas, next_cursor = persona_manager.get_all_personas(
                 limit=21, cursor=decode_cursor(cursor)
             )
             next_cursor_encoded = encode_cursor(next_cursor)
+            if not append:
+                try:
+                    total_count = persona_manager.get_persona_count()
+                except Exception:
+                    total_count = None
 
         return templates.TemplateResponse(
             "persona/partials/persona_list.html",
@@ -506,6 +511,7 @@ async def get_persona_list_partial(
                 "selectable": selectable,
                 "search": search_query,
                 "is_append": append,
+                "total_count": total_count,
             },
         )
     except Exception as e:

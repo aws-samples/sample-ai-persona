@@ -21,6 +21,7 @@ from src.managers.file_manager import FileManager, FileUploadError
 from src.services.service_factory import service_factory
 from src.models.discussion import Discussion
 from src.models.insight_category import InsightCategory
+from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -492,13 +493,10 @@ async def discussion_results_page(
     mode: Optional[str] = None,
     search: Optional[str] = None,
     sort: Optional[str] = "newest",
+    cursor: Optional[str] = None,
+    append: bool = False,
 ) -> Any:
     """議論結果一覧ページ（インタビューセッションを含む）"""
-    from ._pagination import decode_cursor, encode_cursor
-
-    cursor_param: Optional[str] = request.query_params.get("cursor")
-    append = request.query_params.get("append") == "1"
-
     try:
         discussion_manager = get_discussion_manager()
         search_query = (search or "").strip()
@@ -516,13 +514,13 @@ async def discussion_results_page(
                 discussions,
                 key=lambda d: d.created_at or datetime.min,
                 reverse=(sort != "oldest"),
-            )
+            )[:100]
             next_cursor_encoded: Optional[str] = None
         else:
             # GSI Query（mode 指定時は ModeIndex）
             discussions, next_cursor = discussion_manager.get_discussion_history(
                 limit=21,
-                cursor=decode_cursor(cursor_param),
+                cursor=decode_cursor(cursor),
                 mode=mode if mode in ("agent", "classic", "interview") else None,
                 sort_ascending=(sort == "oldest"),
             )
