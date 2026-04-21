@@ -29,8 +29,8 @@ class TestDiscussionManagerIntegration:
         def mock_get_discussion(discussion_id):
             return self.discussions_storage.get(discussion_id)
 
-        def mock_get_discussions():
-            return list(self.discussions_storage.values())
+        def mock_get_discussions(limit=21, cursor=None, mode=None, sort_ascending=False, search_all=False):
+            return list(self.discussions_storage.values()), None
 
         def mock_discussion_exists(discussion_id):
             return discussion_id in self.discussions_storage
@@ -275,7 +275,7 @@ class TestDiscussionManagerIntegration:
             saved_discussion_ids.append(discussion_id)
 
         # Test get discussion history
-        history = self.discussion_manager.get_discussion_history()
+        history, _ = self.discussion_manager.get_discussion_history()
         assert len(history) == 3
 
         # Test search by topic

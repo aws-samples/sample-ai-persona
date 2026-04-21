@@ -120,7 +120,7 @@ async def list_discussions() -> Any:
     """議論一覧取得API"""
     try:
         discussion_manager = get_discussion_manager()
-        discussions = discussion_manager.get_discussion_history()
+        discussions, _ = discussion_manager.get_discussion_history(search_all=True)
 
         return [
             {

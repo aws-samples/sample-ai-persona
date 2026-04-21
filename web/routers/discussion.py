@@ -494,37 +494,46 @@ async def discussion_results_page(
     sort: Optional[str] = "newest",
 ) -> Any:
     """議論結果一覧ページ（インタビューセッションを含む）"""
+    from .persona import get_persona_manager
+    from ._pagination import decode_cursor, encode_cursor
+
+    cursor_param: Optional[str] = request.query_params.get("cursor")
+    append = request.query_params.get("append") == "1"
+
     try:
         discussion_manager = get_discussion_manager()
+        search_query = (search or "").strip()
 
-        # 全ての議論（従来モード、エージェントモード、インタビューモード）を取得
-        discussions = discussion_manager.get_discussion_history()
-
-        # モードでフィルタ（従来モードはDBに"classic"として保存されている）
-        if mode and mode in ["agent", "classic", "interview"]:
-            discussions = [d for d in discussions if d.mode == mode]
-
-        # トピックで検索
-        if search and search.strip():
-            search_lower = search.strip().lower()
+        if search_query:
+            # 検索時は全件 scan フォールバック + Python フィルタ
+            discussions, _ = discussion_manager.get_discussion_history(search_all=True)
+            search_lower = search_query.lower()
             discussions = [d for d in discussions if search_lower in d.topic.lower()]
-
-        # 作成日でソート
-        if sort == "oldest":
+            # mode フィルタも Python 側で適用
+            if mode and mode in ["agent", "classic", "interview"]:
+                discussions = [d for d in discussions if d.mode == mode]
+            # ソート
             discussions = sorted(
-                discussions, key=lambda d: d.created_at or datetime.min
+                discussions,
+                key=lambda d: d.created_at or datetime.min,
+                reverse=(sort != "oldest"),
             )
-        else:  # newest (default)
-            discussions = sorted(
-                discussions, key=lambda d: d.created_at or datetime.min, reverse=True
+            next_cursor_encoded: Optional[str] = None
+        else:
+            # GSI Query（mode 指定時は ModeIndex）
+            discussions, next_cursor = discussion_manager.get_discussion_history(
+                limit=21,
+                cursor=decode_cursor(cursor_param),
+                mode=mode if mode in ("agent", "classic", "interview") else None,
+                sort_ascending=(sort == "oldest"),
             )
+            next_cursor_encoded = encode_cursor(next_cursor)
 
-        # 全議論の参加ペルソナ情報を取得
+        # 参加ペルソナ情報を取得
         all_participant_ids = set()
         for d in discussions:
             if d.participants:
                 all_participant_ids.update(d.participants)
-
         participant_personas = (
             _get_participant_personas(list(all_participant_ids))
             if all_participant_ids
@@ -534,32 +543,28 @@ async def discussion_results_page(
         logger.error(f"議論一覧取得エラー: {e}")
         discussions = []
         participant_personas = {}
+        next_cursor_encoded = None
+
+    ctx = {
+        "request": request,
+        "discussions": discussions,
+        "participant_personas": participant_personas,
+        "current_mode": mode,
+        "current_search": search,
+        "current_sort": sort,
+        "next_cursor": next_cursor_encoded,
+        "is_append": append,
+    }
 
     # htmxリクエストの場合はパーシャルを返す
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            "discussion/partials/discussion_list.html",
-            {
-                "request": request,
-                "discussions": discussions,
-                "participant_personas": participant_personas,
-                "current_mode": mode,
-                "current_search": search,
-                "current_sort": sort,
-            },
+            "discussion/partials/discussion_list.html", ctx,
         )
 
     return templates.TemplateResponse(
         "discussion/results.html",
-        {
-            "request": request,
-            "title": "議論結果",
-            "discussions": discussions,
-            "participant_personas": participant_personas,
-            "current_mode": mode,
-            "current_search": search,
-            "current_sort": sort,
-        },
+        {**ctx, "title": "議論結果"},
     )
 
 

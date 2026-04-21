@@ -1696,7 +1696,7 @@ class TestDiscussionCRUDOperations:
 
     @patch("boto3.client")
     def test_get_discussions(self, mock_boto3_client):
-        """Test retrieving all discussions."""
+        """Test retrieving discussions with cursor-based pagination via GSI query."""
         # Mock boto3 client
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
@@ -1705,23 +1705,26 @@ class TestDiscussionCRUDOperations:
         discussion1 = Discussion.create_new(topic="Topic 1", participants=["persona1"])
         discussion2 = Discussion.create_new(topic="Topic 2", participants=["persona2"])
 
-        # Mock scan to return serialized discussions
+        # Mock query to return serialized discussions
         service = DatabaseService(table_prefix="Test")
         serialized1 = service._serialize_discussion(discussion1)
         serialized2 = service._serialize_discussion(discussion2)
-        mock_client.scan.return_value = {"Items": [serialized1, serialized2]}
+        mock_client.query.return_value = {"Items": [serialized1, serialized2]}
         mock_boto3_client.return_value = mock_client
 
         # Re-initialize service with mocked client
         service = DatabaseService(table_prefix="Test")
 
-        # Get all discussions
-        result = service.get_discussions()
+        result, next_cursor = service.get_discussions()
 
-        # Verify result
+        mock_client.query.assert_called_once()
+        call_kwargs = mock_client.query.call_args.kwargs
+        assert call_kwargs["IndexName"] == "CreatedAtIndex"
+
         assert len(result) == 2
         assert any(d.id == discussion1.id for d in result)
         assert any(d.id == discussion2.id for d in result)
+        assert next_cursor is None
 
     @patch("boto3.client")
     def test_delete_discussion(self, mock_boto3_client):
