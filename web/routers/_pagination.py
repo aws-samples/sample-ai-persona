@@ -32,7 +32,8 @@ def decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
         if not hmac.compare_digest(sig, expected):
             logger.warning("Cursor signature mismatch — possible tampering")
             return None
-        return json.loads(base64.urlsafe_b64decode(payload.encode()))
+        result: Dict[str, Any] = json.loads(base64.urlsafe_b64decode(payload.encode()))
+        return result
     except Exception as e:
         logger.warning(f"Invalid cursor: {e}")
         return None

@@ -494,7 +494,6 @@ async def discussion_results_page(
     sort: Optional[str] = "newest",
 ) -> Any:
     """議論結果一覧ページ（インタビューセッションを含む）"""
-    from .persona import get_persona_manager
     from ._pagination import decode_cursor, encode_cursor
 
     cursor_param: Optional[str] = request.query_params.get("cursor")
