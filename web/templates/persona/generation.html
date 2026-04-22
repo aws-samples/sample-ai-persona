@@ -277,19 +277,39 @@ function startGeneration() {
                         }
                         lastDiv.textContent += entry.content;
                     } else if (entry.type === 'tool_call') {
-                        // ツール呼び出し: 新しい行で表示
+                        // ツール呼び出し: クエリ内容付きで表示
                         const div = document.createElement('div');
-                        div.className = 'text-xs text-blue-700 bg-blue-50 rounded p-2 font-mono';
-                        let text = entry.content;
-                        if (entry.detail) text += '\n' + entry.detail;
-                        div.textContent = text;
+                        div.className = 'text-sm text-blue-700 bg-blue-50 rounded p-2 border-l-4 border-blue-400';
+                        const title = document.createElement('div');
+                        title.className = 'font-semibold';
+                        title.textContent = entry.content;
+                        div.appendChild(title);
+                        if (entry.detail) {
+                            const detail = document.createElement('div');
+                            detail.className = 'text-xs text-blue-600 mt-1';
+                            detail.textContent = entry.detail;
+                            div.appendChild(detail);
+                        }
                         thinkingStream.appendChild(div);
-                        // 次の thinking テキストは新しい div に
                     } else if (entry.type === 'tool_result') {
-                        const div = document.createElement('div');
-                        div.className = 'text-xs text-green-700 bg-green-50 rounded p-2 font-mono max-h-32 overflow-y-auto';
-                        div.textContent = entry.content;
-                        thinkingStream.appendChild(div);
+                        // D360 応答: 折りたたみ + Markdown 表示
+                        const details = document.createElement('details');
+                        details.className = 'text-xs bg-green-50 rounded p-2 border border-green-200';
+                        const summary = document.createElement('summary');
+                        summary.className = 'cursor-pointer text-green-700 font-semibold hover:text-green-900';
+                        summary.textContent = '📊 D360 分析結果を表示';
+                        details.appendChild(summary);
+                        const content = document.createElement('div');
+                        content.className = 'mt-2 prose prose-sm max-w-none max-h-64 overflow-y-auto text-gray-700';
+                        if (window.marked && window.DOMPurify) {
+                            content.innerHTML = DOMPurify.sanitize(marked.parse(entry.content, {breaks: true}));
+                        } else if (window.marked) {
+                            content.innerHTML = marked.parse(entry.content, {breaks: true});
+                        } else {
+                            content.textContent = entry.content;
+                        }
+                        details.appendChild(content);
+                        thinkingStream.appendChild(details);
                     }
                     thinkingStream.scrollTop = thinkingStream.scrollHeight;
                 } catch(e) {}

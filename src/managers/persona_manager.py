@@ -248,25 +248,12 @@ class PersonaManager:
         # callback_handler: Agent イベントを queue に流す
         callback_handler = None
         if event_queue is not None:
-            previous_tool = [None]
-
             def _queue_callback(**kwargs: Any) -> None:
                 data = kwargs.get("data", "")
-                current_tool_use = kwargs.get("current_tool_use", {})
                 complete = kwargs.get("complete", False)
 
                 if data:
                     event_queue.put({"type": "thinking", "content": data})
-                if current_tool_use and current_tool_use.get("name"):
-                    if previous_tool[0] != current_tool_use.get("toolUseId"):
-                        previous_tool[0] = current_tool_use.get("toolUseId")
-                        tool_input = current_tool_use.get("input", {})
-                        question = tool_input.get("question", "") if isinstance(tool_input, dict) else ""
-                        event_queue.put({
-                            "type": "tool_call",
-                            "content": f"🔧 {current_tool_use['name']}",
-                            "detail": question,
-                        })
                 if complete and data:
                     event_queue.put({"type": "thinking_done", "content": ""})
 

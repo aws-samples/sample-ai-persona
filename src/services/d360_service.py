@@ -112,11 +112,11 @@ def create_d360_tool(runtime_arn: str, region: str, event_queue=None):
         Args:
             question: データに関する質問。例: "先月の売上トップ10商品は？", "顧客の年代別購買金額の分布を教えて"
         """
+        if event_queue is not None:
+            event_queue.put({"type": "tool_call", "content": "🔧 DWH に問い合わせ中...", "detail": question})
         result = service.query(question)
         if event_queue is not None:
-            # 結果のプレビュー（先頭300文字）を流す
-            preview = result[:300] + ("..." if len(result) > 300 else "")
-            event_queue.put({"type": "tool_result", "content": preview})
+            event_queue.put({"type": "tool_result", "content": result})
         return result
 
     return ask_data_agent
