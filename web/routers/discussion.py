@@ -829,6 +829,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
                 "custom_categories": custom_categories,
                 "document_urls": document_urls,
+                "config": config,
             },
         )
     except HTTPException:

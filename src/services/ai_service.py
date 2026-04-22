@@ -1638,6 +1638,12 @@ JSON:"""
         Yields:
             str: テキストチャンク
         """
+        if template_type == "data_driven":
+            yield from self._generate_data_driven_report_streaming(
+                messages, insights, topic, custom_prompt, personas
+            )
+            return
+
         system_prompt = self._build_report_system_prompt(
             topic, template_type, custom_prompt
         )
@@ -1743,6 +1749,110 @@ JSON:"""
             return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
         else:
             return base
+
+    def _build_data_driven_system_prompt(
+        self, topic: str, custom_prompt: Optional[str] = None
+    ) -> str:
+        """データドリブン分析レポート用 system_prompt を構築"""
+        prompt = (
+            f"あなたは定性調査 × 実データ分析の専門家です。\n"
+            f"議論トピック「{topic}」について、定性インタビューで得られたインサイトを\n"
+            "DWH（データウェアハウス）の実データと照合し、信頼性の高い意思決定・施策実行に\n"
+            "つながるレポートを生成してください。\n\n"
+            "# ツール\n"
+            "ask_data_agent: 売上・注文・顧客・商品データに自然言語で問い合わせ可能。\n"
+            "1回の呼び出しに数十秒かかるため、必要最小限（1〜3回）で集計クエリを中心に使ってください。\n"
+            "200件を超えるデータは取得できないため、必ず集計・分布・上位N件の形で依頼してください。\n\n"
+            "# 分析の基本構成（カスタムプロンプトがあれば優先）\n"
+            "## 1. インサイト × 実データ照合\n"
+            "主要なインサイトについて以下を明記:\n"
+            "- 定性インサイトの内容と信頼度（元値を引用）\n"
+            "- 実データでの裏付け / 反証 / 追加発見（ask_data_agent の結果を引用）\n"
+            "- 総合判定（✅ 裏付けあり / ⚠️ 要追加調査 / ❌ 反証）\n\n"
+            "## 2. 実データから見えた追加インサイト\n"
+            "定性では見えなかったが実データで顕在化した発見を1〜3件。\n\n"
+            "## 3. 意思決定・施策実行への示唆\n"
+            "- 裏付けあり → すぐ実行可能な施策\n"
+            "- 要追加調査 → 追加で必要なデータや検証方法\n"
+            "- セグメント抽出が依頼された場合は Markdown 内に CSV ブロック（```csv ... ```）で出力し、\n"
+            "  他マーケティングツールへのインプットとして使える形にする\n\n"
+            "# 出力\n"
+            "- Markdown 形式\n"
+            "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
+            "- データ根拠を必ず明示する\n"
+        )
+        if custom_prompt:
+            prompt += f"\n# ユーザーからの追加指示（最優先）\n{custom_prompt}\n"
+        return prompt
+
+    def _generate_data_driven_report_streaming(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        custom_prompt: Optional[str],
+        personas: Optional[List[Dict[str, Any]]],
+    ) -> Any:
+        """データドリブン分析レポートをストリーミング生成する（Strands Agent + D360）。"""
+        if not config.ENABLE_D360_INTEGRATION or not config.D360_RUNTIME_ARN:
+            yield "⚠️ D360 の接続設定がされていません。設定画面から Runtime ARN を設定してください。"
+            return
+
+        try:
+            from strands import Agent
+            from strands.models import BedrockModel
+            from .d360_service import create_d360_tool
+        except ImportError as e:
+            yield f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
+            return
+
+        import queue as queue_mod
+        import threading
+
+        system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
+        user_content = "\n".join(
+            part["content"][0]["text"]
+            for part in self._build_report_context(messages, insights, topic, personas)
+        )
+
+        credentials = config.get_aws_credentials()
+        filtered = {k: v for k, v in credentials.items() if v is not None and k != "region_name"}
+
+        text_queue: queue_mod.Queue = queue_mod.Queue()
+        _SENTINEL = object()
+
+        def _callback(**kwargs: Any) -> None:
+            data = kwargs.get("data", "")
+            if data:
+                text_queue.put(data)
+
+        def _run() -> None:
+            try:
+                model = BedrockModel(
+                    model_id=config.BEDROCK_MODEL_ID,
+                    region_name=config.AWS_REGION,
+                    **filtered,
+                )
+                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION)
+                agent = Agent(
+                    model=model,
+                    tools=[d360_tool],
+                    system_prompt=system_prompt,
+                    callback_handler=_callback,
+                )
+                agent(user_content)
+            except Exception as e:
+                text_queue.put(f"\n\n⚠️ レポート生成エラー: {e}")
+            finally:
+                text_queue.put(_SENTINEL)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        while True:
+            item = text_queue.get()
+            if item is _SENTINEL:
+                break
+            yield item
 
     # =========================================================================
     # アンケートAI生成（Issue #23）

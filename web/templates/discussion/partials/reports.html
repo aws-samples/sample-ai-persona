@@ -1,11 +1,11 @@
 <!-- レポート生成・一覧パーシャル -->
-<div x-data="{ selectedTemplate: 'summary', showCustomPrompt: false, generating: false }"
+<div x-data="{ selectedTemplate: 'summary', showCustomPrompt: false, showDataDrivenPrompt: false, generating: false }"
      id="report-generator">
     <!-- レポート生成フォーム -->
     <div class="mb-6">
         <h3 class="text-sm font-semibold text-gray-700 mb-3">テンプレートを選択</h3>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-            <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false"
+        <div class="grid grid-cols-1 md:grid-cols-2 {% if config and config.ENABLE_D360_INTEGRATION and config.D360_RUNTIME_ARN %}lg:grid-cols-4{% else %}md:grid-cols-3{% endif %} gap-3 mb-4">
+            <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false; showDataDrivenPrompt = false"
                     :class="selectedTemplate === 'summary' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
@@ -16,7 +16,7 @@
                 </div>
                 <p class="text-xs text-gray-500">インタビューとインサイトのサマリ</p>
             </button>
-            <button type="button" @click="selectedTemplate = 'review'; showCustomPrompt = false"
+            <button type="button" @click="selectedTemplate = 'review'; showCustomPrompt = false; showDataDrivenPrompt = false"
                     :class="selectedTemplate === 'review' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
@@ -38,6 +38,19 @@
                 </div>
                 <p class="text-xs text-gray-500">自由にプロンプトを入力して出力形式を指定</p>
             </button>
+            {% if config and config.ENABLE_D360_INTEGRATION and config.D360_RUNTIME_ARN %}
+            <button type="button" @click="selectedTemplate = 'data_driven'; showCustomPrompt = false; showDataDrivenPrompt = true"
+                    :class="selectedTemplate === 'data_driven' ? 'border-teal-500 bg-teal-50 ring-1 ring-teal-500' : 'border-gray-200 hover:border-gray-300'"
+                    class="border rounded-lg p-3 text-left transition-all">
+                <div class="flex items-center gap-2 mb-1">
+                    <svg class="w-4 h-4 text-teal-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">データドリブン分析</span>
+                </div>
+                <p class="text-xs text-gray-500">定性インサイト × 実データ（DWH）で意思決定・施策実行に</p>
+            </button>
+            {% endif %}
         </div>
 
         <!-- カスタムプロンプト入力 -->
@@ -52,7 +65,7 @@
         <!-- 生成ボタン -->
         <button type="button"
                 id="generate-report-btn"
-                @click="window.__generateReport(selectedTemplate, showCustomPrompt, $data)"
+                @click="window.__generateReport(selectedTemplate, showCustomPrompt, showDataDrivenPrompt, $data)"
                 :disabled="generating"
                 class="bg-emerald-600 text-white px-6 py-2.5 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             <svg x-show="!generating" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -127,12 +140,17 @@
 </div>
 
 <script>
-window.__generateReport = function(template, showCustomPrompt, alpineData) {
+window.__generateReport = function(template, showCustomPrompt, showDataDrivenPrompt, alpineData) {
     var discussionId = '{{ discussion.id }}';
     if (alpineData.generating) return;
 
     var display = document.getElementById('report-display');
-    var prompt = showCustomPrompt ? (document.getElementById('custom-prompt-input')?.value || '') : '';
+    var prompt = '';
+    if (showCustomPrompt) {
+        prompt = document.getElementById('custom-prompt-input')?.value || '';
+    } else if (showDataDrivenPrompt) {
+        prompt = document.getElementById('data-driven-prompt-input')?.value || '';
+    }
     var url = '/discussion/' + discussionId + '/report/generate?template_type=' + template;
     if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
 
