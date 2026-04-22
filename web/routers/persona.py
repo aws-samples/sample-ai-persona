@@ -207,7 +207,7 @@ async def generate_persona(
                     evt_type = evt.get("type", "")
                     content = evt.get("content", "")
                     if evt_type == "tool_call":
-                        yield _sse_event("thinking", json.dumps({"type": "tool_call", "content": content}, ensure_ascii=False))
+                        yield _sse_event("thinking", json.dumps({"type": "tool_call", "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
                     elif evt_type == "thinking" and content:
                         yield _sse_event("thinking", json.dumps({"type": "thinking", "content": content}, ensure_ascii=False))
                 except queue_mod.Empty:
@@ -220,7 +220,7 @@ async def generate_persona(
                     evt_type = evt.get("type", "")
                     content = evt.get("content", "")
                     if evt_type in ("tool_call", "thinking") and content:
-                        yield _sse_event("thinking", json.dumps({"type": evt_type, "content": content}, ensure_ascii=False))
+                        yield _sse_event("thinking", json.dumps({"type": evt_type, "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
                 except queue_mod.Empty:
                     break
 

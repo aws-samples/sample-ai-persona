@@ -267,16 +267,30 @@ function startGeneration() {
             } else if (eventType === 'thinking') {
                 try {
                     const entry = JSON.parse(data);
-                    const div = document.createElement('div');
                     if (entry.type === 'thinking') {
-                        div.className = 'text-sm text-gray-700 bg-gray-50 rounded p-2';
+                        // テキストチャンク: 最後の thinking div に追記（なければ新規作成）
+                        let lastDiv = thinkingStream.querySelector('.thinking-text:last-child');
+                        if (!lastDiv) {
+                            lastDiv = document.createElement('div');
+                            lastDiv.className = 'thinking-text text-sm text-gray-700 bg-gray-50 rounded p-2 whitespace-pre-wrap';
+                            thinkingStream.appendChild(lastDiv);
+                        }
+                        lastDiv.textContent += entry.content;
                     } else if (entry.type === 'tool_call') {
+                        // ツール呼び出し: 新しい行で表示
+                        const div = document.createElement('div');
                         div.className = 'text-xs text-blue-700 bg-blue-50 rounded p-2 font-mono';
+                        let text = entry.content;
+                        if (entry.detail) text += '\n' + entry.detail;
+                        div.textContent = text;
+                        thinkingStream.appendChild(div);
+                        // 次の thinking テキストは新しい div に
                     } else if (entry.type === 'tool_result') {
+                        const div = document.createElement('div');
                         div.className = 'text-xs text-green-700 bg-green-50 rounded p-2 font-mono max-h-32 overflow-y-auto';
+                        div.textContent = entry.content;
+                        thinkingStream.appendChild(div);
                     }
-                    div.textContent = entry.content;
-                    thinkingStream.appendChild(div);
                     thinkingStream.scrollTop = thinkingStream.scrollHeight;
                 } catch(e) {}
             } else if (eventType === 'result') {
