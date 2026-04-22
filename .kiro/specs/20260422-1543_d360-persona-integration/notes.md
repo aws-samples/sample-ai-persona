@@ -81,3 +81,22 @@ Q-SPEC Framework でヒアリングを実施し、以下を決定:
 - `web/templates/settings/partials/d360_settings.html` — 新規。D360 設定フォーム
 
 **残タスク**: Phase 5（エラーハンドリング・仕上げ）+ E2E 動作確認
+
+### [2026-04-22 16:03] E2E 動作確認成功
+
+**テスト条件**:
+- D360 Runtime ARN: `arn:aws:bedrock-agentcore:us-east-1:082888215689:runtime/DwhAgentStackAgentBakendAgentCoreRuntime9AF0E3FD-k7Kf7TF2ud`
+- 分析の切り口: 「高単価商品のリピーター層」
+- ペルソナ生成数: 2
+
+**結果**:
+- D360 接続テスト: 成功（テーブル一覧: customers, products, orders, order_items）
+- Agent が D360 に 3 回自律的に問い合わせ
+- 2 名のペルソナ生成成功（高橋美智子 63歳 VIP / 佐藤健一 48歳 ロイヤル）
+- データ充足度レポート自動生成（◎○△✕の4段階評価）
+- 思考ログ 8 件（thinking + tool_call + tool_result）
+
+**所感**:
+- Strands Agent のツール方式が非常にうまく機能。Agent が自律的に「何を聞くか」を判断し、セグメント分析まで行った
+- データ根拠の明示が優秀。「購買データから30代女性の〜」のような具体的な根拠付き
+- D360 の応答時間は各問い合わせ 10-30 秒程度。3 回で合計 1-2 分
