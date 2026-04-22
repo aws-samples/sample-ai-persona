@@ -93,15 +93,9 @@
                 </label>
             </div>
 
-            <!-- DWH の場合の分析指示入力 -->
+            <!-- DWH の場合の説明 -->
             <div x-show="dataType === 'dwh'" x-transition class="mt-4 ml-9">
-                <label for="analysis_angle" class="block text-sm font-medium text-gray-700 mb-1">どんなペルソナを作りたいですか？</label>
-                <textarea name="analysis_angle"
-                          id="analysis_angle"
-                          rows="2"
-                          placeholder="例:&#10;・高単価商品を繰り返し購入しているリピーター層のペルソナ&#10;・20代女性で食品カテゴリの購入が多い顧客像&#10;・直近3ヶ月で初回購入した新規顧客の特徴"
-                          class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-y"></textarea>
-                <p class="text-xs text-gray-400 mt-1">ターゲット顧客の条件や着目したい観点を入力してください。DWH の売上・注文・顧客・商品データを AI が自動で分析し、実データに基づいたペルソナを生成します。</p>
+                <p class="text-xs text-purple-600 bg-purple-50 rounded-md p-3">DWH の売上・注文・顧客・商品データを AI が自動で分析し、実データに基づいたペルソナを生成します。次のステップでターゲット顧客の条件を入力してください。</p>
             </div>
 
             <!-- その他の場合のデータ説明入力 -->
@@ -115,21 +109,37 @@
             </div>
         </div>
 
-        <!-- Step 3: カスタムプロンプト（DWH以外） -->
-        <div x-show="dataType !== 'dwh'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <!-- Step 3: ペルソナ作成の指示 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">3</span>
-                ペルソナ作成の指示
-                <span class="text-xs text-gray-400 font-normal">（任意）</span>
+                <span x-show="dataType !== 'dwh'">ペルソナ作成の指示</span>
+                <span x-show="dataType === 'dwh'">ペルソナのターゲット指定</span>
+                <span x-show="dataType !== 'dwh'" class="text-xs text-gray-400 font-normal">（任意）</span>
             </h2>
-            <p class="text-sm text-gray-500 mb-4 ml-9">作成したいペルソナの特徴や条件を自然言語で指定できます</p>
 
-            <div class="ml-9">
-                <textarea name="custom_prompt"
-                          id="custom_prompt"
-                          rows="3"
-                          placeholder="例: 30代女性で製品に不満を持つペルソナを作って / ヘビーユーザーとライトユーザーの2タイプを作成して"
-                          class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y"></textarea>
+            <!-- DWH 用 -->
+            <div x-show="dataType === 'dwh'" x-transition>
+                <p class="text-sm text-gray-500 mb-4 ml-9">どんな顧客層のペルソナを作りたいか、条件や着目したい観点を入力してください</p>
+                <div class="ml-9">
+                    <textarea name="analysis_angle"
+                              id="analysis_angle"
+                              rows="3"
+                              placeholder="例:&#10;・高単価商品を繰り返し購入しているリピーター層のペルソナ&#10;・20代女性で食品カテゴリの購入が多い顧客像&#10;・直近3ヶ月で初回購入した新規顧客の特徴"
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-y"></textarea>
+                </div>
+            </div>
+
+            <!-- DWH 以外 -->
+            <div x-show="dataType !== 'dwh'" x-transition>
+                <p class="text-sm text-gray-500 mb-4 ml-9">作成したいペルソナの特徴や条件を自然言語で指定できます</p>
+                <div class="ml-9">
+                    <textarea name="custom_prompt"
+                              id="custom_prompt"
+                              rows="3"
+                              placeholder="例: 30代女性で製品に不満を持つペルソナを作って / ヘビーユーザーとライトユーザーの2タイプを作成して"
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y"></textarea>
+                </div>
             </div>
         </div>
 
