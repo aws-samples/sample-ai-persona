@@ -44,3 +44,25 @@ Q-SPEC Framework でヒアリングを実施し、以下を決定:
 
 ---
 **Created**: 2026-04-22
+
+### [2026-04-22 15:54] 設計変更: boto3 直接 → Strands Agent ツール方式
+
+**発見**: 既存のペルソナ生成が既に Strands Agent を使っていた。
+- `agent_service.py` の `generate_personas_with_agent()` が Strands Agent + structured_output で実装
+- `create_persona_generation_agent()` で Agent を作成し、MCP ツール等を付与
+- CSV データの場合は MCP の query ツールで SQL 分析している
+
+**設計変更**:
+- 当初: `PersonaManager` が D360Service を直接呼び、結果を `ai_service` に渡す 3 ステップ方式
+- 変更後: Strands Agent のツールとして `ask_data_agent` を追加し、Agent が自律的に D360 に問い合わせる方式
+
+**理由**:
+- 既存の `generate_personas_with_agent` フローにそのまま乗れる
+- Agent が「何を D360 に聞くか」「何回聞くか」を自律判断できる
+- `create_persona_generation_agent(data_type="dwh")` に分岐を追加するだけで済む
+- MCP ツールと同じパターンなので、コードの一貫性が保たれる
+
+**影響範囲の縮小**:
+- `persona_manager.py` の変更が最小限に（data_type="dwh" のファイル不要チェックのみ）
+- 新規ファイルは `d360_service.py` のみ（D360Service + @tool ファクトリ）
+- `agent_service.py` は `create_persona_generation_agent` に dwh 分岐を追加するだけ
