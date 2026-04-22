@@ -108,16 +108,18 @@ class PersonaManager:
         persona_count: int,
         data_description: str | None = None,
         custom_prompt: str | None = None,
+        event_queue: Any = None,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
         """
         統一ペルソナ生成
 
         Args:
             file_contents: (ファイル内容, ファイル名) のリスト
-            data_type: データ種別 (interview, market_report, review, purchase, other)
+            data_type: データ種別 (interview, market_report, review, purchase, other, dwh)
             persona_count: 生成数 (1-10)
-            data_description: データ説明（data_type="other"時）
+            data_description: データ説明（data_type="other"時）/ 分析の切り口（data_type="dwh"時）
             custom_prompt: カスタムプロンプト
+            event_queue: リアルタイムイベント用 queue（DWH 用）
 
         Returns:
             list[Persona]: 生成されたペルソナリスト
@@ -133,6 +135,7 @@ class PersonaManager:
                 analysis_angle=data_description or "",
                 persona_count=persona_count,
                 custom_prompt=custom_prompt,
+                event_queue=event_queue,
             )
 
         if not file_contents:
@@ -225,11 +228,14 @@ class PersonaManager:
         analysis_angle: str,
         persona_count: int,
         custom_prompt: str | None = None,
+        event_queue: Any = None,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
         """DWH（D360連携）によるペルソナ生成。
 
         Agent が ask_data_agent ツールで D360 に自律的に問い合わせてペルソナを生成する。
+        event_queue が渡された場合、Agent のイベントをリアルタイムで queue に入れる。
         """
+        import queue as queue_mod
         from ..services.agent_service import AgentService, AgentServiceError
 
         if not analysis_angle or not analysis_angle.strip():
@@ -239,15 +245,39 @@ class PersonaManager:
             f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count})"
         )
 
+        # callback_handler: Agent イベントを queue に流す
+        callback_handler = None
+        if event_queue is not None:
+            previous_tool = [None]
+
+            def _queue_callback(**kwargs: Any) -> None:
+                data = kwargs.get("data", "")
+                current_tool_use = kwargs.get("current_tool_use", {})
+                complete = kwargs.get("complete", False)
+
+                if data:
+                    event_queue.put({"type": "thinking", "content": data})
+                if current_tool_use and current_tool_use.get("name"):
+                    if previous_tool[0] != current_tool_use.get("toolUseId"):
+                        previous_tool[0] = current_tool_use.get("toolUseId")
+                        event_queue.put({
+                            "type": "tool_call",
+                            "content": f"🔧 {current_tool_use['name']}",
+                        })
+                if complete and data:
+                    event_queue.put({"type": "thinking_done", "content": ""})
+
+            callback_handler = _queue_callback
+
         try:
             agent_service = AgentService()
-            # analysis_angle を data_text として渡す。Agent が D360 ツールで自律的にデータ取得する。
             data_text = f"分析の切り口: {analysis_angle}"
             personas, thinking_log = agent_service.generate_personas_with_agent(
                 data_text=data_text,
                 data_type="dwh",
                 persona_count=persona_count,
                 custom_prompt=custom_prompt,
+                callback_handler=callback_handler,
             )
 
             for persona in personas:

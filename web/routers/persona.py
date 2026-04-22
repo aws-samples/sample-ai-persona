@@ -180,21 +180,49 @@ async def generate_persona(
             f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}"
         )
 
+        import queue as queue_mod
+
+        event_queue: queue_mod.Queue = queue_mod.Queue()
+
+        def _run_dwh_generation() -> tuple[list, list[dict[str, str]]]:
+            pm = get_persona_manager()
+            return pm.generate_personas(
+                file_contents=[],
+                data_type=data_type,
+                persona_count=persona_count,
+                data_description=analysis_angle,
+                custom_prompt=custom_prompt or None,
+                event_queue=event_queue,
+            )
+
         async def dwh_event_generator() -> Any:
             yield _sse_event("progress", "D360 にデータを問い合わせ中...")
 
-            future = executor.submit(
-                _generate_personas_sync,
-                [],  # ファイルなし
-                data_type,
-                persona_count,
-                analysis_angle,  # data_description として渡す
-                custom_prompt or None,
-            )
+            future = executor.submit(_run_dwh_generation)
 
+            # Agent 実行中: queue からリアルタイムイベントを読み出す
             while not future.done():
-                await asyncio.sleep(3)
-                yield _sse_event("keepalive", "")
+                try:
+                    evt = event_queue.get(timeout=0.3)
+                    evt_type = evt.get("type", "")
+                    content = evt.get("content", "")
+                    if evt_type == "tool_call":
+                        yield _sse_event("thinking", json.dumps({"type": "tool_call", "content": content}, ensure_ascii=False))
+                    elif evt_type == "thinking" and content:
+                        yield _sse_event("thinking", json.dumps({"type": "thinking", "content": content}, ensure_ascii=False))
+                except queue_mod.Empty:
+                    yield _sse_event("keepalive", "")
+
+            # queue に残っているイベントを flush
+            while not event_queue.empty():
+                try:
+                    evt = event_queue.get_nowait()
+                    evt_type = evt.get("type", "")
+                    content = evt.get("content", "")
+                    if evt_type in ("tool_call", "thinking") and content:
+                        yield _sse_event("thinking", json.dumps({"type": evt_type, "content": content}, ensure_ascii=False))
+                except queue_mod.Empty:
+                    break
 
             try:
                 generated_personas, thinking_log = future.result()
@@ -202,9 +230,6 @@ async def generate_persona(
 
                 for persona in generated_personas:
                     _temp_personas_cache[persona.id] = persona
-
-                for entry in thinking_log:
-                    yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
 
                 if len(generated_personas) == 1:
                     html = templates.get_template(

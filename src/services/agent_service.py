@@ -1437,6 +1437,7 @@ JSON配列:"""
         data_description: str | None = None,
         custom_prompt: str | None = None,
         use_mcp: bool = False,
+        callback_handler: Any = None,
     ) -> Any:
         """
         汎用ペルソナ生成エージェントを作成
@@ -1570,12 +1571,16 @@ JSON配列:"""
                         tools.extend(mcp_tools)
                         self.logger.info(f"Added {len(mcp_tools)} MCP tools")
 
-            agent = Agent(
-                name="PersonaGenerator",
-                model=model,
-                system_prompt=system_prompt,
-                tools=tools if tools else None,
-            )
+            agent_kwargs: dict = {
+                "name": "PersonaGenerator",
+                "model": model,
+                "system_prompt": system_prompt,
+                "tools": tools if tools else None,
+            }
+            if callback_handler is not None:
+                agent_kwargs["callback_handler"] = callback_handler
+
+            agent = Agent(**agent_kwargs)
 
             self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})")
             return agent
@@ -1592,6 +1597,7 @@ JSON配列:"""
         custom_prompt: str | None = None,
         use_mcp: bool = False,
         csv_paths: list[str] | None = None,
+        callback_handler: Any = None,
     ) -> tuple[List[Persona], list[dict[str, str]]]:
         """
         汎用ペルソナ生成（Structured Output使用）
@@ -1629,6 +1635,7 @@ JSON配列:"""
                 data_description=data_description,
                 custom_prompt=custom_prompt,
                 use_mcp=use_mcp,
+                callback_handler=callback_handler,
             )
 
             prompt = f"""以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。
