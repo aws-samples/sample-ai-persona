@@ -26,8 +26,8 @@ class TestPersonaDataOperations:
         def mock_get_persona(persona_id):
             return self.personas_storage.get(persona_id)
 
-        def mock_get_all_personas():
-            return list(self.personas_storage.values())
+        def mock_get_all_personas(limit=20, cursor=None, search_all=False):
+            return list(self.personas_storage.values()), None
 
         def mock_update_persona(persona):
             if persona.id in self.personas_storage:
@@ -158,7 +158,7 @@ class TestPersonaDataOperations:
         assert self.mock_db_service.get_persona_count() == 5
 
         # Retrieve all personas
-        all_personas = self.mock_db_service.get_all_personas()
+        all_personas, _ = self.mock_db_service.get_all_personas()
         assert len(all_personas) == 5
 
         # Test search by name

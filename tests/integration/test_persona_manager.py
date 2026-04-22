@@ -29,8 +29,8 @@ class TestPersonaManagerIntegration:
         def mock_get_persona(persona_id):
             return personas_storage.get(persona_id)
 
-        def mock_get_all_personas():
-            return list(personas_storage.values())
+        def mock_get_all_personas(limit=20, cursor=None, search_all=False):
+            return list(personas_storage.values()), None
 
         def mock_update_persona(persona):
             if persona.id in personas_storage:
@@ -294,7 +294,7 @@ class TestPersonaManagerIntegration:
     def test_get_all_personas(self, persona_manager, sample_persona_data):
         """Test retrieving all personas."""
         # Initially should be empty
-        personas = persona_manager.get_all_personas()
+        personas, _ = persona_manager.get_all_personas()
         assert len(personas) == 0
 
         # Save multiple personas
@@ -308,7 +308,7 @@ class TestPersonaManagerIntegration:
         persona_manager.save_persona(persona2)
 
         # Retrieve all personas
-        personas = persona_manager.get_all_personas()
+        personas, _ = persona_manager.get_all_personas()
         assert len(personas) == 2
 
         # Verify personas are ordered by creation date (newest first)
@@ -499,7 +499,7 @@ class TestPersonaManagerIntegration:
         assert edited_persona.age == 36
 
         # Step 5: Verify in list
-        all_personas = persona_manager.get_all_personas()
+        all_personas, _ = persona_manager.get_all_personas()
         assert len(all_personas) == 1
         assert all_personas[0].name == "田中 花子（編集済み）"
 

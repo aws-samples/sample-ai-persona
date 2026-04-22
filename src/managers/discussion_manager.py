@@ -4,7 +4,7 @@ Handles discussion setup, progress management, and insight generation functional
 """
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from datetime import datetime
 
@@ -292,20 +292,36 @@ class DiscussionManager:
             self.logger.error(error_msg)
             raise DiscussionManagerError(error_msg)
 
-    def get_discussion_history(self) -> List[Discussion]:
+    def get_discussion_history(
+        self,
+        limit: int = 21,
+        cursor: Optional[Dict[str, Any]] = None,
+        mode: Optional[str] = None,
+        sort_ascending: bool = False,
+        search_all: bool = False,
+    ) -> Tuple[List[Discussion], Optional[Dict[str, Any]]]:
         """
-        Retrieve all discussions from the database ordered by creation date.
+        Retrieve discussions with cursor-based pagination.
+
+        Args:
+            limit: Page size.
+            cursor: LastEvaluatedKey from previous call.
+            mode: Filter by mode ('classic', 'agent', 'interview').
+            sort_ascending: If True, oldest first.
+            search_all: If True, fall back to full scan (for topic search).
 
         Returns:
-            List of Discussion objects ordered by creation date (newest first)
-
-        Raises:
-            DiscussionManagerError: If retrieval operation fails
+            Tuple of (discussions, next_cursor).
         """
         try:
-            discussions = self.database_service.get_discussions()
-            self.logger.info(f"Retrieved {len(discussions)} discussions from database")
-            return discussions
+            discussions, next_cursor = self.database_service.get_discussions(
+                limit=limit, cursor=cursor, mode=mode,
+                sort_ascending=sort_ascending, search_all=search_all,
+            )
+            self.logger.info(
+                f"Retrieved {len(discussions)} discussions (next_cursor={'yes' if next_cursor else 'no'})"
+            )
+            return discussions, next_cursor
 
         except DatabaseError as e:
             error_msg = f"Database error while retrieving discussion history: {e}"

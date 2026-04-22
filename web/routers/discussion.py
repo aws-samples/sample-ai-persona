@@ -21,6 +21,7 @@ from src.managers.file_manager import FileManager, FileUploadError
 from src.services.service_factory import service_factory
 from src.models.discussion import Discussion
 from src.models.insight_category import InsightCategory
+from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -122,17 +123,10 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
-    """議論設定ページ"""
-    try:
-        persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
-    except Exception as e:
-        logger.error(f"ペルソナ一覧取得エラー: {e}")
-        personas = []
-
+    """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
     return templates.TemplateResponse(
         "discussion/setup.html",
-        {"request": request, "title": "議論設定", "personas": personas},
+        {"request": request, "title": "議論設定"},
     )
 
 
@@ -499,39 +493,44 @@ async def discussion_results_page(
     mode: Optional[str] = None,
     search: Optional[str] = None,
     sort: Optional[str] = "newest",
+    cursor: Optional[str] = None,
+    append: bool = False,
 ) -> Any:
     """議論結果一覧ページ（インタビューセッションを含む）"""
     try:
         discussion_manager = get_discussion_manager()
+        search_query = (search or "").strip()
 
-        # 全ての議論（従来モード、エージェントモード、インタビューモード）を取得
-        discussions = discussion_manager.get_discussion_history()
-
-        # モードでフィルタ（従来モードはDBに"classic"として保存されている）
-        if mode and mode in ["agent", "classic", "interview"]:
-            discussions = [d for d in discussions if d.mode == mode]
-
-        # トピックで検索
-        if search and search.strip():
-            search_lower = search.strip().lower()
+        if search_query:
+            # 検索時は全件 scan フォールバック + Python フィルタ
+            discussions, _ = discussion_manager.get_discussion_history(search_all=True)
+            search_lower = search_query.lower()
             discussions = [d for d in discussions if search_lower in d.topic.lower()]
-
-        # 作成日でソート
-        if sort == "oldest":
+            # mode フィルタも Python 側で適用
+            if mode and mode in ["agent", "classic", "interview"]:
+                discussions = [d for d in discussions if d.mode == mode]
+            # ソート
             discussions = sorted(
-                discussions, key=lambda d: d.created_at or datetime.min
+                discussions,
+                key=lambda d: d.created_at or datetime.min,
+                reverse=(sort != "oldest"),
+            )[:100]
+            next_cursor_encoded: Optional[str] = None
+        else:
+            # GSI Query（mode 指定時は ModeIndex）
+            discussions, next_cursor = discussion_manager.get_discussion_history(
+                limit=21,
+                cursor=decode_cursor(cursor),
+                mode=mode if mode in ("agent", "classic", "interview") else None,
+                sort_ascending=(sort == "oldest"),
             )
-        else:  # newest (default)
-            discussions = sorted(
-                discussions, key=lambda d: d.created_at or datetime.min, reverse=True
-            )
+            next_cursor_encoded = encode_cursor(next_cursor)
 
-        # 全議論の参加ペルソナ情報を取得
+        # 参加ペルソナ情報を取得
         all_participant_ids = set()
         for d in discussions:
             if d.participants:
                 all_participant_ids.update(d.participants)
-
         participant_personas = (
             _get_participant_personas(list(all_participant_ids))
             if all_participant_ids
@@ -541,32 +540,28 @@ async def discussion_results_page(
         logger.error(f"議論一覧取得エラー: {e}")
         discussions = []
         participant_personas = {}
+        next_cursor_encoded = None
+
+    ctx = {
+        "request": request,
+        "discussions": discussions,
+        "participant_personas": participant_personas,
+        "current_mode": mode,
+        "current_search": search,
+        "current_sort": sort,
+        "next_cursor": next_cursor_encoded,
+        "is_append": append,
+    }
 
     # htmxリクエストの場合はパーシャルを返す
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            "discussion/partials/discussion_list.html",
-            {
-                "request": request,
-                "discussions": discussions,
-                "participant_personas": participant_personas,
-                "current_mode": mode,
-                "current_search": search,
-                "current_sort": sort,
-            },
+            "discussion/partials/discussion_list.html", ctx,
         )
 
     return templates.TemplateResponse(
         "discussion/results.html",
-        {
-            "request": request,
-            "title": "議論結果",
-            "discussions": discussions,
-            "participant_personas": participant_personas,
-            "current_mode": mode,
-            "current_search": search,
-            "current_sort": sort,
-        },
+        {**ctx, "title": "議論結果"},
     )
 
 

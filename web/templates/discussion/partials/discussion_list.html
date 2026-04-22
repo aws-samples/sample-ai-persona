@@ -2,7 +2,9 @@
 
 {% if discussions %}
 <!-- 議論一覧 -->
-<div class="space-y-6">
+{% if not is_append %}
+<div class="space-y-6" id="discussion-grid">
+{% endif %}
     {% for discussion in discussions %}
     <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow" id="discussion-card-{{ discussion.id }}">
         <div class="flex items-start justify-between mb-4">
@@ -76,13 +78,30 @@
         {% endif %}
     </div>
     {% endfor %}
+{% if not is_append %}
 </div>
-
-<p class="text-center text-gray-500 mt-6">
-    {{ discussions|length }}件の議論{% if current_mode or current_search %}（フィルタ適用中）{% endif %}
+{% endif %}
+<p id="discussion-count-footer" class="text-sm text-gray-500 mt-4 text-center"
+   {% if is_append %}hx-swap-oob="true"{% endif %}>
+    {% if next_cursor %}次あり{% else %}これで全て{% endif %}
 </p>
 
+{% if next_cursor %}
+<div id="load-more-discussion" class="text-center mt-6"
+     {% if is_append %}hx-swap-oob="true"{% endif %}>
+    <button hx-get="/discussion/results?cursor={{ next_cursor }}{% if current_mode %}&mode={{ current_mode }}{% endif %}{% if current_sort %}&sort={{ current_sort }}{% endif %}{% if current_search %}&search={{ current_search|urlencode }}{% endif %}&append=1"
+            hx-target="#discussion-grid"
+            hx-swap="beforeend"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">
+        もっと見る
+    </button>
+</div>
+{% elif is_append %}
+<div id="load-more-discussion" hx-swap-oob="true"></div>
+{% endif %}
+
 {% else %}
+{% if not is_append %}
 <!-- 議論がない場合 -->
 <div class="bg-gray-50 rounded-lg p-12 text-center">
     <div class="flex justify-center mb-4 text-gray-400">{{ icon_chat("w-16 h-16") }}</div>
@@ -102,4 +121,5 @@
     </a>
     {% endif %}
 </div>
+{% endif %}
 {% endif %}

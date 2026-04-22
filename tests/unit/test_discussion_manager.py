@@ -580,9 +580,9 @@ class TestDiscussionManager:
         ]
 
         # Mock database service response
-        self.mock_database_service.get_discussions.return_value = expected_discussions
+        self.mock_database_service.get_discussions.return_value = (expected_discussions, None)
 
-        result = self.discussion_manager.get_discussion_history()
+        result, _ = self.discussion_manager.get_discussion_history()
 
         # Verify result
         assert result == expected_discussions

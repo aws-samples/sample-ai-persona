@@ -59,7 +59,7 @@ async def list_personas(search: Optional[str] = None) -> Any:
     """ペルソナ一覧取得API"""
     try:
         persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas()
+        personas = persona_manager.get_all_personas_full()
 
         if search:
             search_lower = search.lower()
@@ -120,7 +120,7 @@ async def list_discussions() -> Any:
     """議論一覧取得API"""
     try:
         discussion_manager = get_discussion_manager()
-        discussions = discussion_manager.get_discussion_history()
+        discussions, _ = discussion_manager.get_discussion_history(search_all=True)
 
         return [
             {

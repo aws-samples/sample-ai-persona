@@ -5,7 +5,7 @@ Handles DynamoDB database operations with retry logic and error handling.
 
 import logging
 import time
-from typing import List, Optional, Dict, Any, Callable, TypeVar, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Callable, Tuple, TypeVar, TYPE_CHECKING
 from datetime import datetime
 from decimal import Decimal
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
@@ -800,55 +800,56 @@ class DatabaseService:
 
     def get_all_personas(
         self,
-        limit: Optional[int] = None,
-        last_evaluated_key: Optional[Dict[str, Any]] = None,
-    ) -> List[Persona]:
+        limit: int = 20,
+        cursor: Optional[Dict[str, Any]] = None,
+        search_all: bool = False,
+    ) -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
         """
-        Retrieve all personas from DynamoDB with pagination support.
+        Retrieve personas with cursor-based pagination via GSI 'CreatedAtIndex'.
 
         Args:
-            limit: Maximum number of personas to return (optional)
-            last_evaluated_key: Pagination token from previous call (optional)
+            limit: Page size (default 20).
+            cursor: LastEvaluatedKey from a previous call for the next page.
+            search_all: If True, fall back to scan and return all items
+                (used when full-text search needs to span all records).
 
         Returns:
-            List of Persona objects
-
-        Raises:
-            DatabaseError: If retrieval operation fails
+            Tuple of (personas, next_cursor). next_cursor is None if no more pages.
         """
 
-        def _get_all() -> list[Persona]:
-            personas = []
-
-            # Build scan parameters
-            scan_params: Dict[str, Any] = {"TableName": self.personas_table}
-
-            if limit:
-                scan_params["Limit"] = limit
-
-            if last_evaluated_key:
-                scan_params["ExclusiveStartKey"] = last_evaluated_key
-
-            # Scan the table (note: for production, consider using Query with GSI)
-            response = self.dynamodb_client.scan(**scan_params)
-
-            # Deserialize all items
-            for item in response.get("Items", []):
-                persona = self._deserialize_persona(item)
-                personas.append(persona)
-
-            # Handle pagination if no limit was specified
-            while "LastEvaluatedKey" in response and not limit:
-                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        def _query() -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
+            if search_all:
+                # Full-table scan fallback for search that GSI cannot support.
+                personas: List[Persona] = []
+                scan_params: Dict[str, Any] = {"TableName": self.personas_table}
                 response = self.dynamodb_client.scan(**scan_params)
-
                 for item in response.get("Items", []):
-                    persona = self._deserialize_persona(item)
-                    personas.append(persona)
+                    personas.append(self._deserialize_persona(item))
+                while "LastEvaluatedKey" in response:
+                    scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                    response = self.dynamodb_client.scan(**scan_params)
+                    for item in response.get("Items", []):
+                        personas.append(self._deserialize_persona(item))
+                return personas, None
 
-            return personas
+            params: Dict[str, Any] = {
+                "TableName": self.personas_table,
+                "IndexName": "CreatedAtIndex",
+                "KeyConditionExpression": "#t = :t",
+                "ExpressionAttributeNames": {"#t": "type"},
+                "ExpressionAttributeValues": {":t": {"S": "persona"}},
+                "ScanIndexForward": False,
+                "Limit": limit,
+            }
+            if cursor:
+                params["ExclusiveStartKey"] = cursor
+            response = self.dynamodb_client.query(**params)
+            personas = [
+                self._deserialize_persona(item) for item in response.get("Items", [])
+            ]
+            return personas, response.get("LastEvaluatedKey")
 
-        return self._execute_with_retry(_get_all, operation_name="get_all_personas")
+        return self._execute_with_retry(_query, operation_name="get_all_personas")
 
     def persona_exists(self, persona_id: str) -> bool:
         """
@@ -890,20 +891,21 @@ class DatabaseService:
         """
 
         def _count() -> int:
-            # Use scan with Select='COUNT' for efficient counting
-            response = self.dynamodb_client.scan(
-                TableName=self.personas_table, Select="COUNT"
-            )
-
+            # Use GSI Query with Select='COUNT' (more efficient than scan)
+            params: Dict[str, Any] = {
+                "TableName": self.personas_table,
+                "IndexName": "CreatedAtIndex",
+                "KeyConditionExpression": "#t = :t",
+                "ExpressionAttributeNames": {"#t": "type"},
+                "ExpressionAttributeValues": {":t": {"S": "persona"}},
+                "Select": "COUNT",
+            }
+            response = self.dynamodb_client.query(**params)
             count: int = response.get("Count", 0)
 
-            # Handle pagination to get accurate count
             while "LastEvaluatedKey" in response:
-                response = self.dynamodb_client.scan(
-                    TableName=self.personas_table,
-                    Select="COUNT",
-                    ExclusiveStartKey=response["LastEvaluatedKey"],
-                )
+                params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                response = self.dynamodb_client.query(**params)
                 count += int(response.get("Count", 0))
 
             return count
@@ -1089,55 +1091,75 @@ class DatabaseService:
 
     def get_discussions(
         self,
-        limit: Optional[int] = None,
-        last_evaluated_key: Optional[Dict[str, Any]] = None,
-    ) -> List[Discussion]:
+        limit: int = 21,
+        cursor: Optional[Dict[str, Any]] = None,
+        mode: Optional[str] = None,
+        sort_ascending: bool = False,
+        search_all: bool = False,
+    ) -> Tuple[List[Discussion], Optional[Dict[str, Any]]]:
         """
-        Retrieve all discussions from DynamoDB with pagination support.
+        Retrieve discussions with cursor-based pagination via GSI.
+
+        Uses 'CreatedAtIndex' by default, or 'ModeIndex' when mode is specified.
 
         Args:
-            limit: Maximum number of discussions to return (optional)
-            last_evaluated_key: Pagination token from previous call (optional)
+            limit: Page size (default 21).
+            cursor: LastEvaluatedKey from a previous call.
+            mode: Filter by discussion mode ('classic', 'agent', 'interview').
+                  When set, uses ModeIndex GSI.
+            sort_ascending: If True, sort oldest first.
+            search_all: If True, fall back to full scan (for topic search).
 
         Returns:
-            List of Discussion objects
-
-        Raises:
-            DatabaseError: If retrieval operation fails
+            Tuple of (discussions, next_cursor).
         """
 
-        def _get_all() -> list[Discussion]:
-            discussions = []
-
-            # Build scan parameters
-            scan_params: Dict[str, Any] = {"TableName": self.discussions_table}
-
-            if limit:
-                scan_params["Limit"] = limit
-
-            if last_evaluated_key:
-                scan_params["ExclusiveStartKey"] = last_evaluated_key
-
-            # Scan the table
-            response = self.dynamodb_client.scan(**scan_params)
-
-            # Deserialize all items
-            for item in response.get("Items", []):
-                discussion = self._deserialize_discussion(item)
-                discussions.append(discussion)
-
-            # Handle pagination if no limit was specified
-            while "LastEvaluatedKey" in response and not limit:
-                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        def _query() -> Tuple[List[Discussion], Optional[Dict[str, Any]]]:
+            if search_all:
+                discussions: List[Discussion] = []
+                scan_params: Dict[str, Any] = {"TableName": self.discussions_table}
                 response = self.dynamodb_client.scan(**scan_params)
-
                 for item in response.get("Items", []):
-                    discussion = self._deserialize_discussion(item)
-                    discussions.append(discussion)
+                    discussions.append(self._deserialize_discussion(item))
+                while "LastEvaluatedKey" in response:
+                    scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                    response = self.dynamodb_client.scan(**scan_params)
+                    for item in response.get("Items", []):
+                        discussions.append(self._deserialize_discussion(item))
+                return discussions, None
 
-            return discussions
+            if mode:
+                # Use ModeIndex (PK=mode, SK=created_at)
+                params: Dict[str, Any] = {
+                    "TableName": self.discussions_table,
+                    "IndexName": "ModeIndex",
+                    "KeyConditionExpression": "#m = :m",
+                    "ExpressionAttributeNames": {"#m": "mode"},
+                    "ExpressionAttributeValues": {":m": {"S": mode}},
+                    "ScanIndexForward": sort_ascending,
+                    "Limit": limit,
+                }
+            else:
+                # Use CreatedAtIndex (PK=type, SK=created_at)
+                params = {
+                    "TableName": self.discussions_table,
+                    "IndexName": "CreatedAtIndex",
+                    "KeyConditionExpression": "#t = :t",
+                    "ExpressionAttributeNames": {"#t": "type"},
+                    "ExpressionAttributeValues": {":t": {"S": "discussion"}},
+                    "ScanIndexForward": sort_ascending,
+                    "Limit": limit,
+                }
+            if cursor:
+                params["ExclusiveStartKey"] = cursor
+            response = self.dynamodb_client.query(**params)
+            discussions = [
+                self._deserialize_discussion(item)
+                for item in response.get("Items", [])
+            ]
+            return discussions, response.get("LastEvaluatedKey")
 
-        return self._execute_with_retry(_get_all, operation_name="get_discussions")
+        return self._execute_with_retry(_query, operation_name="get_discussions")
 
     def delete_discussion(self, discussion_id: str) -> bool:
         """
