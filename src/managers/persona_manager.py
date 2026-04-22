@@ -281,6 +281,7 @@ class PersonaManager:
                 persona_count=persona_count,
                 custom_prompt=custom_prompt,
                 callback_handler=callback_handler,
+                event_queue=event_queue,
             )
 
             for persona in personas:

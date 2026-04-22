@@ -1438,6 +1438,7 @@ JSON配列:"""
         custom_prompt: str | None = None,
         use_mcp: bool = False,
         callback_handler: Any = None,
+        event_queue: Any = None,
     ) -> Any:
         """
         汎用ペルソナ生成エージェントを作成
@@ -1555,7 +1556,7 @@ JSON配列:"""
                     raise AgentInitializationError(
                         "D360 の接続設定がされていません。設定画面から Runtime ARN を設定してください"
                     )
-                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION)
+                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION, event_queue=event_queue)
                 tools.append(d360_tool)
                 self.logger.info("D360 ツール (ask_data_agent) を追加")
 
@@ -1598,6 +1599,7 @@ JSON配列:"""
         use_mcp: bool = False,
         csv_paths: list[str] | None = None,
         callback_handler: Any = None,
+        event_queue: Any = None,
     ) -> tuple[List[Persona], list[dict[str, str]]]:
         """
         汎用ペルソナ生成（Structured Output使用）
@@ -1636,6 +1638,7 @@ JSON配列:"""
                 custom_prompt=custom_prompt,
                 use_mcp=use_mcp,
                 callback_handler=callback_handler,
+                event_queue=event_queue,
             )
 
             prompt = f"""以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。

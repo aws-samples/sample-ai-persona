@@ -88,12 +88,13 @@ class D360Service:
             raise D360ServiceError(f"D360 問い合わせ失敗: {e}") from e
 
 
-def create_d360_tool(runtime_arn: str, region: str):
+def create_d360_tool(runtime_arn: str, region: str, event_queue=None):
     """D360 問い合わせを Strands @tool としてラップして返す。
 
     Args:
         runtime_arn: AgentCore Runtime ARN
         region: AWS リージョン
+        event_queue: リアルタイムイベント用 queue（任意）
 
     Returns:
         Strands tool 関数
@@ -111,6 +112,11 @@ def create_d360_tool(runtime_arn: str, region: str):
         Args:
             question: データに関する質問。例: "先月の売上トップ10商品は？", "顧客の年代別購買金額の分布を教えて"
         """
-        return service.query(question)
+        result = service.query(question)
+        if event_queue is not None:
+            # 結果のプレビュー（先頭300文字）を流す
+            preview = result[:300] + ("..." if len(result) > 300 else "")
+            event_queue.put({"type": "tool_result", "content": preview})
+        return result
 
     return ask_data_agent
