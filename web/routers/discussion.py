@@ -961,7 +961,7 @@ async def generate_report_stream(
     custom_prompt: Optional[str] = None,
 ) -> Any:
     """レポートをSSEストリーミングで生成する"""
-    if template_type not in ("summary", "review", "custom"):
+    if template_type not in ("summary", "review", "custom", "data_driven"):
         def error_gen() -> Any:
             yield f'data: {json.dumps({"type": "error", "message": "無効なテンプレート種別です"}, ensure_ascii=False)}\n\n'
         return StreamingResponse(error_gen(), media_type="text/event-stream")
