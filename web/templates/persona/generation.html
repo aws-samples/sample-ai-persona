@@ -115,13 +115,13 @@
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold" x-text="dataType === 'dwh' ? '2' : '3'">3</span>
-                <span x-show="dataType !== 'dwh'">ペルソナ作成の指示</span>
-                <span x-show="dataType === 'dwh'">ペルソナのターゲット指定</span>
-                <span x-show="dataType !== 'dwh'" class="text-xs text-gray-400 font-normal">（任意）</span>
+                <span x-show="dataType !== 'dwh'" x-cloak>ペルソナ作成の指示</span>
+                <span x-show="dataType === 'dwh'" x-cloak>ペルソナのターゲット指定</span>
+                <span x-show="dataType !== 'dwh'" x-cloak class="text-xs text-gray-400 font-normal">（任意）</span>
             </h2>
 
             <!-- DWH 用 -->
-            <div x-show="dataType === 'dwh'" x-transition>
+            <div x-show="dataType === 'dwh'" x-cloak x-transition>
                 <p class="text-sm text-gray-500 mb-4 ml-9">どんな顧客層のペルソナを作りたいか、条件や着目したい観点を入力してください</p>
                 <div class="ml-9">
                     <textarea name="analysis_angle"
