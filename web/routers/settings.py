@@ -359,3 +359,72 @@ async def api_list_knowledge_bases() -> Any:
     db_service = service_factory.get_database_service()
     knowledge_bases = db_service.get_all_knowledge_bases()
     return [kb.to_dict() for kb in knowledge_bases]
+
+
+# ==================== D360 DWH連携設定 ====================
+
+
+def _d360_template_vars() -> dict:
+    """D360 設定テンプレート変数"""
+    from src.config import config
+
+    return {
+        "d360_enabled": config.ENABLE_D360_INTEGRATION,
+        "d360_runtime_arn": config.D360_RUNTIME_ARN,
+        "d360_region": config.D360_REGION,
+    }
+
+
+@router.get("/d360/status", response_class=HTMLResponse)
+async def d360_status(request: Request) -> Any:
+    """D360 設定状態取得"""
+    return templates.TemplateResponse(
+        "settings/partials/d360_settings.html",
+        {"request": request, **_d360_template_vars()},
+    )
+
+
+@router.post("/d360", response_class=HTMLResponse)
+async def save_d360_settings(
+    request: Request,
+    runtime_arn: str = Form(""),
+    region: str = Form("ap-northeast-1"),
+    enabled: str = Form(""),
+) -> Any:
+    """D360 接続設定を保存"""
+    from src.config import config
+
+    config.D360_RUNTIME_ARN = runtime_arn.strip() or None
+    config.D360_REGION = region.strip() or "ap-northeast-1"
+    config.ENABLE_D360_INTEGRATION = enabled == "true"
+
+    logger.info(
+        "D360 設定更新: enabled=%s, arn=%s, region=%s",
+        config.ENABLE_D360_INTEGRATION,
+        config.D360_RUNTIME_ARN,
+        config.D360_REGION,
+    )
+
+    return templates.TemplateResponse(
+        "settings/partials/d360_settings.html",
+        {"request": request, **_d360_template_vars(), "save_message": "設定を保存しました"},
+    )
+
+
+@router.post("/d360/test", response_class=HTMLResponse)
+async def test_d360_connection(request: Request) -> Any:
+    """D360 接続テスト"""
+    from src.config import config
+
+    if not config.D360_RUNTIME_ARN:
+        return HTMLResponse('<div class="text-sm text-red-600 bg-red-50 rounded p-2">Runtime ARN が設定されていません</div>')
+
+    try:
+        from src.services.d360_service import D360Service
+
+        service = D360Service(config.D360_RUNTIME_ARN, config.D360_REGION)
+        result = service.query("利用可能なテーブル一覧を教えてください")
+        preview = result[:200] + "..." if len(result) > 200 else result
+        return HTMLResponse(f'<div class="text-sm text-green-600 bg-green-50 rounded p-2">✅ 接続成功<br><span class="text-xs text-gray-500">{preview}</span></div>')
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: {e}</div>')
