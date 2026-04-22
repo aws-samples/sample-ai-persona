@@ -65,6 +65,11 @@ class Config:
     # Dataset Integration設定
     ENABLE_DATASET_INTEGRATION: bool = False  # データセット連携機能の有効/無効
 
+    # D360 DWH連携設定
+    D360_RUNTIME_ARN: Optional[str] = None
+    D360_REGION: str = "ap-northeast-1"
+    ENABLE_D360_INTEGRATION: bool = False
+
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
         # 環境変数から設定を上書き
@@ -114,6 +119,15 @@ class Config:
         self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
             "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN
         )
+
+        # D360 DWH連携設定を環境変数から上書き
+        self.D360_RUNTIME_ARN = os.getenv("D360_RUNTIME_ARN", self.D360_RUNTIME_ARN)
+        self.D360_REGION = os.getenv("D360_REGION", self.D360_REGION)
+        enable_d360 = os.getenv("ENABLE_D360_INTEGRATION", "").lower()
+        if enable_d360 in ("true", "1", "yes"):
+            self.ENABLE_D360_INTEGRATION = True
+        elif enable_d360 in ("false", "0", "no"):
+            self.ENABLE_D360_INTEGRATION = False
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()
