@@ -9,7 +9,7 @@
     <form id="generate-form">
 
         <!-- Step 1: ファイルアップロード -->
-        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div x-show="dataType !== 'dwh'" x-transition class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold">1</span>
                 データファイルのアップロード
@@ -28,7 +28,6 @@
                        id="file-input"
                        accept=".txt,.md,.pdf,.docx,.doc,.csv"
                        multiple
-                       required
                        class="hidden"
                        onchange="updateFileList(this)">
                 <label for="file-input" class="cursor-pointer">
@@ -83,6 +82,26 @@
                         <div class="text-sm font-medium text-gray-700">その他</div>
                     </div>
                 </label>
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="data_type" value="dwh" x-model="dataType" class="peer sr-only">
+                    <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-purple-500 peer-checked:bg-purple-50 hover:border-gray-400">
+                        <div class="flex justify-center mb-1 text-purple-500">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
+                        </div>
+                        <div class="text-sm font-medium text-gray-700">DWH（D360連携）</div>
+                    </div>
+                </label>
+            </div>
+
+            <!-- DWH の場合の分析の切り口入力 -->
+            <div x-show="dataType === 'dwh'" x-transition class="mt-4 ml-9">
+                <label for="analysis_angle" class="block text-sm font-medium text-gray-700 mb-1">分析の切り口</label>
+                <input type="text"
+                       name="analysis_angle"
+                       id="analysis_angle"
+                       placeholder="例: 高単価商品のリピーター層、20代女性の購買傾向、直近3ヶ月のアクティブユーザー"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm">
+                <p class="text-xs text-gray-400 mt-1">D360 のデータウェアハウスに問い合わせて、実データに基づいたペルソナを生成します</p>
             </div>
 
             <!-- その他の場合のデータ説明入力 -->

@@ -162,7 +162,8 @@ async def generate_persona(
     persona_count: int = Form(1),
     data_description: str = Form(""),
     custom_prompt: str = Form(""),
-    files: list[UploadFile] = File(...),
+    analysis_angle: str = Form(""),
+    files: list[UploadFile] = File(None),
 ) -> Any:
     """統一ペルソナ生成（SSEストリーミング）"""
 
@@ -170,12 +171,66 @@ async def generate_persona(
     if persona_count < 1 or persona_count > 10:
         return _sse_error("ペルソナ数は1-10の範囲で指定してください")
 
-    # ファイル読み込み
+    # DWH（D360連携）の場合
+    if data_type == "dwh":
+        if not analysis_angle or not analysis_angle.strip():
+            return _sse_error("分析の切り口を入力してください")
+
+        logger.info(
+            f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}"
+        )
+
+        async def dwh_event_generator() -> Any:
+            yield _sse_event("progress", "D360 にデータを問い合わせ中...")
+
+            future = executor.submit(
+                _generate_personas_sync,
+                [],  # ファイルなし
+                data_type,
+                persona_count,
+                analysis_angle,  # data_description として渡す
+                custom_prompt or None,
+            )
+
+            while not future.done():
+                await asyncio.sleep(3)
+                yield _sse_event("keepalive", "")
+
+            try:
+                generated_personas, thinking_log = future.result()
+                logger.info(f"{len(generated_personas)}個のDWHペルソナ生成成功")
+
+                for persona in generated_personas:
+                    _temp_personas_cache[persona.id] = persona
+
+                for entry in thinking_log:
+                    yield _sse_event("thinking", json.dumps(entry, ensure_ascii=False))
+
+                if len(generated_personas) == 1:
+                    html = templates.get_template(
+                        "persona/partials/generated_persona.html"
+                    ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+                else:
+                    html = templates.get_template(
+                        "persona/partials/persona_candidates.html"
+                    ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+
+                yield _sse_event("result", html)
+                yield _sse_event("done", "")
+
+            except Exception as e:
+                logger.error(f"DWH ペルソナ生成エラー: {e}")
+                yield _sse_event("error", str(e))
+
+        return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
+
+    # ファイル読み込み（既存フロー）
     file_contents: list[tuple[bytes, str]] = []
-    for f in files:
-        content = await f.read()
-        if content and f.filename:
-            file_contents.append((content, f.filename))
+    if files:
+        for f in files:
+            content = await f.read()
+            if content and f.filename:
+                file_contents.append((content, f.filename))
 
     if not file_contents:
         return _sse_error("ファイルをアップロードしてください")
