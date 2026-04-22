@@ -113,7 +113,7 @@ def create_d360_tool(runtime_arn: str, region: str, event_queue=None):
             question: データに関する質問。例: "先月の売上トップ10商品は？", "顧客の年代別購買金額の分布を教えて"
         """
         if event_queue is not None:
-            event_queue.put({"type": "tool_call", "content": "🔧 DWH に問い合わせ中...", "detail": question})
+            event_queue.put({"type": "tool_call", "content": "🔧 DWH (D360 Agent) に問い合わせ中...", "detail": question})
         result = service.query(question)
         if event_queue is not None:
             event_queue.put({"type": "tool_result", "content": result})
