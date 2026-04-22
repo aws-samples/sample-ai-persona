@@ -1419,14 +1419,14 @@ JSON配列:"""
                 elif "toolUse" in block:
                     tool = block["toolUse"]
                     name = tool.get("name", "unknown")
-                    input_str = str(tool.get("input", ""))[:500]
+                    input_str = str(tool.get("input", ""))
                     log.append({"type": "tool_call", "content": f"🔧 {name}: {input_str}"})
                 elif "toolResult" in block:
                     result_content = block["toolResult"].get("content", [])
                     text_parts = []
                     for part in result_content:
                         if isinstance(part, dict) and "text" in part:
-                            text_parts.append(part["text"][:500])
+                            text_parts.append(part["text"])
                     if text_parts:
                         log.append({"type": "tool_result", "content": "\n".join(text_parts)})
         return log
