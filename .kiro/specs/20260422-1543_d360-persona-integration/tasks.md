@@ -3,22 +3,20 @@
 ## Implementation Checklist
 
 ### Phase 1: 基盤
-- [ ] `src/config.py` に D360 設定を追加（`D360_RUNTIME_ARN`, `D360_REGION`, `ENABLE_D360_INTEGRATION`）
-- [ ] `src/services/d360_service.py` を新規作成（AgentCore Runtime 呼び出し、SSE パース）
+- [x] `src/config.py` に D360 設定を追加（`D360_RUNTIME_ARN`, `D360_REGION`, `ENABLE_D360_INTEGRATION`）
+- [x] `src/services/d360_service.py` を新規作成（AgentCore Runtime 呼び出し、SSE パース）
 
 ### Phase 2: ペルソナ生成ロジック
-- [ ] `src/managers/persona_manager.py` に `generate_personas_from_dwh()` を追加
-- [ ] D360 質問生成プロンプトを作成（analysis_angle → D360 への質問）
-- [ ] D360 分析結果 → ペルソナ生成プロンプトを作成（data_type="dwh" 対応）
+- [x] `src/services/agent_service.py` に `data_type="dwh"` 分岐追加（DATA_TYPE_PROMPTS + D360 ツール付与）
+- [x] `src/managers/persona_manager.py` に `_generate_personas_from_dwh()` 追加
 
 ### Phase 3: Web UI
-- [ ] `web/routers/persona.py` で `data_type="dwh"` のハンドリング追加
-- [ ] `web/templates/persona/generation.html` に「DWH（D360連携）」オプション追加
-- [ ] data_type 切り替え時の UI 動的表示（ファイルアップロード ↔ 分析の切り口入力）
+- [x] `web/routers/persona.py` で `data_type="dwh"` のハンドリング追加
+- [x] `web/templates/persona/generation.html` に「DWH（D360連携）」オプション追加
 
 ### Phase 4: 設定画面
-- [ ] `web/routers/settings.py` に D360 接続設定エンドポイント追加
-- [ ] `web/templates/settings/` に D360 設定セクション UI 追加
+- [x] `web/routers/settings.py` に D360 接続設定エンドポイント追加
+- [x] `web/templates/settings/` に D360 設定セクション UI 追加
 
 ### Phase 5: エラーハンドリング・仕上げ
 - [ ] D360 未設定時のバリデーションとエラーメッセージ

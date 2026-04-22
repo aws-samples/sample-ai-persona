@@ -66,3 +66,18 @@ Q-SPEC Framework でヒアリングを実施し、以下を決定:
 - `persona_manager.py` の変更が最小限に（data_type="dwh" のファイル不要チェックのみ）
 - 新規ファイルは `d360_service.py` のみ（D360Service + @tool ファクトリ）
 - `agent_service.py` は `create_persona_generation_agent` に dwh 分岐を追加するだけ
+
+### [2026-04-22 15:55] Phase 1-4 実装完了
+
+**変更ファイル一覧**:
+- `src/config.py` — D360_RUNTIME_ARN, D360_REGION, ENABLE_D360_INTEGRATION 追加
+- `src/services/d360_service.py` — 新規。D360Service + create_d360_tool
+- `src/services/agent_service.py` — DATA_TYPE_PROMPTS に dwh 追加、D360 ツール付与
+- `src/managers/persona_manager.py` — data_type="dwh" で _generate_personas_from_dwh に分岐
+- `web/routers/persona.py` — dwh ハンドリング（ファイル不要、analysis_angle 受け取り、SSE）
+- `web/templates/persona/generation.html` — DWH オプション追加、動的 UI 切り替え
+- `web/routers/settings.py` — D360 設定の取得・保存・接続テスト
+- `web/templates/settings/index.html` — D360 セクション追加
+- `web/templates/settings/partials/d360_settings.html` — 新規。D360 設定フォーム
+
+**残タスク**: Phase 5（エラーハンドリング・仕上げ）+ E2E 動作確認
