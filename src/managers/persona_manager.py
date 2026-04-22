@@ -127,6 +127,14 @@ class PersonaManager:
         if persona_count < 1 or persona_count > 10:
             raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
 
+        # DWH（D360連携）の場合はファイル不要
+        if data_type == "dwh":
+            return self._generate_personas_from_dwh(
+                analysis_angle=data_description or "",
+                persona_count=persona_count,
+                custom_prompt=custom_prompt,
+            )
+
         if not file_contents:
             raise PersonaManagerError("ファイルが選択されていません")
 
@@ -211,6 +219,47 @@ class PersonaManager:
             raise PersonaManagerError(f"エージェントサービスエラー: {e}")
         except Exception as e:
             raise PersonaManagerError(f"予期しないエラー: {e}")
+
+    def _generate_personas_from_dwh(
+        self,
+        analysis_angle: str,
+        persona_count: int,
+        custom_prompt: str | None = None,
+    ) -> tuple[list[Persona], list[dict[str, str]]]:
+        """DWH（D360連携）によるペルソナ生成。
+
+        Agent が ask_data_agent ツールで D360 に自律的に問い合わせてペルソナを生成する。
+        """
+        from ..services.agent_service import AgentService, AgentServiceError
+
+        if not analysis_angle or not analysis_angle.strip():
+            raise PersonaManagerError("分析の切り口を入力してください")
+
+        self.logger.info(
+            f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count})"
+        )
+
+        try:
+            agent_service = AgentService()
+            # analysis_angle を data_text として渡す。Agent が D360 ツールで自律的にデータ取得する。
+            data_text = f"分析の切り口: {analysis_angle}"
+            personas, thinking_log = agent_service.generate_personas_with_agent(
+                data_text=data_text,
+                data_type="dwh",
+                persona_count=persona_count,
+                custom_prompt=custom_prompt,
+            )
+
+            for persona in personas:
+                self._validate_generated_persona(persona)
+
+            self.logger.info(f"DWH ペルソナ生成完了: {len(personas)}個")
+            return personas, thinking_log
+
+        except AgentServiceError as e:
+            raise PersonaManagerError(f"D360 連携エラー: {e}")
+        except Exception as e:
+            raise PersonaManagerError(f"DWH ペルソナ生成エラー: {e}")
 
     def save_persona(self, persona: Persona) -> str:
         """

@@ -1460,6 +1460,19 @@ JSON配列:"""
             "market_report": "以下は市場調査・分析レポートです。市場セグメント、顧客行動パターン、デモグラフィック情報を分析してペルソナを生成してください。",
             "review": "以下は商品レビュー・口コミデータです。ユーザーの満足点、不満点、利用シーン、期待を分析してペルソナを生成してください。",
             "purchase": "以下は購買データ・トランザクションデータです。購買パターン、嗜好、ライフスタイルを分析してペルソナを生成してください。",
+            "dwh": (
+                "DWH（データウェアハウス）に蓄積された実際の売上・注文・顧客・商品データを分析してペルソナを生成します。\n"
+                "ask_data_agent ツールを使って DWH に問い合わせ、定量データに基づいたペルソナを作成してください。\n\n"
+                "# DWH 分析手順\n"
+                "1. まず ask_data_agent で全体像を把握する質問をする（例: 顧客セグメントの分布、売上上位カテゴリ）\n"
+                "2. ユーザーの分析の切り口に沿って深掘りの質問をする\n"
+                "3. 得られた定量データをもとにペルソナを生成する\n"
+                "4. 各ペルソナにデータ根拠を明示する\n\n"
+                "# 注意\n"
+                "- ask_data_agent は 1 回の呼び出しに数十秒かかる場合がある\n"
+                "- 必要最小限の回数（2-3回程度）で効率的に情報を集める\n"
+                "- 200件を超えるデータは取得できないため、集計クエリを依頼する"
+            ),
         }
 
         base_prompt = DATA_TYPE_PROMPTS.get(data_type)
@@ -1533,6 +1546,17 @@ JSON配列:"""
                 **filtered_credentials,
             )
             tools = []
+
+            if data_type == "dwh":
+                from .d360_service import create_d360_tool
+
+                if not config.D360_RUNTIME_ARN:
+                    raise AgentInitializationError(
+                        "D360 の接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                    )
+                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION)
+                tools.append(d360_tool)
+                self.logger.info("D360 ツール (ask_data_agent) を追加")
 
             if use_mcp:
                 from .mcp_server_manager import get_mcp_manager
