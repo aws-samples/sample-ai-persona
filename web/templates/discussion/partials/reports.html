@@ -4,7 +4,7 @@
     <!-- レポート生成フォーム -->
     <div class="mb-6">
         <h3 class="text-sm font-semibold text-gray-700 mb-3">テンプレートを選択</h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 {% if config and config.ENABLE_D360_INTEGRATION and config.D360_RUNTIME_ARN %}lg:grid-cols-4{% else %}md:grid-cols-3{% endif %} gap-3 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 {% if config and config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN %}lg:grid-cols-4{% else %}md:grid-cols-3{% endif %} gap-3 mb-4">
             <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false; showDataDrivenPrompt = false"
                     :class="selectedTemplate === 'summary' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
@@ -38,7 +38,7 @@
                 </div>
                 <p class="text-xs text-gray-500">自由にプロンプトを入力して出力形式を指定</p>
             </button>
-            {% if config and config.ENABLE_D360_INTEGRATION and config.D360_RUNTIME_ARN %}
+            {% if config and config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN %}
             <button type="button" @click="selectedTemplate = 'data_driven'; showCustomPrompt = false; showDataDrivenPrompt = true"
                     :class="selectedTemplate === 'data_driven' ? 'border-teal-500 bg-teal-50 ring-1 ring-teal-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
@@ -46,9 +46,9 @@
                     <svg class="w-4 h-4 text-teal-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" />
                     </svg>
-                    <span class="text-sm font-semibold text-gray-900">データドリブン分析</span>
+                    <span class="text-sm font-semibold text-gray-900">データドリブン分析（データ分析エージェント連携）</span>
                 </div>
-                <p class="text-xs text-gray-500">定性インサイト × 実データ（DWH）で意思決定・施策実行に</p>
+                <p class="text-xs text-gray-500">定性インサイト × 実データで意思決定・施策実行に</p>
             </button>
             {% endif %}
         </div>
@@ -60,6 +60,16 @@
                       rows="3"
                       class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                       placeholder="例: 箇条書きで主要な発見を5つにまとめてください"></textarea>
+        </div>
+
+        <!-- データドリブン分析用プロンプト入力 -->
+        <div x-show="showDataDrivenPrompt" x-transition class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 mb-1">分析の指示（任意）</label>
+            <textarea id="data-driven-prompt-input"
+                      rows="3"
+                      class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                      placeholder="例: インサイトの裏付けに加えて、類似する顧客セグメントをCSV形式で抽出してください"></textarea>
+            <p class="text-xs text-gray-500 mt-1">未入力の場合はインサイト × 実データの照合レポートを生成します</p>
         </div>
 
         <!-- 生成ボタン -->
@@ -94,6 +104,8 @@
                     <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-800">サマリ</span>
                     {% elif report.template_type == 'review' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">レビュー</span>
+                    {% elif report.template_type == 'data_driven' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-teal-100 text-teal-800">データドリブン分析</span>
                     {% else %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-800">カスタム</span>
                     {% endif %}
@@ -158,16 +170,71 @@ window.__generateReport = function(template, showCustomPrompt, showDataDrivenPro
 
     var streamDiv = document.createElement('div');
     streamDiv.className = 'bg-gray-50 rounded-lg border border-gray-200 p-6';
-    streamDiv.innerHTML = '<div class="flex items-center gap-2 mb-3"><span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">生成中...</span></div><div id="stream-output" class="prose prose-slate max-w-none"></div>';
+    var isDataDriven = template === 'data_driven';
+    streamDiv.innerHTML = '<div class="flex items-center gap-2 mb-3"><span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800">生成中...</span></div>'
+        + (isDataDriven ? '<div id="thinking-stream" class="space-y-2 mb-4"></div>' : '')
+        + '<div id="stream-output" class="prose prose-slate max-w-none"></div>';
     display.innerHTML = '';
     display.appendChild(streamDiv);
 
     var fullContent = '';
     var output = document.getElementById('stream-output');
+    var thinkingStream = document.getElementById('thinking-stream');
     var es = new EventSource(url);
+
+    // thinking イベント（data_driven 時の tool_call/tool_result/thinking）
+    if (isDataDriven) {
+        es.addEventListener('thinking', function(e) {
+            if (!thinkingStream) return;
+            try {
+                var entry = JSON.parse(e.data);
+                if (entry.type === 'thinking') {
+                    var lastDiv = thinkingStream.querySelector('.thinking-text:last-child');
+                    if (!lastDiv) {
+                        lastDiv = document.createElement('div');
+                        lastDiv.className = 'thinking-text text-sm text-gray-700 bg-gray-50 rounded p-2 whitespace-pre-wrap';
+                        thinkingStream.appendChild(lastDiv);
+                    }
+                    lastDiv.textContent += entry.content;
+                } else if (entry.type === 'tool_call') {
+                    var div = document.createElement('div');
+                    div.className = 'text-sm text-blue-700 bg-blue-50 rounded p-2 border-l-4 border-blue-400';
+                    var title = document.createElement('div');
+                    title.className = 'font-semibold';
+                    title.textContent = entry.content;
+                    div.appendChild(title);
+                    if (entry.detail) {
+                        var detail = document.createElement('div');
+                        detail.className = 'text-xs text-blue-600 mt-1';
+                        detail.textContent = entry.detail;
+                        div.appendChild(detail);
+                    }
+                    thinkingStream.appendChild(div);
+                } else if (entry.type === 'tool_result') {
+                    var details = document.createElement('details');
+                    details.className = 'text-xs bg-green-50 rounded p-2 border border-green-200';
+                    var summary = document.createElement('summary');
+                    summary.className = 'cursor-pointer text-green-700 font-semibold hover:text-green-900';
+                    summary.textContent = '📊 データ分析エージェント 分析結果を表示';
+                    details.appendChild(summary);
+                    var content = document.createElement('div');
+                    content.className = 'mt-2 prose prose-sm max-w-none max-h-64 overflow-y-auto text-gray-700';
+                    if (window.marked && window.DOMPurify) {
+                        content.innerHTML = DOMPurify.sanitize(marked.parse(entry.content, {breaks: true}));
+                    } else {
+                        content.textContent = entry.content;
+                    }
+                    details.appendChild(content);
+                    thinkingStream.appendChild(details);
+                }
+                thinkingStream.scrollTop = thinkingStream.scrollHeight;
+            } catch(err) {}
+        });
+    }
 
     es.onmessage = function(e) {
         var data = JSON.parse(e.data);
+        if (data.type === 'keepalive') return;
         if (data.type === 'chunk') {
             fullContent += data.content;
             output.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));

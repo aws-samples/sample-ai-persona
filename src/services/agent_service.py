@@ -1550,15 +1550,15 @@ JSON配列:"""
             tools = []
 
             if data_type == "dwh":
-                from .d360_service import create_d360_tool
+                from .data_agent_service import create_data_agent_tool
 
-                if not config.D360_RUNTIME_ARN:
+                if not config.DATA_AGENT_RUNTIME_ARN:
                     raise AgentInitializationError(
-                        "D360 の接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                        "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
                     )
-                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION, event_queue=event_queue)
-                tools.append(d360_tool)
-                self.logger.info("D360 ツール (ask_data_agent) を追加")
+                data_agent_tool = create_data_agent_tool(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION, event_queue=event_queue)
+                tools.append(data_agent_tool)
+                self.logger.info("データ分析エージェントツール (ask_data_agent) を追加")
 
             if use_mcp:
                 from .mcp_server_manager import get_mcp_manager

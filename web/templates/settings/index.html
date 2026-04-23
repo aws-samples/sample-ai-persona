@@ -49,13 +49,13 @@
         </div>
     </div>
 
-    <!-- D360 DWH連携設定 -->
+    <!-- データ分析エージェント DWH連携設定 -->
     <div class="bg-white rounded-lg shadow-md p-6 mt-6">
-        <h2 class="text-lg font-semibold text-gray-700 mb-2">D360 DWH連携</h2>
-        <p class="text-xs text-gray-500 mb-4">D360 データ分析エージェントと連携して、実データに基づいたペルソナを生成します</p>
+        <h2 class="text-lg font-semibold text-gray-700 mb-2">データ分析エージェント 連携</h2>
+        <p class="text-xs text-gray-500 mb-4">データ分析エージェントと連携して、ペルソナ分析やインサイト分析を行います</p>
 
-        <div id="d360-settings" hx-get="/settings/d360/status" hx-trigger="load">
-            {% include "settings/partials/d360_settings.html" %}
+        <div id="data-agent-settings" hx-get="/settings/data-agent/status" hx-trigger="load">
+            {% include "settings/partials/data_agent_settings.html" %}
         </div>
     </div>
 </div>

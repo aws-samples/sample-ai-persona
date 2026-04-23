@@ -1631,6 +1631,7 @@ JSON:"""
         template_type: str,
         custom_prompt: Optional[str] = None,
         personas: Optional[List[Dict[str, Any]]] = None,
+        event_queue: Any = None,
     ) -> Any:
         """
         議論データからレポートをストリーミング生成する。
@@ -1640,7 +1641,8 @@ JSON:"""
         """
         if template_type == "data_driven":
             yield from self._generate_data_driven_report_streaming(
-                messages, insights, topic, custom_prompt, personas
+                messages, insights, topic, custom_prompt, personas,
+                event_queue=event_queue,
             )
             return
 
@@ -1792,22 +1794,32 @@ JSON:"""
         topic: str,
         custom_prompt: Optional[str],
         personas: Optional[List[Dict[str, Any]]],
+        event_queue: Any = None,
     ) -> Any:
-        """データドリブン分析レポートをストリーミング生成する（Strands Agent + D360）。"""
-        if not config.ENABLE_D360_INTEGRATION or not config.D360_RUNTIME_ARN:
-            yield "⚠️ D360 の接続設定がされていません。設定画面から Runtime ARN を設定してください。"
+        """データドリブン分析レポートを生成する（Strands Agent + データ分析エージェント）。
+
+        event_queue が渡された場合、thinking/tool_call/tool_result イベントを
+        リアルタイムで put し、最終テキストも chunk として put する。
+        event_queue が None の場合は従来通りテキスト chunk を yield する。
+        """
+        if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"})
+                return
+            yield "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"
             return
 
         try:
             from strands import Agent
             from strands.models import BedrockModel
-            from .d360_service import create_d360_tool
+            from .data_agent_service import create_data_agent_tool
         except ImportError as e:
-            yield f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
+            msg = f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+                return
+            yield msg
             return
-
-        import queue as queue_mod
-        import threading
 
         system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
         user_content = "\n".join(
@@ -1818,41 +1830,41 @@ JSON:"""
         credentials = config.get_aws_credentials()
         filtered = {k: v for k, v in credentials.items() if v is not None and k != "region_name"}
 
-        text_queue: queue_mod.Queue = queue_mod.Queue()
-        _SENTINEL = object()
-
         def _callback(**kwargs: Any) -> None:
+            """Agent のテキスト出力を event_queue に thinking として送信"""
             data = kwargs.get("data", "")
-            if data:
-                text_queue.put(data)
+            if data and event_queue is not None:
+                event_queue.put({"type": "thinking", "content": data})
 
-        def _run() -> None:
-            try:
-                model = BedrockModel(
-                    model_id=config.BEDROCK_MODEL_ID,
-                    region_name=config.AWS_REGION,
-                    **filtered,
-                )
-                d360_tool = create_d360_tool(config.D360_RUNTIME_ARN, config.D360_REGION)
-                agent = Agent(
-                    model=model,
-                    tools=[d360_tool],
-                    system_prompt=system_prompt,
-                    callback_handler=_callback,
-                )
-                agent(user_content)
-            except Exception as e:
-                text_queue.put(f"\n\n⚠️ レポート生成エラー: {e}")
-            finally:
-                text_queue.put(_SENTINEL)
+        try:
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+                **filtered,
+            )
+            data_agent_tool = create_data_agent_tool(
+                config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION,
+                event_queue=event_queue,
+            )
+            agent = Agent(
+                model=model,
+                tools=[data_agent_tool],
+                system_prompt=system_prompt,
+                callback_handler=_callback if event_queue is not None else None,
+            )
+            result = agent(user_content)
 
-        threading.Thread(target=_run, daemon=True).start()
-
-        while True:
-            item = text_queue.get()
-            if item is _SENTINEL:
-                break
-            yield item
+            # callback_handler 経由で全テキストは既に送信済み。完了通知のみ。
+            if event_queue is not None:
+                event_queue.put({"type": "_done"})
+            else:
+                yield str(result)
+        except Exception as e:
+            msg = f"\n\n⚠️ レポート生成エラー: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+            else:
+                yield msg
 
     # =========================================================================
     # アンケートAI生成（Issue #23）

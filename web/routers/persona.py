@@ -171,7 +171,7 @@ async def generate_persona(
     if persona_count < 1 or persona_count > 10:
         return _sse_error("ペルソナ数は1-10の範囲で指定してください")
 
-    # DWH（D360連携）の場合
+    # DWH（データ分析エージェント連携）の場合
     if data_type == "dwh":
         if not analysis_angle or not analysis_angle.strip():
             return _sse_error("分析の切り口を入力してください")
@@ -196,7 +196,7 @@ async def generate_persona(
             )
 
         async def dwh_event_generator() -> Any:
-            yield _sse_event("progress", "D360 にデータを問い合わせ中...")
+            yield _sse_event("progress", "データ分析エージェントに問い合わせ中...")
 
             future = executor.submit(_run_dwh_generation)
 

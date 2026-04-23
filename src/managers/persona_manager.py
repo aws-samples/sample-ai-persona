@@ -129,7 +129,7 @@ class PersonaManager:
         if persona_count < 1 or persona_count > 10:
             raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
 
-        # DWH（D360連携）の場合はファイル不要
+        # DWH（データ分析エージェント連携）の場合はファイル不要
         if data_type == "dwh":
             return self._generate_personas_from_dwh(
                 analysis_angle=data_description or "",
@@ -230,12 +230,11 @@ class PersonaManager:
         custom_prompt: str | None = None,
         event_queue: Any = None,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
-        """DWH（D360連携）によるペルソナ生成。
+        """DWH（データ分析エージェント連携）によるペルソナ生成。
 
-        Agent が ask_data_agent ツールで D360 に自律的に問い合わせてペルソナを生成する。
+        Agent が ask_data_agent ツールで データ分析エージェントに自律的に問い合わせてペルソナを生成する。
         event_queue が渡された場合、Agent のイベントをリアルタイムで queue に入れる。
         """
-        import queue as queue_mod
         from ..services.agent_service import AgentService, AgentServiceError
 
         if not analysis_angle or not analysis_angle.strip():
@@ -278,7 +277,7 @@ class PersonaManager:
             return personas, thinking_log
 
         except AgentServiceError as e:
-            raise PersonaManagerError(f"D360 連携エラー: {e}")
+            raise PersonaManagerError(f"データ分析エージェント連携エラー: {e}")
         except Exception as e:
             raise PersonaManagerError(f"DWH ペルソナ生成エラー: {e}")
 
