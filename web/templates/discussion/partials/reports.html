@@ -27,7 +27,7 @@
                 </div>
                 <p class="text-xs text-gray-500">該当箇所、指摘内容、重要度</p>
             </button>
-            <button type="button" @click="selectedTemplate = 'custom'; showCustomPrompt = true"
+            <button type="button" @click="selectedTemplate = 'custom'; showCustomPrompt = true; showDataDrivenPrompt = false"
                     :class="selectedTemplate === 'custom' ? 'border-purple-500 bg-purple-50 ring-1 ring-purple-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
                 <div class="flex items-center gap-2 mb-1">
