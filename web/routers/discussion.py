@@ -973,10 +973,8 @@ async def generate_report_stream(
             if template_type == "data_driven":
                 # event_queue パターン: thinking/tool_call/tool_result をリアルタイム送信
                 import queue as queue_mod
-                from concurrent.futures import ThreadPoolExecutor
 
                 eq: queue_mod.Queue = queue_mod.Queue()
-                _executor = ThreadPoolExecutor(max_workers=1)
 
                 def _run() -> None:
                     for _ in discussion_manager.generate_report_streaming(
@@ -987,7 +985,7 @@ async def generate_report_stream(
                     ):
                         pass
 
-                future = _executor.submit(_run)
+                future = executor.submit(_run)
                 full_content = ""
 
                 while True:
