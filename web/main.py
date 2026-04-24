@@ -3,9 +3,6 @@ AIペルソナシステム - メインアプリケーション
 FastAPI + Jinja2 + htmxベースのWebアプリケーション
 """
 
-from dotenv import load_dotenv
-load_dotenv()
-
 from typing import Any
 import logging
 from pathlib import Path
