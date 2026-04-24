@@ -7,8 +7,10 @@ Strands @tool としてペルソナ生成エージェントに提供する。
 
 import json
 import logging
+import queue
 import uuid
 from datetime import datetime
+from typing import Any
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -88,7 +90,7 @@ class DataAgentService:
             raise DataAgentServiceError(f"DataAgent 問い合わせ失敗: {e}") from e
 
 
-def create_data_agent_tool(runtime_arn: str, region: str, event_queue=None):
+def create_data_agent_tool(runtime_arn: str, region: str, event_queue: "queue.Queue[dict] | None" = None) -> Any:
     """DataAgent 問い合わせを Strands @tool としてラップして返す。
 
     Args:
