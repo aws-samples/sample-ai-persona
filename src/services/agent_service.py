@@ -1420,7 +1420,7 @@ JSON配列:"""
                     tool = block["toolUse"]
                     name = tool.get("name", "unknown")
                     input_str = str(tool.get("input", ""))[:5000]
-                    log.append({"type": "tool_call", "content": f"🔧 {name}: {input_str}"})
+                    log.append({"type": "tool_call", "content": f"{name}: {input_str}"})
                 elif "toolResult" in block:
                     result_content = block["toolResult"].get("content", [])
                     text_parts = []
