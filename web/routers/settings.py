@@ -439,4 +439,5 @@ async def test_data_agent_connection(request: Request) -> Any:
             '</script>'
         )
     except Exception as e:
-        return HTMLResponse(f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: {e}</div>')
+        import html as html_mod
+        return HTMLResponse(f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: {html_mod.escape(str(e))}</div>')
