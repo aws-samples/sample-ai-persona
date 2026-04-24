@@ -108,11 +108,11 @@ def create_data_agent_tool(runtime_arn: str, region: str, event_queue: "queue.Qu
     @tool
     def ask_data_agent(question: str) -> str:
         """社内データウェアハウス（DWH）に自然言語で問い合わせる。
-        売上・注文・顧客・商品データの分析、集計、傾向把握ができる。
-        集計クエリを依頼すると効率的に情報を得られる。
+        利用可能なテーブルやデータの分析、集計、傾向把握ができる。
+        まず「利用可能なテーブル一覧」を確認してからデータ構造に合った質問をすると効果的。
 
         Args:
-            question: データに関する質問。例: "先月の売上トップ10商品は？", "顧客の年代別購買金額の分布を教えて"
+            question: データに関する質問。例: "利用可能なテーブル一覧を教えて", "顧客の年代別分布を教えて"
         """
         if event_queue is not None:
             event_queue.put({"type": "tool_call", "content": "🔧 データ分析エージェントに問い合わせ中...", "detail": question})
