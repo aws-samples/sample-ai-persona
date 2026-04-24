@@ -245,9 +245,9 @@ async def generate_persona(
                 yield _sse_event("result", html)
                 yield _sse_event("done", "")
 
-            except Exception as e:
-                logger.error(f"DWH ペルソナ生成エラー: {e}")
-                yield _sse_event("error", str(e))
+            except Exception:
+                logger.exception("DWH ペルソナ生成エラー")
+                yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。しばらくしてから再試行してください。")
 
         return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
 
