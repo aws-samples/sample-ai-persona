@@ -118,7 +118,7 @@ def create_data_agent_tool(runtime_arn: str, region: str, event_queue: "queue.Qu
             event_queue.put({"type": "tool_call", "content": "データ分析エージェントに問い合わせ中...", "detail": question})
         result = service.query(question)
         if event_queue is not None:
-            event_queue.put({"type": "tool_result", "content": result})
+            event_queue.put({"type": "tool_result", "tool_name": "ask_data_agent", "content": result})
         return result
 
     return ask_data_agent

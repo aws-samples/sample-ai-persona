@@ -1409,6 +1409,7 @@ JSON配列:"""
     def _extract_thinking_log(agent: Any) -> list[dict[str, str]]:
         """エージェントのメッセージ履歴から思考ログを抽出"""
         log: list[dict[str, str]] = []
+        last_tool_name = ""
         for msg in getattr(agent, "messages", []):
             role = msg.get("role", "")
             for block in msg.get("content", []):
@@ -1420,6 +1421,7 @@ JSON配列:"""
                     tool = block["toolUse"]
                     name = tool.get("name", "unknown")
                     input_str = str(tool.get("input", ""))[:5000]
+                    last_tool_name = name
                     log.append({"type": "tool_call", "content": f"{name}: {input_str}"})
                 elif "toolResult" in block:
                     result_content = block["toolResult"].get("content", [])
@@ -1428,7 +1430,7 @@ JSON配列:"""
                         if isinstance(part, dict) and "text" in part:
                             text_parts.append(part["text"])
                     if text_parts:
-                        log.append({"type": "tool_result", "content": "\n".join(text_parts)})
+                        log.append({"type": "tool_result", "tool_name": last_tool_name, "content": "\n".join(text_parts)})
         return log
 
     def create_persona_generation_agent(
