@@ -8,7 +8,8 @@
 ## セットアップ
 ### AWS 上へのデプロイ
 
-[AWS CDK を利用したデプロイ手順](./cdk/README.md)を参照ください。
+- [AWS CDK を利用したデプロイ手順](./cdk/README.md)
+- [AWS Generative AI Solution Box からのワンクリックデプロイ](https://aws-samples.github.io/sample-one-click-generative-ai-solutions/solutions/ai-persona/)
 
 ### ローカル環境でのアプリケーション起動
 #### 前提条件
