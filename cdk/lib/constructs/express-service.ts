@@ -106,7 +106,7 @@ export class ExpressService extends Construct {
     if (props.dataAgentRuntimeArn) {
       taskRole.addToPolicy(new iam.PolicyStatement({
         actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-        resources: [props.dataAgentRuntimeArn],
+        resources: [props.dataAgentRuntimeArn, `${props.dataAgentRuntimeArn}/*`],
       }));
     }
 
