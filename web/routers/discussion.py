@@ -829,6 +829,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
                 "custom_categories": custom_categories,
                 "document_urls": document_urls,
+                "config": config,
             },
         )
     except HTTPException:
@@ -960,7 +961,7 @@ async def generate_report_stream(
     custom_prompt: Optional[str] = None,
 ) -> Any:
     """レポートをSSEストリーミングで生成する"""
-    if template_type not in ("summary", "review", "custom"):
+    if template_type not in ("summary", "review", "custom", "data_driven"):
         def error_gen() -> Any:
             yield f'data: {json.dumps({"type": "error", "message": "無効なテンプレート種別です"}, ensure_ascii=False)}\n\n'
         return StreamingResponse(error_gen(), media_type="text/event-stream")
@@ -968,6 +969,63 @@ async def generate_report_stream(
     def stream_generator() -> Any:
         try:
             discussion_manager = get_discussion_manager()
+
+            if template_type == "data_driven":
+                # event_queue パターン: thinking/tool_call/tool_result をリアルタイム送信
+                import queue as queue_mod
+
+                eq: queue_mod.Queue = queue_mod.Queue()
+
+                def _run() -> None:
+                    for _ in discussion_manager.generate_report_streaming(
+                        discussion_id=discussion_id,
+                        template_type=template_type,
+                        custom_prompt=custom_prompt or None,
+                        event_queue=eq,
+                    ):
+                        pass
+
+                future = executor.submit(_run)
+                full_content = ""
+
+                while True:
+                    try:
+                        evt = eq.get(timeout=0.3)
+                    except queue_mod.Empty:
+                        if future.done():
+                            break
+                        yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
+                        continue
+
+                    evt_type = evt.get("type", "")
+                    content = evt.get("content", "")
+
+                    if evt_type == "_done":
+                        break
+                    elif evt_type == "tool_call":
+                        yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
+                    elif evt_type == "tool_result" and content:
+                        yield f"event: thinking\ndata: {json.dumps({'type': 'tool_result', 'content': content}, ensure_ascii=False)}\n\n"
+                    elif evt_type == "thinking" and content:
+                        full_content += content
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                    elif evt_type == "result":
+                        full_content = content
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                    elif evt_type == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'message': content}, ensure_ascii=False)}\n\n"
+                        return
+
+                # future の例外チェック
+                if future.done() and future.exception():
+                    logger.error(f"レポート生成エラー: {future.exception()}")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'レポートの生成に失敗しました'}, ensure_ascii=False)}\n\n"
+                    return
+
+                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                return
+
+            # 既存テンプレート (summary/review/custom)
             for chunk in discussion_manager.generate_report_streaming(
                 discussion_id=discussion_id,
                 template_type=template_type,
@@ -1014,6 +1072,7 @@ async def save_report(
         discussion_manager.save_report(discussion_id=discussion_id, report=report)
 
         # 保存後、reportsセクション全体を再描画
+        from src.config import Config
         discussion = discussion_manager.get_discussion(discussion_id)
         response = templates.TemplateResponse(
             "discussion/partials/reports.html",
@@ -1021,6 +1080,7 @@ async def save_report(
                 "request": request,
                 "discussion": discussion,
                 "discussion_id": discussion_id,
+                "config": Config(),
             },
         )
         response.headers["HX-Retarget"] = "#reports-container"

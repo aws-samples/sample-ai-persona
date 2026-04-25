@@ -1112,6 +1112,7 @@ class DiscussionManager:
         discussion_id: str,
         template_type: str,
         custom_prompt: Optional[str] = None,
+        event_queue: Any = None,
     ) -> Any:
         """
         議論からレポートをストリーミング生成する。
@@ -1132,6 +1133,7 @@ class DiscussionManager:
             template_type=template_type,
             custom_prompt=custom_prompt,
             personas=personas_data,
+            event_queue=event_queue,
         )
 
     def save_report(self, discussion_id: str, report: DiscussionReport) -> None:

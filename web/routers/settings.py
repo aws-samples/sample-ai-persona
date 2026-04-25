@@ -359,3 +359,85 @@ async def api_list_knowledge_bases() -> Any:
     db_service = service_factory.get_database_service()
     knowledge_bases = db_service.get_all_knowledge_bases()
     return [kb.to_dict() for kb in knowledge_bases]
+
+
+# ==================== データ分析エージェント連携設定 ====================
+
+
+def _data_agent_template_vars() -> dict:
+    """データ分析エージェント設定テンプレート変数"""
+    from src.config import config
+
+    return {
+        "data_agent_enabled": config.ENABLE_DATA_AGENT,
+        "data_agent_runtime_arn": config.DATA_AGENT_RUNTIME_ARN,
+        "data_agent_region": config.DATA_AGENT_REGION,
+    }
+
+
+@router.get("/data-agent/status", response_class=HTMLResponse)
+async def data_agent_status(request: Request) -> Any:
+    """データ分析エージェント設定状態取得"""
+    return templates.TemplateResponse(
+        "settings/partials/data_agent_settings.html",
+        {"request": request, **_data_agent_template_vars()},
+    )
+
+
+@router.post("/data-agent", response_class=HTMLResponse)
+async def save_data_agent_settings(
+    request: Request,
+    runtime_arn: str = Form(""),
+    region: str = Form("ap-northeast-1"),
+    enabled: str = Form(""),
+) -> Any:
+    """データ分析エージェント接続設定を保存"""
+    from src.config import config
+
+    config.DATA_AGENT_RUNTIME_ARN = runtime_arn.strip() or None
+    config.DATA_AGENT_REGION = region.strip() or "ap-northeast-1"
+    config.ENABLE_DATA_AGENT = enabled == "true"
+
+    logger.info(
+        "データ分析エージェント設定更新: enabled=%s, arn=%s, region=%s",
+        config.ENABLE_DATA_AGENT,
+        config.DATA_AGENT_RUNTIME_ARN,
+        config.DATA_AGENT_REGION,
+    )
+
+    return templates.TemplateResponse(
+        "settings/partials/data_agent_settings.html",
+        {"request": request, **_data_agent_template_vars(), "save_message": "設定を保存しました"},
+    )
+
+
+@router.post("/data-agent/test", response_class=HTMLResponse)
+async def test_data_agent_connection(request: Request) -> Any:
+    """データ分析エージェント接続テスト"""
+    from src.config import config
+
+    if not config.DATA_AGENT_RUNTIME_ARN:
+        return HTMLResponse('<div class="text-sm text-red-600 bg-red-50 rounded p-2">Runtime ARN が設定されていません</div>')
+
+    try:
+        from src.services.data_agent_service import DataAgentService
+
+        service = DataAgentService(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION)
+        result = service.query("利用可能なテーブル一覧を教えてください")
+        import html as html_mod
+        escaped = html_mod.escape(result)
+        return HTMLResponse(
+            '<div class="text-sm bg-green-50 rounded p-3 border border-green-200">'
+            '<div class="text-green-700 font-semibold mb-2">✅ 接続成功</div>'
+            f'<div class="prose prose-sm max-w-none max-h-96 overflow-y-auto text-gray-700" id="data-agent-test-md">{escaped}</div>'
+            '</div>'
+            '<script>'
+            'if(window.marked&&window.DOMPurify){'
+            'var el=document.getElementById("data-agent-test-md");'
+            'el.innerHTML=DOMPurify.sanitize(marked.parse(el.textContent,{breaks:true}));'
+            '}'
+            '</script>'
+        )
+    except Exception:
+        logger.exception("データ分析エージェント接続テストエラー")
+        return HTMLResponse('<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>')

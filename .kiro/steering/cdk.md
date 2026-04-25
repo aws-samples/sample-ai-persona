@@ -61,6 +61,8 @@ ECR → AgentCoreMemory → Cognito → AIPersona (メイン) → callbackUrl更
 | batchInferenceModelId | バッチ推論モデルID（Claude Haiku 4.5） |
 | surveyS3Prefix | アンケート結果S3プレフィックス |
 | batchInferenceS3Prefix | バッチ推論入出力S3プレフィックス |
+| dataAgentRuntimeArn | データ分析エージェントのRuntime ARN（任意） |
+| dataAgentRegion | データ分析エージェントのリージョン（任意、省略時はメインリージョン） |
 
 ## 4. 使用するライブラリ
 - `aws-cdk-lib/aws-dynamodb` - DynamoDBテーブル

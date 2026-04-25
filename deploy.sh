@@ -18,6 +18,7 @@
 #   --allowed-ips IPs WAF IP制限（カンマ区切りCIDR）
 #   --env ENV_NAME   環境名を指定（デフォルト: dev）
 #   --region REGION  リージョンを指定（デフォルト: us-east-1）
+#   --data-agent-arn ARN  データ分析エージェントのRuntime ARN
 ###############################################################################
 set -euo pipefail
 
@@ -28,6 +29,8 @@ SKIP_MEMORY=false
 SKIP_COGNITO=false
 SELF_SIGNUP=false
 ALLOWED_IPS=""
+DATA_AGENT_ARN=""
+DATA_AGENT_REGION=""
 
 # カラー出力
 RED='\033[0;31m'
@@ -50,6 +53,8 @@ while [[ $# -gt 0 ]]; do
     --allowed-ips)  ALLOWED_IPS="$2"; shift 2 ;;
     --env)          ENV_NAME="$2"; shift 2 ;;
     --region)       REGION="$2"; shift 2 ;;
+    --data-agent-arn)    DATA_AGENT_ARN="$2"; shift 2 ;;
+    --data-agent-region) DATA_AGENT_REGION="$2"; shift 2 ;;
     -h|--help)
       echo "使い方: ./deploy.sh [オプション]"
       echo "  --skip-memory    長期記憶機能をスキップ"
@@ -58,6 +63,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --allowed-ips IPs WAF IP制限（カンマ区切りCIDR、例: '203.0.113.0/24,198.51.100.1/32'）"
       echo "  --env NAME       環境名 (デフォルト: dev)"
       echo "  --region REGION  リージョン (デフォルト: us-east-1)"
+      echo "  --data-agent-arn ARN  データ分析エージェントのRuntime ARN"
+      echo "  --data-agent-region REGION  データ分析エージェントのリージョン（省略時は--regionと同じ）"
       exit 0 ;;
     *) log_error "不明なオプション: $1"; exit 1 ;;
   esac
@@ -140,6 +147,8 @@ export interface AppParameter {
   batchInferenceModelId: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
+  dataAgentRuntimeArn?: string;
+  dataAgentRegion?: string;
 }
 
 export const devParameter: AppParameter = {
@@ -167,6 +176,8 @@ export const devParameter: AppParameter = {
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',
+  dataAgentRuntimeArn: '${DATA_AGENT_ARN}',
+  dataAgentRegion: '${DATA_AGENT_REGION:-${REGION}}',
 };
 
 export const prodParameter: AppParameter = devParameter;
@@ -344,6 +355,21 @@ else
     sed -i "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
     sed -i "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
     log_info "既存のCognito設定をparameters.tsに反映しました"
+  fi
+fi
+
+# ===== データ分析エージェント設定の引き継ぎ =====
+if [[ -z "${DATA_AGENT_ARN}" ]]; then
+  # 既存スタックからDATA_AGENT_RUNTIME_ARNを取得
+  EXISTING_ARN=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersona-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='DataAgentRuntimeArn'].OutputValue" \
+    --output text 2>/dev/null || echo "")
+  if [[ -n "${EXISTING_ARN}" && "${EXISTING_ARN}" != "None" ]]; then
+    DATA_AGENT_ARN="${EXISTING_ARN}"
+    log_info "既存スタックからデータ分析エージェント設定を引き継ぎ: ${DATA_AGENT_ARN}"
+    sed -i "s|dataAgentRuntimeArn: ''|dataAgentRuntimeArn: '${DATA_AGENT_ARN}'|" "${PROJECT_ROOT}/cdk/parameters.ts"
   fi
 fi
 

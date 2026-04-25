@@ -65,6 +65,11 @@ class Config:
     # Dataset Integration設定
     ENABLE_DATASET_INTEGRATION: bool = False  # データセット連携機能の有効/無効
 
+    # データ分析エージェント連携設定
+    DATA_AGENT_RUNTIME_ARN: Optional[str] = None
+    DATA_AGENT_REGION: str = "ap-northeast-1"
+    ENABLE_DATA_AGENT: bool = False
+
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
         # 環境変数から設定を上書き
@@ -114,6 +119,19 @@ class Config:
         self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
             "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN
         )
+
+        # データ分析エージェント連携設定
+        self.DATA_AGENT_RUNTIME_ARN = os.getenv(
+            "DATA_AGENT_RUNTIME_ARN", self.DATA_AGENT_RUNTIME_ARN
+        )
+        self.DATA_AGENT_REGION = os.getenv(
+            "DATA_AGENT_REGION", self.DATA_AGENT_REGION
+        )
+        enable_val = os.getenv("ENABLE_DATA_AGENT", "").lower()
+        if enable_val in ("true", "1", "yes"):
+            self.ENABLE_DATA_AGENT = True
+        elif enable_val in ("false", "0", "no"):
+            self.ENABLE_DATA_AGENT = False
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()

@@ -1631,6 +1631,7 @@ JSON:"""
         template_type: str,
         custom_prompt: Optional[str] = None,
         personas: Optional[List[Dict[str, Any]]] = None,
+        event_queue: Any = None,
     ) -> Any:
         """
         議論データからレポートをストリーミング生成する。
@@ -1638,6 +1639,13 @@ JSON:"""
         Yields:
             str: テキストチャンク
         """
+        if template_type == "data_driven":
+            yield from self._generate_data_driven_report_streaming(
+                messages, insights, topic, custom_prompt, personas,
+                event_queue=event_queue,
+            )
+            return
+
         system_prompt = self._build_report_system_prompt(
             topic, template_type, custom_prompt
         )
@@ -1743,6 +1751,121 @@ JSON:"""
             return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
         else:
             return base
+
+    def _build_data_driven_system_prompt(
+        self, topic: str, custom_prompt: Optional[str] = None
+    ) -> str:
+        """データドリブン分析レポート用 system_prompt を構築"""
+        prompt = (
+            f"あなたは定性調査 × 実データ分析の専門家です。\n"
+            f"議論トピック「{topic}」について、定性インタビューで得られたインサイトを\n"
+            "DWH（データウェアハウス）の実データと照合し、信頼性の高い意思決定・施策実行に\n"
+            "つながるレポートを生成してください。\n\n"
+            "# ツール\n"
+            "ask_data_agent: DWH の業務データに自然言語で問い合わせ可能。\n"
+            "まず利用可能なテーブル一覧を確認し、データ構造を踏まえて適切な質問を組み立ててください。\n"
+            "1回の呼び出しに数十秒かかるため、1回につき1つの質問に絞り、必要に応じて3〜15回程度で段階的に情報を集めてください。\n"
+            "200件を超えるデータは取得できないため、必ず集計・分布・上位N件の形で依頼してください。\n\n"
+            "# 分析の基本構成（カスタムプロンプトがあれば優先）\n"
+            "## 1. インサイト × 実データ照合\n"
+            "主要なインサイトについて以下を明記:\n"
+            "- 定性インサイトの内容と信頼度（元値を引用）\n"
+            "- 実データでの裏付け / 反証 / 追加発見（ask_data_agent の結果を引用）\n"
+            "- 総合判定（✅ 裏付けあり / ⚠️ 要追加調査 / ❌ 反証）\n\n"
+            "## 2. 実データから見えた追加インサイト\n"
+            "定性では見えなかったが実データで顕在化した発見を1〜3件。\n\n"
+            "## 3. 意思決定・施策実行への示唆\n"
+            "- 裏付けあり → すぐ実行可能な施策\n"
+            "- 要追加調査 → 追加で必要なデータや検証方法\n"
+            "- セグメント抽出が依頼された場合は Markdown 内に CSV ブロック（```csv ... ```）で出力し、\n"
+            "  他マーケティングツールへのインプットとして使える形にする\n\n"
+            "# 出力\n"
+            "- Markdown 形式\n"
+            "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
+            "- データ根拠を必ず明示する\n"
+        )
+        if custom_prompt:
+            prompt += f"\n# ユーザーからの追加指示（最優先）\n{custom_prompt}\n"
+        return prompt
+
+    def _generate_data_driven_report_streaming(
+        self,
+        messages: List[Message],
+        insights: List[Dict[str, Any]],
+        topic: str,
+        custom_prompt: Optional[str],
+        personas: Optional[List[Dict[str, Any]]],
+        event_queue: Any = None,
+    ) -> Any:
+        """データドリブン分析レポートを生成する（Strands Agent + データ分析エージェント）。
+
+        event_queue が渡された場合、thinking/tool_call/tool_result イベントを
+        リアルタイムで put し、最終テキストも chunk として put する。
+        event_queue が None の場合は従来通りテキスト chunk を yield する。
+        """
+        if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"})
+                return
+            yield "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"
+            return
+
+        try:
+            from strands import Agent
+            from strands.models import BedrockModel
+            from .data_agent_service import create_data_agent_tool
+        except ImportError as e:
+            msg = f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+                return
+            yield msg
+            return
+
+        system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
+        user_content = "\n".join(
+            part["content"][0]["text"]
+            for part in self._build_report_context(messages, insights, topic, personas)
+        )
+
+        credentials = config.get_aws_credentials()
+        filtered = {k: v for k, v in credentials.items() if v is not None and k != "region_name"}
+
+        def _callback(**kwargs: Any) -> None:
+            """Agent のテキスト出力を event_queue に thinking として送信"""
+            data = kwargs.get("data", "")
+            if data and event_queue is not None:
+                event_queue.put({"type": "thinking", "content": data})
+
+        try:
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+                **filtered,
+            )
+            data_agent_tool = create_data_agent_tool(
+                config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION,
+                event_queue=event_queue,
+            )
+            agent = Agent(
+                model=model,
+                tools=[data_agent_tool],
+                system_prompt=system_prompt,
+                callback_handler=_callback if event_queue is not None else None,
+            )
+            result = agent(user_content)
+
+            # callback_handler 経由で全テキストは既に送信済み。完了通知のみ。
+            if event_queue is not None:
+                event_queue.put({"type": "_done"})
+            else:
+                yield str(result)
+        except Exception as e:
+            msg = f"\n\n⚠️ レポート生成エラー: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+            else:
+                yield msg
 
     # =========================================================================
     # アンケートAI生成（Issue #23）

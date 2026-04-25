@@ -162,7 +162,8 @@ async def generate_persona(
     persona_count: int = Form(1),
     data_description: str = Form(""),
     custom_prompt: str = Form(""),
-    files: list[UploadFile] = File(...),
+    analysis_angle: str = Form(""),
+    files: list[UploadFile] = File(None),
 ) -> Any:
     """統一ペルソナ生成（SSEストリーミング）"""
 
@@ -170,12 +171,93 @@ async def generate_persona(
     if persona_count < 1 or persona_count > 10:
         return _sse_error("ペルソナ数は1-10の範囲で指定してください")
 
-    # ファイル読み込み
+    # DWH（データ分析エージェント連携）の場合
+    if data_type == "dwh":
+        if not analysis_angle or not analysis_angle.strip():
+            return _sse_error("分析の切り口を入力してください")
+
+        logger.info(
+            f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}"
+        )
+
+        import queue as queue_mod
+
+        event_queue: queue_mod.Queue = queue_mod.Queue()
+
+        def _run_dwh_generation() -> tuple[list, list[dict[str, str]]]:
+            pm = get_persona_manager()
+            return pm.generate_personas(
+                file_contents=[],
+                data_type=data_type,
+                persona_count=persona_count,
+                data_description=analysis_angle,
+                custom_prompt=custom_prompt or None,
+                event_queue=event_queue,
+            )
+
+        async def dwh_event_generator() -> Any:
+            yield _sse_event("progress", "データ分析エージェントに問い合わせ中...")
+
+            future = executor.submit(_run_dwh_generation)
+
+            # Agent 実行中: queue からリアルタイムイベントを読み出す
+            while not future.done():
+                try:
+                    evt = event_queue.get(timeout=0.3)
+                    evt_type = evt.get("type", "")
+                    content = evt.get("content", "")
+                    if evt_type == "tool_call":
+                        yield _sse_event("thinking", json.dumps({"type": "tool_call", "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
+                    elif evt_type == "tool_result" and content:
+                        yield _sse_event("thinking", json.dumps({"type": "tool_result", "tool_name": evt.get("tool_name", ""), "content": content}, ensure_ascii=False))
+                    elif evt_type == "thinking" and content:
+                        yield _sse_event("thinking", json.dumps({"type": "thinking", "content": content}, ensure_ascii=False))
+                except queue_mod.Empty:
+                    yield _sse_event("keepalive", "")
+
+            # queue に残っているイベントを flush
+            while not event_queue.empty():
+                try:
+                    evt = event_queue.get_nowait()
+                    evt_type = evt.get("type", "")
+                    content = evt.get("content", "")
+                    if evt_type in ("tool_call", "thinking") and content:
+                        yield _sse_event("thinking", json.dumps({"type": evt_type, "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
+                except queue_mod.Empty:
+                    break
+
+            try:
+                generated_personas, thinking_log = future.result()
+                logger.info(f"{len(generated_personas)}個のDWHペルソナ生成成功")
+
+                for persona in generated_personas:
+                    _temp_personas_cache[persona.id] = persona
+
+                if len(generated_personas) == 1:
+                    html = templates.get_template(
+                        "persona/partials/generated_persona.html"
+                    ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+                else:
+                    html = templates.get_template(
+                        "persona/partials/persona_candidates.html"
+                    ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+
+                yield _sse_event("result", html)
+                yield _sse_event("done", "")
+
+            except Exception:
+                logger.exception("DWH ペルソナ生成エラー")
+                yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。しばらくしてから再試行してください。")
+
+        return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
+
+    # ファイル読み込み（既存フロー）
     file_contents: list[tuple[bytes, str]] = []
-    for f in files:
-        content = await f.read()
-        if content and f.filename:
-            file_contents.append((content, f.filename))
+    if files:
+        for f in files:
+            content = await f.read()
+            if content and f.filename:
+                file_contents.append((content, f.filename))
 
     if not file_contents:
         return _sse_error("ファイルをアップロードしてください")

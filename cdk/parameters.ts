@@ -44,6 +44,10 @@ export interface AppParameter {
   batchInferenceModelId: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
+
+  // データ分析エージェント連携設定
+  dataAgentRuntimeArn?: string;
+  dataAgentRegion?: string;
 }
 
 // 開発環境
@@ -90,6 +94,10 @@ export const devParameter: AppParameter = {
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',
+
+  // データ分析エージェント連携設定（Runtime ARNを設定すると自動で有効化）
+  dataAgentRuntimeArn: '', // 例: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxx'
+  // dataAgentRegion: 'us-east-1', // 省略時はメインスタックのリージョンを使用
 };
 
 // 本番環境
@@ -126,4 +134,7 @@ export const prodParameter: AppParameter = {
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',
+
+  // データ分析エージェント連携設定
+  dataAgentRuntimeArn: '',
 };

@@ -1409,6 +1409,7 @@ JSON配列:"""
     def _extract_thinking_log(agent: Any) -> list[dict[str, str]]:
         """エージェントのメッセージ履歴から思考ログを抽出"""
         log: list[dict[str, str]] = []
+        last_tool_name = ""
         for msg in getattr(agent, "messages", []):
             role = msg.get("role", "")
             for block in msg.get("content", []):
@@ -1419,16 +1420,17 @@ JSON配列:"""
                 elif "toolUse" in block:
                     tool = block["toolUse"]
                     name = tool.get("name", "unknown")
-                    input_str = str(tool.get("input", ""))[:500]
-                    log.append({"type": "tool_call", "content": f"🔧 {name}: {input_str}"})
+                    input_str = str(tool.get("input", ""))[:5000]
+                    last_tool_name = name
+                    log.append({"type": "tool_call", "content": f"{name}: {input_str}"})
                 elif "toolResult" in block:
                     result_content = block["toolResult"].get("content", [])
                     text_parts = []
                     for part in result_content:
                         if isinstance(part, dict) and "text" in part:
-                            text_parts.append(part["text"][:500])
+                            text_parts.append(part["text"])
                     if text_parts:
-                        log.append({"type": "tool_result", "content": "\n".join(text_parts)})
+                        log.append({"type": "tool_result", "tool_name": last_tool_name, "content": "\n".join(text_parts)})
         return log
 
     def create_persona_generation_agent(
@@ -1437,6 +1439,8 @@ JSON配列:"""
         data_description: str | None = None,
         custom_prompt: str | None = None,
         use_mcp: bool = False,
+        callback_handler: Any = None,
+        event_queue: Any = None,
     ) -> Any:
         """
         汎用ペルソナ生成エージェントを作成
@@ -1460,6 +1464,20 @@ JSON配列:"""
             "market_report": "以下は市場調査・分析レポートです。市場セグメント、顧客行動パターン、デモグラフィック情報を分析してペルソナを生成してください。",
             "review": "以下は商品レビュー・口コミデータです。ユーザーの満足点、不満点、利用シーン、期待を分析してペルソナを生成してください。",
             "purchase": "以下は購買データ・トランザクションデータです。購買パターン、嗜好、ライフスタイルを分析してペルソナを生成してください。",
+            "dwh": (
+                "DWH（データウェアハウス）に蓄積された業務データを分析してペルソナを生成します。\n"
+                "ask_data_agent ツールを使って DWH に問い合わせ、定量データに基づいたペルソナを作成してください。\n\n"
+                "# DWH 分析手順\n"
+                "1. まず ask_data_agent で利用可能なテーブル一覧を確認する\n"
+                "2. テーブル構造を踏まえて全体像を把握する質問をする（例: 主要な分布、上位カテゴリ）\n"
+                "3. ユーザーの分析の切り口に沿って深掘りの質問をする\n"
+                "4. 得られた定量データをもとにペルソナを生成する\n"
+                "5. 各ペルソナにデータ根拠を明示する\n\n"
+                "# 注意\n"
+                "- ask_data_agent は 1 回の呼び出しに数十秒かかる場合がある\n"
+                "- 1回の呼び出しには1つの質問に絞り、必要に応じて3〜10回程度で段階的に情報を集める\n"
+                "- 200件を超えるデータは取得できないため、集計クエリを依頼する"
+            ),
         }
 
         base_prompt = DATA_TYPE_PROMPTS.get(data_type)
@@ -1534,6 +1552,17 @@ JSON配列:"""
             )
             tools = []
 
+            if data_type == "dwh":
+                from .data_agent_service import create_data_agent_tool
+
+                if not config.DATA_AGENT_RUNTIME_ARN:
+                    raise AgentInitializationError(
+                        "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                    )
+                data_agent_tool = create_data_agent_tool(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION, event_queue=event_queue)
+                tools.append(data_agent_tool)
+                self.logger.info("データ分析エージェントツール (ask_data_agent) を追加")
+
             if use_mcp:
                 from .mcp_server_manager import get_mcp_manager
 
@@ -1546,12 +1575,16 @@ JSON配列:"""
                         tools.extend(mcp_tools)
                         self.logger.info(f"Added {len(mcp_tools)} MCP tools")
 
-            agent = Agent(
-                name="PersonaGenerator",
-                model=model,
-                system_prompt=system_prompt,
-                tools=tools if tools else None,
-            )
+            agent_kwargs: dict = {
+                "name": "PersonaGenerator",
+                "model": model,
+                "system_prompt": system_prompt,
+                "tools": tools if tools else None,
+            }
+            if callback_handler is not None:
+                agent_kwargs["callback_handler"] = callback_handler
+
+            agent = Agent(**agent_kwargs)
 
             self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})")
             return agent
@@ -1568,6 +1601,8 @@ JSON配列:"""
         custom_prompt: str | None = None,
         use_mcp: bool = False,
         csv_paths: list[str] | None = None,
+        callback_handler: Any = None,
+        event_queue: Any = None,
     ) -> tuple[List[Persona], list[dict[str, str]]]:
         """
         汎用ペルソナ生成（Structured Output使用）
@@ -1605,6 +1640,8 @@ JSON配列:"""
                 data_description=data_description,
                 custom_prompt=custom_prompt,
                 use_mcp=use_mcp,
+                callback_handler=callback_handler,
+                event_queue=event_queue,
             )
 
             prompt = f"""以下のデータを分析し、**{persona_count}個**の異なるペルソナを生成してください。

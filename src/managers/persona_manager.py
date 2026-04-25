@@ -108,16 +108,18 @@ class PersonaManager:
         persona_count: int,
         data_description: str | None = None,
         custom_prompt: str | None = None,
+        event_queue: Any = None,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
         """
         統一ペルソナ生成
 
         Args:
             file_contents: (ファイル内容, ファイル名) のリスト
-            data_type: データ種別 (interview, market_report, review, purchase, other)
+            data_type: データ種別 (interview, market_report, review, purchase, other, dwh)
             persona_count: 生成数 (1-10)
-            data_description: データ説明（data_type="other"時）
+            data_description: データ説明（data_type="other"時）/ 分析の切り口（data_type="dwh"時）
             custom_prompt: カスタムプロンプト
+            event_queue: リアルタイムイベント用 queue（DWH 用）
 
         Returns:
             list[Persona]: 生成されたペルソナリスト
@@ -126,6 +128,15 @@ class PersonaManager:
 
         if persona_count < 1 or persona_count > 10:
             raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
+
+        # DWH（データ分析エージェント連携）の場合はファイル不要
+        if data_type == "dwh":
+            return self._generate_personas_from_dwh(
+                analysis_angle=data_description or "",
+                persona_count=persona_count,
+                custom_prompt=custom_prompt,
+                event_queue=event_queue,
+            )
 
         if not file_contents:
             raise PersonaManagerError("ファイルが選択されていません")
@@ -211,6 +222,64 @@ class PersonaManager:
             raise PersonaManagerError(f"エージェントサービスエラー: {e}")
         except Exception as e:
             raise PersonaManagerError(f"予期しないエラー: {e}")
+
+    def _generate_personas_from_dwh(
+        self,
+        analysis_angle: str,
+        persona_count: int,
+        custom_prompt: str | None = None,
+        event_queue: Any = None,
+    ) -> tuple[list[Persona], list[dict[str, str]]]:
+        """DWH（データ分析エージェント連携）によるペルソナ生成。
+
+        Agent が ask_data_agent ツールで データ分析エージェントに自律的に問い合わせてペルソナを生成する。
+        event_queue が渡された場合、Agent のイベントをリアルタイムで queue に入れる。
+        """
+        from ..services.agent_service import AgentService, AgentServiceError
+
+        if not analysis_angle or not analysis_angle.strip():
+            raise PersonaManagerError("分析の切り口を入力してください")
+
+        self.logger.info(
+            f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count})"
+        )
+
+        # callback_handler: Agent イベントを queue に流す
+        callback_handler = None
+        if event_queue is not None:
+            def _queue_callback(**kwargs: Any) -> None:
+                data = kwargs.get("data", "")
+                complete = kwargs.get("complete", False)
+
+                if data:
+                    event_queue.put({"type": "thinking", "content": data})
+                if complete and data:
+                    event_queue.put({"type": "thinking_done", "content": ""})
+
+            callback_handler = _queue_callback
+
+        try:
+            agent_service = AgentService()
+            data_text = f"分析の切り口: {analysis_angle}"
+            personas, thinking_log = agent_service.generate_personas_with_agent(
+                data_text=data_text,
+                data_type="dwh",
+                persona_count=persona_count,
+                custom_prompt=custom_prompt,
+                callback_handler=callback_handler,
+                event_queue=event_queue,
+            )
+
+            for persona in personas:
+                self._validate_generated_persona(persona)
+
+            self.logger.info(f"DWH ペルソナ生成完了: {len(personas)}個")
+            return personas, thinking_log
+
+        except AgentServiceError as e:
+            raise PersonaManagerError(f"データ分析エージェント連携エラー: {e}")
+        except Exception as e:
+            raise PersonaManagerError(f"DWH ペルソナ生成エラー: {e}")
 
     def save_persona(self, persona: Persona) -> str:
         """

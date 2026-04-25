@@ -77,6 +77,8 @@ export class AIPersonaStack extends Stack {
       batchInferenceModelId: parameter.batchInferenceModelId,
       surveyS3Prefix: parameter.surveyS3Prefix,
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
+      dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
+      dataAgentRegion: parameter.dataAgentRegion,
       imageTag,
     });
 
@@ -119,5 +121,8 @@ export class AIPersonaStack extends Stack {
       value: bedrockBatchRole.role.roleArn,
       exportName: `${id}-BedrockBatchRoleArn`,
     });
+    if (parameter.dataAgentRuntimeArn) {
+      new CfnOutput(this, 'DataAgentRuntimeArn', { value: parameter.dataAgentRuntimeArn });
+    }
   }
 }

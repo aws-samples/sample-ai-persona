@@ -27,6 +27,8 @@ export interface ExpressServiceProps {
   imageTag?: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
+  dataAgentRuntimeArn?: string;
+  dataAgentRegion?: string;
 }
 
 export class ExpressService extends Construct {
@@ -101,6 +103,12 @@ export class ExpressService extends Construct {
         resources: ['*'],
       }));
     }
+    if (props.dataAgentRuntimeArn) {
+      taskRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+        resources: [props.dataAgentRuntimeArn, `${props.dataAgentRuntimeArn}/*`],
+      }));
+    }
 
     // Infrastructure Role
     const infrastructureRole = new iam.Role(this, 'InfrastructureRole', {
@@ -131,6 +139,14 @@ export class ExpressService extends Construct {
     }
     if (summaryMemoryStrategyId) environment.push({ name: 'SUMMARY_MEMORY_STRATEGY_ID', value: summaryMemoryStrategyId });
     if (semanticMemoryStrategyId) environment.push({ name: 'SEMANTIC_MEMORY_STRATEGY_ID', value: semanticMemoryStrategyId });
+
+    // データ分析エージェント連携
+    const { dataAgentRuntimeArn, dataAgentRegion } = props;
+    if (dataAgentRuntimeArn) {
+      environment.push({ name: 'ENABLE_DATA_AGENT', value: 'true' });
+      environment.push({ name: 'DATA_AGENT_RUNTIME_ARN', value: dataAgentRuntimeArn });
+      environment.push({ name: 'DATA_AGENT_REGION', value: dataAgentRegion ?? awsRegion });
+    }
 
     // ECS Cluster
     const cluster = new ecs.Cluster(this, 'Cluster', {

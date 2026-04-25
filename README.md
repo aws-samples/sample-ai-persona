@@ -8,7 +8,8 @@
 ## セットアップ
 ### AWS 上へのデプロイ
 
-[AWS CDK を利用したデプロイ手順](./cdk/README.md)を参照ください。
+- [AWS CDK を利用したデプロイ手順](./cdk/README.md)
+- [AWS Generative AI Solution Box からのワンクリックデプロイ](https://aws-samples.github.io/sample-one-click-generative-ai-solutions/solutions/ai-persona/)
 
 ### ローカル環境でのアプリケーション起動
 #### 前提条件
@@ -137,12 +138,21 @@ tests/
 
 </details>
 
+## 他ソリューションとの連携オプション
+
+AI ペルソナシステムは、他の AWS ソリューションと連携することで機能を拡張できます。
+
+| 連携先 | 概要 | 詳細 |
+|--------|------|------|
+| [sample-text2sql-agent](https://github.com/aws-samples/sample-text2sql-agent) | 自社の業務知識を持ったデータ分析エージェントと連携し、多様な業務データに基づいたペルソナ生成やディスカッションレポートの作成が可能に | [連携ガイド](docs/data_agent_integration.md) |
+
 ## ドキュメント
 
 | 対象 | ドキュメント |
 |------|------------|
 | ユーザー向け | [ユーザーガイド](docs/user_guide.md)  |
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
+| 共通 | [データ分析エージェント連携ガイド](docs/data_agent_integration.md) |
 
 ## トラブルシューティング
 
