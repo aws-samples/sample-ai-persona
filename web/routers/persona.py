@@ -6,6 +6,7 @@ import logging
 import asyncio
 import json
 import re
+from datetime import datetime
 from typing import Any, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -230,7 +231,17 @@ async def generate_persona(
                 generated_personas, thinking_log = future.result()
                 logger.info(f"{len(generated_personas)}個のDWHペルソナ生成成功")
 
+                gen_ctx = {
+                    "data_type": "dwh",
+                    "data_description": analysis_angle,
+                    "custom_prompt": custom_prompt or None,
+                    "source_files": [],
+                    "persona_count": persona_count,
+                    "generated_at": datetime.now().isoformat(),
+                }
                 for persona in generated_personas:
+                    persona.generation_log = thinking_log
+                    persona.generation_context = gen_ctx
                     _temp_personas_cache[persona.id] = persona
 
                 if len(generated_personas) == 1:
@@ -289,7 +300,18 @@ async def generate_persona(
 
             logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
+            source_files = [fn for _, fn in file_contents]
+            gen_ctx = {
+                "data_type": data_type,
+                "data_description": data_description or None,
+                "custom_prompt": custom_prompt or None,
+                "source_files": source_files,
+                "persona_count": persona_count,
+                "generated_at": datetime.now().isoformat(),
+            }
             for persona in generated_personas:
+                persona.generation_log = thinking_log
+                persona.generation_context = gen_ctx
                 _temp_personas_cache[persona.id] = persona
 
             # 思考ログを送信
