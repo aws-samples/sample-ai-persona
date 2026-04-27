@@ -1430,7 +1430,7 @@ JSON配列:"""
                         if isinstance(part, dict) and "text" in part:
                             text_parts.append(part["text"])
                     if text_parts:
-                        log.append({"type": "tool_result", "tool_name": last_tool_name, "content": "\n".join(text_parts)})
+                        log.append({"type": "tool_result", "tool_name": last_tool_name, "content": "\n".join(text_parts)[:10000]})
         return log
 
     def create_persona_generation_agent(

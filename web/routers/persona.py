@@ -231,7 +231,7 @@ async def generate_persona(
                 generated_personas, thinking_log = future.result()
                 logger.info(f"{len(generated_personas)}個のDWHペルソナ生成成功")
 
-                gen_ctx = {
+                gen_ctx: dict[str, Any] = {
                     "data_type": "dwh",
                     "data_description": analysis_angle,
                     "custom_prompt": custom_prompt or None,
@@ -301,7 +301,7 @@ async def generate_persona(
             logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
             source_files = [fn for _, fn in file_contents]
-            gen_ctx = {
+            gen_ctx: dict[str, Any] = {
                 "data_type": data_type,
                 "data_description": data_description or None,
                 "custom_prompt": custom_prompt or None,

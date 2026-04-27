@@ -6,75 +6,100 @@
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
         </svg>
-        分析・評価ログ
+        生成ログ・評価
     </button>
 
     <!-- モーダル -->
-    <div x-show="showGenLog" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto">
+    <div x-show="showGenLog" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
         <div class="fixed inset-0 bg-black/50" @click="showGenLog = false"></div>
-        <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col">
-            <!-- ヘッダー -->
-            <div class="flex items-center justify-between mb-4">
-                <h3 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                    <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-                    </svg>
-                    {{ persona.name }} — 生成 分析・評価ログ
-                </h3>
-                <button @click="showGenLog = false" class="text-gray-400 hover:text-gray-600">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
+        <div class="flex min-h-full items-start justify-center py-8 px-4">
+            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full">
+                <!-- ヘッダー -->
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+                        </svg>
+                        {{ persona.name }} — 生成ログ・評価
+                    </h3>
+                    <button @click="showGenLog = false" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
 
-            <div class="overflow-y-auto flex-1 space-y-4">
-                <!-- 生成コンテキスト -->
+                <!-- ペルソナ生成インプットデータ -->
                 {% if persona.generation_context %}
                 {% set ctx = persona.generation_context %}
-                <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                    <h4 class="text-sm font-semibold text-gray-700 mb-3">生成入力情報</h4>
-                    <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                        <dt class="text-gray-500">データソース</dt>
-                        <dd>
-                            {% set dt_labels = {"interview": "インタビュー", "market_report": "市場調査レポート", "review": "レビュー・口コミ", "purchase": "購買データ", "other": "その他", "dwh": "DWH（データ分析エージェント）"} %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">{{ dt_labels.get(ctx.data_type, ctx.data_type) }}</span>
-                        </dd>
+                <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>
+                        ペルソナ生成インプットデータ
+                    </h4>
+                    {% set dt_labels = {"interview": "インタビュー", "market_report": "市場調査レポート", "review": "レビュー・口コミ", "purchase": "購買データ", "other": "その他", "dwh": "DWH（データ分析エージェント）"} %}
+                    <div class="grid md:grid-cols-3 gap-4">
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">データソース</p>
+                            <p class="font-semibold text-gray-900">{{ dt_labels.get(ctx.data_type, ctx.data_type) }}</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">生成数</p>
+                            <p class="font-semibold text-gray-900">{{ ctx.persona_count }}体</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">生成日時</p>
+                            <p class="font-semibold text-gray-900">{{ ctx.generated_at[:19] | replace("T", " ") }}</p>
+                        </div>
+                    </div>
+                    {% if ctx.source_files or ctx.data_description or ctx.custom_prompt %}
+                    <div class="mt-4 space-y-3">
                         {% if ctx.source_files %}
-                        <dt class="text-gray-500">入力ファイル</dt>
-                        <dd>{% for f in ctx.source_files %}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-200 text-gray-700 mr-1">{{ f }}</span>{% endfor %}</dd>
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">入力ファイル名</p>
+                            <div class="flex flex-wrap gap-2">
+                                {% for f in ctx.source_files %}
+                                <span class="inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium bg-blue-50 text-blue-700">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg>
+                                    {{ f }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </div>
                         {% endif %}
                         {% if ctx.data_description %}
-                        <dt class="text-gray-500">分析の切り口</dt>
-                        <dd class="text-gray-700">{{ ctx.data_description }}</dd>
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">分析の切り口</p>
+                            <p class="font-semibold text-gray-900">{{ ctx.data_description }}</p>
+                        </div>
                         {% endif %}
                         {% if ctx.custom_prompt %}
-                        <dt class="text-gray-500">指示プロンプト</dt>
-                        <dd class="text-gray-700 whitespace-pre-wrap bg-white rounded p-2 border border-gray-100">{{ ctx.custom_prompt }}</dd>
+                        <div class="bg-gray-50 rounded-md p-4">
+                            <p class="text-sm text-gray-500 mb-1">指示プロンプト</p>
+                            <p class="text-gray-700 whitespace-pre-wrap">{{ ctx.custom_prompt }}</p>
+                        </div>
                         {% endif %}
-                        <dt class="text-gray-500">生成数</dt>
-                        <dd class="text-gray-700">{{ ctx.persona_count }}体</dd>
-                        {% if ctx.generated_at %}
-                        <dt class="text-gray-500">生成日時</dt>
-                        <dd class="text-gray-700">{{ ctx.generated_at[:19] | replace("T", " ") }}</dd>
-                        {% endif %}
-                    </dl>
+                    </div>
+                    {% endif %}
                 </div>
                 {% endif %}
 
-                <!-- 分析ログ -->
+                <!-- AI 分析・評価過程 -->
                 {% if persona.generation_log %}
-                <div>
-                    <h4 class="text-sm font-semibold text-gray-700 mb-2">AI 分析・評価過程</h4>
-                    <div class="space-y-2 max-h-[50vh] overflow-y-auto">
+                <div class="bg-white rounded-lg border border-gray-200 p-6">
+                    <h4 class="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" /></svg>
+                        AI 分析・評価過程
+                    </h4>
+                    <div class="space-y-2">
                         {% for entry in persona.generation_log %}
                         {% if entry.type == "thinking" %}
-                        <div class="text-sm text-gray-700 bg-gray-50 rounded p-3 prose prose-sm max-w-none">{{ entry.content | markdown | safe }}</div>
+                        <div class="text-sm text-gray-700 bg-gray-50 rounded-md p-4 prose prose-sm max-w-none">{{ entry.content | markdown | safe }}</div>
                         {% elif entry.type == "tool_call" %}
-                        <div class="text-xs text-blue-700 bg-blue-50 rounded p-2 font-mono flex items-center gap-1">
+                        <div class="text-xs text-blue-700 bg-blue-50 rounded-md p-3 font-mono flex items-center gap-1">
                             <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.336l-3.276 3.277a3.004 3.004 0 0 1-2.25-2.25l3.276-3.276a4.5 4.5 0 0 0-6.336 4.486c.049.58.025 1.193-.14 1.743" /></svg>
                             {{ entry.content }}
                         </div>
                         {% elif entry.type == "tool_result" %}
-                        <details class="text-xs bg-green-50 rounded p-2 border border-green-200">
+                        <details class="text-xs bg-green-50 rounded-md p-3 border border-green-200">
                             <summary class="cursor-pointer text-green-700 font-semibold hover:text-green-900 flex items-center gap-1">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg>
                                 {% if entry.tool_name == 'ask_data_agent' %}データ分析エージェント 分析結果を表示{% else %}分析結果を表示{% endif %}
