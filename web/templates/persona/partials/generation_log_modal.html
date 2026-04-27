@@ -10,7 +10,7 @@
     </button>
 
     <!-- モーダル -->
-    <div x-show="showGenLog" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div x-show="showGenLog" x-cloak class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto">
         <div class="fixed inset-0 bg-black/50" @click="showGenLog = false"></div>
         <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col">
             <!-- ヘッダー -->
