@@ -2,7 +2,9 @@
 Persona data model for the AI Persona System.
 """
 
-from dataclasses import dataclass, asdict
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import List, Dict, Any
 import json
@@ -25,6 +27,8 @@ class Persona:
     goals: List[str]
     created_at: datetime
     updated_at: datetime
+    generation_log: list[dict[str, str]] | None = field(default=None)
+    generation_context: dict[str, Any] | None = field(default=None)
 
     @classmethod
     def create_new(
@@ -85,9 +89,12 @@ class Persona:
         Convert Persona to dictionary for serialization.
         """
         data = asdict(self)
-        # Convert datetime objects to ISO format strings
         data["created_at"] = self.created_at.isoformat()
         data["updated_at"] = self.updated_at.isoformat()
+        # Omit None optional fields to save DynamoDB capacity
+        for key in ("generation_log", "generation_context"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
     @classmethod

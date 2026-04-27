@@ -19,6 +19,7 @@
             <p class="text-gray-600">{{ persona.occupation }} / {{ persona.age }}歳</p>
         </div>
         <div class="flex gap-2">
+            {% include "persona/partials/generation_log_modal.html" %}
             <button hx-get="/persona/{{ persona.id }}/edit"
                     hx-target="#persona-detail-container"
                     hx-swap="innerHTML"

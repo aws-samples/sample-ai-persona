@@ -1,6 +1,6 @@
 [project]
 name = "ai-persona-system"
-version = "0.7.0"
+version = "0.8.0"
 description = "AIペルソナシステム - インタビューからペルソナを生成し、議論を通じてインサイトを生成"
 authors = [
     {name = "AI Persona Team"}
