@@ -402,6 +402,12 @@ class DatabaseService:
             "type": "persona",  # For GSI queries
         }
 
+        # Optional fields
+        if persona.generation_log is not None:
+            persona_dict["generation_log"] = persona.generation_log
+        if persona.generation_context is not None:
+            persona_dict["generation_context"] = persona.generation_context
+
         # Use boto3 TypeSerializer to convert to DynamoDB format
         serialized = {}
         for key, value in persona_dict.items():
@@ -567,6 +573,8 @@ class DatabaseService:
             goals=deserialized["goals"],
             created_at=created_at,
             updated_at=updated_at,
+            generation_log=deserialized.get("generation_log"),
+            generation_context=deserialized.get("generation_context"),
         )
 
     def _deserialize_discussion(self, item: Dict[str, Any]) -> Discussion:
