@@ -392,6 +392,12 @@ async def save_persona(
             goals=[g.strip() for g in goals.split("\n") if g.strip()],
         )
 
+        # キャッシュから生成ログを引き継ぐ
+        cached = _temp_personas_cache.pop(persona_id, None)
+        if cached:
+            persona.generation_log = cached.generation_log
+            persona.generation_context = cached.generation_context
+
         persona_manager.save_persona(persona)
 
         return templates.TemplateResponse(
