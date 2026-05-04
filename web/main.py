@@ -82,5 +82,5 @@ async def index(request: Request) -> Any:
 @app.get("/health")
 async def health_check() -> Any:
     """ヘルスチェック"""
-    return {"status": "healthy", "version": "0.8.0"}
+    return {"status": "healthy", "version": "0.9.0"}
 
