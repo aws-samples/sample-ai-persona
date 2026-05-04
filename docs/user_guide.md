@@ -485,7 +485,7 @@ AIペルソナシステムは、インタビューデータや調査レポート
 <details>
 <summary>Q: どのAIモデルが使用されている？</summary>
 
-Amazon Bedrock上のClaude Sonnet 4.5（メイン）およびClaude Haiku 4.5（エージェント・バッチ推論）を使用しています。
+Amazon Bedrock上のClaude Sonnet 4.6（メイン）およびClaude Haiku 4.5（エージェント・バッチ推論）を使用しています。
 </details>
 
 <details>

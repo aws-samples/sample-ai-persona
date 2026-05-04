@@ -87,7 +87,7 @@ export const devParameter: AppParameter = {
   semanticMemoryStrategyId: '', // 例: 'semantic-XYZ1234abc' - TODO: デプロイ後に設定
   agentCoreMemoryEventExpiryDays: 30,
   
-  bedrockModelId: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  bedrockModelId: 'global.anthropic.claude-sonnet-4-6',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   
   // マスアンケート機能設定
@@ -127,7 +127,7 @@ export const prodParameter: AppParameter = {
   semanticMemoryStrategyId: '', // 例: 'semantic-DEF5678xyz'
   agentCoreMemoryEventExpiryDays: 90,
   
-  bedrockModelId: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  bedrockModelId: 'global.anthropic.claude-sonnet-4-6',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   
   // マスアンケート機能設定

@@ -13,7 +13,7 @@ inclusion: always
 - **Tailwind CSS** - CSS framework
 - **Alpine.js** - Lightweight JavaScript framework
 - **Amazon DynamoDB** - NoSQL database for data persistence
-- **Amazon Bedrock (Claude Sonnet 4.5 / Claude Haiku 4.5)** - AI service (Batch Inference support)
+- **Amazon Bedrock (Claude Sonnet 4.6 / Claude Haiku 4.5)** - AI service (Batch Inference support)
 - **Strands Agent SDK** - AI Agent Framework
 - **Amazon Bedrock AgentCore Memory** - Persona long-term memory (optional)
 - **DuckDB** - Fast SQL queries on S3 Parquet files (mass survey)
