@@ -21,7 +21,7 @@ inclusion: always
 #### Generating from Interview Data
 - Upload N1 interview text files (loyal customer interviews)
 - Supported formats: `.txt`, `.md`
-- Generate AI personas using Amazon Bedrock Claude Sonnet 4.5
+- Generate AI personas using Amazon Bedrock Claude Sonnet 4.6
 - Display generated personas with edit and save capabilities
 - Store personas in DynamoDB database for reuse
 

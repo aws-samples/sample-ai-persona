@@ -1677,7 +1677,10 @@ JSON配列:"""
             thinking_log = self._extract_thinking_log(agent)
 
             # Structured Outputで型安全に取得
-            result = agent.structured_output(PersonaListOutput)
+            result = agent.structured_output(
+                PersonaListOutput,
+                "上記の分析結果に基づいて、生成したペルソナをJSON形式で出力してください。",
+            )
 
             personas = []
             for p in result.personas:

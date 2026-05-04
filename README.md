@@ -74,7 +74,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 | カテゴリ | 技術 |
 |---------|------|
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
-| AI | Amazon Bedrock (Claude Sonnet 4.5 / Haiku 4.5), Strands Agent SDK |
+| AI | Amazon Bedrock (Claude Sonnet 4.6 / Haiku 4.5), Strands Agent SDK |
 | データ | DynamoDB, DuckDB, Polars, S3 |
 | インフラ | AWS CDK (TypeScript), ECS Express Mode, CloudFront, Lambda@Edge, WAF, ECR, Cognito |
 | リアルタイム | Server-Sent Events (SSE) |

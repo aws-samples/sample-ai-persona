@@ -28,7 +28,7 @@ class Config:
 
     # AWS Bedrock設定
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-4-6"
 
     # アプリケーション設定
     APP_TITLE: str = "AIペルソナシステム"

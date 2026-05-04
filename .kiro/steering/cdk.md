@@ -56,7 +56,7 @@ ECR → AgentCoreMemory → Cognito → AIPersona (メイン) → callbackUrl更
 | summaryMemoryStrategyId | Summary Strategy ID（デプロイ後にCLIで取得して設定） |
 | semanticMemoryStrategyId | Semantic Strategy ID（デプロイ後にCLIで取得して設定） |
 | agentCoreMemoryEventExpiryDays | メモリイベント有効期限（日数、dev: 30, prod: 90） |
-| bedrockModelId | メインモデルID（Claude Sonnet 4.5） |
+| bedrockModelId | メインモデルID（Claude Sonnet 4.6） |
 | agentModelId | エージェントモデルID（Claude Haiku 4.5） |
 | batchInferenceModelId | バッチ推論モデルID（Claude Haiku 4.5） |
 | surveyS3Prefix | アンケート結果S3プレフィックス |
