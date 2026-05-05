@@ -77,12 +77,14 @@ export class McpGatewayStack extends Stack {
     }), {
       authorizationType: apigateway.AuthorizationType.IAM,
       requestParameters: { 'method.request.path.proxy': true },
+      methodResponses: [{ statusCode: '200' }],
     });
 
     // /api/personas
     const personasResource = apiResource.addResource('personas');
     const personasMethod = personasResource.addMethod('GET', createAlbIntegration('GET', '/api/personas'), {
       authorizationType: apigateway.AuthorizationType.IAM,
+      methodResponses: [{ statusCode: '200' }],
     });
 
     // /api/personas/{persona_id}
@@ -92,12 +94,14 @@ export class McpGatewayStack extends Stack {
     }), {
       authorizationType: apigateway.AuthorizationType.IAM,
       requestParameters: { 'method.request.path.persona_id': true },
+      methodResponses: [{ statusCode: '200' }],
     });
 
     // /api/discussions
     const discussionsResource = apiResource.addResource('discussions');
     const discussionsMethod = discussionsResource.addMethod('GET', createAlbIntegration('GET', '/api/discussions'), {
       authorizationType: apigateway.AuthorizationType.IAM,
+      methodResponses: [{ statusCode: '200' }],
     });
 
     // L1 escape hatch: IntegrationTarget（ALB ARN）を設定
