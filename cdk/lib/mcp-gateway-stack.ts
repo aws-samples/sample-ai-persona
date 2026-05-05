@@ -49,6 +49,61 @@ export class McpGatewayStack extends Stack {
       deployOptions: { stageName: 'v1' },
     });
 
+    // リクエストボディモデル（Gateway がボディを転送するために必要）
+    const generatePersonasModel = api.addModel('GeneratePersonasModel', {
+      contentType: 'application/json',
+      modelName: 'GeneratePersonasRequest',
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        properties: {
+          data_type: { type: apigateway.JsonSchemaType.STRING, description: 'データ種別: interview, market_report, review, purchase, other' },
+          file_contents: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'テキストデータのリスト' },
+          count: { type: apigateway.JsonSchemaType.INTEGER, description: '生成するペルソナ数 (1-10)' },
+          description: { type: apigateway.JsonSchemaType.STRING, description: 'データの説明' },
+          custom_prompt: { type: apigateway.JsonSchemaType.STRING, description: 'カスタムプロンプト' },
+        },
+        required: ['data_type'],
+      },
+    });
+
+    const runDiscussionModel = api.addModel('RunDiscussionModel', {
+      contentType: 'application/json',
+      modelName: 'RunDiscussionRequest',
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        properties: {
+          persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: '参加ペルソナIDリスト（2名以上）' },
+          topic: { type: apigateway.JsonSchemaType.STRING, description: '議論トピック' },
+          mode: { type: apigateway.JsonSchemaType.STRING, description: '議論モード: classic または agent' },
+        },
+        required: ['persona_ids', 'topic'],
+      },
+    });
+
+    const generateInsightsModel = api.addModel('GenerateInsightsModel', {
+      contentType: 'application/json',
+      modelName: 'GenerateInsightsRequest',
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        properties: {
+          categories: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.OBJECT }, description: 'カスタムインサイトカテゴリ' },
+        },
+      },
+    });
+
+    const runInterviewModel = api.addModel('RunInterviewModel', {
+      contentType: 'application/json',
+      modelName: 'RunInterviewRequest',
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        properties: {
+          persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: '参加ペルソナIDリスト（1-5名）' },
+          question: { type: apigateway.JsonSchemaType.STRING, description: '質問内容' },
+        },
+        required: ['persona_ids', 'question'],
+      },
+    });
+
     // ヘルパー: VPC Link V2 + ALB の Private Integration を作成
     const vpcLinkId = vpcLinkV2.ref;
 
@@ -76,6 +131,7 @@ export class McpGatewayStack extends Stack {
       authorizationType: apigateway.AuthorizationType.IAM,
       methodResponses: [{ statusCode: '200' }, { statusCode: '202' }],
       operationName: 'generatePersonas',
+      requestModels: { 'application/json': generatePersonasModel },
     });
 
     // /api/mcp/discussions (POST)
@@ -84,6 +140,7 @@ export class McpGatewayStack extends Stack {
       authorizationType: apigateway.AuthorizationType.IAM,
       methodResponses: [{ statusCode: '202' }],
       operationName: 'runDiscussion',
+      requestModels: { 'application/json': runDiscussionModel },
     });
 
     // /api/mcp/discussions/{discussion_id} (GET)
@@ -106,6 +163,7 @@ export class McpGatewayStack extends Stack {
       requestParameters: { 'method.request.path.discussion_id': true },
       methodResponses: [{ statusCode: '200' }],
       operationName: 'generateInsights',
+      requestModels: { 'application/json': generateInsightsModel },
     });
 
     // /api/mcp/interviews (POST)
@@ -114,6 +172,7 @@ export class McpGatewayStack extends Stack {
       authorizationType: apigateway.AuthorizationType.IAM,
       methodResponses: [{ statusCode: '200' }],
       operationName: 'runInterview',
+      requestModels: { 'application/json': runInterviewModel },
     });
 
     // /api/mcp/jobs/{job_id} (GET)
