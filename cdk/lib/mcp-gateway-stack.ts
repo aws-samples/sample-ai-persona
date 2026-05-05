@@ -223,10 +223,19 @@ export class McpGatewayStack extends Stack {
     // AgentCore Gateway（Cognito M2M 認証 + MCP プロトコル）
     const gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `ai-persona-mcp-${parameter.envName}`,
-      description: 'AI Persona MCP Gateway',
+      description: 'AI Persona research toolkit for generating personas, running discussions, and extracting insights',
       protocolConfiguration: new agentcore.McpProtocolConfiguration({
-        instructions:
-          'AIペルソナシステムのMCPツール。ペルソナ生成、議論シミュレーション、インサイト生成が可能です。',
+        instructions: [
+          'This gateway provides AI persona research tools for product planning and marketing strategy.',
+          'Use these tools when you need to: (1) generate realistic customer personas from interview data or reports,',
+          '(2) simulate multi-persona discussions on a topic to surface diverse viewpoints,',
+          '(3) extract structured insights (customer needs, market opportunities, product ideas) from discussions,',
+          '(4) conduct quick Q&A interviews with existing personas.',
+          '',
+          'Typical workflow: listPersonas -> runDiscussion (async, poll getJobStatus) -> getDiscussion.',
+          'For new personas: generatePersonas (async, poll getJobStatus) -> listPersonas.',
+          'For quick answers: listPersonas -> runInterview.',
+        ].join(' '),
         searchType: agentcore.McpGatewaySearchType.SEMANTIC,
       }),
     });
