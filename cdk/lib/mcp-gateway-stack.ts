@@ -247,6 +247,69 @@ export class McpGatewayStack extends Stack {
       },
     });
 
+    // --- API Documentation (used as MCP tool descriptions) ---
+    const docs: Array<{ path: string; method: string; summary: string; description: string }> = [
+      {
+        path: '/api/mcp/personas/generate', method: 'POST',
+        summary: 'Generate AI personas from text data (async)',
+        description: 'Generate AI personas from interview transcripts, market reports, or other text data. Returns a job_id immediately. Poll getJobStatus with the job_id to check progress and retrieve results.',
+      },
+      {
+        path: '/api/mcp/discussions', method: 'POST',
+        summary: 'Run a discussion between personas (async)',
+        description: 'Start a simulated discussion between specified personas on a given topic. Supports "classic" (fast, 1-3 min) and "agent" (deep, 5-15 min) modes. Returns a job_id. Poll getJobStatus to get the full discussion with messages and insights.',
+      },
+      {
+        path: '/api/mcp/discussions/{discussion_id}', method: 'GET',
+        summary: 'Get discussion details with messages and insights',
+        description: 'Retrieve a saved discussion including all messages exchanged between personas and generated insights with confidence scores.',
+      },
+      {
+        path: '/api/mcp/discussions/{discussion_id}/insights', method: 'POST',
+        summary: 'Generate insights from a discussion',
+        description: 'Analyze a saved discussion and generate structured insights categorized by customer needs, market opportunities, product development, and marketing. Optionally provide custom categories.',
+      },
+      {
+        path: '/api/mcp/interviews', method: 'POST',
+        summary: 'Interview personas with a question',
+        description: 'Send a question to one or more personas (1-5) and receive their responses. Each persona answers based on their background, values, and pain points. Useful for quick Q&A without running a full discussion.',
+      },
+      {
+        path: '/api/mcp/jobs/{job_id}', method: 'GET',
+        summary: 'Check async job status and results',
+        description: 'Check the status of an async job (generatePersonas or runDiscussion). Status values: "pending", "running", "completed", "failed". When completed, the result field contains the full output.',
+      },
+      {
+        path: '/api/personas', method: 'GET',
+        summary: 'List all saved personas',
+        description: 'Retrieve a list of all saved AI personas with their demographics, values, pain points, and goals. Use persona IDs from this list for discussions and interviews.',
+      },
+      {
+        path: '/api/personas/{persona_id}', method: 'GET',
+        summary: 'Get persona details by ID',
+        description: 'Retrieve detailed information about a specific persona including background, values, pain points, and goals.',
+      },
+      {
+        path: '/api/discussions', method: 'GET',
+        summary: 'List all saved discussions',
+        description: 'Retrieve a list of all saved discussions with their topics, modes, and creation dates. Use discussion IDs from this list to get full details or generate insights.',
+      },
+    ];
+
+    for (const doc of docs) {
+      new apigateway.CfnDocumentationPart(this, `Doc-${doc.method}-${doc.path.replace(/[/{}]/g, '-')}`, {
+        restApiId: api.restApiId,
+        location: { type: 'METHOD', path: doc.path, method: doc.method },
+        properties: JSON.stringify({ summary: doc.summary, description: doc.description }),
+      });
+    }
+
+    // Documentation version (required for export to include docs)
+    new apigateway.CfnDocumentationVersion(this, 'DocVersion', {
+      restApiId: api.restApiId,
+      documentationVersion: 'v1',
+    });
+
     // --- Outputs ---
     new CfnOutput(this, 'GatewayId', {
       value: gateway.gatewayId,
