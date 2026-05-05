@@ -6,6 +6,131 @@ import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppParameter } from '../parameters';
 
+// ---------------------------------------------------------------------------
+// Endpoint definitions (single source of truth)
+// ---------------------------------------------------------------------------
+
+interface EndpointDef {
+  /** Path segments under /api/ (e.g. 'personas/generate') */
+  path: string;
+  method: 'GET' | 'POST';
+  operationName: string;
+  summary: string;
+  description: string;
+  /** Path parameters (e.g. ['discussion_id']) */
+  pathParams?: string[];
+  /** Request body JSON schema (POST only) */
+  requestSchema?: apigateway.JsonSchema;
+}
+
+const ENDPOINTS: EndpointDef[] = [
+  {
+    path: 'personas',
+    method: 'GET',
+    operationName: 'listPersonas',
+    summary: 'List all saved personas',
+    description: 'Retrieve a list of all saved AI personas with their demographics, values, pain points, and goals. Use persona IDs from this list for discussions and interviews.',
+  },
+  {
+    path: 'personas/{persona_id}',
+    method: 'GET',
+    operationName: 'getPersona',
+    summary: 'Get persona details by ID',
+    description: 'Retrieve detailed information about a specific persona including background, values, pain points, and goals.',
+    pathParams: ['persona_id'],
+  },
+  {
+    path: 'personas/generate',
+    method: 'POST',
+    operationName: 'generatePersonas',
+    summary: 'Generate AI personas from text data (async)',
+    description: 'Generate AI personas from interview transcripts, market reports, or other text data. Returns a job_id immediately. Poll getJobStatus with the job_id to check progress and retrieve results.',
+    requestSchema: {
+      type: apigateway.JsonSchemaType.OBJECT,
+      properties: {
+        data_type: { type: apigateway.JsonSchemaType.STRING, description: 'Data type: interview, market_report, review, purchase, other' },
+        file_contents: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'List of text data (each element represents file content)' },
+        count: { type: apigateway.JsonSchemaType.INTEGER, description: 'Number of personas to generate (1-10)' },
+        description: { type: apigateway.JsonSchemaType.STRING, description: 'Data description (used when data_type=other)' },
+        custom_prompt: { type: apigateway.JsonSchemaType.STRING, description: 'Custom prompt for generation' },
+      },
+      required: ['data_type'],
+    },
+  },
+  {
+    path: 'discussions',
+    method: 'GET',
+    operationName: 'listDiscussions',
+    summary: 'List all saved discussions',
+    description: 'Retrieve a list of all saved discussions with their topics, modes, and creation dates. Use discussion IDs from this list to get full details or generate insights.',
+  },
+  {
+    path: 'discussions',
+    method: 'POST',
+    operationName: 'runDiscussion',
+    summary: 'Run a discussion between personas (async)',
+    description: 'Start a simulated discussion between specified personas on a given topic. Supports "classic" (fast, 1-3 min) and "agent" (deep, 5-15 min) modes. Returns a job_id. Poll getJobStatus to get the full discussion with messages and insights.',
+    requestSchema: {
+      type: apigateway.JsonSchemaType.OBJECT,
+      properties: {
+        persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'Persona ID list (2 or more)' },
+        topic: { type: apigateway.JsonSchemaType.STRING, description: 'Discussion topic' },
+        mode: { type: apigateway.JsonSchemaType.STRING, description: 'Discussion mode: classic or agent' },
+      },
+      required: ['persona_ids', 'topic'],
+    },
+  },
+  {
+    path: 'discussions/{discussion_id}',
+    method: 'GET',
+    operationName: 'getDiscussion',
+    summary: 'Get discussion details with messages and insights',
+    description: 'Retrieve a saved discussion including all messages exchanged between personas and generated insights with confidence scores.',
+    pathParams: ['discussion_id'],
+  },
+  {
+    path: 'discussions/{discussion_id}/insights',
+    method: 'POST',
+    operationName: 'generateInsights',
+    summary: 'Generate insights from a discussion',
+    description: 'Analyze a saved discussion and generate structured insights categorized by customer needs, market opportunities, product development, and marketing. Optionally provide custom categories.',
+    pathParams: ['discussion_id'],
+    requestSchema: {
+      type: apigateway.JsonSchemaType.OBJECT,
+      properties: {
+        categories: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.OBJECT }, description: 'Custom insight categories [{name, description}, ...]' },
+      },
+    },
+  },
+  {
+    path: 'interviews',
+    method: 'POST',
+    operationName: 'runInterview',
+    summary: 'Interview personas with a question',
+    description: 'Send a question to one or more personas (1-5) and receive their responses. Each persona answers based on their background, values, and pain points. Useful for quick Q&A without running a full discussion.',
+    requestSchema: {
+      type: apigateway.JsonSchemaType.OBJECT,
+      properties: {
+        persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'Persona ID list (1-5)' },
+        question: { type: apigateway.JsonSchemaType.STRING, description: 'Question to ask' },
+      },
+      required: ['persona_ids', 'question'],
+    },
+  },
+  {
+    path: 'jobs/{job_id}',
+    method: 'GET',
+    operationName: 'getJobStatus',
+    summary: 'Check async job status and results',
+    description: 'Check the status of an async job (generatePersonas or runDiscussion). Status values: "pending", "running", "completed", "failed". When completed, the result field contains the full output.',
+    pathParams: ['job_id'],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Stack
+// ---------------------------------------------------------------------------
+
 export interface McpGatewayStackProps extends StackProps {
   parameter: AppParameter;
 }
@@ -15,33 +140,25 @@ export class McpGatewayStack extends Stack {
     super(scope, id, props);
 
     const { parameter } = props;
-
-    // メインスタックからエクスポートされた値を取得
     const ecsEndpoint = Fn.importValue(`AIPersona-${parameter.envName}-EcsEndpoint`);
     const albArn = Fn.importValue(`AIPersona-${parameter.envName}-AlbArn`);
 
-    // VPC をルックアップ（VPC Link V2 にはサブネットとSGが必要）
+    // --- VPC Link V2 (ALB support) ---
     const vpc = ec2.Vpc.fromLookup(this, 'Vpc', {
       vpcName: `ai-persona-${parameter.envName}`,
     });
-
-    // VPC Link V2 用セキュリティグループ
     const vpcLinkSg = new ec2.SecurityGroup(this, 'VpcLinkSg', {
       vpc,
       description: 'Security group for API Gateway VPC Link to ALB',
-      allowAllOutbound: true,
     });
-    // ALB のリスナーポート（443）への通信を許可
-    vpcLinkSg.addEgressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(443));
-
-    // VPC Link V2（ALB サポート）
     const vpcLinkV2 = new apigatewayv2.CfnVpcLink(this, 'VpcLink', {
       name: `ai-persona-mcp-${parameter.envName}`,
       subnetIds: vpc.privateSubnets.map(s => s.subnetId),
       securityGroupIds: [vpcLinkSg.securityGroupId],
     });
+    const vpcLinkRef = apigateway.VpcLink.fromVpcLinkId(this, 'VpcLinkRef', vpcLinkV2.ref);
 
-    // REST API（IAM 認証）
+    // --- REST API ---
     const api = new apigateway.RestApi(this, 'Api', {
       restApiName: `ai-persona-mcp-${parameter.envName}`,
       description: 'AI Persona MCP API (AgentCore Gateway Target)',
@@ -49,178 +166,98 @@ export class McpGatewayStack extends Stack {
       deployOptions: { stageName: 'v1', documentationVersion: 'v1' },
     });
 
-    // リクエストボディモデル（Gateway がボディを転送するために必要）
-    const generatePersonasModel = api.addModel('GeneratePersonasModel', {
-      contentType: 'application/json',
-      modelName: 'GeneratePersonasRequest',
-      schema: {
-        type: apigateway.JsonSchemaType.OBJECT,
-        properties: {
-          data_type: { type: apigateway.JsonSchemaType.STRING, description: 'データ種別: interview, market_report, review, purchase, other' },
-          file_contents: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'テキストデータのリスト' },
-          count: { type: apigateway.JsonSchemaType.INTEGER, description: '生成するペルソナ数 (1-10)' },
-          description: { type: apigateway.JsonSchemaType.STRING, description: 'データの説明' },
-          custom_prompt: { type: apigateway.JsonSchemaType.STRING, description: 'カスタムプロンプト' },
+    // --- Build resources & methods from endpoint definitions ---
+    const apiRoot = api.root.addResource('api');
+    const resourceCache: Record<string, apigateway.IResource> = {};
+
+    /** Recursively get or create nested API Gateway resources */
+    const getResource = (pathStr: string): apigateway.IResource => {
+      if (resourceCache[pathStr]) return resourceCache[pathStr];
+      const segments = pathStr.split('/');
+      if (segments.length === 1) {
+        resourceCache[pathStr] = apiRoot.addResource(segments[0]);
+      } else {
+        const parent = getResource(segments.slice(0, -1).join('/'));
+        resourceCache[pathStr] = parent.addResource(segments[segments.length - 1]);
+      }
+      return resourceCache[pathStr];
+    };
+
+    // Request body models (created lazily per endpoint)
+    const models: Record<string, apigateway.IModel> = {};
+
+    const methods: apigateway.Method[] = [];
+    const docParts: apigateway.CfnDocumentationPart[] = [];
+
+    for (const ep of ENDPOINTS) {
+      const resource = getResource(ep.path);
+      const backendPath = `/api/${ep.path}`;
+
+      // Path parameter mappings
+      const requestParams: Record<string, boolean> = {};
+      const integrationParams: Record<string, string> = {};
+      for (const param of ep.pathParams ?? []) {
+        requestParams[`method.request.path.${param}`] = true;
+        integrationParams[`integration.request.path.${param}`] = `method.request.path.${param}`;
+      }
+
+      // Integration
+      const integration = new apigateway.Integration({
+        type: apigateway.IntegrationType.HTTP_PROXY,
+        integrationHttpMethod: ep.method,
+        uri: Fn.join('', ['https://', ecsEndpoint, backendPath]),
+        options: {
+          connectionType: apigateway.ConnectionType.VPC_LINK,
+          vpcLink: vpcLinkRef,
+          requestParameters: Object.keys(integrationParams).length > 0 ? integrationParams : undefined,
         },
-        required: ['data_type'],
-      },
-    });
+      });
 
-    const runDiscussionModel = api.addModel('RunDiscussionModel', {
-      contentType: 'application/json',
-      modelName: 'RunDiscussionRequest',
-      schema: {
-        type: apigateway.JsonSchemaType.OBJECT,
-        properties: {
-          persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: '参加ペルソナIDリスト（2名以上）' },
-          topic: { type: apigateway.JsonSchemaType.STRING, description: '議論トピック' },
-          mode: { type: apigateway.JsonSchemaType.STRING, description: '議論モード: classic または agent' },
-        },
-        required: ['persona_ids', 'topic'],
-      },
-    });
+      // Request model (POST with schema)
+      let requestModels: Record<string, apigateway.IModel> | undefined;
+      if (ep.requestSchema) {
+        const modelId = `${ep.operationName}Model`;
+        models[modelId] = api.addModel(modelId, {
+          contentType: 'application/json',
+          modelName: `${ep.operationName}Request`,
+          schema: ep.requestSchema,
+        });
+        requestModels = { 'application/json': models[modelId] };
+      }
 
-    const generateInsightsModel = api.addModel('GenerateInsightsModel', {
-      contentType: 'application/json',
-      modelName: 'GenerateInsightsRequest',
-      schema: {
-        type: apigateway.JsonSchemaType.OBJECT,
-        properties: {
-          categories: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.OBJECT }, description: 'カスタムインサイトカテゴリ' },
-        },
-      },
-    });
+      // Method
+      const method = resource.addMethod(ep.method, integration, {
+        authorizationType: apigateway.AuthorizationType.IAM,
+        operationName: ep.operationName,
+        methodResponses: [{ statusCode: '200' }],
+        requestParameters: Object.keys(requestParams).length > 0 ? requestParams : undefined,
+        requestModels,
+      });
+      methods.push(method);
 
-    const runInterviewModel = api.addModel('RunInterviewModel', {
-      contentType: 'application/json',
-      modelName: 'RunInterviewRequest',
-      schema: {
-        type: apigateway.JsonSchemaType.OBJECT,
-        properties: {
-          persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: '参加ペルソナIDリスト（1-5名）' },
-          question: { type: apigateway.JsonSchemaType.STRING, description: '質問内容' },
-        },
-        required: ['persona_ids', 'question'],
-      },
-    });
-
-    // ヘルパー: VPC Link V2 + ALB の Private Integration を作成
-    const vpcLinkId = vpcLinkV2.ref;
-
-    const createAlbIntegration = (
-      method: string,
-      path: string,
-      requestParams?: Record<string, string>,
-    ) => new apigateway.Integration({
-      type: apigateway.IntegrationType.HTTP_PROXY,
-      integrationHttpMethod: method,
-      uri: Fn.join('', ['https://', ecsEndpoint, path]),
-      options: {
-        connectionType: apigateway.ConnectionType.VPC_LINK,
-        vpcLink: apigateway.VpcLink.fromVpcLinkId(this, `VL-${path}-${method}`, vpcLinkId),
-        requestParameters: requestParams,
-      },
-    });
-
-    // /api/mcp/personas/generate (POST)
-    const apiResource = api.root.addResource('api');
-    const mcpResource = apiResource.addResource('mcp');
-    const mcpPersonasResource = mcpResource.addResource('personas');
-    const generateResource = mcpPersonasResource.addResource('generate');
-    const generateMethod = generateResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/personas/generate'), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      methodResponses: [{ statusCode: '200' }, { statusCode: '202' }],
-      operationName: 'generatePersonas',
-      requestModels: { 'application/json': generatePersonasModel },
-    });
-
-    // /api/mcp/discussions (POST)
-    const mcpDiscussionsResource = mcpResource.addResource('discussions');
-    const runDiscussionMethod = mcpDiscussionsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/discussions'), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      methodResponses: [{ statusCode: '202' }],
-      operationName: 'runDiscussion',
-      requestModels: { 'application/json': runDiscussionModel },
-    });
-
-    // /api/mcp/discussions/{discussion_id} (GET)
-    const mcpDiscussionIdResource = mcpDiscussionsResource.addResource('{discussion_id}');
-    const getDiscussionMethod = mcpDiscussionIdResource.addMethod('GET', createAlbIntegration('GET', '/api/mcp/discussions/{discussion_id}', {
-      'integration.request.path.discussion_id': 'method.request.path.discussion_id',
-    }), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      requestParameters: { 'method.request.path.discussion_id': true },
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'getDiscussion',
-    });
-
-    // /api/mcp/discussions/{discussion_id}/insights (POST)
-    const insightsResource = mcpDiscussionIdResource.addResource('insights');
-    const generateInsightsMethod = insightsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/discussions/{discussion_id}/insights', {
-      'integration.request.path.discussion_id': 'method.request.path.discussion_id',
-    }), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      requestParameters: { 'method.request.path.discussion_id': true },
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'generateInsights',
-      requestModels: { 'application/json': generateInsightsModel },
-    });
-
-    // /api/mcp/interviews (POST)
-    const interviewsResource = mcpResource.addResource('interviews');
-    const runInterviewMethod = interviewsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/interviews'), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'runInterview',
-      requestModels: { 'application/json': runInterviewModel },
-    });
-
-    // /api/mcp/jobs/{job_id} (GET)
-    const jobsResource = mcpResource.addResource('jobs');
-    const jobIdResource = jobsResource.addResource('{job_id}');
-    const getJobMethod = jobIdResource.addMethod('GET', createAlbIntegration('GET', '/api/mcp/jobs/{job_id}', {
-      'integration.request.path.job_id': 'method.request.path.job_id',
-    }), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      requestParameters: { 'method.request.path.job_id': true },
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'getJobStatus',
-    });
-
-    // /api/personas
-    const personasResource = apiResource.addResource('personas');
-    const personasMethod = personasResource.addMethod('GET', createAlbIntegration('GET', '/api/personas'), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'listPersonas',
-    });
-
-    // /api/personas/{persona_id}
-    const personaIdResource = personasResource.addResource('{persona_id}');
-    const personaIdMethod = personaIdResource.addMethod('GET', createAlbIntegration('GET', '/api/personas/{persona_id}', {
-      'integration.request.path.persona_id': 'method.request.path.persona_id',
-    }), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      requestParameters: { 'method.request.path.persona_id': true },
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'getPersona',
-    });
-
-    // /api/discussions
-    const discussionsResource = apiResource.addResource('discussions');
-    const discussionsMethod = discussionsResource.addMethod('GET', createAlbIntegration('GET', '/api/discussions'), {
-      authorizationType: apigateway.AuthorizationType.IAM,
-      methodResponses: [{ statusCode: '200' }],
-      operationName: 'listDiscussions',
-    });
-
-    // L1 escape hatch: IntegrationTarget（ALB ARN）を設定
-    for (const method of [generateMethod, runDiscussionMethod, getDiscussionMethod, generateInsightsMethod, runInterviewMethod, getJobMethod, personasMethod, personaIdMethod, discussionsMethod]) {
+      // L1: IntegrationTarget (ALB ARN)
       const cfnMethod = method.node.defaultChild as apigateway.CfnMethod;
       cfnMethod.addPropertyOverride('Integration.IntegrationTarget', albArn);
+
+      // Documentation part
+      const part = new apigateway.CfnDocumentationPart(this, `Doc-${ep.operationName}`, {
+        restApiId: api.restApiId,
+        location: { type: 'METHOD', path: `/api/${ep.path}`, method: ep.method },
+        properties: JSON.stringify({ summary: ep.summary, description: ep.description }),
+      });
+      docParts.push(part);
     }
 
-    // AgentCore Gateway（Cognito M2M 認証 + MCP プロトコル）
+    // Documentation version (must be created AFTER all parts)
+    const docVersion = new apigateway.CfnDocumentationVersion(this, 'DocVersion', {
+      restApiId: api.restApiId,
+      documentationVersion: 'v1',
+    });
+    for (const part of docParts) {
+      docVersion.addDependency(part);
+    }
+
+    // --- AgentCore Gateway ---
     const gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `ai-persona-mcp-${parameter.envName}`,
       description: 'AI Persona research toolkit for generating personas, running discussions, and extracting insights',
@@ -240,7 +277,6 @@ export class McpGatewayStack extends Stack {
       }),
     });
 
-    // API Gateway Target（IAM 認証 = GATEWAY_IAM_ROLE）
     gateway.addApiGatewayTarget('Target', {
       restApi: api,
       credentialProviderConfigurations: [
@@ -248,81 +284,10 @@ export class McpGatewayStack extends Stack {
       ],
       apiGatewayToolConfiguration: {
         toolFilters: [
-          { filterPath: '/api/mcp/*', methods: [agentcore.ApiGatewayHttpMethod.GET, agentcore.ApiGatewayHttpMethod.POST] },
-          { filterPath: '/api/personas', methods: [agentcore.ApiGatewayHttpMethod.GET] },
-          { filterPath: '/api/personas/*', methods: [agentcore.ApiGatewayHttpMethod.GET] },
-          { filterPath: '/api/discussions', methods: [agentcore.ApiGatewayHttpMethod.GET] },
+          { filterPath: '/api/*', methods: [agentcore.ApiGatewayHttpMethod.GET, agentcore.ApiGatewayHttpMethod.POST] },
         ],
       },
     });
-
-    // --- API Documentation (used as MCP tool descriptions) ---
-    const docs: Array<{ path: string; method: string; summary: string; description: string }> = [
-      {
-        path: '/api/mcp/personas/generate', method: 'POST',
-        summary: 'Generate AI personas from text data (async)',
-        description: 'Generate AI personas from interview transcripts, market reports, or other text data. Returns a job_id immediately. Poll getJobStatus with the job_id to check progress and retrieve results.',
-      },
-      {
-        path: '/api/mcp/discussions', method: 'POST',
-        summary: 'Run a discussion between personas (async)',
-        description: 'Start a simulated discussion between specified personas on a given topic. Supports "classic" (fast, 1-3 min) and "agent" (deep, 5-15 min) modes. Returns a job_id. Poll getJobStatus to get the full discussion with messages and insights.',
-      },
-      {
-        path: '/api/mcp/discussions/{discussion_id}', method: 'GET',
-        summary: 'Get discussion details with messages and insights',
-        description: 'Retrieve a saved discussion including all messages exchanged between personas and generated insights with confidence scores.',
-      },
-      {
-        path: '/api/mcp/discussions/{discussion_id}/insights', method: 'POST',
-        summary: 'Generate insights from a discussion',
-        description: 'Analyze a saved discussion and generate structured insights categorized by customer needs, market opportunities, product development, and marketing. Optionally provide custom categories.',
-      },
-      {
-        path: '/api/mcp/interviews', method: 'POST',
-        summary: 'Interview personas with a question',
-        description: 'Send a question to one or more personas (1-5) and receive their responses. Each persona answers based on their background, values, and pain points. Useful for quick Q&A without running a full discussion.',
-      },
-      {
-        path: '/api/mcp/jobs/{job_id}', method: 'GET',
-        summary: 'Check async job status and results',
-        description: 'Check the status of an async job (generatePersonas or runDiscussion). Status values: "pending", "running", "completed", "failed". When completed, the result field contains the full output.',
-      },
-      {
-        path: '/api/personas', method: 'GET',
-        summary: 'List all saved personas',
-        description: 'Retrieve a list of all saved AI personas with their demographics, values, pain points, and goals. Use persona IDs from this list for discussions and interviews.',
-      },
-      {
-        path: '/api/personas/{persona_id}', method: 'GET',
-        summary: 'Get persona details by ID',
-        description: 'Retrieve detailed information about a specific persona including background, values, pain points, and goals.',
-      },
-      {
-        path: '/api/discussions', method: 'GET',
-        summary: 'List all saved discussions',
-        description: 'Retrieve a list of all saved discussions with their topics, modes, and creation dates. Use discussion IDs from this list to get full details or generate insights.',
-      },
-    ];
-
-    const docParts: apigateway.CfnDocumentationPart[] = [];
-    for (const doc of docs) {
-      const part = new apigateway.CfnDocumentationPart(this, `Doc-${doc.method}-${doc.path.replace(/[/{}]/g, '-')}`, {
-        restApiId: api.restApiId,
-        location: { type: 'METHOD', path: doc.path, method: doc.method },
-        properties: JSON.stringify({ summary: doc.summary, description: doc.description }),
-      });
-      docParts.push(part);
-    }
-
-    // Documentation version (must be created AFTER all parts)
-    const docVersion = new apigateway.CfnDocumentationVersion(this, 'DocVersion', {
-      restApiId: api.restApiId,
-      documentationVersion: 'v1',
-    });
-    for (const part of docParts) {
-      docVersion.addDependency(part);
-    }
 
     // --- Outputs ---
     new CfnOutput(this, 'GatewayId', {

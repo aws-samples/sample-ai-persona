@@ -1,8 +1,8 @@
 """
 REST API ルーター（JSON応答用）
 
-既存のhtmx UI向けエンドポイントに加え、MCP Gateway (AgentCore Gateway) 経由で
-外部AIエージェントから呼び出されるREST APIを提供する。
+ペルソナ、議論、インタビュー、インサイト生成のREST APIを提供する。
+AgentCore Gateway 経由で外部AIエージェントからも利用可能。
 """
 
 import logging
@@ -325,13 +325,13 @@ def _run_generate_personas(
 
 
 @router.post(
-    "/mcp/personas/generate",
+    "/personas/generate",
     response_model=JobResponse,
     status_code=202,
     summary="AIペルソナを生成する",
-    description="テキストデータからAIペルソナを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/mcp/jobs/{job_id} でステータスと結果を確認してください。",
+    description="テキストデータからAIペルソナを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def mcp_generate_personas(req: GeneratePersonasRequest) -> Any:
+async def generate_personas(req: GeneratePersonasRequest) -> Any:
     try:
         file_contents: list[tuple[bytes, str]] = [
             (text.encode("utf-8"), f"input_{i}.txt")
@@ -431,13 +431,13 @@ def _discussion_detail(discussion: Any) -> dict:
 
 
 @router.post(
-    "/mcp/discussions",
+    "/discussions",
     response_model=JobResponse,
     status_code=202,
     summary="ペルソナ間の議論を実行する",
-    description="指定されたペルソナ間で議論を実行します。処理は非同期で実行され、ジョブIDが返されます。GET /api/mcp/jobs/{job_id} でステータスと結果を確認してください。",
+    description="指定されたペルソナ間で議論を実行します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def mcp_run_discussion(req: RunDiscussionRequest) -> Any:
+async def run_discussion(req: RunDiscussionRequest) -> Any:
     try:
         personas = _resolve_personas(req.persona_ids)
         jm = get_job_manager()
@@ -454,12 +454,12 @@ async def mcp_run_discussion(req: RunDiscussionRequest) -> Any:
 # --- get_discussion ---
 
 @router.get(
-    "/mcp/discussions/{discussion_id}",
+    "/discussions/{discussion_id}",
     response_model=DiscussionDetailResponse,
     summary="議論結果を取得する",
     description="指定されたIDの議論結果（メッセージ、インサイト含む）を取得します。",
 )
-async def mcp_get_discussion(discussion_id: str) -> Any:
+async def get_discussion_detail(discussion_id: str) -> Any:
     try:
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
@@ -476,12 +476,12 @@ async def mcp_get_discussion(discussion_id: str) -> Any:
 # --- generate_insights ---
 
 @router.post(
-    "/mcp/discussions/{discussion_id}/insights",
+    "/discussions/{discussion_id}/insights",
     response_model=List[InsightResponse],
     summary="議論結果からインサイトを生成する",
     description="保存済みの議論結果からインサイトを生成します。",
 )
-async def mcp_generate_insights(
+async def generate_insights(
     discussion_id: str, req: GenerateInsightsRequest
 ) -> Any:
     try:
@@ -515,12 +515,12 @@ async def mcp_generate_insights(
 # --- run_interview ---
 
 @router.post(
-    "/mcp/interviews",
+    "/interviews",
     response_model=List[MessageResponse],
     summary="ペルソナにインタビューする",
     description="指定されたペルソナに質問を送り、回答を取得します。1回の呼び出しで1ターン（質問→回答）のみ実行され、会話コンテキストは保持されません。",
 )
-async def mcp_run_interview(req: RunInterviewRequest) -> Any:
+async def run_interview(req: RunInterviewRequest) -> Any:
     try:
         personas = _resolve_personas(req.persona_ids)
         im = get_interview_manager()
@@ -551,12 +551,12 @@ async def mcp_run_interview(req: RunInterviewRequest) -> Any:
 # --- job status ---
 
 @router.get(
-    "/mcp/jobs/{job_id}",
+    "/jobs/{job_id}",
     response_model=JobResponse,
     summary="非同期ジョブのステータスを確認する",
     description="非同期ジョブ（ペルソナ生成、議論実行）のステータスと結果を取得します。statusがcompletedの場合、resultに結果が含まれます。",
 )
-async def mcp_get_job(job_id: str) -> Any:
+async def get_job(job_id: str) -> Any:
     jm = get_job_manager()
     job = jm.get(job_id)
     if not job:

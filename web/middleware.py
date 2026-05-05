@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 EXEMPT_PATHS = {"/health"}
-EXEMPT_PREFIXES = ("/api/mcp/",)
+EXEMPT_PREFIXES = ("/api/",)
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):

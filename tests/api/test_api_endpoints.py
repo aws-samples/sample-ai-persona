@@ -1,5 +1,5 @@
 """
-MCP API エンドポイント（/api/mcp/...）のテスト
+REST API エンドポイント（/api/...）のテスト
 """
 
 from unittest.mock import Mock, patch
@@ -40,14 +40,14 @@ def _make_discussion():
 # generate_personas (async job)
 # ---------------------------------------------------------------------------
 
-class TestMcpGeneratePersonas:
+class TestGeneratePersonas:
     @patch("web.routers.api.get_job_manager")
     def test_returns_202_with_job_id(self, mock_get_jm, client):
         mock_jm = Mock()
         mock_jm.submit.return_value = "job-123"
         mock_get_jm.return_value = mock_jm
 
-        response = client.post("/api/mcp/personas/generate", json={
+        response = client.post("/api/personas/generate", json={
             "data_type": "interview",
             "file_contents": ["テストインタビュー内容"],
             "count": 1,
@@ -63,7 +63,7 @@ class TestMcpGeneratePersonas:
 # run_discussion (async job)
 # ---------------------------------------------------------------------------
 
-class TestMcpRunDiscussion:
+class TestRunDiscussion:
     @patch("web.routers.api.get_job_manager")
     @patch("web.routers.api.get_persona_manager")
     def test_returns_202_with_job_id(self, mock_get_pm, mock_get_jm, client):
@@ -75,7 +75,7 @@ class TestMcpRunDiscussion:
         mock_jm.submit.return_value = "job-456"
         mock_get_jm.return_value = mock_jm
 
-        response = client.post("/api/mcp/discussions", json={
+        response = client.post("/api/discussions", json={
             "persona_ids": ["p1", "p2"],
             "topic": "テスト議論",
         })
@@ -90,7 +90,7 @@ class TestMcpRunDiscussion:
         mock_pm.get_persona.return_value = None
         mock_get_pm.return_value = mock_pm
 
-        response = client.post("/api/mcp/discussions", json={
+        response = client.post("/api/discussions", json={
             "persona_ids": ["missing1", "missing2"],
             "topic": "テスト",
         })
@@ -99,7 +99,7 @@ class TestMcpRunDiscussion:
 
     def test_invalid_mode(self, client):
         """persona_idsが1つだけの場合はバリデーションエラー"""
-        response = client.post("/api/mcp/discussions", json={
+        response = client.post("/api/discussions", json={
             "persona_ids": ["p1"],
             "topic": "テスト",
         })
@@ -110,14 +110,14 @@ class TestMcpRunDiscussion:
 # get_discussion
 # ---------------------------------------------------------------------------
 
-class TestMcpGetDiscussion:
+class TestGetDiscussion:
     @patch("web.routers.api.get_discussion_manager")
     def test_returns_discussion_detail(self, mock_get_dm, client):
         mock_dm = Mock()
         mock_dm.get_discussion.return_value = _make_discussion()
         mock_get_dm.return_value = mock_dm
 
-        response = client.get("/api/mcp/discussions/disc-123")
+        response = client.get("/api/discussions/disc-123")
 
         assert response.status_code == 200
         data = response.json()
@@ -131,7 +131,7 @@ class TestMcpGetDiscussion:
         mock_dm.get_discussion.return_value = None
         mock_get_dm.return_value = mock_dm
 
-        response = client.get("/api/mcp/discussions/nonexistent")
+        response = client.get("/api/discussions/nonexistent")
         assert response.status_code == 404
 
 
@@ -139,7 +139,7 @@ class TestMcpGetDiscussion:
 # generate_insights
 # ---------------------------------------------------------------------------
 
-class TestMcpGenerateInsights:
+class TestGenerateInsights:
     @patch("web.routers.api.get_discussion_manager")
     def test_returns_insights(self, mock_get_dm, client):
         discussion = _make_discussion()
@@ -152,7 +152,7 @@ class TestMcpGenerateInsights:
         mock_dm.generate_insights.return_value = [insight]
         mock_get_dm.return_value = mock_dm
 
-        response = client.post("/api/mcp/discussions/disc-123/insights", json={})
+        response = client.post("/api/discussions/disc-123/insights", json={})
 
         assert response.status_code == 200
         data = response.json()
@@ -165,7 +165,7 @@ class TestMcpGenerateInsights:
         mock_dm.get_discussion.return_value = None
         mock_get_dm.return_value = mock_dm
 
-        response = client.post("/api/mcp/discussions/missing/insights", json={})
+        response = client.post("/api/discussions/missing/insights", json={})
         assert response.status_code == 404
 
 
@@ -173,7 +173,7 @@ class TestMcpGenerateInsights:
 # run_interview
 # ---------------------------------------------------------------------------
 
-class TestMcpRunInterview:
+class TestRunInterview:
     @patch("web.routers.api.get_interview_manager")
     @patch("web.routers.api.get_persona_manager")
     def test_returns_messages(self, mock_get_pm, mock_get_im, client):
@@ -192,7 +192,7 @@ class TestMcpRunInterview:
         mock_im.send_user_message.return_value = [response_msg]
         mock_get_im.return_value = mock_im
 
-        response = client.post("/api/mcp/interviews", json={
+        response = client.post("/api/interviews", json={
             "persona_ids": ["p1"],
             "question": "テスト質問",
         })
@@ -208,7 +208,7 @@ class TestMcpRunInterview:
 # job status
 # ---------------------------------------------------------------------------
 
-class TestMcpGetJob:
+class TestGetJob:
     @patch("web.routers.api.get_job_manager")
     def test_completed_job(self, mock_get_jm, client):
         job = Job(
@@ -219,7 +219,7 @@ class TestMcpGetJob:
         mock_jm.get.return_value = job
         mock_get_jm.return_value = mock_jm
 
-        response = client.get("/api/mcp/jobs/job-1")
+        response = client.get("/api/jobs/job-1")
 
         assert response.status_code == 200
         data = response.json()
@@ -232,5 +232,5 @@ class TestMcpGetJob:
         mock_jm.get.return_value = None
         mock_get_jm.return_value = mock_jm
 
-        response = client.get("/api/mcp/jobs/nonexistent")
+        response = client.get("/api/jobs/nonexistent")
         assert response.status_code == 404
