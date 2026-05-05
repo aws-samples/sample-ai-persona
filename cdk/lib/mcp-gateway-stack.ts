@@ -46,7 +46,7 @@ export class McpGatewayStack extends Stack {
       restApiName: `ai-persona-mcp-${parameter.envName}`,
       description: 'AI Persona MCP API (AgentCore Gateway Target)',
       endpointTypes: [apigateway.EndpointType.REGIONAL],
-      deployOptions: { stageName: 'v1' },
+      deployOptions: { stageName: 'v1', documentationVersion: 'v1' },
     });
 
     // リクエストボディモデル（Gateway がボディを転送するために必要）
@@ -296,19 +296,24 @@ export class McpGatewayStack extends Stack {
       },
     ];
 
+    const docParts: apigateway.CfnDocumentationPart[] = [];
     for (const doc of docs) {
-      new apigateway.CfnDocumentationPart(this, `Doc-${doc.method}-${doc.path.replace(/[/{}]/g, '-')}`, {
+      const part = new apigateway.CfnDocumentationPart(this, `Doc-${doc.method}-${doc.path.replace(/[/{}]/g, '-')}`, {
         restApiId: api.restApiId,
         location: { type: 'METHOD', path: doc.path, method: doc.method },
         properties: JSON.stringify({ summary: doc.summary, description: doc.description }),
       });
+      docParts.push(part);
     }
 
-    // Documentation version (required for export to include docs)
-    new apigateway.CfnDocumentationVersion(this, 'DocVersion', {
+    // Documentation version (must be created AFTER all parts)
+    const docVersion = new apigateway.CfnDocumentationVersion(this, 'DocVersion', {
       restApiId: api.restApiId,
       documentationVersion: 'v1',
     });
+    for (const part of docParts) {
+      docVersion.addDependency(part);
+    }
 
     // --- Outputs ---
     new CfnOutput(this, 'GatewayId', {
