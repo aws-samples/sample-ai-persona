@@ -19,6 +19,7 @@
 #   --env ENV_NAME   環境名を指定（デフォルト: dev）
 #   --region REGION  リージョンを指定（デフォルト: us-east-1）
 #   --data-agent-arn ARN  データ分析エージェントのRuntime ARN
+#   --enable-mcp     MCP Gateway（AgentCore Gateway）を有効化
 ###############################################################################
 set -euo pipefail
 
@@ -31,6 +32,7 @@ SELF_SIGNUP=false
 ALLOWED_IPS=""
 DATA_AGENT_ARN=""
 DATA_AGENT_REGION=""
+ENABLE_MCP=false
 
 # カラー出力
 RED='\033[0;31m'
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --region)       REGION="$2"; shift 2 ;;
     --data-agent-arn)    DATA_AGENT_ARN="$2"; shift 2 ;;
     --data-agent-region) DATA_AGENT_REGION="$2"; shift 2 ;;
+    --enable-mcp)        ENABLE_MCP=true; shift ;;
     -h|--help)
       echo "使い方: ./deploy.sh [オプション]"
       echo "  --skip-memory    長期記憶機能をスキップ"
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --region REGION  リージョン (デフォルト: us-east-1)"
       echo "  --data-agent-arn ARN  データ分析エージェントのRuntime ARN"
       echo "  --data-agent-region REGION  データ分析エージェントのリージョン（省略時は--regionと同じ）"
+      echo "  --enable-mcp   MCP Gateway（AgentCore Gateway）を有効化"
       exit 0 ;;
     *) log_error "不明なオプション: $1"; exit 1 ;;
   esac
@@ -149,6 +153,7 @@ export interface AppParameter {
   batchInferenceS3Prefix?: string;
   dataAgentRuntimeArn?: string;
   dataAgentRegion?: string;
+  enableMcpGateway?: boolean;
 }
 
 export const devParameter: AppParameter = {
@@ -178,6 +183,7 @@ export const devParameter: AppParameter = {
   batchInferenceS3Prefix: 'batch-inference/',
   dataAgentRuntimeArn: '${DATA_AGENT_ARN}',
   dataAgentRegion: '${DATA_AGENT_REGION:-${REGION}}',
+  enableMcpGateway: ${ENABLE_MCP},
 };
 
 export const prodParameter: AppParameter = devParameter;
@@ -394,6 +400,29 @@ CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
   --output text)
 log_info "CloudFrontドメイン: https://${CLOUDFRONT_DOMAIN}"
 
+# ===== MCP Gateway デプロイ（オプション）=====
+if [[ "${ENABLE_MCP}" == "true" ]]; then
+  log_step "Step 8.5: MCP Gateway（AgentCore Gateway）のデプロイ"
+
+  cd "${PROJECT_ROOT}/cdk"
+  npx cdk deploy "AIPersonaMcp-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
+
+  GATEWAY_ID=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaMcp-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='GatewayId'].OutputValue" \
+    --output text 2>/dev/null || echo "")
+  MCP_TOKEN_URL=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaMcp-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='TokenEndpointUrl'].OutputValue" \
+    --output text 2>/dev/null || echo "")
+
+  log_info "Gateway ID: ${GATEWAY_ID}"
+  log_info "MCP Endpoint: https://${GATEWAY_ID}.gateway.bedrock-agentcore.${REGION}.amazonaws.com/mcp"
+  log_info "Token Endpoint: ${MCP_TOKEN_URL}"
+fi
+
 # ===== Cognito callbackUrl更新（CloudFrontドメイン確定後） =====
 if [[ "${SKIP_COGNITO}" == "false" && -n "${COGNITO_USER_POOL_ID}" && -n "${COGNITO_CLIENT_ID}" ]]; then
   log_step "Step 9: Cognito callbackUrl更新"
@@ -422,6 +451,9 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║  AI Persona System デプロイ完了                             ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
+if [[ "${ENABLE_MCP}" == "true" && -n "${GATEWAY_ID}" ]]; then
+echo -e "${GREEN}║${NC}  MCP Endpoint: ${BLUE}https://${GATEWAY_ID}.gateway.bedrock-agentcore.${REGION}.amazonaws.com/mcp${NC}"
+fi
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"
 echo -e "${GREEN}║${NC}    ./deploy.sh --skip-memory --skip-cognito --region ${REGION}"
