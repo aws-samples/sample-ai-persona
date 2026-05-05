@@ -13,16 +13,20 @@ AgentCore Gateway を介して MCP プロトコルのエンドポイントを公
     │
     ▼
 AgentCore Gateway（MCP エンドポイント + Cognito M2M 認証）
-    │  OpenAPI Target（REST ↔ MCP 自動変換）
+    │  API Gateway Target（GATEWAY_IAM_ROLE）
     ▼
-既存 ECS Express Mode（FastAPI REST API）
+API Gateway（REST API、IAM 認証）
+    │  VPC Link
+    ▼
+既存 ECS Express Mode（Internal ALB → FastAPI）
     │
     ▼
 既存 Manager / Service 層
 ```
 
 - **AgentCore Gateway** が MCP プロトコルのエンドポイントを提供し、Cognito M2M（Client Credentials）認証を自動管理します
-- **OpenAPI Target** により、REST API と MCP ツールの変換が自動で行われます
+- **API Gateway Target** により、Gateway の IAM ロールで API Gateway を呼び出します（追加の credential provider 不要）
+- **API Gateway + VPC Link** で Internal ALB に直接接続し、CloudFront / Cognito 認証を経由しません
 - 既存の ECS 上の FastAPI アプリケーションに MCP 用 REST エンドポイントを追加するだけで、Manager/Service 層はそのまま利用します
 
 ### 利用可能な MCP ツール
@@ -43,19 +47,10 @@ AgentCore Gateway（MCP エンドポイント + Cognito M2M 認証）
 ## 前提条件
 
 - AI ペルソナシステムのメインスタック（`AIPersona-{env}`）がデプロイ済みであること
-- OpenAPI spec ファイル（`openapi_mcp.json`）が生成済みであること
 
 ## セットアップ手順
 
-### 1. OpenAPI spec の確認
-
-MCP ツール用の OpenAPI spec（`openapi_mcp.json`）はリポジトリに含まれています。MCP エンドポイントを追加・変更した場合のみ再生成してください。
-
-```bash
-uv run python scripts/generate_mcp_openapi.py
-```
-
-### 2. パラメータの設定
+### 1. パラメータの設定
 
 #### deploy.sh を使う場合（推奨）
 
@@ -85,7 +80,7 @@ export const devParameter: AppParameter = {
 };
 ```
 
-### 3. CDK デプロイ
+### 2. CDK デプロイ
 
 > `deploy.sh --enable-mcp` を使った場合はこのステップは不要です。
 
@@ -102,7 +97,7 @@ npx cdk deploy AIPersona-dev
 npx cdk deploy AIPersonaMcp-dev
 ```
 
-### 4. デプロイ出力の確認
+### 3. デプロイ出力の確認
 
 デプロイ完了後、以下の出力を確認します。
 
@@ -110,6 +105,7 @@ npx cdk deploy AIPersonaMcp-dev
 |---------|------|
 | `GatewayId` | AgentCore Gateway の ID |
 | `GatewayArn` | AgentCore Gateway の ARN |
+| `ApiGatewayUrl` | API Gateway の URL（VPC Link 経由で ECS に接続） |
 | `TokenEndpointUrl` | Cognito トークンエンドポイント URL（M2M 認証用） |
 
 Cognito User Pool の Client ID と Client Secret は AWS コンソールの Cognito 画面から確認してください。
@@ -301,7 +297,6 @@ npx cdk destroy AIPersonaMcp-dev
 | 問題 | 対処 |
 |------|------|
 | CDK デプロイで `Export not found` エラー | メインスタック（`AIPersona-{env}`）を先にデプロイしてください |
-| `openapi_mcp.json` が見つからない | `uv run python scripts/generate_mcp_openapi.py` を実行して再生成してください |
 | 認証エラー（401） | Cognito の Client ID / Secret / Scope が正しいか確認してください |
 | ジョブが `failed` になる | `error` フィールドのメッセージを確認。Bedrock のモデルアクセス権限やペルソナ ID の存在を確認してください |
 | 非同期ジョブの結果が消える | ジョブはインメモリ管理のため、ECS タスクの再起動で失われます。完了した結果は DB に保存されるため、議論やペルソナは通常の API で取得できます |

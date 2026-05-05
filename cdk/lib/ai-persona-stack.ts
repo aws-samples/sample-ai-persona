@@ -108,6 +108,16 @@ export class AIPersonaStack extends Stack {
       description: 'Express Mode Internal Endpoint',
       exportName: `AIPersona-${parameter.envName}-EcsEndpoint`,
     });
+    new CfnOutput(this, 'AlbArn', {
+      value: service.loadBalancerArn,
+      description: 'Internal ALB ARN (for MCP Gateway VPC Link)',
+      exportName: `AIPersona-${parameter.envName}-AlbArn`,
+    });
+    new CfnOutput(this, 'VpcId', {
+      value: vpc.vpcId,
+      description: 'VPC ID',
+      exportName: `AIPersona-${parameter.envName}-VpcId`,
+    });
 
     new CfnOutput(this, 'PersonasTableName', { value: database.personasTable.tableName });
     new CfnOutput(this, 'DiscussionsTableName', { value: database.discussionsTable.tableName });

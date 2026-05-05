@@ -1,9 +1,7 @@
 import { Construct } from 'constructs';
 import { Stack, StackProps, Fn, CfnOutput } from 'aws-cdk-lib';
 import * as agentcore from '@aws-cdk/aws-bedrock-agentcore-alpha';
-import * as bedrockagentcore from 'aws-cdk-lib/aws-bedrockagentcore';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { AppParameter } from '../parameters';
 
 export interface McpGatewayStackProps extends StackProps {
@@ -16,12 +14,92 @@ export class McpGatewayStack extends Stack {
 
     const { parameter } = props;
 
-    // メインスタックからECSエンドポイントを取得
-    const ecsEndpoint = Fn.importValue(
-      `AIPersona-${parameter.envName}-EcsEndpoint`,
-    );
+    // メインスタックからエクスポートされた値を取得
+    const ecsEndpoint = Fn.importValue(`AIPersona-${parameter.envName}-EcsEndpoint`);
+    const albArn = Fn.importValue(`AIPersona-${parameter.envName}-AlbArn`);
 
-    // Gateway（デフォルト: Cognito M2M認証 + MCPプロトコル）
+    // VPC Link V2（ALB への Private Integration）- L1で作成
+    const vpcLink = new apigateway.CfnVpcLink(this, 'VpcLink', {
+      name: `ai-persona-mcp-${parameter.envName}`,
+      targetArns: [albArn],
+    });
+
+    // REST API（IAM 認証）
+    const api = new apigateway.RestApi(this, 'Api', {
+      restApiName: `ai-persona-mcp-${parameter.envName}`,
+      description: 'AI Persona MCP API (AgentCore Gateway Target)',
+      endpointTypes: [apigateway.EndpointType.REGIONAL],
+      deployOptions: { stageName: 'v1' },
+    });
+
+    // /api/mcp/{proxy+} → ALB に転送
+    const apiResource = api.root.addResource('api');
+    const mcpResource = apiResource.addResource('mcp');
+    const proxyResource = mcpResource.addResource('{proxy+}');
+
+    const vpcLinkRef = apigateway.VpcLink.fromVpcLinkId(this, 'VpcLinkRef', vpcLink.ref);
+
+    const integration = new apigateway.Integration({
+      type: apigateway.IntegrationType.HTTP_PROXY,
+      integrationHttpMethod: 'ANY',
+      uri: Fn.join('', ['https://', ecsEndpoint, '/api/mcp/{proxy}']),
+      options: {
+        connectionType: apigateway.ConnectionType.VPC_LINK,
+        vpcLink: vpcLinkRef,
+        requestParameters: {
+          'integration.request.path.proxy': 'method.request.path.proxy',
+        },
+      },
+    });
+
+    proxyResource.addMethod('ANY', integration, {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      requestParameters: { 'method.request.path.proxy': true },
+    });
+
+    // /api/personas, /api/discussions（既存エンドポイント）も公開
+    const personasResource = apiResource.addResource('personas');
+    const personaIdResource = personasResource.addResource('{persona_id}');
+    const discussionsResource = apiResource.addResource('discussions');
+
+    const personasIntegration = new apigateway.Integration({
+      type: apigateway.IntegrationType.HTTP_PROXY,
+      integrationHttpMethod: 'ANY',
+      uri: Fn.join('', ['https://', ecsEndpoint, '/api/personas']),
+      options: { connectionType: apigateway.ConnectionType.VPC_LINK, vpcLink: vpcLinkRef },
+    });
+    personasResource.addMethod('GET', personasIntegration, {
+      authorizationType: apigateway.AuthorizationType.IAM,
+    });
+
+    const personaIdIntegration = new apigateway.Integration({
+      type: apigateway.IntegrationType.HTTP_PROXY,
+      integrationHttpMethod: 'GET',
+      uri: Fn.join('', ['https://', ecsEndpoint, '/api/personas/{persona_id}']),
+      options: {
+        connectionType: apigateway.ConnectionType.VPC_LINK,
+        vpcLink: vpcLinkRef,
+        requestParameters: {
+          'integration.request.path.persona_id': 'method.request.path.persona_id',
+        },
+      },
+    });
+    personaIdResource.addMethod('GET', personaIdIntegration, {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      requestParameters: { 'method.request.path.persona_id': true },
+    });
+
+    const discussionsIntegration = new apigateway.Integration({
+      type: apigateway.IntegrationType.HTTP_PROXY,
+      integrationHttpMethod: 'GET',
+      uri: Fn.join('', ['https://', ecsEndpoint, '/api/discussions']),
+      options: { connectionType: apigateway.ConnectionType.VPC_LINK, vpcLink: vpcLinkRef },
+    });
+    discussionsResource.addMethod('GET', discussionsIntegration, {
+      authorizationType: apigateway.AuthorizationType.IAM,
+    });
+
+    // AgentCore Gateway（Cognito M2M 認証 + MCP プロトコル）
     const gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `ai-persona-mcp-${parameter.envName}`,
       description: 'AI Persona MCP Gateway',
@@ -32,33 +110,16 @@ export class McpGatewayStack extends Stack {
       }),
     });
 
-    // OpenAPI spec を読み込み、servers を ECS エンドポイントに置換
-    const specPath = path.join(__dirname, '..', '..', 'openapi_mcp.json');
-    const specRaw = fs.readFileSync(specPath, 'utf-8');
-    const spec = JSON.parse(specRaw);
-    // servers フィールドを ${EcsEndpoint} プレースホルダーに置換
-    // NOTE: Fn.sub は ${...} パターンを全て置換するため、
-    // OpenAPI spec内のdescription等に ${...} を含めないこと
-    spec.servers = [{ url: '${EcsEndpoint}' }];
-    const specTemplate = JSON.stringify(spec);
-
-    // Fn.sub で ECS エンドポイントを埋め込み
-    const inlinePayload = Fn.sub(specTemplate, {
-      EcsEndpoint: ecsEndpoint,
-    });
-
-    // L1 CfnGatewayTarget で OpenAPI Target を作成
-    // （L2 addOpenApiTarget は CloudFormation token を servers に埋め込めないため）
-    new bedrockagentcore.CfnGatewayTarget(this, 'Target', {
-      gatewayIdentifier: gateway.gatewayId,
-      name: `ai-persona-api-${parameter.envName}`,
-      description: 'AI Persona REST API on ECS Express Mode',
-      targetConfiguration: {
-        mcp: {
-          openApiSchema: {
-            inlinePayload,
-          },
-        },
+    // API Gateway Target（IAM 認証 = GATEWAY_IAM_ROLE）
+    gateway.addApiGatewayTarget('Target', {
+      restApi: api,
+      apiGatewayToolConfiguration: {
+        toolFilters: [
+          { filterPath: '/api/mcp/*', methods: [agentcore.ApiGatewayHttpMethod.GET, agentcore.ApiGatewayHttpMethod.POST] },
+          { filterPath: '/api/personas', methods: [agentcore.ApiGatewayHttpMethod.GET] },
+          { filterPath: '/api/personas/*', methods: [agentcore.ApiGatewayHttpMethod.GET] },
+          { filterPath: '/api/discussions', methods: [agentcore.ApiGatewayHttpMethod.GET] },
+        ],
       },
     });
 
@@ -70,6 +131,10 @@ export class McpGatewayStack extends Stack {
     new CfnOutput(this, 'GatewayArn', {
       value: gateway.gatewayArn,
       description: 'AgentCore Gateway ARN',
+    });
+    new CfnOutput(this, 'ApiGatewayUrl', {
+      value: api.url,
+      description: 'API Gateway URL',
     });
     if (gateway.tokenEndpointUrl) {
       new CfnOutput(this, 'TokenEndpointUrl', {
