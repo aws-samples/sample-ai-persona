@@ -57,6 +57,22 @@ uv run python scripts/generate_mcp_openapi.py
 
 ### 2. パラメータの設定
 
+#### deploy.sh を使う場合（推奨）
+
+`--enable-mcp` オプションを付けてデプロイするだけで、パラメータ設定と MCP Gateway のデプロイが自動で行われます。
+
+```bash
+./deploy.sh --enable-mcp
+```
+
+再デプロイ時（コード更新のみ）:
+
+```bash
+./deploy.sh --skip-memory --skip-cognito --enable-mcp
+```
+
+#### CDK を直接使う場合
+
 `cdk/parameters.ts` で `enableMcpGateway` を `true` に設定します。
 
 ```typescript
@@ -70,6 +86,8 @@ export const devParameter: AppParameter = {
 ```
 
 ### 3. CDK デプロイ
+
+> `deploy.sh --enable-mcp` を使った場合はこのステップは不要です。
 
 メインスタックが未デプロイまたは `exportName` の追加が必要な場合は、先にメインスタックをデプロイします。
 
@@ -276,7 +294,7 @@ cd cdk
 npx cdk destroy AIPersonaMcp-dev
 ```
 
-削除後、`parameters.ts` の `enableMcpGateway` を `false` に戻してください。
+削除後、次回の `deploy.sh` 実行時に `--enable-mcp` を付けなければ再作成されません。CDK を直接使う場合は `parameters.ts` の `enableMcpGateway` を `false` に戻してください。
 
 ## トラブルシューティング
 
