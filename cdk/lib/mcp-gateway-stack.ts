@@ -2,6 +2,8 @@ import { Construct } from 'constructs';
 import { Stack, StackProps, Fn, CfnOutput } from 'aws-cdk-lib';
 import * as agentcore from '@aws-cdk/aws-bedrock-agentcore-alpha';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppParameter } from '../parameters';
 
 export interface McpGatewayStackProps extends StackProps {
@@ -18,10 +20,25 @@ export class McpGatewayStack extends Stack {
     const ecsEndpoint = Fn.importValue(`AIPersona-${parameter.envName}-EcsEndpoint`);
     const albArn = Fn.importValue(`AIPersona-${parameter.envName}-AlbArn`);
 
-    // VPC Link V2（ALB への Private Integration）- L1で作成
-    const vpcLink = new apigateway.CfnVpcLink(this, 'VpcLink', {
+    // VPC をルックアップ（VPC Link V2 にはサブネットとSGが必要）
+    const vpc = ec2.Vpc.fromLookup(this, 'Vpc', {
+      vpcName: `ai-persona-${parameter.envName}`,
+    });
+
+    // VPC Link V2 用セキュリティグループ
+    const vpcLinkSg = new ec2.SecurityGroup(this, 'VpcLinkSg', {
+      vpc,
+      description: 'Security group for API Gateway VPC Link to ALB',
+      allowAllOutbound: true,
+    });
+    // ALB のリスナーポート（443）への通信を許可
+    vpcLinkSg.addEgressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(443));
+
+    // VPC Link V2（ALB サポート）
+    const vpcLinkV2 = new apigatewayv2.CfnVpcLink(this, 'VpcLink', {
       name: `ai-persona-mcp-${parameter.envName}`,
-      targetArns: [albArn],
+      subnetIds: vpc.privateSubnets.map(s => s.subnetId),
+      securityGroupIds: [vpcLinkSg.securityGroupId],
     });
 
     // REST API（IAM 認証）
@@ -32,72 +49,62 @@ export class McpGatewayStack extends Stack {
       deployOptions: { stageName: 'v1' },
     });
 
+    // ヘルパー: VPC Link V2 + ALB の Private Integration を作成
+    const vpcLinkId = vpcLinkV2.ref;
+
+    const createAlbIntegration = (
+      method: string,
+      path: string,
+      requestParams?: Record<string, string>,
+    ) => new apigateway.Integration({
+      type: apigateway.IntegrationType.HTTP_PROXY,
+      integrationHttpMethod: method,
+      uri: Fn.join('', ['https://', ecsEndpoint, path]),
+      options: {
+        connectionType: apigateway.ConnectionType.VPC_LINK,
+        vpcLink: apigateway.VpcLink.fromVpcLinkId(this, `VL-${path}-${method}`, vpcLinkId),
+        requestParameters: requestParams,
+      },
+    });
+
     // /api/mcp/{proxy+} → ALB に転送
     const apiResource = api.root.addResource('api');
     const mcpResource = apiResource.addResource('mcp');
     const proxyResource = mcpResource.addResource('{proxy+}');
 
-    const vpcLinkRef = apigateway.VpcLink.fromVpcLinkId(this, 'VpcLinkRef', vpcLink.ref);
-
-    const integration = new apigateway.Integration({
-      type: apigateway.IntegrationType.HTTP_PROXY,
-      integrationHttpMethod: 'ANY',
-      uri: Fn.join('', ['https://', ecsEndpoint, '/api/mcp/{proxy}']),
-      options: {
-        connectionType: apigateway.ConnectionType.VPC_LINK,
-        vpcLink: vpcLinkRef,
-        requestParameters: {
-          'integration.request.path.proxy': 'method.request.path.proxy',
-        },
-      },
-    });
-
-    proxyResource.addMethod('ANY', integration, {
+    const proxyMethod = proxyResource.addMethod('ANY', createAlbIntegration('ANY', '/api/mcp/{proxy}', {
+      'integration.request.path.proxy': 'method.request.path.proxy',
+    }), {
       authorizationType: apigateway.AuthorizationType.IAM,
       requestParameters: { 'method.request.path.proxy': true },
     });
 
-    // /api/personas, /api/discussions（既存エンドポイント）も公開
+    // /api/personas
     const personasResource = apiResource.addResource('personas');
-    const personaIdResource = personasResource.addResource('{persona_id}');
-    const discussionsResource = apiResource.addResource('discussions');
-
-    const personasIntegration = new apigateway.Integration({
-      type: apigateway.IntegrationType.HTTP_PROXY,
-      integrationHttpMethod: 'ANY',
-      uri: Fn.join('', ['https://', ecsEndpoint, '/api/personas']),
-      options: { connectionType: apigateway.ConnectionType.VPC_LINK, vpcLink: vpcLinkRef },
-    });
-    personasResource.addMethod('GET', personasIntegration, {
+    const personasMethod = personasResource.addMethod('GET', createAlbIntegration('GET', '/api/personas'), {
       authorizationType: apigateway.AuthorizationType.IAM,
     });
 
-    const personaIdIntegration = new apigateway.Integration({
-      type: apigateway.IntegrationType.HTTP_PROXY,
-      integrationHttpMethod: 'GET',
-      uri: Fn.join('', ['https://', ecsEndpoint, '/api/personas/{persona_id}']),
-      options: {
-        connectionType: apigateway.ConnectionType.VPC_LINK,
-        vpcLink: vpcLinkRef,
-        requestParameters: {
-          'integration.request.path.persona_id': 'method.request.path.persona_id',
-        },
-      },
-    });
-    personaIdResource.addMethod('GET', personaIdIntegration, {
+    // /api/personas/{persona_id}
+    const personaIdResource = personasResource.addResource('{persona_id}');
+    const personaIdMethod = personaIdResource.addMethod('GET', createAlbIntegration('GET', '/api/personas/{persona_id}', {
+      'integration.request.path.persona_id': 'method.request.path.persona_id',
+    }), {
       authorizationType: apigateway.AuthorizationType.IAM,
       requestParameters: { 'method.request.path.persona_id': true },
     });
 
-    const discussionsIntegration = new apigateway.Integration({
-      type: apigateway.IntegrationType.HTTP_PROXY,
-      integrationHttpMethod: 'GET',
-      uri: Fn.join('', ['https://', ecsEndpoint, '/api/discussions']),
-      options: { connectionType: apigateway.ConnectionType.VPC_LINK, vpcLink: vpcLinkRef },
-    });
-    discussionsResource.addMethod('GET', discussionsIntegration, {
+    // /api/discussions
+    const discussionsResource = apiResource.addResource('discussions');
+    const discussionsMethod = discussionsResource.addMethod('GET', createAlbIntegration('GET', '/api/discussions'), {
       authorizationType: apigateway.AuthorizationType.IAM,
     });
+
+    // L1 escape hatch: IntegrationTarget（ALB ARN）を設定
+    for (const method of [proxyMethod, personasMethod, personaIdMethod, discussionsMethod]) {
+      const cfnMethod = method.node.defaultChild as apigateway.CfnMethod;
+      cfnMethod.addPropertyOverride('Integration.IntegrationTarget', albArn);
+    }
 
     // AgentCore Gateway（Cognito M2M 認証 + MCP プロトコル）
     const gateway = new agentcore.Gateway(this, 'Gateway', {
