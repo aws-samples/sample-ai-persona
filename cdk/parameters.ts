@@ -48,6 +48,9 @@ export interface AppParameter {
   // データ分析エージェント連携設定
   dataAgentRuntimeArn?: string;
   dataAgentRegion?: string;
+
+  // MCP Gateway設定（AgentCore Gateway）
+  enableMcpGateway?: boolean;
 }
 
 // 開発環境
@@ -98,6 +101,9 @@ export const devParameter: AppParameter = {
   // データ分析エージェント連携設定（Runtime ARNを設定すると自動で有効化）
   dataAgentRuntimeArn: '', // 例: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxx'
   // dataAgentRegion: 'us-east-1', // 省略時はメインスタックのリージョンを使用
+
+  // MCP Gateway設定（AgentCore Gateway）
+  enableMcpGateway: false,
 };
 
 // 本番環境
@@ -137,4 +143,7 @@ export const prodParameter: AppParameter = {
 
   // データ分析エージェント連携設定
   dataAgentRuntimeArn: '',
+
+  // MCP Gateway設定（AgentCore Gateway）
+  enableMcpGateway: false,
 };

@@ -1,0 +1,606 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Persona MCP API",
+    "description": "AIペルソナシステムのMCPツール用REST API。AgentCore Gateway経由で外部AIエージェントから利用可能。",
+    "version": "0.9.0"
+  },
+  "paths": {
+    "/api/mcp/personas/generate": {
+      "post": {
+        "tags": [
+          "api"
+        ],
+        "summary": "AIペルソナを生成する",
+        "description": "テキストデータからAIペルソナを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/mcp/jobs/{job_id} でステータスと結果を確認してください。",
+        "operationId": "mcp_generate_personas_api_mcp_personas_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneratePersonasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/discussions": {
+      "post": {
+        "tags": [
+          "api"
+        ],
+        "summary": "ペルソナ間の議論を実行する",
+        "description": "指定されたペルソナ間で議論を実行します。処理は非同期で実行され、ジョブIDが返されます。GET /api/mcp/jobs/{job_id} でステータスと結果を確認してください。",
+        "operationId": "mcp_run_discussion_api_mcp_discussions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunDiscussionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/discussions/{discussion_id}": {
+      "get": {
+        "tags": [
+          "api"
+        ],
+        "summary": "議論結果を取得する",
+        "description": "指定されたIDの議論結果（メッセージ、インサイト含む）を取得します。",
+        "operationId": "mcp_get_discussion_api_mcp_discussions__discussion_id__get",
+        "parameters": [
+          {
+            "name": "discussion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Discussion Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/discussions/{discussion_id}/insights": {
+      "post": {
+        "tags": [
+          "api"
+        ],
+        "summary": "議論結果からインサイトを生成する",
+        "description": "保存済みの議論結果からインサイトを生成します。",
+        "operationId": "mcp_generate_insights_api_mcp_discussions__discussion_id__insights_post",
+        "parameters": [
+          {
+            "name": "discussion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Discussion Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateInsightsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InsightResponse"
+                  },
+                  "title": "Response Mcp Generate Insights Api Mcp Discussions  Discussion Id  Insights Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/interviews": {
+      "post": {
+        "tags": [
+          "api"
+        ],
+        "summary": "ペルソナにインタビューする",
+        "description": "指定されたペルソナに質問を送り、回答を取得します。",
+        "operationId": "mcp_run_interview_api_mcp_interviews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunInterviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MessageResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Mcp Run Interview Api Mcp Interviews Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "api"
+        ],
+        "summary": "非同期ジョブのステータスを確認する",
+        "description": "非同期ジョブ（ペルソナ生成、議論実行）のステータスと結果を取得します。statusがcompletedの場合、resultに結果が含まれます。",
+        "operationId": "mcp_get_job_api_mcp_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DiscussionDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Participants"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "insights": {
+            "items": {
+              "$ref": "#/components/schemas/InsightResponse"
+            },
+            "type": "array",
+            "title": "Insights"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "topic",
+          "mode",
+          "participants",
+          "messages",
+          "insights",
+          "created_at"
+        ],
+        "title": "DiscussionDetailResponse"
+      },
+      "GenerateInsightsRequest": {
+        "properties": {
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories",
+            "description": "カスタムインサイトカテゴリ [{name, description}, ...]"
+          }
+        },
+        "type": "object",
+        "title": "GenerateInsightsRequest",
+        "description": "インサイト生成リクエスト"
+      },
+      "GeneratePersonasRequest": {
+        "properties": {
+          "data_type": {
+            "type": "string",
+            "title": "Data Type",
+            "description": "データ種別: interview, market_report, review, purchase, other"
+          },
+          "file_contents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "File Contents",
+            "description": "テキストデータのリスト（各要素がファイル内容に相当）"
+          },
+          "count": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "description": "生成するペルソナ数",
+            "default": 3
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "データの説明（data_type=other時に使用）"
+          },
+          "custom_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Prompt",
+            "description": "カスタムプロンプト"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data_type"
+        ],
+        "title": "GeneratePersonasRequest",
+        "description": "ペルソナ生成リクエスト"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "InsightResponse": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "supporting_messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Supporting Messages"
+          },
+          "confidence_score": {
+            "type": "number",
+            "title": "Confidence Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "description",
+          "supporting_messages",
+          "confidence_score"
+        ],
+        "title": "InsightResponse"
+      },
+      "JobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "result": {
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "JobResponse"
+      },
+      "MessageResponse": {
+        "properties": {
+          "persona_id": {
+            "type": "string",
+            "title": "Persona Id"
+          },
+          "persona_name": {
+            "type": "string",
+            "title": "Persona Name"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "persona_id",
+          "persona_name",
+          "content",
+          "timestamp",
+          "message_type"
+        ],
+        "title": "MessageResponse"
+      },
+      "RunDiscussionRequest": {
+        "properties": {
+          "persona_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Persona Ids",
+            "description": "参加ペルソナIDリスト（2名以上）"
+          },
+          "topic": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Topic",
+            "description": "議論トピック"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "description": "議論モード: classic または agent",
+            "default": "classic"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories",
+            "description": "カスタムインサイトカテゴリ [{name, description}, ...]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "persona_ids",
+          "topic"
+        ],
+        "title": "RunDiscussionRequest",
+        "description": "議論実行リクエスト"
+      },
+      "RunInterviewRequest": {
+        "properties": {
+          "persona_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Persona Ids",
+            "description": "参加ペルソナIDリスト（1-5名）"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question",
+            "description": "質問内容"
+          }
+        },
+        "type": "object",
+        "required": [
+          "persona_ids",
+          "question"
+        ],
+        "title": "RunInterviewRequest",
+        "description": "インタビュー実行リクエスト"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://localhost"
+    }
+  ]
+}

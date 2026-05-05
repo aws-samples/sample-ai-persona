@@ -106,6 +106,7 @@ export class AIPersonaStack extends Stack {
     new CfnOutput(this, 'InternalServiceEndpoint', {
       value: service.endpoint,
       description: 'Express Mode Internal Endpoint',
+      exportName: `AIPersona-${parameter.envName}-EcsEndpoint`,
     });
 
     new CfnOutput(this, 'PersonasTableName', { value: database.personasTable.tableName });

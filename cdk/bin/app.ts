@@ -6,6 +6,7 @@ import { CognitoStack } from '../lib/cognito-stack';
 import { AIPersonaStack } from '../lib/ai-persona-stack';
 import { AgentCoreMemoryStack } from '../lib/agentcore-memory-stack';
 import { WafStack } from '../lib/waf-stack';
+import { McpGatewayStack } from '../lib/mcp-gateway-stack';
 import { devParameter, prodParameter } from '../parameters';
 
 const app = new cdk.App();
@@ -63,3 +64,13 @@ const mainStack = new AIPersonaStack(app, `AIPersona-${parameter.envName}`, {
   description: `AI Persona System - ${parameter.envName} environment`,
 });
 mainStack.addDependency(ecrStack);
+
+// Step 5: MCP Gateway Stack（オプション）
+if (parameter.enableMcpGateway) {
+  const mcpStack = new McpGatewayStack(app, `AIPersonaMcp-${parameter.envName}`, {
+    env: parameter.env,
+    parameter,
+    description: `AI Persona MCP Gateway - ${parameter.envName}`,
+  });
+  mcpStack.addDependency(mainStack);
+}
