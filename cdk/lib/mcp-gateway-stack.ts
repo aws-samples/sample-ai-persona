@@ -175,6 +175,9 @@ export class McpGatewayStack extends Stack {
     // API Gateway Target（IAM 認証 = GATEWAY_IAM_ROLE）
     gateway.addApiGatewayTarget('Target', {
       restApi: api,
+      credentialProviderConfigurations: [
+        agentcore.GatewayCredentialProvider.fromIamRole(),
+      ],
       apiGatewayToolConfiguration: {
         toolFilters: [
           { filterPath: '/api/mcp/*', methods: [agentcore.ApiGatewayHttpMethod.GET, agentcore.ApiGatewayHttpMethod.POST] },
