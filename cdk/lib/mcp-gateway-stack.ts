@@ -60,11 +60,6 @@ export class McpGatewayStack extends Stack {
           },
         },
       },
-      credentialProviderConfigurations: [
-        {
-          credentialProviderType: 'GATEWAY_IAM_ROLE',
-        },
-      ],
     });
 
     // --- Outputs ---
