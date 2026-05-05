@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 EXEMPT_PATHS = {"/health"}
+EXEMPT_PREFIXES = ("/api/mcp/",)
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -22,6 +23,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if (
             request.method in UNSAFE_METHODS
             and request.url.path not in EXEMPT_PATHS
+            and not request.url.path.startswith(EXEMPT_PREFIXES)
         ):
             has_custom_header = (
                 request.headers.get("HX-Request")

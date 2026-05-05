@@ -573,7 +573,7 @@ class AgentDiscussionManager:
             raise AgentDiscussionManagerError(error_msg)
         finally:
             # エージェントリソースを確実に解放
-            self._cleanup_agents(persona_agents, facilitator)
+            self.cleanup_agents(persona_agents, facilitator)
 
     def save_agent_discussion(self, discussion: Discussion) -> str:
         """
@@ -1031,7 +1031,7 @@ class AgentDiscussionManager:
 
         finally:
             # エージェントリソースを確実に解放
-            self._cleanup_agents(persona_agents, facilitator)
+            self.cleanup_agents(persona_agents, facilitator)
 
     def _validate_discussion_for_save(self, discussion: Discussion) -> None:
         """
@@ -1069,7 +1069,7 @@ class AgentDiscussionManager:
                 if not message.persona_id or not message.content:
                     raise AgentDiscussionManagerError(f"メッセージ {i + 1} が無効です")
 
-    def _cleanup_agents(
+    def cleanup_agents(
         self, persona_agents: List[PersonaAgent], facilitator: FacilitatorAgent
     ) -> None:
         """
