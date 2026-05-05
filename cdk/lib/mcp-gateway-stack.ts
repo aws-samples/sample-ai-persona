@@ -67,18 +67,65 @@ export class McpGatewayStack extends Stack {
       },
     });
 
-    // /api/mcp/{proxy+} → ALB に転送
+    // /api/mcp/personas/generate (POST)
     const apiResource = api.root.addResource('api');
     const mcpResource = apiResource.addResource('mcp');
-    const proxyResource = mcpResource.addResource('{proxy+}');
+    const mcpPersonasResource = mcpResource.addResource('personas');
+    const generateResource = mcpPersonasResource.addResource('generate');
+    const generateMethod = generateResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/personas/generate'), {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      methodResponses: [{ statusCode: '200' }, { statusCode: '202' }],
+      operationName: 'generatePersonas',
+    });
 
-    const proxyMethod = proxyResource.addMethod('ANY', createAlbIntegration('ANY', '/api/mcp/{proxy}', {
-      'integration.request.path.proxy': 'method.request.path.proxy',
+    // /api/mcp/discussions (POST)
+    const mcpDiscussionsResource = mcpResource.addResource('discussions');
+    const runDiscussionMethod = mcpDiscussionsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/discussions'), {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      methodResponses: [{ statusCode: '202' }],
+      operationName: 'runDiscussion',
+    });
+
+    // /api/mcp/discussions/{discussion_id} (GET)
+    const mcpDiscussionIdResource = mcpDiscussionsResource.addResource('{discussion_id}');
+    const getDiscussionMethod = mcpDiscussionIdResource.addMethod('GET', createAlbIntegration('GET', '/api/mcp/discussions/{discussion_id}', {
+      'integration.request.path.discussion_id': 'method.request.path.discussion_id',
     }), {
       authorizationType: apigateway.AuthorizationType.IAM,
-      requestParameters: { 'method.request.path.proxy': true },
+      requestParameters: { 'method.request.path.discussion_id': true },
       methodResponses: [{ statusCode: '200' }],
-      operationName: 'mcpProxy',
+      operationName: 'getDiscussion',
+    });
+
+    // /api/mcp/discussions/{discussion_id}/insights (POST)
+    const insightsResource = mcpDiscussionIdResource.addResource('insights');
+    const generateInsightsMethod = insightsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/discussions/{discussion_id}/insights', {
+      'integration.request.path.discussion_id': 'method.request.path.discussion_id',
+    }), {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      requestParameters: { 'method.request.path.discussion_id': true },
+      methodResponses: [{ statusCode: '200' }],
+      operationName: 'generateInsights',
+    });
+
+    // /api/mcp/interviews (POST)
+    const interviewsResource = mcpResource.addResource('interviews');
+    const runInterviewMethod = interviewsResource.addMethod('POST', createAlbIntegration('POST', '/api/mcp/interviews'), {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      methodResponses: [{ statusCode: '200' }],
+      operationName: 'runInterview',
+    });
+
+    // /api/mcp/jobs/{job_id} (GET)
+    const jobsResource = mcpResource.addResource('jobs');
+    const jobIdResource = jobsResource.addResource('{job_id}');
+    const getJobMethod = jobIdResource.addMethod('GET', createAlbIntegration('GET', '/api/mcp/jobs/{job_id}', {
+      'integration.request.path.job_id': 'method.request.path.job_id',
+    }), {
+      authorizationType: apigateway.AuthorizationType.IAM,
+      requestParameters: { 'method.request.path.job_id': true },
+      methodResponses: [{ statusCode: '200' }],
+      operationName: 'getJobStatus',
     });
 
     // /api/personas
@@ -109,7 +156,7 @@ export class McpGatewayStack extends Stack {
     });
 
     // L1 escape hatch: IntegrationTarget（ALB ARN）を設定
-    for (const method of [proxyMethod, personasMethod, personaIdMethod, discussionsMethod]) {
+    for (const method of [generateMethod, runDiscussionMethod, getDiscussionMethod, generateInsightsMethod, runInterviewMethod, getJobMethod, personasMethod, personaIdMethod, discussionsMethod]) {
       const cfnMethod = method.node.defaultChild as apigateway.CfnMethod;
       cfnMethod.addPropertyOverride('Integration.IntegrationTarget', albArn);
     }
