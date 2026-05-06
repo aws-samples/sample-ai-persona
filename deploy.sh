@@ -405,7 +405,7 @@ if [[ "${ENABLE_MCP}" == "true" ]]; then
   log_step "Step 8.5: MCP Gateway（AgentCore Gateway）のデプロイ"
 
   cd "${PROJECT_ROOT}/cdk"
-  npx cdk deploy "AIPersonaMcp-${ENV_NAME}" --require-approval never --region "${REGION}" 2>&1
+  npx cdk deploy "AIPersonaMcp-${ENV_NAME}" --require-approval never --exclusively --region "${REGION}" 2>&1
 
   GATEWAY_ID=$(aws cloudformation describe-stacks \
     --stack-name "AIPersonaMcp-${ENV_NAME}" \
