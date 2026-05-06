@@ -1,6 +1,6 @@
 # AI ペルソナ MCP Server 設定ガイド
 
-AI ペルソナシステムの主要機能（ペルソナ生成、議論シミュレーション、インサイト生成）を MCP ツールとして外部 AI エージェントから利用できるようにする Remote MCP Server オプションの設定ガイドです。
+AI ペルソナシステムの主要機能（ペルソナ生成、議論シミュレーション、インサイト生成）を MCP ツールとして外部 AI エージェントから利用できるようにする MCP Server オプションの設定ガイドです。
 
 ## 概要
 
@@ -29,7 +29,7 @@ graph LR
 | ペルソナ生成 | `POST /api/personas/generate` | 非同期 | テキストデータから AI ペルソナを生成 |
 | 議論実行 | `POST /api/discussions` | 非同期 | ペルソナ間の議論を実行 |
 | 議論結果取得 | `GET /api/discussions/{id}` | 同期 | 議論結果（メッセージ・インサイト）を取得 |
-| インサイト生成 | `POST /api/discussions/{id}/insights` | 同期 | 議論結果からインサイトを生成 |
+| インサイト生成 | `POST /api/discussions/{id}/insights` | 非同期 | 議論結果からインサイトを生成 |
 | インタビュー実行 | `POST /api/interviews` | 同期 | ペルソナに質問して回答を取得 |
 | ジョブステータス確認 | `GET /api/jobs/{job_id}` | 同期 | 非同期ジョブの進捗・結果を確認 |
 
@@ -207,7 +207,8 @@ JOB=$(curl -s -X POST "${GATEWAY_URL}/api/discussions" \
   -d '{
     "persona_ids": ["persona-id-1", "persona-id-2"],
     "topic": "新商品のターゲット層について",
-    "mode": "classic"
+    "mode": "agent",
+    "rounds": 3
   }')
 
 JOB_ID=$(echo $JOB | jq -r '.job_id')
@@ -217,7 +218,7 @@ curl -s "${GATEWAY_URL}/api/jobs/${JOB_ID}" \
   -H "Authorization: Bearer ${TOKEN}"
 ```
 
-`mode` は `classic`（高速、3-5分）または `agent`（深い議論、5-15分）を指定できます。
+`mode` は `classic`（高速、1-3分）または `agent`（深い議論、5-15分）を指定できます。`rounds`（1-10、デフォルト3）で agent モードの議論ラウンド数を制御できます。
 
 ### インタビュー（同期）
 
@@ -231,10 +232,11 @@ curl -s -X POST "${GATEWAY_URL}/api/interviews" \
   }'
 ```
 
-### インサイト生成（同期）
+### インサイト生成（非同期）
 
 ```bash
-curl -s -X POST "${GATEWAY_URL}/api/discussions/${DISCUSSION_ID}/insights" \
+# 1. ジョブ投入
+JOB=$(curl -s -X POST "${GATEWAY_URL}/api/discussions/${DISCUSSION_ID}/insights" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -242,7 +244,13 @@ curl -s -X POST "${GATEWAY_URL}/api/discussions/${DISCUSSION_ID}/insights" \
       {"name": "顧客ニーズ", "description": "潜在的・顕在的ニーズ"},
       {"name": "市場機会", "description": "新たな市場セグメントや成長領域"}
     ]
-  }'
+  }')
+
+JOB_ID=$(echo $JOB | jq -r '.job_id')
+
+# 2. ステータス確認
+curl -s "${GATEWAY_URL}/api/jobs/${JOB_ID}" \
+  -H "Authorization: Bearer ${TOKEN}"
 ```
 
 `categories` を省略するとデフォルトカテゴリ（顧客ニーズ、市場機会、商品開発、マーケティング、その他）が使用されます。
