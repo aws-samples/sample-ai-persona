@@ -1,4 +1,4 @@
-# Remote MCP Server 連携ガイド
+# Remote MCP Server 設定ガイド
 
 AI ペルソナシステムの主要機能（ペルソナ生成、議論シミュレーション、インサイト生成）を MCP ツールとして外部 AI エージェントから利用できるようにする Remote MCP Server オプションの設定ガイドです。
 
@@ -8,26 +8,19 @@ AgentCore Gateway を介して MCP プロトコルのエンドポイントを公
 
 ### アーキテクチャ
 
-```
-外部 AI エージェント（Amazon Quick 等）
-    │
-    ▼
-AgentCore Gateway（MCP エンドポイント + Cognito M2M 認証）
-    │  API Gateway Target（GATEWAY_IAM_ROLE）
-    ▼
-API Gateway（REST API、IAM 認証）
-    │  VPC Link
-    ▼
-既存 ECS Express Mode（Internal ALB → FastAPI）
-    │
-    ▼
-既存 Manager / Service 層
+```mermaid
+graph TB
+    Agent([外部 AI エージェント<br/>Amazon Quick 等]) --> Gateway[AgentCore Gateway<br/>MCP endpoint + Cognito M2M]
+    Gateway -->|API Gateway Target<br/>GATEWAY_IAM_ROLE| APIGW[API Gateway<br/>REST API / IAM 認証]
+    APIGW -->|VPC Link V2| ALB[Internal ALB]
+    ALB --> ECS[ECS Express Mode<br/>FastAPI]
+    ECS --> Managers[Manager / Service 層]
 ```
 
 - **AgentCore Gateway** が MCP プロトコルのエンドポイントを提供し、Cognito M2M（Client Credentials）認証を自動管理します
 - **API Gateway Target** により、Gateway の IAM ロールで API Gateway を呼び出します（追加の credential provider 不要）
-- **API Gateway + VPC Link** で Internal ALB に直接接続し、CloudFront / Cognito 認証を経由しません
-- 既存の ECS 上の FastAPI アプリケーションに MCP 用 REST エンドポイントを追加するだけで、Manager/Service 層はそのまま利用します
+- **API Gateway + VPC Link V2** で Internal ALB に直接接続し、CloudFront / Cognito 認証を経由しません
+- 既存の ECS 上の FastAPI アプリケーションの REST API エンドポイントをそのまま利用します
 
 ### 利用可能な MCP ツール
 

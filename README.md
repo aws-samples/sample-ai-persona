@@ -153,7 +153,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | ユーザー向け | [ユーザーガイド](docs/user_guide.md)  |
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
 | 共通 | [データ分析エージェント連携ガイド](docs/data_agent_integration.md) |
-| 共通 | [Remote MCP Server 連携ガイド](docs/remote_mcp_guide.md) |
+| 共通 | [Remote MCP Server 設定ガイド](docs/remote_mcp_setup.md) |
 
 ## トラブルシューティング
 
