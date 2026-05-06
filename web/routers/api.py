@@ -159,6 +159,9 @@ class RunDiscussionRequest(BaseModel):
         default="classic",
         description="議論モード: classic または agent",
     )
+    rounds: int = Field(
+        default=3, ge=1, le=10, description="議論ラウンド数（agentモードのみ、1-10）"
+    )
     categories: Optional[List[CategoryInput]] = Field(
         default=None,
         max_length=10,
@@ -358,6 +361,7 @@ def _run_classic_discussion(
     personas: list,
     topic: str,
     categories: list | None,
+    rounds: int = 3,
 ) -> dict:
     """Classic議論をバックグラウンドで実行"""
     dm = get_discussion_manager()
@@ -375,6 +379,7 @@ def _run_agent_discussion(
     personas: list,
     topic: str,
     categories: list | None,
+    rounds: int = 3,
 ) -> dict:
     """Agent議論をバックグラウンドで実行"""
     adm = get_agent_discussion_manager()
@@ -382,7 +387,7 @@ def _run_agent_discussion(
 
     system_prompts: dict[str, str] = {}  # デフォルトのシステムプロンプトを使用
     persona_agents = adm.create_persona_agents(personas, system_prompts)
-    facilitator = adm.create_facilitator_agent(rounds=3)
+    facilitator = adm.create_facilitator_agent(rounds=rounds)
     try:
         discussion = adm.start_agent_discussion(
             personas=personas,
@@ -442,7 +447,7 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
         personas = _resolve_personas(req.persona_ids)
         jm = get_job_manager()
         runner = _run_classic_discussion if req.mode == "classic" else _run_agent_discussion
-        job_id = jm.submit(runner, personas, req.topic, req.categories)
+        job_id = jm.submit(runner, personas, req.topic, req.categories, req.rounds)
         return JobResponse(job_id=job_id, status="pending")
     except HTTPException:
         raise

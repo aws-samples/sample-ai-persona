@@ -76,6 +76,7 @@ const ENDPOINTS: EndpointDef[] = [
         persona_ids: { type: apigateway.JsonSchemaType.ARRAY, items: { type: apigateway.JsonSchemaType.STRING }, description: 'Persona ID list (2 or more)' },
         topic: { type: apigateway.JsonSchemaType.STRING, description: 'Discussion topic' },
         mode: { type: apigateway.JsonSchemaType.STRING, description: 'Discussion mode: classic or agent' },
+        rounds: { type: apigateway.JsonSchemaType.INTEGER, description: 'Number of discussion rounds (agent mode only, 1-10, default: 3)' },
       },
       required: ['persona_ids', 'topic'],
     },
