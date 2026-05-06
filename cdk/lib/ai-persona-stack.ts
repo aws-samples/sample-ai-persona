@@ -64,6 +64,7 @@ export class AIPersonaStack extends Stack {
         database.datasetsTable, database.bindingsTable,
         database.surveyTemplatesTable, database.surveysTable,
         database.knowledgeBasesTable, database.personaKBBindingsTable,
+        database.jobsTable,
       ],
       dynamoDbTablePrefix: parameter.dynamoDbTablePrefix,
       awsRegion: this.region,
