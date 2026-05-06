@@ -145,6 +145,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | 連携先 | 概要 | 詳細 |
 |--------|------|------|
 | [sample-text2sql-agent](https://github.com/aws-samples/sample-text2sql-agent) | 自社の業務知識を持ったデータ分析エージェントと連携し、多様な業務データに基づいたペルソナ生成やディスカッションレポートの作成が可能に | [連携ガイド](docs/data_agent_integration.md) |
+| [Amazon Quick](https://aws.amazon.com/jp/quick/) | AI ペルソナシステムの主要機能（ペルソナ生成、議論シミュレーション、インサイト生成）を MCP ツールとして利用する AIエージェントを構築し、リサーチ業務を高度化 | [連携ガイド](docs/remote_mcp_setup.md#amazon-quick-との連携) |
 
 ## ドキュメント
 
