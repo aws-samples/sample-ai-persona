@@ -92,8 +92,8 @@ const ENDPOINTS: EndpointDef[] = [
     path: 'discussions/{discussion_id}/insights',
     method: 'POST',
     operationName: 'generateInsights',
-    summary: 'Generate insights from a discussion',
-    description: 'Analyze a saved discussion and generate structured insights categorized by customer needs, market opportunities, product development, and marketing. Optionally provide custom categories.',
+    summary: 'Generate insights from a discussion (async)',
+    description: 'Analyze a saved discussion and generate structured insights categorized by customer needs, market opportunities, product development, and marketing. Returns a job_id. Poll getJobStatus to retrieve results.',
     pathParams: ['discussion_id'],
     requestSchema: {
       type: apigateway.JsonSchemaType.OBJECT,

@@ -477,9 +477,10 @@ async def get_discussion_detail(discussion_id: str) -> Any:
 
 @router.post(
     "/discussions/{discussion_id}/insights",
-    response_model=List[InsightResponse],
+    response_model=JobResponse,
+    status_code=202,
     summary="議論結果からインサイトを生成する",
-    description="保存済みの議論結果からインサイトを生成します。",
+    description="保存済みの議論結果からインサイトを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
 async def generate_insights(
     discussion_id: str, req: GenerateInsightsRequest
@@ -495,16 +496,22 @@ async def generate_insights(
             if req.categories
             else None
         )
-        insights = dm.generate_insights(discussion, categories=cats)
-        return [
-            InsightResponse(
-                category=i.category,
-                description=i.description,
-                supporting_messages=i.supporting_messages,
-                confidence_score=i.confidence_score,
-            )
-            for i in insights
-        ]
+
+        def _run() -> list[dict]:
+            insights = dm.generate_insights(discussion, categories=cats)
+            return [
+                InsightResponse(
+                    category=i.category,
+                    description=i.description,
+                    supporting_messages=i.supporting_messages,
+                    confidence_score=i.confidence_score,
+                ).model_dump()
+                for i in insights
+            ]
+
+        jm = get_job_manager()
+        job_id = jm.submit(_run)
+        return JobResponse(job_id=job_id, status="pending")
     except HTTPException:
         raise
     except Exception as e:

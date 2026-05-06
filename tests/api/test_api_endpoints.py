@@ -140,24 +140,24 @@ class TestGetDiscussion:
 # ---------------------------------------------------------------------------
 
 class TestGenerateInsights:
+    @patch("web.routers.api.get_job_manager")
     @patch("web.routers.api.get_discussion_manager")
-    def test_returns_insights(self, mock_get_dm, client):
+    def test_returns_202_with_job_id(self, mock_get_dm, mock_get_jm, client):
         discussion = _make_discussion()
-        insight = Insight.create_new(
-            category="新カテゴリ", description="新インサイト",
-            supporting_messages=["msg"], confidence_score=0.9,
-        )
         mock_dm = Mock()
         mock_dm.get_discussion.return_value = discussion
-        mock_dm.generate_insights.return_value = [insight]
         mock_get_dm.return_value = mock_dm
+
+        mock_jm = Mock()
+        mock_jm.submit.return_value = "job-789"
+        mock_get_jm.return_value = mock_jm
 
         response = client.post("/api/discussions/disc-123/insights", json={})
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["category"] == "新カテゴリ"
+        assert data["job_id"] == "job-789"
+        assert data["status"] == "pending"
 
     @patch("web.routers.api.get_discussion_manager")
     def test_discussion_not_found(self, mock_get_dm, client):
