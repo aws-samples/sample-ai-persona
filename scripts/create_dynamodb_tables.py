@@ -418,6 +418,8 @@ class DynamoDBTableCreator:
                     {"Key": "ManagedBy", "Value": "Python"},
                 ],
             )
+            # Wait for table to become active before enabling TTL
+            self.wait_for_table_active(table_name)
             # Enable TTL
             self.dynamodb.update_time_to_live(
                 TableName=table_name,
