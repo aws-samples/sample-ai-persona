@@ -15,9 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Optional
 
-import boto3
-
-from ..config import config
+from ..services.service_factory import ServiceFactory
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +40,12 @@ class Job:
 
 
 class JobManager:
-    """DynamoDB ベースの非同期ジョブ管理"""
+    """DynamoDB ベースの非同期ジョブ管理（ServiceFactory 経由）"""
 
-    def __init__(self) -> None:
-        self._table_name = f"{config.DYNAMODB_TABLE_PREFIX}_Jobs"
-        self._client = boto3.client("dynamodb", region_name=config.DYNAMODB_REGION)
+    def __init__(self, database_service: Any = None) -> None:
+        if database_service is None:
+            database_service = ServiceFactory().get_database_service()
+        self._db = database_service
 
     def submit(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
         """ジョブを投入し job_id を返す"""
@@ -54,15 +53,10 @@ class JobManager:
         now = datetime.now()
         expires_at = int(now.timestamp()) + TTL_SECONDS
 
-        self._client.put_item(
-            TableName=self._table_name,
-            Item={
-                "id": {"S": job_id},
-                "status": {"S": JobStatus.PENDING.value},
-                "created_at": {"S": now.isoformat()},
-                "updated_at": {"S": now.isoformat()},
-                "expires_at": {"N": str(expires_at)},
-            },
+        self._db.save_job(
+            job_id=job_id,
+            status=JobStatus.PENDING.value,
+            expires_at=expires_at,
         )
 
         thread = threading.Thread(
@@ -73,11 +67,7 @@ class JobManager:
 
     def get(self, job_id: str) -> Optional[Job]:
         """ジョブを取得"""
-        response = self._client.get_item(
-            TableName=self._table_name,
-            Key={"id": {"S": job_id}},
-        )
-        item = response.get("Item")
+        item = self._db.get_job(job_id)
         if not item:
             return None
         return self._item_to_job(item)
@@ -89,53 +79,16 @@ class JobManager:
         args: tuple,
         kwargs: dict,
     ) -> None:
-        self._update_status(job_id, JobStatus.RUNNING)
+        self._db.update_job_status(job_id, JobStatus.RUNNING.value)
 
         try:
             result = func(*args, **kwargs)
-            self._update_completed(job_id, result)
+            result_json = json.dumps(result, ensure_ascii=False, default=str)
+            self._db.update_job_completed(job_id, result_json)
             logger.info(f"Job {job_id} completed")
         except Exception as e:
-            self._update_failed(job_id, str(e))
+            self._db.update_job_failed(job_id, str(e))
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-
-    def _update_status(self, job_id: str, status: JobStatus) -> None:
-        self._client.update_item(
-            TableName=self._table_name,
-            Key={"id": {"S": job_id}},
-            UpdateExpression="SET #s = :s, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":s": {"S": status.value},
-                ":u": {"S": datetime.now().isoformat()},
-            },
-        )
-
-    def _update_completed(self, job_id: str, result: Any) -> None:
-        self._client.update_item(
-            TableName=self._table_name,
-            Key={"id": {"S": job_id}},
-            UpdateExpression="SET #s = :s, #r = :r, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status", "#r": "result"},
-            ExpressionAttributeValues={
-                ":s": {"S": JobStatus.COMPLETED.value},
-                ":r": {"S": json.dumps(result, ensure_ascii=False, default=str)},
-                ":u": {"S": datetime.now().isoformat()},
-            },
-        )
-
-    def _update_failed(self, job_id: str, error: str) -> None:
-        self._client.update_item(
-            TableName=self._table_name,
-            Key={"id": {"S": job_id}},
-            UpdateExpression="SET #s = :s, #e = :e, updated_at = :u",
-            ExpressionAttributeNames={"#s": "status", "#e": "error"},
-            ExpressionAttributeValues={
-                ":s": {"S": JobStatus.FAILED.value},
-                ":e": {"S": error},
-                ":u": {"S": datetime.now().isoformat()},
-            },
-        )
 
     @staticmethod
     def _item_to_job(item: dict) -> Job:
