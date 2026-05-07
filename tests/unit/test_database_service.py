@@ -2437,3 +2437,100 @@ class TestUploadedFileCRUDOperations:
         mock_client.delete_item.return_value = {}
         result = service.delete_uploaded_file_info("f1")
         assert result is True
+
+
+# =========================================================================
+# Jobs CRUD Tests
+# =========================================================================
+
+
+class TestDatabaseServiceJobs:
+    """Test DatabaseService job CRUD operations."""
+
+    @patch("boto3.client")
+    def test_save_job(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        service.save_job(job_id="job-1", status="pending", expires_at=9999999999)
+
+        mock_client.put_item.assert_called_once()
+        call_kwargs = mock_client.put_item.call_args[1]
+        assert call_kwargs["TableName"] == "Test_Jobs"
+        assert call_kwargs["Item"]["id"]["S"] == "job-1"
+        assert call_kwargs["Item"]["status"]["S"] == "pending"
+        assert call_kwargs["Item"]["expires_at"]["N"] == "9999999999"
+
+    @patch("boto3.client")
+    def test_get_job_found(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_client.get_item.return_value = {
+            "Item": {
+                "id": {"S": "job-1"},
+                "status": {"S": "completed"},
+                "created_at": {"S": "2026-05-05T10:00:00"},
+                "updated_at": {"S": "2026-05-05T10:01:00"},
+            }
+        }
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        item = service.get_job("job-1")
+
+        assert item is not None
+        assert item["id"]["S"] == "job-1"
+        assert item["status"]["S"] == "completed"
+
+    @patch("boto3.client")
+    def test_get_job_not_found(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_client.get_item.return_value = {}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        assert service.get_job("nonexistent") is None
+
+    @patch("boto3.client")
+    def test_update_job_status(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        service.update_job_status("job-1", "running")
+
+        mock_client.update_item.assert_called_once()
+        call_kwargs = mock_client.update_item.call_args[1]
+        assert call_kwargs["ExpressionAttributeValues"][":s"]["S"] == "running"
+
+    @patch("boto3.client")
+    def test_update_job_completed(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        service.update_job_completed("job-1", '{"key":"value"}')
+
+        mock_client.update_item.assert_called_once()
+        call_kwargs = mock_client.update_item.call_args[1]
+        assert call_kwargs["ExpressionAttributeValues"][":s"]["S"] == "completed"
+        assert call_kwargs["ExpressionAttributeValues"][":r"]["S"] == '{"key":"value"}'
+
+    @patch("boto3.client")
+    def test_update_job_failed(self, mock_boto3_client):
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        service.update_job_failed("job-1", "something went wrong")
+
+        mock_client.update_item.assert_called_once()
+        call_kwargs = mock_client.update_item.call_args[1]
+        assert call_kwargs["ExpressionAttributeValues"][":s"]["S"] == "failed"
+        assert call_kwargs["ExpressionAttributeValues"][":e"]["S"] == "something went wrong"
