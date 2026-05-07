@@ -2473,16 +2473,18 @@ class TestDatabaseServiceJobs:
                 "status": {"S": "completed"},
                 "created_at": {"S": "2026-05-05T10:00:00"},
                 "updated_at": {"S": "2026-05-05T10:01:00"},
+                "result": {"S": "{\"key\":\"value\"}"},
             }
         }
         mock_boto3_client.return_value = mock_client
 
         service = DatabaseService(table_prefix="Test", region="us-east-1")
-        item = service.get_job("job-1")
+        job = service.get_job("job-1")
 
-        assert item is not None
-        assert item["id"]["S"] == "job-1"
-        assert item["status"]["S"] == "completed"
+        assert job is not None
+        assert job.id == "job-1"
+        assert job.status.value == "completed"
+        assert job.result == {"key": "value"}
 
     @patch("boto3.client")
     def test_get_job_not_found(self, mock_boto3_client):

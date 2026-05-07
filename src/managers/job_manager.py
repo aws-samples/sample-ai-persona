@@ -10,33 +10,18 @@ import json
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any, Callable, Optional
 
+from ..models.job import Job, JobStatus
 from ..services.service_factory import ServiceFactory
 
 logger = logging.getLogger(__name__)
 
 TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
-
-class JobStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass
-class Job:
-    id: str
-    status: JobStatus
-    created_at: datetime
-    result: Optional[Any] = None
-    error: Optional[str] = None
-    updated_at: datetime = field(default_factory=datetime.now)
+# Re-export for backward compatibility
+__all__ = ["Job", "JobStatus", "JobManager"]
 
 
 class JobManager:
@@ -67,10 +52,7 @@ class JobManager:
 
     def get(self, job_id: str) -> Optional[Job]:
         """ジョブを取得"""
-        item = self._db.get_job(job_id)
-        if not item:
-            return None
-        return self._item_to_job(item)
+        return self._db.get_job(job_id)  # type: ignore[no-any-return]
 
     def _run(
         self,
@@ -89,15 +71,3 @@ class JobManager:
         except Exception as e:
             self._db.update_job_failed(job_id, str(e))
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-
-    @staticmethod
-    def _item_to_job(item: dict) -> Job:
-        result_str = item.get("result", {}).get("S")
-        return Job(
-            id=item["id"]["S"],
-            status=JobStatus(item["status"]["S"]),
-            created_at=datetime.fromisoformat(item["created_at"]["S"]),
-            updated_at=datetime.fromisoformat(item["updated_at"]["S"]),
-            result=json.loads(result_str) if result_str else None,
-            error=item.get("error", {}).get("S"),
-        )

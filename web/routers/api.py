@@ -577,5 +577,5 @@ async def get_job(job_id: str) -> Any:
         job_id=job.id,
         status=job.status.value,
         result=job.result,
-        error=job.error,
+        error="処理中にエラーが発生しました" if job.error else None,
     )

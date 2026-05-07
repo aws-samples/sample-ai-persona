@@ -13,6 +13,9 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 # Import models
 from ..models.persona import Persona
+
+if TYPE_CHECKING:
+    from ..models.job import Job
 from ..models.discussion import Discussion
 from ..models.message import Message
 from ..models.insight import Insight
@@ -2251,8 +2254,6 @@ class DatabaseService:
 
     def save_job(self, job_id: str, status: str, expires_at: int) -> None:
         """Save a new job record."""
-        from datetime import datetime
-
         now = datetime.now().isoformat()
 
         def _save() -> None:
@@ -2269,8 +2270,10 @@ class DatabaseService:
 
         self._execute_with_retry(_save, operation_name=f"save_job({job_id})")
 
-    def get_job(self, job_id: str) -> dict | None:
-        """Get a job record. Returns raw DynamoDB item dict or None."""
+    def get_job(self, job_id: str) -> "Job | None":
+        """Get a job record. Returns Job object or None."""
+        from ..models.job import Job, JobStatus
+        import json as _json
 
         def _get() -> dict | None:
             response = self.dynamodb_client.get_item(
@@ -2280,11 +2283,22 @@ class DatabaseService:
             item: dict | None = response.get("Item")  # type: ignore[assignment]
             return item
 
-        return self._execute_with_retry(_get, operation_name=f"get_job({job_id})")  # type: ignore[no-any-return]
+        item = self._execute_with_retry(_get, operation_name=f"get_job({job_id})")  # type: ignore[no-any-return]
+        if not item:
+            return None
+
+        result_str = item.get("result", {}).get("S")
+        return Job(
+            id=item["id"]["S"],
+            status=JobStatus(item["status"]["S"]),
+            created_at=datetime.fromisoformat(item["created_at"]["S"]),
+            updated_at=datetime.fromisoformat(item["updated_at"]["S"]),
+            result=_json.loads(result_str) if result_str else None,
+            error=item.get("error", {}).get("S"),
+        )
 
     def update_job_status(self, job_id: str, status: str) -> None:
         """Update job status."""
-        from datetime import datetime
 
         def _update() -> None:
             self.dynamodb_client.update_item(
@@ -2302,7 +2316,6 @@ class DatabaseService:
 
     def update_job_completed(self, job_id: str, result_json: str) -> None:
         """Update job as completed with result."""
-        from datetime import datetime
 
         def _update() -> None:
             self.dynamodb_client.update_item(
@@ -2323,7 +2336,6 @@ class DatabaseService:
 
     def update_job_failed(self, job_id: str, error: str) -> None:
         """Update job as failed with error message."""
-        from datetime import datetime
 
         def _update() -> None:
             self.dynamodb_client.update_item(
