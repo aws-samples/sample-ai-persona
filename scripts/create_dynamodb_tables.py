@@ -402,6 +402,41 @@ class DynamoDBTableCreator:
                 print(f"✗ Error creating table {table_name}: {e}")
                 raise
 
+    def create_jobs_table(self) -> bool:
+        """Create the Jobs table (async job tracking with TTL)."""
+        table_name = f"{self.table_prefix}_Jobs"
+
+        try:
+            self.dynamodb.create_table(
+                TableName=table_name,
+                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST",
+                Tags=[
+                    {"Key": "Application", "Value": "AIPersonaSystem"},
+                    {"Key": "Feature", "Value": "AsyncJobs"},
+                    {"Key": "ManagedBy", "Value": "Python"},
+                ],
+            )
+            # Enable TTL
+            self.dynamodb.update_time_to_live(
+                TableName=table_name,
+                TimeToLiveSpecification={
+                    "Enabled": True,
+                    "AttributeName": "expires_at",
+                },
+            )
+            print(f"✓ Created table: {table_name} (TTL: expires_at)")
+            return True
+
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceInUseException":
+                print(f"⚠ Table already exists: {table_name}")
+                return False
+            else:
+                print(f"✗ Error creating table {table_name}: {e}")
+                raise
+
     def wait_for_table_active(self, table_name: str, max_wait: int = 300) -> bool:
         """
         Wait for a table to become active.
@@ -485,6 +520,10 @@ class DynamoDBTableCreator:
         # Create PersonaKBBindings table
         if self.create_persona_kb_bindings_table():
             tables_created.append(f"{self.table_prefix}_PersonaKBBindings")
+
+        # Create Jobs table
+        if self.create_jobs_table():
+            tables_created.append(f"{self.table_prefix}_Jobs")
 
         # Wait for tables to become active
         if wait_for_active and tables_created:
