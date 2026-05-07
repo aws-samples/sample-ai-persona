@@ -2277,9 +2277,10 @@ class DatabaseService:
                 TableName=self.jobs_table,
                 Key={"id": {"S": job_id}},
             )
-            return response.get("Item")
+            item: dict | None = response.get("Item")  # type: ignore[assignment]
+            return item
 
-        return self._execute_with_retry(_get, operation_name=f"get_job({job_id})")
+        return self._execute_with_retry(_get, operation_name=f"get_job({job_id})")  # type: ignore[no-any-return]
 
     def update_job_status(self, job_id: str, status: str) -> None:
         """Update job status."""
