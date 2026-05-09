@@ -17,6 +17,7 @@ export class Database extends Construct {
   public readonly surveysTable: dynamodb.Table;
   public readonly knowledgeBasesTable: dynamodb.Table;
   public readonly personaKBBindingsTable: dynamodb.Table;
+  public readonly jobsTable: dynamodb.Table;
 
   constructor(scope: Construct, id: string, props: DatabaseProps) {
     super(scope, id);
@@ -163,6 +164,16 @@ export class Database extends Construct {
     this.personaKBBindingsTable.addGlobalSecondaryIndex({
       indexName: 'PersonaIdIndex',
       partitionKey: { name: 'persona_id', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Jobs Table (async job tracking with TTL)
+    this.jobsTable = new dynamodb.Table(this, 'Jobs', {
+      tableName: `${tablePrefix}_Jobs`,
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy,
     });
   }
 }

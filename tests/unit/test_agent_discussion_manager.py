@@ -304,7 +304,7 @@ class TestDisposeAgents:
 
         persona_agents = [mock_persona_agent_1, mock_persona_agent_2]
 
-        manager._cleanup_agents(persona_agents, mock_facilitator)
+        manager.cleanup_agents(persona_agents, mock_facilitator)
 
         # 全てのエージェントのdisposeが呼ばれたことを確認
         mock_persona_agent_1.dispose.assert_called_once()
@@ -329,7 +329,7 @@ class TestDisposeAgents:
         mock_facilitator = Mock(spec=FacilitatorAgent)
 
         # エラーが発生しても例外が伝播しないことを確認
-        manager._cleanup_agents([mock_persona_agent], mock_facilitator)
+        manager.cleanup_agents([mock_persona_agent], mock_facilitator)
 
         # ファシリテーターのdisposeも呼ばれることを確認
         mock_facilitator.dispose.assert_called_once()

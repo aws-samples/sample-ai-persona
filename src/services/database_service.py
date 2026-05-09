@@ -13,6 +13,9 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 # Import models
 from ..models.persona import Persona
+
+if TYPE_CHECKING:
+    from ..models.job import Job
 from ..models.discussion import Discussion
 from ..models.message import Message
 from ..models.insight import Insight
@@ -100,6 +103,7 @@ class DatabaseService:
         self.surveys_table = f"{table_prefix}_Surveys"
         self.kb_table = f"{table_prefix}_KnowledgeBases"
         self.persona_kb_bindings_table = f"{table_prefix}_PersonaKBBindings"
+        self.jobs_table = f"{table_prefix}_Jobs"
 
     def _get_table_name(self, entity_type: str) -> str:
         """
@@ -2243,3 +2247,107 @@ class DatabaseService:
             self.delete_kb_binding(binding.id)
             return 1
         return 0
+
+    # =========================================================================
+    # Jobs CRUD
+    # =========================================================================
+
+    def save_job(self, job_id: str, status: str, expires_at: int) -> None:
+        """Save a new job record."""
+        now = datetime.now().isoformat()
+
+        def _save() -> None:
+            self.dynamodb_client.put_item(
+                TableName=self.jobs_table,
+                Item={
+                    "id": {"S": job_id},
+                    "status": {"S": status},
+                    "created_at": {"S": now},
+                    "updated_at": {"S": now},
+                    "expires_at": {"N": str(expires_at)},
+                },
+            )
+
+        self._execute_with_retry(_save, operation_name=f"save_job({job_id})")
+
+    def get_job(self, job_id: str) -> "Job | None":
+        """Get a job record. Returns Job object or None."""
+        from ..models.job import Job, JobStatus
+        import json as _json
+
+        def _get() -> dict | None:
+            response = self.dynamodb_client.get_item(
+                TableName=self.jobs_table,
+                Key={"id": {"S": job_id}},
+            )
+            item: dict | None = response.get("Item")  # type: ignore[assignment]
+            return item
+
+        item = self._execute_with_retry(_get, operation_name=f"get_job({job_id})")  # type: ignore[no-any-return]
+        if not item:
+            return None
+
+        result_str = item.get("result", {}).get("S")
+        return Job(
+            id=item["id"]["S"],
+            status=JobStatus(item["status"]["S"]),
+            created_at=datetime.fromisoformat(item["created_at"]["S"]),
+            updated_at=datetime.fromisoformat(item["updated_at"]["S"]),
+            result=_json.loads(result_str) if result_str else None,
+            error=item.get("error", {}).get("S"),
+        )
+
+    def update_job_status(self, job_id: str, status: str) -> None:
+        """Update job status."""
+
+        def _update() -> None:
+            self.dynamodb_client.update_item(
+                TableName=self.jobs_table,
+                Key={"id": {"S": job_id}},
+                UpdateExpression="SET #s = :s, updated_at = :u",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":s": {"S": status},
+                    ":u": {"S": datetime.now().isoformat()},
+                },
+            )
+
+        self._execute_with_retry(_update, operation_name=f"update_job_status({job_id})")
+
+    def update_job_completed(self, job_id: str, result_json: str) -> None:
+        """Update job as completed with result."""
+
+        def _update() -> None:
+            self.dynamodb_client.update_item(
+                TableName=self.jobs_table,
+                Key={"id": {"S": job_id}},
+                UpdateExpression="SET #s = :s, #r = :r, updated_at = :u",
+                ExpressionAttributeNames={"#s": "status", "#r": "result"},
+                ExpressionAttributeValues={
+                    ":s": {"S": "completed"},
+                    ":r": {"S": result_json},
+                    ":u": {"S": datetime.now().isoformat()},
+                },
+            )
+
+        self._execute_with_retry(
+            _update, operation_name=f"update_job_completed({job_id})"
+        )
+
+    def update_job_failed(self, job_id: str, error: str) -> None:
+        """Update job as failed with error message."""
+
+        def _update() -> None:
+            self.dynamodb_client.update_item(
+                TableName=self.jobs_table,
+                Key={"id": {"S": job_id}},
+                UpdateExpression="SET #s = :s, #e = :e, updated_at = :u",
+                ExpressionAttributeNames={"#s": "status", "#e": "error"},
+                ExpressionAttributeValues={
+                    ":s": {"S": "failed"},
+                    ":e": {"S": error},
+                    ":u": {"S": datetime.now().isoformat()},
+                },
+            )
+
+        self._execute_with_retry(_update, operation_name=f"update_job_failed({job_id})")

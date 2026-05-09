@@ -64,6 +64,7 @@ export class AIPersonaStack extends Stack {
         database.datasetsTable, database.bindingsTable,
         database.surveyTemplatesTable, database.surveysTable,
         database.knowledgeBasesTable, database.personaKBBindingsTable,
+        database.jobsTable,
       ],
       dynamoDbTablePrefix: parameter.dynamoDbTablePrefix,
       awsRegion: this.region,
@@ -106,6 +107,17 @@ export class AIPersonaStack extends Stack {
     new CfnOutput(this, 'InternalServiceEndpoint', {
       value: service.endpoint,
       description: 'Express Mode Internal Endpoint',
+      exportName: `AIPersona-${parameter.envName}-EcsEndpoint`,
+    });
+    new CfnOutput(this, 'AlbArn', {
+      value: service.loadBalancerArn,
+      description: 'Internal ALB ARN (for MCP Gateway VPC Link)',
+      exportName: `AIPersona-${parameter.envName}-AlbArn`,
+    });
+    new CfnOutput(this, 'VpcId', {
+      value: vpc.vpcId,
+      description: 'VPC ID',
+      exportName: `AIPersona-${parameter.envName}-VpcId`,
     });
 
     new CfnOutput(this, 'PersonasTableName', { value: database.personasTable.tableName });
