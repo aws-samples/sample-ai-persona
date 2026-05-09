@@ -258,6 +258,8 @@ export class McpGatewayStack extends Stack {
     for (const part of docParts) {
       docVersion.addDependency(part);
     }
+    // Stage references documentationVersion — ensure Stage is deleted first
+    api.deploymentStage.node.addDependency(docVersion);
 
     // --- Cognito (M2M authentication for AgentCore Gateway) ---
     const isProd = parameter.envName === 'prod';
