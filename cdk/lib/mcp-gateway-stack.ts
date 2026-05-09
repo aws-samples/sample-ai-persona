@@ -264,6 +264,7 @@ export class McpGatewayStack extends Stack {
     // --- Cognito (M2M authentication for AgentCore Gateway) ---
     const isProd = parameter.envName === 'prod';
     const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `ai-persona-mcp-gw-${parameter.envName}`,
       signInCaseSensitive: false,
       removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
@@ -283,6 +284,7 @@ export class McpGatewayStack extends Stack {
     ];
 
     const userPoolClient = userPool.addClient('Client', {
+      userPoolClientName: `ai-persona-mcp-gw-${parameter.envName}`,
       generateSecret: true,
       oAuth: {
         flows: { clientCredentials: true },
