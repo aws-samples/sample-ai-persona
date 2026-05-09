@@ -273,7 +273,6 @@ npx cdk destroy AIPersonaMcp-dev
 | CDK デプロイで `Export not found` エラー | メインスタック（`AIPersona-{env}`）を先にデプロイしてください |
 | 認証エラー（401） | Cognito の Client ID / Secret / Scope が正しいか確認してください |
 | ジョブが `failed` になる | `error` フィールドのメッセージを確認。Bedrock のモデルアクセス権限やペルソナ ID の存在を確認してください |
-| 非同期ジョブの結果が消える | ジョブはインメモリ管理のため、ECS タスクの再起動で失われます。完了した結果は DB に保存されるため、議論やペルソナは通常の API で取得できます |
 
 ## 参考リンク
 
