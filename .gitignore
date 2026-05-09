@@ -21,6 +21,9 @@ unicode_data/
 constants/
 data/
 
+# Claude Code
+.claude/
+
 # Kiro
 .kiro/specs/
 .kiro/hooks/
@@ -42,3 +45,4 @@ tailwindcss
 .DS_Store
 cdk/lambda/auth-at-edge/node_modules/
 test-results/
+.coverage

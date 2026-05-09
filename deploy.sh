@@ -417,10 +417,16 @@ if [[ "${ENABLE_MCP}" == "true" ]]; then
     --region "${REGION}" \
     --query "Stacks[0].Outputs[?OutputKey=='TokenEndpointUrl'].OutputValue" \
     --output text 2>/dev/null || echo "")
+  MCP_CLIENT_ID=$(aws cloudformation describe-stacks \
+    --stack-name "AIPersonaMcp-${ENV_NAME}" \
+    --region "${REGION}" \
+    --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+    --output text 2>/dev/null || echo "")
 
   log_info "Gateway ID: ${GATEWAY_ID}"
   log_info "MCP Endpoint: https://${GATEWAY_ID}.gateway.bedrock-agentcore.${REGION}.amazonaws.com/mcp"
   log_info "Token Endpoint: ${MCP_TOKEN_URL}"
+  log_info "Client ID: ${MCP_CLIENT_ID}"
 fi
 
 # ===== Cognito callbackUrl更新（CloudFrontドメイン確定後） =====
@@ -453,6 +459,7 @@ echo -e "${GREEN}╠════════════════════
 echo -e "${GREEN}║${NC}  アプリURL: ${BLUE}https://${CLOUDFRONT_DOMAIN}${NC}"
 if [[ "${ENABLE_MCP}" == "true" && -n "${GATEWAY_ID}" ]]; then
 echo -e "${GREEN}║${NC}  MCP Endpoint: ${BLUE}https://${GATEWAY_ID}.gateway.bedrock-agentcore.${REGION}.amazonaws.com/mcp${NC}"
+echo -e "${GREEN}║${NC}  MCP Client ID: ${BLUE}${MCP_CLIENT_ID}${NC}"
 fi
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  再デプロイ（コード更新時）:"

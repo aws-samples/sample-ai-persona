@@ -1,8 +1,9 @@
 import { Construct } from 'constructs';
-import { Stack, StackProps, Fn, CfnOutput } from 'aws-cdk-lib';
+import { Stack, StackProps, Fn, CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
 import * as agentcore from '@aws-cdk/aws-bedrock-agentcore-alpha';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppParameter } from '../parameters';
 
@@ -257,11 +258,53 @@ export class McpGatewayStack extends Stack {
     for (const part of docParts) {
       docVersion.addDependency(part);
     }
+    // Stage references documentationVersion — ensure Stage is deleted first
+    api.deploymentStage.node.addDependency(docVersion);
+
+    // --- Cognito (M2M authentication for AgentCore Gateway) ---
+    const isProd = parameter.envName === 'prod';
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `ai-persona-mcp-gw-${parameter.envName}`,
+      signInCaseSensitive: false,
+      removalPolicy: isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+    });
+
+    const resourceServerIdentifier = `ai-persona-mcp-${parameter.envName}-${this.account}`;
+    const resourceServer = userPool.addResourceServer('ResourceServer', {
+      identifier: resourceServerIdentifier,
+      scopes: [
+        { scopeName: 'read', scopeDescription: 'Read access to gateway tools' },
+        { scopeName: 'write', scopeDescription: 'Write access to gateway tools' },
+      ],
+    });
+
+    const oauthScopes = [
+      cognito.OAuthScope.resourceServer(resourceServer, { scopeName: 'read', scopeDescription: 'Read access to gateway tools' }),
+      cognito.OAuthScope.resourceServer(resourceServer, { scopeName: 'write', scopeDescription: 'Write access to gateway tools' }),
+    ];
+
+    const userPoolClient = userPool.addClient('Client', {
+      userPoolClientName: `ai-persona-mcp-gw-${parameter.envName}`,
+      generateSecret: true,
+      oAuth: {
+        flows: { clientCredentials: true },
+        scopes: oauthScopes,
+      },
+    });
+
+    const domainPrefix = `ai-persona-mcp-${parameter.envName}-${this.account}`;
+    const userPoolDomain = userPool.addDomain('Domain', {
+      cognitoDomain: { domainPrefix },
+    });
 
     // --- AgentCore Gateway ---
     const gateway = new agentcore.Gateway(this, 'Gateway', {
       gatewayName: `ai-persona-mcp-${parameter.envName}`,
       description: 'AI Persona research toolkit for generating personas, running discussions, and extracting insights',
+      authorizerConfiguration: agentcore.GatewayAuthorizer.usingCognito({
+        userPool,
+        allowedClients: [userPoolClient],
+      }),
       protocolConfiguration: new agentcore.McpProtocolConfiguration({
         instructions: [
           'This gateway provides AI persona research tools for product planning and marketing strategy.',
@@ -303,11 +346,13 @@ export class McpGatewayStack extends Stack {
       value: api.url,
       description: 'API Gateway URL',
     });
-    if (gateway.tokenEndpointUrl) {
-      new CfnOutput(this, 'TokenEndpointUrl', {
-        value: gateway.tokenEndpointUrl,
-        description: 'Cognito Token Endpoint URL for M2M authentication',
-      });
-    }
+    new CfnOutput(this, 'TokenEndpointUrl', {
+      value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com/oauth2/token`,
+      description: 'Cognito Token Endpoint URL for M2M authentication',
+    });
+    new CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool Client ID for M2M authentication',
+    });
   }
 }
