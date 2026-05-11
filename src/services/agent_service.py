@@ -74,7 +74,10 @@ class PersonaAgent:
         )
 
     def respond(
-        self, prompt: str, context: List[Message] | None = None, include_documents: bool = True
+        self,
+        prompt: str,
+        context: List[Message] | None = None,
+        include_documents: bool = True,
     ) -> str:
         """
         プロンプトに対して応答を生成
@@ -296,7 +299,10 @@ class FacilitatorAgent:
         return selected_agent
 
     def summarize_round(
-        self, round_number: int, round_messages: List[Message], topic: str,
+        self,
+        round_number: int,
+        round_messages: List[Message],
+        topic: str,
         previous_summaries: List[str] | None = None,
     ) -> str:
         """
@@ -331,7 +337,9 @@ class FacilitatorAgent:
             )
 
             # プロンプト構築
-            parts = [f"議論テーマ「{topic}」のラウンド{round_number}/{self.rounds}が完了しました。\n"]
+            parts = [
+                f"議論テーマ「{topic}」のラウンド{round_number}/{self.rounds}が完了しました。\n"
+            ]
 
             # 過去ラウンドの要約を含める
             if previous_summaries:
@@ -354,7 +362,9 @@ class FacilitatorAgent:
                     f"残り{self.rounds - round_number}ラウンドです。"
                 )
                 if self.rounds - round_number <= 2:
-                    parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
+                    parts.append(
+                        "論点を絞り込み、結論に向けて議論を収束させてください。"
+                    )
                 parts.append("3-5文で要約し、最後に問いかけで締めてください。")
             else:
                 parts.append(
@@ -378,7 +388,10 @@ class FacilitatorAgent:
             raise AgentCommunicationError(error_msg)
 
     def create_prompt_for_persona(
-        self, persona_agent: PersonaAgent, topic: str, context: List[Message],
+        self,
+        persona_agent: PersonaAgent,
+        topic: str,
+        context: List[Message],
         round_summaries: List[str] | None = None,
         latest_facilitator_message: str | None = None,
     ) -> str:
@@ -412,7 +425,11 @@ class FacilitatorAgent:
 
             # 要約コンテキスト（最新の要約は「問いかけ」セクションで表示するため除外）
             if round_summaries:
-                past_summaries = round_summaries[:-1] if latest_facilitator_message else round_summaries
+                past_summaries = (
+                    round_summaries[:-1]
+                    if latest_facilitator_message
+                    else round_summaries
+                )
                 if past_summaries:
                     parts.append("## これまでの議論の要約")
                     for i, summary in enumerate(past_summaries, 1):
@@ -427,9 +444,7 @@ class FacilitatorAgent:
 
             # 自分の前回発言（一貫性のため）
             if context:
-                own_previous = [
-                    msg for msg in context if msg.persona_id == persona_id
-                ]
+                own_previous = [msg for msg in context if msg.persona_id == persona_id]
                 if own_previous:
                     parts.append("## あなたの前回の発言")
                     parts.append(own_previous[-1].content)
@@ -438,7 +453,8 @@ class FacilitatorAgent:
             # 直近の他ペルソナの発言
             if context:
                 recent_others = [
-                    msg for msg in context
+                    msg
+                    for msg in context
                     if msg.persona_id != "facilitator" and msg.persona_id != persona_id
                 ][-3:]
                 if recent_others:
@@ -946,9 +962,11 @@ class AgentService:
         # システムプロンプトにKB利用の指示を追加
         filter_desc = ""
         if metadata_filters:
-            filter_desc = "（フィルタ: " + ", ".join(
-                f"{k}={v}" for k, v in metadata_filters.items()
-            ) + "）"
+            filter_desc = (
+                "（フィルタ: "
+                + ", ".join(f"{k}={v}" for k, v in metadata_filters.items())
+                + "）"
+            )
 
         desc_line = ""
         if kb_description:
@@ -1038,20 +1056,28 @@ class AgentService:
         )
 
     def _enhance_prompt_with_kb_info(
-        self, base_prompt: str, kb_name: str, kb_description: str, metadata_filters: Dict[str, str] | None = None
+        self,
+        base_prompt: str,
+        kb_name: str,
+        kb_description: str,
+        metadata_filters: Dict[str, str] | None = None,
     ) -> str:
         """ナレッジベース情報をシステムプロンプトに追加"""
         filter_desc = ""
         if metadata_filters:
-            filter_desc = "（フィルタ: " + ", ".join(
-                f"{k}={v}" for k, v in metadata_filters.items()
-            ) + "）"
+            filter_desc = (
+                "（フィルタ: "
+                + ", ".join(f"{k}={v}" for k, v in metadata_filters.items())
+                + "）"
+            )
 
         desc_line = ""
         if kb_description:
             desc_line = f"\n内容: {kb_description}"
 
-        return base_prompt + f"""
+        return (
+            base_prompt
+            + f"""
 
 # 【ナレッジベース連携】
 
@@ -1062,6 +1088,7 @@ class AgentService:
 2. 検索結果を参考にしつつ、あなた自身のペルソナとしての視点で発言してください
 3. 検索結果をそのまま読み上げるのではなく、自分の言葉で自然に組み込んでください
 """
+        )
 
     def _enhance_prompt_with_dataset_info(
         self, base_prompt: str, bindings: List[Dict], datasets: List[Any]
@@ -1220,7 +1247,8 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
 
         try:
             model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID, region=config.AWS_REGION  # type: ignore[call-arg]
+                model_id=config.BEDROCK_MODEL_ID,
+                region=config.AWS_REGION,  # type: ignore[call-arg]
             )
 
             agent = Agent(
@@ -1430,7 +1458,13 @@ JSON配列:"""
                         if isinstance(part, dict) and "text" in part:
                             text_parts.append(part["text"])
                     if text_parts:
-                        log.append({"type": "tool_result", "tool_name": last_tool_name, "content": "\n".join(text_parts)[:10000]})
+                        log.append(
+                            {
+                                "type": "tool_result",
+                                "tool_name": last_tool_name,
+                                "content": "\n".join(text_parts)[:10000],
+                            }
+                        )
         return log
 
     def create_persona_generation_agent(
@@ -1543,7 +1577,9 @@ JSON配列:"""
             # ペルソナ生成はデータ分析の品質が重要なためSonnetを使用
             credentials = config.get_aws_credentials()
             filtered_credentials = {
-                k: v for k, v in credentials.items() if v is not None and k != "region_name"
+                k: v
+                for k, v in credentials.items()
+                if v is not None and k != "region_name"
             }
             model = BedrockModel(
                 model_id=config.BEDROCK_MODEL_ID,
@@ -1559,7 +1595,11 @@ JSON配列:"""
                     raise AgentInitializationError(
                         "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
                     )
-                data_agent_tool = create_data_agent_tool(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION, event_queue=event_queue)
+                data_agent_tool = create_data_agent_tool(
+                    config.DATA_AGENT_RUNTIME_ARN,
+                    config.DATA_AGENT_REGION,
+                    event_queue=event_queue,
+                )
                 tools.append(data_agent_tool)
                 self.logger.info("データ分析エージェントツール (ask_data_agent) を追加")
 
@@ -1586,7 +1626,9 @@ JSON配列:"""
 
             agent = Agent(**agent_kwargs)
 
-            self.logger.info(f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})")
+            self.logger.info(
+                f"ペルソナ生成エージェントを作成 (data_type={data_type}, mcp={use_mcp})"
+            )
             return agent
 
         except Exception as e:
@@ -1631,7 +1673,9 @@ JSON配列:"""
             goals: list[str] = Field(description="目標・願望（3-5個）")
 
         class PersonaListOutput(BaseModel):
-            personas: list[PersonaOutput] = Field(description="生成されたペルソナのリスト")
+            personas: list[PersonaOutput] = Field(
+                description="生成されたペルソナのリスト"
+            )
 
         agent = None
         try:
@@ -1670,18 +1714,51 @@ JSON配列:"""
 
             prompt += f"\n{persona_count}個のペルソナを生成してください。"
 
-            self.logger.info(f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})")
+            self.logger.info(
+                f"ペルソナ生成開始 (count={persona_count}, data_type={data_type})"
+            )
             agent(prompt)
 
             # 思考ログを抽出
             thinking_log = self._extract_thinking_log(agent)
 
-            # Structured Outputで型安全に取得
-            result = agent.structured_output(
-                PersonaListOutput,
-                "上記の分析結果に基づいて、生成したペルソナをJSON形式で出力してください。",
+            # Structured Outputで型安全に取得（バリデーションエラー時リトライ）
+            structured_prompt = (
+                "上記の分析結果に基づいて、生成したペルソナをJSON形式で出力してください。\n"
+                "以下のスキーマに厳密に従ってください:\n"
+                "- personas: オブジェクトの配列\n"
+                "  - name: string（日本人の姓名）\n"
+                "  - age: integer（数値のみ、文字列不可）\n"
+                "  - occupation: string\n"
+                "  - background: string\n"
+                "  - values: stringの配列（3-5個）\n"
+                "  - pain_points: stringの配列（3-5個）\n"
+                "  - goals: stringの配列（3-5個）\n"
+                "全フィールド必須です。nullや空配列は不可です。"
             )
 
+            max_retries = 2
+            last_error = None
+            result = None
+            for attempt in range(max_retries + 1):
+                try:
+                    retry_prompt = structured_prompt
+                    if last_error and attempt > 0:
+                        retry_prompt = (
+                            f"前回の出力でバリデーションエラーが発生しました:\n{last_error}\n\n"
+                            f"エラーを修正して再度出力してください。\n{structured_prompt}"
+                        )
+                    result = agent.structured_output(PersonaListOutput, retry_prompt)
+                    break
+                except Exception as validation_err:
+                    last_error = str(validation_err)
+                    self.logger.warning(
+                        f"structured_output バリデーションエラー (attempt {attempt + 1}/{max_retries + 1}): {last_error}"
+                    )
+                    if attempt == max_retries:
+                        raise
+
+            assert result is not None
             personas = []
             for p in result.personas:
                 persona = Persona.create_new(
