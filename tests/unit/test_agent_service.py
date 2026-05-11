@@ -3,12 +3,13 @@ Agent サービスの単体テスト
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 
 from src.services.agent_service import (
     AgentService,
     AgentInitializationError,
+    AgentServiceError,
     PersonaAgent,
     FacilitatorAgent,
 )
@@ -602,7 +603,97 @@ class TestMarketResearchAgent:
         agent_service = AgentService()
         report_text = "これは市場調査レポートです。" * 50
 
-        from src.services.agent_service import AgentServiceError
-
         with pytest.raises(AgentServiceError):
             agent_service.generate_personas_from_report(report_text, 2)
+
+
+class TestStructuredOutputRetry:
+    """structured_output リトライロジックのテスト"""
+
+    def _make_mock_agent(self):
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.messages = []
+        return mock_agent_instance
+
+    @patch.object(AgentService, "create_persona_generation_agent")
+    def test_structured_output_succeeds_first_try(self, mock_create_agent):
+        """初回成功時はリトライなしで結果を返す"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_create_agent.return_value = mock_agent_instance
+
+        mock_result = MagicMock()
+        mock_persona = MagicMock()
+        mock_persona.name = "田中太郎"
+        mock_persona.age = 30
+        mock_persona.occupation = "エンジニア"
+        mock_persona.background = "IT企業勤務"
+        mock_persona.values = ["効率性"]
+        mock_persona.pain_points = ["時間不足"]
+        mock_persona.goals = ["キャリアアップ"]
+        mock_result.personas = [mock_persona]
+
+        mock_agent_instance.structured_output.return_value = mock_result
+
+        agent_service = AgentService()
+        personas, _ = agent_service.generate_personas_with_agent(
+            data_text="テストデータ",
+            data_type="text",
+            persona_count=1,
+        )
+
+        assert len(personas) == 1
+        assert personas[0].name == "田中太郎"
+        assert mock_agent_instance.structured_output.call_count == 1
+
+    @patch.object(AgentService, "create_persona_generation_agent")
+    def test_structured_output_retries_on_validation_error(self, mock_create_agent):
+        """バリデーションエラー時にリトライして成功する"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_create_agent.return_value = mock_agent_instance
+
+        mock_result = MagicMock()
+        mock_persona = MagicMock()
+        mock_persona.name = "鈴木花子"
+        mock_persona.age = 25
+        mock_persona.occupation = "デザイナー"
+        mock_persona.background = "フリーランス"
+        mock_persona.values = ["創造性"]
+        mock_persona.pain_points = ["収入不安定"]
+        mock_persona.goals = ["独立"]
+        mock_result.personas = [mock_persona]
+
+        mock_agent_instance.structured_output.side_effect = [
+            ValueError("1 validation error for PersonaListOutput"),
+            mock_result,
+        ]
+
+        agent_service = AgentService()
+        personas, _ = agent_service.generate_personas_with_agent(
+            data_text="テストデータ",
+            data_type="dwh",
+            persona_count=1,
+        )
+
+        assert len(personas) == 1
+        assert personas[0].name == "鈴木花子"
+        assert mock_agent_instance.structured_output.call_count == 2
+
+    @patch.object(AgentService, "create_persona_generation_agent")
+    def test_structured_output_fails_after_max_retries(self, mock_create_agent):
+        """最大リトライ回数を超えたら例外を発生"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_create_agent.return_value = mock_agent_instance
+
+        mock_agent_instance.structured_output.side_effect = ValueError(
+            "validation error"
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(AgentServiceError, match="ペルソナ生成エラー"):
+            agent_service.generate_personas_with_agent(
+                data_text="テストデータ",
+                data_type="dwh",
+                persona_count=1,
+            )
+
+        assert mock_agent_instance.structured_output.call_count == 3
