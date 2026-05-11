@@ -1248,7 +1248,7 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
         try:
             model = BedrockModel(
                 model_id=config.BEDROCK_MODEL_ID,
-                region=config.AWS_REGION,  # type: ignore[call-arg]
+                region_name=config.AWS_REGION,
             )
 
             agent = Agent(
