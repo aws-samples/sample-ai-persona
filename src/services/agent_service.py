@@ -177,14 +177,15 @@ class PersonaAgent:
             thread = threading.Thread(target=_run_agent, daemon=True)
             thread.start()
 
-            while True:
-                token = token_queue.get()
-                if token is None:
-                    break
-                yield token
-
-            thread.join()
-            self.agent.callback_handler = original_handler
+            try:
+                while True:
+                    token = token_queue.get()
+                    if token is None:
+                        break
+                    yield token
+            finally:
+                thread.join()
+                self.agent.callback_handler = original_handler
 
             if agent_error:
                 raise agent_error
@@ -567,14 +568,15 @@ class FacilitatorAgent:
             thread = threading.Thread(target=_run_agent, daemon=True)
             thread.start()
 
-            while True:
-                token = token_queue.get()
-                if token is None:
-                    break
-                yield token
-
-            thread.join()
-            self.agent.callback_handler = original_handler
+            try:
+                while True:
+                    token = token_queue.get()
+                    if token is None:
+                        break
+                    yield token
+            finally:
+                thread.join()
+                self.agent.callback_handler = original_handler
 
             if agent_error:
                 raise agent_error
