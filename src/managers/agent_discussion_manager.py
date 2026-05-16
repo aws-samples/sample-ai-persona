@@ -478,9 +478,13 @@ class AgentDiscussionManager:
                     # Create prompt with round summaries + recent messages
                     # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages[-10:],
+                        speaker,
+                        topic,
+                        all_messages[-10:],
                         round_summaries=round_summaries if round_summaries else None,
-                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1]
+                        if round_summaries
+                        else None,
                     )
 
                     # Get persona's response (context=None, already in prompt)
@@ -516,8 +520,12 @@ class AgentDiscussionManager:
                 if round_messages:
                     try:
                         round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic,
-                            previous_summaries=round_summaries if round_summaries else None,
+                            current_round,
+                            round_messages,
+                            topic,
+                            previous_summaries=round_summaries
+                            if round_summaries
+                            else None,
                         )
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
@@ -731,7 +739,9 @@ class AgentDiscussionManager:
             if kb_binding:
                 kb = db_service.get_knowledge_base(kb_binding.kb_id)
                 if kb:
-                    from src.services.knowledge_base.kb_tools import create_kb_retrieval_tool
+                    from src.services.knowledge_base.kb_tools import (
+                        create_kb_retrieval_tool,
+                    )
                     from src.config import config
 
                     kb_tool = create_kb_retrieval_tool(
@@ -741,7 +751,10 @@ class AgentDiscussionManager:
                     )
                     additional_tools.append(kb_tool)
                     enhanced_prompt = self.agent_service._enhance_prompt_with_kb_info(
-                        enhanced_prompt, kb.name, kb.description, kb_binding.metadata_filters
+                        enhanced_prompt,
+                        kb.name,
+                        kb.description,
+                        kb_binding.metadata_filters,
                     )
 
         # データセット連携：ツールとプロンプト拡張を準備
@@ -939,28 +952,52 @@ class AgentDiscussionManager:
                     # Create prompt with round summaries + recent messages
                     # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
                     prompt = facilitator.create_prompt_for_persona(
-                        speaker, topic, all_messages[-10:],
+                        speaker,
+                        topic,
+                        all_messages[-10:],
                         round_summaries=round_summaries if round_summaries else None,
-                        latest_facilitator_message=round_summaries[-1] if round_summaries else None,
+                        latest_facilitator_message=round_summaries[-1]
+                        if round_summaries
+                        else None,
                     )
 
-                    # Get persona's response (context=None, already in prompt)
+                    # Get persona's response with token streaming
                     try:
-                        statement = speaker.respond(prompt, None)
+                        # Signal message start
+                        yield (
+                            "message_start",
+                            {
+                                "persona_id": speaker.get_persona_id(),
+                                "persona_name": speaker.get_persona_name(),
+                                "message_type": "statement",
+                                "round_number": current_round,
+                            },
+                        )
 
-                        # Create message for persona statement
+                        # Stream tokens
+                        full_text = ""
+                        for token in speaker.respond_streaming(prompt, None):
+                            full_text += token
+                            yield (
+                                "message_delta",
+                                {
+                                    "persona_id": speaker.get_persona_id(),
+                                    "content": token,
+                                },
+                            )
+
+                        # Create message and signal end
                         message = Message.create_new(
                             persona_id=speaker.get_persona_id(),
                             persona_name=speaker.get_persona_name(),
-                            content=statement,
+                            content=full_text,
                             message_type="statement",
                             round_number=current_round,
                         )
                         all_messages.append(message)
                         round_messages.append(message)
 
-                        # Yield the message immediately
-                        yield ("message", message)
+                        yield ("message_end", message)
 
                         self.logger.info(
                             f"Persona {speaker.get_persona_name()} spoke in round {current_round}"
@@ -976,13 +1013,38 @@ class AgentDiscussionManager:
                         spoken_in_round.append(speaker.get_persona_id())
                         continue
 
-                # ラウンド終了後にファシリテータがラウンド全体を要約
+                # ラウンド終了後にファシリテータがラウンド全体を要約（ストリーミング）
                 if round_messages:
                     try:
-                        round_summary = facilitator.summarize_round(
-                            current_round, round_messages, topic,
-                            previous_summaries=round_summaries if round_summaries else None,
+                        # Signal facilitator message start
+                        yield (
+                            "message_start",
+                            {
+                                "persona_id": "facilitator",
+                                "persona_name": "ファシリテータ",
+                                "message_type": "summary",
+                                "round_number": current_round,
+                            },
                         )
+
+                        # Stream facilitator summary tokens
+                        round_summary = ""
+                        for token in facilitator.summarize_round_streaming(
+                            current_round,
+                            round_messages,
+                            topic,
+                            previous_summaries=round_summaries
+                            if round_summaries
+                            else None,
+                        ):
+                            round_summary += token
+                            yield (
+                                "message_delta",
+                                {
+                                    "persona_id": "facilitator",
+                                    "content": token,
+                                },
+                            )
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
                         round_summaries.append(round_summary)
@@ -997,8 +1059,7 @@ class AgentDiscussionManager:
                         )
                         all_messages.append(summary_message)
 
-                        # Yield the summary message
-                        yield ("message", summary_message)
+                        yield ("message_end", summary_message)
 
                         self.logger.info(
                             f"Facilitator summarized round {current_round}"

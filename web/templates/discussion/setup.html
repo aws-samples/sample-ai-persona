@@ -221,30 +221,97 @@
                   const eventSource = new EventSource(url);
                   let discussionComplete = false;
                   
+                  let currentStreamingEl = null;
+                  let currentAccumulatedText = '';
+
+                  function createBubble(info) {
+                      const isFacilitator = info.persona_id === 'facilitator' || info.message_type === 'summary';
+                      const safeName = escapeHtml(info.persona_name || '');
+                      let msgHtml;
+                      if (isFacilitator) {
+                          msgHtml = `
+                              <div class='flex justify-center my-4 message-item fade-in'>
+                                  <div class='facilitator-bubble max-w-2xl'>
+                                      <div class='flex items-center gap-2 mb-2'>
+                                          <div class='w-8 h-8 rounded-full facilitator-avatar flex items-center justify-center'>
+                                              <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg>
+                                          </div>
+                                          <span class='font-bold'>ファシリテーター</span>
+                                      </div>
+                                      <div class='leading-relaxed prose prose-sm max-w-none streaming-content'></div>
+                                  </div>
+                              </div>
+                          `;
+                      } else {
+                          const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
+                          const color = personaColors[pInfo.colorIndex % personaColors.length];
+                          msgHtml = `
+                              <div class='flex gap-3 message-item fade-in'>
+                                  <div class='flex-shrink-0'>
+                                      <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
+                                          <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
+                                      </div>
+                                  </div>
+                                  <div class='flex-1 min-w-0'>
+                                      <div class='flex items-baseline gap-2 mb-1'>
+                                          <span class='font-bold persona-name-${color} text-lg'>${safeName}</span>
+                                      </div>
+                                      <div class='persona-bubble-${color} border rounded-2xl rounded-tl-none p-4 shadow-sm'>
+                                          <div class='text-gray-800 leading-relaxed prose prose-sm max-w-none streaming-content'></div>
+                                      </div>
+                                  </div>
+                              </div>
+                          `;
+                      }
+                      const tempDiv = document.createElement('div');
+                      tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
+                      const bubble = tempDiv.firstElementChild;
+                      container.appendChild(bubble);
+                      return bubble.querySelector('.streaming-content');
+                  }
+
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
-                      
+
                       if (data.type === 'keepalive') {
-                          // keep-alive: 何もしない（接続維持のみ）
                           return;
                       } else if (data.type === 'participants') {
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
-                      } else if (data.type === 'message') {
+                      } else if (data.type === 'message_start') {
+                          currentAccumulatedText = '';
+                          currentStreamingEl = createBubble(data);
+                          container.scrollTop = container.scrollHeight;
+                      } else if (data.type === 'message_delta') {
+                          currentAccumulatedText += data.content;
+                          if (currentStreamingEl) {
+                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                                  marked.parse(currentAccumulatedText, {breaks: true})
+                              );
+                              container.scrollTop = container.scrollHeight;
+                          }
+                      } else if (data.type === 'message_end') {
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
-                          
-                          // ファシリテーターの発言かどうかを判定
+                          if (currentStreamingEl) {
+                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                                  marked.parse(data.content, {breaks: true})
+                              );
+                          }
+                          currentStreamingEl = null;
+                          currentAccumulatedText = '';
+                      } else if (data.type === 'message') {
+                          // 後方互換: Traditional mode 等の完成メッセージ
+                          messageCount++;
+                          counter.textContent = messageCount + ' 発言';
+
                           const isFacilitator = data.persona_id === 'facilitator' || data.message_type === 'summary';
-                          
-                          // サーバーサイドでサニタイズ済みHTMLを使用（フォールバックはテキストをエスケープ）
-                          const renderedContent = data.content_html || escapeHtml(data.content).replace(/\n/g, '<br>');
+                          const renderedContent = data.content_html || DOMPurify.sanitize(marked.parse(data.content, {breaks: true}));
                           const safeName = escapeHtml(data.persona_name || '');
-                          
+
                           let msgHtml;
                           if (isFacilitator) {
-                              // ファシリテーターの発言（中央寄せ、グレー背景）
                               msgHtml = `
                                   <div class='flex justify-center my-4 message-item fade-in'>
                                       <div class='facilitator-bubble max-w-2xl'>
@@ -259,10 +326,8 @@
                                   </div>
                               `;
                           } else {
-                              // ペルソナの発言
                               const info = participantMap[data.persona_id] || { name: data.persona_name, colorIndex: 0 };
                               const color = personaColors[info.colorIndex % personaColors.length];
-                              
                               msgHtml = `
                                   <div class='flex gap-3 message-item fade-in'>
                                       <div class='flex-shrink-0'>
@@ -285,7 +350,7 @@
                           tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
                           while (tempDiv.firstChild) container.appendChild(tempDiv.firstChild);
                           container.scrollTop = container.scrollHeight;
-                          
+
                       } else if (data.type === 'complete') {
                           discussionComplete = true;
                           eventSource.close();
