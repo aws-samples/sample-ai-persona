@@ -94,7 +94,14 @@ def _prepare_file_content_block(
 
     elif mime_type == "application/pdf":
         # PDFの場合
-        safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", filename.rsplit(".", 1)[0])[:100]
+        safe_name = (
+            re.sub(
+                r"\s+",
+                " ",
+                re.sub(r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", filename.rsplit(".", 1)[0]),
+            ).strip()[:100]
+            or "document"
+        )
         return {
             "document": {
                 "name": safe_name,
@@ -112,7 +119,14 @@ def _prepare_file_content_block(
             "text/markdown": "md",
         }
         doc_format = format_map.get(mime_type, "txt")
-        safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", filename.rsplit(".", 1)[0])[:100]
+        safe_name = (
+            re.sub(
+                r"\s+",
+                " ",
+                re.sub(r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", filename.rsplit(".", 1)[0]),
+            ).strip()[:100]
+            or "document"
+        )
         return {
             "document": {
                 "name": safe_name,
@@ -241,7 +255,11 @@ async def create_interview_session(
     except InterviewValidationError as e:
         logger.error(f"Interview validation error: {e}")
         return JSONResponse(
-            {"error": "入力内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
+            {
+                "error": "入力内容に問題があります。内容を確認してください。",
+                "error_type": "validation_error",
+            },
+            status_code=400,
         )
     except InterviewAgentError as e:
         logger.error(f"Interview agent error: {e}")
@@ -329,6 +347,141 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
                 "error": "ページの読み込み中にエラーが発生しました。しばらく待ってから再試行してください。",
             },
             status_code=500,
+        )
+
+
+@router.post("/{session_id}/message/stream")
+async def send_message_stream(
+    request: Request,
+    session_id: str,
+    message: str = Form(...),
+    files: Optional[List[UploadFile]] = File(None),
+) -> Any:
+    """メッセージ送信ストリーミングエンドポイント（トークン単位SSE）"""
+    try:
+        if not message or not message.strip():
+            return StreamingResponse(
+                iter(
+                    [
+                        f"data: {json.dumps({'type': 'error', 'message': 'メッセージが空です'}, ensure_ascii=False)}\n\n"
+                    ]
+                ),
+                media_type="text/event-stream",
+            )
+
+        # ドキュメント処理
+        document_contents: list[Dict[str, Any]] = []
+        document_metadata: list[Dict[str, Any]] = []
+        if files:
+            for file in files:
+                if file.filename and file.size and file.size > 0:
+                    content_type = file.content_type or ""
+                    if content_type in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES:
+                        file_bytes = await file.read()
+                        if content_type in SUPPORTED_IMAGE_TYPES:
+                            img_format = content_type.split("/")[-1]
+                            if img_format == "jpeg":
+                                img_format = "jpeg"
+                            document_contents.append(
+                                {
+                                    "image": {
+                                        "format": img_format,
+                                        "source": {"bytes": file_bytes},
+                                    }
+                                }
+                            )
+                        else:
+                            raw_name = (file.filename or "doc").rsplit(".", 1)[0]
+                            doc_name = re.sub(
+                                r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", raw_name
+                            )
+                            doc_name = (
+                                re.sub(r"\s+", " ", doc_name).strip() or "document"
+                            )
+                            doc_format = "pdf" if "pdf" in content_type else "txt"
+                            document_contents.append(
+                                {
+                                    "document": {
+                                        "name": doc_name[:200],
+                                        "format": doc_format,
+                                        "source": {"bytes": file_bytes},
+                                    }
+                                }
+                            )
+                        document_metadata.append(
+                            {
+                                "filename": file.filename,
+                                "mime_type": content_type,
+                                "file_size": file.size,
+                                "uploaded_at": datetime.now().isoformat(),
+                            }
+                        )
+
+        interview_manager = get_interview_manager()
+
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        def run_streaming() -> None:
+            try:
+                for event_type, data in interview_manager.send_user_message_streaming(
+                    session_id,
+                    message.strip(),
+                    document_contents=document_contents or None,
+                    document_metadata=document_metadata or None,
+                ):
+                    if event_type == "message_start":
+                        sse = f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
+                    elif event_type == "message_delta":
+                        sse = f"data: {json.dumps({'type': 'message_delta', **data}, ensure_ascii=False)}\n\n"
+                    elif event_type == "message_end":
+                        sse = f"data: {json.dumps({'type': 'message_end', 'persona_id': data.persona_id, 'persona_name': data.persona_name, 'content': data.content, 'message_type': data.message_type}, ensure_ascii=False)}\n\n"
+                    else:
+                        continue
+                    asyncio.run_coroutine_threadsafe(queue.put(sse), loop)
+                # Complete signal
+                complete_sse = (
+                    f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
+                )
+                asyncio.run_coroutine_threadsafe(queue.put(complete_sse), loop)
+            except Exception as e:
+                logger.error(f"Interview streaming error: {e}")
+                error_sse = f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                asyncio.run_coroutine_threadsafe(queue.put(error_sse), loop)
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+        loop = asyncio.get_event_loop()
+
+        async def event_generator() -> Any:
+            executor.submit(run_streaming)
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30)
+                    if event is None:
+                        break
+                    yield event
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Interview stream endpoint error: {e}")
+        return StreamingResponse(
+            iter(
+                [
+                    f"data: {json.dumps({'type': 'error', 'message': 'ストリーミング開始中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
+                ]
+            ),
+            media_type="text/event-stream",
         )
 
 
@@ -497,7 +650,11 @@ async def send_message(
     except InterviewValidationError as e:
         logger.error(f"Validation error: {e}")
         return JSONResponse(
-            {"error": "入力内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
+            {
+                "error": "入力内容に問題があります。内容を確認してください。",
+                "error_type": "validation_error",
+            },
+            status_code=400,
         )
     except InterviewAgentError as e:
         logger.error(f"Agent error: {e}")
@@ -554,7 +711,9 @@ async def get_messages(request: Request, session_id: str) -> Any:
 
     except InterviewManagerError as e:
         logger.error(f"Error getting messages: {e}")
-        return JSONResponse({"error": "メッセージ履歴が見つかりません"}, status_code=404)
+        return JSONResponse(
+            {"error": "メッセージ履歴が見つかりません"}, status_code=404
+        )
     except Exception as e:
         logger.error(f"Unexpected error getting messages: {e}")
         return JSONResponse(
@@ -725,7 +884,11 @@ async def save_interview_session(
     except InterviewValidationError as e:
         logger.error(f"Validation error during save: {e}")
         return JSONResponse(
-            {"error": "保存内容に問題があります。内容を確認してください。", "error_type": "validation_error"}, status_code=400
+            {
+                "error": "保存内容に問題があります。内容を確認してください。",
+                "error_type": "validation_error",
+            },
+            status_code=400,
         )
     except InterviewPersistenceError as e:
         logger.error(f"Persistence error during save: {e}")
@@ -770,7 +933,9 @@ async def end_interview_session(request: Request, session_id: str) -> Any:
 
     except InterviewManagerError as e:
         logger.error(f"Error ending interview session: {e}")
-        return JSONResponse({"error": "インタビューセッションの終了に失敗しました"}, status_code=400)
+        return JSONResponse(
+            {"error": "インタビューセッションの終了に失敗しました"}, status_code=400
+        )
     except Exception as e:
         logger.error(f"Unexpected error ending interview session: {e}")
         return JSONResponse(

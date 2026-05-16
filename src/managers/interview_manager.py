@@ -467,7 +467,140 @@ class InterviewManager(AgentDiscussionManager):
             self.logger.error(error_msg)
             raise InterviewAgentError(error_msg)
 
-    def save_interview_session(self, session_id: str, session_name: str | None = None) -> str:
+    def send_user_message_streaming(
+        self,
+        session_id: str,
+        message: str,
+        document_contents: Optional[List[Dict[str, Any]]] = None,
+        document_metadata: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
+        """
+        Send a user message and stream persona responses token by token.
+
+        Yields:
+            tuple: (event_type, data)
+                - ("message_start", dict): New persona bubble
+                - ("message_delta", dict): Token chunk
+                - ("message_end", Message): Complete message
+
+        Raises:
+            InterviewSessionNotFoundError: If session not found
+            InterviewValidationError: If message validation fails
+            InterviewAgentError: If all agents fail
+        """
+        self._validate_session_exists(session_id)
+        self._validate_message_input(message)
+
+        session = self._active_sessions[session_id]
+
+        if session.is_saved:
+            error_msg = f"保存済みのセッション {session_id} では新しいメッセージを送信できません"
+            self.logger.error(error_msg)
+            raise InterviewSessionError(error_msg)
+
+        persona_agents = self._session_agents.get(session_id, [])
+
+        if not persona_agents:
+            error_msg = (
+                f"セッション {session_id} にペルソナエージェントが見つかりません"
+            )
+            self.logger.error(error_msg)
+            raise InterviewAgentError(error_msg)
+
+        # Add user message to session
+        session = session.add_user_message(message.strip())
+
+        # ドキュメントメタデータ追加
+        if document_metadata:
+            for doc_meta in document_metadata:
+                existing_docs = session.documents or []
+                is_duplicate = any(
+                    d.get("filename") == doc_meta.get("filename")
+                    and d.get("file_size") == doc_meta.get("file_size")
+                    for d in existing_docs
+                )
+                if not is_duplicate:
+                    session = session.add_document(doc_meta)
+
+        # ドキュメントコンテンツをエージェントに設定
+        if document_contents:
+            for persona_agent in persona_agents:
+                persona_agent.set_document_contents(document_contents.copy())
+
+        failed_agents: list[str] = []
+        response_count = 0
+
+        for persona_agent in persona_agents:
+            agent_name = persona_agent.get_persona_name()
+            try:
+                prompt = self._create_interview_prompt(
+                    persona_agent, message, session.messages
+                )
+
+                yield (
+                    "message_start",
+                    {
+                        "persona_id": persona_agent.get_persona_id(),
+                        "persona_name": agent_name,
+                        "message_type": "statement",
+                    },
+                )
+
+                full_text = ""
+                for token in persona_agent.respond_streaming(prompt, session.messages):
+                    full_text += token
+                    yield (
+                        "message_delta",
+                        {
+                            "persona_id": persona_agent.get_persona_id(),
+                            "content": token,
+                        },
+                    )
+
+                if not full_text.strip():
+                    raise AgentCommunicationError("Empty response from agent")
+
+                session = session.add_persona_response(
+                    persona_agent.get_persona_id(),
+                    agent_name,
+                    full_text,
+                )
+
+                response_message = Message.create_new(
+                    persona_id=persona_agent.get_persona_id(),
+                    persona_name=agent_name,
+                    content=full_text,
+                    message_type="statement",
+                )
+                yield ("message_end", response_message)
+                response_count += 1
+
+            except AgentCommunicationError as e:
+                self.logger.error(f"ペルソナ {agent_name} からの応答取得に失敗: {e}")
+                failed_agents.append(agent_name)
+                continue
+            except Exception as e:
+                self.logger.error(
+                    f"ペルソナ {agent_name} の処理中に予期しないエラー: {e}"
+                )
+                failed_agents.append(agent_name)
+                continue
+
+        if response_count == 0 and failed_agents:
+            raise InterviewAgentError(
+                f"すべてのペルソナエージェントが応答に失敗しました: {', '.join(failed_agents)}"
+            )
+
+        # Update stored session
+        self._active_sessions[session_id] = session
+
+        self.logger.info(
+            f"Streaming message processed, generated {response_count} responses"
+        )
+
+    def save_interview_session(
+        self, session_id: str, session_name: str | None = None
+    ) -> str:
         """
         Save an interview session to the database with enhanced validation and error handling.
 
@@ -733,7 +866,9 @@ class InterviewManager(AgentDiscussionManager):
             if kb_binding:
                 kb = db_service.get_knowledge_base(kb_binding.kb_id)
                 if kb:
-                    from src.services.knowledge_base.kb_tools import create_kb_retrieval_tool
+                    from src.services.knowledge_base.kb_tools import (
+                        create_kb_retrieval_tool,
+                    )
                     from src.config import config
 
                     kb_tool = create_kb_retrieval_tool(
@@ -743,7 +878,10 @@ class InterviewManager(AgentDiscussionManager):
                     )
                     additional_tools.append(kb_tool)
                     enhanced_prompt = self.agent_service._enhance_prompt_with_kb_info(
-                        enhanced_prompt, kb.name, kb.description, kb_binding.metadata_filters
+                        enhanced_prompt,
+                        kb.name,
+                        kb.description,
+                        kb_binding.metadata_filters,
                     )
 
         # データセット連携：ツールとプロンプト拡張を準備

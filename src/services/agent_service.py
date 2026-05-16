@@ -3,9 +3,11 @@ Agent Service
 Strands Agent SDKを使用したエージェント管理サービス
 """
 
+import queue
 import random
 import logging
-from typing import List, Dict, Any, Optional
+import threading
+from typing import List, Dict, Any, Optional, Generator
 from dataclasses import asdict
 
 try:
@@ -118,6 +120,84 @@ class PersonaAgent:
             error_msg = (
                 f"ペルソナエージェント {self.persona.name} の応答生成に失敗: {e}"
             )
+            self.logger.error(error_msg)
+            raise AgentCommunicationError(error_msg)
+
+    def respond_streaming(
+        self,
+        prompt: str,
+        context: List[Message] | None = None,
+        include_documents: bool = True,
+    ) -> Generator[str, None, None]:
+        """
+        トークンを逐次yieldする応答生成
+
+        Args:
+            prompt: 発言を促すプロンプト
+            context: これまでの議論コンテキスト
+            include_documents: ドキュメントを含めるかどうか
+
+        Yields:
+            str: トークン文字列
+
+        Raises:
+            AgentCommunicationError: エージェント通信エラー
+        """
+        try:
+            full_prompt = self._build_prompt_with_context(prompt, context)
+            token_queue: queue.Queue[Optional[str]] = queue.Queue()
+
+            class _TokenCapture:
+                def __call__(self, **kwargs: Any) -> None:
+                    data = kwargs.get("data", "")
+                    if data:
+                        token_queue.put(data)
+
+            original_handler = self.agent.callback_handler
+            self.agent.callback_handler = _TokenCapture()
+
+            agent_error: Optional[Exception] = None
+
+            def _run_agent() -> None:
+                nonlocal agent_error
+                try:
+                    if include_documents and self._document_contents:
+                        content_blocks = [
+                            {"text": full_prompt}
+                        ] + self._document_contents
+                        self.agent(content_blocks)
+                        self._document_contents = []
+                    else:
+                        self.agent(full_prompt)
+                except Exception as e:
+                    agent_error = e
+                finally:
+                    token_queue.put(None)
+
+            thread = threading.Thread(target=_run_agent, daemon=True)
+            thread.start()
+
+            try:
+                while True:
+                    token = token_queue.get()
+                    if token is None:
+                        break
+                    yield token
+            finally:
+                thread.join()
+                self.agent.callback_handler = original_handler
+
+            if agent_error:
+                raise agent_error
+
+            self.logger.info(
+                f"ペルソナ {self.persona.name} がストリーミング応答を完了しました"
+            )
+
+        except AgentCommunicationError:
+            raise
+        except Exception as e:
+            error_msg = f"ペルソナエージェント {self.persona.name} のストリーミング応答生成に失敗: {e}"
             self.logger.error(error_msg)
             raise AgentCommunicationError(error_msg)
 
@@ -384,6 +464,131 @@ class FacilitatorAgent:
 
         except Exception as e:
             error_msg = f"ラウンド{round_number}の要約に失敗: {e}"
+            self.logger.error(error_msg)
+            raise AgentCommunicationError(error_msg)
+
+    def summarize_round_streaming(
+        self,
+        round_number: int,
+        round_messages: List[Message],
+        topic: str,
+        previous_summaries: List[str] | None = None,
+    ) -> Generator[str, None, None]:
+        """
+        ラウンドの議論を要約（トークンストリーミング版）
+
+        Args:
+            round_number: ラウンド番号
+            round_messages: そのラウンドのメッセージリスト
+            topic: 議論トピック
+            previous_summaries: 過去ラウンドの要約リスト
+
+        Yields:
+            str: トークン文字列
+
+        Raises:
+            AgentCommunicationError: エージェント通信エラー
+        """
+        try:
+            statements = [
+                msg
+                for msg in round_messages
+                if msg.message_type == "statement" and msg.persona_id != "facilitator"
+            ]
+
+            if not statements:
+                yield f"ラウンド{round_number}では発言がありませんでした。"
+                return
+
+            statements_text = "\n".join(
+                [f"- {msg.persona_name}: {msg.content}" for msg in statements]
+            )
+
+            parts = [
+                f"議論テーマ「{topic}」のラウンド{round_number}/{self.rounds}が完了しました。\n"
+            ]
+
+            if previous_summaries:
+                parts.append("## これまでの議論の流れ")
+                for i, summary in enumerate(previous_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+            parts.append(f"## ラウンド{round_number}の発言")
+            parts.append(statements_text)
+            parts.append("")
+
+            if round_number < self.rounds:
+                parts.append(
+                    "以下の観点で簡潔に要約してください:\n"
+                    "- 各参加者の主要な意見や立場\n"
+                    "- 参加者間の共通点や対立点\n"
+                    "- まだ掘り下げられていない重要な観点\n"
+                    "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                    f"残り{self.rounds - round_number}ラウンドです。"
+                )
+                if self.rounds - round_number <= 2:
+                    parts.append(
+                        "論点を絞り込み、結論に向けて議論を収束させてください。"
+                    )
+                parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+            else:
+                parts.append(
+                    "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
+                    "- 議論を通じて明らかになった主要な結論\n"
+                    "- 参加者間で合意に至った点と残った対立点\n"
+                    "- 議論テーマの目的に対する具体的な示唆\n"
+                    "5-7文で最終まとめを作成してください。"
+                )
+
+            prompt = "\n".join(parts)
+
+            token_queue: queue.Queue[Optional[str]] = queue.Queue()
+
+            class _TokenCapture:
+                def __call__(self, **kwargs: Any) -> None:
+                    data = kwargs.get("data", "")
+                    if data:
+                        token_queue.put(data)
+
+            original_handler = self.agent.callback_handler
+            self.agent.callback_handler = _TokenCapture()
+
+            agent_error: Optional[Exception] = None
+
+            def _run_agent() -> None:
+                nonlocal agent_error
+                try:
+                    self.agent(prompt)
+                except Exception as e:
+                    agent_error = e
+                finally:
+                    token_queue.put(None)
+
+            thread = threading.Thread(target=_run_agent, daemon=True)
+            thread.start()
+
+            try:
+                while True:
+                    token = token_queue.get()
+                    if token is None:
+                        break
+                    yield token
+            finally:
+                thread.join()
+                self.agent.callback_handler = original_handler
+
+            if agent_error:
+                raise agent_error
+
+            self.logger.info(
+                f"ラウンド{round_number}のストリーミング要約が完了しました"
+            )
+
+        except AgentCommunicationError:
+            raise
+        except Exception as e:
+            error_msg = f"ラウンド{round_number}のストリーミング要約に失敗: {e}"
             self.logger.error(error_msg)
             raise AgentCommunicationError(error_msg)
 

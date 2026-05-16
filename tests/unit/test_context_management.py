@@ -13,7 +13,9 @@ from src.models.persona import Persona
 from src.services.agent_service import FacilitatorAgent, PersonaAgent
 
 
-def _create_test_persona(persona_id: str = "test-persona-1", name: str = "田中太郎") -> Persona:
+def _create_test_persona(
+    persona_id: str = "test-persona-1", name: str = "田中太郎"
+) -> Persona:
     return Persona(
         id=persona_id,
         name=name,
@@ -97,7 +99,10 @@ class TestFacilitatorPromptWithSummaries:
     def test_first_round_no_summaries(self):
         """ラウンド1: 具体的なエピソードを引き出す問いかけ"""
         self.facilitator.current_round = 1
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"), get_persona_id=Mock(return_value="p1"))
+        persona_agent = Mock(
+            get_persona_name=Mock(return_value="田中太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
         prompt = self.facilitator.create_prompt_for_persona(
             persona_agent, "新商品について", []
         )
@@ -144,11 +149,19 @@ class TestFacilitatorPromptWithSummaries:
         summaries = ["ラウンド1の要約"]
         recent = [
             Message.create_new("p1", "佐藤", "意見です", message_type="statement"),
-            Message.create_new("facilitator", "ファシリテータ", "論点整理: 次は価格について", message_type="summary"),
+            Message.create_new(
+                "facilitator",
+                "ファシリテータ",
+                "論点整理: 次は価格について",
+                message_type="summary",
+            ),
             Message.create_new("p2", "鈴木", "賛成です", message_type="statement"),
         ]
         prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent, round_summaries=summaries,
+            persona_agent,
+            "テーマ",
+            recent,
+            round_summaries=summaries,
             latest_facilitator_message="論点整理: 次は価格について",
         )
         # ファシリテータの問いかけが専用セクションに表示される
@@ -172,7 +185,10 @@ class TestFacilitatorPromptWithSummaries:
     def test_early_round_phase_instruction(self):
         """ラウンド1: 自分の体験を共有する指示"""
         self.facilitator.current_round = 1
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"), get_persona_id=Mock(return_value="p1"))
+        persona_agent = Mock(
+            get_persona_name=Mock(return_value="田中太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
         summaries = ["ラウンド1の要約"]
         recent = [Message.create_new("p2", "佐藤", "意見です")]
         prompt = self.facilitator.create_prompt_for_persona(
@@ -250,7 +266,9 @@ class TestSummarizeRoundImproved:
         """過去の要約が含まれること"""
         self.mock_agent.return_value = "ラウンド2の要約"
         messages = [
-            Message.create_new("p1", "田中", "具体的な価格帯は...", message_type="statement"),
+            Message.create_new(
+                "p1", "田中", "具体的な価格帯は...", message_type="statement"
+            ),
         ]
         prev = ["ラウンド1では価格vs品質が論点になった"]
         self.facilitator.summarize_round(2, messages, "新商品", previous_summaries=prev)
@@ -295,12 +313,18 @@ class TestAgentDiscussionContextManagement:
         mock_agent_1.get_persona_id.return_value = sample_persona.id
         mock_agent_1.get_persona_name.return_value = sample_persona.name
         mock_agent_1.respond.return_value = "テスト応答1"
+        mock_agent_1.respond_streaming.side_effect = lambda *a, **kw: iter(
+            ["テスト", "応答", "1"]
+        )
         mock_agent_1.clear_conversation_history = Mock()
 
         mock_agent_2 = Mock(spec=PersonaAgent)
         mock_agent_2.get_persona_id.return_value = sample_persona_2.id
         mock_agent_2.get_persona_name.return_value = sample_persona_2.name
         mock_agent_2.respond.return_value = "テスト応答2"
+        mock_agent_2.respond_streaming.side_effect = lambda *a, **kw: iter(
+            ["テスト", "応答", "2"]
+        )
         mock_agent_2.clear_conversation_history = Mock()
 
         persona_agents = [mock_agent_1, mock_agent_2]
@@ -316,6 +340,9 @@ class TestAgentDiscussionContextManagement:
             speaker_sequence.extend([mock_agent_1, mock_agent_2, None])
         mock_facilitator.select_next_speaker.side_effect = speaker_sequence
         mock_facilitator.summarize_round.return_value = "ラウンドの要約"
+        mock_facilitator.summarize_round_streaming.side_effect = lambda *a, **kw: iter(
+            ["ラウンド", "の", "要約"]
+        )
         mock_facilitator.increment_round.return_value = None
         mock_facilitator.current_round = 0
         mock_facilitator.rounds = rounds
@@ -325,6 +352,7 @@ class TestAgentDiscussionContextManagement:
         # increment_round で current_round を更新
         def _increment():
             mock_facilitator.current_round += 1
+
         mock_facilitator.increment_round.side_effect = _increment
 
         return manager, persona_agents, mock_facilitator
@@ -430,7 +458,7 @@ class TestAgentDiscussionContextManagement:
         facilitator.clear_conversation_history.assert_called_once()
 
         # 結果にメッセージとcompleteが含まれること
-        message_results = [r for r in results if r[0] == "message"]
+        message_end_results = [r for r in results if r[0] == "message_end"]
         complete_results = [r for r in results if r[0] == "complete"]
-        assert len(message_results) > 0
+        assert len(message_end_results) > 0
         assert len(complete_results) == 1
