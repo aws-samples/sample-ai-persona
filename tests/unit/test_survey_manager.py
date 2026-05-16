@@ -148,7 +148,9 @@ class TestDeleteTemplate:
 
 
 class TestStartSurvey:
-    def test_rejects_persona_count_below_minimum(self, manager, mock_db, saved_template):
+    def test_rejects_persona_count_below_minimum(
+        self, manager, mock_db, saved_template
+    ):
         mock_db.get_survey_template.return_value = saved_template
         with pytest.raises(SurveyValidationError):
             manager.start_survey("tmpl-id", persona_count=0)
@@ -355,3 +357,417 @@ class TestSaveInsightReport:
     def test_raises_when_no_survey(self, manager):
         with pytest.raises(SurveyManagerError, match="見つかりません"):
             manager.save_insight_report("bad-id", "content")
+
+
+# =============================================================================
+# 画像バリデーション
+# =============================================================================
+
+
+class TestValidateImages:
+    def test_rejects_more_than_one_image(self, manager, sample_questions):
+        from src.models.survey_template import TemplateImage
+
+        imgs = [
+            TemplateImage(
+                id="i1",
+                name="A",
+                file_path="s3://x",
+                mime_type="image/png",
+                original_filename="a.png",
+            ),
+            TemplateImage(
+                id="i2",
+                name="B",
+                file_path="s3://y",
+                mime_type="image/png",
+                original_filename="b.png",
+            ),
+        ]
+        with pytest.raises(SurveyValidationError, match="1枚まで"):
+            manager.create_template("テスト", sample_questions, images=imgs)
+
+    def test_rejects_image_without_name(self, manager, sample_questions):
+        from src.models.survey_template import TemplateImage
+
+        imgs = [
+            TemplateImage(
+                id="i1",
+                name="",
+                file_path="s3://x",
+                mime_type="image/png",
+                original_filename="a.png",
+            ),
+        ]
+        with pytest.raises(SurveyValidationError, match="名前"):
+            manager.create_template("テスト", sample_questions, images=imgs)
+
+    def test_accepts_valid_single_image(self, manager, mock_db, sample_questions):
+        from src.models.survey_template import TemplateImage
+
+        imgs = [
+            TemplateImage(
+                id="i1",
+                name="商品画像",
+                file_path="s3://x",
+                mime_type="image/png",
+                original_filename="a.png",
+            ),
+        ]
+        result = manager.create_template("テスト", sample_questions, images=imgs)
+        assert len(result.images) == 1
+        mock_db.save_survey_template.assert_called_once()
+
+
+# =============================================================================
+# ペルソナ数バリデーション（画像あり/なし）
+# =============================================================================
+
+
+class TestValidatePersonaCount:
+    def test_rejects_below_100(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        with pytest.raises(SurveyValidationError, match="100以上"):
+            manager.create_survey("tmpl-id", persona_count=99)
+
+    def test_rejects_non_int(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        with pytest.raises(SurveyValidationError, match="100以上"):
+            manager.create_survey("tmpl-id", persona_count="abc")  # type: ignore
+
+    def test_rejects_over_10000_without_images(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        with pytest.raises(SurveyValidationError, match="10000人まで"):
+            manager.create_survey("tmpl-id", persona_count=10001)
+
+    def test_rejects_over_1000_with_images(self, manager, mock_db):
+        from src.models.survey_template import TemplateImage
+
+        template = SurveyTemplate.create_new(
+            "T",
+            [Question.create_free_text("Q")],
+            images=[
+                TemplateImage(
+                    id="i1",
+                    name="img",
+                    file_path="s3://x",
+                    mime_type="image/png",
+                    original_filename="a.png",
+                )
+            ],
+        )
+        mock_db.get_survey_template.return_value = template
+        with pytest.raises(SurveyValidationError, match="1000人まで"):
+            manager.create_survey(template.id, persona_count=1001)
+
+    def test_accepts_1000_with_images(self, manager, mock_db):
+        from src.models.survey_template import TemplateImage
+
+        template = SurveyTemplate.create_new(
+            "T",
+            [Question.create_free_text("Q")],
+            images=[
+                TemplateImage(
+                    id="i1",
+                    name="img",
+                    file_path="s3://x",
+                    mime_type="image/png",
+                    original_filename="a.png",
+                )
+            ],
+        )
+        mock_db.get_survey_template.return_value = template
+        result = manager.create_survey(template.id, persona_count=1000)
+        assert result.persona_count == 1000
+
+
+# =============================================================================
+# アンケート実行
+# =============================================================================
+
+
+class TestExecuteSurvey:
+    def test_success_flow(self, manager, mock_db, mock_survey_service, saved_template):
+        import pandas as pd
+
+        survey = Survey.create_new("S", "", saved_template.id, 100)
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = saved_template
+
+        mock_survey_service.filter_and_sample_personas.return_value = pd.DataFrame(
+            [{"id": "p1"}]
+        )
+        mock_survey_service.build_persona_prompts.return_value = ["prompt1"]
+        mock_survey_service.execute_batch_inference.return_value = [{"answer": "a"}]
+        mock_survey_service.save_results_to_s3.return_value = "s3://bucket/results.csv"
+
+        manager.execute_survey(survey.id)
+
+        assert survey.status == "completed"
+        assert survey.s3_result_path == "s3://bucket/results.csv"
+        mock_db.update_survey.assert_called()
+
+    def test_sets_error_status_on_failure(
+        self, manager, mock_db, mock_survey_service, saved_template
+    ):
+        from src.managers.survey_manager import SurveyExecutionError
+
+        survey = Survey.create_new("S", "", saved_template.id, 100)
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = saved_template
+        mock_survey_service.filter_and_sample_personas.side_effect = RuntimeError(
+            "connection failed"
+        )
+
+        with pytest.raises(SurveyExecutionError):
+            manager.execute_survey(survey.id)
+
+        assert survey.status == "error"
+        assert "connection failed" in survey.error_message
+
+    def test_raises_when_survey_not_found(self, manager, mock_db):
+        mock_db.get_survey.return_value = None
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            manager.execute_survey("bad-id")
+
+    def test_raises_when_template_not_found(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "tmpl-missing", 100)
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = None
+        with pytest.raises(SurveyManagerError, match="テンプレートが見つかりません"):
+            manager.execute_survey(survey.id)
+
+
+# =============================================================================
+# アンケート削除
+# =============================================================================
+
+
+class TestDeleteSurvey:
+    def test_deletes_existing_survey(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "t1", 10)
+        mock_db.get_survey.return_value = survey
+        manager.delete_survey(survey.id)
+        mock_db.delete_survey.assert_called_once_with(survey.id)
+
+    def test_raises_when_not_found(self, manager, mock_db):
+        mock_db.get_survey.return_value = None
+        with pytest.raises(SurveyManagerError, match="not found"):
+            manager.delete_survey("bad-id")
+
+
+# =============================================================================
+# ダウンロードURL
+# =============================================================================
+
+
+class TestGetDownloadUrl:
+    def test_returns_presigned_url(self, manager, mock_db, mock_survey_service):
+        survey = Survey.create_new("S", "", "t1", 10)
+        survey.s3_result_path = "s3://bucket/path.csv"
+        mock_db.get_survey.return_value = survey
+        mock_survey_service.s3_service = Mock()
+        mock_survey_service.s3_service.generate_presigned_url.return_value = (
+            "https://signed-url"
+        )
+
+        url = manager.get_download_url(survey.id)
+        assert url == "https://signed-url"
+        mock_survey_service.s3_service.generate_presigned_url.assert_called_once_with(
+            "s3://bucket/path.csv", 300
+        )
+
+    def test_custom_expiration(self, manager, mock_db, mock_survey_service):
+        survey = Survey.create_new("S", "", "t1", 10)
+        survey.s3_result_path = "s3://bucket/path.csv"
+        mock_db.get_survey.return_value = survey
+        mock_survey_service.s3_service = Mock()
+        mock_survey_service.s3_service.generate_presigned_url.return_value = "url"
+
+        manager.get_download_url(survey.id, expiration=600)
+        mock_survey_service.s3_service.generate_presigned_url.assert_called_once_with(
+            "s3://bucket/path.csv", 600
+        )
+
+    def test_raises_when_no_survey(self, manager, mock_db):
+        mock_db.get_survey.return_value = None
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            manager.get_download_url("bad-id")
+
+    def test_raises_when_no_results(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "t1", 10)
+        survey.s3_result_path = None
+        mock_db.get_survey.return_value = survey
+        with pytest.raises(SurveyManagerError, match="まだ生成されていません"):
+            manager.get_download_url(survey.id)
+
+
+# =============================================================================
+# ペルソナ統計
+# =============================================================================
+
+
+class TestGetPersonaStatistics:
+    def _make_csv_with_demographics(self):
+        import csv as csv_mod
+        import io
+
+        buf = io.StringIO()
+        w = csv_mod.writer(buf, quoting=csv_mod.QUOTE_ALL)
+        w.writerow(
+            [
+                "persona_id",
+                "sex",
+                "age",
+                "occupation",
+                "region",
+                "prefecture",
+                "marital_status",
+            ]
+        )
+        w.writerow(["p1", "男性", "25", "エンジニア", "関東", "東京都", "未婚"])
+        w.writerow(["p2", "女性", "35", "デザイナー", "関西", "大阪府", "既婚"])
+        w.writerow(["p3", "男性", "45", "エンジニア", "関東", "神奈川県", "既婚"])
+        w.writerow(["p4", "女性", "28", "営業", "関東", "東京都", "未婚"])
+        return buf.getvalue().encode("utf-8-sig")
+
+    def test_computes_statistics(self, manager, mock_db, mock_survey_service):
+        template = SurveyTemplate.create_new("T", [Question.create_free_text("Q")])
+        survey = Survey.create_new("S", "", template.id, 4)
+        survey.s3_result_path = "s3://bucket/path.csv"
+        mock_db.get_survey.return_value = survey
+
+        csv_bytes = self._make_csv_with_demographics()
+        mock_survey_service.load_results_from_s3.return_value = csv_bytes
+
+        result = manager.get_persona_statistics(survey.id)
+        assert result.total_count == 4
+        assert result.sex_distribution["男性"] == 2
+        assert result.sex_distribution["女性"] == 2
+        assert "20代" in result.age_distribution
+        assert "30代" in result.age_distribution
+        assert "40代" in result.age_distribution
+        assert result.age_stats["min"] == 25
+        assert result.age_stats["max"] == 45
+        assert result.age_stats["average"] == 33.2
+        assert result.occupation_distribution["エンジニア"] == 2
+
+    def test_raises_when_no_survey(self, manager, mock_db):
+        mock_db.get_survey.return_value = None
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            manager.get_persona_statistics("bad-id")
+
+    def test_raises_when_no_results(self, manager, mock_db):
+        survey = Survey.create_new("S", "", "t1", 10)
+        survey.s3_result_path = None
+        mock_db.get_survey.return_value = survey
+        with pytest.raises(SurveyManagerError, match="まだ生成されていません"):
+            manager.get_persona_statistics(survey.id)
+
+
+# =============================================================================
+# クロス集計 & 年齢層変換
+# =============================================================================
+
+
+class TestCrossTabulation:
+    def test_get_age_bracket(self):
+        assert SurveyManager._get_age_bracket("25") == "20代"
+        assert SurveyManager._get_age_bracket("30") == "30代"
+        assert SurveyManager._get_age_bracket("59") == "50代"
+        assert SurveyManager._get_age_bracket("invalid") is None
+        assert SurveyManager._get_age_bracket("") is None
+
+    def test_cross_tabulate_choice_single(self, manager):
+        rows = [
+            {"q1_answer": "A", "sex": "男性", "age": "25"},
+            {"q1_answer": "B", "sex": "女性", "age": "35"},
+            {"q1_answer": "A", "sex": "男性", "age": "45"},
+            {"q1_answer": "", "sex": "男性", "age": "20"},
+        ]
+        result = manager._cross_tabulate_choice(rows, "q1_answer", allow_multiple=False)
+        assert result["by_sex"]["男性"]["A"] == 2
+        assert result["by_sex"]["女性"]["B"] == 1
+        assert result["by_age"]["20代"]["A"] == 1
+        assert result["by_age"]["40代"]["A"] == 1
+        assert result["sex_n"]["男性"] == 2
+        assert result["sex_n"]["女性"] == 1
+
+    def test_cross_tabulate_choice_multiple(self, manager):
+        rows = [
+            {"q1_answer": "A|B", "sex": "男性", "age": "25"},
+            {"q1_answer": "B", "sex": "女性", "age": "35"},
+        ]
+        result = manager._cross_tabulate_choice(rows, "q1_answer", allow_multiple=True)
+        assert result["by_sex"]["男性"]["A"] == 1
+        assert result["by_sex"]["男性"]["B"] == 1
+        assert result["by_sex"]["女性"]["B"] == 1
+
+    def test_cross_tabulate_scale(self, manager):
+        rows = [
+            {"q1_answer": "4", "sex": "男性", "age": "25"},
+            {"q1_answer": "5", "sex": "男性", "age": "35"},
+            {"q1_answer": "3", "sex": "女性", "age": "25"},
+            {"q1_answer": "invalid", "sex": "女性", "age": "40"},
+        ]
+        result = manager._cross_tabulate_scale(rows, "q1_answer")
+        assert result["by_sex"]["男性"] == 4.5
+        assert result["by_sex"]["女性"] == 3.0
+        assert result["by_age"]["20代"] == 3.5
+
+    def test_visual_analysis_with_cross_tab(
+        self, manager, mock_db, mock_survey_service
+    ):
+        template = SurveyTemplate.create_new(
+            "T", [Question.create_multiple_choice("色は？", ["赤", "青"])]
+        )
+        q_id = template.questions[0].id
+        survey = Survey.create_new("S", "", template.id, 2)
+        survey.s3_result_path = "s3://bucket/path.csv"
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = template
+
+        import csv as csv_mod
+        import io
+
+        buf = io.StringIO()
+        w = csv_mod.writer(buf, quoting=csv_mod.QUOTE_ALL)
+        w.writerow(["persona_id", f"{q_id}_text", f"{q_id}_answer", "sex", "age"])
+        w.writerow(["p1", "色は？", "赤", "男性", "25"])
+        w.writerow(["p2", "色は？", "青", "女性", "35"])
+        csv_bytes = buf.getvalue().encode("utf-8-sig")
+        mock_survey_service.load_results_from_s3.return_value = csv_bytes
+
+        result = manager.get_visual_analysis(survey.id)
+        chart = result.multiple_choice_charts[0]
+        assert "cross_tab" in chart
+        assert chart["cross_tab"]["by_sex"]["男性"]["赤"] == 1
+
+
+# =============================================================================
+# CreateSurvey（デフォルト名生成）
+# =============================================================================
+
+
+class TestCreateSurvey:
+    def test_generates_default_name_when_none(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        result = manager.create_survey(saved_template.id, persona_count=100)
+        assert saved_template.name in result.name
+
+    def test_generates_default_name_when_blank(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        result = manager.create_survey(saved_template.id, name="  ", persona_count=100)
+        assert saved_template.name in result.name
+
+    def test_uses_provided_name(self, manager, mock_db, saved_template):
+        mock_db.get_survey_template.return_value = saved_template
+        result = manager.create_survey(
+            saved_template.id, name="カスタム名", persona_count=100
+        )
+        assert result.name == "カスタム名"
+
+    def test_raises_when_template_not_found(self, manager, mock_db):
+        mock_db.get_survey_template.return_value = None
+        with pytest.raises(SurveyManagerError, match="見つかりません"):
+            manager.create_survey("bad-id", persona_count=100)

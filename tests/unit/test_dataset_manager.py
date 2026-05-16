@@ -369,3 +369,216 @@ class TestDatasetManagerSchemaAnalysis:
 
         assert columns == []
         assert row_count == 0
+
+    def test_analyze_schema_many_rows(self, dataset_manager):
+        """sample_rows以上の行数カウントテスト"""
+        header = "id,name\n"
+        rows = "".join(f"{i},name{i}\n" for i in range(150))
+        csv_content = (header + rows).encode("utf-8")
+
+        columns, row_count = dataset_manager.analyze_schema(csv_content, sample_rows=50)
+
+        assert len(columns) == 2
+        assert row_count == 149
+
+    def test_infer_type_empty_values(self, dataset_manager):
+        """空値のみの場合はstring"""
+        result = dataset_manager._infer_type(["", "  ", ""])
+        assert result == "string"
+
+
+class TestDatasetManagerCRUD:
+    """DatasetManager CRUD操作テスト"""
+
+    @pytest.fixture
+    def manager(self):
+        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
+            mock_db = Mock()
+            mock_s3 = Mock()
+            mock_factory.get_database_service.return_value = mock_db
+            mock_factory.get_s3_service.return_value = mock_s3
+            from src.managers.dataset_manager import DatasetManager
+
+            mgr = DatasetManager()
+            mgr._mock_db = mock_db
+            mgr._mock_s3 = mock_s3
+            return mgr
+
+    def test_upload_csv(self, manager):
+        """CSVアップロードテスト"""
+        manager._mock_s3.upload_file.return_value = "s3://bucket/datasets/x.csv"
+        csv_content = b"id,name\n1,Alice\n2,Bob"
+
+        result = manager.upload_csv(
+            file_content=csv_content,
+            filename="test.csv",
+            name="テスト",
+            description="説明",
+        )
+
+        assert result.name == "テスト"
+        assert result.description == "説明"
+        assert result.row_count == 2
+        assert len(result.columns) == 2
+        manager._mock_s3.upload_file.assert_called_once()
+        manager._mock_db.save_dataset.assert_called_once()
+
+    def test_upload_csv_with_custom_columns(self, manager):
+        """カスタムカラム指定でのアップロード"""
+        manager._mock_s3.upload_file.return_value = "s3://bucket/x.csv"
+        csv_content = b"a,b\n1,2"
+        custom_cols = [DatasetColumn(name="a", data_type="string")]
+
+        result = manager.upload_csv(
+            file_content=csv_content,
+            filename="test.csv",
+            name="テスト",
+            columns=custom_cols,
+        )
+
+        assert result.columns == custom_cols
+
+    def test_upload_csv_no_s3_service(self):
+        """S3なしの場合ローカル保存"""
+        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
+            mock_factory.get_database_service.return_value = Mock()
+            mock_factory.get_s3_service.return_value = None
+            from src.managers.dataset_manager import DatasetManager
+
+            mgr = DatasetManager()
+
+        csv_content = b"id,name\n1,test"
+        with patch("pathlib.Path.mkdir"), patch("pathlib.Path.write_bytes"):
+            result = mgr.upload_csv(
+                file_content=csv_content, filename="t.csv", name="ローカル"
+            )
+
+        assert "local://" in result.s3_path
+
+    def test_get_datasets(self, manager):
+        """全データセット取得"""
+        manager._mock_db.get_all_datasets.return_value = ["ds1", "ds2"]
+        result = manager.get_datasets()
+        assert result == ["ds1", "ds2"]
+
+    def test_get_dataset(self, manager):
+        """ID指定取得"""
+        manager._mock_db.get_dataset.return_value = "ds1"
+        result = manager.get_dataset("id1")
+        assert result == "ds1"
+        manager._mock_db.get_dataset.assert_called_once_with("id1")
+
+    def test_update_dataset(self, manager):
+        """データセット更新"""
+        existing = Dataset.create_new(
+            name="旧名",
+            description="旧説明",
+            s3_path="s3://x",
+            columns=[],
+            row_count=10,
+        )
+        manager._mock_db.get_dataset.return_value = existing
+
+        result = manager.update_dataset(
+            existing.id, name="新名", description="新説明", notes="メモ"
+        )
+
+        assert result.name == "新名"
+        assert result.description == "新説明"
+        assert result.notes == "メモ"
+        manager._mock_db.save_dataset.assert_called_once()
+
+    def test_update_dataset_not_found(self, manager):
+        """存在しないデータセット更新"""
+        manager._mock_db.get_dataset.return_value = None
+        result = manager.update_dataset("bad-id", name="x")
+        assert result is None
+
+    def test_delete_dataset_with_s3(self, manager):
+        """S3ファイル付きデータセット削除"""
+        existing = Dataset.create_new(
+            name="テスト",
+            description="",
+            s3_path="s3://bucket/file.csv",
+            columns=[],
+            row_count=5,
+        )
+        manager._mock_db.get_dataset.return_value = existing
+
+        result = manager.delete_dataset(existing.id)
+
+        assert result is True
+        manager._mock_s3.delete_file.assert_called_once_with("s3://bucket/file.csv")
+        manager._mock_db.delete_dataset.assert_called_once_with(existing.id)
+
+    def test_delete_dataset_s3_error_continues(self, manager):
+        """S3削除失敗でもDB削除は実行"""
+        existing = Dataset.create_new(
+            name="テスト",
+            description="",
+            s3_path="s3://bucket/file.csv",
+            columns=[],
+            row_count=5,
+        )
+        manager._mock_db.get_dataset.return_value = existing
+        manager._mock_s3.delete_file.side_effect = Exception("S3 error")
+
+        result = manager.delete_dataset(existing.id)
+
+        assert result is True
+        manager._mock_db.delete_dataset.assert_called_once()
+
+    def test_delete_dataset_not_found(self, manager):
+        """存在しないデータセット削除"""
+        manager._mock_db.get_dataset.return_value = None
+        result = manager.delete_dataset("bad-id")
+        assert result is False
+
+
+class TestDatasetManagerBindings:
+    """紐付け操作テスト"""
+
+    @pytest.fixture
+    def manager(self):
+        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
+            mock_db = Mock()
+            mock_factory.get_database_service.return_value = mock_db
+            mock_factory.get_s3_service.return_value = Mock()
+            from src.managers.dataset_manager import DatasetManager
+
+            mgr = DatasetManager()
+            mgr._mock_db = mock_db
+            return mgr
+
+    def test_save_binding(self, manager):
+        binding = PersonaDatasetBinding.create_new("p1", "d1", {"key": "val"})
+        manager._mock_db.save_binding.return_value = binding
+
+        result = manager.save_binding(binding)
+        assert result == binding
+
+    def test_get_bindings_by_persona(self, manager):
+        manager._mock_db.get_bindings_by_persona.return_value = ["b1", "b2"]
+        result = manager.get_bindings_by_persona("p1")
+        assert result == ["b1", "b2"]
+
+    def test_delete_binding(self, manager):
+        manager._mock_db.delete_binding.return_value = True
+        result = manager.delete_binding("b1")
+        assert result is True
+
+    def test_set_persona_bindings(self, manager):
+        manager._mock_db.save_binding.return_value = None
+        bindings_data = [
+            {"dataset_id": "d1", "binding_keys": {"user_id": "U001"}},
+            {"dataset_id": "d2", "binding_keys": {"customer_id": "C001"}},
+        ]
+
+        result = manager.set_persona_bindings("p1", bindings_data)
+
+        assert len(result) == 2
+        assert result[0].persona_id == "p1"
+        assert result[0].dataset_id == "d1"
+        assert result[1].dataset_id == "d2"
+        manager._mock_db.delete_bindings_by_persona.assert_called_once_with("p1")
+        assert manager._mock_db.save_binding.call_count == 2
