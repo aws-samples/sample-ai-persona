@@ -564,6 +564,9 @@ async function sendMessage(message) {
                 if (data.type === 'keepalive') {
                     continue;
                 } else if (data.type === 'message_start') {
+                    if (currentStreamingEl && !currentAccumulatedText) {
+                        currentStreamingEl.textContent = '[応答を取得できませんでした]';
+                    }
                     receivedResponse = true;
                     currentAccumulatedText = '';
                     currentStreamingEl = createStreamingBubble(data.persona_name, data.persona_id);

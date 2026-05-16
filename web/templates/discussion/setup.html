@@ -280,6 +280,9 @@
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
                       } else if (data.type === 'message_start') {
+                          if (currentStreamingEl && !currentAccumulatedText) {
+                              currentStreamingEl.textContent = '[応答を取得できませんでした]';
+                          }
                           currentAccumulatedText = '';
                           currentStreamingEl = createBubble(data);
                           container.scrollTop = container.scrollHeight;
