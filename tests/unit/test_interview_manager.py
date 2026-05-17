@@ -13,6 +13,7 @@ from src.managers.interview_manager import (
 )
 from src.models.persona import Persona
 from src.models.message import Message
+from src.services.database_service import DatabaseError
 
 
 class TestInterviewSession:
@@ -861,6 +862,7 @@ class TestInterviewManagerSessionStatus:
 
     def _create_session(self, session_id="s1", age_hours=0):
         from datetime import timedelta
+
         session = InterviewSession(
             id=session_id,
             participants=["p1"],
@@ -918,3 +920,198 @@ class TestInterviewManagerSessionStatus:
         self._create_session("new", age_hours=1)
         cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
         assert cleaned == 0
+
+
+class TestInterviewManagerErrorPaths:
+    """InterviewManager のエラーパス・ストリーミングテスト"""
+
+    def setup_method(self):
+        self.mock_agent_service = Mock()
+        self.mock_database_service = Mock()
+        self.interview_manager = InterviewManager(
+            self.mock_agent_service, self.mock_database_service
+        )
+
+    def _create_active_session(self, session_id="s1", is_saved=False):
+        session = InterviewSession(
+            id=session_id,
+            participants=["p1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=is_saved,
+        )
+        self.interview_manager._active_sessions[session_id] = session
+        return session
+
+    def _add_agents(self, session_id, agents):
+        self.interview_manager._session_agents[session_id] = agents
+
+    # --- memory_mode validation ---
+
+    def test_start_session_invalid_memory_mode(self):
+        from src.managers.interview_manager import InterviewValidationError
+
+        persona = Persona(
+            id="p1",
+            name="X",
+            age=30,
+            occupation="Y",
+            background="Z",
+            values=[],
+            pain_points=[],
+            goals=[],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        with pytest.raises(InterviewValidationError, match="無効なmemory_mode"):
+            self.interview_manager.start_interview_session(
+                [persona], memory_mode="invalid_mode"
+            )
+
+    # --- send_user_message: saved session guard ---
+
+    def test_send_message_to_saved_session_raises(self):
+        from src.managers.interview_manager import InterviewSessionError
+
+        self._create_active_session("s1", is_saved=True)
+        with pytest.raises(InterviewSessionError, match="保存済み"):
+            self.interview_manager.send_user_message("s1", "hello")
+
+    # --- send_user_message: no agents ---
+
+    def test_send_message_no_agents_raises(self):
+        from src.managers.interview_manager import InterviewAgentError
+
+        self._create_active_session("s1")
+        self._add_agents("s1", [])
+        with pytest.raises(InterviewAgentError, match="エージェントが見つかりません"):
+            self.interview_manager.send_user_message("s1", "hello")
+
+    # --- send_user_message: agent failure (all fail) ---
+
+    def test_send_message_all_agents_fail(self):
+        from src.managers.interview_manager import InterviewAgentError
+        from src.services.agent_service import AgentCommunicationError
+
+        self._create_active_session("s1")
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.respond.side_effect = AgentCommunicationError("timeout")
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        with pytest.raises(InterviewAgentError, match="すべてのペルソナ"):
+            self.interview_manager.send_user_message("s1", "質問")
+
+    # --- send_user_message: partial agent failure (some succeed) ---
+
+    def test_send_message_partial_agent_failure(self):
+        from src.services.agent_service import AgentCommunicationError
+
+        self._create_active_session("s1")
+        self._active_sessions_update_participants("s1", ["p1", "p2"])
+
+        agent_ok = Mock()
+        agent_ok.get_persona_id.return_value = "p1"
+        agent_ok.get_persona_name.return_value = "田中"
+        agent_ok.respond.return_value = "回答です"
+        agent_ok.set_document_contents = Mock()
+
+        agent_fail = Mock()
+        agent_fail.get_persona_id.return_value = "p2"
+        agent_fail.get_persona_name.return_value = "佐藤"
+        agent_fail.respond.side_effect = AgentCommunicationError("error")
+        agent_fail.set_document_contents = Mock()
+
+        self._add_agents("s1", [agent_ok, agent_fail])
+
+        responses = self.interview_manager.send_user_message("s1", "質問")
+        assert len(responses) == 1
+        assert responses[0].persona_name == "田中"
+
+    def _active_sessions_update_participants(self, session_id, participants):
+        session = self.interview_manager._active_sessions[session_id]
+        self.interview_manager._active_sessions[session_id] = InterviewSession(
+            id=session.id,
+            participants=participants,
+            messages=session.messages,
+            created_at=session.created_at,
+            is_saved=session.is_saved,
+        )
+
+    # --- send_user_message_streaming: basic flow ---
+
+    def test_streaming_basic_flow(self):
+        self._create_active_session("s1")
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.respond_streaming.return_value = iter(["Hello", " World"])
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        events = list(self.interview_manager.send_user_message_streaming("s1", "質問"))
+
+        event_types = [e[0] for e in events]
+        assert "message_start" in event_types
+        assert "message_delta" in event_types
+        assert "message_end" in event_types
+        assert events[0][0] == "message_start"
+        assert events[-1][0] == "message_end"
+
+    # --- send_user_message_streaming: saved session ---
+
+    def test_streaming_saved_session_raises(self):
+        from src.managers.interview_manager import InterviewSessionError
+
+        self._create_active_session("s1", is_saved=True)
+        with pytest.raises(InterviewSessionError, match="保存済み"):
+            list(self.interview_manager.send_user_message_streaming("s1", "hello"))
+
+    # --- send_user_message_streaming: all agents fail ---
+
+    def test_streaming_all_agents_fail(self):
+        from src.managers.interview_manager import InterviewAgentError
+        from src.services.agent_service import AgentCommunicationError
+
+        self._create_active_session("s1")
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.respond_streaming.side_effect = AgentCommunicationError("fail")
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        with pytest.raises(InterviewAgentError, match="すべてのペルソナ"):
+            list(self.interview_manager.send_user_message_streaming("s1", "質問"))
+
+    # --- save_interview_session: DB error ---
+
+    def test_save_session_db_error(self):
+        from src.managers.interview_manager import InterviewPersistenceError
+
+        session = self._create_active_session("s1")
+        session.messages = [
+            Message.create_new("user", "User", "質問", "user_message"),
+            Message.create_new("p1", "田中", "回答", "statement"),
+        ]
+        self._add_agents("s1", [Mock()])
+        self.mock_database_service.save_discussion.side_effect = DatabaseError(
+            "DB down"
+        )
+
+        with pytest.raises(InterviewPersistenceError, match="データベースエラー"):
+            self.interview_manager.save_interview_session("s1")
+
+    # --- end_interview_session: agent dispose error (continues) ---
+
+    def test_end_session_agent_dispose_error_continues(self):
+        self._create_active_session("s1")
+        mock_agent = Mock()
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.dispose.side_effect = Exception("dispose failed")
+        self._add_agents("s1", [mock_agent])
+
+        self.interview_manager.end_interview_session("s1")
+        assert "s1" not in self.interview_manager._active_sessions
