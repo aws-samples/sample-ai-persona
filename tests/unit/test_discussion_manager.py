@@ -580,7 +580,10 @@ class TestDiscussionManager:
         ]
 
         # Mock database service response
-        self.mock_database_service.get_discussions.return_value = (expected_discussions, None)
+        self.mock_database_service.get_discussions.return_value = (
+            expected_discussions,
+            None,
+        )
 
         result, _ = self.discussion_manager.get_discussion_history()
 
@@ -864,14 +867,25 @@ class TestDiscussionManagerReports:
             topic="テスト議論", participants=["p1", "p2"]
         )
         msg1 = Message.create_new(
-            persona_id="p1", persona_name="田中", content="意見A", message_type="statement"
+            persona_id="p1",
+            persona_name="田中",
+            content="意見A",
+            message_type="statement",
         )
         msg2 = Message.create_new(
-            persona_id="p2", persona_name="佐藤", content="意見B", message_type="statement"
+            persona_id="p2",
+            persona_name="佐藤",
+            content="意見B",
+            message_type="statement",
         )
         self.discussion = self.discussion.add_message(msg1).add_message(msg2)
         self.discussion.insights = [
-            Insight(category="ニーズ", description="テストインサイト", supporting_messages=[], confidence_score=0.8)
+            Insight(
+                category="ニーズ",
+                description="テストインサイト",
+                supporting_messages=[],
+                confidence_score=0.8,
+            )
         ]
 
     def test_generate_report_summary(self):
@@ -971,3 +985,300 @@ class TestDiscussionManagerReports:
                 self.discussion.id,
                 DiscussionReport.create_new(template_type="summary", content="4th"),
             )
+
+    def test_generate_report_streaming(self):
+        """ストリーミングレポート生成テスト"""
+        self.mock_database_service.get_discussion.return_value = self.discussion
+        self.mock_database_service.get_persona.return_value = None
+        self.mock_ai_service.generate_discussion_report_streaming.return_value = iter(
+            ["chunk1", "chunk2"]
+        )
+
+        chunks = list(
+            self.manager.generate_report_streaming(
+                discussion_id=self.discussion.id,
+                template_type="summary",
+            )
+        )
+        assert chunks == ["chunk1", "chunk2"]
+
+    def test_generate_report_streaming_not_found(self):
+        """ストリーミングレポート - 議論が見つからない"""
+        self.mock_database_service.get_discussion.return_value = None
+        with pytest.raises(DiscussionManagerError, match="議論が見つかりません"):
+            list(
+                self.manager.generate_report_streaming(
+                    discussion_id="bad", template_type="summary"
+                )
+            )
+
+
+class TestDiscussionManagerValidation:
+    """追加バリデーションテスト"""
+
+    def setup_method(self):
+        self.mock_ai_service = Mock()
+        self.mock_db = Mock()
+        self.manager = DiscussionManager(
+            ai_service=self.mock_ai_service, database_service=self.mock_db
+        )
+
+    def test_validate_discussion_for_save_no_id(self):
+        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
+        discussion = Discussion(
+            id="",
+            topic=discussion.topic,
+            participants=discussion.participants,
+            messages=discussion.messages,
+            insights=discussion.insights,
+            created_at=discussion.created_at,
+            mode=discussion.mode,
+        )
+        with pytest.raises(DiscussionManagerError, match="議論IDが設定されていません"):
+            self.manager.save_discussion(discussion)
+
+    def test_validate_discussion_for_save_no_topic(self):
+        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
+        discussion = Discussion(
+            id=discussion.id,
+            topic="",
+            participants=discussion.participants,
+            messages=discussion.messages,
+            insights=discussion.insights,
+            created_at=discussion.created_at,
+            mode=discussion.mode,
+        )
+        with pytest.raises(
+            DiscussionManagerError, match="議論トピックが設定されていません"
+        ):
+            self.manager.save_discussion(discussion)
+
+    def test_validate_discussion_for_save_insufficient_participants(self):
+        discussion = Discussion(
+            id="d1",
+            topic="テスト",
+            participants=["p1"],
+            messages=[],
+            insights=[],
+            created_at=datetime.now(),
+            mode="classic",
+        )
+        with pytest.raises(DiscussionManagerError, match="議論参加者が不足しています"):
+            self.manager.save_discussion(discussion)
+
+    def test_validate_discussion_for_save_invalid_message(self):
+        bad_msg = Message(
+            persona_id="",
+            persona_name="X",
+            content="hello",
+            timestamp=datetime.now(),
+        )
+        discussion = Discussion(
+            id="d1",
+            topic="テストトピック",
+            participants=["p1", "p2"],
+            messages=[bad_msg],
+            insights=[],
+            created_at=datetime.now(),
+            mode="classic",
+        )
+        with pytest.raises(DiscussionManagerError, match="メッセージ.*無効"):
+            self.manager.save_discussion(discussion)
+
+    def test_validate_discussion_for_save_invalid_insight(self):
+        bad_insight = Insight(
+            category="",
+            description="valid",
+            supporting_messages=[],
+            confidence_score=0.5,
+        )
+        discussion = Discussion(
+            id="d1",
+            topic="テストトピック",
+            participants=["p1", "p2"],
+            messages=[],
+            insights=[bad_insight],
+            created_at=datetime.now(),
+            mode="classic",
+        )
+        with pytest.raises(DiscussionManagerError, match="インサイト.*無効"):
+            self.manager.save_discussion(discussion)
+
+    def test_validate_generated_insights_empty(self):
+        with pytest.raises(DiscussionManagerError, match="生成されませんでした"):
+            self.manager._validate_generated_insights([])
+
+    def test_validate_generated_insights_short_description(self):
+        insights = [
+            Insight.create_new(
+                category="テスト",
+                description="短い",
+                supporting_messages=[],
+                confidence_score=0.8,
+            )
+        ]
+        with pytest.raises(DiscussionManagerError, match="説明が短すぎます"):
+            self.manager._validate_generated_insights(insights)
+
+    def test_validate_generated_insights_no_category(self):
+        insights = [
+            Insight(
+                category="",
+                description="十分な長さの説明です。十分な長さの説明です。",
+                supporting_messages=[],
+                confidence_score=0.8,
+            )
+        ]
+        with pytest.raises(
+            DiscussionManagerError, match="カテゴリが設定されていません"
+        ):
+            self.manager._validate_generated_insights(insights)
+
+    def test_parse_insights_from_texts(self):
+        texts = [
+            "[ニーズ] ユーザーは高速なレスポンスを求めている",
+            "",
+            "カテゴリなしのインサイトテキスト",
+        ]
+        result = self.manager._parse_insights_from_texts(texts)
+        assert len(result) == 2
+        assert result[0].category == "ニーズ"
+        assert result[1].category == "その他"
+
+    def test_parse_insights_from_structured_data_skips_invalid(self):
+        data = [
+            {"category": "A", "description": "valid insight", "confidence_score": 0.9},
+            "not a dict",
+            {"category": "B"},  # missing description
+        ]
+        result = self.manager._parse_insights_from_structured_data(data)
+        assert len(result) == 1
+        assert result[0].category == "A"
+
+    def test_load_categories_from_config_no_config(self):
+        discussion = Discussion.create_new(topic="T", participants=["p1"])
+        result = self.manager._load_categories_from_config(discussion)
+        assert result is None
+
+    def test_load_categories_from_config_corrupt_data(self):
+        discussion = Discussion(
+            id="d1",
+            topic="T",
+            participants=["p1"],
+            messages=[],
+            insights=[],
+            created_at=datetime.now(),
+            mode="classic",
+            agent_config={"insight_categories": [{"invalid": "data"}]},
+        )
+        result = self.manager._load_categories_from_config(discussion)
+        assert result is None
+
+    def test_get_discussions_by_topic_empty_returns_empty(self):
+        result = self.manager.get_discussions_by_topic("")
+        assert result == []
+
+    def test_get_discussions_by_participant_invalid_id(self):
+        with pytest.raises(DiscussionManagerError, match="ペルソナIDが無効"):
+            self.manager.get_discussions_by_participant("")
+
+    def test_delete_discussion_invalid_id(self):
+        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
+            self.manager.delete_discussion("")
+
+    def test_update_discussion_insights_invalid_id(self):
+        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
+            self.manager.update_discussion_insights("", [])
+
+    def test_update_discussion_insights_empty_insights(self):
+        with pytest.raises(DiscussionManagerError, match="インサイトが無効"):
+            self.manager.update_discussion_insights("valid-id", [])
+
+    def test_discussion_exists_empty_id(self):
+        result = self.manager.discussion_exists("")
+        assert result is False
+
+    def test_get_discussion_history_database_error(self):
+        self.mock_db.get_discussions.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.get_discussion_history()
+
+    def test_get_discussions_by_topic_database_error(self):
+        self.mock_db.get_discussions_by_topic.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.get_discussions_by_topic("topic")
+
+    def test_get_discussions_by_participant_database_error(self):
+        self.mock_db.get_discussions_by_participant.side_effect = DatabaseError(
+            "db error"
+        )
+        with pytest.raises(DiscussionManagerError):
+            self.manager.get_discussions_by_participant("p1")
+
+    def test_delete_discussion_database_error(self):
+        self.mock_db.delete_discussion.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.delete_discussion("d1")
+
+    def test_get_discussion_count_database_error(self):
+        self.mock_db.get_discussion_count.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.get_discussion_count()
+
+    def test_discussion_exists_database_error(self):
+        self.mock_db.discussion_exists.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.discussion_exists("d1")
+
+    def test_update_discussion_insights_database_error(self):
+        insights = [
+            Insight.create_new(
+                category="テスト",
+                description="十分に長い説明のインサイトです",
+                supporting_messages=[],
+                confidence_score=0.8,
+            )
+        ]
+        self.mock_db.update_discussion_insights.side_effect = DatabaseError("db error")
+        with pytest.raises(DiscussionManagerError):
+            self.manager.update_discussion_insights("d1", insights)
+
+    def test_save_discussion_with_insights_none_discussion(self):
+        with pytest.raises(DiscussionManagerError, match="議論オブジェクトが無効"):
+            self.manager.save_discussion_with_insights(None, [])
+
+    def test_save_discussion_with_insights_none_insights(self):
+        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
+        with pytest.raises(DiscussionManagerError, match="インサイトが無効"):
+            self.manager.save_discussion_with_insights(discussion, [])
+
+    def test_regenerate_insights_invalid_id(self):
+        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
+            self.manager.regenerate_insights("")
+
+    def test_get_report_context(self):
+        discussion = Discussion.create_new(topic="T", participants=["p1"])
+        msg = Message.create_new("p1", "田中", "テストメッセージ")
+        discussion = discussion.add_message(msg)
+        discussion.insights = [
+            Insight(
+                category="C",
+                description="D",
+                supporting_messages=[],
+                confidence_score=0.9,
+            )
+        ]
+        persona_mock = Mock()
+        persona_mock.name = "田中"
+        persona_mock.age = 30
+        persona_mock.occupation = "エンジニア"
+        persona_mock.values = ["品質"]
+        persona_mock.pain_points = ["予算"]
+        persona_mock.goals = ["成長"]
+        self.mock_db.get_persona.return_value = persona_mock
+
+        insights_data, personas_data = self.manager._get_report_context(discussion)
+        assert len(insights_data) == 1
+        assert insights_data[0]["category"] == "C"
+        assert len(personas_data) == 1
+        assert personas_data[0]["name"] == "田中"
