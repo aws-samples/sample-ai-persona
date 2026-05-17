@@ -131,9 +131,14 @@ class TestPersonaGenerateEndpoint:
         mock_manager.generate_personas.return_value = ([sample_persona], [])
         mock_get_manager.return_value = mock_manager
 
-        file_content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        file_content = (
+            "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        )
         files = [
-            ("files", ("interview.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+            (
+                "files",
+                ("interview.txt", BytesIO(file_content.encode("utf-8")), "text/plain"),
+            ),
         ]
 
         response = client.post(
@@ -177,7 +182,10 @@ class TestPersonaGenerateEndpoint:
         """無効なペルソナ数でエラーを返すことを確認（SSE）"""
         file_content = "テスト用テキスト。" * 10
         files = [
-            ("files", ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+            (
+                "files",
+                ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain"),
+            ),
         ]
 
         response = client.post(
@@ -209,7 +217,10 @@ class TestPersonaGenerateEndpoint:
 
         file_content = "これは市場調査レポートです。" * 50
         files = [
-            ("files", ("report.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+            (
+                "files",
+                ("report.txt", BytesIO(file_content.encode("utf-8")), "text/plain"),
+            ),
         ]
 
         response = client.post(
@@ -232,14 +243,15 @@ class TestPersonaGenerateEndpoint:
         from src.managers.persona_manager import PersonaManagerError
 
         mock_manager = Mock()
-        mock_manager.generate_personas.side_effect = PersonaManagerError(
-            "生成エラー"
-        )
+        mock_manager.generate_personas.side_effect = PersonaManagerError("生成エラー")
         mock_get_manager.return_value = mock_manager
 
         file_content = "テスト用テキスト。" * 10
         files = [
-            ("files", ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain")),
+            (
+                "files",
+                ("test.txt", BytesIO(file_content.encode("utf-8")), "text/plain"),
+            ),
         ]
 
         response = client.post(
@@ -434,7 +446,10 @@ class TestPersonaListPartialEndpoint:
     ):
         """検索フィルタが機能することを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = ([sample_persona, sample_persona_2], None)
+        mock_manager.get_all_personas.return_value = (
+            [sample_persona, sample_persona_2],
+            None,
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/list/partial?search=田中")
@@ -491,3 +506,147 @@ class TestSaveSelectedPersonasEndpoint:
 
         assert response.status_code == 500
         assert "保存に失敗しました" in response.text
+
+
+class TestPersonaEditForm:
+    """ペルソナ編集フォームのテスト"""
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_edit_form_loads(self, mock_get_mgr, client, sample_persona):
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = sample_persona
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get(f"/persona/{sample_persona.id}/edit")
+        assert response.status_code == 200
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_edit_form_not_found(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = None
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get("/persona/nonexistent/edit")
+        assert response.status_code == 404
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_edit_form_error(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_persona.side_effect = Exception("DB error")
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get("/persona/test-id/edit")
+        assert response.status_code == 500
+
+
+class TestPersonaUpdate:
+    """ペルソナ更新のテスト"""
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_update_success(self, mock_get_mgr, client, sample_persona):
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = sample_persona
+        mock_mgr.edit_persona.return_value = sample_persona
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.put(
+            f"/persona/{sample_persona.id}",
+            data={
+                "name": "新名前",
+                "age": "35",
+                "occupation": "新職業",
+                "background": "新背景",
+                "values": "価値1\n価値2",
+                "pain_points": "課題1\n課題2",
+                "goals": "目標1",
+            },
+        )
+        assert response.status_code == 200
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_update_not_found(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = None
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.put(
+            "/persona/nonexistent",
+            data={
+                "name": "X",
+                "age": "30",
+                "occupation": "Y",
+                "background": "Z",
+                "values": "v",
+                "pain_points": "p",
+                "goals": "g",
+            },
+        )
+        assert response.status_code == 404
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_update_validation_error(self, mock_get_mgr, client, sample_persona):
+        from src.managers.persona_manager import PersonaManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = sample_persona
+        mock_mgr.edit_persona.side_effect = PersonaManagerError("名前が空です")
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.put(
+            f"/persona/{sample_persona.id}",
+            data={
+                "name": "valid",
+                "age": "30",
+                "occupation": "Y",
+                "background": "Z",
+                "values": "v",
+                "pain_points": "p",
+                "goals": "g",
+            },
+        )
+        assert response.status_code == 400
+
+
+class TestPersonaMemories:
+    """ペルソナ記憶管理のテスト"""
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_memories_list_success(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_persona_memories.return_value = ([], 1, 1)
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get("/persona/p1/memories")
+        assert response.status_code == 200
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_memories_list_error(self, mock_get_mgr, client):
+        from src.managers.persona_manager import PersonaManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.get_persona_memories.side_effect = PersonaManagerError(
+            "見つかりません"
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get("/persona/p1/memories")
+        assert response.status_code == 200  # エラーでも200でエラーメッセージ表示
+
+    @patch("web.routers.persona.service_factory")
+    def test_delete_memory_success(self, mock_sf, client):
+        mock_memory = Mock()
+        mock_memory.delete_memory.return_value = True
+        mock_sf.get_memory_service.return_value = mock_memory
+
+        response = client.delete("/persona/p1/memories/m1")
+        assert response.status_code == 200
+
+    @patch("web.routers.persona.service_factory")
+    def test_delete_memory_disabled(self, mock_sf, client):
+        mock_sf.get_memory_service.return_value = None
+
+        response = client.delete("/persona/p1/memories/m1")
+        assert response.status_code == 400
+
+        response = client.delete("/persona/p1/memories")
+        assert response.status_code == 200
