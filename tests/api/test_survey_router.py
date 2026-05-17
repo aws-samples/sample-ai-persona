@@ -161,7 +161,7 @@ class TestSurveyDownload:
 
         resp = client.get("/survey/results/s1/download", follow_redirects=False)
         assert resp.status_code == 307
-        assert "s3.example.com" in resp.headers["location"]
+        assert resp.headers["location"] == "https://s3.example.com/signed"
 
     @patch("web.routers.survey.get_survey_manager")
     def test_download_not_found(self, mock_get_mgr, client):
