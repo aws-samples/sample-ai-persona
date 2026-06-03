@@ -407,7 +407,11 @@ async def save_data_agent_settings(
 
     return templates.TemplateResponse(
         "settings/partials/data_agent_settings.html",
-        {"request": request, **_data_agent_template_vars(), "save_message": "設定を保存しました"},
+        {
+            "request": request,
+            **_data_agent_template_vars(),
+            "save_message": "設定を保存しました",
+        },
     )
 
 
@@ -417,27 +421,34 @@ async def test_data_agent_connection(request: Request) -> Any:
     from src.config import config
 
     if not config.DATA_AGENT_RUNTIME_ARN:
-        return HTMLResponse('<div class="text-sm text-red-600 bg-red-50 rounded p-2">Runtime ARN が設定されていません</div>')
+        return HTMLResponse(
+            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">Runtime ARN が設定されていません</div>'
+        )
 
     try:
         from src.services.data_agent_service import DataAgentService
 
-        service = DataAgentService(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION)
-        result = service.query("利用可能なテーブル一覧を教えてください")
+        service = DataAgentService(
+            config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION
+        )
+        agent_result = service.query("利用可能なテーブル一覧を教えてください")
         import html as html_mod
-        escaped = html_mod.escape(result)
+
+        escaped = html_mod.escape(agent_result.text)
         return HTMLResponse(
             '<div class="text-sm bg-green-50 rounded p-3 border border-green-200">'
             '<div class="text-green-700 font-semibold mb-2">✅ 接続成功</div>'
             f'<div class="prose prose-sm max-w-none max-h-96 overflow-y-auto text-gray-700" id="data-agent-test-md">{escaped}</div>'
-            '</div>'
-            '<script>'
-            'if(window.marked&&window.DOMPurify){'
+            "</div>"
+            "<script>"
+            "if(window.marked&&window.DOMPurify){"
             'var el=document.getElementById("data-agent-test-md");'
-            'el.innerHTML=DOMPurify.sanitize(marked.parse(el.textContent,{breaks:true}));'
-            '}'
-            '</script>'
+            "el.innerHTML=DOMPurify.sanitize(marked.parse(el.textContent,{breaks:true}));"
+            "}"
+            "</script>"
         )
     except Exception:
         logger.exception("データ分析エージェント接続テストエラー")
-        return HTMLResponse('<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>')
+        return HTMLResponse(
+            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>'
+        )

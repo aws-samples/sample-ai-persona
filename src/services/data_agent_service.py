@@ -9,6 +9,7 @@ import json
 import logging
 import queue
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,14 @@ import boto3
 from botocore.config import Config as BotoConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DataAgentResult:
+    """DataAgent からの応答結果"""
+
+    text: str
+    csv_urls: list[str] = field(default_factory=list)
 
 
 class DataAgentServiceError(Exception):
@@ -33,14 +42,14 @@ class DataAgentService:
             config=BotoConfig(read_timeout=600, connect_timeout=120),
         )
 
-    def query(self, question: str) -> str:
-        """DataAgent に自然言語で問い合わせ、回答テキストを返す。
+    def query(self, question: str) -> DataAgentResult:
+        """DataAgent に自然言語で問い合わせ、回答テキストとCSV URLを返す。
 
         Args:
             question: データに関する質問
 
         Returns:
-            分析結果テキスト
+            DataAgentResult（テキスト応答 + CSV URL リスト）
 
         Raises:
             DataAgentServiceError: 問い合わせ失敗時
@@ -48,10 +57,12 @@ class DataAgentService:
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         session_id = f"persona-data_agent-{ts}-{uuid.uuid4().hex[:8]}"
 
-        payload = json.dumps({
-            "prompt": question,
-            "user_id": "persona-system",
-        }).encode()
+        payload = json.dumps(
+            {
+                "prompt": question,
+                "user_id": "persona-system",
+            }
+        ).encode()
 
         logger.info("DataAgent 問い合わせ開始: %s", question[:100])
 
@@ -63,6 +74,7 @@ class DataAgentService:
             )
 
             chunks: list[str] = []
+            csv_urls: list[str] = []
             for line in resp["response"].iter_lines():
                 if not line:
                     continue
@@ -72,8 +84,14 @@ class DataAgentService:
                 evt = json.loads(s[6:])
                 if evt.get("type") == "token":
                     chunks.append(evt["content"])
+                elif evt.get("type") == "csv_url":
+                    url = evt.get("url", "")
+                    if url:
+                        csv_urls.append(url)
                 elif evt.get("type") == "error":
-                    raise DataAgentServiceError(f"DataAgent エラー: {evt.get('content', '')}")
+                    raise DataAgentServiceError(
+                        f"DataAgent エラー: {evt.get('content', '')}"
+                    )
                 elif evt.get("type") == "done":
                     break
 
@@ -81,8 +99,12 @@ class DataAgentService:
             if not result:
                 raise DataAgentServiceError("DataAgent から回答を取得できませんでした")
 
-            logger.info("DataAgent 問い合わせ完了 (%d chars)", len(result))
-            return result
+            logger.info(
+                "DataAgent 問い合わせ完了 (%d chars, %d csv_urls)",
+                len(result),
+                len(csv_urls),
+            )
+            return DataAgentResult(text=result, csv_urls=csv_urls)
 
         except DataAgentServiceError:
             raise
@@ -90,7 +112,9 @@ class DataAgentService:
             raise DataAgentServiceError(f"DataAgent 問い合わせ失敗: {e}") from e
 
 
-def create_data_agent_tool(runtime_arn: str, region: str, event_queue: "queue.Queue[dict] | None" = None) -> Any:
+def create_data_agent_tool(
+    runtime_arn: str, region: str, event_queue: "queue.Queue[dict] | None" = None
+) -> Any:
     """DataAgent 問い合わせを Strands @tool としてラップして返す。
 
     Args:
@@ -115,10 +139,24 @@ def create_data_agent_tool(runtime_arn: str, region: str, event_queue: "queue.Qu
             question: データに関する質問。例: "利用可能なテーブル一覧を教えて", "顧客の年代別分布を教えて"
         """
         if event_queue is not None:
-            event_queue.put({"type": "tool_call", "content": "データ分析エージェントに問い合わせ中...", "detail": question})
-        result = service.query(question)
+            event_queue.put(
+                {
+                    "type": "tool_call",
+                    "content": "データ分析エージェントに問い合わせ中...",
+                    "detail": question,
+                }
+            )
+        agent_result = service.query(question)
         if event_queue is not None:
-            event_queue.put({"type": "tool_result", "tool_name": "ask_data_agent", "content": result})
-        return result
+            event_queue.put(
+                {
+                    "type": "tool_result",
+                    "tool_name": "ask_data_agent",
+                    "content": agent_result.text,
+                }
+            )
+            for url in agent_result.csv_urls:
+                event_queue.put({"type": "csv_url", "url": url})
+        return agent_result.text
 
     return ask_data_agent

@@ -315,8 +315,11 @@ class DiscussionManager:
         """
         try:
             discussions, next_cursor = self.database_service.get_discussions(
-                limit=limit, cursor=cursor, mode=mode,
-                sort_ascending=sort_ascending, search_all=search_all,
+                limit=limit,
+                cursor=cursor,
+                mode=mode,
+                sort_ascending=sort_ascending,
+                search_all=search_all,
             )
             self.logger.info(
                 f"Retrieved {len(discussions)} discussions (next_cursor={'yes' if next_cursor else 'no'})"
@@ -1097,14 +1100,16 @@ class DiscussionManager:
         for pid in discussion.participants:
             persona = self.database_service.get_persona(pid)
             if persona:
-                personas_data.append({
-                    "name": persona.name,
-                    "age": persona.age,
-                    "occupation": persona.occupation,
-                    "values": persona.values,
-                    "pain_points": persona.pain_points,
-                    "goals": persona.goals,
-                })
+                personas_data.append(
+                    {
+                        "name": persona.name,
+                        "age": persona.age,
+                        "occupation": persona.occupation,
+                        "values": persona.values,
+                        "pain_points": persona.pain_points,
+                        "goals": persona.goals,
+                    }
+                )
         return insights_data, personas_data
 
     def generate_report_streaming(
@@ -1136,6 +1141,36 @@ class DiscussionManager:
             event_queue=event_queue,
         )
 
+    def generate_followup_report_streaming(
+        self,
+        discussion_id: str,
+        followup_prompt: str,
+        previous_report: str,
+        event_queue: Any = None,
+    ) -> Any:
+        """前回レポートを踏まえたフォローアップ分析をストリーミング生成する。
+
+        Args:
+            discussion_id: 議論ID
+            followup_prompt: ユーザーの追加指示
+            previous_report: 先に生成された分析レポート本文
+            event_queue: リアルタイムイベント用 queue
+
+        Yields:
+            str: テキストチャンク
+        """
+        effective_prompt = (
+            "以下は先に生成した分析レポートです。このレポートを前提として追加分析を行ってください:\n\n"
+            f"---\n{previous_report}\n---\n\n"
+            f"追加指示: {followup_prompt}"
+        )
+        yield from self.generate_report_streaming(
+            discussion_id=discussion_id,
+            template_type="data_driven",
+            custom_prompt=effective_prompt,
+            event_queue=event_queue,
+        )
+
     def save_report(self, discussion_id: str, report: DiscussionReport) -> None:
         """
         生成済みレポートをDBに保存する。
@@ -1152,9 +1187,35 @@ class DiscussionManager:
             raise DiscussionManagerError("議論が見つかりません")
 
         if len(discussion.reports) >= 3:
-            raise DiscussionManagerError("レポートは最大3件まで保存できます。不要なレポートを削除してください。")
+            raise DiscussionManagerError(
+                "レポートは最大3件まで保存できます。不要なレポートを削除してください。"
+            )
 
         discussion.reports.append(report)
+        self.database_service.save_discussion(discussion)
+
+    def update_report_content(
+        self, discussion_id: str, report_id: str, content: str
+    ) -> None:
+        """既存レポートの内容を更新する。
+
+        Args:
+            discussion_id: 議論ID
+            report_id: レポートID
+            content: 更新後のレポート内容
+
+        Raises:
+            DiscussionManagerError: 議論やレポートが見つからない場合
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        report = next((r for r in discussion.reports if r.id == report_id), None)
+        if not report:
+            raise DiscussionManagerError("レポートが見つかりません")
+
+        report.content = content
         self.database_service.save_discussion(discussion)
 
     def delete_report(self, discussion_id: str, report_id: str) -> bool:

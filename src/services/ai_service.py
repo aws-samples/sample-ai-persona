@@ -1085,7 +1085,9 @@ JSON:"""
             f"インサイト抽出を開始します (メッセージ数: {len(discussion_messages)}, 総文字数: {total_chars}, カテゴリー数: {len(categories)})"
         )
 
-        prompt = self._create_insight_extraction_prompt(discussion_messages, categories, topic)
+        prompt = self._create_insight_extraction_prompt(
+            discussion_messages, categories, topic
+        )
 
         try:
             response = self._retry_with_backoff(self._invoke_model, prompt)
@@ -1184,7 +1186,9 @@ JSON:"""
         return prompt
 
     def _create_insight_extraction_prompt(
-        self, messages: List[Message], categories: Optional[List[InsightCategory]],
+        self,
+        messages: List[Message],
+        categories: Optional[List[InsightCategory]],
         topic: str = "",
     ) -> str:
         """インサイト抽出用のプロンプトを作成"""
@@ -1193,7 +1197,8 @@ JSON:"""
         persona_final_statements = [
             f"**{msg.persona_name}**: {msg.content}"
             for msg in messages
-            if msg.persona_id != "facilitator" and (msg.round_number or 0) > max_round - 3
+            if msg.persona_id != "facilitator"
+            and (msg.round_number or 0) > max_round - 3
         ]
         facilitator_summaries = [
             f"ラウンド{msg.round_number}: {msg.content}"
@@ -1202,7 +1207,9 @@ JSON:"""
         ]
 
         persona_text = "\n".join(persona_final_statements)
-        facilitator_text = "\n".join(facilitator_summaries) if facilitator_summaries else ""
+        facilitator_text = (
+            "\n".join(facilitator_summaries) if facilitator_summaries else ""
+        )
 
         # カテゴリーがNoneの場合はデフォルトを使用
         if categories is None:
@@ -1619,7 +1626,8 @@ JSON:"""
         )
 
         return self._invoke_converse_api(
-            converse_messages, system_prompts=[{"text": system_prompt}],
+            converse_messages,
+            system_prompts=[{"text": system_prompt}],
             max_tokens=12000,
         )
 
@@ -1641,7 +1649,11 @@ JSON:"""
         """
         if template_type == "data_driven":
             yield from self._generate_data_driven_report_streaming(
-                messages, insights, topic, custom_prompt, personas,
+                messages,
+                insights,
+                topic,
+                custom_prompt,
+                personas,
                 event_queue=event_queue,
             )
             return
@@ -1777,8 +1789,10 @@ JSON:"""
             "## 3. 意思決定・施策実行への示唆\n"
             "- 裏付けあり → すぐ実行可能な施策\n"
             "- 要追加調査 → 追加で必要なデータや検証方法\n"
-            "- セグメント抽出が依頼された場合は Markdown 内に CSV ブロック（```csv ... ```）で出力し、\n"
-            "  他マーケティングツールへのインプットとして使える形にする\n\n"
+            "- セグメント抽出やCSV出力が依頼された場合は、ask_data_agent に対して\n"
+            "  「〜をCSVで出力してください」と明示的に依頼すること。\n"
+            "  データエージェントがCSVファイルを生成しダウンロードURLを返すため、\n"
+            "  レポート内にデータをインライン展開してはならない。\n\n"
             "# 出力\n"
             "- Markdown 形式\n"
             "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
@@ -1805,7 +1819,12 @@ JSON:"""
         """
         if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
             if event_queue is not None:
-                event_queue.put({"type": "error", "content": "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"})
+                event_queue.put(
+                    {
+                        "type": "error",
+                        "content": "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。",
+                    }
+                )
                 return
             yield "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"
             return
@@ -1829,7 +1848,9 @@ JSON:"""
         )
 
         credentials = config.get_aws_credentials()
-        filtered = {k: v for k, v in credentials.items() if v is not None and k != "region_name"}
+        filtered = {
+            k: v for k, v in credentials.items() if v is not None and k != "region_name"
+        }
 
         def _callback(**kwargs: Any) -> None:
             """Agent のテキスト出力を event_queue に thinking として送信"""
@@ -1844,7 +1865,8 @@ JSON:"""
                 **filtered,
             )
             data_agent_tool = create_data_agent_tool(
-                config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION,
+                config.DATA_AGENT_RUNTIME_ARN,
+                config.DATA_AGENT_REGION,
                 event_queue=event_queue,
             )
             agent = Agent(
