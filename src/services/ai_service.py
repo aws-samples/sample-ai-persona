@@ -1640,6 +1640,8 @@ JSON:"""
         custom_prompt: Optional[str] = None,
         personas: Optional[List[Dict[str, Any]]] = None,
         event_queue: Any = None,
+        session_id: Optional[str] = None,
+        is_followup: bool = False,
     ) -> Any:
         """
         議論データからレポートをストリーミング生成する。
@@ -1655,6 +1657,8 @@ JSON:"""
                 custom_prompt,
                 personas,
                 event_queue=event_queue,
+                session_id=session_id,
+                is_followup=is_followup,
             )
             return
 
@@ -1764,6 +1768,35 @@ JSON:"""
         else:
             return base
 
+    def _build_data_driven_followup_system_prompt(
+        self, topic: str, custom_prompt: Optional[str] = None
+    ) -> str:
+        """フォローアップ分析用の軽量 system_prompt を構築"""
+        prompt = (
+            f"あなたは定性調査 × 実データ分析の専門家です。\n"
+            f"議論トピック「{topic}」について、前回の分析セッションの続きとして追加分析を行います。\n\n"
+            "# ツール\n"
+            "ask_data_agent: DWH の業務データに自然言語で問い合わせ可能。\n"
+            "前回のセッションでテーブル構造は確認済みのため、テーブル一覧の再確認は不要です。\n"
+            "ユーザーの追加指示に直接関連するクエリのみ実行してください。\n"
+            "大量データの全件取得はトークン消費が大きいため避けること。\n"
+            "集計・分布・上位N件で十分な場合はその形で依頼し、\n"
+            "特定条件で絞り込んだ少数の明細データが必要な場合は件数を限定して取得すること。\n\n"
+            "# CSV出力\n"
+            "セグメント抽出やCSV出力が依頼された場合は、ask_data_agent に対して\n"
+            "「〜をCSVで出力してください」と明示的に依頼すること。\n"
+            "データエージェントがCSVファイルを生成しダウンロードURLを返すため、\n"
+            "レポート内にデータをインライン展開してはならない。\n\n"
+            "# 出力\n"
+            "- Markdown 形式\n"
+            "- ユーザーの追加指示に対する回答に集中する\n"
+            "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
+            "- データ根拠を必ず明示する\n"
+        )
+        if custom_prompt:
+            prompt += f"\n# ユーザーからの追加指示（最優先）\n{custom_prompt}\n"
+        return prompt
+
     def _build_data_driven_system_prompt(
         self, topic: str, custom_prompt: Optional[str] = None
     ) -> str:
@@ -1777,7 +1810,9 @@ JSON:"""
             "ask_data_agent: DWH の業務データに自然言語で問い合わせ可能。\n"
             "まず利用可能なテーブル一覧を確認し、データ構造を踏まえて適切な質問を組み立ててください。\n"
             "1回の呼び出しに数十秒かかるため、1回につき1つの質問に絞り、必要に応じて3〜15回程度で段階的に情報を集めてください。\n"
-            "200件を超えるデータは取得できないため、必ず集計・分布・上位N件の形で依頼してください。\n\n"
+            "大量データの全件取得はトークン消費が大きいため避けること。\n"
+            "集計・分布・上位N件で十分な場合はその形で依頼し、\n"
+            "特定条件で絞り込んだ少数の明細データが必要な場合は件数を限定して取得すること。\n\n"
             "# 分析の基本構成（カスタムプロンプトがあれば優先）\n"
             "## 1. インサイト × 実データ照合\n"
             "主要なインサイトについて以下を明記:\n"
@@ -1810,12 +1845,17 @@ JSON:"""
         custom_prompt: Optional[str],
         personas: Optional[List[Dict[str, Any]]],
         event_queue: Any = None,
+        session_id: Optional[str] = None,
+        is_followup: bool = False,
     ) -> Any:
         """データドリブン分析レポートを生成する（Strands Agent + データ分析エージェント）。
 
         event_queue が渡された場合、thinking/tool_call/tool_result イベントを
         リアルタイムで put し、最終テキストも chunk として put する。
         event_queue が None の場合は従来通りテキスト chunk を yield する。
+
+        session_id: AgentCore Memory STMのセッションID。指定時はセッション継続。
+        is_followup: フォローアップ分析かどうか。Trueの場合は専用プロンプトを使用。
         """
         if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
             if event_queue is not None:
@@ -1841,7 +1881,12 @@ JSON:"""
             yield msg
             return
 
-        system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
+        if is_followup:
+            system_prompt = self._build_data_driven_followup_system_prompt(
+                topic, custom_prompt
+            )
+        else:
+            system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
         user_content = "\n".join(
             part["content"][0]["text"]
             for part in self._build_report_context(messages, insights, topic, personas)
@@ -1858,6 +1903,27 @@ JSON:"""
             if data and event_queue is not None:
                 event_queue.put({"type": "thinking", "content": data})
 
+        # セッションマネージャーを構築（AgentCore Memory STM）
+        report_session_manager = None
+        if session_id:
+            try:
+                from .memory.session_manager_factory import (
+                    create_agentcore_session_manager,
+                    is_memory_enabled,
+                )
+
+                if is_memory_enabled():
+                    report_session_manager = create_agentcore_session_manager(
+                        actor_id="report-agent",
+                        session_id=session_id,
+                        retrieval_config={},
+                        memory_mode="full",
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    f"レポートエージェントのセッションマネージャー作成失敗: {e}"
+                )
+
         try:
             model = BedrockModel(
                 model_id=config.BEDROCK_MODEL_ID,
@@ -1869,16 +1935,32 @@ JSON:"""
                 config.DATA_AGENT_REGION,
                 event_queue=event_queue,
             )
-            agent = Agent(
-                model=model,
-                tools=[data_agent_tool],
-                system_prompt=system_prompt,
-                callback_handler=_callback if event_queue is not None else None,
-            )
+
+            agent_kwargs: Dict[str, Any] = {
+                "model": model,
+                "tools": [data_agent_tool],
+                "system_prompt": system_prompt,
+                "callback_handler": _callback if event_queue is not None else None,
+            }
+            if report_session_manager:
+                agent_kwargs["session_manager"] = report_session_manager
+
+            agent = Agent(**agent_kwargs)
             result = agent(user_content)
 
-            # callback_handler 経由で全テキストは既に送信済み。完了通知のみ。
+            # セッションに履歴があるか確認してSTM有効フラグを通知
+            session_has_history = (
+                report_session_manager is not None and len(agent.messages) > 2
+            )
+
             if event_queue is not None:
+                event_queue.put(
+                    {
+                        "type": "session_id",
+                        "session_id": session_id or "",
+                        "has_history": session_has_history,
+                    }
+                )
                 event_queue.put({"type": "_done"})
             else:
                 yield str(result)

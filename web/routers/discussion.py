@@ -1023,6 +1023,8 @@ async def generate_report_stream(
 
                     if evt_type == "_done":
                         break
+                    elif evt_type == "session_id":
+                        yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
                     elif evt_type == "tool_call":
                         yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
                     elif evt_type == "tool_result" and content:
@@ -1083,6 +1085,7 @@ async def generate_followup_report_stream(
     discussion_id: str,
     followup_prompt: str = Form(...),
     previous_report: str = Form(...),
+    session_id: Optional[str] = Form(None),
 ) -> Any:
     """フォローアップ分析をPOST SSEストリーミングで生成する"""
 
@@ -1099,6 +1102,7 @@ async def generate_followup_report_stream(
                     followup_prompt=followup_prompt,
                     previous_report=previous_report,
                     event_queue=eq,
+                    session_id=session_id or None,
                 ):
                     pass
 
@@ -1118,6 +1122,8 @@ async def generate_followup_report_stream(
 
                 if evt_type == "_done":
                     break
+                elif evt_type == "session_id":
+                    yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
                 elif evt_type == "tool_call":
                     yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
                 elif evt_type == "tool_result" and content:

@@ -51,6 +51,7 @@
     (function() {
         var discussionId = '{{ discussion_id }}';
         var previousReport = {{ report.content | tojson }};
+        var currentSessionId = 'report-' + discussionId;
         var btn = document.getElementById('saved-followup-btn');
 
         btn.addEventListener('click', function() {
@@ -76,10 +77,12 @@
             var thinking = section.querySelector('#saved-followup-thinking');
             var content = '';
 
-            var body = new URLSearchParams({
+            var bodyParams = {
                 followup_prompt: prompt,
                 previous_report: previousReport
-            });
+            };
+            if (currentSessionId) bodyParams.session_id = currentSessionId;
+            var body = new URLSearchParams(bodyParams);
 
             fetch('/discussion/' + discussionId + '/report/generate-followup', {
                 method: 'POST',
