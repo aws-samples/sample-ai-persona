@@ -1181,12 +1181,18 @@ class DiscussionManager:
         stm_available = self._check_stm_session(effective_session_id)
 
         if stm_available:
+            self.logger.info(
+                f"フォローアップ: STMセッション継続 (session_id={effective_session_id})"
+            )
             effective_prompt = (
                 f"追加指示: {followup_prompt}\n\n"
                 "重要: 前回の会話でテーブル構造やデータ分析は実施済みです。"
                 "テーブル一覧の再確認は不要です。追加指示に直接関連するクエリのみ実行してください。"
             )
         else:
+            self.logger.info(
+                f"フォローアップ: STMセッション未検出、フォールバック使用 (session_id={effective_session_id})"
+            )
             effective_prompt = (
                 "以下は先に生成した分析レポートです。このレポートを前提として追加分析を行ってください:\n\n"
                 f"---\n{previous_report}\n---\n\n"
