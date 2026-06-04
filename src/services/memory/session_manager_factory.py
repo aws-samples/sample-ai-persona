@@ -85,8 +85,10 @@ def create_agentcore_session_manager(
         )
 
         # RetrievalConfigを構築
+        # retrieval_config が明示的に渡された場合（空dict含む）はそのまま使用し、
+        # None の場合のみデフォルト戦略を注入する
         retrieval_config_obj = None
-        if retrieval_config:
+        if retrieval_config is not None:
             retrieval_config_obj = {}
             for namespace, settings in retrieval_config.items():
                 retrieval_config_obj[namespace] = RetrievalConfig(

@@ -1023,10 +1023,16 @@ async def generate_report_stream(
 
                     if evt_type == "_done":
                         break
+                    elif evt_type == "session_id":
+                        yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
                     elif evt_type == "tool_call":
                         yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
                     elif evt_type == "tool_result" and content:
                         yield f"event: thinking\ndata: {json.dumps({'type': 'tool_result', 'content': content}, ensure_ascii=False)}\n\n"
+                    elif evt_type == "csv_url":
+                        url = evt.get("url", "")
+                        if url:
+                            yield f"data: {json.dumps({'type': 'csv_url', 'url': url}, ensure_ascii=False)}\n\n"
                     elif evt_type == "thinking" and content:
                         full_content += content
                         yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
@@ -1065,6 +1071,84 @@ async def generate_report_stream(
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{discussion_id}/report/generate-followup")
+async def generate_followup_report_stream(
+    request: Request,
+    discussion_id: str,
+    followup_prompt: str = Form(...),
+    previous_report: str = Form(...),
+    session_id: Optional[str] = Form(None),
+) -> Any:
+    """フォローアップ分析をPOST SSEストリーミングで生成する"""
+
+    def stream_generator() -> Any:
+        try:
+            discussion_manager = get_discussion_manager()
+            import queue as queue_mod
+
+            eq: queue_mod.Queue = queue_mod.Queue()
+
+            def _run() -> None:
+                for _ in discussion_manager.generate_followup_report_streaming(
+                    discussion_id=discussion_id,
+                    followup_prompt=followup_prompt,
+                    previous_report=previous_report,
+                    event_queue=eq,
+                    session_id=session_id or None,
+                ):
+                    pass
+
+            future = executor.submit(_run)
+
+            while True:
+                try:
+                    evt = eq.get(timeout=0.3)
+                except queue_mod.Empty:
+                    if future.done():
+                        break
+                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
+                    continue
+
+                evt_type = evt.get("type", "")
+                content = evt.get("content", "")
+
+                if evt_type == "_done":
+                    break
+                elif evt_type == "session_id":
+                    yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
+                elif evt_type == "tool_call":
+                    yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
+                elif evt_type == "tool_result" and content:
+                    yield f"event: thinking\ndata: {json.dumps({'type': 'tool_result', 'content': content}, ensure_ascii=False)}\n\n"
+                elif evt_type == "csv_url":
+                    url = evt.get("url", "")
+                    if url:
+                        yield f"data: {json.dumps({'type': 'csv_url', 'url': url}, ensure_ascii=False)}\n\n"
+                elif evt_type == "thinking" and content:
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                elif evt_type == "result":
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                elif evt_type == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'message': content}, ensure_ascii=False)}\n\n"
+                    return
+
+            if future.done() and future.exception():
+                logger.error(f"フォローアップレポート生成エラー: {future.exception()}")
+                yield f"data: {json.dumps({'type': 'error', 'message': 'フォローアップ分析の生成に失敗しました'}, ensure_ascii=False)}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"フォローアップレポート生成エラー: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'フォローアップ分析の生成に失敗しました'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         stream_generator(),
@@ -1134,6 +1218,32 @@ async def save_report(
         )
 
 
+@router.post("/{discussion_id}/report/{report_id}/update-content")
+async def update_report_content(
+    request: Request,
+    discussion_id: str,
+    report_id: str,
+    content: str = Form(...),
+) -> Any:
+    """レポート内容を更新する"""
+    try:
+        discussion_manager = get_discussion_manager()
+        discussion_manager.update_report_content(
+            discussion_id=discussion_id,
+            report_id=report_id,
+            content=content,
+        )
+        return HTMLResponse(
+            '<div class="text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2 mt-2">レポートを更新しました</div>'
+        )
+    except Exception as e:
+        logger.error(f"レポート更新エラー: {e}")
+        return HTMLResponse(
+            '<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">更新に失敗しました</div>',
+            status_code=400,
+        )
+
+
 @router.get("/{discussion_id}/report/{report_id}")
 async def get_report(
     request: Request,
@@ -1153,7 +1263,7 @@ async def get_report(
 
         return templates.TemplateResponse(
             "discussion/partials/report_content.html",
-            {"request": request, "report": report},
+            {"request": request, "report": report, "discussion_id": discussion_id},
         )
     except Exception as e:
         logger.error(f"レポート取得エラー: {e}")

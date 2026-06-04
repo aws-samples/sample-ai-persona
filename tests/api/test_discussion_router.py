@@ -612,7 +612,9 @@ class TestDiscussionReportEndpoints:
     def test_generate_report_success(self, mock_get_manager, client):
         """レポートSSEストリーミングが成功することを確認"""
         mock_manager = Mock()
-        mock_manager.generate_report_streaming.return_value = iter(["# サマリ", "レポート"])
+        mock_manager.generate_report_streaming.return_value = iter(
+            ["# サマリ", "レポート"]
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get(
@@ -643,7 +645,9 @@ class TestDiscussionReportEndpoints:
         from src.managers.discussion_manager import DiscussionManagerError
 
         mock_manager = Mock()
-        mock_manager.generate_report_streaming.side_effect = DiscussionManagerError("議論が見つかりません")
+        mock_manager.generate_report_streaming.side_effect = DiscussionManagerError(
+            "議論が見つかりません"
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get(
@@ -777,6 +781,56 @@ class TestDiscussionReportEndpoints:
         """無効なtemplate_typeが拒否されることを確認"""
         response = client.get(
             "/discussion/test-id/report/generate?template_type=invalid",
+        )
+
+        assert response.status_code == 200
+        assert "error" in response.text
+
+
+class TestDiscussionFollowupReportEndpoint:
+    """フォローアップ分析エンドポイントのテスト"""
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_followup_report_success(self, mock_get_manager, client):
+        """フォローアップSSEストリーミングが成功することを確認"""
+        mock_manager = Mock()
+        mock_manager.generate_followup_report_streaming.return_value = iter(
+            ["追加分析結果"]
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            "/discussion/test-id/report/generate-followup",
+            data={
+                "followup_prompt": "顧客セグメントをCSVで出力して",
+                "previous_report": "# 初回分析レポート\n分析内容...",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        call_kwargs = mock_manager.generate_followup_report_streaming.call_args[1]
+        assert call_kwargs["discussion_id"] == "test-id"
+        assert call_kwargs["followup_prompt"] == "顧客セグメントをCSVで出力して"
+        assert "初回分析レポート" in call_kwargs["previous_report"]
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_followup_report_failure(self, mock_get_manager, client):
+        """フォローアップ生成失敗時にSSEでエラーを返すことを確認"""
+        from src.managers.discussion_manager import DiscussionManagerError
+
+        mock_manager = Mock()
+        mock_manager.generate_followup_report_streaming.side_effect = (
+            DiscussionManagerError("議論が見つかりません")
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            "/discussion/test-id/report/generate-followup",
+            data={
+                "followup_prompt": "追加分析",
+                "previous_report": "レポート内容",
+            },
         )
 
         assert response.status_code == 200

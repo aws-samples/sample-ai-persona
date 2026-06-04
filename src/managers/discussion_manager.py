@@ -315,8 +315,11 @@ class DiscussionManager:
         """
         try:
             discussions, next_cursor = self.database_service.get_discussions(
-                limit=limit, cursor=cursor, mode=mode,
-                sort_ascending=sort_ascending, search_all=search_all,
+                limit=limit,
+                cursor=cursor,
+                mode=mode,
+                sort_ascending=sort_ascending,
+                search_all=search_all,
             )
             self.logger.info(
                 f"Retrieved {len(discussions)} discussions (next_cursor={'yes' if next_cursor else 'no'})"
@@ -1097,14 +1100,16 @@ class DiscussionManager:
         for pid in discussion.participants:
             persona = self.database_service.get_persona(pid)
             if persona:
-                personas_data.append({
-                    "name": persona.name,
-                    "age": persona.age,
-                    "occupation": persona.occupation,
-                    "values": persona.values,
-                    "pain_points": persona.pain_points,
-                    "goals": persona.goals,
-                })
+                personas_data.append(
+                    {
+                        "name": persona.name,
+                        "age": persona.age,
+                        "occupation": persona.occupation,
+                        "values": persona.values,
+                        "pain_points": persona.pain_points,
+                        "goals": persona.goals,
+                    }
+                )
         return insights_data, personas_data
 
     def generate_report_streaming(
@@ -1113,9 +1118,15 @@ class DiscussionManager:
         template_type: str,
         custom_prompt: Optional[str] = None,
         event_queue: Any = None,
+        session_id: Optional[str] = None,
+        is_followup: bool = False,
     ) -> Any:
         """
         議論からレポートをストリーミング生成する。
+
+        Args:
+            session_id: AgentCore Memory STMセッションID（data_driven時）
+            is_followup: フォローアップ分析かどうか
 
         Yields:
             str: テキストチャンク
@@ -1126,6 +1137,10 @@ class DiscussionManager:
 
         insights_data, personas_data = self._get_report_context(discussion)
 
+        effective_session_id = session_id
+        if template_type == "data_driven" and not effective_session_id:
+            effective_session_id = f"report-{discussion_id}"
+
         yield from self.ai_service.generate_discussion_report_streaming(
             messages=discussion.messages,
             insights=insights_data,
@@ -1134,7 +1149,101 @@ class DiscussionManager:
             custom_prompt=custom_prompt,
             personas=personas_data,
             event_queue=event_queue,
+            session_id=effective_session_id,
+            is_followup=is_followup,
         )
+
+    def generate_followup_report_streaming(
+        self,
+        discussion_id: str,
+        followup_prompt: str,
+        previous_report: str,
+        event_queue: Any = None,
+        session_id: Optional[str] = None,
+    ) -> Any:
+        """前回レポートを踏まえたフォローアップ分析をストリーミング生成する。
+
+        STMセッションが有効なら前回履歴が自動復元されるため追加指示のみ渡す。
+        STMが期限切れの場合はprevious_reportをフォールバックとしてプロンプトに注入。
+
+        Args:
+            discussion_id: 議論ID
+            followup_prompt: ユーザーの追加指示
+            previous_report: 先に生成された分析レポート本文（フォールバック用）
+            event_queue: リアルタイムイベント用 queue
+            session_id: AgentCore Memory STMセッションID
+
+        Yields:
+            str: テキストチャンク
+        """
+        effective_session_id = session_id or f"report-{discussion_id}"
+
+        stm_available = self._check_stm_session(effective_session_id)
+
+        if stm_available:
+            self.logger.info(
+                f"フォローアップ: STMセッション継続 (session_id={effective_session_id})"
+            )
+            effective_prompt = (
+                f"追加指示: {followup_prompt}\n\n"
+                "重要: 前回の会話でテーブル構造やデータ分析は実施済みです。"
+                "テーブル一覧の再確認は不要です。追加指示に直接関連するクエリのみ実行してください。"
+            )
+        else:
+            self.logger.info(
+                f"フォローアップ: STMセッション未検出、フォールバック使用 (session_id={effective_session_id})"
+            )
+            effective_prompt = (
+                "以下は先に生成した分析レポートです。このレポートを前提として追加分析を行ってください:\n\n"
+                f"---\n{previous_report}\n---\n\n"
+                f"追加指示: {followup_prompt}\n\n"
+                "重要: 前回レポートでテーブル構造は確認済みです。テーブル一覧の再確認は不要です。"
+                "追加指示に直接関連するクエリのみ実行してください。"
+            )
+
+        yield from self.generate_report_streaming(
+            discussion_id=discussion_id,
+            template_type="data_driven",
+            custom_prompt=effective_prompt,
+            event_queue=event_queue,
+            session_id=effective_session_id,
+            is_followup=True,
+        )
+
+    def _check_stm_session(self, session_id: str) -> bool:
+        """AgentCore Memory STMにセッション履歴が存在するか確認する。"""
+        try:
+            from src.services.memory.session_manager_factory import is_memory_enabled
+
+            if not is_memory_enabled():
+                return False
+
+            from bedrock_agentcore.memory.integrations.strands.config import (
+                AgentCoreMemoryConfig,
+            )
+            from bedrock_agentcore.memory.integrations.strands.session_manager import (
+                AgentCoreMemorySessionManager,
+            )
+            from src.config import config
+
+            if not config.AGENTCORE_MEMORY_ID:
+                return False
+
+            memory_config = AgentCoreMemoryConfig(
+                memory_id=config.AGENTCORE_MEMORY_ID,
+                session_id=session_id,
+                actor_id="report-agent",
+                retrieval_config={},
+            )
+            sm = AgentCoreMemorySessionManager(
+                agentcore_memory_config=memory_config,
+                region_name=config.AGENTCORE_MEMORY_REGION,
+            )
+            session_data = sm.read_session(session_id=session_id)
+            return session_data is not None
+        except Exception as e:
+            self.logger.debug(f"STMセッション確認失敗（フォールバック使用）: {e}")
+            return False
 
     def save_report(self, discussion_id: str, report: DiscussionReport) -> None:
         """
@@ -1152,9 +1261,42 @@ class DiscussionManager:
             raise DiscussionManagerError("議論が見つかりません")
 
         if len(discussion.reports) >= 3:
-            raise DiscussionManagerError("レポートは最大3件まで保存できます。不要なレポートを削除してください。")
+            raise DiscussionManagerError(
+                "レポートは最大3件まで保存できます。不要なレポートを削除してください。"
+            )
 
         discussion.reports.append(report)
+        self.database_service.save_discussion(discussion)
+
+    def update_report_content(
+        self, discussion_id: str, report_id: str, content: str
+    ) -> None:
+        """既存レポートの内容を更新する。
+
+        Args:
+            discussion_id: 議論ID
+            report_id: レポートID
+            content: 更新後のレポート内容
+
+        Raises:
+            DiscussionManagerError: 議論やレポートが見つからない場合
+        """
+        discussion = self.database_service.get_discussion(discussion_id)
+        if not discussion:
+            raise DiscussionManagerError("議論が見つかりません")
+
+        updated = False
+        for i, report in enumerate(discussion.reports):
+            if report.id == report_id:
+                from dataclasses import replace
+
+                discussion.reports[i] = replace(report, content=content)
+                updated = True
+                break
+
+        if not updated:
+            raise DiscussionManagerError("レポートが見つかりません")
+
         self.database_service.save_discussion(discussion)
 
     def delete_report(self, discussion_id: str, report_id: str) -> bool:

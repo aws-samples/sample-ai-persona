@@ -1,4 +1,5 @@
 """render_markdown (sanitize.py) の単体テスト"""
+
 from web.sanitize import render_markdown
 
 
@@ -51,3 +52,22 @@ class TestRenderMarkdown:
         result = render_markdown("*italic* **bold** ~~strike~~")
         assert "<em>" in result
         assert "<strong>" in result
+
+    # URL auto-linkify tests
+    def test_plain_url_linkified(self):
+        result = render_markdown("ダウンロード: https://example.com/file.csv")
+        assert 'href="https://example.com/file.csv"' in result
+        assert 'target="_blank"' in result
+
+    def test_existing_markdown_link_not_double_linked(self):
+        result = render_markdown("[リンク](https://example.com/page)")
+        assert result.count("https://example.com/page") == 1
+
+    def test_url_in_code_block_not_linkified(self):
+        result = render_markdown("`https://example.com/code`")
+        assert "<a" not in result or 'href="https://example.com/code"' not in result
+
+    def test_presigned_url_linkified(self):
+        url = "https://bucket.s3.amazonaws.com/key?X-Amz-Signature=abc123"
+        result = render_markdown(f"CSV: {url}")
+        assert f'href="{url}"' in result
