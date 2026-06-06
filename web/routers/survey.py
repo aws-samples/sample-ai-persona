@@ -275,15 +275,15 @@ async def preview_persona_prompt(request: Request) -> Any:
 async def upload_custom_step2(request: Request) -> Any:
     """Step2: マッピング確定 → Parquet変換 → S3保存"""
     form = await request.form()
-    filename = form.get("filename", "")
-    temp_key = form.get("temp_key", "")
+    filename = str(form.get("filename", ""))
+    temp_key = str(form.get("temp_key", ""))
 
     # マッピング情報を収集
-    column_mapping = {}
+    column_mapping: dict[str, str] = {}
     for key, value in form.items():
         if key.startswith("mapping_") and value:
             std_col = key[len("mapping_") :]
-            column_mapping[std_col] = value
+            column_mapping[std_col] = str(value)
 
     # その他カラム情報を収集（インデックスにギャップがあっても対応）
     extra_columns = []
@@ -899,8 +899,8 @@ async def filter_options(request: Request) -> Any:
 async def preview_personas(request: Request) -> Any:
     """フィルタ条件に基づくペルソナプレビュー"""
     form = await request.form()
-    filters_json = form.get("filters_json", "{}")
-    datasource = form.get("datasource", "nemotron")
+    filters_json = str(form.get("filters_json", "{}"))
+    datasource = str(form.get("datasource", "nemotron"))
 
     logger.info(
         f"Preview request - filters_json: {filters_json}, datasource: {datasource}"
@@ -1197,12 +1197,12 @@ async def execute_survey(request: Request) -> Any:
     template_id = form.get("template_id", "")
     name = form.get("name", "").strip()  # type: ignore[arg-type,union-attr]
     description = form.get("description", "").strip()  # type: ignore[arg-type,union-attr]
-    persona_count_str = form.get("persona_count", "100")
-    filters_json = form.get("filters_json", "{}")
-    datasource = form.get("datasource", "nemotron")
+    persona_count_str = str(form.get("persona_count", "100"))
+    filters_json = str(form.get("filters_json", "{}"))
+    datasource = str(form.get("datasource", "nemotron"))
 
     try:
-        persona_count = int(persona_count_str)  # type: ignore[arg-type]
+        persona_count = int(persona_count_str)
     except (ValueError, TypeError):
         response = templates.TemplateResponse(
             "survey/partials/error_message.html",
