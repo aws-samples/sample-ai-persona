@@ -274,30 +274,26 @@ class SurveyManager:
     def _validate_persona_count(count: int, has_images: bool = False) -> None:
         """
         ペルソナ数のバリデーション。
-        
+
         Args:
             count: ペルソナ数
             has_images: 画像が含まれる場合True
-        
+
         Raises:
             SurveyValidationError: バリデーションエラー
         """
         if not isinstance(count, int) or count < 100:
-            raise SurveyValidationError(
-                "対象ペルソナ数は100以上で指定してください"
-            )
-        
+            raise SurveyValidationError("対象ペルソナ数は100以上で指定してください")
+
         # 画像付きの場合は1000人まで
         if has_images and count > 1000:
             raise SurveyValidationError(
                 "画像付きアンケートの場合、対象ペルソナ数は1000人までです"
             )
-        
+
         # 画像なしの場合は10000人まで
         if not has_images and count > 10000:
-            raise SurveyValidationError(
-                "対象ペルソナ数は10000人までです"
-            )
+            raise SurveyValidationError("対象ペルソナ数は10000人までです")
 
     # =========================================================================
     # アンケート実行
@@ -424,7 +420,9 @@ class SurveyManager:
             )
 
             # プロンプト構築とバッチ推論
-            prompts = self.survey_service.build_persona_prompts(sampled, template, datasource=datasource)
+            prompts = self.survey_service.build_persona_prompts(
+                sampled, template, datasource=datasource
+            )
             results = self.survey_service.execute_batch_inference(prompts)
 
             # CSV結果をS3に保存
@@ -453,6 +451,324 @@ class SurveyManager:
             raise SurveyExecutionError(
                 f"アンケート実行中にエラーが発生しました: {e}"
             ) from e
+
+    # =========================================================================
+    # データ分析エージェント連携（DWHセグメント抽出）
+    # =========================================================================
+
+    DWH_SEGMENT_SYSTEM_PROMPT = (
+        "あなたはDWH（データウェアハウス）から顧客セグメントデータを抽出する専門エージェントです。\n\n"
+        "# 目的\n"
+        "抽出したデータは、AIがその顧客になりきってアンケートに回答するための「ペルソナ」として使われます。\n"
+        "AIが再現性の高いペルソナとして振る舞うには、属性だけでなく過去の行動・状況・文脈が必要です。\n"
+        "できるだけリッチなデータを1人1行で抽出してください。\n\n"
+        "# 抽出すべきデータの優先順位\n"
+        "1. **基本属性**: 顧客ID、性別、年齢（または生年）、居住地域、職業\n"
+        "2. **行動履歴**: 購買回数、累計購入額、最終購入日、利用頻度、会員ランク等\n"
+        "3. **嗜好・関心**: よく購入するカテゴリ、お気に入りブランド、閲覧傾向等\n"
+        "4. **状況・ライフステージ**: 登録日（新規/古参）、解約リスクスコア、問い合わせ履歴件数等\n"
+        "5. **セグメント情報**: 所属セグメント名、顧客スコア等\n\n"
+        "上記すべてが存在するとは限りません。DWHにあるテーブルから取得可能なものをできるだけ多くJOINして取得してください。\n\n"
+        "# 手順\n"
+        "1. ask_data_agent で利用可能なテーブル一覧を確認する\n"
+        "2. 顧客テーブルと関連テーブル（注文、行動ログ、セグメント等）の構造を確認する\n"
+        "3. ユーザー条件に合致する顧客を特定し、関連テーブルをJOINして集計カラムを付与する\n"
+        "4. 結果を「CSVで出力してください」と ask_data_agent に依頼する\n"
+        "5. 1顧客1行になるようにする（重複がある場合は集計やDISTINCTで解消）\n"
+        "6. 抽出件数が100件未満の場合は条件を緩和して再試行する\n"
+        "7. 10,000件を超える場合はサンプリングまたは条件を絞るよう調整する\n\n"
+        "# 制約\n"
+        "- 最小100行、最大10,000行\n"
+        "- 必ず1顧客1行（GROUP BY customer_id 等で集約）\n"
+        "- 顧客を一意に識別できるID列を必ず含めること\n"
+        "- ask_data_agent に「CSVで出力してください」と依頼してCSV URLを取得すること\n\n"
+        "# 注意\n"
+        "- ask_data_agent は1回の呼び出しに数十秒かかる場合がある\n"
+        "- 1回の呼び出しには1つの質問に絞ること\n"
+        "- 最大10回まで呼び出し可能。十分なデータ探索を行ってからCSV出力すること\n"
+        "- 典型的なペース配分: テーブル一覧(1回) → 構造確認(2-3回) → 件数確認(1回) → CSV出力(1回) → 必要に応じて条件調整・再出力\n"
+    )
+
+    MIN_SEGMENT_ROWS = 100
+    MAX_SEGMENT_ROWS = 10000
+
+    def extract_segment_from_dwh(
+        self,
+        condition: str,
+        event_queue: Any,
+    ) -> Dict[str, Any]:
+        """データ分析エージェント連携でDWHから顧客セグメントを抽出する。
+
+        Args:
+            condition: 自然言語による抽出条件
+            event_queue: SSEストリーミング用イベントキュー
+
+        Returns:
+            dict: csv_bytes, row_count, columns, samples, auto_mapping, suggested_name
+
+        Raises:
+            SurveyValidationError: バリデーションエラー
+            SurveyExecutionError: 抽出エラー
+        """
+
+        from strands import Agent
+        from strands.models import BedrockModel
+
+        from src.config import config
+        from src.services.data_agent_service import create_data_agent_tool
+
+        if not condition or not condition.strip():
+            raise SurveyValidationError("抽出条件を入力してください")
+        if not config.DATA_AGENT_RUNTIME_ARN:
+            raise SurveyExecutionError(
+                "データ分析エージェントの接続設定がされていません。"
+                "設定画面から Runtime ARN を設定してください"
+            )
+
+        logger.info(f"DWH セグメント抽出開始 (condition={condition!r})")
+        event_queue.put(
+            {"type": "status", "content": "データ分析エージェントに接続中..."}
+        )
+
+        # csv_url を直接収集するリスト（event_queue とは別に保持）
+        csv_urls: List[str] = []
+
+        # event_queue に csv_url を流しつつ、csv_urls リストにも蓄積するラッパーキュー
+        class _CsvUrlCapture:
+            """event_queue をラップし、csv_url イベントを別途キャプチャする"""
+
+            def __init__(self, inner: Any, url_list: List[str]) -> None:
+                self._inner = inner
+                self._url_list = url_list
+
+            def put(self, item: Any) -> None:
+                if isinstance(item, dict) and item.get("type") == "csv_url":
+                    url = item.get("url", "")
+                    if url:
+                        self._url_list.append(url)
+                self._inner.put(item)
+
+            def get(self, *args: Any, **kwargs: Any) -> Any:
+                return self._inner.get(*args, **kwargs)
+
+            def get_nowait(self) -> Any:
+                return self._inner.get_nowait()
+
+            def empty(self) -> bool:
+                return bool(self._inner.empty())
+
+        capture_queue = _CsvUrlCapture(event_queue, csv_urls)
+
+        ask_data_agent = create_data_agent_tool(
+            config.DATA_AGENT_RUNTIME_ARN,
+            config.DATA_AGENT_REGION,
+            event_queue=capture_queue,  # type: ignore[arg-type]
+        )
+
+        model = BedrockModel(
+            model_id=config.BEDROCK_MODEL_ID,
+            region_name=config.AWS_REGION,
+        )
+
+        user_prompt = (
+            f"以下の条件で顧客セグメントをCSVエクスポートしてください。\n\n"
+            f"条件: {condition}\n\n"
+            f"この顧客たちにアンケートを実施し、AIがその人になりきって回答します。\n"
+            f"回答の再現性を高めるため、基本属性に加えて行動履歴・嗜好・状況など、\n"
+            f"その人の「人となり」が分かる情報をできるだけ多く含めてください。\n"
+            f"1顧客1行で出力してください。"
+        )
+
+        try:
+            agent = Agent(
+                name="SegmentExtractor",
+                model=model,
+                system_prompt=self.DWH_SEGMENT_SYSTEM_PROMPT,
+                tools=[ask_data_agent],
+            )
+            agent(user_prompt)
+        except Exception as e:
+            raise SurveyExecutionError(f"データ分析エージェント実行エラー: {e}") from e
+
+        if not csv_urls:
+            raise SurveyExecutionError(
+                "CSVエクスポートURLを取得できませんでした。"
+                "条件を変更して再試行してください。"
+            )
+
+        # CSV ダウンロード（URLスキーム/ドメインを検証）
+        event_queue.put({"type": "status", "content": "CSVデータをダウンロード中..."})
+        csv_url = csv_urls[-1]
+        from urllib.parse import urlparse
+
+        parsed_url = urlparse(csv_url)
+        if parsed_url.scheme not in ("https", "http"):
+            raise SurveyExecutionError("不正なURLスキームです")
+        if not parsed_url.hostname or not parsed_url.hostname.endswith(
+            ".amazonaws.com"
+        ):
+            raise SurveyExecutionError("許可されていないドメインからのダウンロードです")
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(csv_url, timeout=120) as resp:
+                csv_bytes = resp.read()
+        except Exception as e:
+            raise SurveyExecutionError(f"CSVダウンロードに失敗しました: {e}") from e
+
+        # CSV 解析
+        parse_result = self.survey_service.parse_csv_columns(csv_bytes)
+
+        # 件数バリデーション（parse_csv_columns は5行しか読まないので全行カウント）
+        import io
+
+        import polars as pl
+
+        df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
+        row_count = len(df)
+
+        if row_count < self.MIN_SEGMENT_ROWS:
+            raise SurveyValidationError(
+                f"抽出件数が{row_count}件です。"
+                f"Bedrockバッチ推論には{self.MIN_SEGMENT_ROWS}件以上必要です。"
+                f"条件を緩和してください。"
+            )
+        if row_count > self.MAX_SEGMENT_ROWS:
+            raise SurveyValidationError(
+                f"抽出件数が{row_count}件で上限({self.MAX_SEGMENT_ROWS}件)を超えています。"
+                f"条件を絞ってください。"
+            )
+
+        event_queue.put(
+            {
+                "type": "complete",
+                "content": f"抽出完了: {row_count}件",
+            }
+        )
+
+        # 条件からデータセット名を自動生成
+        suggested_name = self._generate_dataset_name(condition)
+
+        logger.info(
+            f"DWH セグメント抽出完了: {row_count}件, {len(parse_result['columns'])}カラム"
+        )
+        return {
+            "csv_bytes": csv_bytes,
+            "row_count": row_count,
+            "columns": parse_result["columns"],
+            "samples": parse_result["samples"],
+            "auto_mapping": parse_result["auto_mapping"],
+            "suggested_name": suggested_name,
+        }
+
+    def _generate_dataset_name(self, condition: str) -> str:
+        """抽出条件からデータセット名を自動生成する。"""
+        if self.ai_service:
+            prompt = (
+                "以下の顧客抽出条件から、短いデータセット名（15文字以内の日本語）を1つだけ生成してください。\n"
+                "名前だけを返し、説明や記号は不要です。\n\n"
+                f"条件: {condition}"
+            )
+            try:
+                name = self.ai_service._invoke_model(prompt).strip()
+                name = name.strip("「」『』\"'")
+                if 1 <= len(name) <= 30:
+                    return name
+            except Exception:
+                pass
+        # フォールバック: 条件文を20文字に切り詰め
+        clean = condition.strip().replace("\n", " ")
+        return clean[:20] if len(clean) > 20 else clean
+
+    def suggest_column_mapping(
+        self,
+        columns: List[str],
+        samples: Dict[str, List[str]],
+    ) -> Dict[str, Any]:
+        """LLMを使ってDWHカラムからペルソナ標準カラムへのマッピングと、その他カラムの補足情報を提案する。
+
+        Args:
+            columns: CSVカラム名リスト
+            samples: {カラム名: [サンプル値...]} 辞書
+
+        Returns:
+            {"mapping": {標準カラム名: CSVカラム名}, "extra_columns": [{csv_column, label, description}]}
+        """
+        if not self.ai_service:
+            return {"mapping": {}, "extra_columns": []}
+
+        import json
+
+        standard_cols = self.survey_service.STANDARD_COLUMNS
+        standard_info = {k: v["label"] for k, v in standard_cols.items()}
+
+        prompt = (
+            "以下のCSVカラム名とサンプル値から、2つの情報を提案してください。\n\n"
+            "## CSVカラム:\n"
+        )
+        for col in columns:
+            sample_vals = samples.get(col, [])
+            prompt += f"- {col}: {sample_vals}\n"
+
+        prompt += (
+            f"\n## 標準カラム定義:\n"
+            f"{json.dumps(standard_info, ensure_ascii=False, indent=2)}\n\n"
+            "## タスク\n"
+            "1. **mapping**: 標準カラムにマッピングできるカラムを特定する\n"
+            "2. **extra_columns**: 標準カラムに該当しないが、ペルソナの人物像を理解するのに有用なカラムについて、"
+            "日本語ラベルと補足説明を付与する\n\n"
+            "## 出力形式（JSONのみ）\n"
+            "```json\n"
+            "{\n"
+            '  "mapping": {"sex": "gender", "age": "birth_year"},\n'
+            '  "extra_columns": [\n'
+            '    {"csv_column": "total_purchases", "label": "累計購入額", "description": "顧客の生涯購入金額合計（円）"},\n'
+            '    {"csv_column": "member_rank", "label": "会員ランク", "description": "ゴールド/シルバー/ブロンズ。購入頻度と金額に基づく"}\n'
+            "  ]\n"
+            "}\n"
+            "```\n\n"
+            "## ルール\n"
+            "- mappingのキーは標準カラム名、値はCSVカラム名\n"
+            "- birth_year等はageに変換可能なのでマッピング対象にする\n"
+            "- extra_columnsにはIDカラムや明らかに不要なカラム(created_at等)は含めない\n"
+            "- extra_columnsのdescriptionにはサンプル値から読み取れる値の意味や範囲を含める\n"
+            "- JSONオブジェクトのみを返すこと"
+        )
+
+        try:
+            response = self.ai_service._invoke_model(prompt)
+            json_str = response.strip()
+            if json_str.startswith("```"):
+                lines = json_str.split("\n")
+                json_str = "\n".join(
+                    line for line in lines[1:-1] if not line.startswith("```")
+                )
+            result = json.loads(json_str)
+            if isinstance(result, dict):
+                mapping = result.get("mapping", {})
+                valid_mapping = {
+                    k: v
+                    for k, v in mapping.items()
+                    if k in standard_cols and v in columns
+                }
+                extra = result.get("extra_columns", [])
+                valid_extra = [
+                    e
+                    for e in extra
+                    if isinstance(e, dict)
+                    and e.get("csv_column") in columns
+                    and e.get("csv_column") not in valid_mapping.values()
+                ]
+                logger.info(
+                    f"LLMマッピング提案: mapping={len(valid_mapping)}件, "
+                    f"extra={len(valid_extra)}件 (raw extra={len(extra)}件)"
+                )
+                return {"mapping": valid_mapping, "extra_columns": valid_extra}
+            logger.warning(f"LLMマッピング提案: 予期しない応答形式 type={type(result)}")
+        except Exception as e:
+            logger.warning(f"LLMマッピング提案失敗: {e}")
+
+        return {"mapping": {}, "extra_columns": []}
 
     # =========================================================================
     # 結果取得・分析

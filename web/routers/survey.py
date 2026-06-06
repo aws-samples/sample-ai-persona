@@ -12,7 +12,13 @@ from pathlib import Path
 
 import polars as pl
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    Response,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from src.managers.survey_manager import (
@@ -115,14 +121,22 @@ async def download_nemotron(request: Request) -> Any:
     if _nemotron_download_status["downloading"]:
         return templates.TemplateResponse(
             "survey/partials/nemotron_status.html",
-            {"request": request, "nemotron_status": {"exists": False, "size_mb": 0}, "downloading": True},
+            {
+                "request": request,
+                "nemotron_status": {"exists": False, "size_mb": 0},
+                "downloading": True,
+            },
         )
     _nemotron_download_status["downloading"] = True
     _nemotron_download_status["error"] = None
     asyncio.create_task(asyncio.to_thread(_download_nemotron_background))
     return templates.TemplateResponse(
         "survey/partials/nemotron_status.html",
-        {"request": request, "nemotron_status": {"exists": False, "size_mb": 0}, "downloading": True},
+        {
+            "request": request,
+            "nemotron_status": {"exists": False, "size_mb": 0},
+            "downloading": True,
+        },
     )
 
 
@@ -141,7 +155,8 @@ async def nemotron_download_status(request: Request) -> Any:
             "nemotron_status": status,
             "downloading": _nemotron_download_status["downloading"],
             "error": _nemotron_download_status["error"],
-            "success": status.get("exists", False) and not _nemotron_download_status["downloading"],
+            "success": status.get("exists", False)
+            and not _nemotron_download_status["downloading"],
         },
     )
 
@@ -159,7 +174,10 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         if len(content) > 500 * 1024 * 1024:
             return templates.TemplateResponse(
                 "survey/partials/custom_upload_result.html",
-                {"request": request, "error": "ファイルサイズは500MB以下にしてください。"},
+                {
+                    "request": request,
+                    "error": "ファイルサイズは500MB以下にしてください。",
+                },
             )
         survey_service = service_factory.get_survey_service()
         parsed = survey_service.parse_csv_columns(content)
@@ -198,22 +216,28 @@ async def preview_persona_prompt(request: Request) -> Any:
     column_mapping = {}
     for key, value in form.items():
         if key.startswith("mapping_") and value:
-            std_col = key[len("mapping_"):]
+            std_col = key[len("mapping_") :]
             column_mapping[std_col] = value
 
-    # その他カラム情報を収集
-    extra_count = int(form.get("extra_count", "0"))  # type: ignore[arg-type]
+    # その他カラム情報を収集（インデックスにギャップがあっても対応）
     extra_columns = []
-    for i in range(extra_count):
+    extra_indices = sorted(
+        int(k.split("_", 2)[2])
+        for k in form.keys()
+        if k.startswith("extra_column_") and form.get(k)
+    )
+    for i in extra_indices:
         csv_col = form.get(f"extra_column_{i}", "")
         label = form.get(f"extra_label_{i}", "")
         desc = form.get(f"extra_desc_{i}", "")
         if csv_col:
-            extra_columns.append({
-                "csv_column": csv_col,
-                "label": label or csv_col,
-                "description": desc,
-            })
+            extra_columns.append(
+                {
+                    "csv_column": csv_col,
+                    "label": label or csv_col,
+                    "description": desc,
+                }
+            )
 
     try:
         survey_service = service_factory.get_survey_service()
@@ -231,7 +255,8 @@ async def preview_persona_prompt(request: Request) -> Any:
 
         row = df.row(0, named=True)
         preview_text = survey_service._build_system_prompt(
-            row, extra_columns=extra_columns or None  # type: ignore[arg-type]
+            row,
+            extra_columns=extra_columns or None,  # type: ignore[arg-type]
         )
 
         return templates.TemplateResponse(
@@ -257,22 +282,28 @@ async def upload_custom_step2(request: Request) -> Any:
     column_mapping = {}
     for key, value in form.items():
         if key.startswith("mapping_") and value:
-            std_col = key[len("mapping_"):]
+            std_col = key[len("mapping_") :]
             column_mapping[std_col] = value
 
-    # その他カラム情報を収集
-    extra_count = int(form.get("extra_count", "0"))  # type: ignore[arg-type]
+    # その他カラム情報を収集（インデックスにギャップがあっても対応）
     extra_columns = []
-    for i in range(extra_count):
+    extra_indices = sorted(
+        int(k.split("_", 2)[2])
+        for k in form.keys()
+        if k.startswith("extra_column_") and form.get(k)
+    )
+    for i in extra_indices:
         csv_col = form.get(f"extra_column_{i}", "")
         label = form.get(f"extra_label_{i}", "")
         desc = form.get(f"extra_desc_{i}", "")
         if csv_col:
-            extra_columns.append({
-                "csv_column": csv_col,
-                "label": label or csv_col,
-                "description": desc,
-            })
+            extra_columns.append(
+                {
+                    "csv_column": csv_col,
+                    "label": label or csv_col,
+                    "description": desc,
+                }
+            )
 
     try:
         survey_service = service_factory.get_survey_service()
@@ -284,7 +315,10 @@ async def upload_custom_step2(request: Request) -> Any:
         result = await loop.run_in_executor(
             executor,
             lambda: survey_service.upload_custom_dataset(
-                csv_bytes, filename, column_mapping, extra_columns  # type: ignore[arg-type]
+                csv_bytes,
+                filename,
+                column_mapping,
+                extra_columns,  # type: ignore[arg-type]
             ),
         )
 
@@ -335,8 +369,7 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
     except Exception as e:
         logger.error(f"Failed to load dataset detail: {e}")
         return HTMLResponse(
-            '<div class="text-red-600 text-sm p-2">'
-            "詳細の取得に失敗しました</div>"
+            '<div class="text-red-600 text-sm p-2">詳細の取得に失敗しました</div>'
         )
 
 
@@ -356,6 +389,264 @@ async def delete_custom_dataset(request: Request, name: str) -> Any:
         return HTMLResponse(
             '<div class="text-red-600 text-sm">削除に失敗しました</div>'
         )
+
+
+# =========================================================================
+# データ分析エージェント連携（DWHセグメント抽出）
+# =========================================================================
+
+
+def _survey_sse_event(event_type: str, data: str) -> str:
+    """SSEイベントをフォーマット"""
+    lines = data.split("\n") if data else [""]
+    data_lines = "\n".join(f"data: {line}" for line in lines)
+    return f"event: {event_type}\n{data_lines}\n\n"
+
+
+@router.post("/persona-data/dwh-extract")
+async def dwh_extract(request: Request) -> Any:
+    """データ分析エージェント連携: セグメント抽出（SSEストリーミング）"""
+    import queue as queue_mod
+
+    form = await request.form()
+    condition = str(form.get("condition", "")).strip()
+
+    if not condition:
+
+        async def err_gen() -> Any:
+            yield _survey_sse_event("error", "抽出条件を入力してください")
+
+        return StreamingResponse(err_gen(), media_type="text/event-stream")
+
+    event_queue: queue_mod.Queue = queue_mod.Queue()
+
+    def _run_extraction() -> dict:
+        manager = get_survey_manager()
+        return manager.extract_segment_from_dwh(
+            condition=condition,
+            event_queue=event_queue,
+        )
+
+    async def event_generator() -> Any:
+        yield _survey_sse_event("status", "データ分析エージェントに接続中...")
+
+        future = executor.submit(_run_extraction)
+
+        while not future.done():
+            try:
+                evt = event_queue.get(timeout=0.3)
+                evt_type = evt.get("type", "")
+                content = evt.get("content", "")
+                if evt_type == "tool_call":
+                    yield _survey_sse_event(
+                        "thinking",
+                        json.dumps(
+                            {
+                                "type": "tool_call",
+                                "content": content,
+                                "detail": evt.get("detail", ""),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                elif evt_type == "tool_result" and content:
+                    yield _survey_sse_event(
+                        "thinking",
+                        json.dumps(
+                            {
+                                "type": "tool_result",
+                                "tool_name": evt.get("tool_name", ""),
+                                "content": content[:500],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                elif evt_type == "status" and content:
+                    yield _survey_sse_event("status", content)
+                elif evt_type == "csv_url":
+                    pass
+                elif evt_type == "complete":
+                    pass
+            except queue_mod.Empty:
+                yield _survey_sse_event("keepalive", "")
+
+        # flush remaining events
+        while not event_queue.empty():
+            try:
+                event_queue.get_nowait()
+            except queue_mod.Empty:
+                break
+
+        try:
+            result = future.result()
+            # Save CSV to temp S3
+            survey_service = service_factory.get_survey_service()
+            import uuid as uuid_mod
+
+            temp_key = f"persona-dataset/temp/dwh-{uuid_mod.uuid4().hex[:8]}.csv"
+            survey_service.s3_service.upload_file(result["csv_bytes"], temp_key)
+
+            yield _survey_sse_event(
+                "complete",
+                json.dumps(
+                    {
+                        "temp_key": temp_key,
+                        "dataset_name": result.get("suggested_name", "dwh_segment"),
+                        "row_count": result["row_count"],
+                        "columns": result["columns"],
+                        "samples": result["samples"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            yield _survey_sse_event("done", "")
+
+        except (SurveyValidationError, SurveyExecutionError) as e:
+            yield _survey_sse_event("error", str(e))
+        except Exception:
+            logger.exception("DWH セグメント抽出エラー")
+            yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/persona-data/dwh-preview", response_class=HTMLResponse)
+async def dwh_preview(request: Request) -> Any:
+    """DWH抽出結果のプレビュー＋マッピングUIを返す"""
+    form = await request.form()
+    temp_key = str(form.get("temp_key", ""))
+    dataset_name = str(form.get("dataset_name", ""))
+
+    try:
+        survey_service = service_factory.get_survey_service()
+        bucket = survey_service.s3_service.bucket_name
+        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+
+        parsed = survey_service.parse_csv_columns(csv_bytes)
+
+        # LLMマッピング提案（標準カラム + その他カラム）
+        manager = get_survey_manager()
+        suggestion = manager.suggest_column_mapping(
+            parsed["columns"], parsed["samples"]
+        )
+
+        # auto_mapping と suggested mapping をマージ（suggestedを優先）
+        merged_mapping = {**parsed["auto_mapping"], **suggestion.get("mapping", {})}
+        suggested_extra = suggestion.get("extra_columns", [])
+
+        return templates.TemplateResponse(
+            "survey/partials/column_mapping.html",
+            {
+                "request": request,
+                "filename": dataset_name + ".csv",
+                "temp_key": temp_key,
+                "columns": parsed["columns"],
+                "samples": parsed["samples"],
+                "auto_mapping": merged_mapping,
+                "standard_columns": survey_service.STANDARD_COLUMNS,
+                "is_dwh": True,
+                "dataset_name": dataset_name,
+                "suggested_extra": suggested_extra,
+            },
+        )
+    except Exception as e:
+        logger.error(f"DWH preview failed: {e}")
+        return templates.TemplateResponse(
+            "survey/partials/custom_upload_result.html",
+            {
+                "request": request,
+                "error": "プレビューの生成に失敗しました。再度お試しください。",
+            },
+        )
+
+
+@router.post("/persona-data/dwh-confirm", response_class=HTMLResponse)
+async def dwh_confirm(request: Request) -> Any:
+    """DWH抽出データのマッピング確定 → Parquet変換 → S3保存"""
+    form = await request.form()
+    temp_key = str(form.get("temp_key", ""))
+    dataset_name = str(form.get("dataset_name", ""))
+
+    column_mapping: dict[str, str] = {}
+    for key, value in form.items():
+        if key.startswith("mapping_") and value:
+            std_col = key[len("mapping_") :]
+            column_mapping[std_col] = str(value)
+
+    # その他カラム情報を収集（インデックスにギャップがあっても対応）
+    extra_columns = []
+    extra_indices = sorted(
+        int(k.split("_", 2)[2])
+        for k in form.keys()
+        if k.startswith("extra_column_") and form.get(k)
+    )
+    for i in extra_indices:
+        csv_col = form.get(f"extra_column_{i}", "")
+        label = form.get(f"extra_label_{i}", "")
+        desc = form.get(f"extra_desc_{i}", "")
+        if csv_col:
+            extra_columns.append(
+                {
+                    "csv_column": str(csv_col),
+                    "label": str(label) or str(csv_col),
+                    "description": str(desc),
+                }
+            )
+
+    try:
+        survey_service = service_factory.get_survey_service()
+        bucket = survey_service.s3_service.bucket_name
+        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+
+        filename = dataset_name + ".csv" if dataset_name else "dwh_segment.csv"
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            lambda: survey_service.upload_custom_dataset(
+                csv_bytes,
+                filename,
+                column_mapping,
+                extra_columns,  # type: ignore[arg-type]
+            ),
+        )
+
+        # 一時ファイルを削除
+        try:
+            survey_service.s3_service.s3_client.delete_object(
+                Bucket=bucket, Key=temp_key
+            )
+        except Exception:
+            pass
+
+        custom_datasets = survey_service.list_custom_datasets()
+        return templates.TemplateResponse(
+            "survey/partials/custom_upload_result.html",
+            {
+                "request": request,
+                "success": True,
+                "result": result,
+                "custom_datasets": custom_datasets,
+            },
+        )
+    except Exception as e:
+        logger.error(f"DWH confirm failed: {e}")
+        return templates.TemplateResponse(
+            "survey/partials/custom_upload_result.html",
+            {
+                "request": request,
+                "error": "データセットの保存に失敗しました。再度お試しください。",
+            },
+        )
+
+
+# =========================================================================
+# テンプレート管理
+# =========================================================================
 
 
 @router.get("/templates", response_class=HTMLResponse)
@@ -393,7 +684,9 @@ def _parse_ai_messages(payload: Any) -> list[dict[str, str]]:
         raise HTTPException(status_code=400, detail="リクエストボディが不正です")
     raw = payload.get("messages")
     if not isinstance(raw, list):
-        raise HTTPException(status_code=400, detail="messages はリストである必要があります")
+        raise HTTPException(
+            status_code=400, detail="messages はリストである必要があります"
+        )
     normalized: list[dict[str, str]] = []
     for m in raw:
         if not isinstance(m, dict):
@@ -401,7 +694,9 @@ def _parse_ai_messages(payload: Any) -> list[dict[str, str]]:
         role = str(m.get("role", "")).strip()
         content = str(m.get("content", "")).strip()
         if role not in ("user", "assistant") or not content:
-            raise HTTPException(status_code=400, detail="messages の role/content が不正です")
+            raise HTTPException(
+                status_code=400, detail="messages の role/content が不正です"
+            )
         normalized.append({"role": role, "content": content})
     return normalized
 
@@ -423,7 +718,9 @@ async def template_ai_chat(request: Request) -> JSONResponse:
     except SurveyValidationError as e:
         logger.info(f"AI chat validation error: {e}")
         return JSONResponse(
-            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            {
+                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+            },
             status_code=400,
         )
     except Exception as e:
@@ -449,13 +746,17 @@ async def template_ai_generate(request: Request) -> JSONResponse:
     except SurveyValidationError as e:
         logger.info(f"AI draft validation error: {e}")
         return JSONResponse(
-            {"error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"},
+            {
+                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+            },
             status_code=400,
         )
     except Exception as e:
         logger.error(f"AI draft generation failed: {e}")
         return JSONResponse(
-            {"error": "設問ドラフトの生成に失敗しました。もう少し会話を続けてから再度お試しください。"},
+            {
+                "error": "設問ドラフトの生成に失敗しました。もう少し会話を続けてから再度お試しください。"
+            },
             status_code=500,
         )
     return JSONResponse(result)
@@ -514,7 +815,9 @@ async def survey_start_page(request: Request) -> Any:
     datasource_counts = {}
     try:
         survey_service = service_factory.get_survey_service()
-        nemotron_available = survey_service.check_nemotron_dataset_status().get("exists", False)
+        nemotron_available = survey_service.check_nemotron_dataset_status().get(
+            "exists", False
+        )
         custom_datasets = survey_service.list_custom_datasets()
         # 初期表示のデータソースを決定
         if nemotron_available:
@@ -524,12 +827,16 @@ async def survey_start_page(request: Request) -> Any:
         else:
             default_ds = None
         if default_ds:
-            filter_values = survey_service.get_available_filter_values(datasource=default_ds)
+            filter_values = survey_service.get_available_filter_values(
+                datasource=default_ds
+            )
         # 各データソースのペルソナ数を取得
         if nemotron_available:
             datasource_counts["nemotron"] = survey_service._get_total_count("nemotron")
         for ds in custom_datasets:
-            datasource_counts[f"custom:{ds['name']}"] = survey_service._get_total_count(f"custom:{ds['name']}")
+            datasource_counts[f"custom:{ds['name']}"] = survey_service._get_total_count(
+                f"custom:{ds['name']}"
+            )
     except Exception as e:
         logger.warning(f"Failed to get filter values: {e}")
 
@@ -577,7 +884,9 @@ async def filter_options(request: Request) -> Any:
     survey_service = service_factory.get_survey_service()
     filter_values = {}
     try:
-        filter_values = survey_service.get_available_filter_values(datasource=datasource)
+        filter_values = survey_service.get_available_filter_values(
+            datasource=datasource
+        )
     except Exception as e:
         logger.warning(f"Failed to get filter values for {datasource}: {e}")
     return templates.TemplateResponse(
@@ -592,8 +901,10 @@ async def preview_personas(request: Request) -> Any:
     form = await request.form()
     filters_json = form.get("filters_json", "{}")
     datasource = form.get("datasource", "nemotron")
-    
-    logger.info(f"Preview request - filters_json: {filters_json}, datasource: {datasource}")
+
+    logger.info(
+        f"Preview request - filters_json: {filters_json}, datasource: {datasource}"
+    )
 
     try:
         raw = json.loads(filters_json) if filters_json.strip() else {}  # type: ignore[arg-type,union-attr]
@@ -606,7 +917,11 @@ async def preview_personas(request: Request) -> Any:
     try:
         survey_service = service_factory.get_survey_service()
         total = survey_service.get_filtered_count(datasource=datasource)  # type: ignore[arg-type]
-        count = survey_service.get_filtered_count(filters, datasource=datasource) if filters else total  # type: ignore[arg-type]
+        count = (
+            survey_service.get_filtered_count(filters, datasource=datasource)
+            if filters
+            else total
+        )  # type: ignore[arg-type]
         stats = survey_service.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
 
     except Exception as e:
@@ -708,7 +1023,9 @@ async def upload_survey_image(file: UploadFile = File(...)) -> Any:
         )
     except Exception as e:
         logger.error(f"Survey image upload error: {e}")
-        return JSONResponse({"error": "画像のアップロードに失敗しました"}, status_code=400)
+        return JSONResponse(
+            {"error": "画像のアップロードに失敗しました"}, status_code=400
+        )
 
 
 @router.get("/image-preview")
@@ -767,9 +1084,7 @@ async def create_template(request: Request) -> Any:
 
     manager = get_survey_manager()
     try:
-        manager.create_template(
-            name=name, questions=questions, images=images or None
-        )
+        manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyValidationError as e:
         return templates.TemplateResponse(
             "survey/partials/error_message.html",
@@ -861,11 +1176,15 @@ async def delete_template(request: Request, template_id: str) -> Any:
 # =========================================================================
 
 
-def _execute_survey_background(survey_id: str, filters: dict | None, datasource: str = "nemotron") -> None:
+def _execute_survey_background(
+    survey_id: str, filters: dict | None, datasource: str = "nemotron"
+) -> None:
     """バックグラウンドでアンケートを実行する（スレッドプールで呼び出す）"""
     try:
         manager = get_survey_manager()
-        manager.execute_survey(survey_id=survey_id, filters=filters, datasource=datasource)
+        manager.execute_survey(
+            survey_id=survey_id, filters=filters, datasource=datasource
+        )
     except Exception:
         # execute_survey 内でステータスが error に更新されるため、ここではログのみ
         logger.exception(f"Background survey execution failed: {survey_id}")
@@ -931,7 +1250,9 @@ async def execute_survey(request: Request) -> Any:
         return response
 
     # 2. バックグラウンドで実行を開始（デフォルトスレッドプールで実行し、executorを占有しない）
-    asyncio.create_task(asyncio.to_thread(_execute_survey_background, survey.id, filters, datasource))  # type: ignore[arg-type]
+    asyncio.create_task(
+        asyncio.to_thread(_execute_survey_background, survey.id, filters, datasource)
+    )  # type: ignore[arg-type]
 
     # 3. 開始メッセージを表示し、結果一覧へ自動遷移
     return templates.TemplateResponse(
@@ -1002,7 +1323,9 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             full_content = []
             for chunk in manager.generate_insight_report_streaming(survey_id):
                 full_content.append(chunk)
-                data = json.dumps({"type": "chunk", "content": chunk}, ensure_ascii=False)
+                data = json.dumps(
+                    {"type": "chunk", "content": chunk}, ensure_ascii=False
+                )
                 yield f"data: {data}\n\n"
 
             # 自動保存
@@ -1010,11 +1333,20 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except (SurveyManagerError, SurveyExecutionError) as e:
             logger.warning("レポート生成エラー (survey_id=%s): %s", survey_id, e)
-            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
+            data = json.dumps(
+                {"type": "error", "message": "レポートの生成に失敗しました"},
+                ensure_ascii=False,
+            )
             yield f"data: {data}\n\n"
         except Exception:
-            logger.exception("レポート生成中に予期しないエラーが発生しました (survey_id=%s)", survey_id)
-            data = json.dumps({"type": "error", "message": "レポートの生成に失敗しました"}, ensure_ascii=False)
+            logger.exception(
+                "レポート生成中に予期しないエラーが発生しました (survey_id=%s)",
+                survey_id,
+            )
+            data = json.dumps(
+                {"type": "error", "message": "レポートの生成に失敗しました"},
+                ensure_ascii=False,
+            )
             yield f"data: {data}\n\n"
 
     return StreamingResponse(
@@ -1022,7 +1354,6 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
 
 
 # =========================================================================

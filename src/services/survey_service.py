@@ -101,7 +101,9 @@ class SurveyService:
         self._parquet_s3_uri: Optional[str] = None
         self._csv_cache: Dict[str, Tuple[float, bytes]] = {}
         self._duckdb_conns: Dict[str, duckdb.DuckDBPyConnection] = {}
-        self._filter_values_cache: Dict[str, Tuple[float, Dict[str, Dict[str, Any]]]] = {}
+        self._filter_values_cache: Dict[
+            str, Tuple[float, Dict[str, Dict[str, Any]]]
+        ] = {}
 
     # =========================================================================
     # 画像圧縮（Batch Inference用）
@@ -144,7 +146,8 @@ class SurveyService:
         bucket = self.s3_service.bucket_name
         try:
             resp = self.s3_service.s3_client.head_object(
-                Bucket=bucket, Key=PARQUET_S3_KEY  # gitleaks:allow
+                Bucket=bucket,
+                Key=PARQUET_S3_KEY,  # gitleaks:allow
             )
             size_mb = round(resp["ContentLength"] / (1024 * 1024), 1)
             return {"exists": True, "size_mb": size_mb}
@@ -200,12 +203,32 @@ class SurveyService:
         "country": {"label": "出身国", "required": False, "group": "属性"},
         "region": {"label": "居住地域", "required": False, "group": "属性"},
         "prefecture": {"label": "都道府県", "required": False, "group": "属性"},
-        "marital_status": {"label": "結婚・子供の有無", "required": False, "group": "属性"},
+        "marital_status": {
+            "label": "結婚・子供の有無",
+            "required": False,
+            "group": "属性",
+        },
         "education_level": {"label": "学歴", "required": False, "group": "属性"},
-        "cultural_background": {"label": "文化的背景", "required": False, "group": "プロフィール"},
-        "skills_and_expertise": {"label": "スキル・専門知識", "required": False, "group": "プロフィール"},
-        "hobbies_and_interests": {"label": "趣味・関心", "required": False, "group": "プロフィール"},
-        "career_goals_and_ambitions": {"label": "キャリア目標", "required": False, "group": "プロフィール"},
+        "cultural_background": {
+            "label": "文化的背景",
+            "required": False,
+            "group": "プロフィール",
+        },
+        "skills_and_expertise": {
+            "label": "スキル・専門知識",
+            "required": False,
+            "group": "プロフィール",
+        },
+        "hobbies_and_interests": {
+            "label": "趣味・関心",
+            "required": False,
+            "group": "プロフィール",
+        },
+        "career_goals_and_ambitions": {
+            "label": "キャリア目標",
+            "required": False,
+            "group": "プロフィール",
+        },
     }
 
     def parse_csv_columns(self, csv_bytes: bytes) -> dict:
@@ -224,7 +247,10 @@ class SurveyService:
         for col in df.columns:
             col_lower = col.lower().strip()
             for std_col in self.STANDARD_COLUMNS:
-                if col_lower == std_col or col_lower == self.STANDARD_COLUMNS[std_col]["label"]:
+                if (
+                    col_lower == std_col
+                    or col_lower == self.STANDARD_COLUMNS[std_col]["label"]
+                ):
                     auto_mapping[std_col] = col
                     break
         return {
@@ -253,7 +279,9 @@ class SurveyService:
             return None
 
     def upload_custom_dataset(
-        self, csv_bytes: bytes, filename: str,
+        self,
+        csv_bytes: bytes,
+        filename: str,
         column_mapping: Optional[Dict[str, str]] = None,
         extra_columns: Optional[List[Dict[str, str]]] = None,
     ) -> dict:
@@ -405,7 +433,9 @@ class SurveyService:
                 "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
             )
 
-    def _get_duckdb_conn(self, datasource: str = "nemotron") -> duckdb.DuckDBPyConnection:
+    def _get_duckdb_conn(
+        self, datasource: str = "nemotron"
+    ) -> duckdb.DuckDBPyConnection:
         """
         DuckDB接続を取得する（datasourceごとにキャッシュ）。
         """
@@ -423,13 +453,17 @@ class SurveyService:
         # Validate s3_uri format to prevent injection via DuckDB SQL
         import re
 
-        if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/]+", s3_uri):
+        if not re.fullmatch(
+            r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/　-鿿゠-ヿ぀-ゟ＀-￯]+", s3_uri
+        ):
             raise SurveyServiceError(f"Invalid S3 URI format: {s3_uri}")
 
         # DuckDB connection setup — all values are either static strings,
         # parameterized ($1), or validated above. Not SQLAlchemy.
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL httpfs; LOAD httpfs;")  # nosemgrep: sqlalchemy-execute-raw-query
+        conn.execute(
+            "INSTALL httpfs; LOAD httpfs;"
+        )  # nosemgrep: sqlalchemy-execute-raw-query
 
         import boto3
 
@@ -447,9 +481,13 @@ class SurveyService:
                 conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
                     "SET s3_session_token = $1;", [creds.token]
                 )  # gitleaks:allow
-        conn.execute("SET s3_region = $1;", [self.s3_service.region_name])  # nosemgrep: sqlalchemy-execute-raw-query
+        conn.execute(
+            "SET s3_region = $1;", [self.s3_service.region_name]
+        )  # nosemgrep: sqlalchemy-execute-raw-query
         # s3_uri is validated above; CREATE VIEW does not support parameter binding
-        conn.execute(f"CREATE VIEW personas AS SELECT * FROM read_parquet('{s3_uri}');")  # nosemgrep: sqlalchemy-execute-raw-query
+        conn.execute(
+            f"CREATE VIEW personas AS SELECT * FROM read_parquet('{s3_uri}');"
+        )  # nosemgrep: sqlalchemy-execute-raw-query
 
         self._duckdb_conns[datasource] = conn
         return conn
@@ -480,7 +518,9 @@ class SurveyService:
 
     def _get_total_count(self, datasource: str = "nemotron") -> int:
         """データセットの総レコード数を取得する。"""
-        df = self._query_duckdb("SELECT count(*) AS cnt FROM personas", datasource=datasource)
+        df = self._query_duckdb(
+            "SELECT count(*) AS cnt FROM personas", datasource=datasource
+        )
         return int(df["cnt"][0])
 
     # =========================================================================
@@ -488,7 +528,9 @@ class SurveyService:
     # =========================================================================
 
     def filter_personas(
-        self, filters: Dict[str, Any], df: Optional[pl.DataFrame] = None,
+        self,
+        filters: Dict[str, Any],
+        df: Optional[pl.DataFrame] = None,
         datasource: str = "nemotron",
     ) -> pl.DataFrame:
         """
@@ -549,7 +591,9 @@ class SurveyService:
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
         sql = f"SELECT * FROM personas WHERE {where_sql}"
 
-        result = self._query_duckdb(sql, params if params else None, datasource=datasource)
+        result = self._query_duckdb(
+            sql, params if params else None, datasource=datasource
+        )
         logger.info(f"Filtered personas: {len(result)} records (filters: {filters})")
         return result
 
@@ -604,7 +648,9 @@ class SurveyService:
         return sampled
 
     def filter_and_sample_personas(
-        self, filters: Dict[str, Any], count: int,
+        self,
+        filters: Dict[str, Any],
+        count: int,
         datasource: str = "nemotron",
     ) -> pl.DataFrame:
         """
@@ -670,7 +716,9 @@ class SurveyService:
         )
         return result
 
-    def get_available_filter_values(self, datasource: str = "nemotron") -> Dict[str, Dict[str, Any]]:
+    def get_available_filter_values(
+        self, datasource: str = "nemotron"
+    ) -> Dict[str, Dict[str, Any]]:
         """
         フィルタ可能な属性値の一覧をフィルタタイプ情報付きで取得する。
         DuckDB SQLで集計クエリを実行し、メモリに全データを展開しない。
@@ -721,7 +769,9 @@ class SurveyService:
         self._filter_values_cache[datasource] = (now, result)
         return result
 
-    def get_filtered_count(self, filters: Optional[Dict[str, Any]] = None, datasource: str = "nemotron") -> int:
+    def get_filtered_count(
+        self, filters: Optional[Dict[str, Any]] = None, datasource: str = "nemotron"
+    ) -> int:
         """フィルタ条件に合致するペルソナ数を取得する（COUNT集計のみ）。"""
         if not filters:
             return self._get_total_count(datasource)
@@ -772,7 +822,8 @@ class SurveyService:
         return int(df["cnt"][0])
 
     def get_preview_stats(
-        self, filters: Optional[Dict[str, Any]] = None,
+        self,
+        filters: Optional[Dict[str, Any]] = None,
         datasource: str = "nemotron",
     ) -> Dict[str, Dict[str, Any]]:
         """プレビュー用の属性分布統計を取得する（DuckDB集計）。"""
@@ -871,7 +922,9 @@ class SurveyService:
     # =========================================================================
 
     def build_persona_prompts(
-        self, personas_df: pl.DataFrame, template: SurveyTemplate,
+        self,
+        personas_df: pl.DataFrame,
+        template: SurveyTemplate,
         datasource: str = "nemotron",
     ) -> List[Dict[str, Any]]:
         """
@@ -1000,7 +1053,8 @@ class SurveyService:
         return prompts
 
     def _build_system_prompt(
-        self, persona_row: Dict[str, Any],
+        self,
+        persona_row: Dict[str, Any],
         extra_columns: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """ペルソナ属性からシステムプロンプトを構築する。"""
@@ -1741,9 +1795,15 @@ class SurveyService:
         valid_df = df.filter(numeric_col.is_not_null())
 
         return {
-            "mean": round(float(numeric_col.mean()), 2) if numeric_col.mean() is not None else 0,  # type: ignore[arg-type]
-            "median": float(numeric_col.median()) if numeric_col.median() is not None else 0,  # type: ignore[arg-type]
-            "std": round(float(numeric_col.std()), 2) if numeric_col.std() is not None else 0,  # type: ignore[arg-type]
+            "mean": round(float(numeric_col.mean()), 2)  # type: ignore[arg-type]
+            if numeric_col.mean() is not None
+            else 0,
+            "median": float(numeric_col.median())  # type: ignore[arg-type]
+            if numeric_col.median() is not None
+            else 0,
+            "std": round(float(numeric_col.std()), 2)  # type: ignore[arg-type]
+            if numeric_col.std() is not None
+            else 0,
             "distribution": valid_df.group_by(answer_col)
             .agg(pl.count())
             .sort(answer_col)
