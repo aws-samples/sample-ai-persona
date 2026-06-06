@@ -502,8 +502,9 @@ async def dwh_extract(request: Request) -> Any:
             yield _survey_sse_event("done", "")
 
         except (SurveyValidationError, SurveyExecutionError) as e:
-            # These exceptions contain user-facing messages by design (not internal details)
-            yield _survey_sse_event("error", str(e))
+            yield _survey_sse_event(
+                "error", e.args[0] if e.args else "エラーが発生しました"
+            )
         except Exception:
             logger.exception("DWH セグメント抽出エラー")
             yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
