@@ -674,8 +674,8 @@ class SurveyManager:
                 name = name.strip("「」『』\"'")
                 if 1 <= len(name) <= 30:
                     return name
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"データセット名自動生成失敗（フォールバック使用）: {e}")
         # フォールバック: 条件文を20文字に切り詰め
         clean = condition.strip().replace("\n", " ")
         return clean[:20] if len(clean) > 20 else clean

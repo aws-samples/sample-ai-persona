@@ -453,9 +453,7 @@ class SurveyService:
         # Validate s3_uri format to prevent injection via DuckDB SQL
         import re
 
-        if not re.fullmatch(
-            r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/　-鿿゠-ヿ぀-ゟ＀-￯]+", s3_uri
-        ):
+        if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/　-鿿＀-￯]+", s3_uri):
             raise SurveyServiceError(f"Invalid S3 URI format: {s3_uri}")
 
         # DuckDB connection setup — all values are either static strings,

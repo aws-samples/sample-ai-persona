@@ -502,6 +502,7 @@ async def dwh_extract(request: Request) -> Any:
             yield _survey_sse_event("done", "")
 
         except (SurveyValidationError, SurveyExecutionError) as e:
+            # These exceptions contain user-facing messages by design (not internal details)
             yield _survey_sse_event("error", str(e))
         except Exception:
             logger.exception("DWH セグメント抽出エラー")
@@ -615,13 +616,13 @@ async def dwh_confirm(request: Request) -> Any:
             ),
         )
 
-        # 一時ファイルを削除
+        # 一時ファイルを削除（best-effort: 失敗しても処理は継続）
         try:
             survey_service.s3_service.s3_client.delete_object(
                 Bucket=bucket, Key=temp_key
             )
         except Exception:
-            pass
+            logger.warning(f"Failed to delete temp file: {temp_key}")
 
         custom_datasets = survey_service.list_custom_datasets()
         return templates.TemplateResponse(
