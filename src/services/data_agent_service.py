@@ -157,6 +157,12 @@ def create_data_agent_tool(
             )
             for url in agent_result.csv_urls:
                 event_queue.put({"type": "csv_url", "url": url})
+        if agent_result.csv_urls:
+            return (
+                agent_result.text
+                + "\n\nCSVダウンロードURL:\n"
+                + "\n".join(agent_result.csv_urls)
+            )
         return agent_result.text
 
     return ask_data_agent

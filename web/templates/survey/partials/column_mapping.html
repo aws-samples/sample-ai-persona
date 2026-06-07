@@ -14,7 +14,9 @@
     {% if is_dwh %}
     <div class="mb-4">
         <label class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
-        <input type="text" name="dataset_name" value="{{ dataset_name }}"
+        <input type="text" name="dataset_name" value="{{ dataset_name }}" required
+               pattern="[a-zA-Z0-9\-_　-鿿＀-￯]+"
+               title="日本語・英数字・ハイフン・アンダースコアのみ使用可（括弧・スペース・特殊記号不可）"
                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                placeholder="データセット名を確認・編集してください">
     </div>
