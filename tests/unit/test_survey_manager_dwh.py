@@ -3,7 +3,7 @@ Unit tests for SurveyManager DWH segment extraction.
 """
 
 import queue
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -82,17 +82,16 @@ class TestExtractSegmentFromDwh:
     @patch("strands.Agent")
     @patch("strands.models.BedrockModel")
     @patch("src.services.data_agent_service.create_data_agent_tool")
-    @patch("urllib.request.urlopen")
-    @patch("polars.read_csv")
+    @patch("src.services.data_agent_service.DataAgentService.download_csv")
     def test_successful_extraction(
         self,
-        mock_read_csv,
-        mock_urlopen,
+        mock_download_csv,
         mock_create_tool,
         mock_bedrock_model,
         mock_agent_cls,
         mock_config,
         manager,
+        mock_survey_service,
     ):
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/abc"
@@ -117,15 +116,8 @@ class TestExtractSegmentFromDwh:
         mock_agent_cls.return_value = mock_agent_instance
 
         csv_content = b"id,gender,birth_year,prefecture\n001,F,1990,Tokyo\n" * 150
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = csv_content
-        mock_resp.__enter__ = Mock(return_value=mock_resp)
-        mock_resp.__exit__ = Mock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        mock_df = Mock()
-        mock_df.__len__ = Mock(return_value=150)
-        mock_read_csv.return_value = mock_df
+        mock_download_csv.return_value = csv_content
+        mock_survey_service.count_csv_rows.return_value = 150
 
         eq = queue.Queue()
 
@@ -140,17 +132,16 @@ class TestExtractSegmentFromDwh:
     @patch("strands.Agent")
     @patch("strands.models.BedrockModel")
     @patch("src.services.data_agent_service.create_data_agent_tool")
-    @patch("urllib.request.urlopen")
-    @patch("polars.read_csv")
+    @patch("src.services.data_agent_service.DataAgentService.download_csv")
     def test_too_few_rows_raises_validation_error(
         self,
-        mock_read_csv,
-        mock_urlopen,
+        mock_download_csv,
         mock_create_tool,
         mock_bedrock_model,
         mock_agent_cls,
         mock_config,
         manager,
+        mock_survey_service,
     ):
         mock_config.DATA_AGENT_RUNTIME_ARN = (
             "arn:aws:bedrock:us-east-1:123:agent-runtime/abc"
@@ -173,15 +164,8 @@ class TestExtractSegmentFromDwh:
         mock_agent_cls.return_value = Mock()
 
         csv_content = b"id,gender\n001,F\n002,M\n"
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = csv_content
-        mock_resp.__enter__ = Mock(return_value=mock_resp)
-        mock_resp.__exit__ = Mock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        mock_df = Mock()
-        mock_df.__len__ = Mock(return_value=50)
-        mock_read_csv.return_value = mock_df
+        mock_download_csv.return_value = csv_content
+        mock_survey_service.count_csv_rows.return_value = 50
 
         eq = queue.Queue()
 

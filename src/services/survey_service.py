@@ -260,6 +260,11 @@ class SurveyService:
             "auto_mapping": auto_mapping,
         }
 
+    def count_csv_rows(self, csv_bytes: bytes) -> int:
+        """CSVの全行数を返す。"""
+        df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
+        return len(df)
+
     def _save_dataset_metadata(self, name: str, metadata: Dict[str, Any]) -> None:
         """カスタムデータセットのメタデータをS3にJSON保存する。"""
         meta_key = f"{self.CUSTOM_DATASET_PREFIX}{name}.meta.json"

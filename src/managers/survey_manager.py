@@ -596,36 +596,21 @@ class SurveyManager:
                 "条件を変更して再試行してください。"
             )
 
-        # CSV ダウンロード（URLスキーム/ドメインを検証）
+        # CSV ダウンロード
         event_queue.put({"type": "status", "content": "CSVデータをダウンロード中..."})
         csv_url = csv_urls[-1]
-        from urllib.parse import urlparse
-
-        parsed_url = urlparse(csv_url)
-        if parsed_url.scheme not in ("https", "http"):
-            raise SurveyExecutionError("不正なURLスキームです")
-        if not parsed_url.hostname or not parsed_url.hostname.endswith(
-            ".amazonaws.com"
-        ):
-            raise SurveyExecutionError("許可されていないドメインからのダウンロードです")
         try:
-            import urllib.request
+            from src.services.data_agent_service import DataAgentService
 
-            with urllib.request.urlopen(csv_url, timeout=120) as resp:
-                csv_bytes = resp.read()
+            csv_bytes = DataAgentService.download_csv(csv_url)
         except Exception as e:
-            raise SurveyExecutionError(f"CSVダウンロードに失敗しました: {e}") from e
+            raise SurveyExecutionError(str(e)) from e
 
         # CSV 解析
         parse_result = self.survey_service.parse_csv_columns(csv_bytes)
 
-        # 件数バリデーション（parse_csv_columns は5行しか読まないので全行カウント）
-        import io
-
-        import polars as pl
-
-        df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
-        row_count = len(df)
+        # 件数バリデーション
+        row_count = self.survey_service.count_csv_rows(csv_bytes)
 
         if row_count < self.MIN_SEGMENT_ROWS:
             raise SurveyValidationError(
