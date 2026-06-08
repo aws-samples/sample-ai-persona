@@ -204,11 +204,38 @@ class TestExtractSegmentFromDwh:
 class TestSuggestColumnMapping:
     """suggest_column_mapping のテスト"""
 
-    def test_returns_valid_mapping(self, manager, mock_ai_service):
-        mock_ai_service._invoke_model.return_value = (
-            '{"mapping": {"sex": "gender", "age": "birth_year", "prefecture": "prefecture"}, '
-            '"extra_columns": [{"csv_column": "id", "label": "顧客ID", "description": "一意識別子"}]}'
+    @patch("src.config.config")
+    @patch("strands.Agent")
+    @patch("strands.models.BedrockModel")
+    def test_returns_valid_mapping(
+        self, mock_bedrock, mock_agent_cls, mock_config, manager
+    ):
+        mock_config.BEDROCK_MODEL_ID = "anthropic.claude-sonnet-4-6"
+        mock_config.AWS_REGION = "us-east-1"
+
+        from pydantic import BaseModel, Field
+        from typing import Dict, List
+
+        class ExtraColumnItem(BaseModel):
+            csv_column: str = Field(description="CSVカラム名")
+            label: str = Field(description="日本語ラベル")
+            description: str = Field(description="補足説明")
+
+        class ColumnMappingOutput(BaseModel):
+            mapping: Dict[str, str] = Field(description="標準カラム名→CSVカラム名")
+            extra_columns: List[ExtraColumnItem] = Field(description="その他")
+
+        mock_instance = Mock()
+        mock_agent_cls.return_value = mock_instance
+        mock_instance.structured_output.return_value = ColumnMappingOutput(
+            mapping={"sex": "gender", "age": "birth_year", "prefecture": "prefecture"},
+            extra_columns=[
+                ExtraColumnItem(
+                    csv_column="id", label="顧客ID", description="一意識別子"
+                )
+            ],
         )
+
         columns = ["id", "gender", "birth_year", "prefecture"]
         samples = {
             "id": ["001", "002"],
@@ -236,15 +263,50 @@ class TestSuggestColumnMapping:
         result = mgr.suggest_column_mapping(["col1"], {"col1": ["val"]})
         assert result == {"mapping": {}, "extra_columns": []}
 
-    def test_handles_invalid_json_gracefully(self, manager, mock_ai_service):
-        mock_ai_service._invoke_model.return_value = "not valid json"
+    @patch("src.config.config")
+    @patch("strands.Agent")
+    @patch("strands.models.BedrockModel")
+    def test_handles_structured_output_failure(
+        self, mock_bedrock, mock_agent_cls, mock_config, manager
+    ):
+        mock_config.BEDROCK_MODEL_ID = "anthropic.claude-sonnet-4-6"
+        mock_config.AWS_REGION = "us-east-1"
+
+        mock_instance = Mock()
+        mock_agent_cls.return_value = mock_instance
+        mock_instance.structured_output.side_effect = Exception("validation error")
+
         result = manager.suggest_column_mapping(["col1"], {"col1": ["val"]})
         assert result == {"mapping": {}, "extra_columns": []}
 
-    def test_filters_invalid_columns(self, manager, mock_ai_service):
-        mock_ai_service._invoke_model.return_value = (
-            '{"mapping": {"sex": "gender", "invalid_key": "col1"}, "extra_columns": []}'
+    @patch("src.config.config")
+    @patch("strands.Agent")
+    @patch("strands.models.BedrockModel")
+    def test_filters_invalid_columns(
+        self, mock_bedrock, mock_agent_cls, mock_config, manager
+    ):
+        mock_config.BEDROCK_MODEL_ID = "anthropic.claude-sonnet-4-6"
+        mock_config.AWS_REGION = "us-east-1"
+
+        from pydantic import BaseModel, Field
+        from typing import Dict, List
+
+        class ExtraColumnItem(BaseModel):
+            csv_column: str = Field(description="CSVカラム名")
+            label: str = Field(description="日本語ラベル")
+            description: str = Field(description="補足説明")
+
+        class ColumnMappingOutput(BaseModel):
+            mapping: Dict[str, str] = Field(description="標準カラム名→CSVカラム名")
+            extra_columns: List[ExtraColumnItem] = Field(description="その他")
+
+        mock_instance = Mock()
+        mock_agent_cls.return_value = mock_instance
+        mock_instance.structured_output.return_value = ColumnMappingOutput(
+            mapping={"sex": "gender", "invalid_key": "col1"},
+            extra_columns=[],
         )
+
         columns = ["gender", "col1"]
         result = manager.suggest_column_mapping(
             columns, {"gender": ["M"], "col1": ["x"]}

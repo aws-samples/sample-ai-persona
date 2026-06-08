@@ -684,13 +684,30 @@ class SurveyManager:
 
         import json
 
+        from pydantic import BaseModel, Field
+        from strands import Agent
+        from strands.models import BedrockModel
+
+        from src.config import config
+
+        class ExtraColumnItem(BaseModel):
+            csv_column: str = Field(description="CSVカラム名")
+            label: str = Field(description="日本語ラベル")
+            description: str = Field(description="補足説明")
+
+        class ColumnMappingOutput(BaseModel):
+            mapping: Dict[str, str] = Field(
+                description="標準カラム名→CSVカラム名のマッピング"
+            )
+            extra_columns: List[ExtraColumnItem] = Field(
+                description="標準カラム以外で有用なカラムの補足情報"
+            )
+
         standard_cols = self.survey_service.STANDARD_COLUMNS
         standard_info = {k: v["label"] for k, v in standard_cols.items()}
 
-        prompt = (
-            "以下のCSVカラム名とサンプル値から、2つの情報を提案してください。\n\n"
-            "## CSVカラム:\n"
-        )
+        prompt = "以下のCSVカラム名とサンプル値から、標準カラムへのマッピングとその他有用カラムの補足情報を提案してください。\n\n"
+        prompt += "## CSVカラム:\n"
         for col in columns:
             sample_vals = samples.get(col, [])
             prompt += f"- {col}: {sample_vals}\n"
@@ -698,58 +715,43 @@ class SurveyManager:
         prompt += (
             f"\n## 標準カラム定義:\n"
             f"{json.dumps(standard_info, ensure_ascii=False, indent=2)}\n\n"
-            "## タスク\n"
-            "1. **mapping**: 標準カラムにマッピングできるカラムを特定する\n"
-            "2. **extra_columns**: 標準カラムに該当しないが、ペルソナの人物像を理解するのに有用なカラムについて、"
-            "日本語ラベルと補足説明を付与する\n\n"
-            "## 出力形式（JSONのみ）\n"
-            "```json\n"
-            "{\n"
-            '  "mapping": {"sex": "gender", "age": "birth_year"},\n'
-            '  "extra_columns": [\n'
-            '    {"csv_column": "total_purchases", "label": "累計購入額", "description": "顧客の生涯購入金額合計（円）"},\n'
-            '    {"csv_column": "member_rank", "label": "会員ランク", "description": "ゴールド/シルバー/ブロンズ。購入頻度と金額に基づく"}\n'
-            "  ]\n"
-            "}\n"
-            "```\n\n"
+            "## 目的\n"
+            "extra_columnsは「AIがこの人になりきってアンケートに回答する際に、回答内容に影響を与える情報」だけを選ぶこと。\n\n"
             "## ルール\n"
             "- mappingのキーは標準カラム名、値はCSVカラム名\n"
             "- birth_year等はageに変換可能なのでマッピング対象にする\n"
-            "- extra_columnsにはIDカラムや明らかに不要なカラム(created_at等)は含めない\n"
+            "- extra_columnsには行動履歴・嗜好・利用状況・ライフステージなど回答に影響するカラムのみ含める\n"
+            "- extra_columnsに含めてはいけないもの: 氏名・姓・名・メールアドレス・電話番号・住所詳細・ID・作成日時・更新日時など個人識別情報やメタデータ\n"
             "- extra_columnsのdescriptionにはサンプル値から読み取れる値の意味や範囲を含める\n"
-            "- JSONオブジェクトのみを返すこと"
         )
 
         try:
-            response = self.ai_service._invoke_model(prompt)
-            json_str = response.strip()
-            if json_str.startswith("```"):
-                lines = json_str.split("\n")
-                json_str = "\n".join(
-                    line for line in lines[1:-1] if not line.startswith("```")
-                )
-            result = json.loads(json_str)
-            if isinstance(result, dict):
-                mapping = result.get("mapping", {})
-                valid_mapping = {
-                    k: v
-                    for k, v in mapping.items()
-                    if k in standard_cols and v in columns
-                }
-                extra = result.get("extra_columns", [])
-                valid_extra = [
-                    e
-                    for e in extra
-                    if isinstance(e, dict)
-                    and e.get("csv_column") in columns
-                    and e.get("csv_column") not in valid_mapping.values()
-                ]
-                logger.info(
-                    f"LLMマッピング提案: mapping={len(valid_mapping)}件, "
-                    f"extra={len(valid_extra)}件 (raw extra={len(extra)}件)"
-                )
-                return {"mapping": valid_mapping, "extra_columns": valid_extra}
-            logger.warning(f"LLMマッピング提案: 予期しない応答形式 type={type(result)}")
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+            )
+            agent = Agent(model=model, tools=[])
+            result = agent.structured_output(ColumnMappingOutput, prompt)
+
+            valid_mapping = {
+                k: v
+                for k, v in result.mapping.items()
+                if k in standard_cols and v in columns
+            }
+            valid_extra = [
+                e
+                for e in result.extra_columns
+                if e.csv_column in columns
+                and e.csv_column not in valid_mapping.values()
+            ]
+            logger.info(
+                f"LLMマッピング提案: mapping={len(valid_mapping)}件, "
+                f"extra={len(valid_extra)}件 (raw extra={len(result.extra_columns)}件)"
+            )
+            return {
+                "mapping": valid_mapping,
+                "extra_columns": [e.model_dump() for e in valid_extra],
+            }
         except Exception as e:
             logger.warning(f"LLMマッピング提案失敗: {e}")
 
