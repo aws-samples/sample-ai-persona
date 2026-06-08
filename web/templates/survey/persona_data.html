@@ -322,6 +322,11 @@ function showDwhPreview(result, resultEl) {
         .then(r => r.text())
         .then(html => {
             resultEl.innerHTML = html;
+            resultEl.querySelectorAll('script').forEach(function(oldScript) {
+                var newScript = document.createElement('script');
+                newScript.textContent = oldScript.textContent;
+                oldScript.replaceWith(newScript);
+            });
             if (window.htmx) htmx.process(resultEl);
             if (window.Alpine) Alpine.initTree(resultEl);
         });
