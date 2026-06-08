@@ -958,8 +958,8 @@ async def results_list(request: Request) -> Any:
     try:
         for t in manager.get_all_templates():
             template_names[t.id] = t.name
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to load template names: {e}")
     return templates.TemplateResponse(
         "survey/results_list.html",
         {
