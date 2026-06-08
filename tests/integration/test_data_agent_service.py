@@ -171,7 +171,8 @@ class TestCreateDataAgentTool:
 
         result = tool_fn(question="CSVエクスポート")
 
-        assert result == "完了"
+        assert "完了" in result
+        assert csv_url in result
 
         events_received = []
         while not eq.empty():

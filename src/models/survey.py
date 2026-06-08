@@ -85,6 +85,7 @@ class Survey:
     created_at: datetime
     updated_at: datetime
     error_message: Optional[str] = None
+    datasource: Optional[str] = None
 
     @classmethod
     def create_new(
@@ -94,6 +95,7 @@ class Survey:
         template_id: str,
         persona_count: int,
         filters: Optional[Dict[str, Any]] = None,
+        datasource: Optional[str] = None,
     ) -> "Survey":
         """Create a new Survey with auto-generated ID and timestamps."""
         now = datetime.now()
@@ -109,11 +111,12 @@ class Survey:
             insight_report=None,
             created_at=now,
             updated_at=now,
+            datasource=datasource,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert Survey to dictionary for serialization."""
-        return {
+        result: Dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "description": self.description,
@@ -129,6 +132,9 @@ class Survey:
             "updated_at": self.updated_at.isoformat(),
             "error_message": self.error_message,
         }
+        if self.datasource is not None:
+            result["datasource"] = self.datasource
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Survey":
@@ -148,4 +154,5 @@ class Survey:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             error_message=data.get("error_message"),
+            datasource=data.get("datasource"),
         )

@@ -111,6 +111,33 @@ class DataAgentService:
         except Exception as e:
             raise DataAgentServiceError(f"DataAgent 問い合わせ失敗: {e}") from e
 
+    @staticmethod
+    def download_csv(url: str) -> bytes:
+        """DataAgentが生成した署名付きURLからCSVをダウンロードする。
+
+        URLスキーム・ドメインを検証し、HTTPタイムアウト付きで取得する。
+
+        Raises:
+            DataAgentServiceError: URL不正またはダウンロード失敗時
+        """
+        import urllib.request
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme not in ("https", "http"):
+            raise DataAgentServiceError("不正なURLスキームです")
+        if not parsed.hostname or not parsed.hostname.endswith(".amazonaws.com"):
+            raise DataAgentServiceError(
+                "許可されていないドメインからのダウンロードです"
+            )
+        try:
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                return bytes(resp.read())
+        except DataAgentServiceError:
+            raise
+        except Exception as e:
+            raise DataAgentServiceError(f"CSVダウンロードに失敗しました: {e}") from e
+
 
 def create_data_agent_tool(
     runtime_arn: str, region: str, event_queue: "queue.Queue[dict] | None" = None
@@ -157,6 +184,12 @@ def create_data_agent_tool(
             )
             for url in agent_result.csv_urls:
                 event_queue.put({"type": "csv_url", "url": url})
+        if agent_result.csv_urls:
+            return (
+                agent_result.text
+                + "\n\nCSVダウンロードURL:\n"
+                + "\n".join(agent_result.csv_urls)
+            )
         return agent_result.text
 
     return ask_data_agent

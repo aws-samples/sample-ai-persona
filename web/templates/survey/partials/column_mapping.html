@@ -5,12 +5,22 @@
     </p>
 </div>
 
-<form hx-post="/survey/persona-data/confirm-mapping"
-      hx-target="#custom-upload-result"
+<form hx-post="{% if is_dwh %}/survey/persona-data/dwh-confirm{% else %}/survey/persona-data/confirm-mapping{% endif %}"
+      hx-target="{% if is_dwh %}#dwh-result{% else %}#custom-upload-result{% endif %}"
       hx-swap="innerHTML"
       hx-indicator="#mapping-spinner">
     <input type="hidden" name="filename" value="{{ filename }}">
     <input type="hidden" name="temp_key" value="{{ temp_key }}">
+    {% if is_dwh %}
+    <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
+        <input type="text" name="dataset_name" value="{{ dataset_name }}" required
+               pattern="[a-zA-Z0-9\-_　-鿿＀-￯]+"
+               title="日本語・英数字・ハイフン・アンダースコアのみ使用可（括弧・スペース・特殊記号不可）"
+               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+               placeholder="データセット名を確認・編集してください">
+    </div>
+    {% endif %}
 
     <!-- CSVカラムのサンプルデータ表示 -->
     <div class="mb-4 overflow-x-auto">
@@ -58,7 +68,11 @@
     {% if info.group == 'プロフィール' %}
     <div class="flex items-center gap-3 mb-2">
         <label class="w-44 text-sm text-gray-700 flex-shrink-0">
-            {{ info.label }}{% if info.required %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+            {{ info.label }}{% if info.required %}<span class="text-red-500 ml-0.5">*</span>
+            <span class="relative inline-block ml-1 group">
+                <svg class="w-3.5 h-3.5 inline-block text-gray-400 cursor-help" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" /></svg>
+                <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs text-white bg-gray-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">未指定の場合、他のテキストカラムを結合して自動生成されます</span>
+            </span>{% endif %}
         </label>
         <select name="mapping_{{ std_col }}"
                 class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
@@ -71,50 +85,89 @@
     {% endif %}
     {% endfor %}
 
-    <!-- その他カラム（動的追加） -->
-    <div x-data="{ items: [] }" class="mt-4">
+    <!-- その他カラム -->
+    <div class="mt-4">
         <div class="flex items-center gap-2 mb-2">
             <h4 class="text-sm font-semibold text-gray-700">その他</h4>
             <span class="text-xs text-gray-500">（標準項目以外の情報をプロンプトに追加）</span>
         </div>
 
-        <template x-for="(item, index) in items" :key="index">
-            <div class="border border-gray-200 rounded-md p-3 mb-2 bg-gray-50">
+        <div id="extra-columns-list">
+        {% for item in suggested_extra | default([], true) %}
+            <div class="border border-gray-200 rounded-md p-3 mb-2 bg-gray-50 extra-column-item">
                 <div class="flex items-center gap-3 mb-2">
                     <label class="w-28 text-sm text-gray-600 flex-shrink-0">CSVカラム</label>
-                    <select :name="'extra_column_' + index"
-                            x-model="item.csv_column"
+                    <select name="extra_column_{{ loop.index0 }}"
                             class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
                         <option value="">-- 選択 --</option>
                         {% for col in columns %}
-                        <option value="{{ col }}">{{ col }}</option>
+                        <option value="{{ col }}" {% if col == item.csv_column %}selected{% endif %}>{{ col }}</option>
                         {% endfor %}
                     </select>
-                    <button type="button" @click="items.splice(index, 1)"
+                    <button type="button" onclick="this.closest('.extra-column-item').remove(); updateExtraCount();"
                             class="text-red-400 hover:text-red-600 text-sm px-2">✕</button>
                 </div>
                 <div class="flex items-center gap-3 mb-2">
                     <label class="w-28 text-sm text-gray-600 flex-shrink-0">ラベル名</label>
-                    <input type="text" :name="'extra_label_' + index"
-                           x-model="item.label" placeholder="例: 会員ランク"
+                    <input type="text" name="extra_label_{{ loop.index0 }}"
+                           value="{{ item.label | default('', true) }}" placeholder="例: 会員ランク"
                            class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
                 </div>
                 <div class="flex items-center gap-3">
                     <label class="w-28 text-sm text-gray-600 flex-shrink-0">補足情報</label>
-                    <input type="text" :name="'extra_desc_' + index"
-                           x-model="item.description" placeholder="例: ゴールド/シルバー/ブロンズの3段階。購入頻度と金額に基づく"
+                    <input type="text" name="extra_desc_{{ loop.index0 }}"
+                           value="{{ item.description | default('', true) }}" placeholder="例: ゴールド/シルバー/ブロンズの3段階。購入頻度と金額に基づく"
                            class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">
                 </div>
             </div>
-        </template>
+        {% endfor %}
+        </div>
 
-        <button type="button" @click="items.push({ csv_column: '', label: '', description: '' })"
+        <button type="button" onclick="addExtraColumn()"
                 class="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             項目を追加
         </button>
-        <input type="hidden" name="extra_count" :value="items.length">
+        <input type="hidden" name="extra_count" id="extra-count-input" value="{{ suggested_extra | default([], true) | length }}">
     </div>
+
+    <script>
+    var _extraColumnNames = {{ columns | tojson }};
+    var _extraNextIdx = {{ suggested_extra | default([], true) | length }};
+    function addExtraColumn() {
+        var list = document.getElementById('extra-columns-list');
+        var idx = _extraNextIdx++;
+        var div = document.createElement('div');
+        div.className = 'border border-gray-200 rounded-md p-3 mb-2 bg-gray-50 extra-column-item';
+
+        var selectHtml = '<option value="">-- 選択 --</option>';
+        _extraColumnNames.forEach(function(col) {
+            var escaped = col.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            selectHtml += '<option value="' + escaped + '">' + escaped + '</option>';
+        });
+
+        div.innerHTML =
+            '<div class="flex items-center gap-3 mb-2">' +
+                '<label class="w-28 text-sm text-gray-600 flex-shrink-0">CSVカラム</label>' +
+                '<select name="extra_column_' + idx + '" class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">' + selectHtml + '</select>' +
+                '<button type="button" onclick="this.closest(\'.extra-column-item\').remove(); updateExtraCount();" class="text-red-400 hover:text-red-600 text-sm px-2">✕</button>' +
+            '</div>' +
+            '<div class="flex items-center gap-3 mb-2">' +
+                '<label class="w-28 text-sm text-gray-600 flex-shrink-0">ラベル名</label>' +
+                '<input type="text" name="extra_label_' + idx + '" placeholder="例: 会員ランク" class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">' +
+            '</div>' +
+            '<div class="flex items-center gap-3">' +
+                '<label class="w-28 text-sm text-gray-600 flex-shrink-0">補足情報</label>' +
+                '<input type="text" name="extra_desc_' + idx + '" placeholder="例: ゴールド/シルバー/ブロンズの3段階" class="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-blue-500 focus:border-blue-500">' +
+            '</div>';
+        list.appendChild(div);
+        updateExtraCount();
+    }
+    function updateExtraCount() {
+        var count = document.querySelectorAll('#extra-columns-list .extra-column-item').length;
+        document.getElementById('extra-count-input').value = count;
+    }
+    </script>
 
     <!-- プレビューエリア -->
     <div id="prompt-preview" class="mt-4"></div>

@@ -33,73 +33,309 @@
         </div>
     </div>
 
-    <!-- 自社顧客データのアップロード -->
-    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <!-- カスタムペルソナデータの追加 -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6" x-data="{ source: 'csv' }">
         <h2 class="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
-            {{ icon_upload("w-5 h-5 text-teal-600") }}
-            ペルソナデータのアップロード
+            <svg class="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            カスタムペルソナデータの追加
         </h2>
         <p class="text-sm text-gray-500 mb-4">
-            ペルソナデータ（CSV形式）をアップロードして、独自のアンケート用ペルソナデータを構築できます。
+            CSVファイルのアップロード、またはデータ分析エージェント連携でDWHから顧客セグメントを抽出して追加します。
         </p>
 
-        <div class="mb-4 p-4 bg-gray-50 rounded-md">
-            <p class="text-sm text-gray-600">
-                <strong>対応ファイル形式:</strong> CSVファイル (.csv)<br>
-                <strong>最大ファイルサイズ:</strong> 500MB<br>
-                <strong>エンコーディング:</strong> UTF-8推奨
-            </p>
+        <!-- ソース選択タブ -->
+        <div class="flex border-b border-gray-200 mb-5">
+            <button type="button"
+                    @click="source = 'csv'"
+                    :class="source === 'csv' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+                {{ icon_upload("w-4 h-4") }}
+                CSVアップロード
+            </button>
+            <button type="button"
+                    @click="source = 'dwh'"
+                    :class="source === 'dwh' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                </svg>
+                データ分析エージェント連携
+            </button>
         </div>
 
-        <form hx-post="/survey/persona-data/upload-custom"
-              hx-target="#custom-upload-result"
-              hx-swap="innerHTML"
-              hx-encoding="multipart/form-data"
-              hx-indicator="#upload-spinner">
-
-            <div id="custom-drop-zone"
-                 class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-teal-400 transition-colors cursor-pointer"
-                 ondragenter="this.classList.add('border-teal-400','bg-teal-50')"
-                 ondragover="event.preventDefault(); this.classList.add('border-teal-400','bg-teal-50')"
-                 ondragleave="this.classList.remove('border-teal-400','bg-teal-50')"
-                 ondrop="event.preventDefault(); this.classList.remove('border-teal-400','bg-teal-50'); var f=event.dataTransfer.files; if(f.length && f[0].name.endsWith('.csv')){document.getElementById('custom-csv-input').files=f; document.getElementById('custom-selected-file').textContent=f[0].name+' ('+Math.round(f[0].size/1024)+' KB)';}"
-                 onclick="document.getElementById('custom-csv-input').click()">
-                <input type="file"
-                       name="file"
-                       id="custom-csv-input"
-                       accept=".csv"
-                       required
-                       class="hidden"
-                       onchange="if(this.files[0]){document.getElementById('custom-selected-file').textContent=this.files[0].name+' ('+Math.round(this.files[0].size/1024)+' KB)';}">
-                <div class="flex justify-center mb-2 text-gray-400">
-                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                </div>
-                <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
-                <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
-                <p id="custom-selected-file" class="mt-4 text-teal-600 font-medium"></p>
+        <!-- CSVアップロード -->
+        <div x-show="source === 'csv'" x-transition>
+            <div class="mb-4 p-4 bg-gray-50 rounded-md">
+                <p class="text-sm text-gray-600">
+                    <strong>対応ファイル形式:</strong> CSVファイル (.csv)<br>
+                    <strong>最大ファイルサイズ:</strong> 500MB<br>
+                    <strong>エンコーディング:</strong> UTF-8推奨
+                </p>
             </div>
 
-            <div class="mt-4">
-                <button type="submit"
-                        class="bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-2">
-                    <span id="upload-spinner" class="htmx-indicator">
-                        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+            <form hx-post="/survey/persona-data/upload-custom"
+                  hx-target="#custom-upload-result"
+                  hx-swap="innerHTML"
+                  hx-encoding="multipart/form-data"
+                  hx-indicator="#upload-spinner">
+
+                <div id="custom-drop-zone"
+                     class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-teal-400 transition-colors cursor-pointer"
+                     ondragenter="this.classList.add('border-teal-400','bg-teal-50')"
+                     ondragover="event.preventDefault(); this.classList.add('border-teal-400','bg-teal-50')"
+                     ondragleave="this.classList.remove('border-teal-400','bg-teal-50')"
+                     ondrop="event.preventDefault(); this.classList.remove('border-teal-400','bg-teal-50'); var f=event.dataTransfer.files; if(f.length && f[0].name.endsWith('.csv')){document.getElementById('custom-csv-input').files=f; document.getElementById('custom-selected-file').textContent=f[0].name+' ('+Math.round(f[0].size/1024)+' KB)';}"
+                     onclick="document.getElementById('custom-csv-input').click()">
+                    <input type="file"
+                           name="file"
+                           id="custom-csv-input"
+                           accept=".csv"
+                           required
+                           class="hidden"
+                           onchange="if(this.files[0]){document.getElementById('custom-selected-file').textContent=this.files[0].name+' ('+Math.round(this.files[0].size/1024)+' KB)';}">
+                    <div class="flex justify-center mb-2 text-gray-400">
+                        <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                    </div>
+                    <p class="text-gray-600 mb-2">クリックしてファイルを選択</p>
+                    <p class="text-sm text-gray-400">または、ファイルをドラッグ＆ドロップ</p>
+                    <p id="custom-selected-file" class="mt-4 text-teal-600 font-medium"></p>
+                </div>
+
+                <div class="mt-4">
+                    <button type="submit"
+                            class="bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-2">
+                        <span id="upload-spinner" class="htmx-indicator">
+                            <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                        </span>
+                        {{ icon_upload("w-4 h-4") }} アップロード
+                    </button>
+                </div>
+            </form>
+            <div id="custom-upload-result" class="mt-4"></div>
+        </div>
+
+        <!-- データ分析エージェント連携 -->
+        <div x-show="source === 'dwh'" x-cloak x-transition>
+            <p class="text-xs text-purple-600 bg-purple-50 rounded-md p-3 mb-4">
+                DWH に蓄積された業務データからデータ分析エージェントが自然言語で顧客セグメントを抽出します。
+            </p>
+
+            <div class="space-y-4">
+                <div>
+                    <label for="dwh-condition" class="block text-sm font-medium text-gray-700 mb-1">抽出条件（自然言語）</label>
+                    <textarea id="dwh-condition" rows="3"
+                              placeholder="例: 東京都在住の30代女性で、年間購入額が50万円以上の顧客"
+                              class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="dwh-extract-btn"
+                            onclick="startDwhExtraction()"
+                            class="bg-purple-600 text-white px-6 py-2 rounded-md hover:bg-purple-700 transition-colors flex items-center gap-2 text-sm">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                        </svg>
+                        抽出開始
+                    </button>
+                    <span id="dwh-extract-spinner" class="hidden">
+                        <svg class="animate-spin w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                         </svg>
                     </span>
-                    {{ icon_upload("w-4 h-4") }} アップロード
-                </button>
+                </div>
             </div>
-        </form>
-        <div id="custom-upload-result" class="mt-4"></div>
+
+            <!-- 抽出進捗表示 -->
+            <div id="dwh-progress" class="mt-4 hidden">
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="flex items-center gap-3 mb-3">
+                        <span class="spinner"></span>
+                        <span id="dwh-progress-text" class="text-sm text-gray-700">データ分析エージェントに接続中...</span>
+                    </div>
+                    <div id="dwh-thinking-stream" class="space-y-2 max-h-[32rem] overflow-y-auto"></div>
+                </div>
+            </div>
+
+            <!-- 抽出結果 / マッピングUI -->
+            <div id="dwh-result" class="mt-4"></div>
+        </div>
 
         <!-- アップロード済みデータセット一覧 -->
-        <div id="custom-dataset-list" class="mt-6">
+        <div id="custom-dataset-list" class="mt-6 border-t pt-4">
             {% include "survey/partials/custom_dataset_list.html" %}
         </div>
     </div>
 </div>
+
+<script>
+function startDwhExtraction() {
+    const condition = document.getElementById('dwh-condition').value.trim();
+
+    if (!condition) { alert('抽出条件を入力してください'); return; }
+
+    const btn = document.getElementById('dwh-extract-btn');
+    const spinner = document.getElementById('dwh-extract-spinner');
+    const progress = document.getElementById('dwh-progress');
+    const thinkingStream = document.getElementById('dwh-thinking-stream');
+    const progressText = document.getElementById('dwh-progress-text');
+    const resultDiv = document.getElementById('dwh-result');
+
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+    spinner.classList.remove('hidden');
+    progress.classList.remove('hidden');
+    thinkingStream.innerHTML = '';
+    resultDiv.innerHTML = '';
+
+    const formData = new FormData();
+    formData.append('condition', condition);
+
+    fetch('/survey/persona-data/dwh-extract', {method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            function processChunk() {
+                return reader.read().then(({ done, value }) => {
+                    if (done) {
+                        if (buffer.trim()) processEvents(buffer);
+                        btn.disabled = false;
+                        btn.classList.remove('opacity-50');
+                        spinner.classList.add('hidden');
+                        return;
+                    }
+                    buffer += decoder.decode(value, { stream: true });
+                    let idx;
+                    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                        const eventStr = buffer.substring(0, idx);
+                        buffer = buffer.substring(idx + 2);
+                        processEvents(eventStr);
+                    }
+                    return processChunk();
+                });
+            }
+
+            function processEvents(eventStr) {
+                if (!eventStr.trim()) return;
+                const lines = eventStr.split('\n');
+                let eventType = '';
+                let dataLines = [];
+                lines.forEach(line => {
+                    if (line.startsWith('event: ')) eventType = line.slice(7);
+                    else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+                    else if (line === 'data:') dataLines.push('');
+                });
+                const data = dataLines.join('\n');
+                if (!eventType) return;
+                handleDwhEvent(eventType, data, thinkingStream, progressText, resultDiv);
+            }
+
+            processChunk();
+        })
+        .catch(err => {
+            thinkingStream.innerHTML += '<div class="text-red-600 text-sm p-2">接続エラー: ' + err.message + '</div>';
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+            spinner.classList.add('hidden');
+        });
+}
+
+function handleDwhEvent(type, data, streamEl, progressTextEl, resultEl) {
+    if (type === 'status') {
+        progressTextEl.textContent = data;
+    } else if (type === 'thinking') {
+        try {
+            const entry = JSON.parse(data);
+            if (entry.type === 'thinking') {
+                let lastDiv = streamEl.querySelector('.thinking-text:last-child');
+                if (!lastDiv) {
+                    lastDiv = document.createElement('div');
+                    lastDiv.className = 'thinking-text text-sm text-gray-700 bg-gray-50 rounded p-2 whitespace-pre-wrap';
+                    streamEl.appendChild(lastDiv);
+                }
+                lastDiv.textContent += entry.content;
+            } else if (entry.type === 'tool_call') {
+                const div = document.createElement('div');
+                div.className = 'text-sm text-blue-700 bg-blue-50 rounded p-2 border-l-4 border-blue-400';
+                const title = document.createElement('div');
+                title.className = 'font-semibold flex items-center gap-1';
+                title.innerHTML = '<svg class="w-4 h-4 inline-block" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 0 0 4.486-6.336l-3.276 3.277a3.004 3.004 0 0 1-2.25-2.25l3.276-3.276a4.5 4.5 0 0 0-6.336 4.486c.049.58.025 1.193-.14 1.743" /></svg> ' + escapeHtml(entry.content);
+                div.appendChild(title);
+                if (entry.detail) {
+                    const detail = document.createElement('div');
+                    detail.className = 'text-xs text-blue-600 mt-1';
+                    detail.textContent = entry.detail;
+                    div.appendChild(detail);
+                }
+                streamEl.appendChild(div);
+            } else if (entry.type === 'tool_result') {
+                const details = document.createElement('details');
+                details.className = 'text-xs bg-green-50 rounded p-2 border border-green-200';
+                const summary = document.createElement('summary');
+                summary.className = 'cursor-pointer text-green-700 font-semibold hover:text-green-900 flex items-center gap-1';
+                summary.innerHTML = '<svg class="w-4 h-4 inline-block" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" /></svg> データ分析エージェント 分析結果を表示';
+                details.appendChild(summary);
+                const content = document.createElement('div');
+                content.className = 'mt-2 prose prose-sm max-w-none max-h-64 overflow-y-auto text-gray-700';
+                if (window.marked && window.DOMPurify) {
+                    content.innerHTML = DOMPurify.sanitize(marked.parse(entry.content, {breaks: true}));
+                } else if (window.marked) {
+                    content.innerHTML = marked.parse(entry.content, {breaks: true});
+                } else {
+                    content.textContent = entry.content;
+                }
+                details.appendChild(content);
+                streamEl.appendChild(details);
+            }
+            streamEl.scrollTop = streamEl.scrollHeight;
+        } catch(e) {}
+    } else if (type === 'complete') {
+        try {
+            const result = JSON.parse(data);
+            progressTextEl.textContent = '抽出完了: ' + result.row_count + '件';
+            const spinnerEl = progressTextEl.parentElement.querySelector('.spinner');
+            if (spinnerEl) spinnerEl.classList.add('hidden');
+            showDwhPreview(result, resultEl);
+        } catch(e) {}
+    } else if (type === 'error') {
+        const div = document.createElement('div');
+        div.className = 'text-sm text-red-700 bg-red-50 rounded p-3 border border-red-200 mt-2';
+        div.textContent = data;
+        streamEl.appendChild(div);
+    }
+}
+
+function showDwhPreview(result, resultEl) {
+    const formData = new FormData();
+    formData.append('temp_key', result.temp_key);
+    formData.append('dataset_name', result.dataset_name);
+
+    fetch('/survey/persona-data/dwh-preview', {method: 'POST', body: formData, headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => r.text())
+        .then(html => {
+            resultEl.innerHTML = html;
+            resultEl.querySelectorAll('script').forEach(function(oldScript) {
+                var newScript = document.createElement('script');
+                newScript.textContent = oldScript.textContent;
+                oldScript.replaceWith(newScript);
+            });
+            if (window.htmx) htmx.process(resultEl);
+            if (window.Alpine) Alpine.initTree(resultEl);
+        });
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+</script>
 {% endblock %}
