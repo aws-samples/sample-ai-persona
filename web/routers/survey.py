@@ -954,9 +954,20 @@ async def results_list(request: Request) -> Any:
     except Exception as e:
         logger.error(f"Failed to get surveys: {e}")
         surveys = []
+    template_names: dict[str, str] = {}
+    try:
+        for t in manager.get_all_templates():
+            template_names[t.id] = t.name
+    except Exception:
+        pass
     return templates.TemplateResponse(
         "survey/results_list.html",
-        {"request": request, "title": "アンケート結果一覧", "surveys": surveys},
+        {
+            "request": request,
+            "title": "アンケート結果一覧",
+            "surveys": surveys,
+            "template_names": template_names,
+        },
     )
 
 
@@ -1231,6 +1242,7 @@ async def execute_survey(request: Request) -> Any:
             description=description,
             persona_count=persona_count,
             filters=filters,
+            datasource=datasource,
         )
     except SurveyValidationError as e:
         response = templates.TemplateResponse(

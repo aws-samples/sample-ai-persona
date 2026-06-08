@@ -9,7 +9,7 @@
             {% if survey.description %}
             <p class="text-gray-600 mt-1">{{ survey.description }}</p>
             {% endif %}
-            <div class="flex items-center gap-4 mt-2">
+            <div class="flex items-center gap-4 mt-2 flex-wrap">
                 <span class="text-sm text-gray-500"><time datetime="{{ survey.created_at.isoformat() }}Z">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time></span>
                 <span class="text-sm text-gray-500">{{ survey.persona_count }}名</span>
                 <span class="px-2 py-0.5 text-xs rounded-full
@@ -23,9 +23,25 @@
                     {% else %}待機中{% endif %}
                 </span>
             </div>
+            {% if survey.datasource or survey_template %}
+            <div class="flex flex-wrap items-center gap-2 mt-3">
+                <span class="text-xs text-gray-500">データソース:</span>
+                {% if survey.datasource %}
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                    {% if survey.datasource == 'nemotron' %}オープンデータ{% elif survey.datasource.startswith('custom:') %}{{ survey.datasource[7:] }}{% else %}{{ survey.datasource }}{% endif %}
+                </span>
+                {% endif %}
+                <span class="text-xs text-gray-500">テンプレート:</span>
+                {% if survey_template %}
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    {{ survey_template.name }}
+                </span>
+                {% endif %}
+            </div>
+            {% endif %}
             {% if survey.filters %}
             <div class="flex flex-wrap items-center gap-2 mt-3">
-                <span class="text-xs text-gray-500">セグメント:</span>
+                <span class="text-xs text-gray-500">フィルタ:</span>
                 {% for key, value in survey.filters.items() %}
                 {% if value is mapping %}
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">

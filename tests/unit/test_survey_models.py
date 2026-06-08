@@ -1,13 +1,21 @@
-"""Survey関連モデル（TemplateImage, PersonaStatistics, VisualAnalysisData, InsightReport）の単体テスト"""
+"""Survey関連モデル（Survey, TemplateImage, PersonaStatistics, VisualAnalysisData, InsightReport）の単体テスト"""
+
 from datetime import datetime
 
-from src.models.survey import InsightReport, VisualAnalysisData, PersonaStatistics
+from src.models.survey import (
+    Survey,
+    InsightReport,
+    VisualAnalysisData,
+    PersonaStatistics,
+)
 from src.models.survey_template import TemplateImage
 
 
 class TestTemplateImage:
     def test_create_new(self):
-        img = TemplateImage.create_new("商品画像", "survey_images/test.png", "image/png", "test.png")
+        img = TemplateImage.create_new(
+            "商品画像", "survey_images/test.png", "image/png", "test.png"
+        )
         assert img.name == "商品画像"
         assert img.file_path == "survey_images/test.png"
         assert img.mime_type == "image/png"
@@ -70,3 +78,77 @@ class TestPersonaStatistics:
         assert stats.total_count == 100
         assert stats.sex_distribution["男性"] == 50
         assert stats.age_stats["average"] == 35.5
+
+
+class TestSurvey:
+    def test_create_new_with_datasource(self):
+        survey = Survey.create_new(
+            name="テスト",
+            description="説明",
+            template_id="tmpl-1",
+            persona_count=200,
+            datasource="custom_segment",
+        )
+        assert survey.datasource == "custom_segment"
+        assert survey.status == "pending"
+
+    def test_create_new_without_datasource(self):
+        survey = Survey.create_new(
+            name="テスト",
+            description="",
+            template_id="tmpl-1",
+            persona_count=100,
+        )
+        assert survey.datasource is None
+
+    def test_to_dict_includes_datasource(self):
+        survey = Survey.create_new(
+            name="テスト",
+            description="",
+            template_id="tmpl-1",
+            persona_count=100,
+            datasource="nemotron",
+        )
+        data = survey.to_dict()
+        assert data["datasource"] == "nemotron"
+
+    def test_to_dict_excludes_none_datasource(self):
+        survey = Survey.create_new(
+            name="テスト",
+            description="",
+            template_id="tmpl-1",
+            persona_count=100,
+        )
+        data = survey.to_dict()
+        assert "datasource" not in data
+
+    def test_from_dict_with_datasource(self):
+        survey = Survey.create_new(
+            name="テスト",
+            description="",
+            template_id="tmpl-1",
+            persona_count=100,
+            datasource="my_data",
+        )
+        data = survey.to_dict()
+        restored = Survey.from_dict(data)
+        assert restored.datasource == "my_data"
+
+    def test_from_dict_without_datasource_field(self):
+        """既存データ（datasourceフィールドなし）との後方互換性"""
+        data = {
+            "id": "test-id",
+            "name": "テスト",
+            "description": "",
+            "template_id": "tmpl-1",
+            "persona_count": 100,
+            "filters": None,
+            "status": "completed",
+            "s3_result_path": None,
+            "insight_report": None,
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+            "error_message": None,
+        }
+        restored = Survey.from_dict(data)
+        assert restored.datasource is None

@@ -335,6 +335,7 @@ class SurveyManager:
         description: str = "",
         persona_count: int = 100,
         filters: Optional[Dict[str, Any]] = None,
+        datasource: Optional[str] = None,
     ) -> Survey:
         """
         アンケートレコードを作成する（実行はしない）。
@@ -373,6 +374,7 @@ class SurveyManager:
             template_id=template_id,
             persona_count=persona_count,
             filters=filters,
+            datasource=datasource,
         )
         self.db.save_survey(survey)
         logger.info(f"Survey created: {survey.id} ({survey.name})")
