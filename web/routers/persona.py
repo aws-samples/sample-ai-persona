@@ -269,8 +269,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
 
         saved_path, file_text, metadata = file_manager.upload_interview_file(
             file_content,
-            file.filename,
-            allow_duplicates=False,  # type: ignore[arg-type]
+            file.filename or "uploaded_file",
+            allow_duplicates=False,
         )
 
         # アップロード成功時のパーシャルHTMLを返す
