@@ -27,6 +27,9 @@ from ._pagination import decode_cursor, encode_cursor
 # 一時ペルソナ用TTLキャッシュ（30分で自動削除、最大1000件）
 _temp_personas_cache: TTLCache = TTLCache(maxsize=1000, ttl=1800)
 
+# 行動データセット候補キャッシュ（30分TTL）: persona_id → list[dict]
+_temp_behavior_datasets_cache: TTLCache = TTLCache(maxsize=100, ttl=1800)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -34,6 +37,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates"
 
 # main.pyと同じmarkdownフィルターを登録
 from web.sanitize import render_markdown  # noqa: E402
+
 templates.env.filters["markdown"] = render_markdown
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
@@ -64,6 +68,181 @@ def get_file_manager() -> FileManager:
     return _file_manager
 
 
+_BEHAVIOR_DATA_TYPE_HINTS: dict[str, str] = {
+    "purchase": "購買履歴",
+    "order": "購買履歴",
+    "transaction": "購買履歴",
+    "buy": "購買履歴",
+    "page": "Web行動ログ",
+    "click": "Web行動ログ",
+    "session": "Web行動ログ",
+    "browse": "Web行動ログ",
+    "access": "Web行動ログ",
+    "inquiry": "問い合わせ履歴",
+    "contact": "問い合わせ履歴",
+    "support": "問い合わせ履歴",
+    "ticket": "問い合わせ履歴",
+}
+
+
+def _infer_behavior_data_type(columns: list[str]) -> str:
+    """CSVカラム名からデータ種別を推定する（全カラムのヒット数で最多種別を返す）"""
+    scores: dict[str, int] = {}
+    for col in columns:
+        col_lower = col.lower()
+        for keyword, label in _BEHAVIOR_DATA_TYPE_HINTS.items():
+            if keyword in col_lower:
+                scores[label] = scores.get(label, 0) + 1
+                break
+    if not scores:
+        return ""
+    return max(scores, key=scores.get)  # type: ignore[arg-type]
+
+
+def _detect_binding_key(columns: list[str], csv_bytes: bytes) -> tuple[str, str]:
+    """CSVから識別キーカラムと値を検出する"""
+    import csv as csv_mod
+    import io
+
+    id_candidates = ["user_id", "customer_id", "member_id", "uid", "cid"]
+    header_lower = [c.lower().strip() for c in columns]
+    key_col = ""
+    for candidate in id_candidates:
+        if candidate in header_lower:
+            key_col = columns[header_lower.index(candidate)]
+            break
+
+    if not key_col:
+        return "", ""
+
+    text = csv_bytes.decode("utf-8-sig")
+    reader = csv_mod.DictReader(io.StringIO(text))
+    first_row = next(reader, None)
+    if first_row and key_col in first_row:
+        return key_col, first_row[key_col]
+    return key_col, ""
+
+
+def _extract_label_from_tool_call(detail: str) -> str:
+    """tool_callのdetailテキストからデータ種別名を抽出する。
+
+    例: "customer_id='ABC' の注文履歴をCSVで出力してください" → "注文履歴"
+    """
+    import re as re_mod
+
+    # 「の〇〇をCSVで出力」パターン
+    m = re_mod.search(r"の(.+?)を.*CSV", detail)
+    if m:
+        return m.group(1).strip()
+    # 「〇〇をCSVで出力」パターン
+    m = re_mod.search(r"(.+?)をCSV", detail)
+    if m:
+        label = m.group(1).strip()
+        # 長すぎる場合は末尾のみ（「...の購買履歴」→「購買履歴」）
+        if len(label) > 20:
+            parts = re_mod.split(r"の", label)
+            if parts:
+                label = parts[-1]
+        return label
+    return ""
+
+
+def _build_behavior_dataset_candidates(
+    csv_urls: list[str],
+    persona_name: str,
+    thinking_log: list[dict[str, str]] | None = None,
+    csv_url_labels: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """CSV URLリストからデータセット候補を構築する"""
+    import uuid as uuid_mod
+
+    from src.managers.dataset_manager import DatasetManager
+
+    # 思考ログからbinding_keyのフォールバック値を取得
+    fallback_col, fallback_val = "", ""
+    if thinking_log:
+        fallback_col, fallback_val = _extract_user_id_from_log(thinking_log)
+
+    dataset_manager = DatasetManager()
+    candidates: list[dict[str, Any]] = []
+    type_counter: int = 0
+    label_counts: dict[str, int] = {}
+
+    for idx, url in enumerate(csv_urls):
+        try:
+            csv_bytes = dataset_manager.download_csv_from_url(url)
+            columns, row_count = dataset_manager.analyze_schema(csv_bytes)
+            if row_count == 0:
+                continue
+
+            col_names = [c.name for c in columns]
+
+            # 1. tool_callのdetailからラベル抽出（メイン）
+            data_type_label = ""
+            if csv_url_labels and idx < len(csv_url_labels):
+                data_type_label = _extract_label_from_tool_call(csv_url_labels[idx])
+
+            # 2. フォールバック: カラム名ルール式
+            if not data_type_label:
+                data_type_label = _infer_behavior_data_type(col_names)
+
+            # 3. それでも取れなければ連番
+            if not data_type_label:
+                type_counter += 1
+                data_type_label = f"行動データ{type_counter}"
+
+            binding_key_col, binding_key_val = _detect_binding_key(col_names, csv_bytes)
+            if not binding_key_col and fallback_col:
+                binding_key_col, binding_key_val = fallback_col, fallback_val
+
+            # 同名ラベルに連番を付与
+            label_counts[data_type_label] = label_counts.get(data_type_label, 0) + 1
+            if label_counts[data_type_label] > 1:
+                dataset_name = (
+                    f"{persona_name}_{data_type_label}{label_counts[data_type_label]}"
+                )
+            else:
+                dataset_name = f"{persona_name}_{data_type_label}"
+
+            candidates.append(
+                {
+                    "temp_id": str(uuid_mod.uuid4()),
+                    "name": dataset_name,
+                    "data_type_label": data_type_label,
+                    "csv_bytes": csv_bytes,
+                    "columns": columns,
+                    "row_count": row_count,
+                    "binding_key_column": binding_key_col,
+                    "binding_key_value": binding_key_val,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"行動データCSVダウンロード/解析エラー: {e}")
+            continue
+
+    return candidates
+
+
+def _extract_user_id_from_log(thinking_log: list[dict[str, str]]) -> tuple[str, str]:
+    """思考ログからcustomer_id/user_idとその値を抽出する"""
+    import re as re_mod
+
+    patterns = [
+        r"customer_id\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]+)['\"]?",
+        r"user_id\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]+)['\"]?",
+    ]
+    all_text = " ".join(
+        entry.get("content", "") + " " + entry.get("detail", "")
+        for entry in thinking_log
+    )
+    for pattern in patterns:
+        matches = re_mod.findall(pattern, all_text)
+        if matches:
+            col_name = "customer_id" if "customer_id" in pattern else "user_id"
+            return col_name, matches[-1]
+    return "", ""
+
+
 @router.get("/generation", response_class=HTMLResponse)
 async def persona_generation_page(request: Request) -> Any:
     """ペルソナ生成ページ"""
@@ -89,7 +268,9 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
         file_manager = get_file_manager()
 
         saved_path, file_text, metadata = file_manager.upload_interview_file(
-            file_content, file.filename, allow_duplicates=False  # type: ignore[arg-type]
+            file_content,
+            file.filename,
+            allow_duplicates=False,  # type: ignore[arg-type]
         )
 
         # アップロード成功時のパーシャルHTMLを返す
@@ -164,6 +345,7 @@ async def generate_persona(
     data_description: str = Form(""),
     custom_prompt: str = Form(""),
     analysis_angle: str = Form(""),
+    auto_link_behavior: str = Form(""),
     files: list[UploadFile] = File(None),
 ) -> Any:
     """統一ペルソナ生成（SSEストリーミング）"""
@@ -177,8 +359,12 @@ async def generate_persona(
         if not analysis_angle or not analysis_angle.strip():
             return _sse_error("分析の切り口を入力してください")
 
+        is_auto_link = data_type == "dwh" and auto_link_behavior == "true"
+        if is_auto_link:
+            persona_count = 1
+
         logger.info(
-            f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}"
+            f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}, auto_link={is_auto_link}"
         )
 
         import queue as queue_mod
@@ -194,12 +380,16 @@ async def generate_persona(
                 data_description=analysis_angle,
                 custom_prompt=custom_prompt or None,
                 event_queue=event_queue,
+                auto_link_behavior=is_auto_link,
             )
 
         async def dwh_event_generator() -> Any:
             yield _sse_event("progress", "データ分析エージェントに問い合わせ中...")
 
             future = executor.submit(_run_dwh_generation)
+            collected_csv_urls: list[str] = []
+            csv_url_labels: list[str] = []
+            last_tool_call_detail: str = ""
 
             # Agent 実行中: queue からリアルタイムイベントを読み出す
             while not future.done():
@@ -207,12 +397,44 @@ async def generate_persona(
                     evt = event_queue.get(timeout=0.3)
                     evt_type = evt.get("type", "")
                     content = evt.get("content", "")
-                    if evt_type == "tool_call":
-                        yield _sse_event("thinking", json.dumps({"type": "tool_call", "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
+                    if evt_type == "csv_url":
+                        url = evt.get("url", "")
+                        if url:
+                            collected_csv_urls.append(url)
+                            csv_url_labels.append(last_tool_call_detail)
+                    elif evt_type == "tool_call":
+                        last_tool_call_detail = evt.get("detail", "")
+                        yield _sse_event(
+                            "thinking",
+                            json.dumps(
+                                {
+                                    "type": "tool_call",
+                                    "content": content,
+                                    "detail": evt.get("detail", ""),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
                     elif evt_type == "tool_result" and content:
-                        yield _sse_event("thinking", json.dumps({"type": "tool_result", "tool_name": evt.get("tool_name", ""), "content": content}, ensure_ascii=False))
+                        yield _sse_event(
+                            "thinking",
+                            json.dumps(
+                                {
+                                    "type": "tool_result",
+                                    "tool_name": evt.get("tool_name", ""),
+                                    "content": content,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
                     elif evt_type == "thinking" and content:
-                        yield _sse_event("thinking", json.dumps({"type": "thinking", "content": content}, ensure_ascii=False))
+                        yield _sse_event(
+                            "thinking",
+                            json.dumps(
+                                {"type": "thinking", "content": content},
+                                ensure_ascii=False,
+                            ),
+                        )
                 except queue_mod.Empty:
                     yield _sse_event("keepalive", "")
 
@@ -222,8 +444,25 @@ async def generate_persona(
                     evt = event_queue.get_nowait()
                     evt_type = evt.get("type", "")
                     content = evt.get("content", "")
+                    if evt_type == "csv_url":
+                        url = evt.get("url", "")
+                        if url:
+                            collected_csv_urls.append(url)
+                            csv_url_labels.append(last_tool_call_detail)
+                    elif evt_type == "tool_call":
+                        last_tool_call_detail = evt.get("detail", "")
                     if evt_type in ("tool_call", "thinking") and content:
-                        yield _sse_event("thinking", json.dumps({"type": evt_type, "content": content, "detail": evt.get("detail", "")}, ensure_ascii=False))
+                        yield _sse_event(
+                            "thinking",
+                            json.dumps(
+                                {
+                                    "type": evt_type,
+                                    "content": content,
+                                    "detail": evt.get("detail", ""),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
                 except queue_mod.Empty:
                     break
 
@@ -238,27 +477,56 @@ async def generate_persona(
                     "source_files": [],
                     "persona_count": persona_count,
                     "generated_at": datetime.now().isoformat(),
+                    "auto_link_behavior": is_auto_link,
                 }
                 for persona in generated_personas:
                     persona.generation_log = thinking_log
                     persona.generation_context = gen_ctx
                     _temp_personas_cache[persona.id] = persona
 
+                # 行動データ自動紐付け: csv_urlイベントから候補データセットを生成
+                candidate_datasets: list[dict[str, Any]] = []
+                if is_auto_link and collected_csv_urls and len(generated_personas) == 1:
+                    persona = generated_personas[0]
+                    candidate_datasets = _build_behavior_dataset_candidates(
+                        csv_urls=collected_csv_urls,
+                        persona_name=persona.name,
+                        thinking_log=thinking_log,
+                        csv_url_labels=csv_url_labels,
+                    )
+                    if candidate_datasets:
+                        _temp_behavior_datasets_cache[persona.id] = candidate_datasets
+                        logger.info(
+                            f"行動データセット候補 {len(candidate_datasets)}件を生成 (persona={persona.name})"
+                        )
+
                 if len(generated_personas) == 1:
                     html = templates.get_template(
                         "persona/partials/generated_persona.html"
-                    ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+                    ).render(
+                        request=request,
+                        persona=generated_personas[0],
+                        thinking_log=thinking_log,
+                        candidate_datasets=candidate_datasets,
+                    )
                 else:
                     html = templates.get_template(
                         "persona/partials/persona_candidates.html"
-                    ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+                    ).render(
+                        request=request,
+                        personas=generated_personas,
+                        thinking_log=thinking_log,
+                    )
 
                 yield _sse_event("result", html)
                 yield _sse_event("done", "")
 
             except Exception:
                 logger.exception("DWH ペルソナ生成エラー")
-                yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。しばらくしてから再試行してください。")
+                yield _sse_event(
+                    "error",
+                    "ペルソナ生成中にエラーが発生しました。しばらくしてから再試行してください。",
+                )
 
         return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
 
@@ -322,11 +590,19 @@ async def generate_persona(
             if len(generated_personas) == 1:
                 html = templates.get_template(
                     "persona/partials/generated_persona.html"
-                ).render(request=request, persona=generated_personas[0], thinking_log=thinking_log)
+                ).render(
+                    request=request,
+                    persona=generated_personas[0],
+                    thinking_log=thinking_log,
+                )
             else:
                 html = templates.get_template(
                     "persona/partials/persona_candidates.html"
-                ).render(request=request, personas=generated_personas, thinking_log=thinking_log)
+                ).render(
+                    request=request,
+                    personas=generated_personas,
+                    thinking_log=thinking_log,
+                )
 
             yield _sse_event("result", html)
             yield _sse_event("done", "")
@@ -334,7 +610,10 @@ async def generate_persona(
         except Exception:
             # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
             logger.error("ペルソナ生成エラーが発生しました。", exc_info=True)
-            yield _sse_event("error", "ペルソナ生成中にエラーが発生しました。時間をおいて再度お試しください。")
+            yield _sse_event(
+                "error",
+                "ペルソナ生成中にエラーが発生しました。時間をおいて再度お試しください。",
+            )
 
     return StreamingResponse(
         event_generator(),
@@ -356,8 +635,10 @@ def _sse_event(event_type: str, data: str) -> str:
 
 def _sse_error(message: str) -> StreamingResponse:
     """SSEエラーレスポンスを返す"""
+
     async def gen() -> Any:
         yield _sse_event("error", message)
+
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
@@ -376,6 +657,7 @@ async def save_persona(
     values: str = Form(...),
     pain_points: str = Form(...),
     goals: str = Form(...),
+    selected_behavior_datasets: str = Form(""),
 ) -> Any:
     """ペルソナ保存処理（htmx対応）"""
     try:
@@ -400,6 +682,10 @@ async def save_persona(
 
         persona_manager.save_persona(persona)
 
+        # 行動データセットの保存・紐付け
+        if selected_behavior_datasets:
+            _save_behavior_datasets(persona.id, persona_id, selected_behavior_datasets)
+
         return templates.TemplateResponse(
             "partials/success.html",
             {
@@ -414,6 +700,52 @@ async def save_persona(
             "partials/error.html",
             {"request": request, "error": f"保存エラー: {str(e)}"},
             status_code=500,
+        )
+
+
+def _save_behavior_datasets(
+    saved_persona_id: str, cache_persona_id: str, selected_ids_str: str
+) -> None:
+    """選択された行動データセットを保存しペルソナに紐付ける"""
+    from src.managers.dataset_manager import DatasetManager
+
+    selected_ids = {t.strip() for t in selected_ids_str.split(",") if t.strip()}
+    cached_datasets = _temp_behavior_datasets_cache.pop(cache_persona_id, None)
+    if not cached_datasets:
+        logger.warning(
+            "行動データセットのキャッシュが見つかりません（期限切れの可能性）"
+        )
+        return
+
+    dataset_manager = DatasetManager()
+    bindings_data: list[dict[str, Any]] = []
+
+    for ds_info in cached_datasets:
+        if ds_info["temp_id"] not in selected_ids:
+            continue
+        try:
+            dataset = dataset_manager.upload_csv(
+                file_content=ds_info["csv_bytes"],
+                filename=f"behavior_{ds_info['temp_id']}.csv",
+                name=ds_info["name"],
+                description=f"{ds_info['data_type_label']}（自動取得）",
+            )
+            binding_keys: dict[str, str] = {}
+            if ds_info.get("binding_key_column") and ds_info.get("binding_key_value"):
+                binding_keys[ds_info["binding_key_column"]] = ds_info[
+                    "binding_key_value"
+                ]
+            bindings_data.append(
+                {"dataset_id": dataset.id, "binding_keys": binding_keys}
+            )
+            logger.info(f"行動データセット保存: {dataset.name} (ID: {dataset.id})")
+        except Exception as e:
+            logger.error(f"行動データセット保存エラー ({ds_info['name']}): {e}")
+
+    if bindings_data:
+        dataset_manager.set_persona_bindings(saved_persona_id, bindings_data)
+        logger.info(
+            f"ペルソナ {saved_persona_id} に {len(bindings_data)}件のデータセットを紐付け"
         )
 
 
@@ -799,7 +1131,9 @@ async def get_persona_memories(
 
 
 @router.delete("/{persona_id}/memories/{memory_id}", response_class=HTMLResponse)
-async def delete_persona_memory(request: Request, persona_id: str, memory_id: str) -> Any:
+async def delete_persona_memory(
+    request: Request, persona_id: str, memory_id: str
+) -> Any:
     """
     ペルソナの特定の記憶を削除（htmx対応）
 
@@ -1117,7 +1451,8 @@ async def upload_knowledge_file_preview(
         # FileManagerで変換
         file_manager = get_file_manager()
         file_metadata, markdown_content = file_manager.upload_knowledge_file(
-            file_content, file.filename  # type: ignore[arg-type]
+            file_content,
+            file.filename,  # type: ignore[arg-type]
         )
 
         # 内容の文字数チェック（10000文字制限）
@@ -1228,7 +1563,9 @@ async def create_kb_binding(
     db_service = service_factory.get_database_service()
 
     try:
-        metadata_filters = json.loads(metadata_filters_json) if metadata_filters_json else {}
+        metadata_filters = (
+            json.loads(metadata_filters_json) if metadata_filters_json else {}
+        )
     except json.JSONDecodeError:
         metadata_filters = {}
 
@@ -1302,7 +1639,10 @@ async def create_dataset_binding(
             if key_name not in valid_columns:
                 return templates.TemplateResponse(
                     "partials/error.html",
-                    {"request": request, "error": f"カラム「{key_name}」はデータセットに存在しません"},
+                    {
+                        "request": request,
+                        "error": f"カラム「{key_name}」はデータセットに存在しません",
+                    },
                 )
         binding_keys[key_name] = key_value
     else:
@@ -1328,7 +1668,9 @@ async def create_dataset_binding(
 @router.delete(
     "/{persona_id}/dataset-bindings/{binding_id}", response_class=HTMLResponse
 )
-async def delete_dataset_binding(request: Request, persona_id: str, binding_id: str) -> Any:
+async def delete_dataset_binding(
+    request: Request, persona_id: str, binding_id: str
+) -> Any:
     """データセット紐付けを削除"""
     db_service = service_factory.get_database_service()
     db_service.delete_binding(binding_id)
@@ -1357,7 +1699,13 @@ async def preview_dataset_binding(
         logger.error(f"Dataset preview error: {e}")
         return templates.TemplateResponse(
             "persona/partials/dataset_preview.html",
-            {"request": request, "columns": [], "rows": [], "total_count": 0, "error": "データの取得に失敗しました"},
+            {
+                "request": request,
+                "columns": [],
+                "rows": [],
+                "total_count": 0,
+                "error": "データの取得に失敗しました",
+            },
         )
 
 

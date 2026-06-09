@@ -109,6 +109,7 @@ class PersonaManager:
         data_description: str | None = None,
         custom_prompt: str | None = None,
         event_queue: Any = None,
+        auto_link_behavior: bool = False,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
         """
         統一ペルソナ生成
@@ -120,6 +121,7 @@ class PersonaManager:
             data_description: データ説明（data_type="other"時）/ 分析の切り口（data_type="dwh"時）
             custom_prompt: カスタムプロンプト
             event_queue: リアルタイムイベント用 queue（DWH 用）
+            auto_link_behavior: 行動データ自動紐付けオプション（DWH時のみ有効）
 
         Returns:
             list[Persona]: 生成されたペルソナリスト
@@ -136,6 +138,7 @@ class PersonaManager:
                 persona_count=persona_count,
                 custom_prompt=custom_prompt,
                 event_queue=event_queue,
+                auto_link_behavior=auto_link_behavior,
             )
 
         if not file_contents:
@@ -166,10 +169,13 @@ class PersonaManager:
                         except UnicodeDecodeError:
                             continue
                     else:
-                        raise PersonaManagerError("CSVファイルのエンコーディングを検出できません")
+                        raise PersonaManagerError(
+                            "CSVファイルのエンコーディングを検出できません"
+                        )
 
                     # /tmp直下にシンプルなパスで保存（LLMがパスを正確にコピーできるように）
                     import uuid
+
                     csv_path = f"/tmp/persona_csv_{uuid.uuid4().hex[:8]}.csv"
                     with open(csv_path, "w", encoding="utf-8") as f:
                         f.write(decoded)
@@ -180,7 +186,9 @@ class PersonaManager:
                     preview = "\n".join(lines[:20])
                     if len(lines) > 20:
                         preview += f"\n... (全{len(lines)}行)"
-                    texts.append(f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n{preview}")
+                    texts.append(
+                        f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n{preview}"
+                    )
                 else:
                     text = file_manager.extract_text_from_file(content, filename)
                     texts.append(f"--- {filename} ---\n{text}")
@@ -204,6 +212,7 @@ class PersonaManager:
             finally:
                 # 一時CSVファイルを削除
                 import os
+
                 for p in csv_temp_paths:
                     try:
                         os.unlink(p)
@@ -229,24 +238,30 @@ class PersonaManager:
         persona_count: int,
         custom_prompt: str | None = None,
         event_queue: Any = None,
+        auto_link_behavior: bool = False,
     ) -> tuple[list[Persona], list[dict[str, str]]]:
         """DWH（データ分析エージェント連携）によるペルソナ生成。
 
         Agent が ask_data_agent ツールで データ分析エージェントに自律的に問い合わせてペルソナを生成する。
         event_queue が渡された場合、Agent のイベントをリアルタイムで queue に入れる。
+        auto_link_behavior が True の場合、特定ユーザー深掘り型に限定し、行動データCSV抽出も指示する。
         """
         from ..services.agent_service import AgentService, AgentServiceError
 
         if not analysis_angle or not analysis_angle.strip():
             raise PersonaManagerError("分析の切り口を入力してください")
 
+        if auto_link_behavior:
+            persona_count = 1
+
         self.logger.info(
-            f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count})"
+            f"DWH ペルソナ生成開始 (angle={analysis_angle!r}, count={persona_count}, auto_link={auto_link_behavior})"
         )
 
         # callback_handler: Agent イベントを queue に流す
         callback_handler = None
         if event_queue is not None:
+
             def _queue_callback(**kwargs: Any) -> None:
                 data = kwargs.get("data", "")
                 complete = kwargs.get("complete", False)
@@ -261,6 +276,30 @@ class PersonaManager:
         try:
             agent_service = AgentService()
             data_text = f"分析の切り口: {analysis_angle}"
+
+            if auto_link_behavior:
+                data_text += (
+                    "\n\n# ★重要: ペルソナ生成方式\n"
+                    "※ 本タスクでは複数ペルソナの比較・統計的集約ではなく、特定1名の深掘り分析を行います。\n"
+                    "条件に最も合致する実在ユーザー1名をDWHから特定し、そのユーザーの実データに基づいて\n"
+                    "属性・行動パターンを詳細に分析してペルソナ化してください。\n"
+                    "\n# 追加タスク: 行動データCSVエクスポート（必須）\n"
+                    "ペルソナ生成後、選定したユーザーの行動データをCSVファイルとしてエクスポートしてください。\n"
+                    "このCSVはAIがそのペルソナになりきる際の参照データとなります。\n\n"
+                    "## エクスポートルール\n"
+                    "1. 各データ種別ごとに ask_data_agent へCSV出力を依頼する（1回 = 1種別）\n"
+                    "   ★ 必ず「CSVで出力してください」というフレーズを含めること（これがないとCSVファイルが生成されません）\n"
+                    "2. 各CSVには必ずそのユーザーを識別するキーカラムを含めること\n"
+                    "3. ★単一テーブルのIDや外部キーだけのデータは不十分です。\n"
+                    "   関連テーブルをJOINし、人間が読んで意味のわかるリッチな情報（名称、カテゴリ、日時、金額など）を含めてください。\n"
+                    "   AIがこのデータだけを見てそのユーザーの行動を具体的に語れるレベルが目標です。\n"
+                    "4. 複数種別がある場合は種別ごとに個別にCSV出力を依頼する\n\n"
+                    "## 依頼例\n"
+                    '  ask_data_agent("<ユーザーID条件> の購買履歴をCSVで出力してください。\n'
+                    "  関連テーブルをJOINして、日時・商品名・カテゴリ・数量・金額など具体的な情報を含めてください。\n"
+                    '  識別キーカラムも含めてください")\n'
+                )
+
             personas, thinking_log = agent_service.generate_personas_with_agent(
                 data_text=data_text,
                 data_type="dwh",

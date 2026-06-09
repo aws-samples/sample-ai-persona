@@ -104,7 +104,7 @@
           hx-swap="innerHTML"
           hx-indicator="#save-spinner"
           class="border-t pt-6">
-        
+
         <input type="hidden" name="persona_id" value="{{ persona.id }}">
         <input type="hidden" name="name" value="{{ persona.name }}">
         <input type="hidden" name="age" value="{{ persona.age }}">
@@ -113,8 +113,10 @@
         <input type="hidden" name="values" value="{{ persona.values | join('\n') }}">
         <input type="hidden" name="pain_points" value="{{ persona.pain_points | join('\n') }}">
         <input type="hidden" name="goals" value="{{ persona.goals | join('\n') }}">
-        
-        <div class="flex gap-4">
+
+        {% include "persona/partials/behavior_datasets_preview.html" %}
+
+        <div class="flex gap-4 mt-4">
             <button type="submit"
                     class="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
                 <span class="htmx-indicator" id="save-spinner">
@@ -122,13 +124,13 @@
                 </span>
                 {{ icon_save("w-4 h-4") }} ペルソナを保存
             </button>
-            
+
             <button type="button"
                     onclick="location.reload()"
                     class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors flex items-center gap-1.5">
                 {{ icon_refresh("w-4 h-4") }} 新しいペルソナを生成
             </button>
-            
+
             <a href="/persona/management"
                class="bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5">
                 {{ icon_users("w-4 h-4") }} ペルソナ管理へ

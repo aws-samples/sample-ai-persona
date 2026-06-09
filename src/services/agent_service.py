@@ -1314,12 +1314,17 @@ class AgentService:
                 continue
 
             binding_keys = binding.get("binding_keys", {})
-            keys_str = ", ".join(f"{k}='{v}'" for k, v in binding_keys.items())
-            filter_condition = " AND ".join(
-                f"{k} = '{v}'" for k, v in binding_keys.items()
-            )
-
             columns_str = ", ".join(c.name for c in dataset.columns)
+
+            if binding_keys:
+                keys_str = ", ".join(f"{k}='{v}'" for k, v in binding_keys.items())
+                filter_condition = " AND ".join(
+                    f"{k} = '{v}'" for k, v in binding_keys.items()
+                )
+                query_example = f"SELECT * FROM read_csv('{dataset.s3_path}') WHERE {filter_condition};"
+            else:
+                keys_str = "（全行がこのペルソナのデータ）"
+                query_example = f"SELECT * FROM read_csv('{dataset.s3_path}');"
 
             dataset_info_parts.append(f"""
 ### データセット: {dataset.name}
@@ -1331,7 +1336,7 @@ class AgentService:
 
 あなたのデータを取得するクエリ:
 ```sql
-SELECT * FROM read_csv('{dataset.s3_path}') WHERE {filter_condition};
+{query_example}
 ```
 """)
 

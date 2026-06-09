@@ -102,6 +102,12 @@ class DatasetManager:
 
         return bool(re.match(r"^\d{4}-\d{2}-\d{2}", v))
 
+    def download_csv_from_url(self, url: str) -> bytes:
+        """署名付きURLからCSVをダウンロードする（DataAgentService経由）"""
+        from ..services.data_agent_service import DataAgentService
+
+        return DataAgentService.download_csv(url)
+
     def upload_csv(
         self,
         file_content: bytes,
@@ -310,6 +316,7 @@ class DatasetManager:
             conn.execute("INSTALL httpfs; LOAD httpfs;")
 
             import boto3
+
             session = boto3.Session()
             credentials = session.get_credentials()
             if credentials:
@@ -318,20 +325,28 @@ class DatasetManager:
                 conn.execute("SET s3_secret_access_key = $1;", [creds.secret_key])
                 if creds.token:
                     conn.execute("SET s3_session_token = $1;", [creds.token])
-            conn.execute(
-                "SET s3_region = $1;", [self.s3_service.region_name]
-            )
+            conn.execute("SET s3_region = $1;", [self.s3_service.region_name])
 
             if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/]+", s3_path):
                 raise ValueError(f"Invalid S3 URI format: {s3_path}")
 
-            read_fn = "read_parquet" if s3_path.endswith(".parquet") else "read_csv_auto"
-            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{s3_path}');")
+            read_fn = (
+                "read_parquet" if s3_path.endswith(".parquet") else "read_csv_auto"
+            )
+            conn.execute(
+                f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{s3_path}');"
+            )
         else:
             # ローカルファイル
             local_path = s3_path.replace("local://", "")
-            if ".." in local_path or not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9.\-_/]*", local_path):
+            if ".." in local_path or not re.fullmatch(
+                r"[a-zA-Z0-9_][a-zA-Z0-9.\-_/]*", local_path
+            ):
                 raise ValueError(f"Invalid local path format: {local_path}")
-            read_fn = "read_parquet" if local_path.endswith(".parquet") else "read_csv_auto"
-            conn.execute(f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');")  # nosemgrep: sqlalchemy-execute-raw-query
+            read_fn = (
+                "read_parquet" if local_path.endswith(".parquet") else "read_csv_auto"
+            )
+            conn.execute(
+                f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');"
+            )  # nosemgrep: sqlalchemy-execute-raw-query
         return conn
