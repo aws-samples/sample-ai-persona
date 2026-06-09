@@ -10,7 +10,7 @@
     <p class="text-xs text-gray-500 mb-3">保存する行動データを選択してください（ペルソナ保存時に紐付けされます）</p>
 
     {% for ds in candidate_datasets %}
-    <label class="flex items-start gap-2 p-3 mb-2 bg-white border border-gray-200 rounded-md hover:border-purple-300 transition-colors cursor-pointer overflow-hidden">
+    <label class="flex items-start gap-2 p-3 mb-2 border rounded-md transition-all cursor-pointer overflow-hidden has-[:checked]:bg-purple-50 has-[:checked]:border-purple-300 bg-white border-gray-200 hover:border-purple-300">
         <input type="checkbox"
                value="{{ ds.temp_id }}"
                checked
