@@ -37,6 +37,10 @@
                 <div class="mt-2 text-xs text-gray-500">
                     キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
                 </div>
+                {% else %}
+                <div class="mt-2 text-xs text-amber-600">
+                    全行対象（キー指定なし）
+                </div>
                 {% endif %}
                 <!-- プレビューモーダル -->
                 <div x-show="showPreview" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
@@ -73,16 +77,23 @@
                 <h3 class="text-lg font-semibold mb-4">{{ dataset.name }} を紐付け</h3>
                 <p class="text-sm text-gray-600 mb-4">このペルソナがデータセットにアクセスする際のキー値を設定してください。</p>
                 
-                <form id="binding-form-{{ dataset.id }}">
+                <form id="binding-form-{{ dataset.id }}" x-data="{ useKey: true }">
                     <div class="space-y-3 mb-4">
-                        <div class="flex gap-2">
-                            <select name="key_name" class="flex-1 border rounded px-3 py-2 text-sm bg-white">
+                        <label class="flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" x-model="useKey" checked class="rounded border-gray-300">
+                            <span>キー列で絞り込む</span>
+                        </label>
+                        <div x-show="useKey" class="flex gap-2">
+                            <select name="key_name" class="flex-1 border rounded px-3 py-2 text-sm bg-white" :disabled="!useKey">
                                 <option value="">キー列を選択</option>
                                 {% for col in dataset.columns %}
                                 <option value="{{ col.name }}">{{ col.name }} ({{ col.data_type }})</option>
                                 {% endfor %}
                             </select>
-                            <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm">
+                            <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm" :disabled="!useKey">
+                        </div>
+                        <div x-show="!useKey" x-cloak class="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
+                            データセットの全行がこのペルソナのデータとして読み込まれます。1ユーザー分のデータのみ含まれている場合に適しています。
                         </div>
                     </div>
                     <input type="hidden" name="dataset_id" value="{{ dataset.id }}">

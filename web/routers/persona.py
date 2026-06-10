@@ -1645,11 +1645,6 @@ async def create_dataset_binding(
                     },
                 )
         binding_keys[key_name] = key_value
-    else:
-        return templates.TemplateResponse(
-            "partials/error.html",
-            {"request": request, "error": "キー列と値を入力してください"},
-        )
 
     binding = PersonaDatasetBinding.create_new(
         persona_id=persona_id, dataset_id=dataset_id, binding_keys=binding_keys
