@@ -132,7 +132,13 @@ class DataAgentService:
             )
         try:
             with urllib.request.urlopen(url, timeout=120) as resp:
-                return bytes(resp.read())
+                data = bytes(resp.read())
+            # gzip圧縮されている場合は解凍
+            if data[:2] == b"\x1f\x8b":
+                import gzip
+
+                data = gzip.decompress(data)
+            return data
         except DataAgentServiceError:
             raise
         except Exception as e:

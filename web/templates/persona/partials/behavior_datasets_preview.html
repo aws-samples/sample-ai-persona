@@ -1,0 +1,44 @@
+<!-- 行動データセット候補プレビュー -->
+{% if candidate_datasets %}
+<div class="border border-gray-200 rounded-lg p-4 mt-4 fade-in" id="behavior-datasets-section">
+    <h3 class="text-base font-semibold text-gray-900 mb-1 flex items-center gap-2">
+        <svg class="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+        </svg>
+        行動データセット候補
+    </h3>
+    <p class="text-xs text-gray-500 mb-3">保存する行動データを選択してください（ペルソナ保存時に紐付けされます）</p>
+
+    {% for ds in candidate_datasets %}
+    <label class="flex items-start gap-2 p-3 mb-2 border rounded-md transition-all cursor-pointer overflow-hidden has-[:checked]:bg-purple-50 has-[:checked]:border-purple-300 bg-white border-gray-200 hover:border-purple-300">
+        <input type="checkbox"
+               value="{{ ds.temp_id }}"
+               checked
+               onchange="updateBehaviorDatasetSelection()"
+               class="behavior-ds-checkbox mt-0.5 w-4 h-4 flex-shrink-0 text-purple-600 border-gray-300 rounded focus:ring-purple-500">
+        <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-medium text-gray-900 truncate">{{ ds.name }}</span>
+                <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full whitespace-nowrap">{{ ds.data_type_label }}</span>
+            </div>
+            <div class="text-xs text-gray-500 mt-0.5">
+                {{ ds.row_count }}行 / {{ ds.columns | length }}列
+            </div>
+            <div class="text-xs text-gray-400 mt-0.5 truncate" title="{{ ds.columns | map(attribute='name') | join(', ') }}">
+                列: {{ ds.columns | map(attribute='name') | join(', ') }}
+            </div>
+            {% if ds.binding_key_column %}
+            <div class="text-xs text-gray-400 mt-0.5 truncate">
+                識別キー: {{ ds.binding_key_column }} = {{ ds.binding_key_value }}
+            </div>
+            {% endif %}
+        </div>
+    </label>
+    {% endfor %}
+
+    <input type="hidden"
+           name="selected_behavior_datasets"
+           id="selected-behavior-datasets"
+           value="{{ candidate_datasets | map(attribute='temp_id') | join(',') }}">
+</div>
+{% endif %}

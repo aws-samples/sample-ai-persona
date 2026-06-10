@@ -2,7 +2,7 @@
 {% from "components/icons.html" import icon_sparkles, icon_document, icon_upload, icon_chat, icon_lightbulb, icon_bolt, icon_plus %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto" x-data="{ dataType: 'interview', showDescription: false }">
+<div class="max-w-4xl mx-auto" x-data="{ dataType: 'interview', showDescription: false, autoLinkBehavior: false }">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     <p class="text-gray-600 mb-8">データをアップロードし、作成したいペルソナの指示を入力してAIペルソナを生成します。</p>
 
@@ -66,6 +66,20 @@
             <!-- DWH の場合の説明 -->
             <div x-show="dataType === 'dwh'" x-transition class="mt-4 ml-9">
                 <p class="text-xs text-purple-600 bg-purple-50 rounded-md p-3">DWH に蓄積された業務データをデータ分析エージェントが自動で分析し、ペルソナを生成します。次のステップでターゲット顧客の条件や指示を入力してください。</p>
+
+                <!-- 行動データ自動紐付けオプション -->
+                <label class="flex items-start gap-2 mt-3 cursor-pointer">
+                    <input type="checkbox" x-model="autoLinkBehavior"
+                           class="mt-0.5 w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500">
+                    <div>
+                        <span class="text-sm font-medium text-gray-700">行動データ自動紐付け</span>
+                        <p class="text-xs text-gray-500 mt-0.5">特定ユーザーを深掘り分析してペルソナ化し、そのユーザーの行動データ（購買履歴、Web行動ログ等）も自動で取得・紐付けします。</p>
+                    </div>
+                </label>
+                <div x-show="autoLinkBehavior" x-transition class="mt-2 text-xs text-purple-600 bg-purple-50/50 rounded p-2 border border-purple-100">
+                    生成数は1体に制限されます。条件に最も合致する実在ユーザー1名を特定し、深掘り分析を行います。
+                </div>
+                <input type="hidden" name="auto_link_behavior" :value="autoLinkBehavior ? 'true' : ''">
             </div>
 
             <!-- その他の場合のデータ説明入力 -->
@@ -125,7 +139,7 @@
                     <textarea name="analysis_angle"
                               id="analysis_angle"
                               rows="3"
-                              placeholder="例:&#10;・高単価商品を繰り返し購入しているリピーター層のペルソナ&#10;・20代女性で食品カテゴリの購入が多い顧客像&#10;・直近3ヶ月で初回購入した新規顧客の特徴"
+                              :placeholder="autoLinkBehavior ? '例:\n・高単価商品を繰り返し購入しているリピーターの中から1名を選定して深掘り分析\n・20代女性で最もアクティブなユーザーを特定してペルソナ化' : '例:\n・高単価商品を繰り返し購入しているリピーター層のペルソナ\n・20代女性で食品カテゴリの購入が多い顧客像\n・直近3ヶ月で初回購入した新規顧客の特徴'"
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-y"></textarea>
                 </div>
             </div>
@@ -156,10 +170,14 @@
                     <input type="number"
                            name="persona_count"
                            id="persona_count"
-                           min="1" max="10" value="1"
+                           min="1" max="10"
+                           :value="autoLinkBehavior ? 1 : 1"
+                           :disabled="autoLinkBehavior"
+                           x-effect="if (autoLinkBehavior) { $el.value = 1 }"
                            required
-                           class="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
-                    <span class="text-xs text-gray-500 ml-1">（1-10）</span>
+                           class="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                    <span x-show="!autoLinkBehavior" class="text-xs text-gray-500 ml-1">（1-10）</span>
+                    <span x-show="autoLinkBehavior" class="text-xs text-purple-600 ml-1">行動データ紐付け時は1体に制限</span>
                 </div>
 
                 <button type="button"
@@ -190,6 +208,14 @@
 
 {% block scripts %}
 <script>
+function updateBehaviorDatasetSelection() {
+    const checkboxes = document.querySelectorAll('.behavior-ds-checkbox:checked');
+    const hidden = document.getElementById('selected-behavior-datasets');
+    if (hidden) {
+        hidden.value = Array.from(checkboxes).map(cb => cb.value).join(',');
+    }
+}
+
 function updateFileList(input) {
     const fileList = document.getElementById('file-list');
     fileList.innerHTML = '';
