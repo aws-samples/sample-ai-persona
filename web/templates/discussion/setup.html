@@ -4,6 +4,7 @@
 {% block content %}
 <div x-data="{
               discussionStarted: false,
+              _eventSource: null,
               mode: 'traditional',
               topic: '', 
               rounds: 3, 
@@ -157,7 +158,11 @@
                   this.$nextTick(() => this.initStreaming());
               },
               backToSetup() {
-                  // 議論ステージから設定画面に戻る
+                  // 議論ステージから設定画面に戻る（進行中のSSE接続を確実に閉じる）
+                  if (this._eventSource) {
+                      this._eventSource.close();
+                      this._eventSource = null;
+                  }
                   this.discussionStarted = false;
                   const resultDiv = document.getElementById('discussion-result');
                   if (resultDiv) resultDiv.innerHTML = '';
@@ -210,6 +215,7 @@
                   `;
               },
               initStreaming() {
+                  const self = this;  // onmessage 内のコールバックから Alpine コンポーネントを参照するため
                   const container = document.getElementById('streaming-messages');
                   const counter = document.getElementById('message-counter');
                   const loading = document.getElementById('streaming-loading');
@@ -336,11 +342,34 @@
                       const docIds = this.uploadedDocuments.map(d => d.file_id).join(',');
                       url += `&document_ids=${encodeURIComponent(docIds)}`;
                   }
+                  // 既存接続があれば閉じてから新規接続（多重接続防止）
+                  if (this._eventSource) this._eventSource.close();
                   const eventSource = new EventSource(url);
+                  this._eventSource = eventSource;
                   let discussionComplete = false;
                   
                   let currentActiveEl = null;
                   let currentAccumulatedText = '';
+                  // message_start 済みだが message_end 未達の話者（AIエラー等で発言が完了しなかった場合の検知用）
+                  let pendingSpeaker = null;
+
+                  // 未完了の話者を会話ログに「取得失敗」として記録（応答消失の可視化）
+                  function flushPendingSpeaker() {
+                      if (!pendingSpeaker) return;
+                      const logEl = createBubble(pendingSpeaker);
+                      if (logEl) {
+                          if (currentAccumulatedText) {
+                              // 途中まで届いていた本文を残す
+                              logEl.innerHTML = DOMPurify.sanitize(
+                                  marked.parse(currentAccumulatedText, {breaks: true})
+                              );
+                          } else {
+                              logEl.textContent = '[応答を取得できませんでした]';
+                          }
+                          container.scrollTop = container.scrollHeight;
+                      }
+                      pendingSpeaker = null;
+                  }
 
                   function createBubble(info) {
                       const isFacilitator = info.persona_id === 'facilitator' || info.message_type === 'summary';
@@ -402,7 +431,10 @@
                           // ステージ上部にアバター列を描画
                           renderStageAvatars(data.personas);
                       } else if (data.type === 'message_start') {
+                          // 直前の話者が message_end 未達のまま次が始まった場合、取得失敗として記録
+                          flushPendingSpeaker();
                           currentAccumulatedText = '';
+                          pendingSpeaker = data;
                           // ステージ上段: 発言者をハイライトし、アクティブ吹き出しを逐次表示
                           setSpeaking(data.persona_id);
                           currentActiveEl = showActiveBubble(data);
@@ -416,14 +448,21 @@
                               );
                           }
                       } else if (data.type === 'message_end') {
+                          // 正常に発言完了。pending を解消（取得失敗扱いにしない）
+                          pendingSpeaker = null;
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
                           // 会話ログ（下段）に発言全文を一括表示
                           const logEl = createBubble(data);
                           if (logEl) {
-                              logEl.innerHTML = DOMPurify.sanitize(
-                                  marked.parse(data.content, {breaks: true})
-                              );
+                              const html = data.content
+                                  ? DOMPurify.sanitize(marked.parse(data.content, {breaks: true}))
+                                  : null;
+                              if (html) {
+                                  logEl.innerHTML = html;
+                              } else {
+                                  logEl.textContent = '[応答を取得できませんでした]';
+                              }
                               container.scrollTop = container.scrollHeight;
                           }
                           // ステージ上段: 発言確定後はアクティブ吹き出しをクリアし待機状態へ
@@ -490,11 +529,16 @@
                           tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
                           while (tempDiv.firstChild) container.appendChild(tempDiv.firstChild);
                           container.scrollTop = container.scrollHeight;
+                          // 簡易モードは発言が即確定するため、上段の発言中表示も都度クリア（最後の話者が固定表示されるのを防ぐ）
+                          clearActiveBubble();
+                          clearSpeaking();
 
                       } else if (data.type === 'complete') {
                           discussionComplete = true;
                           eventSource.close();
-                          // ステージのアクティブ表示をクリア
+                          self._eventSource = null;
+                          // ステージのアクティブ表示と未完了話者をクリア
+                          flushPendingSpeaker();
                           clearActiveBubble();
                           clearSpeaking();
                           // 従来の議論完了画面を取得して表示
@@ -525,7 +569,12 @@
                       } else if (data.type === 'error') {
                           discussionComplete = true;
                           eventSource.close();
-                          loading.innerHTML = `<p class='text-red-600'>エラー: ${data.message}</p>`;
+                          self._eventSource = null;
+                          // 途中まで届いていた発言を会話ログに残し、上段の発言中表示をクリア
+                          flushPendingSpeaker();
+                          clearActiveBubble();
+                          clearSpeaking();
+                          loading.innerHTML = `<p class='text-red-600'>エラー: ${escapeHtml(data.message || '')}</p>`;
                       }
                   };
                   
