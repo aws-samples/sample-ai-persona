@@ -1221,26 +1221,9 @@ document.addEventListener('alpine:init', () => {
 {% endblock %}
 
 {% block scripts %}
-<!-- DiceBear（自己完結バンドル: core + notionists）。議論ページのみで読み込む -->
+<!-- DiceBear（自己完結バンドル: core + notionists）。議論ページのみで読み込む。
+     window.personaAvatarSvg / renderPersonaAvatars は app.js が定義（キャッシュ・遅延生成込み）。 -->
 <script src="/static/js/vendor/dicebear.min.js?v=9.4.2"
         integrity="sha384-IL34iYYUNCuWb+GJru/GHUa0tW0KEb3hIKKCKJHYXoOO1N480UvHCYEIEJX06um4"
         crossorigin="anonymous"></script>
-<script>
-// ペルソナID(またはファシリテーター)を seed にアバターSVGを生成する。
-// 同じ seed には常に同じ顔。DiceBear 未読込時は null を返し、呼び出し側で頭文字にフォールバック。
-// 返すSVGは呼び出し側で DOMPurify.sanitize() を通す前提（信頼済み出力だが二重防御）。
-window.personaAvatarSvg = function(seed, size) {
-    try {
-        if (!window.DiceBear || !window.DiceBear.createAvatar) return null;
-        const raw = window.DiceBear.createAvatar(window.DiceBear.styles.notionists, {
-            seed: String(seed || ''),
-            size: size || 64,
-        }).toString();
-        // SVGプロファイルでサニタイズ（path/ellipse等の図形要素を保持）
-        return DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true, svgFilters: true } });
-    } catch (e) {
-        return null;
-    }
-};
-</script>
 {% endblock %}

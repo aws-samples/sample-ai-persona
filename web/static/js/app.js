@@ -166,9 +166,95 @@ function convertAllTimes(root) {
     (root || document).querySelectorAll('time[datetime]').forEach(formatLocalTime);
 }
 
+// =============================================================
+// ペルソナアバター（DiceBear notionists）
+// DiceBear バンドルを読み込んだページでのみ動作。未読込時は頭文字フォールバック。
+// =============================================================
+
+// seed+size をキーにした生成済みSVGのキャッシュ（同一画面内の再生成を防ぐ）
+const _personaAvatarCache = {};
+
+/**
+ * ペルソナID(seed)から DiceBear アバターSVGを生成して返す。
+ * DiceBear/DOMPurify 未読込・生成失敗時は null（呼び出し側で頭文字にフォールバック）。
+ */
+function personaAvatarSvg(seed, size) {
+    try {
+        if (!window.DiceBear || !window.DiceBear.createAvatar) return null;
+        const key = String(seed || '') + '@' + (size || 64);
+        if (_personaAvatarCache[key] !== undefined) return _personaAvatarCache[key];
+        const raw = window.DiceBear.createAvatar(window.DiceBear.styles.notionists, {
+            seed: String(seed || ''),
+            size: size || 64,
+        }).toString();
+        const clean = window.DOMPurify
+            ? window.DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true, svgFilters: true } })
+            : null;
+        _personaAvatarCache[key] = clean;
+        return clean;
+    } catch (e) {
+        return null;
+    }
+}
+window.personaAvatarSvg = personaAvatarSvg;
+
+/**
+ * 単一アバター枠を描画する。DiceBear が使えれば SVG、無ければ頭文字+カラー円。
+ * el: data-avatar-seed / data-avatar-name / data-avatar-color を持つ要素。
+ */
+function fillPersonaAvatar(el) {
+    if (!el || el.dataset.avatarFilled) return;
+    const seed = el.dataset.avatarSeed || '';
+    const size = parseInt(el.dataset.avatarSize || '48', 10);
+    const svg = personaAvatarSvg(seed, size);
+    if (svg) {
+        el.innerHTML = svg; // personaAvatarSvg 内で DOMPurify 済み
+        el.classList.add('persona-avatar-img');
+    } else {
+        // フォールバック: 頭文字 + 既存カラークラス
+        const name = el.dataset.avatarName || '';
+        const color = el.dataset.avatarColor || 'blue';
+        const initial = name ? name.charAt(0) : '';
+        el.classList.add('persona-avatar-' + color);
+        el.textContent = initial;
+    }
+    el.dataset.avatarFilled = '1';
+}
+
+// 可視範囲に入ったアバター枠だけ生成する（一覧の大量生成によるブロックを防ぐ）
+let _avatarObserver = null;
+function getAvatarObserver() {
+    if (_avatarObserver || typeof IntersectionObserver === 'undefined') return _avatarObserver;
+    _avatarObserver = new IntersectionObserver((entries, obs) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                fillPersonaAvatar(entry.target);
+                obs.unobserve(entry.target);
+            }
+        });
+    }, { rootMargin: '200px' });
+    return _avatarObserver;
+}
+
+/**
+ * root 配下の未処理アバター枠 [data-avatar-seed] を遅延生成にのせる。
+ * IntersectionObserver 非対応環境では即時生成にフォールバック。
+ */
+function renderPersonaAvatars(root) {
+    const scope = root || document;
+    const els = scope.querySelectorAll('[data-avatar-seed]:not([data-avatar-filled])');
+    const obs = getAvatarObserver();
+    els.forEach(el => {
+        if (obs) obs.observe(el);
+        else fillPersonaAvatar(el);
+    });
+}
+window.renderPersonaAvatars = renderPersonaAvatars;
+
 // htmxで動的に追加された要素にも対応
 document.body.addEventListener('htmx:afterSwap', function(evt) {
     convertAllTimes(evt.detail.target);
+    renderPersonaAvatars(evt.detail.target);
 });
 
 // ページ読み込み完了時の処理
@@ -179,6 +265,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // ローカルタイムゾーン変換
     convertAllTimes();
-    
+
+    // ペルソナアバター描画（DiceBear 読込ページのみ動作）
+    renderPersonaAvatars();
+
     console.log('AIペルソナシステム (htmx版) initialized');
 });
