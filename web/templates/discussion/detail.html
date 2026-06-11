@@ -264,9 +264,12 @@
                 {% set persona = participant_personas.get(message.persona_id) if participant_personas else None %}
                 <div class="flex gap-2.5 message-item">
                     <div class="flex-shrink-0">
-                        <div class="w-10 h-10 rounded-full persona-avatar-{{ color }} flex items-center justify-center shadow-md">
-                            <span class="text-white font-bold text-sm">{{ (message.persona_name or 'P')[0] }}</span>
-                        </div>
+                        <div class="persona-list-avatar shadow-md"
+                             data-avatar-seed="{{ message.persona_id }}"
+                             data-avatar-name="{{ message.persona_name or 'P' }}"
+                             data-avatar-color="{{ color }}"
+                             data-avatar-size="40"
+                             data-avatar-eager></div>
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-baseline gap-2 mb-1">

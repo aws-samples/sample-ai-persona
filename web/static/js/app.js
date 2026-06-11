@@ -241,14 +241,21 @@ function getAvatarObserver() {
 /**
  * root 配下の未処理アバター枠 [data-avatar-seed] を遅延生成にのせる。
  * IntersectionObserver 非対応環境では即時生成にフォールバック。
+ * data-avatar-eager 属性を持つ要素は即時生成する（内部スクロールコンテナ内など、
+ * viewport ベースの IntersectionObserver が可視判定できない場所向け）。
  */
 function renderPersonaAvatars(root) {
     const scope = root || document;
     const els = scope.querySelectorAll('[data-avatar-seed]:not([data-avatar-filled])');
     const obs = getAvatarObserver();
     els.forEach(el => {
-        if (obs) obs.observe(el);
-        else fillPersonaAvatar(el);
+        if (el.dataset.avatarEager !== undefined) {
+            fillPersonaAvatar(el);  // 即時生成（キャッシュが効くため低コスト）
+        } else if (obs) {
+            obs.observe(el);
+        } else {
+            fillPersonaAvatar(el);
+        }
     });
 }
 window.renderPersonaAvatars = renderPersonaAvatars;
