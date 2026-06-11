@@ -206,6 +206,8 @@ function fillPersonaAvatar(el) {
     if (!el || el.dataset.avatarFilled) return;
     const seed = el.dataset.avatarSeed || '';
     const size = parseInt(el.dataset.avatarSize || '48', 10);
+    // 装飾画像。名前は隣のテキストで読み上げられるため、スクリーンリーダーからは隠す
+    el.setAttribute('aria-hidden', 'true');
     const svg = personaAvatarSvg(seed, size);
     if (svg) {
         el.innerHTML = svg; // personaAvatarSvg 内で DOMPurify 済み

@@ -13,6 +13,7 @@
                data-persona-name="{{ persona.name }}"
                data-persona-occupation="{{ persona.occupation }}"
                data-persona-age="{{ persona.age }}"
+               aria-label="{{ persona.name }}（{{ persona.occupation }}・{{ persona.age }}歳）を議論に追加"
                :checked="$store.discussionSetup?.isSelected?.('{{ persona.id }}') || false"
                @change="$store.discussionSetup?.toggle?.($event.target)"
                class="peer sr-only">
@@ -43,11 +44,17 @@
     <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow" id="persona-card-{{ persona.id }}">
         <!-- ヘッダー -->
         <div class="flex items-start justify-between mb-4">
-            <div>
-                <h3 class="text-lg font-semibold text-gray-900">{{ persona.name }}</h3>
-                <p class="text-sm text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</p>
+            <div class="flex items-center gap-3 min-w-0">
+                <div class="persona-list-avatar"
+                     data-avatar-seed="{{ persona.id }}"
+                     data-avatar-name="{{ persona.name }}"
+                     data-avatar-size="48"></div>
+                <div class="min-w-0">
+                    <h3 class="text-lg font-semibold text-gray-900 truncate">{{ persona.name }}</h3>
+                    <p class="text-sm text-gray-500 truncate">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                </div>
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-2 flex-shrink-0">
                 <a href="/persona/{{ persona.id }}" 
                    class="text-blue-600 hover:text-blue-800 text-sm">
                     詳細

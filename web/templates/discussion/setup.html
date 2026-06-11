@@ -167,19 +167,6 @@
                   const resultDiv = document.getElementById('discussion-result');
                   if (resultDiv) resultDiv.innerHTML = '';
               },
-              fillSummaryAvatars(listEl) {
-                  // サマリの各ペルソナ枠に DiceBear アバターを差し込む（未生成のものだけ）
-                  if (!listEl) return;
-                  listEl.querySelectorAll('.summary-persona-avatar[data-seed]').forEach(el => {
-                      if (el.dataset.filled) return;
-                      const svg = window.personaAvatarSvg ? window.personaAvatarSvg(el.dataset.seed, 40) : null;
-                      if (svg) {
-                          el.innerHTML = svg; // 既にDOMPurify済み
-                          el.classList.add('persona-avatar-img');
-                          el.dataset.filled = '1';
-                      }
-                  });
-              },
               getStreamingHtml() {
                   return `
                       <div id='streaming-container' class='bg-white rounded-xl shadow-md'>
@@ -636,10 +623,13 @@
                 <dt class="text-gray-500 text-xs mb-2">参加ペルソナ（<span x-text="$store.discussionSetup.selectedPersonas.length"></span>体）</dt>
                 <dd>
                     <ul class="space-y-2"
-                        x-effect="discussionStarted; $store.discussionSetup.selectedPersonas.length; $nextTick(() => fillSummaryAvatars($el))">
+                        x-effect="discussionStarted; $store.discussionSetup.selectedPersonas.length; $nextTick(() => window.renderPersonaAvatars && window.renderPersonaAvatars($el))">
                         <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'sum-' + p.id">
                             <li class="summary-persona">
-                                <div class="summary-persona-avatar" :data-seed="p.id"></div>
+                                <div class="summary-persona-avatar"
+                                     :data-avatar-seed="p.id"
+                                     :data-avatar-name="p.name"
+                                     data-avatar-size="40"></div>
                                 <div class="min-w-0">
                                     <p class="font-medium text-gray-800 truncate" x-text="p.name"></p>
                                     <p class="text-xs text-gray-500 truncate">

@@ -600,6 +600,12 @@ button:not(:disabled):active {
     flex-shrink: 0;
     background-color: #e2e8f0;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1rem;
 }
 .summary-persona-avatar svg {
     width: 100%;
