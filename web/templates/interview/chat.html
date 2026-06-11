@@ -45,13 +45,17 @@
             {% for participant in participants %}
             <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <div class="flex items-start justify-between">
-                    <div>
-                        <h4 class="font-semibold text-gray-900 text-lg flex items-center gap-1.5">
-                            {{ icon_persona("w-4 h-4 text-blue-600") }} {{ participant.name }}
-                        </h4>
-                        <p class="text-sm text-blue-600 font-medium">{{ participant.occupation }} / {{ participant.age }}歳</p>
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="persona-list-avatar"
+                             data-avatar-seed="{{ participant.id }}"
+                             data-avatar-name="{{ participant.name }}"
+                             data-avatar-size="48"></div>
+                        <div class="min-w-0">
+                            <h4 class="font-semibold text-gray-900 text-lg truncate">{{ participant.name }}</h4>
+                            <p class="text-sm text-blue-600 font-medium truncate">{{ participant.occupation }} / {{ participant.age }}歳</p>
+                        </div>
                     </div>
-                    <a href="/persona/{{ participant.id }}" class="text-xs text-gray-500 hover:text-blue-600">詳細</a>
+                    <a href="/persona/{{ participant.id }}" class="text-xs text-gray-500 hover:text-blue-600 flex-shrink-0">詳細</a>
                 </div>
                 <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ participant.background[:100] }}{% if participant.background|length > 100 %}...{% endif %}</p>
                 <div class="mt-2 flex flex-wrap gap-1">
@@ -90,21 +94,11 @@
                 <!-- ペルソナメッセージ -->
                 <div class="flex gap-3 mb-4">
                     <div class="flex-shrink-0">
-                        <!-- ペルソナアバター（ペルソナIDベースの一貫した色分け） -->
-                        {% set persona_colors = [
-                            'bg-purple-500',
-                            'bg-indigo-500', 
-                            'bg-pink-500',
-                            'bg-emerald-500',
-                            'bg-orange-500',
-                            'bg-cyan-500',
-                            'bg-amber-500',
-                            'bg-rose-500'
-                        ] %}
-                        {% set color_index = session.participants.index(message.persona_id) if message.persona_id in session.participants else 0 %}
-                        <div class="w-12 h-12 rounded-full {{ persona_colors[color_index % persona_colors|length] }} flex items-center justify-center shadow-md ring-2 ring-white">
-                            <span class="text-white font-bold text-sm">{{ message.persona_name[0] }}</span>
-                        </div>
+                        <!-- ペルソナアバター（DiceBear、ペルソナIDをseedに一貫生成。未読込時は頭文字フォールバック） -->
+                        <div class="persona-list-avatar ring-2 ring-white"
+                             data-avatar-seed="{{ message.persona_id }}"
+                             data-avatar-name="{{ message.persona_name }}"
+                             data-avatar-size="48"></div>
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-baseline gap-2 mb-2">
@@ -641,15 +635,18 @@ function createStreamingBubble(personaName, personaId) {
     if (!chatMessages) return null;
     const colorClass = getPersonaColor(personaId);
     const timeStr = new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
+    // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
+    const avatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(personaId, 48) : null;
+    const avatarHtml = avatarSvg
+        ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
+        : `<div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white"><span class="text-white font-bold text-sm">${escapeHtml(personaName)[0] || ''}</span></div>`;
 
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message-item persona-message animate-fade-in';
     safeSetInnerHTML(messageDiv, `
         <div class="flex gap-3 mb-4">
             <div class="flex-shrink-0">
-                <div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white">
-                    <span class="text-white font-bold text-sm">${escapeHtml(personaName)[0]}</span>
-                </div>
+                ${avatarHtml}
             </div>
             <div class="flex-1 min-w-0">
                 <div class="flex items-baseline gap-2 mb-2">
@@ -742,20 +739,23 @@ function addUserMessage(content, files = []) {
 
 function addPersonaMessage(personaName, content, timestamp, personaId, contentHtml) {
     if (!chatMessages) return;
-    
-    // ペルソナIDから一貫した色を取得
+
+    // ペルソナIDから一貫した色を取得（DiceBear未読込時のフォールバック用）
     const colorClass = getPersonaColor(personaId);
-    
+    // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
+    const avatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(personaId, 48) : null;
+    const avatarHtml = avatarSvg
+        ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
+        : `<div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white"><span class="text-white font-bold text-sm">${personaName[0] || ''}</span></div>`;
+
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message-item persona-message animate-fade-in';
     const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'}) : new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
-    
+
     safeSetInnerHTML(messageDiv, `
         <div class="flex gap-3 mb-4">
             <div class="flex-shrink-0">
-                <div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white">
-                    <span class="text-white font-bold text-sm">${personaName[0]}</span>
-                </div>
+                ${avatarHtml}
             </div>
             <div class="flex-1 min-w-0">
                 <div class="flex items-baseline gap-2 mb-2">
@@ -1114,4 +1114,8 @@ window.addEventListener('load', function() {
     }
 });
 </script>
+{% endblock %}
+
+{% block scripts %}
+{% include "components/dicebear.html" %}
 {% endblock %}

@@ -71,11 +71,17 @@
             <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 {% if persona %}
                 <div class="flex items-start justify-between">
-                    <div>
-                        <h4 class="font-semibold text-gray-900 text-lg flex items-center gap-1.5">{{ icon_persona("w-4 h-4 text-blue-600") }} {{ persona.name }}</h4>
-                        <p class="text-sm text-blue-600 font-medium">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="persona-list-avatar"
+                             data-avatar-seed="{{ persona.id }}"
+                             data-avatar-name="{{ persona.name }}"
+                             data-avatar-size="48"></div>
+                        <div class="min-w-0">
+                            <h4 class="font-semibold text-gray-900 text-lg truncate">{{ persona.name }}</h4>
+                            <p class="text-sm text-blue-600 font-medium truncate">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                        </div>
                     </div>
-                    <a href="/persona/{{ persona.id }}" class="text-xs text-gray-500 hover:text-blue-600">詳細</a>
+                    <a href="/persona/{{ persona.id }}" class="text-xs text-gray-500 hover:text-blue-600 flex-shrink-0">詳細</a>
                 </div>
                 <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ persona.background[:100] }}{% if persona.background|length > 100 %}...{% endif %}</p>
                 <div class="mt-2 flex flex-wrap gap-1">
@@ -329,4 +335,8 @@
         </button>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% include "components/dicebear.html" %}
 {% endblock %}

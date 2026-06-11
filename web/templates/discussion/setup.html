@@ -1211,9 +1211,5 @@ document.addEventListener('alpine:init', () => {
 {% endblock %}
 
 {% block scripts %}
-<!-- DiceBear（自己完結バンドル: core + notionists）。議論ページのみで読み込む。
-     window.personaAvatarSvg / renderPersonaAvatars は app.js が定義（キャッシュ・遅延生成込み）。 -->
-<script src="/static/js/vendor/dicebear.min.js?v=9.4.2"
-        integrity="sha384-IL34iYYUNCuWb+GJru/GHUa0tW0KEb3hIKKCKJHYXoOO1N480UvHCYEIEJX06um4"
-        crossorigin="anonymous"></script>
+{% include "components/dicebear.html" %}
 {% endblock %}

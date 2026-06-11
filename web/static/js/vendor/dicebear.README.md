@@ -22,7 +22,7 @@ npx esbuild entry.mjs --bundle --format=iife --target=es2019 --minify \
   --legal-comments=inline --outfile=dicebear.min.js
 ```
 
-再ビルドしたら **必ず SRI を再計算して `discussion/setup.html` の `integrity` 属性を更新する**
+再ビルドしたら **必ず SRI を再計算して `web/templates/components/dicebear.html` の `integrity` 属性を更新する**（このパーシャルを各ページが include しているため1箇所の更新で済む）
 （不一致だとブラウザがファイルを拒否しアバターが出ない）。
 
 ```bash
