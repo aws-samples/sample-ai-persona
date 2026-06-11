@@ -2,26 +2,8 @@
 {% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_sparkles %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto">
-    <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_cog("w-8 h-8 text-purple-600") }} 議論設定</h1>
-    <p class="text-gray-600 mb-8">ペルソナを選択して議論トピックを設定します。</p>
-    
-    <!-- ステップガイド -->
-    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
-        <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
-        <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
-            <li>議論モードを選択</li>
-            <li>議論に参加させるペルソナを選択</li>
-            <li>議論トピックを入力（インタビューモード以外）</li>
-            <li>議論を開始</li>
-        </ol>
-    </div>
-    
-    <form hx-post="/discussion/start"
-          hx-target="#discussion-result"
-          hx-swap="innerHTML"
-          hx-indicator="#discussion-spinner"
-          x-data="{ 
+<div x-data="{
+              discussionStarted: false,
               mode: 'traditional',
               topic: '', 
               rounds: 3, 
@@ -164,27 +146,65 @@
               },
               startStreamingDiscussion() {
                   if (this.$store.discussionSetup.selectedPersonas.length < 2 || !this.topic.trim()) return;
-                  
+
+                  // 2カラムビューに切り替え（左:設定サマリ、右:議論ステージ）
+                  this.discussionStarted = true;
+
                   const resultDiv = document.getElementById('discussion-result');
-                  // ストリーミング議論UIを表示
+                  // ステージUIを表示
                   resultDiv.innerHTML = this.getStreamingHtml();
                   // SSE接続を開始
-                  this.initStreaming();
+                  this.$nextTick(() => this.initStreaming());
+              },
+              backToSetup() {
+                  // 議論ステージから設定画面に戻る
+                  this.discussionStarted = false;
+                  const resultDiv = document.getElementById('discussion-result');
+                  if (resultDiv) resultDiv.innerHTML = '';
+              },
+              fillSummaryAvatars(listEl) {
+                  // サマリの各ペルソナ枠に DiceBear アバターを差し込む（未生成のものだけ）
+                  if (!listEl) return;
+                  listEl.querySelectorAll('.summary-persona-avatar[data-seed]').forEach(el => {
+                      if (el.dataset.filled) return;
+                      const svg = window.personaAvatarSvg ? window.personaAvatarSvg(el.dataset.seed, 40) : null;
+                      if (svg) {
+                          el.innerHTML = svg; // 既にDOMPurify済み
+                          el.classList.add('persona-avatar-img');
+                          el.dataset.filled = '1';
+                      }
+                  });
               },
               getStreamingHtml() {
                   return `
-                      <div id='streaming-container' class='bg-white rounded-lg shadow-md p-6'>
-                          <div class='flex items-center justify-between mb-6'>
-                              <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
-                                  <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
-                                  議論進行中...
-                              </h2>
-                              <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
+                      <div id='streaming-container' class='bg-white rounded-xl shadow-md'>
+                          <!-- ステージ上段: タイトル + 参加アバター + 進行中の発言 -->
+                          <div class='stage-top'>
+                              <div class='flex items-center justify-between mb-5'>
+                                  <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
+                                      <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
+                                      議論ステージ
+                                  </h2>
+                                  <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
+                              </div>
+
+                              <!-- 参加ペルソナのアバター列（常時表示・発言者をハイライト） -->
+                              <div id='stage-avatars' class='stage-avatars'></div>
+
+                              <!-- アクティブ発言エリア（発言中ペルソナの吹き出し） -->
+                              <div id='stage-active' class='stage-active'>
+                                  <p class='stage-active-placeholder'>まもなく議論が始まります…</p>
+                              </div>
                           </div>
-                          <div id='streaming-messages' class='space-y-4 max-h-[600px] overflow-y-auto discussion-messages pr-2'></div>
-                          <div id='streaming-loading' class='flex items-center justify-center py-4 text-gray-500 mt-4'>
-                              <div class='spinner mr-2' style='width: 20px; height: 20px;'></div>
-                              <span>ペルソナが発言中...</span>
+
+                          <!-- ステージ下段: 会話ログ -->
+                          <div class='stage-log'>
+                              <h3 class='text-sm font-semibold text-gray-500 mb-3'>会話ログ</h3>
+                              <div id='streaming-messages' class='space-y-5 max-h-[380px] overflow-y-auto discussion-messages pr-2'></div>
+                              <div id='streaming-loading' class='flex items-center justify-center py-4 text-gray-500 mt-4'>
+                                  <div class='spinner mr-2' style='width: 20px; height: 20px;'></div>
+                                  <span>ペルソナが発言中...</span>
+                              </div>
                           </div>
                       </div>
                   `;
@@ -193,6 +213,8 @@
                   const container = document.getElementById('streaming-messages');
                   const counter = document.getElementById('message-counter');
                   const loading = document.getElementById('streaming-loading');
+                  const avatarsEl = document.getElementById('stage-avatars');
+                  const activeEl = document.getElementById('stage-active');
                   const personaColors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'];
                   let participantMap = {};
                   let messageCount = 0;
@@ -202,7 +224,103 @@
                       div.textContent = text;
                       return div.innerHTML;
                   }
-                  
+
+                  // アバター円の中身を生成（DiceBear SVG、無ければ頭文字にフォールバック）
+                  function avatarInner(seed, name, color) {
+                      const svg = window.personaAvatarSvg ? window.personaAvatarSvg(seed, 56) : null;
+                      if (svg) {
+                          return `<div class='stage-avatar-circle persona-avatar-img'>${svg}</div>`;
+                      }
+                      const safeName = escapeHtml(name || '');
+                      return `<div class='stage-avatar-circle persona-avatar-${color}'>${safeName[0] || ''}</div>`;
+                  }
+
+                  // ステージ上部にペルソナのアバター列を描画
+                  function renderStageAvatars(personas) {
+                      let html = '';
+                      personas.forEach((p, idx) => {
+                          const color = personaColors[idx % personaColors.length];
+                          const safeName = escapeHtml(p.name || '');
+                          html += `
+                              <div class='stage-avatar idle' data-avatar-id='${escapeHtml(p.id)}'>
+                                  ${avatarInner(p.id, p.name, color)}
+                                  <span class='stage-avatar-name'>${safeName}</span>
+                              </div>
+                          `;
+                      });
+                      // ファシリテーター用アバター（エージェントモードで発言）
+                      html += `
+                          <div class='stage-avatar idle' data-avatar-id='facilitator'>
+                              <div class='stage-avatar-circle facilitator-avatar'>
+                                  <svg class='w-5 h-5 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg>
+                              </div>
+                              <span class='stage-avatar-name'>進行役</span>
+                          </div>
+                      `;
+                      avatarsEl.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
+                  }
+
+                  // 発言者のアバターをハイライト（他は待機状態に）
+                  function setSpeaking(personaId) {
+                      if (!avatarsEl) return;
+                      avatarsEl.querySelectorAll('.stage-avatar').forEach(el => {
+                          const isSpeaker = el.dataset.avatarId === personaId;
+                          el.classList.toggle('speaking', isSpeaker);
+                          el.classList.toggle('idle', !isSpeaker);
+                      });
+                  }
+
+                  // 全アバターを待機状態に戻す
+                  function clearSpeaking() {
+                      if (!avatarsEl) return;
+                      avatarsEl.querySelectorAll('.stage-avatar').forEach(el => {
+                          el.classList.remove('speaking');
+                          el.classList.add('idle');
+                      });
+                  }
+
+                  // アクティブ発言（発言中アバター + その隣の吹き出し = 喋っている表現）
+                  function showActiveBubble(info) {
+                      if (!activeEl) return null;
+                      const isFacilitator = info.persona_id === 'facilitator' || info.message_type === 'summary';
+                      const safeName = escapeHtml(info.persona_name || '');
+                      const typing = `<span class='stage-typing'><span></span><span></span><span></span></span>`;
+                      let avatarHtml, name, bubbleClass, nameClass;
+                      if (isFacilitator) {
+                          avatarHtml = `<div class='stage-active-avatar facilitator-avatar'><svg class='w-6 h-6 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg></div>`;
+                          name = 'ファシリテーター';
+                          bubbleClass = 'facilitator-bubble';
+                          nameClass = '';
+                      } else {
+                          const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
+                          const color = personaColors[pInfo.colorIndex % personaColors.length];
+                          const svg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 64) : null;
+                          avatarHtml = svg
+                              ? `<div class='stage-active-avatar persona-avatar-img'>${svg}</div>`
+                              : `<div class='stage-active-avatar persona-avatar-${color}'>${safeName[0] || ''}</div>`;
+                          name = safeName;
+                          bubbleClass = 'persona-bubble-' + color;
+                          nameClass = 'persona-name-' + color;
+                      }
+                      const html = `
+                          <div class='stage-active-row'>
+                              ${avatarHtml}
+                              <div class='stage-active-bubble ${bubbleClass}'>
+                                  <div class='stage-active-name ${nameClass}'>${name}</div>
+                                  <div class='leading-relaxed prose prose-sm max-w-none active-content'>${typing}</div>
+                              </div>
+                          </div>
+                      `;
+                      activeEl.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
+                      return activeEl.querySelector('.active-content');
+                  }
+
+                  function clearActiveBubble() {
+                      if (activeEl) {
+                          activeEl.innerHTML = `<p class='stage-active-placeholder'>次の発言を待っています…</p>`;
+                      }
+                  }
+
                   // モードに応じたURLを構築
                   let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.$store.discussionSetup.selectedPersonas.map(p => p.id).join(','))}&mode=${this.mode}`;
                   if (this.mode === 'agent') {
@@ -221,7 +339,7 @@
                   const eventSource = new EventSource(url);
                   let discussionComplete = false;
                   
-                  let currentStreamingEl = null;
+                  let currentActiveEl = null;
                   let currentAccumulatedText = '';
 
                   function createBubble(info) {
@@ -245,12 +363,14 @@
                       } else {
                           const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
                           const color = personaColors[pInfo.colorIndex % personaColors.length];
+                          const logAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 48) : null;
+                          const logAvatar = logAvatarSvg
+                              ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${logAvatarSvg}</div>`
+                              : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;
                           msgHtml = `
                               <div class='flex gap-3 message-item fade-in'>
                                   <div class='flex-shrink-0'>
-                                      <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
-                                          <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
-                                      </div>
+                                      ${logAvatar}
                                   </div>
                                   <div class='flex-1 min-w-0'>
                                       <div class='flex items-baseline gap-2 mb-1'>
@@ -279,35 +399,50 @@
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
+                          // ステージ上部にアバター列を描画
+                          renderStageAvatars(data.personas);
                       } else if (data.type === 'message_start') {
-                          if (currentStreamingEl && !currentAccumulatedText) {
-                              currentStreamingEl.textContent = '[応答を取得できませんでした]';
-                          }
                           currentAccumulatedText = '';
-                          currentStreamingEl = createBubble(data);
-                          container.scrollTop = container.scrollHeight;
+                          // ステージ上段: 発言者をハイライトし、アクティブ吹き出しを逐次表示
+                          setSpeaking(data.persona_id);
+                          currentActiveEl = showActiveBubble(data);
+                          // 会話ログ（下段）は確定時に一括追加するため、ここでは作らない
                       } else if (data.type === 'message_delta') {
                           currentAccumulatedText += data.content;
-                          if (currentStreamingEl) {
-                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                          // 上段アクティブ吹き出しのみ逐次更新（会話ログは更新しない）
+                          if (currentActiveEl) {
+                              currentActiveEl.innerHTML = DOMPurify.sanitize(
                                   marked.parse(currentAccumulatedText, {breaks: true})
                               );
-                              container.scrollTop = container.scrollHeight;
                           }
                       } else if (data.type === 'message_end') {
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
-                          if (currentStreamingEl) {
-                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                          // 会話ログ（下段）に発言全文を一括表示
+                          const logEl = createBubble(data);
+                          if (logEl) {
+                              logEl.innerHTML = DOMPurify.sanitize(
                                   marked.parse(data.content, {breaks: true})
                               );
+                              container.scrollTop = container.scrollHeight;
                           }
-                          currentStreamingEl = null;
+                          // ステージ上段: 発言確定後はアクティブ吹き出しをクリアし待機状態へ
+                          clearActiveBubble();
+                          clearSpeaking();
+                          currentActiveEl = null;
                           currentAccumulatedText = '';
                       } else if (data.type === 'message') {
                           // 後方互換: Traditional mode 等の完成メッセージ
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
+
+                          // ステージ: 簡易モードは逐次デルタが無いため、確定発言で一瞬ハイライト
+                          setSpeaking(data.persona_id);
+                          showActiveBubble(data);
+                          const activeContent = activeEl ? activeEl.querySelector('.active-content') : null;
+                          if (activeContent) {
+                              activeContent.innerHTML = data.content_html || DOMPurify.sanitize(marked.parse(data.content, {breaks: true}));
+                          }
 
                           const isFacilitator = data.persona_id === 'facilitator' || data.message_type === 'summary';
                           const renderedContent = data.content_html || DOMPurify.sanitize(marked.parse(data.content, {breaks: true}));
@@ -331,12 +466,14 @@
                           } else {
                               const info = participantMap[data.persona_id] || { name: data.persona_name, colorIndex: 0 };
                               const color = personaColors[info.colorIndex % personaColors.length];
+                              const msgAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(data.persona_id, 48) : null;
+                              const msgAvatar = msgAvatarSvg
+                                  ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${msgAvatarSvg}</div>`
+                                  : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;
                               msgHtml = `
                                   <div class='flex gap-3 message-item fade-in'>
                                       <div class='flex-shrink-0'>
-                                          <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
-                                              <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
-                                          </div>
+                                          ${msgAvatar}
                                       </div>
                                       <div class='flex-1 min-w-0'>
                                           <div class='flex items-baseline gap-2 mb-1'>
@@ -357,6 +494,9 @@
                       } else if (data.type === 'complete') {
                           discussionComplete = true;
                           eventSource.close();
+                          // ステージのアクティブ表示をクリア
+                          clearActiveBubble();
+                          clearSpeaking();
                           // 従来の議論完了画面を取得して表示
                           loading.innerHTML = `
                               <div class='text-center py-4'>
@@ -400,8 +540,78 @@
                       }
                   };
               }
-          }">
-        
+          }"
+     class="discussion-layout"
+     :class="{ 'is-started': discussionStarted }">
+
+    <!-- 左カラム: 設定（議論開始後は固定サマリ幅に縮小） -->
+    <div class="discussion-col-left">
+
+    <!-- ヘッダー（設定中のみ表示） -->
+    <div x-show="!discussionStarted">
+        <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_cog("w-8 h-8 text-purple-600") }} 議論設定</h1>
+        <p class="text-gray-600 mb-8">ペルソナを選択して議論トピックを設定します。</p>
+
+        <!-- ステップガイド -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
+            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
+            <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
+                <li>議論モードを選択</li>
+                <li>議論に参加させるペルソナを選択</li>
+                <li>議論トピックを入力（インタビューモード以外）</li>
+                <li>議論を開始</li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- 設定サマリ（議論開始後のみ表示） -->
+    <div x-show="discussionStarted" x-cloak class="bg-white rounded-lg shadow-md p-5 mb-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論設定</h3>
+            <button type="button" @click="backToSetup()"
+                    class="text-sm text-blue-600 hover:text-blue-800 font-medium">設定に戻る</button>
+        </div>
+        <dl class="space-y-3 text-sm">
+            <div>
+                <dt class="text-gray-500 text-xs mb-1">モード</dt>
+                <dd class="font-medium text-gray-800">
+                    <span x-show="mode === 'traditional'">簡易議論</span>
+                    <span x-show="mode === 'agent'">しっかり議論（<span x-text="rounds"></span>ラウンド）</span>
+                </dd>
+            </div>
+            <div>
+                <dt class="text-gray-500 text-xs mb-1">トピック</dt>
+                <dd class="text-gray-800 line-clamp-3" x-text="topic"></dd>
+            </div>
+            <div>
+                <dt class="text-gray-500 text-xs mb-2">参加ペルソナ（<span x-text="$store.discussionSetup.selectedPersonas.length"></span>体）</dt>
+                <dd>
+                    <ul class="space-y-2"
+                        x-effect="discussionStarted; $store.discussionSetup.selectedPersonas.length; $nextTick(() => fillSummaryAvatars($el))">
+                        <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'sum-' + p.id">
+                            <li class="summary-persona">
+                                <div class="summary-persona-avatar" :data-seed="p.id"></div>
+                                <div class="min-w-0">
+                                    <p class="font-medium text-gray-800 truncate" x-text="p.name"></p>
+                                    <p class="text-xs text-gray-500 truncate">
+                                        <span x-text="p.occupation"></span><span x-show="p.age"> / <span x-text="p.age"></span>歳</span>
+                                    </p>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                </dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- 設定フォーム本体（議論開始後は非表示） -->
+    <form hx-post="/discussion/start"
+          hx-target="#discussion-result"
+          hx-swap="innerHTML"
+          hx-indicator="#discussion-spinner"
+          x-show="!discussionStarted">
+
         <!-- 議論モード選択（最初に表示） -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論モード</h2>
@@ -903,9 +1113,11 @@
             </button>
         </div>
     </form>
-    
-    <!-- 議論結果表示エリア -->
-    <div id="discussion-result" class="mt-8"></div>
+    </div><!-- /左カラム -->
+
+    <!-- 右カラム: 議論ステージ / 結果表示エリア -->
+    <div id="discussion-result" class="discussion-col-right"
+         :class="{ 'mt-8': !discussionStarted }"></div>
 </div>
 
 <!-- 議論中のローディング表示 -->
@@ -945,6 +1157,7 @@ document.addEventListener('alpine:init', () => {
                     id: id,
                     name: el.dataset.personaName,
                     occupation: el.dataset.personaOccupation,
+                    age: el.dataset.personaAge,
                 });
             } else {
                 this.selectedPersonas = this.selectedPersonas.filter(p => p.id !== id);
@@ -955,5 +1168,30 @@ document.addEventListener('alpine:init', () => {
         },
     });
 });
+</script>
+{% endblock %}
+
+{% block scripts %}
+<!-- DiceBear（自己完結バンドル: core + notionists）。議論ページのみで読み込む -->
+<script src="/static/js/vendor/dicebear.min.js?v=9.4.2"
+        integrity="sha384-IL34iYYUNCuWb+GJru/GHUa0tW0KEb3hIKKCKJHYXoOO1N480UvHCYEIEJX06um4"
+        crossorigin="anonymous"></script>
+<script>
+// ペルソナID(またはファシリテーター)を seed にアバターSVGを生成する。
+// 同じ seed には常に同じ顔。DiceBear 未読込時は null を返し、呼び出し側で頭文字にフォールバック。
+// 返すSVGは呼び出し側で DOMPurify.sanitize() を通す前提（信頼済み出力だが二重防御）。
+window.personaAvatarSvg = function(seed, size) {
+    try {
+        if (!window.DiceBear || !window.DiceBear.createAvatar) return null;
+        const raw = window.DiceBear.createAvatar(window.DiceBear.styles.notionists, {
+            seed: String(seed || ''),
+            size: size || 64,
+        }).toString();
+        // SVGプロファイルでサニタイズ（path/ellipse等の図形要素を保持）
+        return DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true, svgFilters: true } });
+    } catch (e) {
+        return null;
+    }
+};
 </script>
 {% endblock %}

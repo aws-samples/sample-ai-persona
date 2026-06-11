@@ -344,3 +344,288 @@ button:not(:disabled):active {
 .facilitator-avatar {
     background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%) !important;
 }
+
+/* =========================================================
+   議論ステージ（円卓ビュー） - リアルタイム会話の動的UI
+   ========================================================= */
+
+/* ステージ上段（タイトル + アバター列 + 進行中の発言）。下段ログと余白で分離 */
+.stage-top {
+    padding: 1.5rem 1.75rem;
+    background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+    border-bottom: 1px solid #eef2f7;
+    border-radius: 0.75rem 0.75rem 0 0;
+}
+.stage-log {
+    padding: 1.25rem 1.75rem 1.5rem;
+}
+
+/* アバター列（参加ペルソナを横一列に常時表示） */
+.stage-avatars {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 0.25rem 0 1.25rem;
+}
+
+.stage-avatar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    width: 4.5rem;
+    transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+.stage-avatar-circle {
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.stage-avatar-name {
+    font-size: 0.75rem;
+    color: #374151;
+    text-align: center;
+    max-width: 4.5rem;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* DiceBear SVGアバター（円形に収める。色背景の代わりに薄いグレー地） */
+.persona-avatar-img {
+    background-color: #f1f5f9;
+    overflow: hidden;
+    padding: 0;
+}
+.persona-avatar-img svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* 待機中（発言していないペルソナ） */
+.stage-avatar.idle {
+    opacity: 0.4;
+    filter: grayscale(0.35);
+}
+.stage-avatar.idle .stage-avatar-circle {
+    transform: scale(0.92);
+}
+
+/* 発言中（ハイライト + 発光） */
+.stage-avatar.speaking {
+    opacity: 1;
+    filter: none;
+}
+.stage-avatar.speaking .stage-avatar-circle {
+    transform: scale(1.12);
+    animation: stage-pulse 1.4s ease-in-out infinite;
+}
+.stage-avatar.speaking .stage-avatar-name {
+    font-weight: 700;
+    color: #111827;
+}
+
+@keyframes stage-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.35), 0 4px 10px rgba(0, 0, 0, 0.2); }
+    50% { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0.12), 0 4px 14px rgba(0, 0, 0, 0.25); }
+}
+
+/* アクティブ発言エリア: 発言中アバター + 吹き出し（喋っている表現） */
+.stage-active {
+    min-height: 5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stage-active-placeholder {
+    color: #9ca3af;
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 1rem 0;
+}
+
+.stage-active-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+    width: 100%;
+    max-width: 44rem;
+    animation: fadeInUp 0.35s ease-out;
+}
+
+/* 発言者の大きめアバター（吹き出しの左に立つ） */
+.stage-active-avatar {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.25rem;
+    overflow: hidden;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25), 0 3px 8px rgba(0, 0, 0, 0.18);
+    animation: stage-pulse 1.6s ease-in-out infinite;
+}
+.stage-active-avatar svg { width: 100%; height: 100%; display: block; }
+.stage-active-avatar.persona-avatar-img { background-color: #f1f5f9; }
+
+.stage-active-bubble {
+    flex: 1 1 0%;
+    min-width: 0;
+    border-width: 1px;
+    border-style: solid;
+    border-radius: 1rem;
+    border-top-left-radius: 0.25rem;
+    padding: 0.875rem 1.25rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.07);
+    position: relative;
+}
+
+/* 吹き出しのしっぽ（左のアバターを指す） */
+.stage-active-bubble::before {
+    content: '';
+    position: absolute;
+    top: 1rem;
+    left: -7px;
+    transform: rotate(45deg);
+    width: 13px;
+    height: 13px;
+    background: inherit;
+    border-left: 1px solid;
+    border-bottom: 1px solid;
+    border-color: inherit;
+}
+
+.stage-active-name {
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+/* アクティブ吹き出し本文（地色に対し十分濃い文字色で可読性確保） */
+.stage-active-bubble .active-content {
+    color: #1f2937;
+    font-size: 0.95rem;
+    line-height: 1.65;
+}
+.stage-active-bubble .active-content p { margin: 0 0 0.5rem; }
+.stage-active-bubble .active-content p:last-child { margin-bottom: 0; }
+/* ファシリテーターの吹き出しは濃紫地なので白文字（既存 .facilitator-bubble * が効くが明示） */
+.facilitator-bubble .active-content { color: #ffffff; }
+
+/* タイピングインジケーター（発言到着待ち） */
+.stage-typing {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+}
+.stage-typing span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #9ca3af;
+    animation: stage-typing 1.2s infinite ease-in-out;
+}
+.stage-typing span:nth-child(2) { animation-delay: 0.2s; }
+.stage-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes stage-typing {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* 設定サマリ（2カラム時の左固定パネル内） */
+.setup-summary-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.6rem;
+    background: #fff;
+    border: 1px solid #bfdbfe;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    color: #1e40af;
+}
+
+/* サマリの参加ペルソナ（アバター + 名前 + 属性） */
+.summary-persona {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.45rem 0.6rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+}
+.summary-persona-avatar {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    background-color: #e2e8f0;
+    overflow: hidden;
+}
+.summary-persona-avatar svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* =========================================================
+   議論ページ 2カラムレイアウト（Tailwind lg: に依存しない自前実装）
+   ========================================================= */
+.discussion-layout {
+    width: 100%;
+    max-width: 80rem;
+    margin: 0 auto;
+}
+.discussion-layout.is-started {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    align-items: stretch;
+}
+/* 設定中は中央寄せの単カラム（幅を絞る） */
+.discussion-layout:not(.is-started) {
+    max-width: 56rem;
+}
+
+.discussion-col-left { width: 100%; }
+.discussion-col-right { width: 100%; }
+
+@media (min-width: 1024px) {
+    .discussion-layout.is-started {
+        flex-direction: row;
+        gap: 2rem;
+        align-items: flex-start;
+    }
+    .discussion-layout.is-started .discussion-col-left {
+        width: 20rem;
+        flex-shrink: 0;
+        position: sticky;
+        top: 1.5rem;
+    }
+    .discussion-layout.is-started .discussion-col-right {
+        flex: 1 1 0%;
+        min-width: 0;
+    }
+}
