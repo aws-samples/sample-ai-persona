@@ -15,8 +15,17 @@
             <a href="/persona/management" class="text-blue-600 hover:text-blue-800 text-sm mb-2 inline-flex items-center gap-1">
                 {{ icon_arrow_left("w-4 h-4") }} ペルソナ管理に戻る
             </a>
-            <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-2">{{ icon_persona("w-8 h-8 text-blue-600") }} {{ persona.name }}</h1>
-            <p class="text-gray-600">{{ persona.occupation }} / {{ persona.age }}歳</p>
+            <div class="flex items-center gap-4">
+                <div class="persona-detail-avatar shadow-md"
+                     data-avatar-seed="{{ persona.id }}"
+                     data-avatar-name="{{ persona.name }}"
+                     data-avatar-size="64"
+                     data-avatar-eager></div>
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-900">{{ persona.name }}</h1>
+                    <p class="text-gray-600">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                </div>
+            </div>
         </div>
         <div class="flex gap-2">
             {% include "persona/partials/generation_log_modal.html" %}
@@ -38,4 +47,8 @@
 
     {% include "persona/partials/detail_body.html" %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% include "components/dicebear.html" %}
 {% endblock %}
