@@ -452,9 +452,14 @@
                               }
                               container.scrollTop = container.scrollHeight;
                           }
-                          // ステージ上段: 発言確定後はアクティブ吹き出しをクリアし待機状態へ
-                          clearActiveBubble();
-                          clearSpeaking();
+                          // ステージ上段: アクティブ吹き出しは即クリアせず、確定内容で残す。
+                          // 次の message_start（または complete/error）まで表示し続けることで、
+                          // 発言が一瞬で消えて読めない問題を防ぐ。
+                          if (currentActiveEl && data.content) {
+                              currentActiveEl.innerHTML = DOMPurify.sanitize(
+                                  marked.parse(data.content, {breaks: true})
+                              );
+                          }
                           currentActiveEl = null;
                           currentAccumulatedText = '';
                       } else if (data.type === 'message') {
@@ -516,9 +521,8 @@
                           tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
                           while (tempDiv.firstChild) container.appendChild(tempDiv.firstChild);
                           container.scrollTop = container.scrollHeight;
-                          // 簡易モードは発言が即確定するため、上段の発言中表示も都度クリア（最後の話者が固定表示されるのを防ぐ）
-                          clearActiveBubble();
-                          clearSpeaking();
+                          // ステージ上段はクリアせず最新発言を保持（次の message が上書き、complete/error でクリア）。
+                          // 発言が一瞬で消えて読めない問題を防ぐ。
 
                       } else if (data.type === 'complete') {
                           discussionComplete = true;
