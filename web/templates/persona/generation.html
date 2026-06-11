@@ -207,6 +207,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% include "components/dicebear.html" %}
 <script>
 function updateBehaviorDatasetSelection() {
     const checkboxes = document.querySelectorAll('.behavior-ds-checkbox:checked');
@@ -345,6 +346,8 @@ function startGeneration() {
                 result.innerHTML = data;
                 if (window.htmx) htmx.process(result);
                 if (window.Alpine) Alpine.initTree(result);
+                // ペルソナアバターを描画（fetch挿入のため afterSwap が発火しない）
+                if (window.renderPersonaAvatars) renderPersonaAvatars(result);
                 // innerHTML挿入ではscriptが実行されないため、手動で実行
                 result.querySelectorAll('script').forEach(function(oldScript) {
                     var newScript = document.createElement('script');
