@@ -653,7 +653,8 @@
                       // EventSource.CONNECTING(0) = ブラウザが自動再接続中 → 待つ
                       // EventSource.CLOSED(2) = 再接続不可 → エラー表示
                       if (eventSource.readyState === EventSource.CLOSED) {
-                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                          self._streamingActive = false;
+                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました。「設定に戻る」からもう一度議論を開始してください。</p>`;
                       }
                   };
               }
