@@ -477,6 +477,14 @@
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
                       if (data.type === 'keepalive') return;  // 表示対象外。キューに積まない
+                      // 完了/エラーは受信した時点で即座に接続を閉じる。
+                      // 一時停止・低速でキュー処理(close)が遅れると、サーバ側ストリーム終了後に
+                      // EventSource が自動再接続し議論が再実行されるため、表示(キュー)とは分離して即閉じる。
+                      if (data.type === 'complete' || data.type === 'error') {
+                          discussionComplete = true;
+                          eventSource.close();
+                          self._eventSource = null;
+                      }
                       eventQueue.push(data);
                       self._queueRemaining = eventQueue.length;
                       if (!queueDraining && !self.playbackPaused) drainQueue();
