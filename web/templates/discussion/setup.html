@@ -5,6 +5,20 @@
 <div x-data="{
               discussionStarted: false,
               _eventSource: null,
+              playbackSpeed: 1,
+              playbackPaused: false,
+              _queueRemaining: 0,
+              _resumeQueue: null,
+              _streamingActive: false,
+              togglePause() {
+                  this.playbackPaused = !this.playbackPaused;
+                  if (!this.playbackPaused && this._resumeQueue) this._resumeQueue();
+              },
+              setPlaybackSpeed(s) {
+                  this.playbackSpeed = s;
+                  // 速度変更後も止まっていれば再開（即時化した場合など）
+                  if (!this.playbackPaused && this._resumeQueue) this._resumeQueue();
+              },
               mode: 'traditional',
               topic: '', 
               rounds: 3, 
@@ -150,9 +164,13 @@
 
                   // 2カラムビューに切り替え（左:設定サマリ、右:議論ステージ）
                   this.discussionStarted = true;
+                  // 再生状態を初期化（速度はユーザー設定を維持、一時停止は解除）
+                  this.playbackPaused = false;
+                  this._queueRemaining = 0;
+                  this._streamingActive = true;
 
                   const resultDiv = document.getElementById('discussion-result');
-                  // ステージUIを表示
+                  // ステージUIを表示（コントロールバーは右カラム側の通常HTMLで別管理）
                   resultDiv.innerHTML = this.getStreamingHtml();
                   // SSE接続を開始
                   this.$nextTick(() => this.initStreaming());
@@ -163,6 +181,11 @@
                       this._eventSource.close();
                       this._eventSource = null;
                   }
+                  // 表示ループの後始末
+                  this.playbackPaused = false;
+                  this._resumeQueue = null;
+                  this._queueRemaining = 0;
+                  this._streamingActive = false;
                   this.discussionStarted = false;
                   const resultDiv = document.getElementById('discussion-result');
                   if (resultDiv) resultDiv.innerHTML = '';
@@ -172,13 +195,16 @@
                       <div id='streaming-container' class='bg-white rounded-xl shadow-md'>
                           <!-- ステージ上段: タイトル + 参加アバター + 進行中の発言 -->
                           <div class='stage-top'>
-                              <div class='flex items-center justify-between mb-5'>
+                              <div class='flex items-center justify-between mb-4'>
                                   <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
                                       <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
                                       議論ステージ
                                   </h2>
                                   <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
                               </div>
+
+                              <!-- 再生コントロールは x-data 属性内のダブルクォート制約を避けるため、
+                                   この文字列ではなく通常HTML側（右カラム上部）に配置している -->
 
                               <!-- 参加ペルソナのアバター列（常時表示・発言者をハイライト） -->
                               <div id='stage-avatars' class='stage-avatars'></div>
@@ -406,9 +432,52 @@
                       return bubble.querySelector('.streaming-content');
                   }
 
+                  // ===== 表示ペース制御（受信と表示を分離）=====
+                  // SSE受信は即キューに積み、表示ループが speed/pause に従って取り出す。
+                  // サーバ側AI生成は止められないため、フロントで「見る速さ」を制御する。
+                  const eventQueue = [];
+                  let queueDraining = false;
+                  let playbackTimer = null;
+
+                  // 次イベントまでの待ち時間(ms)。self.playbackSpeed: 0=即時, 0.5/1/2
+                  function eventDelay(data) {
+                      const speed = self.playbackSpeed;
+                      if (!speed || speed <= 0) return 0;  // 即時モード
+                      const base = {
+                          message_delta: 45,   // タイピング風
+                          message_start: 250,
+                          message_end: 1800,   // 発言を読む間
+                          message: 1800,       // 簡易モードの1発言
+                      };
+                      return (base[data.type] || 0) / speed;
+                  }
+
+                  function drainQueue() {
+                      if (self.playbackPaused) { queueDraining = false; return; }
+                      if (eventQueue.length === 0) { queueDraining = false; return; }
+                      queueDraining = true;
+                      const data = eventQueue.shift();
+                      try { handleStreamEvent(data); } catch (e) { /* 個別イベントのエラーで停止させない */ }
+                      self._queueRemaining = eventQueue.length;
+                      const delay = eventDelay(data);
+                      playbackTimer = setTimeout(drainQueue, delay);
+                  }
+
+                  // 一時停止解除・速度変更時に表示ループを再開させるためコンポーネントへ公開
+                  self._resumeQueue = function() {
+                      if (!queueDraining && !self.playbackPaused && eventQueue.length > 0) drainQueue();
+                  };
+
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
+                      if (data.type === 'keepalive') return;  // 表示対象外。キューに積まない
+                      eventQueue.push(data);
+                      self._queueRemaining = eventQueue.length;
+                      if (!queueDraining && !self.playbackPaused) drainQueue();
+                  };
 
+                  // 実際の描画処理（旧 onmessage 本体）。キューから取り出して呼ばれる。
+                  function handleStreamEvent(data) {
                       if (data.type === 'keepalive') {
                           return;
                       } else if (data.type === 'participants') {
@@ -528,6 +597,7 @@
                           discussionComplete = true;
                           eventSource.close();
                           self._eventSource = null;
+                          self._streamingActive = false;  // 再生コントロールを隠す
                           // ステージのアクティブ表示と未完了話者をクリア
                           flushPendingSpeaker();
                           clearActiveBubble();
@@ -561,14 +631,15 @@
                           discussionComplete = true;
                           eventSource.close();
                           self._eventSource = null;
+                          self._streamingActive = false;  // 再生コントロールを隠す
                           // 途中まで届いていた発言を会話ログに残し、上段の発言中表示をクリア
                           flushPendingSpeaker();
                           clearActiveBubble();
                           clearSpeaking();
                           loading.innerHTML = `<p class='text-red-600'>エラー: ${escapeHtml(data.message || '')}</p>`;
                       }
-                  };
-                  
+                  }  // end handleStreamEvent
+
                   eventSource.onerror = function() {
                       if (discussionComplete) {
                           return; // 正常完了後の切断は無視
@@ -1185,8 +1256,27 @@
     </div><!-- /左カラム -->
 
     <!-- 右カラム: 議論ステージ / 結果表示エリア -->
-    <div id="discussion-result" class="discussion-col-right"
-         :class="{ 'mt-8': !discussionStarted }"></div>
+    <div class="discussion-col-right" :class="{ 'mt-8': !discussionStarted }">
+        <!-- 再生コントロール（一時停止・表示速度）。ストリーミング中のみ表示 -->
+        <div class="stage-controls" x-show="discussionStarted && _streamingActive" x-cloak>
+            <button type="button" @click="togglePause()" class="stage-ctrl-btn"
+                    :title="playbackPaused ? '再生' : '一時停止'">
+                <span x-show="!playbackPaused">⏸ 一時停止</span>
+                <span x-show="playbackPaused" x-cloak>▶ 再生</span>
+            </button>
+            <span class="stage-ctrl-label">表示速度</span>
+            <div class="stage-ctrl-speeds">
+                <button type="button" @click="setPlaybackSpeed(0.5)" class="stage-ctrl-btn" :class="playbackSpeed === 0.5 ? 'is-active' : ''">ゆっくり</button>
+                <button type="button" @click="setPlaybackSpeed(1)" class="stage-ctrl-btn" :class="playbackSpeed === 1 ? 'is-active' : ''">標準</button>
+                <button type="button" @click="setPlaybackSpeed(2)" class="stage-ctrl-btn" :class="playbackSpeed === 2 ? 'is-active' : ''">速い</button>
+                <button type="button" @click="setPlaybackSpeed(0)" class="stage-ctrl-btn" :class="playbackSpeed === 0 ? 'is-active' : ''">即時</button>
+            </div>
+            <span class="stage-ctrl-queue" x-show="_queueRemaining > 0" x-cloak>
+                <span x-text="_queueRemaining"></span> 件待機中
+            </span>
+        </div>
+        <div id="discussion-result"></div>
+    </div>
 </div>
 
 <!-- 議論中のローディング表示 -->

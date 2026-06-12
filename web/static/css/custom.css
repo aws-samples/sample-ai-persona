@@ -360,6 +360,50 @@ button:not(:disabled):active {
     padding: 1.25rem 1.75rem 1.5rem;
 }
 
+/* 再生コントロール（一時停止・表示速度） */
+.stage-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+}
+.stage-ctrl-label {
+    color: #64748b;
+    margin-left: 0.5rem;
+}
+.stage-ctrl-speeds {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+.stage-ctrl-btn {
+    padding: 0.25rem 0.7rem;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 9999px;
+    color: #334155;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.stage-ctrl-btn:hover { background: #e2e8f0; }
+.stage-ctrl-btn.is-active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+    font-weight: 600;
+}
+.stage-ctrl-queue {
+    margin-left: auto;
+    color: #94a3b8;
+    font-size: 0.75rem;
+}
+
 /* アバター列（参加ペルソナを横一列に常時表示） */
 .stage-avatars {
     display: flex;
