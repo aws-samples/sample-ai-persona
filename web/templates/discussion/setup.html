@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_sparkles %}
+{% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_pause, icon_sparkles %}
 
 {% block content %}
 <div x-data="{
@@ -453,6 +453,12 @@
                   }
 
                   function drainQueue() {
+                      // 設定に戻る等でステージが破棄されたら停止（消えたDOMへの操作・タイマーリークを防ぐ）
+                      if (!self._streamingActive) {
+                          queueDraining = false;
+                          if (playbackTimer) { clearTimeout(playbackTimer); playbackTimer = null; }
+                          return;
+                      }
                       if (self.playbackPaused) { queueDraining = false; return; }
                       if (eventQueue.length === 0) { queueDraining = false; return; }
                       queueDraining = true;
@@ -1259,10 +1265,10 @@
     <div class="discussion-col-right" :class="{ 'mt-8': !discussionStarted }">
         <!-- 再生コントロール（一時停止・表示速度）。ストリーミング中のみ表示 -->
         <div class="stage-controls" x-show="discussionStarted && _streamingActive" x-cloak>
-            <button type="button" @click="togglePause()" class="stage-ctrl-btn"
+            <button type="button" @click="togglePause()" class="stage-ctrl-btn stage-ctrl-toggle"
                     :title="playbackPaused ? '再生' : '一時停止'">
-                <span x-show="!playbackPaused">⏸ 一時停止</span>
-                <span x-show="playbackPaused" x-cloak>▶ 再生</span>
+                <span x-show="!playbackPaused" class="inline-flex items-center gap-1">{{ icon_pause("w-4 h-4") }} 一時停止</span>
+                <span x-show="playbackPaused" x-cloak class="inline-flex items-center gap-1">{{ icon_play("w-4 h-4") }} 再生</span>
             </button>
             <span class="stage-ctrl-label">表示速度</span>
             <div class="stage-ctrl-speeds">
