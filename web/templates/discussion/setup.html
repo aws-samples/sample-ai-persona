@@ -1,27 +1,24 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_sparkles %}
+{% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_pause, icon_sparkles %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto">
-    <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_cog("w-8 h-8 text-purple-600") }} 議論設定</h1>
-    <p class="text-gray-600 mb-8">ペルソナを選択して議論トピックを設定します。</p>
-    
-    <!-- ステップガイド -->
-    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
-        <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
-        <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
-            <li>議論モードを選択</li>
-            <li>議論に参加させるペルソナを選択</li>
-            <li>議論トピックを入力（インタビューモード以外）</li>
-            <li>議論を開始</li>
-        </ol>
-    </div>
-    
-    <form hx-post="/discussion/start"
-          hx-target="#discussion-result"
-          hx-swap="innerHTML"
-          hx-indicator="#discussion-spinner"
-          x-data="{ 
+<div x-data="{
+              discussionStarted: false,
+              _eventSource: null,
+              playbackSpeed: 1,
+              playbackPaused: false,
+              _queueRemaining: 0,
+              _resumeQueue: null,
+              _streamingActive: false,
+              togglePause() {
+                  this.playbackPaused = !this.playbackPaused;
+                  if (!this.playbackPaused && this._resumeQueue) this._resumeQueue();
+              },
+              setPlaybackSpeed(s) {
+                  this.playbackSpeed = s;
+                  // 速度変更後も止まっていれば再開（即時化した場合など）
+                  if (!this.playbackPaused && this._resumeQueue) this._resumeQueue();
+              },
               mode: 'traditional',
               topic: '', 
               rounds: 3, 
@@ -164,35 +161,79 @@
               },
               startStreamingDiscussion() {
                   if (this.$store.discussionSetup.selectedPersonas.length < 2 || !this.topic.trim()) return;
-                  
+
+                  // 2カラムビューに切り替え（左:設定サマリ、右:議論ステージ）
+                  this.discussionStarted = true;
+                  // 再生状態を初期化（速度はユーザー設定を維持、一時停止は解除）
+                  this.playbackPaused = false;
+                  this._queueRemaining = 0;
+                  this._streamingActive = true;
+
                   const resultDiv = document.getElementById('discussion-result');
-                  // ストリーミング議論UIを表示
+                  // ステージUIを表示（コントロールバーは右カラム側の通常HTMLで別管理）
                   resultDiv.innerHTML = this.getStreamingHtml();
                   // SSE接続を開始
-                  this.initStreaming();
+                  this.$nextTick(() => this.initStreaming());
+              },
+              backToSetup() {
+                  // 議論ステージから設定画面に戻る（進行中のSSE接続を確実に閉じる）
+                  if (this._eventSource) {
+                      this._eventSource.close();
+                      this._eventSource = null;
+                  }
+                  // 表示ループの後始末
+                  this.playbackPaused = false;
+                  this._resumeQueue = null;
+                  this._queueRemaining = 0;
+                  this._streamingActive = false;
+                  this.discussionStarted = false;
+                  const resultDiv = document.getElementById('discussion-result');
+                  if (resultDiv) resultDiv.innerHTML = '';
               },
               getStreamingHtml() {
                   return `
-                      <div id='streaming-container' class='bg-white rounded-lg shadow-md p-6'>
-                          <div class='flex items-center justify-between mb-6'>
-                              <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
-                                  <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
-                                  議論進行中...
-                              </h2>
-                              <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
+                      <div id='streaming-container' class='bg-white rounded-xl shadow-md'>
+                          <!-- ステージ上段: タイトル + 参加アバター + 進行中の発言 -->
+                          <div class='stage-top'>
+                              <div class='flex items-center justify-between mb-4'>
+                                  <h2 class='text-xl font-bold text-gray-900 flex items-center gap-2'>
+                                      <svg class='w-6 h-6 text-blue-600' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z'></path></svg>
+                                      議論ステージ
+                                  </h2>
+                                  <span id='message-counter' class='bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium'>0 発言</span>
+                              </div>
+
+                              <!-- 再生コントロールは x-data 属性内のダブルクォート制約を避けるため、
+                                   この文字列ではなく通常HTML側（右カラム上部）に配置している -->
+
+                              <!-- 参加ペルソナのアバター列（常時表示・発言者をハイライト） -->
+                              <div id='stage-avatars' class='stage-avatars'></div>
+
+                              <!-- アクティブ発言エリア（発言中ペルソナの吹き出し） -->
+                              <div id='stage-active' class='stage-active'>
+                                  <p class='stage-active-placeholder'>まもなく議論が始まります…</p>
+                              </div>
                           </div>
-                          <div id='streaming-messages' class='space-y-4 max-h-[600px] overflow-y-auto discussion-messages pr-2'></div>
-                          <div id='streaming-loading' class='flex items-center justify-center py-4 text-gray-500 mt-4'>
-                              <div class='spinner mr-2' style='width: 20px; height: 20px;'></div>
-                              <span>ペルソナが発言中...</span>
+
+                          <!-- ステージ下段: 会話ログ -->
+                          <div class='stage-log'>
+                              <h3 class='text-sm font-semibold text-gray-500 mb-3'>会話ログ</h3>
+                              <div id='streaming-messages' class='space-y-5 max-h-[380px] overflow-y-auto discussion-messages pr-2'></div>
+                              <div id='streaming-loading' class='flex items-center justify-center py-4 text-gray-500 mt-4'>
+                                  <div class='spinner mr-2' style='width: 20px; height: 20px;'></div>
+                                  <span>ペルソナが発言中...</span>
+                              </div>
                           </div>
                       </div>
                   `;
               },
               initStreaming() {
+                  const self = this;  // onmessage 内のコールバックから Alpine コンポーネントを参照するため
                   const container = document.getElementById('streaming-messages');
                   const counter = document.getElementById('message-counter');
                   const loading = document.getElementById('streaming-loading');
+                  const avatarsEl = document.getElementById('stage-avatars');
+                  const activeEl = document.getElementById('stage-active');
                   const personaColors = ['blue', 'emerald', 'orange', 'pink', 'cyan', 'amber', 'indigo', 'rose'];
                   let participantMap = {};
                   let messageCount = 0;
@@ -202,7 +243,103 @@
                       div.textContent = text;
                       return div.innerHTML;
                   }
-                  
+
+                  // アバター円の中身を生成（DiceBear SVG、無ければ頭文字にフォールバック）
+                  function avatarInner(seed, name, color) {
+                      const svg = window.personaAvatarSvg ? window.personaAvatarSvg(seed, 56) : null;
+                      if (svg) {
+                          return `<div class='stage-avatar-circle persona-avatar-img'>${svg}</div>`;
+                      }
+                      const safeName = escapeHtml(name || '');
+                      return `<div class='stage-avatar-circle persona-avatar-${color}'>${safeName[0] || ''}</div>`;
+                  }
+
+                  // ステージ上部にペルソナのアバター列を描画
+                  function renderStageAvatars(personas) {
+                      let html = '';
+                      personas.forEach((p, idx) => {
+                          const color = personaColors[idx % personaColors.length];
+                          const safeName = escapeHtml(p.name || '');
+                          html += `
+                              <div class='stage-avatar idle' data-avatar-id='${escapeHtml(p.id)}'>
+                                  ${avatarInner(p.id, p.name, color)}
+                                  <span class='stage-avatar-name'>${safeName}</span>
+                              </div>
+                          `;
+                      });
+                      // ファシリテーター用アバター（エージェントモードで発言）
+                      html += `
+                          <div class='stage-avatar idle' data-avatar-id='facilitator'>
+                              <div class='stage-avatar-circle facilitator-avatar'>
+                                  <svg class='w-5 h-5 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z'></path></svg>
+                              </div>
+                              <span class='stage-avatar-name'>進行役</span>
+                          </div>
+                      `;
+                      avatarsEl.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
+                  }
+
+                  // 発言者のアバターをハイライト（他は待機状態に）
+                  function setSpeaking(personaId) {
+                      if (!avatarsEl) return;
+                      avatarsEl.querySelectorAll('.stage-avatar').forEach(el => {
+                          const isSpeaker = el.dataset.avatarId === personaId;
+                          el.classList.toggle('speaking', isSpeaker);
+                          el.classList.toggle('idle', !isSpeaker);
+                      });
+                  }
+
+                  // 全アバターを待機状態に戻す
+                  function clearSpeaking() {
+                      if (!avatarsEl) return;
+                      avatarsEl.querySelectorAll('.stage-avatar').forEach(el => {
+                          el.classList.remove('speaking');
+                          el.classList.add('idle');
+                      });
+                  }
+
+                  // アクティブ発言（発言中アバター + その隣の吹き出し = 喋っている表現）
+                  function showActiveBubble(info) {
+                      if (!activeEl) return null;
+                      const isFacilitator = info.persona_id === 'facilitator' || info.message_type === 'summary';
+                      const safeName = escapeHtml(info.persona_name || '');
+                      const typing = `<span class='stage-typing'><span></span><span></span><span></span></span>`;
+                      let avatarHtml, name, bubbleClass, nameClass;
+                      if (isFacilitator) {
+                          avatarHtml = `<div class='stage-active-avatar facilitator-avatar'><svg class='w-6 h-6 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z'></path></svg></div>`;
+                          name = 'ファシリテーター';
+                          bubbleClass = 'facilitator-bubble';
+                          nameClass = '';
+                      } else {
+                          const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
+                          const color = personaColors[pInfo.colorIndex % personaColors.length];
+                          const svg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 64) : null;
+                          avatarHtml = svg
+                              ? `<div class='stage-active-avatar persona-avatar-img'>${svg}</div>`
+                              : `<div class='stage-active-avatar persona-avatar-${color}'>${safeName[0] || ''}</div>`;
+                          name = safeName;
+                          bubbleClass = 'persona-bubble-' + color;
+                          nameClass = 'persona-name-' + color;
+                      }
+                      const html = `
+                          <div class='stage-active-row'>
+                              ${avatarHtml}
+                              <div class='stage-active-bubble ${bubbleClass}'>
+                                  <div class='stage-active-name ${nameClass}'>${name}</div>
+                                  <div class='leading-relaxed prose prose-sm max-w-none active-content'>${typing}</div>
+                              </div>
+                          </div>
+                      `;
+                      activeEl.innerHTML = DOMPurify.sanitize(html); // nosemgrep: insecure-document-method
+                      return activeEl.querySelector('.active-content');
+                  }
+
+                  function clearActiveBubble() {
+                      if (activeEl) {
+                          activeEl.innerHTML = `<p class='stage-active-placeholder'>次の発言を待っています…</p>`;
+                      }
+                  }
+
                   // モードに応じたURLを構築
                   let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.$store.discussionSetup.selectedPersonas.map(p => p.id).join(','))}&mode=${this.mode}`;
                   if (this.mode === 'agent') {
@@ -218,11 +355,34 @@
                       const docIds = this.uploadedDocuments.map(d => d.file_id).join(',');
                       url += `&document_ids=${encodeURIComponent(docIds)}`;
                   }
+                  // 既存接続があれば閉じてから新規接続（多重接続防止）
+                  if (this._eventSource) this._eventSource.close();
                   const eventSource = new EventSource(url);
+                  this._eventSource = eventSource;
                   let discussionComplete = false;
                   
-                  let currentStreamingEl = null;
+                  let currentActiveEl = null;
                   let currentAccumulatedText = '';
+                  // message_start 済みだが message_end 未達の話者（AIエラー等で発言が完了しなかった場合の検知用）
+                  let pendingSpeaker = null;
+
+                  // 未完了の話者を会話ログに「取得失敗」として記録（応答消失の可視化）
+                  function flushPendingSpeaker() {
+                      if (!pendingSpeaker) return;
+                      const logEl = createBubble(pendingSpeaker);
+                      if (logEl) {
+                          if (currentAccumulatedText) {
+                              // 途中まで届いていた本文を残す
+                              logEl.innerHTML = DOMPurify.sanitize(
+                                  marked.parse(currentAccumulatedText, {breaks: true})
+                              );
+                          } else {
+                              logEl.textContent = '[応答を取得できませんでした]';
+                          }
+                          container.scrollTop = container.scrollHeight;
+                      }
+                      pendingSpeaker = null;
+                  }
 
                   function createBubble(info) {
                       const isFacilitator = info.persona_id === 'facilitator' || info.message_type === 'summary';
@@ -234,7 +394,7 @@
                                   <div class='facilitator-bubble max-w-2xl'>
                                       <div class='flex items-center gap-2 mb-2'>
                                           <div class='w-8 h-8 rounded-full facilitator-avatar flex items-center justify-center'>
-                                              <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg>
+                                              <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z'></path></svg>
                                           </div>
                                           <span class='font-bold'>ファシリテーター</span>
                                       </div>
@@ -245,12 +405,14 @@
                       } else {
                           const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
                           const color = personaColors[pInfo.colorIndex % personaColors.length];
+                          const logAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 48) : null;
+                          const logAvatar = logAvatarSvg
+                              ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${logAvatarSvg}</div>`
+                              : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;
                           msgHtml = `
                               <div class='flex gap-3 message-item fade-in'>
                                   <div class='flex-shrink-0'>
-                                      <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
-                                          <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
-                                      </div>
+                                      ${logAvatar}
                                   </div>
                                   <div class='flex-1 min-w-0'>
                                       <div class='flex items-baseline gap-2 mb-1'>
@@ -270,44 +432,131 @@
                       return bubble.querySelector('.streaming-content');
                   }
 
+                  // ===== 表示ペース制御（受信と表示を分離）=====
+                  // SSE受信は即キューに積み、表示ループが speed/pause に従って取り出す。
+                  // サーバ側AI生成は止められないため、フロントで「見る速さ」を制御する。
+                  const eventQueue = [];
+                  let queueDraining = false;
+                  let playbackTimer = null;
+
+                  // 次イベントまでの待ち時間(ms)。self.playbackSpeed: 0=即時, 0.5/1/2
+                  function eventDelay(data) {
+                      const speed = self.playbackSpeed;
+                      if (!speed || speed <= 0) return 0;  // 即時モード
+                      const base = {
+                          message_delta: 45,   // タイピング風
+                          message_start: 250,
+                          message_end: 1800,   // 発言を読む間
+                          message: 1800,       // 簡易モードの1発言
+                      };
+                      return (base[data.type] || 0) / speed;
+                  }
+
+                  function drainQueue() {
+                      // 設定に戻る等でステージが破棄されたら停止（消えたDOMへの操作・タイマーリークを防ぐ）
+                      if (!self._streamingActive) {
+                          queueDraining = false;
+                          if (playbackTimer) { clearTimeout(playbackTimer); playbackTimer = null; }
+                          return;
+                      }
+                      if (self.playbackPaused) { queueDraining = false; return; }
+                      if (eventQueue.length === 0) { queueDraining = false; return; }
+                      queueDraining = true;
+                      const data = eventQueue.shift();
+                      try { handleStreamEvent(data); } catch (e) { /* 個別イベントのエラーで停止させない */ }
+                      self._queueRemaining = eventQueue.length;
+                      const delay = eventDelay(data);
+                      playbackTimer = setTimeout(drainQueue, delay);
+                  }
+
+                  // 一時停止解除・速度変更時に表示ループを再開させるためコンポーネントへ公開
+                  self._resumeQueue = function() {
+                      if (!queueDraining && !self.playbackPaused && eventQueue.length > 0) drainQueue();
+                  };
+
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
+                      if (data.type === 'keepalive') return;  // 表示対象外。キューに積まない
+                      // 完了/エラーは受信した時点で即座に接続を閉じる。
+                      // 一時停止・低速でキュー処理(close)が遅れると、サーバ側ストリーム終了後に
+                      // EventSource が自動再接続し議論が再実行されるため、表示(キュー)とは分離して即閉じる。
+                      if (data.type === 'complete' || data.type === 'error') {
+                          discussionComplete = true;
+                          eventSource.close();
+                          self._eventSource = null;
+                      }
+                      eventQueue.push(data);
+                      self._queueRemaining = eventQueue.length;
+                      if (!queueDraining && !self.playbackPaused) drainQueue();
+                  };
 
+                  // 実際の描画処理（旧 onmessage 本体）。キューから取り出して呼ばれる。
+                  function handleStreamEvent(data) {
                       if (data.type === 'keepalive') {
                           return;
                       } else if (data.type === 'participants') {
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
                           });
+                          // ステージ上部にアバター列を描画
+                          renderStageAvatars(data.personas);
                       } else if (data.type === 'message_start') {
-                          if (currentStreamingEl && !currentAccumulatedText) {
-                              currentStreamingEl.textContent = '[応答を取得できませんでした]';
-                          }
+                          // 直前の話者が message_end 未達のまま次が始まった場合、取得失敗として記録
+                          flushPendingSpeaker();
                           currentAccumulatedText = '';
-                          currentStreamingEl = createBubble(data);
-                          container.scrollTop = container.scrollHeight;
+                          pendingSpeaker = data;
+                          // ステージ上段: 発言者をハイライトし、アクティブ吹き出しを逐次表示
+                          setSpeaking(data.persona_id);
+                          currentActiveEl = showActiveBubble(data);
+                          // 会話ログ（下段）は確定時に一括追加するため、ここでは作らない
                       } else if (data.type === 'message_delta') {
                           currentAccumulatedText += data.content;
-                          if (currentStreamingEl) {
-                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                          // 上段アクティブ吹き出しのみ逐次更新（会話ログは更新しない）
+                          if (currentActiveEl) {
+                              currentActiveEl.innerHTML = DOMPurify.sanitize(
                                   marked.parse(currentAccumulatedText, {breaks: true})
                               );
-                              container.scrollTop = container.scrollHeight;
                           }
                       } else if (data.type === 'message_end') {
+                          // 正常に発言完了。pending を解消（取得失敗扱いにしない）
+                          pendingSpeaker = null;
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
-                          if (currentStreamingEl) {
-                              currentStreamingEl.innerHTML = DOMPurify.sanitize(
+                          // 会話ログ（下段）に発言全文を一括表示
+                          const logEl = createBubble(data);
+                          if (logEl) {
+                              const html = data.content
+                                  ? DOMPurify.sanitize(marked.parse(data.content, {breaks: true}))
+                                  : null;
+                              if (html) {
+                                  logEl.innerHTML = html;
+                              } else {
+                                  logEl.textContent = '[応答を取得できませんでした]';
+                              }
+                              container.scrollTop = container.scrollHeight;
+                          }
+                          // ステージ上段: アクティブ吹き出しは即クリアせず、確定内容で残す。
+                          // 次の message_start（または complete/error）まで表示し続けることで、
+                          // 発言が一瞬で消えて読めない問題を防ぐ。
+                          if (currentActiveEl && data.content) {
+                              currentActiveEl.innerHTML = DOMPurify.sanitize(
                                   marked.parse(data.content, {breaks: true})
                               );
                           }
-                          currentStreamingEl = null;
+                          currentActiveEl = null;
                           currentAccumulatedText = '';
                       } else if (data.type === 'message') {
                           // 後方互換: Traditional mode 等の完成メッセージ
                           messageCount++;
                           counter.textContent = messageCount + ' 発言';
+
+                          // ステージ: 簡易モードは逐次デルタが無いため、確定発言で一瞬ハイライト
+                          setSpeaking(data.persona_id);
+                          showActiveBubble(data);
+                          const activeContent = activeEl ? activeEl.querySelector('.active-content') : null;
+                          if (activeContent) {
+                              activeContent.innerHTML = data.content_html || DOMPurify.sanitize(marked.parse(data.content, {breaks: true}));
+                          }
 
                           const isFacilitator = data.persona_id === 'facilitator' || data.message_type === 'summary';
                           const renderedContent = data.content_html || DOMPurify.sanitize(marked.parse(data.content, {breaks: true}));
@@ -320,7 +569,7 @@
                                       <div class='facilitator-bubble max-w-2xl'>
                                           <div class='flex items-center gap-2 mb-2'>
                                               <div class='w-8 h-8 rounded-full facilitator-avatar flex items-center justify-center'>
-                                                  <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'></path></svg>
+                                                  <svg class='w-4 h-4 text-white' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z'></path></svg>
                                               </div>
                                               <span class='font-bold'>ファシリテーター</span>
                                           </div>
@@ -331,12 +580,14 @@
                           } else {
                               const info = participantMap[data.persona_id] || { name: data.persona_name, colorIndex: 0 };
                               const color = personaColors[info.colorIndex % personaColors.length];
+                              const msgAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(data.persona_id, 48) : null;
+                              const msgAvatar = msgAvatarSvg
+                                  ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${msgAvatarSvg}</div>`
+                                  : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;
                               msgHtml = `
                                   <div class='flex gap-3 message-item fade-in'>
                                       <div class='flex-shrink-0'>
-                                          <div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'>
-                                              <span class='text-white font-bold text-lg'>${safeName[0] || ''}</span>
-                                          </div>
+                                          ${msgAvatar}
                                       </div>
                                       <div class='flex-1 min-w-0'>
                                           <div class='flex items-baseline gap-2 mb-1'>
@@ -353,10 +604,18 @@
                           tempDiv.innerHTML = DOMPurify.sanitize(msgHtml); // nosemgrep: insecure-document-method
                           while (tempDiv.firstChild) container.appendChild(tempDiv.firstChild);
                           container.scrollTop = container.scrollHeight;
+                          // ステージ上段はクリアせず最新発言を保持（次の message が上書き、complete/error でクリア）。
+                          // 発言が一瞬で消えて読めない問題を防ぐ。
 
                       } else if (data.type === 'complete') {
                           discussionComplete = true;
                           eventSource.close();
+                          self._eventSource = null;
+                          self._streamingActive = false;  // 再生コントロールを隠す
+                          // ステージのアクティブ表示と未完了話者をクリア
+                          flushPendingSpeaker();
+                          clearActiveBubble();
+                          clearSpeaking();
                           // 従来の議論完了画面を取得して表示
                           loading.innerHTML = `
                               <div class='text-center py-4'>
@@ -385,10 +644,16 @@
                       } else if (data.type === 'error') {
                           discussionComplete = true;
                           eventSource.close();
-                          loading.innerHTML = `<p class='text-red-600'>エラー: ${data.message}</p>`;
+                          self._eventSource = null;
+                          self._streamingActive = false;  // 再生コントロールを隠す
+                          // 途中まで届いていた発言を会話ログに残し、上段の発言中表示をクリア
+                          flushPendingSpeaker();
+                          clearActiveBubble();
+                          clearSpeaking();
+                          loading.innerHTML = `<p class='text-red-600'>エラー: ${escapeHtml(data.message || '')}</p>`;
                       }
-                  };
-                  
+                  }  // end handleStreamEvent
+
                   eventSource.onerror = function() {
                       if (discussionComplete) {
                           return; // 正常完了後の切断は無視
@@ -396,12 +661,112 @@
                       // EventSource.CONNECTING(0) = ブラウザが自動再接続中 → 待つ
                       // EventSource.CLOSED(2) = 再接続不可 → エラー表示
                       if (eventSource.readyState === EventSource.CLOSED) {
-                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました</p>`;
+                          self._streamingActive = false;
+                          loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました。「設定に戻る」からもう一度議論を開始してください。</p>`;
                       }
                   };
               }
-          }">
-        
+          }"
+     class="discussion-layout"
+     :class="{ 'is-started': discussionStarted }">
+
+    <!-- 左カラム: 設定（議論開始後は固定サマリ幅に縮小） -->
+    <div class="discussion-col-left">
+
+    <!-- ヘッダー（設定中のみ表示） -->
+    <div x-show="!discussionStarted">
+        <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_cog("w-8 h-8 text-purple-600") }} 議論設定</h1>
+        <p class="text-gray-600 mb-8">ペルソナを選択して議論トピックを設定します。</p>
+
+        <!-- ステップガイド -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
+            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
+            <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
+                <li>議論モードを選択</li>
+                <li>議論に参加させるペルソナを選択</li>
+                <li>議論トピックを入力（インタビューモード以外）</li>
+                <li>議論を開始</li>
+            </ol>
+        </div>
+    </div>
+
+    <!-- 設定サマリ（議論開始後のみ表示） -->
+    <div x-show="discussionStarted" x-cloak class="bg-white rounded-lg shadow-md p-5 mb-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論設定</h3>
+            <button type="button" @click="backToSetup()"
+                    class="text-sm text-blue-600 hover:text-blue-800 font-medium">設定に戻る</button>
+        </div>
+        <dl class="space-y-3 text-sm">
+            <div>
+                <dt class="text-gray-500 text-xs mb-1">モード</dt>
+                <dd class="font-medium text-gray-800">
+                    <span x-show="mode === 'traditional'">簡易議論</span>
+                    <span x-show="mode === 'agent'">しっかり議論（<span x-text="rounds"></span>ラウンド）</span>
+                </dd>
+            </div>
+            <div>
+                <dt class="text-gray-500 text-xs mb-1">トピック</dt>
+                <dd class="text-gray-800 line-clamp-3" x-text="topic"></dd>
+            </div>
+            <div>
+                <dt class="text-gray-500 text-xs mb-2">参加ペルソナ（<span x-text="$store.discussionSetup.selectedPersonas.length"></span>体）</dt>
+                <dd>
+                    <ul class="space-y-2"
+                        x-effect="discussionStarted; $store.discussionSetup.selectedPersonas.length; $nextTick(() => window.renderPersonaAvatars && window.renderPersonaAvatars($el))">
+                        <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'sum-' + p.id">
+                            <li class="summary-persona">
+                                <div class="summary-persona-avatar"
+                                     :data-avatar-seed="p.id"
+                                     :data-avatar-name="p.name"
+                                     data-avatar-size="40"></div>
+                                <div class="min-w-0">
+                                    <p class="font-medium text-gray-800 truncate" x-text="p.name"></p>
+                                    <p class="text-xs text-gray-500 truncate">
+                                        <span x-text="p.occupation"></span><span x-show="p.age"> / <span x-text="p.age"></span>歳</span>
+                                    </p>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                </dd>
+            </div>
+            <!-- 参考資料（アップロードされている場合のみ） -->
+            <div x-show="uploadedDocuments.length > 0">
+                <dt class="text-gray-500 text-xs mb-2">参考資料（<span x-text="uploadedDocuments.length"></span>件）</dt>
+                <dd>
+                    <ul class="space-y-1.5">
+                        <template x-for="doc in uploadedDocuments" :key="'sumdoc-' + doc.file_id">
+                            <li class="flex items-center gap-2 p-1.5 bg-gray-50 rounded border border-gray-200">
+                                <!-- 画像アイコン -->
+                                <template x-if="doc.mime_type && doc.mime_type.startsWith('image/')">
+                                    <svg class="w-4 h-4 text-purple-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Z" />
+                                    </svg>
+                                </template>
+                                <!-- PDFアイコン -->
+                                <template x-if="doc.mime_type === 'application/pdf'">
+                                    <svg class="w-4 h-4 text-red-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                    </svg>
+                                </template>
+                                <span class="text-sm text-gray-700 truncate flex-1" x-text="doc.filename"></span>
+                                <span class="text-xs text-gray-400 flex-shrink-0" x-text="formatSize(doc.file_size)"></span>
+                            </li>
+                        </template>
+                    </ul>
+                </dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- 設定フォーム本体（議論開始後は非表示） -->
+    <form hx-post="/discussion/start"
+          hx-target="#discussion-result"
+          hx-swap="innerHTML"
+          hx-indicator="#discussion-spinner"
+          x-show="!discussionStarted">
+
         <!-- 議論モード選択（最初に表示） -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論モード</h2>
@@ -903,9 +1268,30 @@
             </button>
         </div>
     </form>
-    
-    <!-- 議論結果表示エリア -->
-    <div id="discussion-result" class="mt-8"></div>
+    </div><!-- /左カラム -->
+
+    <!-- 右カラム: 議論ステージ / 結果表示エリア -->
+    <div class="discussion-col-right" :class="{ 'mt-8': !discussionStarted }">
+        <!-- 再生コントロール（一時停止・表示速度）。ストリーミング中のみ表示 -->
+        <div class="stage-controls" x-show="discussionStarted && _streamingActive" x-cloak>
+            <button type="button" @click="togglePause()" class="stage-ctrl-btn stage-ctrl-toggle"
+                    :title="playbackPaused ? '再生' : '一時停止'">
+                <span x-show="!playbackPaused" class="inline-flex items-center gap-1">{{ icon_pause("w-4 h-4") }} 一時停止</span>
+                <span x-show="playbackPaused" x-cloak class="inline-flex items-center gap-1">{{ icon_play("w-4 h-4") }} 再生</span>
+            </button>
+            <span class="stage-ctrl-label">表示速度</span>
+            <div class="stage-ctrl-speeds">
+                <button type="button" @click="setPlaybackSpeed(0.5)" class="stage-ctrl-btn" :class="playbackSpeed === 0.5 ? 'is-active' : ''">ゆっくり</button>
+                <button type="button" @click="setPlaybackSpeed(1)" class="stage-ctrl-btn" :class="playbackSpeed === 1 ? 'is-active' : ''">標準</button>
+                <button type="button" @click="setPlaybackSpeed(2)" class="stage-ctrl-btn" :class="playbackSpeed === 2 ? 'is-active' : ''">速い</button>
+                <button type="button" @click="setPlaybackSpeed(0)" class="stage-ctrl-btn" :class="playbackSpeed === 0 ? 'is-active' : ''">即時</button>
+            </div>
+            <span class="stage-ctrl-queue" x-show="_queueRemaining > 0" x-cloak>
+                <span x-text="_queueRemaining"></span> 件待機中
+            </span>
+        </div>
+        <div id="discussion-result"></div>
+    </div>
 </div>
 
 <!-- 議論中のローディング表示 -->
@@ -945,6 +1331,7 @@ document.addEventListener('alpine:init', () => {
                     id: id,
                     name: el.dataset.personaName,
                     occupation: el.dataset.personaOccupation,
+                    age: el.dataset.personaAge,
                 });
             } else {
                 this.selectedPersonas = this.selectedPersonas.filter(p => p.id !== id);
@@ -956,4 +1343,8 @@ document.addEventListener('alpine:init', () => {
     });
 });
 </script>
+{% endblock %}
+
+{% block scripts %}
+{% include "components/dicebear.html" %}
 {% endblock %}
