@@ -1,5 +1,6 @@
 {% from "components/icons.html" import icon_sparkles, icon_document, icon_lightbulb, icon_x_circle, icon_rocket, icon_save, icon_refresh, icon_users %}
 <!-- 生成されたペルソナ表示パーシャル -->
+{# gender_label / country_name は各ルーターで templates.env.globals に登録済み #}
 <div class="bg-white rounded-lg shadow-md p-6 fade-in">
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-4">
@@ -32,8 +33,26 @@
             <p class="text-sm text-gray-500 mb-1">職業</p>
             <p class="font-semibold text-gray-900">{{ persona.occupation }}</p>
         </div>
+        {% if persona.gender %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">性別</p>
+            <p class="font-semibold text-gray-900">{{ gender_label(persona.gender) }}</p>
+        </div>
+        {% endif %}
+        {% if persona.country %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">居住国</p>
+            <p class="font-semibold text-gray-900">{{ country_name(persona.country) }}</p>
+        </div>
+        {% endif %}
+        {% if persona.city %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">居住都市</p>
+            <p class="font-semibold text-gray-900">{{ persona.city }}</p>
+        </div>
+        {% endif %}
     </div>
-    
+
     <!-- タブ形式の詳細情報 -->
     <div x-data="{ activeTab: 'background' }" class="mb-6">
         <!-- タブヘッダー -->
@@ -120,6 +139,10 @@
         <input type="hidden" name="values" value="{{ persona.values | join('\n') }}">
         <input type="hidden" name="pain_points" value="{{ persona.pain_points | join('\n') }}">
         <input type="hidden" name="goals" value="{{ persona.goals | join('\n') }}">
+        <input type="hidden" name="gender" value="{{ persona.gender or '' }}">
+        <input type="hidden" name="country" value="{{ persona.country or '' }}">
+        <input type="hidden" name="city" value="{{ persona.city or '' }}">
+        <input type="hidden" name="tags" value="{{ persona.tags | join('\n') }}">
 
         {% include "persona/partials/behavior_datasets_preview.html" %}
 

@@ -7,6 +7,8 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple
 
 from ..models.persona import Persona
+from ..models.demographics import VALID_GENDERS
+from ..services import country_service
 from ..services.ai_service import AIService, AIServiceError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
@@ -523,6 +525,10 @@ class PersonaManager:
         values: List[str] | None = None,
         pain_points: List[str] | None = None,
         goals: List[str] | None = None,
+        gender: str | None = None,
+        country: str | None = None,
+        city: str | None = None,
+        tags: List[str] | None = None,
     ) -> Optional[Persona]:
         """
         Edit an existing persona with new values.
@@ -536,6 +542,10 @@ class PersonaManager:
             values: New values list (optional)
             pain_points: New pain points list (optional)
             goals: New goals list (optional)
+            gender: New gender code (optional)
+            country: New country code (ISO 3166-1 alpha-2, optional)
+            city: New city (optional)
+            tags: New filter tags list (optional)
 
         Returns:
             Updated Persona object if successful, None if persona not found
@@ -562,6 +572,10 @@ class PersonaManager:
                 values=values,
                 pain_points=pain_points,
                 goals=goals,
+                gender=gender,
+                country=country,
+                city=city,
+                tags=tags,
             )
 
             # Validate updated persona
@@ -656,11 +670,14 @@ class PersonaManager:
 
             matching_personas = []
             for persona in all_personas:
-                # Search in name, occupation, and background
+                # Search in name, occupation, background, country, and tags
+                tags_text = " ".join(persona.tags).lower() if persona.tags else ""
                 if (
                     query_lower in persona.name.lower()
                     or query_lower in persona.occupation.lower()
                     or query_lower in persona.background.lower()
+                    or (persona.country and query_lower in persona.country.lower())
+                    or query_lower in tags_text
                 ):
                     matching_personas.append(persona)
 
@@ -770,6 +787,36 @@ class PersonaManager:
 
         if len(persona.goals) > 10:
             raise PersonaManagerError("目標・願望は10項目以内で設定してください")
+
+        # Validate demographic fields (optional, only when set)
+        if persona.gender is not None and persona.gender not in VALID_GENDERS:
+            raise PersonaManagerError(
+                f"性別は {', '.join(sorted(VALID_GENDERS))} のいずれかで設定してください"
+            )
+
+        if persona.country and not country_service.is_valid_country(persona.country):
+            # ISO 3166-1 alpha-2 として実在する国コードのみ許可（架空コード XX や
+            # alpha-3 JPN を弾く）。検証は pycountry ベースの country_service に委譲。
+            raise PersonaManagerError(
+                "国はISO 3166-1 alpha-2の実在する国コードで設定してください"
+            )
+
+        if persona.city and len(persona.city) > 100:
+            raise PersonaManagerError("居住都市は100文字以内で設定してください")
+
+        if persona.tags:
+            if len(persona.tags) > 20:
+                raise PersonaManagerError("タグは20個以内で設定してください")
+            for tag in persona.tags:
+                if not tag or not tag.strip():
+                    raise PersonaManagerError("タグに空の項目があります")
+                if len(tag) > 50:
+                    raise PersonaManagerError(
+                        "タグは1個あたり50文字以内で設定してください"
+                    )
+                # data属性ではカンマ区切りでフィルタに渡すため、タグ内のカンマを禁止
+                if "," in tag:
+                    raise PersonaManagerError("タグにカンマ（,）は使用できません")
 
     # ============================================
     # Memory Management Methods

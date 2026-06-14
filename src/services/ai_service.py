@@ -20,6 +20,8 @@ except ImportError:
 
 from ..config import config
 from ..models.persona import Persona
+from ..models.demographics import sanitize_gender, gender_label
+from .country_service import sanitize_country, country_name
 from ..models.message import Message
 from ..models.insight_category import InsightCategory
 
@@ -400,7 +402,7 @@ class AIService:
 # 指示
 インタビュー内容から読み取れる情報を基に、以下の要素を含む詳細なペルソナを作成してください：
 
-1. **基本情報**: 名前、年齢、職業
+1. **基本情報**: 名前、年齢、性別、職業、居住国・都市
 2. **背景**: 生活環境、経歴、ライフスタイル
 3. **価値観**: 大切にしていること、信念、優先順位
 4. **課題・悩み**: 現在抱えている問題や不満
@@ -412,8 +414,11 @@ class AIService:
 {
     "name": "田中 花子",
     "age": 35,
+    "gender": "female",
+    "country": "JP",
+    "city": "東京都",
     "occupation": "会社員（マーケティング部）",
-    "background": "東京都在住。大学卒業後、現在の会社に就職し10年目。一人暮らしで、仕事とプライベートのバランスを重視している。",
+    "background": "大学卒業後、現在の会社に就職し10年目。一人暮らしで、仕事とプライベートのバランスを重視している。",
     "values": ["効率性を重視する", "新しいことへの挑戦を大切にする", "人とのつながりを大事にする"],
     "pain_points": ["時間管理が難しい", "情報過多で選択に迷う", "仕事のストレスが多い"],
     "goals": ["キャリアアップを目指す", "ワークライフバランスを改善する", "新しいスキルを身につける"]
@@ -421,7 +426,11 @@ class AIService:
 
 # 重要な注意事項
 - 入力されたテキスト内容に基づいた現実的で具体的なペルソナを作成
-- 日本人の名前を使用（多様な姓と名を使用）
+- 名前・背景・文化はそのペルソナの国・地域に即した自然なものにする（特定の国を前提にしない）
+- 出力テキスト（name/background/values等）は全て日本語で記述する
+- gender は "male" / "female" / "other" のいずれかの値のみ
+- country は ISO 3166-1 alpha-2 の2文字大文字コード（例: 日本=JP, アメリカ=US）。読み取れない場合は "JP"
+- city は居住都市名（日本語）。データから読み取れない場合は省略（キーを含めない）
 - 年齢は数値のみ（引用符なし）
 - 各リスト項目は3-5個程度
 - JSON形式を厳密に守り、構文エラーがないようにする
@@ -468,6 +477,9 @@ JSON:"""
                 values=persona_data["values"],
                 pain_points=persona_data["pain_points"],
                 goals=persona_data["goals"],
+                gender=sanitize_gender(persona_data.get("gender")),
+                country=sanitize_country(persona_data.get("country")),
+                city=persona_data.get("city"),
             )
 
             return persona
@@ -526,8 +538,9 @@ JSON:"""
 修正要件:
 1. 有効なJSON形式にする
 2. 必須フィールドを含める: name, age, occupation, background, values, pain_points, goals
-3. 年齢は数値（引用符なし）
-4. values, pain_points, goalsは文字列の配列
+3. 任意フィールド: gender("male"/"female"/"other"), country(ISO 3166-1 alpha-2の2文字コード), city
+4. 年齢は数値（引用符なし）
+5. values, pain_points, goalsは文字列の配列
 
 修正されたJSON:"""
 
@@ -548,6 +561,9 @@ JSON:"""
                 values=persona_data["values"],
                 pain_points=persona_data["pain_points"],
                 goals=persona_data["goals"],
+                gender=sanitize_gender(persona_data.get("gender")),
+                country=sanitize_country(persona_data.get("country")),
+                city=persona_data.get("city"),
             )
 
             self.logger.info("JSONレスポンスの修正に成功しました")
@@ -771,6 +787,10 @@ JSON:"""
                     raise AIServiceError(
                         f"'{field}' の各要素は空でない文字列である必要があります"
                     )
+
+        # gender/country はAI生成時に sanitize_gender/sanitize_country で
+        # 正規化（規格外は None 化）するため、ここでは検証しない。
+        # 1件の規格外値でバッチ生成全体を失敗させないための方針。
 
     def facilitate_discussion(
         self,
@@ -1139,6 +1159,15 @@ JSON:"""
             persona_dict = asdict(persona)
             persona_info = f"\n**{persona_dict['name']}**\n"
             persona_info += f"- 年齢: {persona_dict['age']}歳\n"
+            if persona.gender:
+                persona_info += f"- 性別: {gender_label(persona.gender)}\n"
+            if persona.country:
+                location = country_name(persona.country)
+                if persona.city:
+                    location += f"・{persona.city}"
+                persona_info += f"- 居住地: {location}\n"
+            elif persona.city:
+                persona_info += f"- 居住地: {persona.city}\n"
             persona_info += f"- 職業: {persona_dict['occupation']}\n"
             persona_info += f"- 背景: {persona_dict['background']}\n"
             persona_info += f"- 価値観: {', '.join(persona_dict['values'])}\n"

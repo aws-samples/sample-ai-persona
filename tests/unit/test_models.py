@@ -76,6 +76,147 @@ class TestPersona:
         assert restored_persona.id == persona.id
         assert restored_persona.name == persona.name
 
+    def test_create_new_with_demographics(self):
+        """gender/country/city/tags を指定して生成できる"""
+        persona = Persona.create_new(
+            **self.sample_persona_data,
+            gender="male",
+            country="JP",
+            city="東京都",
+            tags=["VIP", "リピーター"],
+        )
+        assert persona.gender == "male"
+        assert persona.country == "JP"
+        assert persona.city == "東京都"
+        assert persona.tags == ["VIP", "リピーター"]
+
+    def test_create_new_demographics_defaults(self):
+        """新フィールド未指定時はNone/空リストになる"""
+        persona = Persona.create_new(**self.sample_persona_data)
+        assert persona.gender is None
+        assert persona.country is None
+        assert persona.city is None
+        assert persona.tags == []
+
+    def test_update_demographics(self):
+        """update で新フィールドを更新でき、未指定フィールドは保持される"""
+        persona = Persona.create_new(
+            **self.sample_persona_data, gender="female", country="US"
+        )
+        updated = persona.update(country="JP", tags=["新規"])
+        assert updated.gender == "female"  # 保持
+        assert updated.country == "JP"  # 更新
+        assert updated.tags == ["新規"]
+
+    def test_update_none_keeps_demographics(self):
+        """update に None を渡すと既存のdemographic値を保持する"""
+        persona = Persona.create_new(
+            **self.sample_persona_data, gender="male", country="JP", city="東京都"
+        )
+        updated = persona.update(name="新名前")
+        assert updated.gender == "male"
+        assert updated.country == "JP"
+        assert updated.city == "東京都"
+
+    def test_update_empty_string_clears_demographics(self):
+        """update に空文字を渡すと gender/country/city をクリアできる"""
+        persona = Persona.create_new(
+            **self.sample_persona_data, gender="male", country="JP", city="東京都"
+        )
+        updated = persona.update(gender="", country="", city="")
+        assert updated.gender is None
+        assert updated.country is None
+        assert updated.city is None
+
+    def test_update_clears_tags_with_empty_list(self):
+        """update に空リストを渡すと tags をクリアできる"""
+        persona = Persona.create_new(**self.sample_persona_data, tags=["旧タグ"])
+        updated = persona.update(tags=[])
+        assert updated.tags == []
+
+    def test_to_dict_omits_empty_demographics(self):
+        """None/空のデモグラフィックフィールドはto_dictで省略される"""
+        persona = Persona.create_new(**self.sample_persona_data)
+        data = persona.to_dict()
+        assert "gender" not in data
+        assert "country" not in data
+        assert "city" not in data
+        assert "tags" not in data
+
+    def test_to_dict_includes_set_demographics(self):
+        """値を持つデモグラフィックフィールドはto_dictに含まれる"""
+        persona = Persona.create_new(
+            **self.sample_persona_data,
+            gender="other",
+            country="FR",
+            city="パリ",
+            tags=["t1"],
+        )
+        data = persona.to_dict()
+        assert data["gender"] == "other"
+        assert data["country"] == "FR"
+        assert data["city"] == "パリ"
+        assert data["tags"] == ["t1"]
+
+    def test_from_dict_backward_compatibility(self):
+        """新フィールドを持たない既存データから復元できる（後方互換）"""
+        legacy = {
+            "id": "legacy-id",
+            "name": "旧ペルソナ",
+            "age": 40,
+            "occupation": "教師",
+            "background": "20年の教職経験",
+            "values": ["誠実さ"],
+            "pain_points": ["多忙"],
+            "goals": ["生徒の成長"],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+        }
+        persona = Persona.from_dict(legacy)
+        assert persona.gender is None
+        assert persona.country is None
+        assert persona.city is None
+        assert persona.tags == []
+
+    def test_demographics_roundtrip(self):
+        """デモグラフィックフィールドの to_dict→from_dict 往復"""
+        persona = Persona.create_new(
+            **self.sample_persona_data,
+            gender="male",
+            country="KR",
+            city="ソウル",
+            tags=["a", "b"],
+        )
+        restored = Persona.from_dict(persona.to_dict())
+        assert restored.gender == "male"
+        assert restored.country == "KR"
+        assert restored.city == "ソウル"
+        assert restored.tags == ["a", "b"]
+
+
+class TestDemographicsSanitize:
+    """gender のサニタイズ関数のテスト（AI生成値の正規化）。
+
+    country のサニタイズ・検証は pycountry ベースの country_service に移管したため
+    tests/integration/test_country_service.py を参照。
+    """
+
+    def test_sanitize_gender_valid(self):
+        from src.models.demographics import sanitize_gender
+
+        assert sanitize_gender("male") == "male"
+        assert sanitize_gender("female") == "female"
+        assert sanitize_gender("other") == "other"
+
+    def test_sanitize_gender_invalid_returns_none(self):
+        """規格外の性別値は None に正規化される（例外を投げない）"""
+        from src.models.demographics import sanitize_gender
+
+        assert sanitize_gender("M") is None
+        assert sanitize_gender("男性") is None
+        assert sanitize_gender("") is None
+        assert sanitize_gender(None) is None
+
 
 class TestMessage:
     """Test cases for Message model."""
@@ -333,7 +474,10 @@ class TestDiscussion:
         assert restored_discussion.mode == "agent"
         assert restored_discussion.agent_config is not None
         assert restored_discussion.agent_config["rounds"] == 5
-        assert restored_discussion.agent_config["additional_instructions"] == "Focus on user needs"
+        assert (
+            restored_discussion.agent_config["additional_instructions"]
+            == "Focus on user needs"
+        )
 
     def test_discussion_backward_compatibility(self):
         old_discussion_dict = {
@@ -426,7 +570,9 @@ class TestDiscussion:
     def test_interview_message_filtering(self):
         interview = Discussion.create_interview_session(["persona1"])
         interview = interview.add_user_message("ユーザーの質問")
-        interview = interview.add_persona_response("persona1", "田中太郎", "ペルソナの回答")
+        interview = interview.add_persona_response(
+            "persona1", "田中太郎", "ペルソナの回答"
+        )
         interview = interview.add_user_message("別の質問")
 
         user_messages = interview.get_user_messages()
@@ -481,16 +627,22 @@ class TestMessageInterviewExtensions:
 
     def test_persona_response_identification(self):
         statement_msg = Message.create_new(
-            persona_id="persona1", persona_name="田中太郎",
-            content="通常の発言", message_type="statement",
+            persona_id="persona1",
+            persona_name="田中太郎",
+            content="通常の発言",
+            message_type="statement",
         )
         summary_msg = Message.create_new(
-            persona_id="persona1", persona_name="田中太郎",
-            content="まとめ", message_type="summary",
+            persona_id="persona1",
+            persona_name="田中太郎",
+            content="まとめ",
+            message_type="summary",
         )
         facilitation_msg = Message.create_new(
-            persona_id="facilitator", persona_name="ファシリテーター",
-            content="進行", message_type="facilitation",
+            persona_id="facilitator",
+            persona_name="ファシリテーター",
+            content="進行",
+            message_type="facilitation",
         )
 
         assert statement_msg.is_persona_response()

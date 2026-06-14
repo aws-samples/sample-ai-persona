@@ -40,6 +40,18 @@ from web.sanitize import render_markdown  # noqa: E402
 
 templates.env.filters["markdown"] = render_markdown
 
+# 表示用ヘルパーをテンプレートのグローバル関数として登録。
+# country_service は ISO国コード→名前の純粋なデータ参照（ビジネスロジックなし）であり、
+# render_markdown と同様に表示ヘルパーとして Router から直接利用する
+# （アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
+from src.services import country_service  # noqa: E402
+from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
+
+templates.env.globals["country_name"] = country_service.country_name
+templates.env.globals["country_choices"] = country_service.country_choices
+templates.env.globals["gender_label"] = gender_label
+templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
 
@@ -657,6 +669,10 @@ async def save_persona(
     values: str = Form(...),
     pain_points: str = Form(...),
     goals: str = Form(...),
+    gender: str = Form(""),
+    country: str = Form(""),
+    city: str = Form(""),
+    tags: str = Form(""),
     selected_behavior_datasets: str = Form(""),
 ) -> Any:
     """ペルソナ保存処理（htmx対応）"""
@@ -672,6 +688,10 @@ async def save_persona(
             values=[v.strip() for v in values.split("\n") if v.strip()],
             pain_points=[p.strip() for p in pain_points.split("\n") if p.strip()],
             goals=[g.strip() for g in goals.split("\n") if g.strip()],
+            gender=gender.strip() or None,
+            country=country.strip().upper() or None,
+            city=city.strip() or None,
+            tags=[t.strip() for t in tags.split("\n") if t.strip()],
         )
 
         # キャッシュから生成ログを引き継ぐ
@@ -786,6 +806,10 @@ async def update_persona(
     values: str = Form(...),
     pain_points: str = Form(...),
     goals: str = Form(...),
+    gender: str = Form(""),
+    country: str = Form(""),
+    city: str = Form(""),
+    tags: str = Form(""),
 ) -> Any:
     """ペルソナ更新処理（htmx対応）- 詳細画面用"""
     try:
@@ -810,6 +834,12 @@ async def update_persona(
             values=[v.strip() for v in values.split("\n") if v.strip()],
             pain_points=[p.strip() for p in pain_points.split("\n") if p.strip()],
             goals=[g.strip() for g in goals.split("\n") if g.strip()],
+            # 空文字はそのまま渡し、update() 側でクリア（None化）させる。
+            # gender/country/city は None=変更なし、""=クリアのセマンティクス。
+            gender=gender.strip(),
+            country=country.strip().upper(),
+            city=city.strip(),
+            tags=[t.strip() for t in tags.split("\n") if t.strip()],
         )
 
         if updated_persona:

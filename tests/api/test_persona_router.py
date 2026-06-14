@@ -564,6 +564,38 @@ class TestPersonaUpdate:
         assert response.status_code == 200
 
     @patch("web.routers.persona.get_persona_manager")
+    def test_update_clears_demographics_with_empty_form_values(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        """空のgender/country/cityフォーム値が edit_persona に空文字で渡りクリアされる"""
+        mock_mgr = Mock()
+        mock_mgr.get_persona.return_value = sample_persona
+        mock_mgr.edit_persona.return_value = sample_persona
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.put(
+            f"/persona/{sample_persona.id}",
+            data={
+                "name": "新名前",
+                "age": "35",
+                "occupation": "新職業",
+                "background": "新背景",
+                "values": "価値1",
+                "pain_points": "課題1",
+                "goals": "目標1",
+                "gender": "",
+                "country": "",
+                "city": "",
+            },
+        )
+        assert response.status_code == 200
+        # update() でクリアできるよう、空文字をそのまま渡している（or None にしない）
+        call_kwargs = mock_mgr.edit_persona.call_args[1]
+        assert call_kwargs["gender"] == ""
+        assert call_kwargs["country"] == ""
+        assert call_kwargs["city"] == ""
+
+    @patch("web.routers.persona.get_persona_manager")
     def test_update_not_found(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_persona.return_value = None

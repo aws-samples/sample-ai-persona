@@ -621,6 +621,70 @@ class TestDatabaseServiceSerialization:
         assert deserialized.updated_at == original.updated_at
 
     @patch("boto3.client")
+    def test_round_trip_persona_with_demographics(self, mock_boto3_client):
+        """gender/country/city/tags を含むペルソナの往復シリアライズ"""
+        from src.models.persona import Persona
+
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        original = Persona.create_new(
+            name="John Smith",
+            age=42,
+            occupation="Designer",
+            background="bg",
+            values=["v1"],
+            pain_points=["p1"],
+            goals=["g1"],
+            gender="male",
+            country="US",
+            city="New York",
+            tags=["premium", "early-adopter"],
+        )
+
+        serialized = service._serialize_persona(original)
+        deserialized = service._deserialize_persona(serialized)
+
+        assert deserialized.gender == "male"
+        assert deserialized.country == "US"
+        assert deserialized.city == "New York"
+        assert deserialized.tags == ["premium", "early-adopter"]
+
+    @patch("boto3.client")
+    def test_deserialize_persona_without_demographics(self, mock_boto3_client):
+        """新フィールドを持たないDynamoDB itemを後方互換でデシリアライズできる"""
+        from boto3.dynamodb.types import TypeSerializer
+
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        serializer = TypeSerializer()
+        legacy_item = {
+            "id": serializer.serialize("legacy-id"),
+            "name": serializer.serialize("旧ペルソナ"),
+            "age": serializer.serialize(50),
+            "occupation": serializer.serialize("教師"),
+            "background": serializer.serialize("経験豊富"),
+            "values": serializer.serialize(["誠実"]),
+            "pain_points": serializer.serialize(["多忙"]),
+            "goals": serializer.serialize(["成長"]),
+            "created_at": serializer.serialize("2024-01-01T12:00:00"),
+            "updated_at": serializer.serialize("2024-01-01T12:00:00"),
+        }
+
+        persona = service._deserialize_persona(legacy_item)
+        assert persona.gender is None
+        assert persona.country is None
+        assert persona.city is None
+        assert persona.tags == []
+
+    @patch("boto3.client")
     def test_round_trip_discussion_serialization(self, mock_boto3_client):
         """Test round-trip serialization/deserialization for discussion."""
         from datetime import datetime
@@ -2346,6 +2410,7 @@ class TestKnowledgeBaseCRUDOperations:
 
     def test_save_and_get_knowledge_base(self):
         from src.models.knowledge_base import KnowledgeBase
+
         service, mock_client = self._make_service()
         kb = KnowledgeBase.create_new("KB123", "テストKB", "説明")
 
@@ -2386,6 +2451,7 @@ class TestKnowledgeBaseCRUDOperations:
 
     def test_save_and_get_kb_binding(self):
         from src.models.knowledge_base import PersonaKBBinding
+
         service, mock_client = self._make_service()
         binding = PersonaKBBinding.create_new("p1", "kb1", {"key": "val"})
 
@@ -2473,7 +2539,7 @@ class TestDatabaseServiceJobs:
                 "status": {"S": "completed"},
                 "created_at": {"S": "2026-05-05T10:00:00"},
                 "updated_at": {"S": "2026-05-05T10:01:00"},
-                "result": {"S": "{\"key\":\"value\"}"},
+                "result": {"S": '{"key":"value"}'},
             }
         }
         mock_boto3_client.return_value = mock_client
@@ -2535,4 +2601,7 @@ class TestDatabaseServiceJobs:
         mock_client.update_item.assert_called_once()
         call_kwargs = mock_client.update_item.call_args[1]
         assert call_kwargs["ExpressionAttributeValues"][":s"]["S"] == "failed"
-        assert call_kwargs["ExpressionAttributeValues"][":e"]["S"] == "something went wrong"
+        assert (
+            call_kwargs["ExpressionAttributeValues"][":e"]["S"]
+            == "something went wrong"
+        )

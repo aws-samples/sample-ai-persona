@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_users, icon_plus %}
+{# GENDER_LABELS / country_choices は persona ルーターで templates.env.globals に登録済み #}
 
 {% block content %}
 <div class="max-w-6xl mx-auto">
@@ -34,17 +35,50 @@
                 クリア
             </button>
         </div>
+        <!-- 属性フィルタ（クライアントサイド） -->
+        <div class="flex flex-wrap gap-4 mt-4">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">性別</label>
+                <select id="filter-gender" onchange="applyPersonaFilters()"
+                        class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+                    <option value="">すべて</option>
+                    {% for code, label in GENDER_LABELS.items() %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">居住国</label>
+                <select id="filter-country" onchange="applyPersonaFilters()"
+                        class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+                    <option value="">すべて</option>
+                    {% for code, name in country_choices() %}
+                    <option value="{{ code }}">{{ name }} ({{ code }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">タグ</label>
+                <input type="text" id="filter-tag" placeholder="タグで絞り込み"
+                       oninput="applyPersonaFilters()"
+                       class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+            </div>
+        </div>
     </div>
-    
+
     <!-- ペルソナ一覧 -->
     <div id="persona-list"
          hx-get="/persona/list/partial"
          hx-trigger="load"
          hx-swap="innerHTML">
     </div>
+    <p id="filter-empty-message" class="text-center text-gray-400 py-8" style="display: none;">
+        フィルタ条件に一致するペルソナがありません
+    </p>
 </div>
 {% endblock %}
 
 {% block scripts %}
 {% include "components/dicebear.html" %}
+{% include "persona/partials/filter_script.html" %}
 {% endblock %}

@@ -20,6 +20,8 @@ except ImportError:
 
 from ..config import config
 from ..models.persona import Persona
+from ..models.demographics import sanitize_gender, gender_label
+from .country_service import sanitize_country, country_name
 from ..models.message import Message
 
 
@@ -1089,12 +1091,27 @@ class AgentService:
         """
         persona_dict = asdict(persona)
 
+        # 設定済みのデモグラフィック属性のみプロフィールに追加（表示名へ変換）
+        profile_lines = [
+            f"- 名前: {persona_dict['name']}",
+            f"- 年齢: {persona_dict['age']}歳",
+        ]
+        if persona.gender:
+            profile_lines.append(f"- 性別: {gender_label(persona.gender)}")
+        if persona.country:
+            location = country_name(persona.country)
+            if persona.city:
+                location += f"・{persona.city}"
+            profile_lines.append(f"- 居住地: {location}")
+        elif persona.city:
+            profile_lines.append(f"- 居住地: {persona.city}")
+        profile_lines.append(f"- 職業: {persona_dict['occupation']}")
+        profile_text = "\n".join(profile_lines)
+
         prompt = f"""あなたは{persona_dict["name"]}として議論に参加します。
 
 # あなたのプロフィール
-- 名前: {persona_dict["name"]}
-- 年齢: {persona_dict["age"]}歳
-- 職業: {persona_dict["occupation"]}
+{profile_text}
 
 # 背景
 {persona_dict["background"]}
@@ -1420,7 +1437,7 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
 - レポート全体を俯瞰し、複数の異なる顧客像を抽出
 - 各ペルソナが明確に区別できるよう、特徴的な違いを強調
 - 実在しそうなリアルで具体的なペルソナを作成
-- 日本市場を想定した日本人のペルソナを生成
+- レポートが対象とする市場・地域に即したペルソナを生成（特定の国を前提にしない）
 
 # 出力形式
 **必ず以下のJSON配列形式のみで出力してください。説明文、前置き、後書きは一切不要です：**
@@ -1429,8 +1446,11 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
     {
         "name": "田中 花子",
         "age": 35,
+        "gender": "female",
+        "country": "JP",
+        "city": "東京都",
         "occupation": "会社員（マーケティング部）",
-        "background": "東京都在住。大学卒業後、現在の会社に就職し10年目。一人暮らしで、仕事とプライベートのバランスを重視している。",
+        "background": "大学卒業後、現在の会社に就職し10年目。一人暮らしで、仕事とプライベートのバランスを重視している。",
         "values": ["効率性を重視する", "新しいことへの挑戦を大切にする", "人とのつながりを大事にする"],
         "pain_points": ["時間管理が難しい", "情報過多で選択に迷う", "仕事のストレスが多い"],
         "goals": ["キャリアアップを目指す", "ワークライフバランスを改善する", "新しいスキルを身につける"]
@@ -1438,8 +1458,11 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
     {
         "name": "佐藤 健太",
         "age": 28,
+        "gender": "male",
+        "country": "JP",
+        "city": "神奈川県",
         "occupation": "フリーランスエンジニア",
-        "background": "神奈川県在住。大学卒業後、IT企業に3年勤務した後、フリーランスとして独立。リモートワーク中心の生活。",
+        "background": "大学卒業後、IT企業に3年勤務した後、フリーランスとして独立。リモートワーク中心の生活。",
         "values": ["自由な働き方を重視", "技術力の向上を追求", "効率的な時間の使い方"],
         "pain_points": ["収入の不安定さ", "孤独を感じることがある", "自己管理の難しさ"],
         "goals": ["安定した収入源を確保", "技術コミュニティとのつながり", "ワークライフバランスの確立"]
@@ -1448,7 +1471,11 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
 
 # 重要な注意事項
 - 各ペルソナは明確に異なる特徴を持つこと
-- 日本人の名前を使用（多様な姓と名を使用）
+- 名前・背景・文化はそのペルソナの国・地域に即した自然なものにする（特定の国を前提にしない）
+- 出力テキスト（name/background/values等）は全て日本語で記述する
+- gender は "male" / "female" / "other" のいずれかの値のみ
+- country は ISO 3166-1 alpha-2 の2文字大文字コード（例: 日本=JP, アメリカ=US）。読み取れない場合は "JP"
+- city は居住都市名（日本語）。読み取れない場合はキーを省略
 - 年齢は数値のみ（引用符なし）
 - 各リスト項目は3-5個程度
 - JSON形式を厳密に守り、構文エラーがないようにする
@@ -1629,6 +1656,9 @@ JSON配列:"""
                     values=persona_data["values"],
                     pain_points=persona_data["pain_points"],
                     goals=persona_data["goals"],
+                    gender=sanitize_gender(persona_data.get("gender")),
+                    country=sanitize_country(persona_data.get("country")),
+                    city=persona_data.get("city"),
                 )
                 personas.append(persona)
 
@@ -1737,7 +1767,7 @@ JSON配列:"""
 - データ全体を俯瞰し、異なる顧客像を抽出
 - 各ペルソナが明確に区別できるよう、特徴的な違いを強調
 - 実在しそうなリアルで具体的なペルソナを作成
-- 日本市場を想定した日本人のペルソナを生成
+- データが対象とする市場・地域に即したペルソナを生成（特定の国を前提にしない。出力テキストは日本語）
 
 # ★重要：分析過程での根拠明示
 
@@ -1784,8 +1814,11 @@ JSON配列:"""
 
 # ペルソナの構成要素
 各ペルソナには以下を含めてください：
-- name: 日本人の名前（姓 名）
+- name: 名前（そのペルソナの国・地域に即した自然な名前。日本語で表記）
 - age: 年齢（数値）
+- gender: 性別（"male" / "female" / "other" のいずれか）
+- country: 居住国（ISO 3166-1 alpha-2の2文字大文字コード。例: 日本=JP, アメリカ=US。読み取れない場合は "JP"）
+- city: 居住都市名（日本語。読み取れない場合は省略）
 - occupation: 職業
 - background: 以下を含む具体的な記述にすること
   ・経歴と現在の生活状況（家族構成、居住地、生活リズム）
@@ -1894,8 +1927,20 @@ JSON配列:"""
         from pydantic import BaseModel, Field
 
         class PersonaOutput(BaseModel):
-            name: str = Field(description="日本人の名前（姓 名）")
+            name: str = Field(
+                description="名前（国・地域に即した自然な名前。日本語表記）"
+            )
             age: int = Field(description="年齢")
+            gender: str | None = Field(
+                default=None, description="性別（male / female / other）"
+            )
+            country: str | None = Field(
+                default=None,
+                description="居住国（ISO 3166-1 alpha-2の2文字コード。例: JP, US）",
+            )
+            city: str | None = Field(
+                default=None, description="居住都市名（日本語。不明なら省略）"
+            )
             occupation: str = Field(description="職業")
             background: str = Field(description="背景・経歴")
             values: list[str] = Field(description="価値観（データから導出できるもの）")
@@ -1961,8 +2006,11 @@ JSON配列:"""
                 "上記の分析結果に基づいて、生成したペルソナをJSON形式で出力してください。\n"
                 "以下のスキーマに厳密に従ってください:\n"
                 "- personas: オブジェクトの配列\n"
-                "  - name: string（日本人の姓名）\n"
+                "  - name: string（国・地域に即した自然な名前。日本語表記）\n"
                 "  - age: integer（数値のみ、文字列不可）\n"
+                "  - gender: string（male / female / other のいずれか）\n"
+                "  - country: string（ISO 3166-1 alpha-2の2文字コード。例: JP, US。不明なら JP）\n"
+                "  - city: string（居住都市名。日本語。不明なら省略可）\n"
                 "  - occupation: string\n"
                 "  - background: string\n"
                 "  - values: stringの配列（1-5個、データから導出できるもの）\n"
@@ -2003,6 +2051,9 @@ JSON配列:"""
                     values=p.values,
                     pain_points=p.pain_points,
                     goals=p.goals,
+                    gender=sanitize_gender(p.gender),
+                    country=sanitize_country(p.country),
+                    city=p.city,
                 )
                 personas.append(persona)
 

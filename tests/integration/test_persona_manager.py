@@ -263,6 +263,38 @@ class TestPersonaManagerIntegration:
         with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
             persona_manager.save_persona(invalid_persona)
 
+    def test_save_persona_city_too_long(self, persona_manager, sample_persona_data):
+        """居住都市が100文字超だと拒否される。"""
+        persona = Persona.create_new(**sample_persona_data, city="あ" * 101)
+        with pytest.raises(PersonaManagerError, match="居住都市は100文字以内"):
+            persona_manager.save_persona(persona)
+
+    def test_save_persona_tag_with_comma_rejected(
+        self, persona_manager, sample_persona_data
+    ):
+        """タグにカンマが含まれると拒否される（フィルタ区切りの破損防止）。"""
+        persona = Persona.create_new(**sample_persona_data, tags=["B2B, enterprise"])
+        with pytest.raises(PersonaManagerError, match="タグにカンマ"):
+            persona_manager.save_persona(persona)
+
+    def test_save_persona_tag_too_long(self, persona_manager, sample_persona_data):
+        """タグが50文字超だと拒否される。"""
+        persona = Persona.create_new(**sample_persona_data, tags=["あ" * 51])
+        with pytest.raises(PersonaManagerError, match="タグは1個あたり50文字以内"):
+            persona_manager.save_persona(persona)
+
+    def test_save_persona_valid_demographics(
+        self, persona_manager, sample_persona_data
+    ):
+        """正常な city / tags は保存できる。"""
+        persona = Persona.create_new(
+            **sample_persona_data,
+            city="東京都",
+            tags=["VIP", "リピーター"],
+        )
+        saved_id = persona_manager.save_persona(persona)
+        assert saved_id == persona.id
+
     def test_get_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona retrieval."""
         # Save a persona first

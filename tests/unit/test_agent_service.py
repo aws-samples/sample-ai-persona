@@ -630,6 +630,9 @@ class TestStructuredOutputRetry:
         mock_persona.values = ["効率性"]
         mock_persona.pain_points = ["時間不足"]
         mock_persona.goals = ["キャリアアップ"]
+        mock_persona.gender = "male"
+        mock_persona.country = "JP"
+        mock_persona.city = "東京都"
         mock_result.personas = [mock_persona]
 
         mock_agent_instance.structured_output.return_value = mock_result
@@ -660,6 +663,9 @@ class TestStructuredOutputRetry:
         mock_persona.values = ["創造性"]
         mock_persona.pain_points = ["収入不安定"]
         mock_persona.goals = ["独立"]
+        mock_persona.gender = "female"
+        mock_persona.country = "JP"
+        mock_persona.city = "大阪府"
         mock_result.personas = [mock_persona]
 
         mock_agent_instance.structured_output.side_effect = [

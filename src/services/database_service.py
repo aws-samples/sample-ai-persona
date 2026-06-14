@@ -406,6 +406,16 @@ class DatabaseService:
             "type": "persona",  # For GSI queries
         }
 
+        # Optional demographic fields (omit None/empty for backward compatibility)
+        if persona.gender is not None:
+            persona_dict["gender"] = persona.gender
+        if persona.country is not None:
+            persona_dict["country"] = persona.country
+        if persona.city is not None:
+            persona_dict["city"] = persona.city
+        if persona.tags:
+            persona_dict["tags"] = persona.tags
+
         # Optional fields
         if persona.generation_log is not None:
             persona_dict["generation_log"] = persona.generation_log
@@ -577,6 +587,10 @@ class DatabaseService:
             goals=deserialized["goals"],
             created_at=created_at,
             updated_at=updated_at,
+            gender=deserialized.get("gender"),
+            country=deserialized.get("country"),
+            city=deserialized.get("city"),
+            tags=deserialized.get("tags", []),
             generation_log=deserialized.get("generation_log"),
             generation_context=deserialized.get("generation_context"),
         )
@@ -632,8 +646,7 @@ class DatabaseService:
 
         # Convert reports from dictionaries to DiscussionReport objects
         reports = [
-            DiscussionReport.from_dict(r)
-            for r in deserialized.get("reports", [])
+            DiscussionReport.from_dict(r) for r in deserialized.get("reports", [])
         ]
 
         # Create Discussion object
@@ -1166,8 +1179,7 @@ class DatabaseService:
                 params["ExclusiveStartKey"] = cursor
             response = self.dynamodb_client.query(**params)
             discussions = [
-                self._deserialize_discussion(item)
-                for item in response.get("Items", [])
+                self._deserialize_discussion(item) for item in response.get("Items", [])
             ]
             return discussions, response.get("LastEvaluatedKey")
 
@@ -2217,9 +2229,7 @@ class DatabaseService:
             items = response.get("Items", [])
             if not items:
                 return None
-            item = {
-                k: self.deserializer.deserialize(v) for k, v in items[0].items()
-            }
+            item = {k: self.deserializer.deserialize(v) for k, v in items[0].items()}
             return PersonaKBBinding.from_dict(item)
 
         return self._execute_with_retry(

@@ -1,5 +1,6 @@
 {% from "components/icons.html" import icon_persona, icon_document, icon_lightbulb, icon_x_circle, icon_rocket, icon_cpu_chip %}
 <!-- ペルソナ詳細ボディ（共通パーシャル） -->
+{# gender_label / country_name は各ルーターで templates.env.globals に登録済み #}
 
 <!-- 基本情報カード -->
 <div class="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -17,7 +18,35 @@
             <p class="text-sm text-gray-500 mb-1">職業</p>
             <p class="font-semibold text-gray-900">{{ persona.occupation }}</p>
         </div>
+        {% if persona.gender %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">性別</p>
+            <p class="font-semibold text-gray-900">{{ gender_label(persona.gender) }}</p>
+        </div>
+        {% endif %}
+        {% if persona.country %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">居住国</p>
+            <p class="font-semibold text-gray-900">{{ country_name(persona.country) }}</p>
+        </div>
+        {% endif %}
+        {% if persona.city %}
+        <div class="bg-gray-50 rounded-md p-4">
+            <p class="text-sm text-gray-500 mb-1">居住都市</p>
+            <p class="font-semibold text-gray-900">{{ persona.city }}</p>
+        </div>
+        {% endif %}
     </div>
+    {% if persona.tags %}
+    <div class="mt-4">
+        <p class="text-sm text-gray-500 mb-2">タグ</p>
+        <div class="flex flex-wrap gap-2">
+            {% for tag in persona.tags %}
+            <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full">{{ tag }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <!-- 背景 -->

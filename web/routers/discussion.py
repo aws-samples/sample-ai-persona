@@ -33,6 +33,17 @@ from web.sanitize import render_markdown  # noqa: E402
 
 templates.env.filters["markdown"] = render_markdown
 
+# 表示用ヘルパーをテンプレートのグローバル関数として登録（persona.py と同様）。
+# country_service は ISO国コード→名前の純粋なデータ参照であり、表示ヘルパーとして
+# Router から直接利用する（アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
+from src.services import country_service  # noqa: E402
+from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
+
+templates.env.globals["country_name"] = country_service.country_name
+templates.env.globals["country_choices"] = country_service.country_choices
+templates.env.globals["gender_label"] = gender_label
+templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
 

@@ -1,0 +1,41 @@
+<script>
+// ペルソナ一覧のクライアントサイド属性フィルタ。
+// .persona-filter-item の data 属性（gender/country/tags/age/occupation）で表示/非表示を切り替える。
+function applyPersonaFilters() {
+    const gender = (document.getElementById('filter-gender')?.value || '').trim();
+    const country = (document.getElementById('filter-country')?.value || '').trim();
+    const tag = (document.getElementById('filter-tag')?.value || '').trim().toLowerCase();
+    const ageMin = parseInt(document.getElementById('filter-age-min')?.value || '', 10);
+    const ageMax = parseInt(document.getElementById('filter-age-max')?.value || '', 10);
+    const occupation = (document.getElementById('filter-occupation')?.value || '').trim().toLowerCase();
+
+    let visible = 0;
+    document.querySelectorAll('.persona-filter-item').forEach((item) => {
+        const ds = item.dataset;
+        const itemTags = (ds.personaTags || '').toLowerCase();
+        const itemAge = parseInt(ds.personaAge || '', 10);
+        const itemOcc = (ds.personaOccupation || '').toLowerCase();
+
+        let show = true;
+        if (gender && ds.personaGender !== gender) show = false;
+        if (country && ds.personaCountry !== country) show = false;
+        if (tag && !itemTags.split(',').some((t) => t.includes(tag))) show = false;
+        if (occupation && !itemOcc.includes(occupation)) show = false;
+        if (!isNaN(ageMin) && (isNaN(itemAge) || itemAge < ageMin)) show = false;
+        if (!isNaN(ageMax) && (isNaN(itemAge) || itemAge > ageMax)) show = false;
+
+        item.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+    });
+
+    const empty = document.getElementById('filter-empty-message');
+    if (empty) empty.style.display = visible === 0 ? '' : 'none';
+}
+
+// htmx で一覧が差し替わった後もフィルタを再適用する
+document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.target && (e.target.id === 'persona-list' || e.target.id === 'persona-grid')) {
+        applyPersonaFilters();
+    }
+});
+</script>

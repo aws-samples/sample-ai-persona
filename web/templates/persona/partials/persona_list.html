@@ -7,17 +7,26 @@
 {% endif %}
     {% for persona in personas %}
     {% if selectable %}
-    <label class="relative cursor-pointer" id="persona-card-{{ persona.id }}">
+    <label class="relative cursor-pointer persona-filter-item block h-full" id="persona-card-{{ persona.id }}"
+           data-persona-name="{{ persona.name }}"
+           data-persona-occupation="{{ persona.occupation }}"
+           data-persona-age="{{ persona.age }}"
+           data-persona-gender="{{ persona.gender or '' }}"
+           data-persona-country="{{ persona.country or '' }}"
+           data-persona-tags="{{ persona.tags | join(',') }}">
         <input type="checkbox"
                data-persona-id="{{ persona.id }}"
                data-persona-name="{{ persona.name }}"
                data-persona-occupation="{{ persona.occupation }}"
                data-persona-age="{{ persona.age }}"
+               data-persona-values="{{ persona.values | join('|') }}"
+               data-persona-tags="{{ persona.tags | join(',') }}"
+               data-persona-background="{{ persona.background }}"
                aria-label="{{ persona.name }}（{{ persona.occupation }}・{{ persona.age }}歳）を議論に追加"
                :checked="$store.discussionSetup?.isSelected?.('{{ persona.id }}') || false"
                @change="$store.discussionSetup?.toggle?.($event.target)"
                class="peer sr-only">
-        <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all">
+        <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all h-full flex flex-col">
             <div class="flex items-start justify-between">
                 <div class="flex items-center gap-3 min-w-0">
                     <div class="persona-list-avatar"
@@ -25,23 +34,50 @@
                          data-avatar-name="{{ persona.name }}"
                          data-avatar-size="40"></div>
                     <div class="min-w-0">
-                        <h4 class="font-semibold text-gray-900 truncate">{{ persona.name }}</h4>
-                        <p class="text-sm text-gray-500 truncate">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                        <h4 class="font-semibold text-gray-900 truncate" title="{{ persona.name }}">{{ persona.name }}</h4>
+                        <p class="text-sm text-gray-500 flex items-center gap-1 min-w-0">
+                            <span class="truncate" title="{{ persona.occupation }}">{{ persona.occupation }}</span>
+                            <span class="flex-shrink-0">/ {{ persona.age }}歳</span>
+                        </p>
                     </div>
                 </div>
-                <div class="w-5 h-5 flex-shrink-0 border-2 border-gray-300 rounded peer-checked:bg-blue-500 peer-checked:border-blue-500 flex items-center justify-center">
-                    <svg class="w-3 h-3 text-white hidden peer-checked:block" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
-                    </svg>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <!-- 詳細を別タブで開く（label選択への伝播を止める） -->
+                    <a href="/persona/{{ persona.id }}" target="_blank" rel="noopener"
+                       @click.stop
+                       title="詳細を別タブで開く"
+                       class="text-blue-600 hover:text-blue-800 text-xs underline">
+                        詳細
+                    </a>
+                    <div class="w-5 h-5 border-2 border-gray-300 rounded peer-checked:bg-blue-500 peer-checked:border-blue-500 flex items-center justify-center">
+                        <svg class="w-3 h-3 text-white hidden peer-checked:block" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
                 </div>
             </div>
-            <p class="text-xs text-gray-400 mt-2 line-clamp-2">
-                {{ persona.background[:80] }}...
+            <!-- プロフィール（背景）。flex-1 で余白を吸収しカード高さをグリッドで統一 -->
+            <p class="text-xs text-gray-400 mt-2 line-clamp-3 flex-1">
+                {{ persona.background }}
             </p>
+            {% if persona.tags %}
+            <!-- タグ行はカード下端に固定 -->
+            <div class="flex flex-wrap gap-1 mt-2">
+                {% for tag in persona.tags[:5] %}
+                <span class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded-full">#{{ tag }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
     </label>
     {% else %}
-    <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow" id="persona-card-{{ persona.id }}">
+    <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow persona-filter-item" id="persona-card-{{ persona.id }}"
+         data-persona-name="{{ persona.name }}"
+         data-persona-occupation="{{ persona.occupation }}"
+         data-persona-age="{{ persona.age }}"
+         data-persona-gender="{{ persona.gender or '' }}"
+         data-persona-country="{{ persona.country or '' }}"
+         data-persona-tags="{{ persona.tags | join(',') }}">
         <!-- ヘッダー -->
         <div class="flex items-start justify-between mb-4">
             <div class="flex items-center gap-3 min-w-0">
@@ -87,6 +123,15 @@
             </span>
             {% endif %}
         </div>
+
+        {% if persona.tags %}
+        <!-- フィルタ用タグ -->
+        <div class="flex flex-wrap gap-2 mt-2">
+            {% for tag in persona.tags[:5] %}
+            <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full">#{{ tag }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
         
         <!-- 作成日時 -->
         <p class="text-xs text-gray-400 mt-4">
