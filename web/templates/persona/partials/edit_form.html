@@ -104,7 +104,7 @@
         <!-- タグ -->
         <div class="bg-white rounded-lg shadow-md p-6">
             <label for="tags" class="block text-xl font-semibold text-gray-900 mb-2">タグ</label>
-            <p class="text-sm text-gray-500 mb-4">フィルタ用のタグを1行に1つ入力してください</p>
+            <p class="text-sm text-gray-500 mb-4">フィルタ用のタグを1行に1つ入力してください（カンマ「,」は使用不可、1個50文字以内、最大20個）</p>
             <textarea id="tags" name="tags" rows="3"
                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">{% for tag in persona.tags %}{{ tag }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea>
