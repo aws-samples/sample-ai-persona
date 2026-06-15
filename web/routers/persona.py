@@ -325,12 +325,6 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
         )
 
 
-def _generate_persona_sync(file_text: str) -> Persona:
-    """同期的なペルソナ生成処理（スレッドプールで実行）"""
-    persona_manager = get_persona_manager()
-    return persona_manager.generate_persona_from_interview(file_text)
-
-
 def _generate_personas_sync(
     file_contents: list[tuple[bytes, str]],
     data_type: str,

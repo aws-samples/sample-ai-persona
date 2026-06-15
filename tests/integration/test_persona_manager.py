@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.persona import Persona
-from src.services.ai_service import AIService, AIServiceError
+from src.services.ai_service import AIService
 from src.services.database_service import DatabaseError
 
 
@@ -163,70 +163,6 @@ class TestPersonaManagerIntegration:
         )
         assert manager.ai_service == ai_service
         assert manager.database_service == mock_database_service
-
-    def test_generate_persona_from_interview_success(
-        self,
-        persona_manager,
-        mock_ai_service,
-        sample_interview_text,
-        sample_persona_data,
-    ):
-        """Test successful persona generation from interview text."""
-        # Setup mock AI service to return a valid persona
-        expected_persona = Persona.create_new(**sample_persona_data)
-        mock_ai_service.generate_persona.return_value = expected_persona
-
-        # Generate persona
-        result = persona_manager.generate_persona_from_interview(sample_interview_text)
-
-        # Verify AI service was called correctly
-        mock_ai_service.generate_persona.assert_called_once_with(sample_interview_text)
-
-        # Verify result
-        assert result == expected_persona
-        assert result.name == "田中 花子"
-        assert result.age == 35
-        assert len(result.values) == 3
-        assert len(result.pain_points) == 3
-        assert len(result.goals) == 3
-
-    def test_generate_persona_from_interview_empty_text(self, persona_manager):
-        """Test persona generation with empty interview text."""
-        with pytest.raises(PersonaManagerError, match="インタビューテキストが空です"):
-            persona_manager.generate_persona_from_interview("")
-
-        with pytest.raises(PersonaManagerError, match="インタビューテキストが空です"):
-            persona_manager.generate_persona_from_interview("   ")
-
-    def test_generate_persona_from_interview_short_text(self, persona_manager):
-        """Test persona generation with too short interview text."""
-        short_text = "短いテキスト"
-        with pytest.raises(
-            PersonaManagerError, match="インタビューテキストが短すぎます"
-        ):
-            persona_manager.generate_persona_from_interview(short_text)
-
-    def test_generate_persona_from_interview_long_text(self, persona_manager):
-        """Test persona generation with too long interview text."""
-        long_text = "a" * 50001  # Exceed 50KB limit
-        with pytest.raises(
-            PersonaManagerError, match="インタビューテキストが長すぎます"
-        ):
-            persona_manager.generate_persona_from_interview(long_text)
-
-    def test_generate_persona_ai_service_error(
-        self, persona_manager, mock_ai_service, sample_interview_text
-    ):
-        """Test persona generation when AI service fails."""
-        # Setup mock to raise AIServiceError
-        mock_ai_service.generate_persona.side_effect = AIServiceError(
-            "AI service failed"
-        )
-
-        with pytest.raises(
-            PersonaManagerError, match="AI service error during persona generation"
-        ):
-            persona_manager.generate_persona_from_interview(sample_interview_text)
 
     def test_save_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona saving."""
@@ -500,17 +436,11 @@ class TestPersonaManagerIntegration:
     def test_complete_persona_workflow(
         self,
         persona_manager,
-        mock_ai_service,
-        sample_interview_text,
         sample_persona_data,
     ):
         """Test complete persona management workflow."""
-        # Setup mock AI service
-        generated_persona = Persona.create_new(**sample_persona_data)
-        mock_ai_service.generate_persona.return_value = generated_persona
-
-        # Step 1: Generate persona from interview
-        persona = persona_manager.generate_persona_from_interview(sample_interview_text)
+        # Step 1: Create persona
+        persona = Persona.create_new(**sample_persona_data)
         assert persona.name == "田中 花子"
 
         # Step 2: Save persona
