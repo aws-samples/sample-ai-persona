@@ -20,6 +20,8 @@ except ImportError:
 
 from ..config import config
 from ..models.persona import Persona
+from ..models.demographics import sanitize_gender, gender_label
+from .country_service import sanitize_country, country_name
 from ..models.message import Message
 
 
@@ -1089,12 +1091,27 @@ class AgentService:
         """
         persona_dict = asdict(persona)
 
+        # 設定済みのデモグラフィック属性のみプロフィールに追加（表示名へ変換）
+        profile_lines = [
+            f"- 名前: {persona_dict['name']}",
+            f"- 年齢: {persona_dict['age']}歳",
+        ]
+        if persona.gender:
+            profile_lines.append(f"- 性別: {gender_label(persona.gender)}")
+        if persona.country:
+            location = country_name(persona.country)
+            if persona.city:
+                location += f"・{persona.city}"
+            profile_lines.append(f"- 居住地: {location}")
+        elif persona.city:
+            profile_lines.append(f"- 居住地: {persona.city}")
+        profile_lines.append(f"- 職業: {persona_dict['occupation']}")
+        profile_text = "\n".join(profile_lines)
+
         prompt = f"""あなたは{persona_dict["name"]}として議論に参加します。
 
 # あなたのプロフィール
-- 名前: {persona_dict["name"]}
-- 年齢: {persona_dict["age"]}歳
-- 職業: {persona_dict["occupation"]}
+{profile_text}
 
 # 背景
 {persona_dict["background"]}
@@ -1392,255 +1409,6 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
 
         return base_prompt + dataset_section
 
-    def create_market_research_agent(self) -> Agent:
-        """
-        市場調査レポート分析用のエージェントを作成
-
-        Returns:
-            Agent: 市場調査分析エージェント
-
-        Raises:
-            AgentInitializationError: エージェント作成に失敗した場合
-        """
-        if Agent is None or BedrockModel is None:
-            raise AgentInitializationError(
-                "Strands Agent SDKがインストールされていません"
-            )
-
-        system_prompt = """あなたは提供される市場調査レポート、顧客分析資料またはマーケティングレポートを分析し、複数の異なるペルソナを生成する専門家です。
-
-# 役割
-これら資料、レポートの内容を詳細に分析し、以下の観点から異なる顧客セグメントを識別してペルソナを生成してください：
-
-1. **市場セグメント**: レポートから読み取れる異なる顧客層・ターゲット層
-2. **行動パターン**: 購買行動、利用パターン、意思決定プロセスの違い
-3. **デモグラフィック**: 年齢、職業、ライフスタイル、価値観の違い
-
-# 分析アプローチ
-- レポート全体を俯瞰し、複数の異なる顧客像を抽出
-- 各ペルソナが明確に区別できるよう、特徴的な違いを強調
-- 実在しそうなリアルで具体的なペルソナを作成
-- 日本市場を想定した日本人のペルソナを生成
-
-# 出力形式
-**必ず以下のJSON配列形式のみで出力してください。説明文、前置き、後書きは一切不要です：**
-
-[
-    {
-        "name": "田中 花子",
-        "age": 35,
-        "occupation": "会社員（マーケティング部）",
-        "background": "東京都在住。大学卒業後、現在の会社に就職し10年目。一人暮らしで、仕事とプライベートのバランスを重視している。",
-        "values": ["効率性を重視する", "新しいことへの挑戦を大切にする", "人とのつながりを大事にする"],
-        "pain_points": ["時間管理が難しい", "情報過多で選択に迷う", "仕事のストレスが多い"],
-        "goals": ["キャリアアップを目指す", "ワークライフバランスを改善する", "新しいスキルを身につける"]
-    },
-    {
-        "name": "佐藤 健太",
-        "age": 28,
-        "occupation": "フリーランスエンジニア",
-        "background": "神奈川県在住。大学卒業後、IT企業に3年勤務した後、フリーランスとして独立。リモートワーク中心の生活。",
-        "values": ["自由な働き方を重視", "技術力の向上を追求", "効率的な時間の使い方"],
-        "pain_points": ["収入の不安定さ", "孤独を感じることがある", "自己管理の難しさ"],
-        "goals": ["安定した収入源を確保", "技術コミュニティとのつながり", "ワークライフバランスの確立"]
-    }
-]
-
-# 重要な注意事項
-- 各ペルソナは明確に異なる特徴を持つこと
-- 日本人の名前を使用（多様な姓と名を使用）
-- 年齢は数値のみ（引用符なし）
-- 各リスト項目は3-5個程度
-- JSON形式を厳密に守り、構文エラーがないようにする
-- **出力は上記JSON配列のみで、他の文章は絶対に含めない**
-"""
-
-        try:
-            model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID,
-                region_name=config.AWS_REGION,
-            )
-
-            agent = Agent(
-                name="MarketResearchAnalyst", model=model, system_prompt=system_prompt
-            )
-
-            self.logger.info("市場調査分析エージェントを作成しました")
-            return agent
-
-        except Exception as e:
-            error_msg = f"市場調査分析エージェント作成エラー: {e}"
-            self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
-
-    def generate_personas_from_report(
-        self, report_text: str, persona_count: int
-    ) -> List[Persona]:
-        """
-        市場調査レポートから複数のペルソナを生成
-
-        Args:
-            report_text: 市場調査レポートのテキスト
-            persona_count: 生成するペルソナの数（1-10）
-
-        Returns:
-            List[Persona]: 生成されたペルソナのリスト
-
-        Raises:
-            AgentServiceError: ペルソナ生成に失敗した場合
-        """
-        if not report_text or not report_text.strip():
-            raise AgentServiceError("レポートテキストが空です")
-
-        if persona_count < 1 or persona_count > 10:
-            raise AgentServiceError("ペルソナ数は1-10の範囲で指定してください")
-
-        agent = None
-        try:
-            # 市場調査分析エージェントを作成
-            agent = self.create_market_research_agent()
-
-            # プロンプトを構築
-            prompt = f"""以下の市場調査レポートを分析し、**{persona_count}個**の異なるペルソナを生成してください。
-
-# 市場調査レポート
-{report_text}
-
-# 指示
-上記のレポートから、{persona_count}個の明確に異なる顧客ペルソナを抽出してください。
-各ペルソナは、市場セグメント、行動パターン、デモグラフィックの観点で区別できるようにしてください。
-
-JSON配列:"""
-
-            # エージェントを実行
-            self.logger.info(
-                f"市場調査レポートから{persona_count}個のペルソナを生成中..."
-            )
-            result = agent(prompt)
-
-            # AgentResultからテキストを抽出
-            response_text = ""
-            try:
-                if hasattr(result, "message") and result.message:
-                    content = result.message.get("content", [])
-                    text_parts = []
-                    for block in content:
-                        if isinstance(block, dict) and "text" in block:
-                            text_parts.append(block["text"])
-                    if text_parts:
-                        response_text = "\n".join(text_parts)
-
-                # フォールバック: agent.messagesから取得
-                if not response_text and hasattr(agent, "messages"):
-                    for msg in reversed(agent.messages):
-                        if msg.get("role") == "assistant":
-                            msg_content = msg.get("content", [])
-                            text_parts = []
-                            for block in msg_content:
-                                if isinstance(block, dict) and "text" in block:
-                                    text_parts.append(block["text"])
-                            if text_parts:
-                                response_text = "\n".join(text_parts)
-                                break
-
-                # 最終フォールバック
-                if not response_text:
-                    response_text = str(result)
-            except Exception as e:
-                self.logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
-                response_text = str(result)
-
-            self.logger.debug(f"エージェントレスポンス: {response_text[:500]}...")
-
-            # レスポンスをパース
-            personas = self._parse_personas_from_response(response_text)
-
-            # 指定された数のペルソナが生成されたか確認
-            if len(personas) != persona_count:
-                self.logger.warning(
-                    f"要求された{persona_count}個ではなく{len(personas)}個のペルソナが生成されました"
-                )
-
-            self.logger.info(f"{len(personas)}個のペルソナ生成が完了しました")
-            return personas
-
-        except Exception as e:
-            error_msg = f"市場調査レポートからのペルソナ生成エラー: {e}"
-            self.logger.error(error_msg)
-            raise AgentServiceError(error_msg)
-        finally:
-            # エージェントのクリーンアップ（Strands SDKではdisposeは不要）
-            if agent is not None:
-                self.logger.debug("市場調査分析エージェントの処理が完了しました")
-
-    def _parse_personas_from_response(self, response: str) -> List[Persona]:
-        """
-        エージェントのレスポンスから複数のペルソナをパース
-
-        Args:
-            response: エージェントのレスポンス文字列
-
-        Returns:
-            List[Persona]: パースされたペルソナのリスト
-
-        Raises:
-            AgentServiceError: パースに失敗した場合
-        """
-        import json
-        import re
-
-        try:
-            # JSON配列部分を抽出
-            json_match = re.search(r"\[[\s\S]*\]", response)
-            if not json_match:
-                raise AgentServiceError("レスポンスからJSON配列を抽出できませんでした")
-
-            json_str = json_match.group(0)
-            personas_data = json.loads(json_str)
-
-            if not isinstance(personas_data, list):
-                raise AgentServiceError("レスポンスがJSON配列ではありません")
-
-            # 各ペルソナデータをPersonaオブジェクトに変換
-            personas = []
-            for persona_data in personas_data:
-                # 必須フィールドの検証
-                required_fields = [
-                    "name",
-                    "age",
-                    "occupation",
-                    "background",
-                    "values",
-                    "pain_points",
-                    "goals",
-                ]
-                for field in required_fields:
-                    if field not in persona_data:
-                        raise AgentServiceError(
-                            f"必須フィールド '{field}' が見つかりません"
-                        )
-
-                # Personaオブジェクトを作成
-                persona = Persona.create_new(
-                    name=persona_data["name"],
-                    age=int(persona_data["age"]),
-                    occupation=persona_data["occupation"],
-                    background=persona_data["background"],
-                    values=persona_data["values"],
-                    pain_points=persona_data["pain_points"],
-                    goals=persona_data["goals"],
-                )
-                personas.append(persona)
-
-            return personas
-
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON解析エラー - レスポンス: {response[:500]}...")
-            raise AgentServiceError(f"JSON解析エラー: {e}")
-        except Exception as e:
-            self.logger.error(f"ペルソナパースエラー: {e}")
-            raise AgentServiceError(f"ペルソナパースエラー: {e}")
-
     # --- Flexible Persona Generation ---
 
     @staticmethod
@@ -1737,7 +1505,7 @@ JSON配列:"""
 - データ全体を俯瞰し、異なる顧客像を抽出
 - 各ペルソナが明確に区別できるよう、特徴的な違いを強調
 - 実在しそうなリアルで具体的なペルソナを作成
-- 日本市場を想定した日本人のペルソナを生成
+- データが対象とする市場・地域に即したペルソナを生成（特定の国を前提にしない。出力テキストは日本語）
 
 # ★重要：分析過程での根拠明示
 
@@ -1784,8 +1552,11 @@ JSON配列:"""
 
 # ペルソナの構成要素
 各ペルソナには以下を含めてください：
-- name: 日本人の名前（姓 名）
+- name: 名前（そのペルソナの国・地域に即した自然な名前。日本語で表記）
 - age: 年齢（数値）
+- gender: 性別（"male" / "female" / "other" のいずれか）
+- country: 居住国（ISO 3166-1 alpha-2の2文字大文字コード。例: 日本=JP, アメリカ=US。読み取れない場合は "JP"）
+- city: 居住都市名（日本語。読み取れない場合は省略）
 - occupation: 職業
 - background: 以下を含む具体的な記述にすること
   ・経歴と現在の生活状況（家族構成、居住地、生活リズム）
@@ -1894,8 +1665,20 @@ JSON配列:"""
         from pydantic import BaseModel, Field
 
         class PersonaOutput(BaseModel):
-            name: str = Field(description="日本人の名前（姓 名）")
+            name: str = Field(
+                description="名前（国・地域に即した自然な名前。日本語表記）"
+            )
             age: int = Field(description="年齢")
+            gender: str | None = Field(
+                default=None, description="性別（male / female / other）"
+            )
+            country: str | None = Field(
+                default=None,
+                description="居住国（ISO 3166-1 alpha-2の2文字コード。例: JP, US）",
+            )
+            city: str | None = Field(
+                default=None, description="居住都市名（日本語。不明なら省略）"
+            )
             occupation: str = Field(description="職業")
             background: str = Field(description="背景・経歴")
             values: list[str] = Field(description="価値観（データから導出できるもの）")
@@ -1961,8 +1744,11 @@ JSON配列:"""
                 "上記の分析結果に基づいて、生成したペルソナをJSON形式で出力してください。\n"
                 "以下のスキーマに厳密に従ってください:\n"
                 "- personas: オブジェクトの配列\n"
-                "  - name: string（日本人の姓名）\n"
+                "  - name: string（国・地域に即した自然な名前。日本語表記）\n"
                 "  - age: integer（数値のみ、文字列不可）\n"
+                "  - gender: string（male / female / other のいずれか）\n"
+                "  - country: string（ISO 3166-1 alpha-2の2文字コード。例: JP, US。不明なら JP）\n"
+                "  - city: string（居住都市名。日本語。不明なら省略可）\n"
                 "  - occupation: string\n"
                 "  - background: string\n"
                 "  - values: stringの配列（1-5個、データから導出できるもの）\n"
@@ -2003,6 +1789,9 @@ JSON配列:"""
                     values=p.values,
                     pain_points=p.pain_points,
                     goals=p.goals,
+                    gender=sanitize_gender(p.gender),
+                    country=sanitize_country(p.country),
+                    city=p.city,
                 )
                 personas.append(persona)
 

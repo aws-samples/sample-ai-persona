@@ -72,6 +72,7 @@ def get_job_manager() -> JobManager:
 # Response / Request models
 # ---------------------------------------------------------------------------
 
+
 class PersonaResponse(BaseModel):
     id: str
     name: str
@@ -81,6 +82,10 @@ class PersonaResponse(BaseModel):
     values: List[str]
     pain_points: List[str]
     goals: List[str]
+    gender: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
+    tags: List[str] = []
 
 
 class DiscussionResponse(BaseModel):
@@ -124,8 +129,10 @@ class JobResponse(BaseModel):
 
 # --- MCP Request models ---
 
+
 class GeneratePersonasRequest(BaseModel):
     """ペルソナ生成リクエスト"""
+
     data_type: str = Field(
         description="データ種別: interview, market_report, review, purchase, other",
     )
@@ -136,7 +143,9 @@ class GeneratePersonasRequest(BaseModel):
     )
     count: int = Field(default=3, ge=1, le=10, description="生成するペルソナ数")
     description: Optional[str] = Field(
-        default=None, max_length=1000, description="データの説明（data_type=other時に使用）"
+        default=None,
+        max_length=1000,
+        description="データの説明（data_type=other時に使用）",
     )
     custom_prompt: Optional[str] = Field(
         default=None, max_length=2000, description="カスタムプロンプト（最大2000文字）"
@@ -145,12 +154,14 @@ class GeneratePersonasRequest(BaseModel):
 
 class CategoryInput(BaseModel):
     """インサイトカテゴリ入力"""
+
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=500)
 
 
 class RunDiscussionRequest(BaseModel):
     """議論実行リクエスト"""
+
     persona_ids: List[str] = Field(
         min_length=2, description="参加ペルソナIDリスト（2名以上）"
     )
@@ -171,6 +182,7 @@ class RunDiscussionRequest(BaseModel):
 
 class GenerateInsightsRequest(BaseModel):
     """インサイト生成リクエスト"""
+
     categories: Optional[List[CategoryInput]] = Field(
         default=None,
         max_length=10,
@@ -180,6 +192,7 @@ class GenerateInsightsRequest(BaseModel):
 
 class RunInterviewRequest(BaseModel):
     """インタビュー実行リクエスト"""
+
     persona_ids: List[str] = Field(
         min_length=1, max_length=5, description="参加ペルソナIDリスト（1-5名）"
     )
@@ -212,6 +225,10 @@ async def list_personas(search: Optional[str] = None) -> Any:
                 values=p.values,
                 pain_points=p.pain_points,
                 goals=p.goals,
+                gender=p.gender,
+                country=p.country,
+                city=p.city,
+                tags=p.tags,
             )
             for p in personas
         ]
@@ -239,6 +256,10 @@ async def get_persona(persona_id: str) -> Any:
             values=persona.values,
             pain_points=persona.pain_points,
             goals=persona.goals,
+            gender=persona.gender,
+            country=persona.country,
+            city=persona.city,
+            tags=persona.tags,
         )
     except HTTPException:
         raise
@@ -278,6 +299,7 @@ async def health() -> Any:
 # MCP Tool Endpoints
 # ---------------------------------------------------------------------------
 
+
 def _persona_to_response(p: Any) -> PersonaResponse:
     return PersonaResponse(
         id=p.id,
@@ -298,12 +320,15 @@ def _resolve_personas(persona_ids: List[str]) -> list:
     for pid in persona_ids:
         p = pm.get_persona(pid)
         if not p:
-            raise HTTPException(status_code=404, detail=f"ペルソナが見つかりません: {pid}")
+            raise HTTPException(
+                status_code=404, detail=f"ペルソナが見つかりません: {pid}"
+            )
         personas.append(p)
     return personas
 
 
 # --- generate_personas (async job) ---
+
 
 def _run_generate_personas(
     file_contents: list[tuple[bytes, str]],
@@ -357,6 +382,7 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
 
 # --- run_discussion (async job) ---
 
+
 def _run_classic_discussion(
     personas: list,
     topic: str,
@@ -367,7 +393,9 @@ def _run_classic_discussion(
     dm = get_discussion_manager()
     discussion = dm.start_discussion(personas=personas, topic=topic)
     cats = (
-        [InsightCategory.from_dict(c.model_dump()) for c in categories] if categories else None
+        [InsightCategory.from_dict(c.model_dump()) for c in categories]
+        if categories
+        else None
     )
     insights = dm.generate_insights(discussion, categories=cats)
     discussion = replace(discussion, insights=insights)
@@ -396,7 +424,9 @@ def _run_agent_discussion(
             facilitator=facilitator,
         )
         cats = (
-            [InsightCategory.from_dict(c.model_dump()) for c in categories] if categories else None
+            [InsightCategory.from_dict(c.model_dump()) for c in categories]
+            if categories
+            else None
         )
         insights = dm.generate_insights(discussion, categories=cats)
         discussion = replace(discussion, insights=insights)
@@ -446,7 +476,9 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
     try:
         personas = _resolve_personas(req.persona_ids)
         jm = get_job_manager()
-        runner = _run_classic_discussion if req.mode == "classic" else _run_agent_discussion
+        runner = (
+            _run_classic_discussion if req.mode == "classic" else _run_agent_discussion
+        )
         job_id = jm.submit(runner, personas, req.topic, req.categories, req.rounds)
         return JobResponse(job_id=job_id, status="pending")
     except HTTPException:
@@ -457,6 +489,7 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
 
 
 # --- get_discussion ---
+
 
 @router.get(
     "/discussions/{discussion_id}",
@@ -480,6 +513,7 @@ async def get_discussion_detail(discussion_id: str) -> Any:
 
 # --- generate_insights ---
 
+
 @router.post(
     "/discussions/{discussion_id}/insights",
     response_model=JobResponse,
@@ -487,9 +521,7 @@ async def get_discussion_detail(discussion_id: str) -> Any:
     summary="議論結果からインサイトを生成する",
     description="保存済みの議論結果からインサイトを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def generate_insights(
-    discussion_id: str, req: GenerateInsightsRequest
-) -> Any:
+async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) -> Any:
     try:
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
@@ -526,6 +558,7 @@ async def generate_insights(
 
 # --- run_interview ---
 
+
 @router.post(
     "/interviews",
     response_model=List[MessageResponse],
@@ -561,6 +594,7 @@ async def run_interview(req: RunInterviewRequest) -> Any:
 
 
 # --- job status ---
+
 
 @router.get(
     "/jobs/{job_id}",

@@ -7,7 +7,9 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple
 
 from ..models.persona import Persona
-from ..services.ai_service import AIService, AIServiceError
+from ..models.demographics import VALID_GENDERS
+from ..services import country_service
+from ..services.ai_service import AIService
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
@@ -43,63 +45,6 @@ class PersonaManager:
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
-
-    def generate_persona_from_interview(self, interview_text: str) -> Persona:
-        """
-        Generate a persona from N1 interview text.
-
-        This method implements the complete persona generation workflow:
-        1. Validates input interview text
-        2. Uses AI service to generate persona
-        3. Returns the generated persona object
-
-        Args:
-            interview_text: N1 interview text content
-
-        Returns:
-            Persona: Generated persona object
-
-        Raises:
-            PersonaManagerError: If persona generation fails
-        """
-        if not interview_text or not interview_text.strip():
-            raise PersonaManagerError("インタビューテキストが空です")
-
-        # Validate interview text length
-        if len(interview_text.strip()) < 50:
-            raise PersonaManagerError(
-                "インタビューテキストが短すぎます。より詳細な内容が必要です"
-            )
-
-        if len(interview_text) > 50000:  # 50KB limit
-            raise PersonaManagerError(
-                "インタビューテキストが長すぎます。50,000文字以内で入力してください"
-            )
-
-        self.logger.info(
-            f"Starting persona generation from interview text (length: {len(interview_text)} chars)"
-        )
-
-        try:
-            # Generate persona using AI service
-            persona = self.ai_service.generate_persona(interview_text)
-
-            # Validate generated persona
-            self._validate_generated_persona(persona)
-
-            self.logger.info(
-                f"Persona generation completed successfully: {persona.name} (ID: {persona.id})"
-            )
-            return persona
-
-        except AIServiceError as e:
-            error_msg = f"AI service error during persona generation: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error during persona generation: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
 
     def generate_personas(
         self,
@@ -523,6 +468,10 @@ class PersonaManager:
         values: List[str] | None = None,
         pain_points: List[str] | None = None,
         goals: List[str] | None = None,
+        gender: str | None = None,
+        country: str | None = None,
+        city: str | None = None,
+        tags: List[str] | None = None,
     ) -> Optional[Persona]:
         """
         Edit an existing persona with new values.
@@ -536,6 +485,10 @@ class PersonaManager:
             values: New values list (optional)
             pain_points: New pain points list (optional)
             goals: New goals list (optional)
+            gender: New gender code (optional)
+            country: New country code (ISO 3166-1 alpha-2, optional)
+            city: New city (optional)
+            tags: New filter tags list (optional)
 
         Returns:
             Updated Persona object if successful, None if persona not found
@@ -562,6 +515,10 @@ class PersonaManager:
                 values=values,
                 pain_points=pain_points,
                 goals=goals,
+                gender=gender,
+                country=country,
+                city=city,
+                tags=tags,
             )
 
             # Validate updated persona
@@ -656,11 +613,14 @@ class PersonaManager:
 
             matching_personas = []
             for persona in all_personas:
-                # Search in name, occupation, and background
+                # Search in name, occupation, background, country, and tags
+                tags_text = " ".join(persona.tags).lower() if persona.tags else ""
                 if (
                     query_lower in persona.name.lower()
                     or query_lower in persona.occupation.lower()
                     or query_lower in persona.background.lower()
+                    or (persona.country and query_lower in persona.country.lower())
+                    or query_lower in tags_text
                 ):
                     matching_personas.append(persona)
 
@@ -770,6 +730,36 @@ class PersonaManager:
 
         if len(persona.goals) > 10:
             raise PersonaManagerError("目標・願望は10項目以内で設定してください")
+
+        # Validate demographic fields (optional, only when set)
+        if persona.gender is not None and persona.gender not in VALID_GENDERS:
+            raise PersonaManagerError(
+                f"性別は {', '.join(sorted(VALID_GENDERS))} のいずれかで設定してください"
+            )
+
+        if persona.country and not country_service.is_valid_country(persona.country):
+            # ISO 3166-1 alpha-2 として実在する国コードのみ許可（架空コード XX や
+            # alpha-3 JPN を弾く）。検証は pycountry ベースの country_service に委譲。
+            raise PersonaManagerError(
+                "国はISO 3166-1 alpha-2の実在する国コードで設定してください"
+            )
+
+        if persona.city and len(persona.city) > 100:
+            raise PersonaManagerError("居住都市は100文字以内で設定してください")
+
+        if persona.tags:
+            if len(persona.tags) > 20:
+                raise PersonaManagerError("タグは20個以内で設定してください")
+            for tag in persona.tags:
+                if not tag or not tag.strip():
+                    raise PersonaManagerError("タグに空の項目があります")
+                if len(tag) > 50:
+                    raise PersonaManagerError(
+                        "タグは1個あたり50文字以内で設定してください"
+                    )
+                # data属性ではカンマ区切りでフィルタに渡すため、タグ内のカンマを禁止
+                if "," in tag:
+                    raise PersonaManagerError("タグにカンマ（,）は使用できません")
 
     # ============================================
     # Memory Management Methods
@@ -942,87 +932,3 @@ class PersonaManager:
             return {"name": match.group(1), "content": match.group(2).strip()}
         return None
 
-    def generate_personas_from_market_report(
-        self, file_content: bytes, filename: str, persona_count: int
-    ) -> List[Persona]:
-        """
-        市場調査レポートなどから複数のペルソナを生成
-
-        このメソッドは以下のワークフローを実装します：
-        1. ファイルからテキストを抽出（PDF/Word/テキスト対応）
-        2. テキスト内容を検証
-        3. AgentServiceを使用して複数ペルソナを生成
-        4. 生成されたペルソナを返却
-
-        Args:
-            file_content: ファイル内容（バイト）
-            filename: ファイル名
-            persona_count: 生成するペルソナの数（1-10）
-
-        Returns:
-            List[Persona]: 生成されたペルソナのリスト
-
-        Raises:
-            PersonaManagerError: ペルソナ生成に失敗した場合
-        """
-        from ..managers.file_manager import FileManager, FileUploadError
-        from ..services.agent_service import AgentService, AgentServiceError
-
-        # 入力検証
-        if persona_count < 1 or persona_count > 10:
-            raise PersonaManagerError("ペルソナ数は1-10の範囲で指定してください")
-
-        self.logger.info(
-            f"調査、分析レポートから{persona_count}人のペルソナ生成を開始 "
-            f"(ファイル: {filename}, サイズ: {len(file_content)} bytes)"
-        )
-
-        try:
-            # ファイルマネージャーを使用してテキストを抽出
-            file_manager = FileManager()
-            report_text = file_manager.extract_text_from_file(file_content, filename)
-
-            # テキスト長の検証
-            text_length = len(report_text.strip())
-            if text_length < 100:
-                raise PersonaManagerError(
-                    "レポート内容が短すぎます。より詳細な市場調査レポートが必要です"
-                )
-
-            if text_length > 100000:  # 100KB limit
-                raise PersonaManagerError(
-                    "レポート内容が長すぎます。100,000文字以内のレポートをアップロードしてください"
-                )
-
-            self.logger.info(f"レポートテキスト抽出完了 (長さ: {text_length} 文字)")
-
-            # AgentServiceを使用して複数ペルソナを生成
-            agent_service = AgentService()
-            personas = agent_service.generate_personas_from_report(
-                report_text, persona_count
-            )
-
-            # 生成されたペルソナを検証
-            for i, persona in enumerate(personas, 1):
-                self._validate_generated_persona(persona)
-                self.logger.info(
-                    f"ペルソナ {i}/{len(personas)} 検証完了: {persona.name}"
-                )
-
-            self.logger.info(
-                f"市場調査レポートから{len(personas)}個のペルソナ生成が完了しました"
-            )
-            return personas
-
-        except FileUploadError as e:
-            error_msg = f"ファイル処理エラー: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-        except AgentServiceError as e:
-            error_msg = f"エージェントサービスエラー: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"予期しないエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)

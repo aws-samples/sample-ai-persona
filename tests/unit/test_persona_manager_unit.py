@@ -117,68 +117,6 @@ class TestGetPersonaMemories:
         assert page == 1
 
 
-class TestGeneratePersonasFromMarketReport:
-    """generate_personas_from_market_report のテスト"""
-
-    def test_invalid_persona_count_zero(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas_from_market_report(b"content", "report.txt", 0)
-
-    def test_invalid_persona_count_over(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas_from_market_report(b"content", "report.txt", 11)
-
-    @patch("src.managers.file_manager.FileManager")
-    def test_report_too_short(self, mock_fm_cls, manager):
-        mock_fm = Mock()
-        mock_fm.extract_text_from_file.return_value = "短い"
-        mock_fm_cls.return_value = mock_fm
-
-        with pytest.raises(PersonaManagerError, match="短すぎます"):
-            manager.generate_personas_from_market_report(b"content", "report.txt", 3)
-
-
-class TestGeneratePersonaFromInterview:
-    """generate_persona_from_interview のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
-
-    def test_empty_text_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="空です"):
-            manager.generate_persona_from_interview("")
-
-    def test_short_text_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="短すぎます"):
-            manager.generate_persona_from_interview("短い文章")
-
-    def test_too_long_text_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="長すぎます"):
-            manager.generate_persona_from_interview("x" * 50001)
-
-    def test_ai_service_error(self, manager):
-        from src.services.ai_service import AIServiceError
-
-        manager.ai_service.generate_persona.side_effect = AIServiceError("AI error")
-        with pytest.raises(PersonaManagerError, match="AI service error"):
-            manager.generate_persona_from_interview("x" * 100)
-
-    def test_success(self, manager):
-        persona = Persona.create_new(
-            name="生成ペルソナ",
-            age=30,
-            occupation="会社員",
-            background="テスト背景テスト背景",
-            values=["v"],
-            pain_points=["p"],
-            goals=["g"],
-        )
-        manager.ai_service.generate_persona.return_value = persona
-        result = manager.generate_persona_from_interview("x" * 100)
-        assert result.name == "生成ペルソナ"
-
-
 class TestGeneratePersonas:
     """generate_personas 統合生成のテスト"""
 

@@ -149,50 +149,6 @@ class TestAIService:
         with pytest.raises(BedrockAPIError, match="レスポンスの JSON 解析に失敗"):
             self.ai_service._invoke_model("テストプロンプト")
 
-    def test_generate_persona_success(self):
-        """ペルソナ生成成功のテスト"""
-        mock_response = """
-        {
-            "name": "田中花子",
-            "age": 30,
-            "occupation": "マーケティング担当",
-            "background": "大学卒業後、現在の会社で5年間勤務",
-            "values": ["効率性", "品質", "革新性"],
-            "pain_points": ["時間不足", "情報過多", "コスト意識"],
-            "goals": ["キャリアアップ", "ワークライフバランス", "スキル向上"]
-        }
-        """
-
-        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
-            mock_retry.return_value = mock_response
-
-            result = self.ai_service.generate_persona("テストインタビュー")
-
-            assert isinstance(result, Persona)
-            assert result.name == "田中花子"
-            assert result.age == 30
-            assert result.occupation == "マーケティング担当"
-            assert len(result.values) == 3
-            assert len(result.pain_points) == 3
-            assert len(result.goals) == 3
-            mock_retry.assert_called_once()
-
-    def test_generate_persona_empty_interview(self):
-        """空のインタビューテキストでペルソナ生成のテスト"""
-        with pytest.raises(AIServiceError, match="インタビューテキストが空です"):
-            self.ai_service.generate_persona("")
-
-        with pytest.raises(AIServiceError, match="インタビューテキストが空です"):
-            self.ai_service.generate_persona("   ")
-
-    def test_generate_persona_error(self):
-        """ペルソナ生成エラーのテスト"""
-        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
-            mock_retry.side_effect = Exception("API エラー")
-
-            with pytest.raises(AIServiceError, match="ペルソナ生成中にエラーが発生"):
-                self.ai_service.generate_persona("テストインタビュー")
-
     def test_facilitate_discussion_success(self):
         """議論進行成功のテスト"""
         mock_response = "[田中太郎]: こんにちは\n[佐藤花子]: よろしくお願いします"
@@ -532,16 +488,6 @@ class TestAIService:
         assert mock_func.call_count == 1  # リトライしない
         assert mock_sleep.call_count == 0
 
-    def test_create_persona_generation_prompt(self):
-        """ペルソナ生成プロンプト作成のテスト"""
-        interview_text = "テストインタビュー内容"
-        prompt = self.ai_service._create_persona_generation_prompt(interview_text)
-
-        assert "テストインタビュー内容" in prompt
-        assert "JSON形式" in prompt
-        assert "name" in prompt
-        assert "age" in prompt
-
     def test_create_discussion_prompt(self):
         """議論プロンプト作成のテスト"""
         personas = [self.test_persona, self.test_persona2]
@@ -574,56 +520,6 @@ class TestAIService:
         assert "**田中太郎**: テストメッセージ1" in prompt
         assert "**佐藤花子**: テストメッセージ2" in prompt
         assert "インサイト" in prompt
-
-    def test_parse_and_validate_persona_success(self):
-        """ペルソナ解析・検証成功のテスト"""
-        response = """
-        以下がペルソナです：
-        {
-            "name": "田中花子",
-            "age": 30,
-            "occupation": "マーケティング担当",
-            "background": "大学卒業後、現在の会社で5年間勤務",
-            "values": ["効率性", "品質", "革新性"],
-            "pain_points": ["時間不足", "情報過多", "コスト意識"],
-            "goals": ["キャリアアップ", "ワークライフバランス", "スキル向上"]
-        }
-        その他の説明文
-        """
-
-        result = self.ai_service._parse_and_validate_persona(response)
-
-        assert isinstance(result, Persona)
-        assert result.name == "田中花子"
-        assert result.age == 30
-        assert result.occupation == "マーケティング担当"
-        assert result.background == "大学卒業後、現在の会社で5年間勤務"
-        assert result.values == ["効率性", "品質", "革新性"]
-        assert result.pain_points == ["時間不足", "情報過多", "コスト意識"]
-        assert result.goals == ["キャリアアップ", "ワークライフバランス", "スキル向上"]
-
-    def test_parse_and_validate_persona_invalid_json(self):
-        """無効なJSONでペルソナ解析のテスト"""
-        response = "invalid json content"
-
-        with pytest.raises(
-            AIServiceError, match="ペルソナの解析中にエラーが発生しました"
-        ):
-            self.ai_service._parse_and_validate_persona(response)
-
-    def test_parse_and_validate_persona_missing_fields(self):
-        """必須フィールド不足でペルソナ解析のテスト"""
-        response = """
-        {
-            "name": "田中花子",
-            "age": 30
-        }
-        """
-
-        with pytest.raises(
-            AIServiceError, match="ペルソナの解析中にエラーが発生しました"
-        ):
-            self.ai_service._parse_and_validate_persona(response)
 
     def test_extract_json_from_response_success(self):
         """レスポンスからJSON抽出成功のテスト"""
@@ -659,124 +555,6 @@ class TestAIService:
             AIServiceError, match="レスポンスから有効なJSONを抽出できませんでした"
         ):
             self.ai_service._extract_json_from_response(response)
-
-    def test_validate_persona_data_success(self):
-        """ペルソナデータ検証成功のテスト"""
-        valid_data = {
-            "name": "田中花子",
-            "age": 30,
-            "occupation": "マーケティング担当",
-            "background": "大学卒業後、現在の会社で5年間勤務",
-            "values": ["効率性", "品質", "革新性"],
-            "pain_points": ["時間不足", "情報過多", "コスト意識"],
-            "goals": ["キャリアアップ", "ワークライフバランス", "スキル向上"],
-        }
-
-        # 例外が発生しないことを確認
-        self.ai_service._validate_persona_data(valid_data)
-
-    def test_validate_persona_data_missing_required_field(self):
-        """必須フィールド不足の検証テスト"""
-        invalid_data = {
-            "name": "田中花子",
-            "age": 30,
-            # occupation が不足
-        }
-
-        with pytest.raises(
-            AIServiceError, match="必須フィールド 'occupation' が不足しています"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-    def test_validate_persona_data_invalid_name(self):
-        """無効な名前の検証テスト"""
-        invalid_data = {
-            "name": "",  # 空の名前
-            "age": 30,
-            "occupation": "マーケティング担当",
-            "background": "背景",
-            "values": ["価値観"],
-            "pain_points": ["課題"],
-            "goals": ["目標"],
-        }
-
-        with pytest.raises(
-            AIServiceError, match="名前は空でない文字列である必要があります"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-    def test_validate_persona_data_invalid_age(self):
-        """無効な年齢の検証テスト"""
-        # 負の年齢
-        invalid_data = {
-            "name": "田中花子",
-            "age": -5,
-            "occupation": "マーケティング担当",
-            "background": "背景",
-            "values": ["価値観"],
-            "pain_points": ["課題"],
-            "goals": ["目標"],
-        }
-
-        with pytest.raises(
-            AIServiceError, match="年齢は0から150の範囲である必要があります"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-        # 範囲外の年齢
-        invalid_data["age"] = 200
-        with pytest.raises(
-            AIServiceError, match="年齢は0から150の範囲である必要があります"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-        # 文字列の年齢（無効）
-        invalid_data["age"] = "abc"
-        with pytest.raises(
-            AIServiceError, match="年齢は有効な数値である必要があります"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-    def test_validate_persona_data_invalid_list_fields(self):
-        """無効なリストフィールドの検証テスト"""
-        # 空のリスト
-        invalid_data = {
-            "name": "田中花子",
-            "age": 30,
-            "occupation": "マーケティング担当",
-            "background": "背景",
-            "values": [],  # 空のリスト
-            "pain_points": ["課題"],
-            "goals": ["目標"],
-        }
-
-        with pytest.raises(
-            AIServiceError, match="'values' は少なくとも1つの要素が必要です"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-        # リストでない
-        invalid_data["values"] = "文字列"
-        with pytest.raises(
-            AIServiceError, match="'values' はリスト形式である必要があります"
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-        # 空の文字列要素
-        invalid_data["values"] = ["有効な値", ""]
-        with pytest.raises(
-            AIServiceError,
-            match="'values' の各要素は空でない文字列である必要があります",
-        ):
-            self.ai_service._validate_persona_data(invalid_data)
-
-    def test_generate_persona_parsing_error(self):
-        """ペルソナ生成時の解析エラーのテスト"""
-        with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
-            mock_retry.return_value = "invalid json response"
-
-            with pytest.raises(AIServiceError, match="ペルソナ生成中にエラーが発生"):
-                self.ai_service.generate_persona("テストインタビュー")
 
     def test_invoke_converse_api_basic(self):
         """Converse API基本呼び出しテスト (Task 3)"""

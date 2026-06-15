@@ -27,6 +27,10 @@ class TestAutoLinkBehaviorFlag:
             mock_persona.values = ["v1"]
             mock_persona.pain_points = ["p1"]
             mock_persona.goals = ["g1"]
+            mock_persona.gender = None
+            mock_persona.country = None
+            mock_persona.city = None
+            mock_persona.tags = []
             mock_agent.generate_personas_with_agent.return_value = (
                 [mock_persona],
                 [],
@@ -55,6 +59,10 @@ class TestAutoLinkBehaviorFlag:
             mock_persona.values = ["v"]
             mock_persona.pain_points = ["p"]
             mock_persona.goals = ["g"]
+            mock_persona.gender = None
+            mock_persona.country = None
+            mock_persona.city = None
+            mock_persona.tags = []
             mock_agent.generate_personas_with_agent.return_value = (
                 [mock_persona],
                 [],
@@ -86,6 +94,10 @@ class TestAutoLinkBehaviorFlag:
             mock_persona.values = ["v"]
             mock_persona.pain_points = ["p"]
             mock_persona.goals = ["g"]
+            mock_persona.gender = None
+            mock_persona.country = None
+            mock_persona.city = None
+            mock_persona.tags = []
             mock_agent.generate_personas_with_agent.return_value = (
                 [mock_persona],
                 [],

@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "ai-persona-system"
-version = "0.15.0"
+version = "0.16.0"
 source = { editable = "." }
 dependencies = [
     { name = "bedrock-agentcore" },
@@ -26,6 +26,7 @@ dependencies = [
     { name = "nh3" },
     { name = "pillow" },
     { name = "polars" },
+    { name = "pycountry" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "strands-agents" },
@@ -64,6 +65,7 @@ requires-dist = [
     { name = "nh3", specifier = ">=0.2.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "polars", specifier = ">=1.0.0" },
+    { name = "pycountry", specifier = ">=24.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
@@ -75,6 +77,9 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = []
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -1919,6 +1924,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/88/a3/d2c462d4ef313521eaf2eff04d204ac60775263f1fb08c374b543f79f610/pyarrow-23.0.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:46718a220d64677c93bc243af1d44b55998255427588e400677d7192671845c7", size = 48259435 },
     { url = "https://files.pythonhosted.org/packages/cc/f1/11a544b8c3d38a759eb3fbb022039117fd633e9a7b19e4841cc3da091915/pyarrow-23.0.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a09f3876e87f48bc2f13583ab551f0379e5dfb83210391e68ace404181a20690", size = 50629149 },
     { url = "https://files.pythonhosted.org/packages/50/f2/c0e76a0b451ffdf0cf788932e182758eb7558953f4f27f1aff8e2518b653/pyarrow-23.0.1-cp314-cp314t-win_amd64.whl", hash = "sha256:527e8d899f14bd15b740cd5a54ad56b7f98044955373a17179d5956ddb93d9ce", size = 28365807 },
+]
+
+[[package]]
+name = "pycountry"
+version = "26.2.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/1d/061b9e7a48b85cfd69f33c33d2ef784a531c359399ad764243399673c8f5/pycountry-26.2.16.tar.gz", hash = "sha256:5b6027d453fcd6060112b951dd010f01f168b51b4bf8a1f1fc8c95c8d94a0801", size = 7711342 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/42/7703bd45b62fecd44cd7d3495423097e2f7d28bc2e99e7c1af68892ab157/pycountry-26.2.16-py3-none-any.whl", hash = "sha256:115c4baf7cceaa30f59a4694d79483c9167dbce7a9de4d3d571c5f3ea77c305a", size = 8044600 },
 ]
 
 [[package]]

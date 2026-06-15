@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_cog, icon_document, icon_users, icon_chat, icon_bolt, icon_cpu_chip, icon_play, icon_pause, icon_sparkles %}
+{# GENDER_LABELS / country_choices は discussion ルーターで templates.env.globals に登録済み #}
 
 {% block content %}
 <div x-data="{
@@ -721,10 +722,27 @@
                                      :data-avatar-name="p.name"
                                      data-avatar-size="40"></div>
                                 <div class="min-w-0">
-                                    <p class="font-medium text-gray-800 truncate" x-text="p.name"></p>
-                                    <p class="text-xs text-gray-500 truncate">
-                                        <span x-text="p.occupation"></span><span x-show="p.age"> / <span x-text="p.age"></span>歳</span>
+                                    <p class="font-medium text-gray-800 truncate" x-text="p.name" :title="p.name"></p>
+                                    <p class="text-xs text-gray-500 flex items-center gap-1 min-w-0">
+                                        <span class="truncate" x-text="p.occupation" :title="p.occupation"></span>
+                                        <span class="flex-shrink-0" x-show="p.age">/ <span x-text="p.age"></span>歳</span>
                                     </p>
+                                    <p class="text-xs text-gray-400 mt-1 line-clamp-3"
+                                       x-show="p.background" x-text="p.background" :title="p.background"></p>
+                                    <div class="flex flex-wrap gap-1 mt-1" x-show="p.values && p.values.length">
+                                        <template x-for="(value, idx) in (p.values || []).slice(0, 2)" :key="'sumval-' + p.id + '-' + idx">
+                                            <span class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full truncate max-w-[8rem]" x-text="value" :title="value"></span>
+                                        </template>
+                                        <span x-show="p.values && p.values.length > 2"
+                                              class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full"
+                                              x-text="'+' + (p.values.length - 2)"
+                                              :title="(p.values || []).slice(2).join('\n')"></span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-1 mt-1" x-show="p.tags && p.tags.length">
+                                        <template x-for="(tag, idx) in (p.tags || []).slice(0, 5)" :key="'sumtag-' + p.id + '-' + idx">
+                                            <span class="bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded-full" x-text="'#' + tag"></span>
+                                        </template>
+                                    </div>
                                 </div>
                             </li>
                         </template>
@@ -848,6 +866,54 @@
                     </template>
                 </div>
             </template>
+
+            <!-- 簡易フィルタ（クライアントサイド） -->
+            <div class="flex flex-wrap gap-3 mb-4 p-3 bg-gray-50 rounded-md">
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">年齢</label>
+                    <div class="flex items-center gap-1">
+                        <input type="number" id="filter-age-min" min="0" max="150" placeholder="最小"
+                               oninput="applyPersonaFilters()"
+                               class="w-20 px-2 py-1 border border-gray-300 rounded text-sm">
+                        <span class="text-gray-400">〜</span>
+                        <input type="number" id="filter-age-max" min="0" max="150" placeholder="最大"
+                               oninput="applyPersonaFilters()"
+                               class="w-20 px-2 py-1 border border-gray-300 rounded text-sm">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">性別</label>
+                    <select id="filter-gender" onchange="applyPersonaFilters()"
+                            class="px-2 py-1 border border-gray-300 rounded text-sm">
+                        <option value="">すべて</option>
+                        {% for code, label in GENDER_LABELS.items() %}
+                        <option value="{{ code }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">居住国</label>
+                    <select id="filter-country" onchange="applyPersonaFilters()"
+                            class="px-2 py-1 border border-gray-300 rounded text-sm">
+                        <option value="">すべて</option>
+                        {% for code, name in country_choices() %}
+                        <option value="{{ code }}">{{ name }} ({{ code }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">職業</label>
+                    <input type="text" id="filter-occupation" placeholder="職業で絞り込み"
+                           oninput="applyPersonaFilters()"
+                           class="px-2 py-1 border border-gray-300 rounded text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">タグ</label>
+                    <input type="text" id="filter-tag" placeholder="タグで絞り込み"
+                           oninput="applyPersonaFilters()"
+                           class="px-2 py-1 border border-gray-300 rounded text-sm">
+                </div>
+            </div>
 
             <!-- ペルソナ一覧（htmx 遅延ロード） -->
             <div hx-get="/persona/list/partial?selectable=1"
@@ -1327,11 +1393,16 @@ document.addEventListener('alpine:init', () => {
         toggle(el) {
             const id = el.dataset.personaId;
             if (el.checked) {
+                // values は内容にカンマを含みうるため '|' 区切り。tags はカンマ禁止なので ',' 区切り。
+                const splitField = (v, sep) => (v ? v.split(sep).filter(Boolean) : []);
                 this.selectedPersonas.push({
                     id: id,
                     name: el.dataset.personaName,
                     occupation: el.dataset.personaOccupation,
                     age: el.dataset.personaAge,
+                    values: splitField(el.dataset.personaValues, '|'),
+                    tags: splitField(el.dataset.personaTags, ','),
+                    background: el.dataset.personaBackground || '',
                 });
             } else {
                 this.selectedPersonas = this.selectedPersonas.filter(p => p.id !== id);
@@ -1347,4 +1418,5 @@ document.addEventListener('alpine:init', () => {
 
 {% block scripts %}
 {% include "components/dicebear.html" %}
+{% include "persona/partials/filter_script.html" %}
 {% endblock %}

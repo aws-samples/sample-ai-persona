@@ -1,6 +1,6 @@
 [project]
 name = "ai-persona-system"
-version = "0.15.0"
+version = "0.16.0"
 description = "AIペルソナシステム - インタビューからペルソナを生成し、議論を通じてインサイトを生成"
 authors = [
     {name = "AI Persona Team"}
@@ -26,6 +26,7 @@ dependencies = [
     "markdown>=3.5.0",
     "nh3>=0.2.0",
     "Pillow>=10.0.0",
+    "pycountry>=24.0.0",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +73,9 @@ module = [
     "datasets.*",
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = []
 
 [project.scripts]
 ai-persona = "src.app:main"
