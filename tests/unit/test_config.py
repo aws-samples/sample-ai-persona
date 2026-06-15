@@ -29,8 +29,26 @@ class TestConfigDefaults:
         config = Config()
         assert config.UPLOAD_DIR == "uploads/"
         assert config.MAX_FILE_SIZE == 10 * 1024 * 1024  # 10MB
+        assert config.MAX_IMAGE_SIZE == 5 * 1024 * 1024  # 5MB
+        assert config.MAX_REQUEST_PAYLOAD_SIZE == 32 * 1024 * 1024  # 32MB
         assert ".txt" in config.ALLOWED_FILE_EXTENSIONS
         assert ".md" in config.ALLOWED_FILE_EXTENSIONS
+
+    def test_size_limits_are_single_source_of_truth(self):
+        """サイズ上限がconfigを single source of truth として参照されることを確認
+
+        画像5MB・リクエスト合計32MBの定数が各Managerでハードコードされず
+        configに集約されていることを検証する（重複定義の再発防止）。
+        """
+        from src.config import config
+        from src.managers.file_manager import FileManager
+
+        assert FileManager.DISCUSSION_IMAGE_MAX_SIZE == config.MAX_IMAGE_SIZE
+        assert FileManager.SURVEY_IMAGE_MAX_SIZE == config.MAX_IMAGE_SIZE
+        assert (
+            FileManager.DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE
+            == config.MAX_REQUEST_PAYLOAD_SIZE
+        )
 
     def test_default_aws_settings(self):
         """デフォルトのAWS設定を確認"""

@@ -94,8 +94,8 @@ class FileManager:
     DISCUSSION_DOCUMENT_MAX_SIZE = 10 * 1024 * 1024  # 10MB per file（アプリ運用上限）
     # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
     DISCUSSION_IMAGE_MAX_SIZE = config.MAX_IMAGE_SIZE  # 5MB per image
-    # リクエストペイロード全体の上限（PDF含む全コンテンツ合算）。Claude(Bedrock)の制約
-    DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE = 32 * 1024 * 1024  # 32MB total request payload
+    # リクエストペイロード全体の上限（PDF含む全コンテンツ合算）。configを single source of truth とする
+    DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE = config.MAX_REQUEST_PAYLOAD_SIZE  # 32MB total
     DISCUSSION_IMAGE_MIMES = {"image/png", "image/jpeg"}
 
     # 知識ファイルの許可形式

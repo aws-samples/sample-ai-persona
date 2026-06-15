@@ -26,6 +26,9 @@ class Config:
     MAX_IMAGE_SIZE: int = (
         5 * 1024 * 1024
     )  # 5MB (Claude(Bedrock)モデルの画像1枚あたり上限。超過時Converseが ValidationException を返す)
+    MAX_REQUEST_PAYLOAD_SIZE: int = (
+        32 * 1024 * 1024
+    )  # 32MB (Claude(Bedrock)のリクエストペイロード全体上限。議論ドキュメント合計に適用)
     ALLOWED_FILE_EXTENSIONS: tuple = (".txt", ".md")
     S3_BUCKET_NAME: Optional[str] = None  # .envで設定、未設定時はローカルストレージ
 
