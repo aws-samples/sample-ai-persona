@@ -91,8 +91,12 @@ class FileManager:
 
     # 議論用ドキュメントの許可形式
     DISCUSSION_DOCUMENT_FORMATS = {".png", ".jpg", ".jpeg", ".pdf"}
-    DISCUSSION_DOCUMENT_MAX_SIZE = 10 * 1024 * 1024  # 10MB per file
-    DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE = 32 * 1024 * 1024  # 32MB total (Bedrock limit)
+    DISCUSSION_DOCUMENT_MAX_SIZE = 10 * 1024 * 1024  # 10MB per file（アプリ運用上限）
+    # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
+    DISCUSSION_IMAGE_MAX_SIZE = config.MAX_IMAGE_SIZE  # 5MB per image
+    # リクエストペイロード全体の上限（PDF含む全コンテンツ合算）。Claude(Bedrock)の制約
+    DISCUSSION_DOCUMENT_TOTAL_MAX_SIZE = 32 * 1024 * 1024  # 32MB total request payload
+    DISCUSSION_IMAGE_MIMES = {"image/png", "image/jpeg"}
 
     # 知識ファイルの許可形式
     KNOWLEDGE_FILE_FORMATS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md"}
@@ -104,7 +108,8 @@ class FileManager:
 
     # アンケート画像の許可形式
     SURVEY_IMAGE_FORMATS = {".png", ".jpg", ".jpeg"}
-    SURVEY_IMAGE_MAX_SIZE = 5 * 1024 * 1024  # 5MB per file
+    # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
+    SURVEY_IMAGE_MAX_SIZE = config.MAX_IMAGE_SIZE  # 5MB per file
 
     def __init__(
         self,
@@ -212,9 +217,21 @@ class FileManager:
                 f"対応形式: {', '.join(self.DISCUSSION_DOCUMENT_FORMATS)}"
             )
 
-        # ファイルサイズチェック（個別ファイル）
-        if len(file_content) > self.DISCUSSION_DOCUMENT_MAX_SIZE:
-            max_size_mb = self.DISCUSSION_DOCUMENT_MAX_SIZE / (1024 * 1024)
+        # MIMEタイプチェック（簡易）
+        mime_type = mimetypes.guess_type(filename)[0]
+        allowed_mimes = {"image/png", "image/jpeg", "application/pdf"}
+        if mime_type not in allowed_mimes:
+            raise FileUploadError(f"サポートされていないMIMEタイプです: {mime_type}")
+
+        # ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
+        is_image = mime_type in self.DISCUSSION_IMAGE_MIMES
+        size_limit = (
+            self.DISCUSSION_IMAGE_MAX_SIZE
+            if is_image
+            else self.DISCUSSION_DOCUMENT_MAX_SIZE
+        )
+        if len(file_content) > size_limit:
+            max_size_mb = size_limit / (1024 * 1024)
             raise FileUploadError(
                 f"ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
             )
@@ -222,12 +239,6 @@ class FileManager:
         # ファイル内容が空でないかチェック
         if len(file_content) == 0:
             raise FileUploadError("ファイルが空です。")
-
-        # MIMEタイプチェック（簡易）
-        mime_type = mimetypes.guess_type(filename)[0]
-        allowed_mimes = {"image/png", "image/jpeg", "application/pdf"}
-        if mime_type not in allowed_mimes:
-            raise FileUploadError(f"サポートされていないMIMEタイプです: {mime_type}")
 
         return True
 

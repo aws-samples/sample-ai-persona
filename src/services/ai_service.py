@@ -665,14 +665,18 @@ class AIService:
                 # メッセージコンテンツを構築
                 message_content = [{"text": prompt}] + document_contents
 
-                response = self.bedrock_client.converse_stream(
-                    modelId=self.model_id,
-                    messages=[{"role": "user", "content": message_content}],
-                    inferenceConfig={
-                        "maxTokens": self.max_tokens,
-                        "temperature": self.temperature,
-                    },
-                )
+                def _call_converse_stream() -> Any:
+                    return self.bedrock_client.converse_stream(
+                        modelId=self.model_id,
+                        messages=[{"role": "user", "content": message_content}],
+                        inferenceConfig={
+                            "maxTokens": self.max_tokens,
+                            "temperature": self.temperature,
+                        },
+                    )
+
+                # 一過性の接続エラー対策として指数バックオフでリトライ
+                response = self._retry_with_backoff(_call_converse_stream)
 
                 # ストリーミングレスポンスを処理
                 accumulated_text = ""
@@ -721,11 +725,15 @@ class AIService:
                 "messages": [{"role": "user", "content": prompt}],
             }
 
-            response = self.bedrock_client.invoke_model_with_response_stream(
-                modelId=self.model_id,
-                body=json.dumps(request_body),
-                contentType="application/json",
-            )
+            def _call_invoke_stream() -> Any:
+                return self.bedrock_client.invoke_model_with_response_stream(
+                    modelId=self.model_id,
+                    body=json.dumps(request_body),
+                    contentType="application/json",
+                )
+
+            # 一過性の接続エラー対策として指数バックオフでリトライ
+            response = self._retry_with_backoff(_call_invoke_stream)
 
             # ストリームからテキストを蓄積して発言を検出
             buffer = ""

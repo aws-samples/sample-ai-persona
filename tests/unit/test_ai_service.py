@@ -209,6 +209,29 @@ class TestAIService:
             with pytest.raises(AIServiceError, match="議論進行中にエラーが発生"):
                 self.ai_service.facilitate_discussion(personas, "テストトピック")
 
+    def test_facilitate_discussion_streaming_uses_retry(self):
+        """ストリーミング議論（ドキュメントなし）がリトライ経由でストリームを取得する
+
+        一過性の接続エラー（Connection closed）対策として
+        invoke_model_with_response_stream が _retry_with_backoff 経由で
+        呼ばれることを検証する。
+        """
+        # ストリームイベントを返すモックレスポンス
+        mock_response = {"body": []}
+
+        with patch.object(
+            self.ai_service, "_retry_with_backoff", return_value=mock_response
+        ) as mock_retry:
+            personas = [self.test_persona, self.test_persona2]
+            list(
+                self.ai_service.facilitate_discussion_streaming(
+                    personas, "テストトピック"
+                )
+            )
+
+            # ストリーム取得がリトライ経由で行われたこと
+            mock_retry.assert_called_once()
+
     def test_extract_insights_success(self):
         """インサイト抽出成功のテスト（構造化データ）"""
         mock_response = """[
@@ -504,11 +527,15 @@ class TestAIService:
         """インサイト抽出プロンプト作成のテスト"""
         messages = [
             Message.create_new(
-                persona_id="1", persona_name="田中太郎", content="テストメッセージ1",
+                persona_id="1",
+                persona_name="田中太郎",
+                content="テストメッセージ1",
                 round_number=1,
             ),
             Message.create_new(
-                persona_id="2", persona_name="佐藤花子", content="テストメッセージ2",
+                persona_id="2",
+                persona_name="佐藤花子",
+                content="テストメッセージ2",
                 round_number=1,
             ),
         ]
@@ -697,7 +724,9 @@ class TestGenerateDiscussionReport:
         mock_response = {
             "output": {
                 "message": {
-                    "content": [{"text": "# サマリレポート\n\n## 参加ペルソナ\n- 田中太郎"}]
+                    "content": [
+                        {"text": "# サマリレポート\n\n## 参加ペルソナ\n- 田中太郎"}
+                    ]
                 }
             }
         }
@@ -718,7 +747,9 @@ class TestGenerateDiscussionReport:
         mock_response = {
             "output": {
                 "message": {
-                    "content": [{"text": "# レビューコメント\n\n| 該当箇所 | 指摘内容 |"}]
+                    "content": [
+                        {"text": "# レビューコメント\n\n| 該当箇所 | 指摘内容 |"}
+                    ]
                 }
             }
         }
@@ -736,11 +767,7 @@ class TestGenerateDiscussionReport:
     def test_generate_custom_report(self):
         """カスタムプロンプトレポート生成テスト"""
         mock_response = {
-            "output": {
-                "message": {
-                    "content": [{"text": "- ポイント1\n- ポイント2"}]
-                }
-            }
+            "output": {"message": {"content": [{"text": "- ポイント1\n- ポイント2"}]}}
         }
         with patch.object(
             self.ai_service.bedrock_client, "converse", return_value=mock_response
@@ -756,9 +783,7 @@ class TestGenerateDiscussionReport:
 
     def test_generate_report_includes_topic_in_prompt(self):
         """プロンプトにトピックが含まれることを確認"""
-        mock_response = {
-            "output": {"message": {"content": [{"text": "レポート内容"}]}}
-        }
+        mock_response = {"output": {"message": {"content": [{"text": "レポート内容"}]}}}
         with patch.object(
             self.ai_service.bedrock_client, "converse", return_value=mock_response
         ) as mock_converse:

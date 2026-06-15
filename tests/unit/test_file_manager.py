@@ -680,6 +680,7 @@ class TestFileManagerSurveyImage:
 
     def teardown_method(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_upload_survey_image_success(self):
@@ -716,16 +717,21 @@ class TestFileManagerKnowledgeFile:
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
             self.file_manager = FileManager(self.mock_db_service)
-            self.file_manager.knowledge_files_dir = Path(self.temp_dir) / "knowledge_files"
+            self.file_manager.knowledge_files_dir = (
+                Path(self.temp_dir) / "knowledge_files"
+            )
             self.file_manager.knowledge_files_dir.mkdir(exist_ok=True)
 
     def teardown_method(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_upload_knowledge_file_txt(self):
         content = ("テスト知識ファイルの内容です。" * 10).encode("utf-8")
-        metadata, markdown_text = self.file_manager.upload_knowledge_file(content, "knowledge.txt")
+        metadata, markdown_text = self.file_manager.upload_knowledge_file(
+            content, "knowledge.txt"
+        )
         assert metadata is not None
         assert "テスト知識ファイル" in markdown_text
 
@@ -789,6 +795,7 @@ class TestFileManagerUtilities:
 
     def teardown_method(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_get_file_statistics_empty(self):
@@ -817,3 +824,29 @@ class TestFileManagerUtilities:
         result = self.file_manager.cleanup_orphaned_files()
         assert isinstance(result, int)
         assert result >= 0
+
+    def test_validate_discussion_document_image_within_5mb(self):
+        """画像が5MB以内なら検証を通過する"""
+        content = b"\x00" * (4 * 1024 * 1024)  # 4MB
+        result = self.file_manager._validate_discussion_document("photo.png", content)
+        assert result is True
+
+    def test_validate_discussion_document_image_over_5mb(self):
+        """画像が5MBを超えると検証エラー（Bedrock上限に整合）"""
+        content = b"\x00" * (5 * 1024 * 1024 + 1)  # 5MB超
+        with pytest.raises(FileUploadError) as exc_info:
+            self.file_manager._validate_discussion_document("photo.png", content)
+        assert "5.0MB" in str(exc_info.value)
+
+    def test_validate_discussion_document_pdf_within_10mb(self):
+        """PDFは画像より緩く10MBまで許容する"""
+        content = b"\x00" * (6 * 1024 * 1024)  # 6MB
+        result = self.file_manager._validate_discussion_document("doc.pdf", content)
+        assert result is True
+
+    def test_validate_discussion_document_pdf_over_10mb(self):
+        """PDFが10MBを超えると検証エラー"""
+        content = b"\x00" * (10 * 1024 * 1024 + 1)  # 10MB超
+        with pytest.raises(FileUploadError) as exc_info:
+            self.file_manager._validate_discussion_document("doc.pdf", content)
+        assert "10.0MB" in str(exc_info.value)

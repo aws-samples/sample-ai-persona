@@ -58,6 +58,26 @@ class TestAgentService:
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")
+    def test_create_bedrock_model_sets_retry_config(
+        self, mock_bedrock_model, mock_agent
+    ):
+        """BedrockModelに一過性エラー対策のリトライ設定が渡されることを検証する
+
+        ストリーミング開始時のConnection closedエラー対策として、
+        boto_client_config（retries付き）が指定されていることを確認する。
+        """
+        agent_service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        agent_service._create_bedrock_model()
+
+        mock_bedrock_model.assert_called_once()
+        boto_config = mock_bedrock_model.call_args.kwargs["boto_client_config"]
+        assert boto_config.retries["max_attempts"] == 3
+        assert boto_config.retries["mode"] == "adaptive"
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
     def test_generate_persona_system_prompt(self, mock_bedrock_model, mock_agent):
         """ペルソナシステムプロンプト生成テスト"""
         agent_service = AgentService()

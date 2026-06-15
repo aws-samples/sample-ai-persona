@@ -15,6 +15,7 @@ from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from src.config import config
 from src.managers.persona_manager import PersonaManager
 from src.managers.interview_manager import (
     InterviewManager,
@@ -52,7 +53,9 @@ SUPPORTED_DOCUMENT_TYPES = [
     "text/html",
     "text/markdown",
 ]
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+# 一般ファイル上限はアプリ運用上限、画像上限はClaude(Bedrock)モデル制約。configを参照
+MAX_FILE_SIZE = config.MAX_FILE_SIZE  # 10MB
+MAX_IMAGE_SIZE = config.MAX_IMAGE_SIZE  # 5MB
 
 
 def get_persona_manager() -> PersonaManager:
@@ -536,11 +539,16 @@ async def send_message(
         if files:
             for file in files:
                 if file.filename and file.size > 0:  # type: ignore[operator]
-                    # ファイルサイズチェック
-                    if file.size > MAX_FILE_SIZE:  # type: ignore[operator]
+                    content_type = file.content_type or ""
+
+                    # ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
+                    is_image = content_type in SUPPORTED_IMAGE_TYPES
+                    size_limit = MAX_IMAGE_SIZE if is_image else MAX_FILE_SIZE
+                    if file.size > size_limit:  # type: ignore[operator]
+                        limit_mb = size_limit // (1024 * 1024)
                         return JSONResponse(
                             {
-                                "error": f"ファイル '{file.filename}' が大きすぎます（最大10MB）",
+                                "error": f"ファイル '{file.filename}' が大きすぎます（最大{limit_mb}MB）",
                                 "error_type": "validation_error",
                                 "field": "files",
                             },
@@ -548,7 +556,6 @@ async def send_message(
                         )
 
                     # MIMEタイプチェック
-                    content_type = file.content_type or ""
                     if (
                         content_type
                         not in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES

@@ -23,6 +23,9 @@ class Config:
     # ファイルストレージ設定
     UPLOAD_DIR: str = "uploads/"
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
+    MAX_IMAGE_SIZE: int = (
+        5 * 1024 * 1024
+    )  # 5MB (Claude(Bedrock)モデルの画像1枚あたり上限。超過時Converseが ValidationException を返す)
     ALLOWED_FILE_EXTENSIONS: tuple = (".txt", ".md")
     S3_BUCKET_NAME: Optional[str] = None  # .envで設定、未設定時はローカルストレージ
 
@@ -124,9 +127,7 @@ class Config:
         self.DATA_AGENT_RUNTIME_ARN = os.getenv(
             "DATA_AGENT_RUNTIME_ARN", self.DATA_AGENT_RUNTIME_ARN
         )
-        self.DATA_AGENT_REGION = os.getenv(
-            "DATA_AGENT_REGION", self.DATA_AGENT_REGION
-        )
+        self.DATA_AGENT_REGION = os.getenv("DATA_AGENT_REGION", self.DATA_AGENT_REGION)
         enable_val = os.getenv("ENABLE_DATA_AGENT", "").lower()
         if enable_val in ("true", "1", "yes"):
             self.ENABLE_DATA_AGENT = True

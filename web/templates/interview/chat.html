@@ -181,7 +181,7 @@
             <div class="mt-2 text-xs text-gray-500 flex items-center gap-4 flex-wrap">
                 <span>💡 具体的な質問をすると、より詳しい回答が得られます</span>
                 <span>⌘/Ctrl+Enter で送信 · Enter で改行</span>
-                <span>📎 画像・PDF・テキストファイルを添付可能（最大10MB）</span>
+                <span>📎 画像・PDF・テキストファイルを添付可能（画像は最大5MB・その他は最大10MB）</span>
             </div>
         </div>
     </div>
@@ -247,6 +247,7 @@ let selectedFiles = []; // 選択されたファイルを保持
 const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const SUPPORTED_DOCUMENT_TYPES = ['application/pdf', 'text/plain', 'text/csv', 'text/html', 'text/markdown'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB（Claude(Bedrock)モデルの画像1枚あたり上限。src/config.py MAX_IMAGE_SIZE と一致させること）
 
 // 参加者リストとペルソナ色マッピング
 const sessionParticipants = {{ session.participants | tojson | safe }};
@@ -368,9 +369,12 @@ function initializeChat() {
 // ファイル選択処理
 function handleFileSelection(files) {
     for (const file of files) {
-        // ファイルサイズチェック
-        if (file.size > MAX_FILE_SIZE) {
-            showErrorMessage(`ファイル "${file.name}" が大きすぎます（最大10MB）`);
+        // ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
+        const isImage = SUPPORTED_IMAGE_TYPES.includes(file.type);
+        const sizeLimit = isImage ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
+        if (file.size > sizeLimit) {
+            const limitMb = sizeLimit / (1024 * 1024);
+            showErrorMessage(`ファイル "${file.name}" が大きすぎます（最大${limitMb}MB）`);
             continue;
         }
         
