@@ -840,6 +840,8 @@ class AgentService:
             AgentInitializationError: モデル作成エラー
         """
         try:
+            from botocore.config import Config as BotoConfig
+
             # AWS認証情報を取得
             credentials = config.get_aws_credentials()
 
@@ -850,10 +852,19 @@ class AgentService:
                 if v is not None and k != "region_name"
             }
 
+            # 一過性の接続エラー（ストリーミング開始時のConnection closed等）対策。
+            # ai_serviceと異なり自前のバックオフ機構を持たないため、boto3標準リトライに委ねる
+            boto_config = BotoConfig(
+                connect_timeout=30,
+                read_timeout=300,
+                retries={"max_attempts": 3, "mode": "adaptive"},
+            )
+
             # Bedrockモデルを作成
             model = BedrockModel(
                 model_id=config.AGENT_MODEL_ID,
                 region_name=config.AWS_REGION,
+                boto_client_config=boto_config,
                 **filtered_credentials,
             )
 

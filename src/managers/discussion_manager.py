@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from datetime import datetime
 
+from ..config import config
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.insight import Insight
@@ -688,7 +689,8 @@ class DiscussionManager:
         documents_data = []
         documents_metadata = []
         total_size = 0
-        max_total_size = 32 * 1024 * 1024  # 32MB (Bedrock API limit)
+        # リクエストペイロード全体（PDF含む全コンテンツ合算）の上限。Claude(Bedrock)の制約
+        max_total_size = config.MAX_REQUEST_PAYLOAD_SIZE  # 32MB total request payload
 
         for doc_id in document_ids:
             # Get file info from database
@@ -1224,7 +1226,6 @@ class DiscussionManager:
             from bedrock_agentcore.memory.integrations.strands.session_manager import (
                 AgentCoreMemorySessionManager,
             )
-            from src.config import config
 
             if not config.AGENTCORE_MEMORY_ID:
                 return False

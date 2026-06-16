@@ -92,15 +92,18 @@
               },
               validateFile(file) {
                   const validTypes = ['image/png', 'image/jpeg', 'application/pdf'];
-                  const maxSize = 10 * 1024 * 1024;
+                  // maxTotalはリクエストペイロード全体の上限、画像5MBはClaude(Bedrock)モデル制約。
+                  // いずれもsrc/config.py / src/managers/file_manager.py の値と一致させること
                   const maxTotal = 32 * 1024 * 1024;
-                  
+                  const isImage = file.type.startsWith('image/');
+                  const maxSize = isImage ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+
                   if (!validTypes.includes(file.type)) {
                       alert('PNG、JPEG、PDFファイルのみアップロード可能です');
                       return false;
                   }
                   if (file.size > maxSize) {
-                      alert('ファイルサイズは10MB以下にしてください');
+                      alert(isImage ? '画像サイズは5MB以下にしてください' : 'ファイルサイズは10MB以下にしてください');
                       return false;
                   }
                   if (this.totalSize + file.size > maxTotal) {
@@ -969,7 +972,7 @@
                     参考資料（オプション）
                 </h3>
                 <p class="text-sm text-gray-600 mb-4">
-                    議論の参考資料として画像やPDFをアップロードできます（PNG/JPEG/PDF、最大10MB/ファイル、合計32MB）
+                    議論の参考資料として画像やPDFをアップロードできます（PNG/JPEG/PDF、画像は最大5MB・PDFは最大10MB/ファイル、合計32MB）
                 </p>
                 
                 <!-- ドロップゾーン -->
@@ -986,7 +989,7 @@
                         <span class="font-semibold text-purple-600">クリックしてファイルを選択</span>
                         またはドラッグ&ドロップ
                     </p>
-                    <p class="text-sm text-gray-500">PNG, JPEG, PDF（最大10MB/ファイル）</p>
+                    <p class="text-sm text-gray-500">PNG, JPEG, PDF（画像は最大5MB・PDFは最大10MB/ファイル）</p>
                     <input type="file" 
                            x-ref="fileInput"
                            @change="Array.from($event.target.files).forEach(file => uploadFile(file)); $event.target.value = ''"
