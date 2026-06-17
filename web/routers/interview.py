@@ -321,6 +321,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
             logger.warning(f"Some participant personas not found: {missing_personas}")
 
         return templates.TemplateResponse(
+            request,
             "interview/chat.html",
             {
                 "request": request,
@@ -334,6 +335,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
     except InterviewSessionNotFoundError as e:
         logger.error(f"Interview session not found: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {
                 "request": request,
@@ -344,6 +346,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
     except Exception as e:
         logger.error(f"Error loading interview chat page: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {
                 "request": request,

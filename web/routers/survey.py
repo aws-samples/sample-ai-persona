@@ -69,6 +69,7 @@ def get_survey_manager() -> SurveyManager:
 async def survey_index(request: Request) -> Any:
     """アンケートTOP画面"""
     return templates.TemplateResponse(
+        request,
         "survey/index.html",
         {"request": request, "title": "マスアンケート"},
     )
@@ -89,6 +90,7 @@ async def persona_data_page(request: Request) -> Any:
     except Exception as e:
         logger.warning(f"Failed to list custom datasets: {e}")
     return templates.TemplateResponse(
+        request,
         "survey/persona_data.html",
         {
             "request": request,
@@ -120,6 +122,7 @@ async def download_nemotron(request: Request) -> Any:
     """Nemotronデータセットのダウンロードをバックグラウンドで開始"""
     if _nemotron_download_status["downloading"]:
         return templates.TemplateResponse(
+            request,
             "survey/partials/nemotron_status.html",
             {
                 "request": request,
@@ -131,6 +134,7 @@ async def download_nemotron(request: Request) -> Any:
     _nemotron_download_status["error"] = None
     asyncio.create_task(asyncio.to_thread(_download_nemotron_background))
     return templates.TemplateResponse(
+        request,
         "survey/partials/nemotron_status.html",
         {
             "request": request,
@@ -149,6 +153,7 @@ async def nemotron_download_status(request: Request) -> Any:
     except Exception:
         status = {"exists": False, "size_mb": 0}
     return templates.TemplateResponse(
+        request,
         "survey/partials/nemotron_status.html",
         {
             "request": request,
@@ -166,6 +171,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
     """Step1: CSVアップロード → カラム解析 → マッピングUI表示"""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {"request": request, "error": "CSVファイルのみアップロード可能です。"},
         )
@@ -173,6 +179,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         content = await file.read()
         if len(content) > 500 * 1024 * 1024:
             return templates.TemplateResponse(
+                request,
                 "survey/partials/custom_upload_result.html",
                 {
                     "request": request,
@@ -187,6 +194,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         survey_service.s3_service.upload_file(content, temp_key)
 
         return templates.TemplateResponse(
+            request,
             "survey/partials/column_mapping.html",
             {
                 "request": request,
@@ -201,6 +209,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
     except Exception as e:
         logger.error(f"Failed to parse CSV: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {"request": request, "error": str(e)},
         )
@@ -260,12 +269,14 @@ async def preview_persona_prompt(request: Request) -> Any:
         )
 
         return templates.TemplateResponse(
+            request,
             "survey/partials/prompt_preview.html",
             {"request": request, "preview_text": preview_text},
         )
     except Exception as e:
         logger.error(f"Failed to preview prompt: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/prompt_preview.html",
             {"request": request, "error": str(e)},
         )
@@ -332,6 +343,7 @@ async def upload_custom_step2(request: Request) -> Any:
 
         custom_datasets = survey_service.list_custom_datasets()
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
@@ -343,6 +355,7 @@ async def upload_custom_step2(request: Request) -> Any:
     except Exception as e:
         logger.error(f"Failed to upload custom persona data: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {"request": request, "error": str(e)},
         )
@@ -358,6 +371,7 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
         survey_service = service_factory.get_survey_service()
         metadata = survey_service.load_dataset_metadata(name)
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_dataset_detail.html",
             {
                 "request": request,
@@ -381,6 +395,7 @@ async def delete_custom_dataset(request: Request, name: str) -> Any:
         survey_service.delete_custom_dataset(name)
         custom_datasets = survey_service.list_custom_datasets()
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_dataset_list.html",
             {"request": request, "custom_datasets": custom_datasets},
         )
@@ -541,6 +556,7 @@ async def dwh_preview(request: Request) -> Any:
         suggested_extra = suggestion.get("extra_columns", [])
 
         return templates.TemplateResponse(
+            request,
             "survey/partials/column_mapping.html",
             {
                 "request": request,
@@ -558,6 +574,7 @@ async def dwh_preview(request: Request) -> Any:
     except Exception as e:
         logger.error(f"DWH preview failed: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
@@ -627,6 +644,7 @@ async def dwh_confirm(request: Request) -> Any:
 
         custom_datasets = survey_service.list_custom_datasets()
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
@@ -638,6 +656,7 @@ async def dwh_confirm(request: Request) -> Any:
     except Exception as e:
         logger.error(f"DWH confirm failed: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
@@ -661,6 +680,7 @@ async def templates_list(request: Request) -> Any:
         logger.error(f"Failed to get templates: {e}")
         template_list = []
     return templates.TemplateResponse(
+        request,
         "survey/templates_list.html",
         {"request": request, "title": "テンプレート一覧", "templates": template_list},
     )
@@ -670,6 +690,7 @@ async def templates_list(request: Request) -> Any:
 async def template_new(request: Request) -> Any:
     """テンプレート作成画面"""
     return templates.TemplateResponse(
+        request,
         "survey/template_form.html",
         {"request": request, "title": "テンプレート作成", "template": None},
     )
@@ -778,6 +799,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
         d["preview_url"] = _get_image_preview_url(img.file_path)
         images_with_urls.append(d)
     return templates.TemplateResponse(
+        request,
         "survey/template_form.html",
         {
             "request": request,
@@ -843,6 +865,7 @@ async def survey_start_page(request: Request) -> Any:
         logger.warning(f"Failed to get filter values: {e}")
 
     return templates.TemplateResponse(
+        request,
         "survey/start.html",
         {
             "request": request,
@@ -892,6 +915,7 @@ async def filter_options(request: Request) -> Any:
     except Exception as e:
         logger.warning(f"Failed to get filter values for {datasource}: {e}")
     return templates.TemplateResponse(
+        request,
         "survey/partials/filter_fields.html",
         {"request": request, "filter_values": filter_values},
     )
@@ -929,11 +953,13 @@ async def preview_personas(request: Request) -> Any:
     except Exception as e:
         logger.error(f"Preview failed: {e}")
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": f"プレビューに失敗しました: {e}"},
         )
 
     return templates.TemplateResponse(
+        request,
         "survey/partials/filter_preview.html",
         {
             "request": request,
@@ -961,6 +987,7 @@ async def results_list(request: Request) -> Any:
     except Exception as e:
         logger.warning(f"Failed to load template names: {e}")
     return templates.TemplateResponse(
+        request,
         "survey/results_list.html",
         {
             "request": request,
@@ -985,6 +1012,7 @@ async def result_detail(request: Request, survey_id: str) -> Any:
         for img in survey_template.images:
             image_preview_urls[img.id] = _get_image_preview_url(img.file_path)
     return templates.TemplateResponse(
+        request,
         "survey/result_detail.html",
         {
             "request": request,
@@ -1082,6 +1110,7 @@ async def create_template(request: Request) -> Any:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": "質問データの形式が不正です"},
             status_code=400,
@@ -1100,12 +1129,14 @@ async def create_template(request: Request) -> Any:
         manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyValidationError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": str(e)},
             status_code=400,
         )
     except SurveyManagerError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": f"保存に失敗しました: {e}"},
             status_code=500,
@@ -1129,6 +1160,7 @@ async def update_template(request: Request, template_id: str) -> Any:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": "質問データの形式が不正です"},
             status_code=400,
@@ -1152,12 +1184,14 @@ async def update_template(request: Request, template_id: str) -> Any:
         )
     except SurveyValidationError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": str(e)},
             status_code=400,
         )
     except SurveyManagerError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": f"更新に失敗しました: {e}"},
             status_code=500,
@@ -1176,6 +1210,7 @@ async def delete_template(request: Request, template_id: str) -> Any:
         manager.delete_template(template_id)
     except SurveyManagerError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": f"削除に失敗しました: {e}"},
             status_code=500,
@@ -1218,6 +1253,7 @@ async def execute_survey(request: Request) -> Any:
         persona_count = int(persona_count_str)
     except (ValueError, TypeError):
         response = templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": "ペルソナ数は整数で入力してください"},
             status_code=400,
@@ -1246,6 +1282,7 @@ async def execute_survey(request: Request) -> Any:
         )
     except SurveyValidationError as e:
         response = templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": str(e)},
             status_code=400,
@@ -1255,6 +1292,7 @@ async def execute_survey(request: Request) -> Any:
         return response
     except SurveyManagerError as e:
         response = templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": f"アンケート作成に失敗しました: {e}"},
             status_code=500,
@@ -1270,6 +1308,7 @@ async def execute_survey(request: Request) -> Any:
 
     # 3. 開始メッセージを表示し、結果一覧へ自動遷移
     return templates.TemplateResponse(
+        request,
         "survey/partials/survey_submitted.html",
         {"request": request, "survey_name": survey.name},
     )
@@ -1299,11 +1338,13 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
         stats = manager.get_persona_statistics(survey_id)
     except SurveyManagerError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": str(e)},
             status_code=400,
         )
     return templates.TemplateResponse(
+        request,
         "survey/partials/persona_statistics.html",
         {"request": request, "stats": stats},
     )
@@ -1317,11 +1358,13 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
         data = manager.get_visual_analysis(survey_id)
     except SurveyManagerError as e:
         return templates.TemplateResponse(
+            request,
             "survey/partials/error_message.html",
             {"request": request, "message": str(e)},
             status_code=400,
         )
     return templates.TemplateResponse(
+        request,
         "survey/partials/visual_analysis.html",
         {"request": request, "analysis": data},
     )

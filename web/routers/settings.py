@@ -47,6 +47,7 @@ async def settings_page(request: Request) -> Any:
     kb_list = [kb.to_dict() for kb in knowledge_bases]
 
     return templates.TemplateResponse(
+        request,
         "settings/index.html",
         {
             "request": request,
@@ -66,12 +67,14 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
 
     if not success:
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": "MCPサーバーの切り替えに失敗しました"},
             status_code=500,
         )
 
     return templates.TemplateResponse(
+        request,
         "settings/partials/mcp_status.html",
         {"request": request, "mcp_enabled": mcp_manager.is_running()},
     )
@@ -82,6 +85,7 @@ async def mcp_status(request: Request) -> Any:
     """MCP状態取得"""
     mcp_manager = get_mcp_manager()
     return templates.TemplateResponse(
+        request,
         "settings/partials/mcp_status.html",
         {"request": request, "mcp_enabled": mcp_manager.is_running()},
     )
@@ -95,6 +99,7 @@ async def list_datasets(request: Request) -> Any:
     datasets_dict = [d.to_dict() for d in datasets]
 
     return templates.TemplateResponse(
+        request,
         "settings/partials/dataset_list.html",
         {"request": request, "datasets": datasets_dict},
     )
@@ -109,7 +114,9 @@ async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> An
         dataset = dataset_manager.get_dataset(dataset_id)
 
     return templates.TemplateResponse(
-        "settings/partials/dataset_form.html", {"request": request, "dataset": dataset}
+        request,
+        "settings/partials/dataset_form.html",
+        {"request": request, "dataset": dataset},
     )
 
 
@@ -118,6 +125,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     """CSVファイルのスキーマを解析"""
     if not file.filename.endswith(".csv"):  # type: ignore[union-attr]
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": "CSVファイルのみアップロード可能です"},
             status_code=400,
@@ -126,6 +134,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:  # 10MB制限
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": "ファイルサイズは10MB以下にしてください"},
             status_code=400,
@@ -141,6 +150,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     ]
 
     return templates.TemplateResponse(
+        request,
         "settings/partials/schema_preview.html",
         {
             "request": request,
@@ -189,6 +199,7 @@ async def create_dataset(
         datasets = dataset_manager.get_datasets()
         datasets_dict = [d.to_dict() for d in datasets]
         return templates.TemplateResponse(
+            request,
             "settings/partials/dataset_list.html",
             {"request": request, "datasets": datasets_dict},
         )
@@ -196,6 +207,7 @@ async def create_dataset(
     except Exception as e:
         logger.error(f"Dataset creation failed: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": f"データセット作成に失敗しました: {e}"},
             status_code=500,
@@ -238,6 +250,7 @@ async def update_dataset(
         datasets = dataset_manager.get_datasets()
         datasets_dict = [d.to_dict() for d in datasets]
         return templates.TemplateResponse(
+            request,
             "settings/partials/dataset_list.html",
             {"request": request, "datasets": datasets_dict},
         )
@@ -245,6 +258,7 @@ async def update_dataset(
     except Exception as e:
         logger.error(f"Dataset update failed: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": f"データセット更新に失敗しました: {e}"},
             status_code=500,
@@ -259,6 +273,7 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
 
     if not success:
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": "データセットの削除に失敗しました"},
             status_code=404,
@@ -267,6 +282,7 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
     datasets = dataset_manager.get_datasets()
     datasets_dict = [d.to_dict() for d in datasets]
     return templates.TemplateResponse(
+        request,
         "settings/partials/dataset_list.html",
         {"request": request, "datasets": datasets_dict},
     )
@@ -299,6 +315,7 @@ async def list_knowledge_bases(request: Request) -> Any:
     kb_list = [kb.to_dict() for kb in knowledge_bases]
 
     return templates.TemplateResponse(
+        request,
         "settings/partials/kb_list.html",
         {"request": request, "knowledge_bases": kb_list},
     )
@@ -325,12 +342,14 @@ async def create_knowledge_base(
         knowledge_bases = db_service.get_all_knowledge_bases()
         kb_list = [kb.to_dict() for kb in knowledge_bases]
         return templates.TemplateResponse(
+            request,
             "settings/partials/kb_list.html",
             {"request": request, "knowledge_bases": kb_list},
         )
     except Exception as e:
         logger.error(f"KB registration failed: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "message": f"ナレッジベースの登録に失敗しました: {e}"},
             status_code=500,
@@ -347,6 +366,7 @@ async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
     knowledge_bases = db_service.get_all_knowledge_bases()
     kb_list = [kb.to_dict() for kb in knowledge_bases]
     return templates.TemplateResponse(
+        request,
         "settings/partials/kb_list.html",
         {"request": request, "knowledge_bases": kb_list},
     )
@@ -379,6 +399,7 @@ def _data_agent_template_vars() -> dict:
 async def data_agent_status(request: Request) -> Any:
     """データ分析エージェント設定状態取得"""
     return templates.TemplateResponse(
+        request,
         "settings/partials/data_agent_settings.html",
         {"request": request, **_data_agent_template_vars()},
     )
@@ -406,6 +427,7 @@ async def save_data_agent_settings(
     )
 
     return templates.TemplateResponse(
+        request,
         "settings/partials/data_agent_settings.html",
         {
             "request": request,

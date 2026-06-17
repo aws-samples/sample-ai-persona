@@ -259,7 +259,9 @@ def _extract_user_id_from_log(thinking_log: list[dict[str, str]]) -> tuple[str, 
 async def persona_generation_page(request: Request) -> Any:
     """ペルソナ生成ページ"""
     return templates.TemplateResponse(
-        "persona/generation.html", {"request": request, "title": "AIペルソナ生成"}
+        request,
+        "persona/generation.html",
+        {"request": request, "title": "AIペルソナ生成"},
     )
 
 
@@ -267,6 +269,7 @@ async def persona_generation_page(request: Request) -> Any:
 async def persona_management_page(request: Request) -> Any:
     """ペルソナ管理ページ（ペルソナ一覧は htmx で遅延ロード）"""
     return templates.TemplateResponse(
+        request,
         "persona/management.html",
         {"request": request, "title": "ペルソナ管理"},
     )
@@ -287,6 +290,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
 
         # アップロード成功時のパーシャルHTMLを返す
         return templates.TemplateResponse(
+            request,
             "persona/partials/upload_success.html",
             {
                 "request": request,
@@ -302,6 +306,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
     except FileSecurityError as e:
         logger.warning(f"ファイルセキュリティエラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"セキュリティエラー: {str(e)}"},
             status_code=400,
@@ -309,6 +314,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
     except FileUploadError as e:
         logger.warning(f"ファイルアップロードエラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"アップロードエラー: {str(e)}"},
             status_code=400,
@@ -316,6 +322,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
     except Exception as e:
         logger.error(f"予期しないエラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {
                 "request": request,
@@ -701,6 +708,7 @@ async def save_persona(
             _save_behavior_datasets(persona.id, persona_id, selected_behavior_datasets)
 
         return templates.TemplateResponse(
+            request,
             "partials/success.html",
             {
                 "request": request,
@@ -711,6 +719,7 @@ async def save_persona(
     except Exception as e:
         logger.error(f"ペルソナ保存エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"保存エラー: {str(e)}"},
             status_code=500,
@@ -772,17 +781,21 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
 
         if not persona:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "ペルソナが見つかりません"},
                 status_code=404,
             )
 
         return templates.TemplateResponse(
-            "persona/partials/edit_form.html", {"request": request, "persona": persona}
+            request,
+            "persona/partials/edit_form.html",
+            {"request": request, "persona": persona},
         )
     except Exception as e:
         logger.error(f"ペルソナ編集フォーム取得エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": "編集フォームの取得に失敗しました"},
             status_code=500,
@@ -813,6 +826,7 @@ async def update_persona(
         existing_persona = persona_manager.get_persona(persona_id)
         if not existing_persona:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "ペルソナが見つかりません"},
                 status_code=404,
@@ -839,6 +853,7 @@ async def update_persona(
         if updated_persona:
             # htmxスワップ用：ヘッダー + ボディを返す
             return templates.TemplateResponse(
+                request,
                 "persona/partials/detail_swap.html",
                 {
                     "request": request,
@@ -848,6 +863,7 @@ async def update_persona(
             )
         else:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "ペルソナの更新に失敗しました"},
                 status_code=400,
@@ -855,6 +871,7 @@ async def update_persona(
     except PersonaManagerError as e:
         logger.error(f"ペルソナ更新エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"更新エラー: {str(e)}"},
             status_code=400,
@@ -862,6 +879,7 @@ async def update_persona(
     except Exception as e:
         logger.error(f"ペルソナ更新エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"更新エラー: {str(e)}"},
             status_code=500,
@@ -879,6 +897,7 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
             raise HTTPException(status_code=404, detail="ペルソナが見つかりません")
 
         return templates.TemplateResponse(
+            request,
             "persona/detail.html",
             {
                 "request": request,
@@ -910,11 +929,13 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
                     headers={"HX-Redirect": "/persona/management"},
                 )
             return templates.TemplateResponse(
+                request,
                 "partials/success.html",
                 {"request": request, "message": "ペルソナを削除しました"},
             )
         else:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "ペルソナの削除に失敗しました"},
                 status_code=400,
@@ -922,6 +943,7 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
     except Exception as e:
         logger.error(f"ペルソナ削除エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"削除エラー: {str(e)}"},
             status_code=500,
@@ -969,6 +991,7 @@ async def get_persona_list_partial(
                     total_count = None
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/persona_list.html",
             {
                 "request": request,
@@ -983,6 +1006,7 @@ async def get_persona_list_partial(
     except Exception as e:
         logger.error(f"ペルソナ一覧取得エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": "ペルソナ一覧の取得に失敗しました"},
             status_code=500,
@@ -1095,6 +1119,7 @@ async def get_persona_memories(
         )
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1111,6 +1136,7 @@ async def get_persona_memories(
             f"PersonaManager error getting memories for persona {persona_id}: {e}"
         )
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1126,6 +1152,7 @@ async def get_persona_memories(
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Network error getting memories for persona {persona_id}: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1143,6 +1170,7 @@ async def get_persona_memories(
             f"Error getting memories for persona {persona_id}: {e}", exc_info=True
         )
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1175,6 +1203,7 @@ async def delete_persona_memory(
             # 長期記憶機能が無効の場合 - エラーをインラインで表示
             logger.warning(f"Memory service disabled, cannot delete memory {memory_id}")
             return templates.TemplateResponse(
+                request,
                 "persona/partials/memory_delete_error.html",
                 {
                     "request": request,
@@ -1195,6 +1224,7 @@ async def delete_persona_memory(
             # 削除失敗時はエラーメッセージを含む要素を返す
             logger.warning(f"Memory {memory_id} not found for persona {persona_id}")
             return templates.TemplateResponse(
+                request,
                 "persona/partials/memory_delete_error.html",
                 {
                     "request": request,
@@ -1209,6 +1239,7 @@ async def delete_persona_memory(
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Network error deleting memory {memory_id}: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_delete_error.html",
             {"request": request, "memory_id": memory_id, "error": error_msg},
             status_code=503,
@@ -1219,6 +1250,7 @@ async def delete_persona_memory(
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_delete_error.html",
             {"request": request, "memory_id": memory_id, "error": error_msg},
             status_code=500,
@@ -1252,6 +1284,7 @@ async def delete_all_persona_memories(
                 f"Memory service disabled, cannot delete all memories for persona {persona_id}"
             )
             return templates.TemplateResponse(
+                request,
                 "persona/partials/memory_list.html",
                 {
                     "request": request,
@@ -1287,6 +1320,7 @@ async def delete_all_persona_memories(
         # 空の記憶リストを返す（成功メッセージ付き）
         item_name = "知識" if strategy_type == "semantic" else "記憶"
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1312,6 +1346,7 @@ async def delete_all_persona_memories(
         memories = _safe_get_memories(persona_id, strategy_type)
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1335,6 +1370,7 @@ async def delete_all_persona_memories(
         memories = _safe_get_memories(persona_id)
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1414,6 +1450,7 @@ async def add_persona_memory(
         )
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_list.html",
             {
                 "request": request,
@@ -1431,6 +1468,7 @@ async def add_persona_memory(
             f"PersonaManager error adding memory for persona {persona_id}: {e}"
         )
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_add_error.html",
             {"request": request, "error": str(e)},
             status_code=400,
@@ -1440,6 +1478,7 @@ async def add_persona_memory(
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Network error adding memory for persona {persona_id}: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_add_error.html",
             {"request": request, "error": error_msg},
             status_code=503,
@@ -1451,6 +1490,7 @@ async def add_persona_memory(
             f"Error adding memory for persona {persona_id}: {e}", exc_info=True
         )
         return templates.TemplateResponse(
+            request,
             "persona/partials/memory_add_error.html",
             {"request": request, "error": error_msg},
             status_code=500,
@@ -1486,6 +1526,7 @@ async def upload_knowledge_file_preview(
                 f"{len(markdown_content)} chars (limit: 10000)"
             )
             return templates.TemplateResponse(
+                request,
                 "persona/partials/knowledge_file_error.html",
                 {
                     "request": request,
@@ -1505,6 +1546,7 @@ async def upload_knowledge_file_preview(
         )
 
         return templates.TemplateResponse(
+            request,
             "persona/partials/knowledge_file_preview.html",
             {
                 "request": request,
@@ -1519,6 +1561,7 @@ async def upload_knowledge_file_preview(
     except FileUploadError as e:
         logger.warning(f"Knowledge file upload error for persona {persona_id}: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/knowledge_file_error.html",
             {"request": request, "error": str(e)},
         )
@@ -1526,6 +1569,7 @@ async def upload_knowledge_file_preview(
     except FileSecurityError as e:
         logger.warning(f"Knowledge file security error for persona {persona_id}: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/knowledge_file_error.html",
             {"request": request, "error": f"セキュリティエラー: {str(e)}"},
         )
@@ -1536,6 +1580,7 @@ async def upload_knowledge_file_preview(
             exc_info=True,
         )
         return templates.TemplateResponse(
+            request,
             "persona/partials/knowledge_file_error.html",
             {
                 "request": request,
@@ -1563,6 +1608,7 @@ async def get_kb_binding(request: Request, persona_id: str) -> Any:
             binding = None
 
     return templates.TemplateResponse(
+        request,
         "persona/partials/kb_binding.html",
         {
             "request": request,
@@ -1631,6 +1677,7 @@ async def get_dataset_bindings(request: Request, persona_id: str) -> Any:
     bindings_map = {b.dataset_id: b for b in bindings}
 
     return templates.TemplateResponse(
+        request,
         "persona/partials/dataset_bindings.html",
         {
             "request": request,
@@ -1662,6 +1709,7 @@ async def create_dataset_binding(
             valid_columns = {col.name for col in dataset.columns}
             if key_name not in valid_columns:
                 return templates.TemplateResponse(
+                    request,
                     "partials/error.html",
                     {
                         "request": request,
@@ -1711,12 +1759,14 @@ async def preview_dataset_binding(
         manager = DatasetManager()
         data = manager.preview_binding_data(persona_id, binding_id)
         return templates.TemplateResponse(
+            request,
             "persona/partials/dataset_preview.html",
             {"request": request, **data},
         )
     except Exception as e:
         logger.error(f"Dataset preview error: {e}")
         return templates.TemplateResponse(
+            request,
             "persona/partials/dataset_preview.html",
             {
                 "request": request,
@@ -1738,6 +1788,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
         if not id_list:
             logger.warning("保存するペルソナが選択されていません")
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "保存するペルソナを選択してください"},
                 status_code=400,
@@ -1770,6 +1821,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         if saved_count == 0:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "ペルソナの保存に失敗しました"},
                 status_code=500,
@@ -1779,6 +1831,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         # 成功メッセージを返す
         return templates.TemplateResponse(
+            request,
             "persona/partials/save_success.html",
             {"request": request, "saved_count": saved_count},
         )
@@ -1789,6 +1842,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         logger.error(f"エラー詳細: {traceback.format_exc()}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": "ペルソナの保存中にエラーが発生しました"},
             status_code=500,

@@ -75,7 +75,7 @@ app.include_router(survey.router, prefix="/survey", tags=["survey"])
 async def index(request: Request) -> Any:
     """トップページ"""
     return templates.TemplateResponse(
-        "index.html", {"request": request, "title": "AIペルソナシステム"}
+        request, "index.html", {"request": request, "title": "AIペルソナシステム"}
     )
 
 
