@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> Any:
 app = FastAPI(
     title="AIペルソナシステム",
     description="AIペルソナを生成し、議論を通じてインサイトを生成",
-    version="0.16.1",
+    version="0.16.2",
     lifespan=lifespan,
 )
 
@@ -75,11 +75,11 @@ app.include_router(survey.router, prefix="/survey", tags=["survey"])
 async def index(request: Request) -> Any:
     """トップページ"""
     return templates.TemplateResponse(
-        "index.html", {"request": request, "title": "AIペルソナシステム"}
+        request, "index.html", {"request": request, "title": "AIペルソナシステム"}
     )
 
 
 @app.get("/health")
 async def health_check() -> Any:
     """ヘルスチェック"""
-    return {"status": "healthy", "version": "0.16.1"}
+    return {"status": "healthy", "version": "0.16.2"}

@@ -25,10 +25,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             and request.url.path not in EXEMPT_PATHS
             and not request.url.path.startswith(EXEMPT_PREFIXES)
         ):
-            has_custom_header = (
-                request.headers.get("HX-Request")
-                or request.headers.get("X-Requested-With")
-            )
+            has_custom_header = request.headers.get(
+                "HX-Request"
+            ) or request.headers.get("X-Requested-With")
             if not has_custom_header:
                 return JSONResponse(
                     status_code=403,

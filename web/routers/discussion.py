@@ -136,6 +136,7 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 async def discussion_setup_page(request: Request) -> Any:
     """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
     return templates.TemplateResponse(
+        request,
         "discussion/setup.html",
         {"request": request, "title": "議論設定"},
     )
@@ -186,18 +187,21 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
 
         if not discussion:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "議論が見つかりません"},
                 status_code=404,
             )
 
         return templates.TemplateResponse(
+            request,
             "discussion/partials/discussion_result.html",
             {"request": request, "discussion": discussion},
         )
     except Exception as e:
         logger.error(f"議論結果パーシャル取得エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": "議論結果の取得に失敗しました"},
             status_code=500,
@@ -585,11 +589,13 @@ async def discussion_results_page(
     # htmxリクエストの場合はパーシャルを返す
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
+            request,
             "discussion/partials/discussion_list.html",
             ctx,
         )
 
     return templates.TemplateResponse(
+        request,
         "discussion/results.html",
         {**ctx, "title": "議論結果"},
     )
@@ -726,6 +732,7 @@ async def start_discussion(
         # インタビューモードの場合はエラーを返す（インタビューは別のエンドポイントで処理）
         if mode == "interview":
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {
                     "request": request,
@@ -736,6 +743,7 @@ async def start_discussion(
 
         if len(persona_ids) < 2:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "議論には最低2体のペルソナが必要です"},
                 status_code=400,
@@ -747,6 +755,7 @@ async def start_discussion(
 
         if len(personas) < 2:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "有効なペルソナが2体以上必要です"},
                 status_code=400,
@@ -778,12 +787,14 @@ async def start_discussion(
         )
 
         return templates.TemplateResponse(
+            request,
             "discussion/partials/discussion_result.html",
             {"request": request, "discussion": discussion},
         )
     except Exception as e:
         logger.error(f"議論開始エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {
                 "request": request,
@@ -848,6 +859,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
             title = f"議論: {discussion.topic}"
 
         return templates.TemplateResponse(
+            request,
             "discussion/detail.html",
             {
                 "request": request,
@@ -890,6 +902,7 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
 
         # 更新されたインサイトパーシャルを返す
         return templates.TemplateResponse(
+            request,
             "discussion/partials/insights.html",
             {
                 "request": request,
@@ -901,6 +914,7 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
     except Exception as e:
         logger.error(f"インサイト再生成エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {
                 "request": request,
@@ -933,11 +947,13 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                     headers={"HX-Redirect": "/discussion/results"},
                 )
             return templates.TemplateResponse(
+                request,
                 "partials/success.html",
                 {"request": request, "message": "議論を削除しました"},
             )
         else:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "議論の削除に失敗しました"},
                 status_code=400,
@@ -945,6 +961,7 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
     except Exception as e:
         logger.error(f"議論削除エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": f"削除エラー: {str(e)}"},
             status_code=500,
@@ -960,18 +977,21 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
 
         if not discussion:
             return templates.TemplateResponse(
+                request,
                 "partials/error.html",
                 {"request": request, "error": "議論が見つかりません"},
                 status_code=404,
             )
 
         return templates.TemplateResponse(
+            request,
             "discussion/partials/insights.html",
             {"request": request, "insights": discussion.insights},
         )
     except Exception as e:
         logger.error(f"インサイト取得エラー: {e}")
         return templates.TemplateResponse(
+            request,
             "partials/error.html",
             {"request": request, "error": "インサイトの取得に失敗しました"},
             status_code=500,
@@ -1197,6 +1217,7 @@ async def save_report(
 
         discussion = discussion_manager.get_discussion(discussion_id)
         response = templates.TemplateResponse(
+            request,
             "discussion/partials/reports.html",
             {
                 "request": request,
@@ -1219,6 +1240,7 @@ async def save_report(
             custom_prompt=custom_prompt or None,
         )
         return templates.TemplateResponse(
+            request,
             "discussion/partials/report_preview.html",
             {
                 "request": request,
@@ -1273,6 +1295,7 @@ async def get_report(
             return HTMLResponse(content="レポートが見つかりません", status_code=404)
 
         return templates.TemplateResponse(
+            request,
             "discussion/partials/report_content.html",
             {"request": request, "report": report, "discussion_id": discussion_id},
         )
