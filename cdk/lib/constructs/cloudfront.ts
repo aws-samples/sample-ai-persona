@@ -80,7 +80,7 @@ exports.handler = async (event) => {
 
     const authFunction = new cloudfront.experimental.EdgeFunction(this, 'AuthAtEdge', {
       functionName: `ai-persona-auth-edge-${envName}`,
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(lambdaDir),
       memorySize: 128,
