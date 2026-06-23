@@ -745,13 +745,11 @@ class AIService:
                         delta = chunk_data.get("delta", {})
                         text = delta.get("text", "")
                         buffer += text
-                        # print(buffer)
 
                         # 改行で区切って完成した発言を検出
                         while "\n" in buffer:
                             line, buffer = buffer.split("\n", 1)
                             line = line.strip()
-                            print(line)
                             if line and line.startswith("[") and "]:" in line:
                                 try:
                                     end_bracket = line.index("]:")
@@ -764,7 +762,6 @@ class AIService:
                                             persona_name=persona_name,
                                             content=content,
                                         )
-                                        print(message)
                                         yield message
                                 except (ValueError, IndexError):
                                     continue

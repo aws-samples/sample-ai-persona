@@ -10,7 +10,7 @@ import functools
 import logging
 import random
 import time
-from typing import Any,  Callable, Optional, Tuple, Type, TypeVar
+from typing import Any, Callable, Optional, Tuple, Type, TypeVar
 
 from botocore.exceptions import ClientError
 
@@ -222,102 +222,3 @@ def with_retry(
         return wrapper
 
     return decorator
-
-
-class RetryContext:
-    """
-    リトライコンテキストマネージャー
-
-    with文でリトライロジックを適用する場合に使用。
-
-    Example:
-        with RetryContext(max_retries=3) as ctx:
-            while ctx.should_retry():
-                try:
-                    result = call_external_service()
-                    break
-                except Exception as e:
-                    ctx.record_failure(e)
-    """
-
-    def __init__(
-        self,
-        max_retries: int = 3,
-        base_delay: float = 1.0,
-        max_delay: float = 60.0,
-        jitter: bool = True,
-    ):
-        self.max_retries = max_retries
-        self.base_delay = base_delay
-        self.max_delay = max_delay
-        self.jitter = jitter
-        self._attempt = 0
-        self._last_exception: Optional[Exception] = None
-        self._success = False
-
-    def __enter__(self) -> "RetryContext":
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        # Don't suppress exceptions
-        pass
-
-    def should_retry(self) -> bool:
-        """リトライすべきかどうかを返す"""
-        return self._attempt <= self.max_retries and not self._success
-
-    def record_failure(self, exception: Exception) -> None:
-        """
-        失敗を記録し、必要に応じて待機
-
-        Args:
-            exception: 発生した例外
-
-        Raises:
-            RetryExhaustedError: リトライ回数を超過した場合
-        """
-        self._last_exception = exception
-
-        if self._attempt >= self.max_retries:
-            raise RetryExhaustedError(
-                f"Operation failed after {self.max_retries + 1} attempts",
-                attempts=self.max_retries + 1,
-                last_exception=exception,
-            ) from exception
-
-        # Check if error is retryable
-        if not is_transient_error(exception):
-            raise exception
-
-        # Calculate and apply delay
-        delay = calculate_backoff_delay(
-            attempt=self._attempt,
-            base_delay=self.base_delay,
-            max_delay=self.max_delay,
-            jitter=self.jitter,
-        )
-
-        logger.warning(
-            "Retry attempt %d/%d after %.2fs delay: %s",
-            self._attempt + 1,
-            self.max_retries,
-            delay,
-            str(exception),
-        )
-
-        time.sleep(delay)
-        self._attempt += 1
-
-    def record_success(self) -> None:
-        """成功を記録"""
-        self._success = True
-
-    @property
-    def attempts(self) -> int:
-        """現在の試行回数を返す"""
-        return self._attempt + 1
-
-    @property
-    def last_exception(self) -> Optional[Exception]:
-        """最後に発生した例外を返す"""
-        return self._last_exception

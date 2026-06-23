@@ -55,7 +55,6 @@ class RetrieveOnlySessionManager:
         self._messages: List[
             Any
         ] = []  # ローカルでメッセージを保持（検索コンテキスト用）
-        self._latest_agent_message: dict = {}  # ベースマネージャーとの互換性のため
 
         logger.info(
             f"Created RetrieveOnlySessionManager: actor_id={actor_id}, session_id={session_id}"

@@ -21,10 +21,7 @@ from .memory_service import (
     MemoryServiceError,
 )
 from .retry import (
-    RetryContext,
     RetryExhaustedError,
-    calculate_backoff_delay,
-    is_transient_error,
     with_retry,
 )
 from .strategy import MemoryStrategy
@@ -46,7 +43,4 @@ __all__ = [
     "MemoryConnectionError",
     "with_retry",
     "RetryExhaustedError",
-    "RetryContext",
-    "is_transient_error",
-    "calculate_backoff_delay",
 ]

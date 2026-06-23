@@ -68,9 +68,6 @@ class Config:
     )
     BEDROCK_BATCH_ROLE_ARN: Optional[str] = None
 
-    # Dataset Integration設定
-    ENABLE_DATASET_INTEGRATION: bool = False  # データセット連携機能の有効/無効
-
     # データ分析エージェント連携設定
     DATA_AGENT_RUNTIME_ARN: Optional[str] = None
     DATA_AGENT_REGION: str = "ap-northeast-1"
