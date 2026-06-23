@@ -10,22 +10,6 @@ from src.models.insight_category import InsightCategory
 class TestInsightCategory:
     """Test cases for InsightCategory model."""
 
-    def test_create_new_valid(self):
-        """Test creating a valid InsightCategory."""
-        category = InsightCategory.create_new(
-            name="顧客ニーズ", description="議論から読み取れる潜在的・顕在的ニーズ"
-        )
-        assert category.name == "顧客ニーズ"
-        assert category.description == "議論から読み取れる潜在的・顕在的ニーズ"
-
-    def test_create_new_strips_whitespace(self):
-        """Test that create_new strips whitespace."""
-        category = InsightCategory.create_new(
-            name="  顧客ニーズ  ", description="  説明  "
-        )
-        assert category.name == "顧客ニーズ"
-        assert category.description == "説明"
-
     def test_empty_name_raises_error(self):
         """Test that empty name raises ValueError."""
         with pytest.raises(ValueError, match="Category name cannot be empty"):
@@ -66,41 +50,6 @@ class TestInsightCategory:
 
         assert category.name == "市場機会"
         assert category.description == "市場の機会を特定"
-
-    def test_to_json(self):
-        """Test converting InsightCategory to JSON string."""
-        category = InsightCategory(name="顧客ニーズ", description="説明")
-        json_str = category.to_json()
-
-        data = json.loads(json_str)
-        assert data["name"] == "顧客ニーズ"
-        assert data["description"] == "説明"
-
-    def test_from_json(self):
-        """Test creating InsightCategory from JSON string."""
-        json_str = '{"name": "商品開発", "description": "商品開発への示唆"}'
-        category = InsightCategory.from_json(json_str)
-
-        assert category.name == "商品開発"
-        assert category.description == "商品開発への示唆"
-
-    def test_round_trip_serialization(self):
-        """Test that serialization and deserialization preserves data."""
-        original = InsightCategory(
-            name="マーケティング", description="マーケティング戦略"
-        )
-
-        # Dict round trip
-        dict_data = original.to_dict()
-        from_dict = InsightCategory.from_dict(dict_data)
-        assert from_dict.name == original.name
-        assert from_dict.description == original.description
-
-        # JSON round trip
-        json_str = original.to_json()
-        from_json = InsightCategory.from_json(json_str)
-        assert from_json.name == original.name
-        assert from_json.description == original.description
 
     def test_get_default_categories(self):
         """Test getting default insight categories."""

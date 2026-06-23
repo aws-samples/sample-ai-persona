@@ -40,13 +40,6 @@ class TestMemoryEntry:
         assert restored.metadata == entry.metadata
         assert restored.relevance_score == entry.relevance_score
 
-    def test_to_json_from_json_roundtrip(self):
-        entry = self._make_entry()
-        json_str = entry.to_json()
-        restored = MemoryEntry.from_json(json_str)
-        assert restored.id == entry.id
-        assert restored.content == entry.content
-
     def test_from_dict_string_created_at(self):
         data = {
             "id": "m1",

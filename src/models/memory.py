@@ -3,7 +3,6 @@ Memory Entry Model
 長期記憶エントリのデータモデル
 """
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -53,13 +52,3 @@ class MemoryEntry:
             created_at=created_at,
             relevance_score=data.get("relevance_score"),
         )
-
-    def to_json(self) -> str:
-        """JSON文字列に変換"""
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "MemoryEntry":
-        """JSON文字列から作成"""
-        data = json.loads(json_str)
-        return cls.from_dict(data)

@@ -5,7 +5,6 @@ Discussion data model for the AI Persona System.
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-import json
 import uuid
 
 from .message import Message
@@ -54,21 +53,6 @@ class Discussion:
             documents=documents,
         )
 
-    @classmethod
-    def create_interview_session(cls, participants: List[str]) -> "Discussion":
-        """
-        Create a new interview session with specified participants.
-
-        Args:
-            participants: List of persona IDs participating in the interview
-
-        Returns:
-            Discussion instance configured for interview mode
-        """
-        return cls.create_new(
-            topic="Interview Session", participants=participants, mode="interview"
-        )
-
     def add_message(self, message: Message) -> "Discussion":
         """
         Add a message to the discussion and return a new instance.
@@ -104,12 +88,6 @@ class Discussion:
             documents=self.documents,
             reports=self.reports,
         )
-
-    def get_messages_by_persona(self, persona_id: str) -> List[Message]:
-        """
-        Get all messages from a specific persona.
-        """
-        return [msg for msg in self.messages if msg.persona_id == persona_id]
 
     def add_user_message(self, content: str) -> "Discussion":
         """
@@ -151,33 +129,6 @@ class Discussion:
         )
         return self.add_message(response_message)
 
-    def is_interview_session(self) -> bool:
-        """
-        Check if this discussion is an interview session.
-
-        Returns:
-            True if this is an interview session, False otherwise
-        """
-        return self.mode == "interview"
-
-    def get_user_messages(self) -> List[Message]:
-        """
-        Get all user messages from the interview session.
-
-        Returns:
-            List of messages from the user
-        """
-        return [msg for msg in self.messages if msg.message_type == "user_message"]
-
-    def get_persona_responses(self) -> List[Message]:
-        """
-        Get all persona responses from the interview session.
-
-        Returns:
-            List of messages from personas (excluding user messages)
-        """
-        return [msg for msg in self.messages if msg.message_type != "user_message"]
-
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert Discussion to dictionary for serialization.
@@ -214,17 +165,3 @@ class Discussion:
             DiscussionReport.from_dict(r) for r in data.get("reports", [])
         ]
         return cls(**data)
-
-    def to_json(self) -> str:
-        """
-        Convert Discussion to JSON string.
-        """
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "Discussion":
-        """
-        Create Discussion instance from JSON string.
-        """
-        data = json.loads(json_str)
-        return cls.from_dict(data)
