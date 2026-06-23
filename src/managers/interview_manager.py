@@ -954,40 +954,6 @@ class InterviewManager(AgentDiscussionManager):
 
         return base_prompt + interview_instructions
 
-    def _validate_session_data(self, session: InterviewSession) -> None:
-        """
-        Validate interview session data for persistence.
-
-        Args:
-            session: Interview session to validate
-
-        Raises:
-            InterviewManagerError: If session data is invalid
-        """
-        if not session.messages:
-            raise InterviewManagerError("セッションにメッセージがありません")
-
-        # Validate message order by timestamp
-        for i in range(1, len(session.messages)):
-            if session.messages[i].timestamp < session.messages[i - 1].timestamp:
-                self.logger.warning(
-                    f"Message order inconsistency detected in session {session.id}"
-                )
-                # Sort messages by timestamp to fix order
-                session.messages.sort(key=lambda msg: msg.timestamp)
-                break
-
-        # Validate that all messages have timestamps
-        for i, message in enumerate(session.messages):
-            if not message.timestamp:
-                raise InterviewManagerError(f"Message {i} missing timestamp")
-
-        # Validate participants
-        if not session.participants:
-            raise InterviewManagerError("セッションに参加者がいません")
-
-        self.logger.debug(f"Session validation passed for {session.id}")
-
     def get_session_status(self, session_id: str) -> Dict[str, Any]:
         """
         Get detailed status information about an interview session.

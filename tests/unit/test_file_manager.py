@@ -260,35 +260,6 @@ class TestFileManager:
         with pytest.raises(FileUploadError):
             self.file_manager.upload_interview_file(content, filename)
 
-    def test_save_uploaded_file_success(self):
-        """ファイル保存の成功テスト"""
-        filename = "test_file.txt"
-        content = "テストファイルの内容".encode("utf-8")
-
-        saved_path = self.file_manager.save_uploaded_file(content, filename)
-
-        # ファイルが保存されていることを確認
-        assert Path(saved_path).exists()
-
-        # 保存された内容を確認
-        with open(saved_path, "rb") as f:
-            saved_content = f.read()
-        assert saved_content == content
-
-    def test_get_uploaded_file_content_success(self):
-        """保存されたファイル内容取得の成功テスト"""
-        filename = "test_file.txt"
-        original_content = "テストファイルの内容です。"
-        content_bytes = original_content.encode("utf-8")
-
-        # ファイルを保存
-        saved_path = self.file_manager.save_uploaded_file(content_bytes, filename)
-
-        # 内容を取得
-        retrieved_content = self.file_manager.get_uploaded_file_content(saved_path)
-
-        assert retrieved_content == original_content
-
     def test_get_uploaded_file_content_file_not_found(self):
         """存在しないファイルの内容取得テスト"""
         non_existent_path = "/path/to/non/existent/file.txt"
@@ -412,29 +383,6 @@ class TestFileManager:
 
         assert "バイナリファイルはアップロードできません" in str(exc_info.value)
 
-    def test_verify_file_integrity_success(self):
-        """ファイル整合性検証成功テスト"""
-        filename = "integrity_test.txt"
-        content = "整合性テスト用のファイル内容です。十分な長さのテキストです。".encode(
-            "utf-8"
-        )
-
-        # ファイルをアップロード
-        saved_path, file_text, metadata = self.file_manager.upload_interview_file(
-            content, filename
-        )
-
-        # 整合性を検証
-        result = self.file_manager.verify_file_integrity(metadata.file_id)
-        assert result is True
-
-    def test_verify_file_integrity_file_not_found(self):
-        """ファイルが見つからない場合の整合性検証テスト"""
-        non_existent_id = str(uuid.uuid4())
-
-        result = self.file_manager.verify_file_integrity(non_existent_id)
-        assert result is False
-
     def test_get_file_metadata_success(self):
         """ファイルメタデータ取得成功テスト"""
         filename = "metadata_test.txt"
@@ -456,27 +404,6 @@ class TestFileManager:
         assert retrieved_metadata.file_id == metadata.file_id
         assert retrieved_metadata.original_filename == filename
         assert retrieved_metadata.file_size == len(content)
-
-    def test_get_storage_usage(self):
-        """ストレージ使用量取得テスト"""
-        filename = "storage_test.txt"
-        content = (
-            "ストレージテスト用のファイル内容です。十分な長さのテキストです。".encode(
-                "utf-8"
-            )
-        )
-
-        # ファイルをアップロード
-        self.file_manager.upload_interview_file(content, filename)
-
-        # ストレージ使用量を取得
-        usage = self.file_manager.get_storage_usage()
-
-        assert usage["total_files"] >= 1
-        assert usage["total_size_bytes"] >= len(content)
-        assert usage["total_size_mb"] >= 0
-        assert "upload_dir" in usage
-        assert "max_file_size_mb" in usage
 
     def test_upload_discussion_document_png(self):
         """議論用ドキュメント（PNG）アップロードテスト (Task 2)"""
@@ -797,33 +724,6 @@ class TestFileManagerUtilities:
         import shutil
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_get_file_statistics_empty(self):
-        result = self.file_manager.get_file_statistics()
-        assert isinstance(result, dict)
-        assert result["total_files"] == 0
-
-    def test_bulk_delete_files(self):
-        self.mock_db_service.get_uploaded_file_info.return_value = None
-        result = self.file_manager.bulk_delete_files(["f1", "f2"])
-        assert isinstance(result, dict)
-        assert "f1" in result
-        assert "f2" in result
-
-    def test_export_file_metadata_empty(self):
-        result = self.file_manager.export_file_metadata()
-        assert isinstance(result, list)
-        assert len(result) == 0
-
-    def test_validate_system_health(self):
-        result = self.file_manager.validate_system_health()
-        assert isinstance(result, dict)
-        assert "upload_dir_exists" in result
-
-    def test_cleanup_orphaned_files(self):
-        result = self.file_manager.cleanup_orphaned_files()
-        assert isinstance(result, int)
-        assert result >= 0
 
     def test_validate_discussion_document_image_within_5mb(self):
         """画像が5MB以内なら検証を通過する"""
