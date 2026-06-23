@@ -36,11 +36,6 @@ class Config:
     AWS_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-4-6"
 
-    # アプリケーション設定
-    APP_TITLE: str = "AIペルソナシステム"
-    APP_HOST: str = "0.0.0.0"
-    APP_PORT: int = 8000
-
     # AI生成設定
     MAX_TOKENS: int = 4000
     TEMPERATURE: float = 0.7
@@ -55,7 +50,6 @@ class Config:
     AGENTCORE_MEMORY_ID: Optional[str] = None
     AGENTCORE_MEMORY_REGION: str = "us-east-1"
     ENABLE_LONG_TERM_MEMORY: bool = False
-    MEMORY_STRATEGY: str = "summary"  # "summary", "semantic", etc.
     MEMORY_MAX_RESULTS: int = 5
     SUMMARY_MEMORY_STRATEGY_ID: Optional[str] = None
     SEMANTIC_MEMORY_STRATEGY_ID: Optional[str] = None
@@ -97,7 +91,6 @@ class Config:
             self.ENABLE_LONG_TERM_MEMORY = True
         elif enable_memory in ("false", "0", "no"):
             self.ENABLE_LONG_TERM_MEMORY = False
-        self.MEMORY_STRATEGY = os.getenv("MEMORY_STRATEGY", self.MEMORY_STRATEGY)
         memory_max_results = os.getenv("MEMORY_MAX_RESULTS")
         if memory_max_results:
             self.MEMORY_MAX_RESULTS = int(memory_max_results)

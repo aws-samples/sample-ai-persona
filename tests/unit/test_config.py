@@ -62,15 +62,6 @@ class TestConfigDefaults:
                 or "anthropic" in config.BEDROCK_MODEL_ID.lower()
             )
 
-    def test_default_app_settings(self):
-        """デフォルトのアプリケーション設定を確認"""
-        from src.config import Config
-
-        config = Config()
-        assert config.APP_TITLE == "AIペルソナシステム"
-        assert config.APP_HOST == "0.0.0.0"
-        assert config.APP_PORT == 8000
-
     def test_default_ai_settings(self):
         """デフォルトのAI生成設定を確認"""
         from src.config import Config
@@ -276,7 +267,6 @@ class TestConfigMemorySettings:
             )
             assert config.AGENTCORE_MEMORY_REGION == "us-east-1"
             assert config.ENABLE_LONG_TERM_MEMORY is False
-            assert config.MEMORY_STRATEGY == "summary"
             assert config.MEMORY_MAX_RESULTS == 5
 
     def test_agentcore_memory_id_from_env(self):
@@ -312,14 +302,6 @@ class TestConfigMemorySettings:
             with patch.dict(os.environ, {"ENABLE_LONG_TERM_MEMORY": value}):
                 config = Config()
                 assert config.ENABLE_LONG_TERM_MEMORY is False
-
-    def test_memory_strategy_from_env(self):
-        """MEMORY_STRATEGYが環境変数から読み込まれることを確認"""
-        from src.config import Config
-
-        with patch.dict(os.environ, {"MEMORY_STRATEGY": "semantic"}):
-            config = Config()
-            assert config.MEMORY_STRATEGY == "semantic"
 
     def test_memory_max_results_from_env(self):
         """MEMORY_MAX_RESULTSが環境変数から読み込まれることを確認"""
