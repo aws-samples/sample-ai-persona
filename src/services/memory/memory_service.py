@@ -171,9 +171,6 @@ class MemoryService:
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
     )
-    @with_retry(
-        max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
-    )
     def delete_memory(self, actor_id: str, memory_id: str) -> bool:
         """
         記憶を削除（Summary戦略とSemantic戦略の両方を試行）
