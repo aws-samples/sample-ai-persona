@@ -1,5 +1,4 @@
 """MemoryEntry モデルの単体テスト"""
-from datetime import datetime
 
 from src.models.memory import MemoryEntry
 

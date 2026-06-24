@@ -3,7 +3,6 @@ Unit tests for InsightCategory model.
 """
 
 import pytest
-import json
 from src.models.insight_category import InsightCategory
 
 

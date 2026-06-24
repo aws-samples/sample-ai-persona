@@ -8,9 +8,8 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import Mock
-import pytest
 
-from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
+from src.managers.file_manager import FileManager
 from src.config import Config
 
 

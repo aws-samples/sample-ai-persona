@@ -3,7 +3,6 @@ Unit tests for data models.
 """
 
 import time
-import json
 from datetime import datetime
 
 import pytest

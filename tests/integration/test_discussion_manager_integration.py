@@ -7,9 +7,7 @@ from unittest.mock import Mock
 
 from src.managers.discussion_manager import DiscussionManager
 from src.models.persona import Persona
-from src.models.discussion import Discussion
 from src.models.message import Message
-from src.models.insight import Insight
 from src.services.ai_service import AIService
 
 
