@@ -162,10 +162,6 @@ class MemoryService:
                 f"Failed to validate connection to AgentCore Memory: {e}"
             ) from e
 
-    @property
-
-    @property
-
     def _ensure_strategy(self) -> MemoryStrategy:
         """戦略が設定されていることを確認し、戦略を返す"""
         if not self._strategy:
@@ -175,7 +171,6 @@ class MemoryService:
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
     )
-
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
     )
