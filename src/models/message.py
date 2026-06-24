@@ -5,7 +5,6 @@ Message data model for the AI Persona System.
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Dict, Any, Optional
-import json
 
 
 @dataclass
@@ -69,34 +68,3 @@ class Message:
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         return cls(**data)
 
-    def to_json(self) -> str:
-        """
-        Convert Message to JSON string.
-        """
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "Message":
-        """
-        Create Message instance from JSON string.
-        """
-        data = json.loads(json_str)
-        return cls.from_dict(data)
-
-    def is_user_message(self) -> bool:
-        """
-        Check if this message is from a user.
-
-        Returns:
-            True if this is a user message, False otherwise
-        """
-        return self.message_type == "user_message"
-
-    def is_persona_response(self) -> bool:
-        """
-        Check if this message is a persona response.
-
-        Returns:
-            True if this is a persona response, False otherwise
-        """
-        return self.message_type in ["statement", "summary", "facilitation"]

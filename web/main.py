@@ -19,7 +19,6 @@ from web.middleware import CSRFMiddleware
 # ログ設定
 logging.basicConfig(
     level=logging.INFO,
-    # level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ async def lifespan(app: FastAPI) -> Any:
 app = FastAPI(
     title="AIペルソナシステム",
     description="AIペルソナを生成し、議論を通じてインサイトを生成",
-    version="0.16.3",
+    version="0.16.4",
     lifespan=lifespan,
 )
 
@@ -82,4 +81,4 @@ async def index(request: Request) -> Any:
 @app.get("/health")
 async def health_check() -> Any:
     """ヘルスチェック"""
-    return {"status": "healthy", "version": "0.16.3"}
+    return {"status": "healthy", "version": "0.16.4"}

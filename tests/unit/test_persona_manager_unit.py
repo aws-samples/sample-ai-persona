@@ -373,23 +373,6 @@ class TestSearchPersonas:
         mock_db.get_all_personas.return_value = (personas, None)
         return PersonaManager(ai_service=Mock(), database_service=mock_db)
 
-    def test_empty_query_returns_empty(self, manager):
-        assert manager.search_personas("") == []
-
-    def test_search_by_name(self, manager):
-        result = manager.search_personas("田中")
-        assert len(result) == 1
-        assert result[0].name == "田中花子"
-
-    def test_search_by_occupation(self, manager):
-        result = manager.search_personas("エンジニア")
-        assert len(result) == 1
-        assert result[0].name == "佐藤太郎"
-
-    def test_search_no_match(self, manager):
-        result = manager.search_personas("存在しない")
-        assert result == []
-
 
 class TestPersonaCount:
     """get_persona_count / persona_exists のテスト"""
@@ -401,23 +384,3 @@ class TestPersonaCount:
     def test_count(self, manager):
         manager.database_service.get_persona_count.return_value = 5
         assert manager.get_persona_count() == 5
-
-    def test_exists_true(self, manager):
-        persona = Persona.create_new(
-            name="X",
-            age=20,
-            occupation="Y",
-            background="Z",
-            values=[],
-            pain_points=[],
-            goals=[],
-        )
-        manager.database_service.get_persona.return_value = persona
-        assert manager.persona_exists("p1") is True
-
-    def test_exists_false(self, manager):
-        manager.database_service.get_persona.return_value = None
-        assert manager.persona_exists("p1") is False
-
-    def test_exists_empty_id(self, manager):
-        assert manager.persona_exists("") is False

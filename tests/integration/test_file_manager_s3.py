@@ -211,36 +211,6 @@ def test_delete_file_from_local(file_manager_without_s3):
     assert not file_path.exists()
 
 
-def test_verify_file_integrity_s3(file_manager_with_s3):
-    """S3ファイルの整合性検証テスト"""
-    file_content = b"Test interview content for persona generation."
-    filename = "test_interview.txt"
-
-    # アップロード
-    _, _, metadata = file_manager_with_s3.upload_interview_file(file_content, filename)
-
-    # 整合性検証
-    is_valid = file_manager_with_s3.verify_file_integrity(metadata.file_id)
-
-    # 検証
-    assert is_valid is True
-
-
-def test_verify_file_integrity_local(file_manager_without_s3):
-    """ローカルファイルの整合性検証テスト"""
-    file_content = b"Test interview content for persona generation."
-    filename = "test_interview.txt"
-
-    # アップロード
-    _, _, metadata = file_manager_without_s3.upload_interview_file(
-        file_content, filename
-    )
-
-    # 整合性検証
-    is_valid = file_manager_without_s3.verify_file_integrity(metadata.file_id)
-
-    # 検証
-    assert is_valid is True
 
 
 def test_list_uploaded_files_s3(file_manager_with_s3):

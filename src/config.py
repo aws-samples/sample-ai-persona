@@ -36,11 +36,6 @@ class Config:
     AWS_REGION: str = "us-east-1"
     BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-4-6"
 
-    # アプリケーション設定
-    APP_TITLE: str = "AIペルソナシステム"
-    APP_HOST: str = "0.0.0.0"
-    APP_PORT: int = 8000
-
     # AI生成設定
     MAX_TOKENS: int = 4000
     TEMPERATURE: float = 0.7
@@ -55,21 +50,13 @@ class Config:
     AGENTCORE_MEMORY_ID: Optional[str] = None
     AGENTCORE_MEMORY_REGION: str = "us-east-1"
     ENABLE_LONG_TERM_MEMORY: bool = False
-    MEMORY_STRATEGY: str = "summary"  # "summary", "semantic", etc.
     MEMORY_MAX_RESULTS: int = 5
     SUMMARY_MEMORY_STRATEGY_ID: Optional[str] = None
     SEMANTIC_MEMORY_STRATEGY_ID: Optional[str] = None
 
     # マスアンケート機能設定
     BATCH_INFERENCE_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"  # バッチ推論用モデル（Claude 4.5 Haiku、クロスリージョン推論プロファイル）
-    SURVEY_S3_PREFIX: str = "survey-results/"  # アンケート結果CSV保存先S3プレフィックス
-    BATCH_INFERENCE_S3_PREFIX: str = (
-        "batch-inference/"  # バッチ推論入出力S3プレフィックス
-    )
     BEDROCK_BATCH_ROLE_ARN: Optional[str] = None
-
-    # Dataset Integration設定
-    ENABLE_DATASET_INTEGRATION: bool = False  # データセット連携機能の有効/無効
 
     # データ分析エージェント連携設定
     DATA_AGENT_RUNTIME_ARN: Optional[str] = None
@@ -100,7 +87,6 @@ class Config:
             self.ENABLE_LONG_TERM_MEMORY = True
         elif enable_memory in ("false", "0", "no"):
             self.ENABLE_LONG_TERM_MEMORY = False
-        self.MEMORY_STRATEGY = os.getenv("MEMORY_STRATEGY", self.MEMORY_STRATEGY)
         memory_max_results = os.getenv("MEMORY_MAX_RESULTS")
         if memory_max_results:
             self.MEMORY_MAX_RESULTS = int(memory_max_results)
@@ -117,10 +103,6 @@ class Config:
         # マスアンケート機能設定を環境変数から上書き
         self.BATCH_INFERENCE_MODEL_ID = os.getenv(
             "BATCH_INFERENCE_MODEL_ID", self.BATCH_INFERENCE_MODEL_ID
-        )
-        self.SURVEY_S3_PREFIX = os.getenv("SURVEY_S3_PREFIX", self.SURVEY_S3_PREFIX)
-        self.BATCH_INFERENCE_S3_PREFIX = os.getenv(
-            "BATCH_INFERENCE_S3_PREFIX", self.BATCH_INFERENCE_S3_PREFIX
         )
         self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
             "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN

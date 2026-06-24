@@ -11,7 +11,7 @@ Requirements:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from src.models.memory import MemoryEntry
 
@@ -162,144 +162,11 @@ class MemoryService:
                 f"Failed to validate connection to AgentCore Memory: {e}"
             ) from e
 
-    @property
-    def enabled(self) -> bool:
-        """サービスが有効かどうかを返す"""
-        return self._enabled
-
-    @property
-    def strategy(self) -> Optional[MemoryStrategy]:
-        """現在の記憶戦略を返す"""
-        return self._strategy
-
-    def set_strategy(self, strategy: MemoryStrategy) -> None:
-        """
-        記憶戦略を設定
-
-        Args:
-            strategy: 新しい記憶戦略
-
-        Requirements:
-            - 2.1: Strategy patternの実装
-            - 2.3: 新しい戦略の登録
-        """
-        if not isinstance(strategy, MemoryStrategy):
-            raise TypeError("strategy must be an instance of MemoryStrategy")
-
-        old_strategy = type(self._strategy).__name__ if self._strategy else "None"
-        self._strategy = strategy
-
-        logger.info(
-            "Memory strategy changed: %s -> %s", old_strategy, type(strategy).__name__
-        )
-
     def _ensure_strategy(self) -> MemoryStrategy:
         """戦略が設定されていることを確認し、戦略を返す"""
         if not self._strategy:
             raise MemoryServiceError("Memory strategy not configured")
         return self._strategy
-
-    @with_retry(
-        max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
-    )
-    def save_memory(
-        self,
-        actor_id: str,
-        session_id: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        """
-        記憶を保存
-
-        Args:
-            actor_id: ペルソナID
-            session_id: 議論ID
-            content: 保存する内容
-            metadata: 追加メタデータ
-
-        Returns:
-            保存された記憶のID
-
-        Raises:
-            MemoryServiceError: 保存に失敗した場合
-        """
-        strategy = self._ensure_strategy()
-
-        try:
-            memory_id = strategy.save(
-                actor_id=actor_id,
-                session_id=session_id,
-                content=content,
-                metadata=metadata,
-            )
-
-            logger.info(
-                "Memory saved: actor=%s, session=%s, memory_id=%s",
-                actor_id,
-                session_id,
-                memory_id,
-            )
-
-            return memory_id
-
-        except RetryExhaustedError as e:
-            logger.error("Retry exhausted saving memory: %s", e)
-            raise MemoryServiceError(
-                f"Failed to save memory after retries: {e.last_exception}"
-            ) from e
-        except MemoryOperationError:
-            # リトライ対象のエラーは再送出
-            raise
-        except Exception as e:
-            logger.error("Unexpected error saving memory: %s", e)
-            raise MemoryServiceError(f"Failed to save memory: {e}") from e
-
-    @with_retry(
-        max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
-    )
-    def retrieve_memories(
-        self, actor_id: str, query: str, top_k: int = 5
-    ) -> List[MemoryEntry]:
-        """
-        関連する記憶を検索
-
-        Args:
-            actor_id: ペルソナID
-            query: 検索クエリ
-            top_k: 取得する最大件数
-
-        Returns:
-            関連する記憶エントリのリスト
-
-        Raises:
-            MemoryServiceError: 検索に失敗した場合
-        """
-        strategy = self._ensure_strategy()
-
-        try:
-            memories = strategy.retrieve(actor_id=actor_id, query=query, top_k=top_k)
-
-            logger.info(
-                "Retrieved %d memories for actor=%s, query='%s'",
-                len(memories),
-                actor_id,
-                query[:50] if query else "",
-            )
-
-            return memories
-
-        except RetryExhaustedError as e:
-            logger.error("Retry exhausted retrieving memories: %s", e)
-            raise MemoryServiceError(
-                f"Failed to retrieve memories after retries: {e.last_exception}"
-            ) from e
-        except MemoryOperationError:
-            # リトライ対象のエラーは再送出
-            raise
-        except Exception as e:
-            logger.error("Unexpected error retrieving memories: %s", e)
-            raise MemoryServiceError(f"Failed to retrieve memories: {e}") from e
 
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
@@ -434,64 +301,3 @@ class MemoryService:
         )
 
         return all_memories
-
-    def delete_all_memories(self, actor_id: str) -> int:
-        """
-        ペルソナの全記憶を削除
-
-        Args:
-            actor_id: ペルソナID
-
-        Returns:
-            削除された記憶の数
-
-        Raises:
-            MemoryServiceError: 削除に失敗した場合
-        """
-        try:
-            # まず全記憶を取得
-            memories = self.list_memories(actor_id)
-
-            if not memories:
-                logger.info("No memories to delete for actor=%s", actor_id)
-                return 0
-
-            # 各記憶を削除
-            deleted_count = 0
-            failed_count = 0
-
-            for memory in memories:
-                try:
-                    if self.delete_memory(actor_id, memory.id):
-                        deleted_count += 1
-                except Exception as e:
-                    logger.warning("Failed to delete memory %s: %s", memory.id, e)
-                    failed_count += 1
-
-            logger.info(
-                "Deleted %d memories for actor=%s (failed: %d)",
-                deleted_count,
-                actor_id,
-                failed_count,
-            )
-
-            if failed_count > 0:
-                logger.warning(
-                    "Some memories could not be deleted: %d failures", failed_count
-                )
-
-            return deleted_count
-
-        except Exception as e:
-            logger.error("Unexpected error deleting all memories: %s", e)
-            raise MemoryServiceError(f"Failed to delete all memories: {e}") from e
-
-    def disable(self) -> None:
-        """サービスを無効化"""
-        self._enabled = False
-        logger.info("MemoryService disabled")
-
-    def enable(self) -> None:
-        """サービスを有効化"""
-        self._enabled = True
-        logger.info("MemoryService enabled")

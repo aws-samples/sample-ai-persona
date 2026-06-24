@@ -214,50 +214,6 @@ class DiscussionManager:
             self.logger.error(error_msg)
             raise DiscussionManagerError(error_msg)
 
-    def save_discussion_with_insights(
-        self, discussion: Discussion, insights: List[Insight]
-    ) -> str:
-        """
-        Save a discussion with generated insights to the database.
-
-        Args:
-            discussion: Discussion object to save
-            insights: List of insights to add to the discussion
-
-        Returns:
-            str: The discussion ID
-
-        Raises:
-            DiscussionManagerError: If save operation fails
-        """
-        if not discussion:
-            raise DiscussionManagerError("議論オブジェクトが無効です")
-
-        if not insights:
-            raise DiscussionManagerError("インサイトが無効です")
-
-        try:
-            # Add insights to discussion
-            discussion_with_insights = discussion
-            for insight in insights:
-                discussion_with_insights = discussion_with_insights.add_insight(insight)
-
-            # Save the complete discussion
-            discussion_id = self.save_discussion(discussion_with_insights)
-
-            self.logger.info(
-                f"Discussion with {len(insights)} insights saved successfully: {discussion_id}"
-            )
-            return discussion_id
-
-        except DiscussionManagerError:
-            # Re-raise DiscussionManagerError
-            raise
-        except Exception as e:
-            error_msg = f"Unexpected error while saving discussion with insights: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
     def get_discussion(self, discussion_id: str) -> Optional[Discussion]:
         """
         Retrieve a discussion by ID.
@@ -333,78 +289,6 @@ class DiscussionManager:
             raise DiscussionManagerError(error_msg)
         except Exception as e:
             error_msg = f"Unexpected error while retrieving discussion history: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
-    def get_discussions_by_topic(self, topic_pattern: str) -> List[Discussion]:
-        """
-        Search discussions by topic pattern.
-
-        Args:
-            topic_pattern: Topic pattern to search for
-
-        Returns:
-            List of matching Discussion objects
-
-        Raises:
-            DiscussionManagerError: If search operation fails
-        """
-        if not topic_pattern or not topic_pattern.strip():
-            return []
-
-        try:
-            discussions = self.database_service.get_discussions_by_topic(
-                topic_pattern.strip()
-            )
-            self.logger.info(
-                f"Found {len(discussions)} discussions matching topic pattern: '{topic_pattern}'"
-            )
-            return discussions
-
-        except DatabaseError as e:
-            error_msg = f"Database error while searching discussions by topic: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error while searching discussions by topic: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
-    def get_discussions_by_participant(self, persona_id: str) -> List[Discussion]:
-        """
-        Get discussions that include a specific persona as participant.
-
-        Args:
-            persona_id: ID of the persona to search for
-
-        Returns:
-            List of Discussion objects where the persona participated
-
-        Raises:
-            DiscussionManagerError: If search operation fails
-        """
-        if not persona_id or not persona_id.strip():
-            raise DiscussionManagerError("ペルソナIDが無効です")
-
-        try:
-            discussions = self.database_service.get_discussions_by_participant(
-                persona_id.strip()
-            )
-            self.logger.info(
-                f"Found {len(discussions)} discussions with participant: {persona_id}"
-            )
-            return discussions
-
-        except DatabaseError as e:
-            error_msg = (
-                f"Database error while searching discussions by participant: {e}"
-            )
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-        except Exception as e:
-            error_msg = (
-                f"Unexpected error while searching discussions by participant: {e}"
-            )
             self.logger.error(error_msg)
             raise DiscussionManagerError(error_msg)
 
@@ -511,108 +395,6 @@ class DiscussionManager:
             raise
         except Exception as e:
             error_msg = f"Unexpected error during insight regeneration: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
-    def update_discussion_insights(
-        self, discussion_id: str, insights: List[Insight]
-    ) -> bool:
-        """
-        Update insights for an existing discussion.
-
-        Args:
-            discussion_id: ID of the discussion to update
-            insights: List of Insight objects to save
-
-        Returns:
-            True if update was successful, False if discussion not found
-
-        Raises:
-            DiscussionManagerError: If update operation fails
-        """
-        if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError("議論IDが無効です")
-
-        if not insights:
-            raise DiscussionManagerError("インサイトが無効です")
-
-        # Validate insights
-        self._validate_generated_insights(insights)
-
-        try:
-            success = self.database_service.update_discussion_insights(
-                discussion_id.strip(), insights
-            )
-            if success:
-                self.logger.info(
-                    f"Discussion insights updated successfully: {discussion_id} with {len(insights)} insights"
-                )
-            else:
-                self.logger.warning(
-                    f"Discussion not found for insight update: {discussion_id}"
-                )
-            return success
-
-        except DatabaseError as e:
-            error_msg = f"Database error while updating discussion insights: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error while updating discussion insights: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
-    def get_discussion_count(self) -> int:
-        """
-        Get the total number of discussions in the database.
-
-        Returns:
-            Number of discussions
-
-        Raises:
-            DiscussionManagerError: If count operation fails
-        """
-        try:
-            count = self.database_service.get_discussion_count()
-            self.logger.debug(f"Discussion count: {count}")
-            return count
-
-        except DatabaseError as e:
-            error_msg = f"Database error while getting discussion count: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error while getting discussion count: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-
-    def discussion_exists(self, discussion_id: str) -> bool:
-        """
-        Check if a discussion exists in the database.
-
-        Args:
-            discussion_id: ID of the discussion to check
-
-        Returns:
-            True if discussion exists, False otherwise
-
-        Raises:
-            DiscussionManagerError: If check operation fails
-        """
-        if not discussion_id or not discussion_id.strip():
-            return False
-
-        try:
-            exists = self.database_service.discussion_exists(discussion_id.strip())
-            self.logger.debug(f"Discussion exists check for {discussion_id}: {exists}")
-            return exists
-
-        except DatabaseError as e:
-            error_msg = f"Database error while checking discussion existence: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error while checking discussion existence: {e}"
             self.logger.error(error_msg)
             raise DiscussionManagerError(error_msg)
 
@@ -878,74 +660,6 @@ class DiscussionManager:
 
         return insights
 
-    def _parse_insights_from_texts(self, insight_texts: List[str]) -> List[Insight]:
-        """
-        Parse insight texts into Insight objects.
-
-        Args:
-            insight_texts: List of insight text strings
-
-        Returns:
-            List[Insight]: Parsed Insight objects
-
-        Raises:
-            DiscussionManagerError: If parsing fails
-        """
-        insights = []
-
-        for i, text in enumerate(insight_texts):
-            if not text or not text.strip():
-                self.logger.warning(f"Empty insight text at index {i}, skipping")
-                continue
-
-            try:
-                # Parse category and description from text
-                category, description = self._extract_category_and_description(
-                    text.strip()
-                )
-
-                # Create insight object
-                insight = Insight.create_new(
-                    category=category,
-                    description=description,
-                    supporting_messages=[],  # Will be populated later if needed
-                    confidence_score=0.8,  # Default confidence score
-                )
-
-                insights.append(insight)
-
-            except Exception as e:
-                self.logger.warning(f"Failed to parse insight at index {i}: {e}")
-                # Continue with other insights instead of failing completely
-                continue
-
-        return insights
-
-    def _extract_category_and_description(self, text: str) -> tuple[str, str]:
-        """
-        Extract category and description from insight text.
-
-        Args:
-            text: Insight text to parse
-
-        Returns:
-            tuple: (category, description)
-        """
-        # Look for category pattern: [カテゴリー] 内容
-        if text.startswith("[") and "]" in text:
-            end_bracket = text.index("]")
-            category = text[1:end_bracket].strip()
-            description = text[end_bracket + 1 :].strip()
-
-            # Remove leading whitespace or dash
-            if description.startswith("-") or description.startswith("–"):
-                description = description[1:].strip()
-
-            return category, description
-        else:
-            # If no category pattern found, use default category
-            return "その他", text.strip()
-
     def _validate_generated_insights(self, insights: List[Insight]) -> None:
         """
         Validate generated insights.
@@ -1017,31 +731,6 @@ class DiscussionManager:
             agent_config=agent_config,
             documents=discussion.documents,
         )
-
-    def _load_categories_from_config(
-        self, discussion: Discussion
-    ) -> Optional[List[InsightCategory]]:
-        """
-        Load insight categories from discussion's agent_config.
-
-        Args:
-            discussion: Discussion object to load from
-
-        Returns:
-            Optional[List[InsightCategory]]: List of categories if found, None otherwise
-        """
-        if not discussion.agent_config:
-            return None
-
-        categories_data = discussion.agent_config.get("insight_categories")
-        if not categories_data:
-            return None
-
-        try:
-            return [InsightCategory.from_dict(cat_data) for cat_data in categories_data]
-        except Exception as e:
-            self.logger.warning(f"Failed to load categories from config: {e}")
-            return None
 
     def generate_report(
         self,

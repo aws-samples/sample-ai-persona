@@ -3,7 +3,6 @@ Unit tests for data models.
 """
 
 import time
-import json
 from datetime import datetime
 
 import pytest
@@ -62,19 +61,6 @@ class TestPersona:
         assert restored_persona.id == persona.id
         assert restored_persona.name == persona.name
         assert restored_persona.created_at == persona.created_at
-
-    def test_persona_json_serialization(self):
-        persona = Persona.create_new(**self.sample_persona_data)
-
-        json_str = persona.to_json()
-        assert isinstance(json_str, str)
-
-        parsed_json = json.loads(json_str)
-        assert parsed_json["name"] == "田中太郎"
-
-        restored_persona = Persona.from_json(json_str)
-        assert restored_persona.id == persona.id
-        assert restored_persona.name == persona.name
 
     def test_create_new_with_demographics(self):
         """gender/country/city/tags を指定して生成できる"""
@@ -247,18 +233,6 @@ class TestMessage:
         assert restored_message.content == message.content
         assert restored_message.timestamp == message.timestamp
 
-    def test_message_json_serialization(self):
-        message = Message.create_new(
-            persona_id="test-id", persona_name="田中太郎", content="JSONテスト"
-        )
-
-        json_str = message.to_json()
-        assert isinstance(json_str, str)
-
-        restored_message = Message.from_json(json_str)
-        assert restored_message.persona_id == message.persona_id
-        assert restored_message.content == message.content
-
     def test_message_with_agent_mode_fields(self):
         message = Message.create_new(
             persona_id="test-id",
@@ -330,21 +304,6 @@ class TestInsight:
         assert restored_insight.category == insight.category
         assert restored_insight.confidence_score == insight.confidence_score
 
-    def test_insight_json_serialization(self):
-        insight = Insight.create_new(
-            category="JSON",
-            description="JSONテスト",
-            supporting_messages=["msg1"],
-            confidence_score=0.9,
-        )
-
-        json_str = insight.to_json()
-        assert isinstance(json_str, str)
-
-        restored_insight = Insight.from_json(json_str)
-        assert restored_insight.category == insight.category
-        assert restored_insight.confidence_score == insight.confidence_score
-
 
 class TestDiscussion:
     """Test cases for Discussion model."""
@@ -413,23 +372,6 @@ class TestDiscussion:
         assert updated_discussion.mode == discussion.mode
         assert updated_discussion.agent_config == discussion.agent_config
 
-    def test_get_messages_by_persona(self):
-        discussion = Discussion.create_new(
-            topic="テスト議論", participants=["persona1", "persona2"]
-        )
-        message1 = Message.create_new("persona1", "田中", "メッセージ1")
-        message2 = Message.create_new("persona2", "佐藤", "メッセージ2")
-        message3 = Message.create_new("persona1", "田中", "メッセージ3")
-
-        discussion = discussion.add_message(message1)
-        discussion = discussion.add_message(message2)
-        discussion = discussion.add_message(message3)
-
-        persona1_messages = discussion.get_messages_by_persona("persona1")
-        assert len(persona1_messages) == 2
-        assert persona1_messages[0].content == "メッセージ1"
-        assert persona1_messages[1].content == "メッセージ3"
-
     def test_discussion_serialization(self):
         discussion = Discussion.create_new(
             topic="シリアライゼーションテスト", participants=["persona1"]
@@ -492,166 +434,9 @@ class TestDiscussion:
         assert restored_discussion.mode == "classic"
         assert restored_discussion.agent_config is None
 
-    def test_discussion_json_serialization(self):
-        discussion = Discussion.create_new(
-            topic="JSONテスト", participants=["persona1"]
-        )
-        discussion = discussion.add_message(self.sample_message)
-
-        json_str = discussion.to_json()
-        assert isinstance(json_str, str)
-
-        parsed_json = json.loads(json_str)
-        assert parsed_json["topic"] == "JSONテスト"
-        assert parsed_json["mode"] == "classic"
-
-        restored_discussion = Discussion.from_json(json_str)
-        assert restored_discussion.id == discussion.id
-        assert restored_discussion.topic == discussion.topic
-        assert len(restored_discussion.messages) == 1
-        assert restored_discussion.mode == "classic"
-
-    def test_discussion_json_serialization_with_agent_mode(self):
-        agent_config = {"rounds": 4, "model": "claude-3"}
-        discussion = Discussion.create_new(
-            topic="JSONエージェントモードテスト",
-            participants=["persona1", "persona2"],
-            mode="agent",
-            agent_config=agent_config,
-        )
-
-        json_str = discussion.to_json()
-        assert isinstance(json_str, str)
-
-        parsed_json = json.loads(json_str)
-        assert parsed_json["mode"] == "agent"
-        assert parsed_json["agent_config"]["rounds"] == 4
-
-        restored_discussion = Discussion.from_json(json_str)
-        assert restored_discussion.mode == "agent"
-        assert restored_discussion.agent_config["rounds"] == 4
-
-    def test_create_interview_session(self):
-        participants = ["persona1", "persona2"]
-        interview = Discussion.create_interview_session(participants)
-        assert interview.mode == "interview"
-        assert interview.topic == "Interview Session"
-        assert interview.participants == participants
-        assert len(interview.messages) == 0
-        assert interview.is_interview_session()
-
-    def test_add_user_message(self):
-        interview = Discussion.create_interview_session(["persona1"])
-        user_content = "こんにちは、質問があります。"
-        updated_interview = interview.add_user_message(user_content)
-
-        assert len(updated_interview.messages) == 1
-        message = updated_interview.messages[0]
-        assert message.persona_id == "user"
-        assert message.persona_name == "User"
-        assert message.content == user_content
-        assert message.message_type == "user_message"
-        assert message.is_user_message()
-
-    def test_add_persona_response(self):
-        interview = Discussion.create_interview_session(["persona1"])
-        updated_interview = interview.add_persona_response(
-            "persona1", "田中太郎", "はい、お答えします。"
-        )
-
-        assert len(updated_interview.messages) == 1
-        message = updated_interview.messages[0]
-        assert message.persona_id == "persona1"
-        assert message.persona_name == "田中太郎"
-        assert message.content == "はい、お答えします。"
-        assert message.message_type == "statement"
-        assert message.is_persona_response()
-
-    def test_interview_message_filtering(self):
-        interview = Discussion.create_interview_session(["persona1"])
-        interview = interview.add_user_message("ユーザーの質問")
-        interview = interview.add_persona_response(
-            "persona1", "田中太郎", "ペルソナの回答"
-        )
-        interview = interview.add_user_message("別の質問")
-
-        user_messages = interview.get_user_messages()
-        persona_responses = interview.get_persona_responses()
-
-        assert len(user_messages) == 2
-        assert len(persona_responses) == 1
-
-        for msg in user_messages:
-            assert msg.is_user_message()
-            assert msg.persona_id == "user"
-
-        for msg in persona_responses:
-            assert msg.is_persona_response()
-            assert msg.persona_id == "persona1"
-
-    def test_interview_session_serialization(self):
-        interview = Discussion.create_interview_session(["persona1", "persona2"])
-        interview = interview.add_user_message("テスト質問")
-        interview = interview.add_persona_response("persona1", "田中太郎", "テスト回答")
-
-        interview_dict = interview.to_dict()
-        assert interview_dict["mode"] == "interview"
-        assert interview_dict["topic"] == "Interview Session"
-
-        restored_interview = Discussion.from_dict(interview_dict)
-        assert restored_interview.mode == "interview"
-        assert restored_interview.is_interview_session()
-        assert len(restored_interview.messages) == 2
-
-        json_str = interview.to_json()
-        restored_from_json = Discussion.from_json(json_str)
-        assert restored_from_json.mode == "interview"
-        assert len(restored_from_json.messages) == 2
-
 
 class TestMessageInterviewExtensions:
     """Test cases for Message model interview extensions."""
-
-    def test_user_message_creation(self):
-        user_message = Message.create_new(
-            persona_id="user",
-            persona_name="User",
-            content="ユーザーからの質問",
-            message_type="user_message",
-        )
-        assert user_message.persona_id == "user"
-        assert user_message.persona_name == "User"
-        assert user_message.message_type == "user_message"
-        assert user_message.is_user_message()
-        assert not user_message.is_persona_response()
-
-    def test_persona_response_identification(self):
-        statement_msg = Message.create_new(
-            persona_id="persona1",
-            persona_name="田中太郎",
-            content="通常の発言",
-            message_type="statement",
-        )
-        summary_msg = Message.create_new(
-            persona_id="persona1",
-            persona_name="田中太郎",
-            content="まとめ",
-            message_type="summary",
-        )
-        facilitation_msg = Message.create_new(
-            persona_id="facilitator",
-            persona_name="ファシリテーター",
-            content="進行",
-            message_type="facilitation",
-        )
-
-        assert statement_msg.is_persona_response()
-        assert summary_msg.is_persona_response()
-        assert facilitation_msg.is_persona_response()
-
-        assert not statement_msg.is_user_message()
-        assert not summary_msg.is_user_message()
-        assert not facilitation_msg.is_user_message()
 
     def test_discussion_with_documents(self):
         documents = [

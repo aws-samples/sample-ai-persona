@@ -282,41 +282,6 @@ class TestDiscussionManager:
             self.discussion_manager.generate_insights(empty_discussion)
         assert "インサイト生成には最低2つのメッセージが必要です" in str(exc_info.value)
 
-    def test_save_and_load_categories(self):
-        """Test saving and loading categories to/from discussion config."""
-        from src.models.insight_category import InsightCategory
-
-        # Create discussion
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id]
-        )
-
-        # Create custom categories
-        categories = [
-            InsightCategory(name="カテゴリー1", description="説明1"),
-            InsightCategory(name="カテゴリー2", description="説明2"),
-        ]
-
-        # Save categories to config
-        updated_discussion = self.discussion_manager._save_categories_to_config(
-            discussion, categories
-        )
-
-        # Verify categories are saved
-        assert updated_discussion.agent_config is not None
-        assert "insight_categories" in updated_discussion.agent_config
-
-        # Load categories from config
-        loaded_categories = self.discussion_manager._load_categories_from_config(
-            updated_discussion
-        )
-
-        # Verify loaded categories
-        assert loaded_categories is not None
-        assert len(loaded_categories) == 2
-        assert loaded_categories[0].name == "カテゴリー1"
-        assert loaded_categories[1].name == "カテゴリー2"
-
     def test_generate_insights_ai_service_error(self):
         """Test insight generation with AI service error."""
         # Create discussion with messages
@@ -510,30 +475,6 @@ class TestDiscussionManager:
 
         assert "Database error while saving discussion" in str(exc_info.value)
 
-    def test_save_discussion_with_insights_success(self):
-        """Test successful discussion save with insights."""
-        # Create discussion
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-
-        # Mock database service response
-        self.mock_database_service.save_discussion.return_value = discussion.id
-
-        result = self.discussion_manager.save_discussion_with_insights(
-            discussion, self.test_insights
-        )
-
-        # Verify result
-        assert result == discussion.id
-
-        # Verify database service was called
-        self.mock_database_service.save_discussion.assert_called_once()
-
-        # Verify the discussion passed to save_discussion has insights
-        saved_discussion = self.mock_database_service.save_discussion.call_args[0][0]
-        assert len(saved_discussion.insights) == 2
-
     def test_get_discussion_success(self):
         """Test successful discussion retrieval."""
         discussion_id = "test-id"
@@ -593,52 +534,6 @@ class TestDiscussionManager:
         # Verify database service was called correctly
         self.mock_database_service.get_discussions.assert_called_once()
 
-    def test_get_discussions_by_topic_success(self):
-        """Test successful discussion search by topic."""
-        topic_pattern = "マーケティング"
-        expected_discussions = [
-            Discussion.create_new(
-                topic="マーケティング戦略", participants=[self.persona1.id]
-            )
-        ]
-
-        # Mock database service response
-        self.mock_database_service.get_discussions_by_topic.return_value = (
-            expected_discussions
-        )
-
-        result = self.discussion_manager.get_discussions_by_topic(topic_pattern)
-
-        # Verify result
-        assert result == expected_discussions
-
-        # Verify database service was called correctly
-        self.mock_database_service.get_discussions_by_topic.assert_called_once_with(
-            topic_pattern
-        )
-
-    def test_get_discussions_by_participant_success(self):
-        """Test successful discussion search by participant."""
-        persona_id = self.persona1.id
-        expected_discussions = [
-            Discussion.create_new(topic="テストトピック", participants=[persona_id])
-        ]
-
-        # Mock database service response
-        self.mock_database_service.get_discussions_by_participant.return_value = (
-            expected_discussions
-        )
-
-        result = self.discussion_manager.get_discussions_by_participant(persona_id)
-
-        # Verify result
-        assert result == expected_discussions
-
-        # Verify database service was called correctly
-        self.mock_database_service.get_discussions_by_participant.assert_called_once_with(
-            persona_id
-        )
-
     def test_delete_discussion_success(self):
         """Test successful discussion deletion."""
         discussion_id = "test-id"
@@ -655,83 +550,6 @@ class TestDiscussionManager:
         self.mock_database_service.delete_discussion.assert_called_once_with(
             discussion_id
         )
-
-    def test_update_discussion_insights_success(self):
-        """Test successful discussion insights update."""
-        discussion_id = "test-id"
-
-        # Mock database service response
-        self.mock_database_service.update_discussion_insights.return_value = True
-
-        result = self.discussion_manager.update_discussion_insights(
-            discussion_id, self.test_insights
-        )
-
-        # Verify result
-        assert result
-
-        # Verify database service was called correctly
-        self.mock_database_service.update_discussion_insights.assert_called_once_with(
-            discussion_id, self.test_insights
-        )
-
-    def test_get_discussion_count_success(self):
-        """Test successful discussion count retrieval."""
-        expected_count = 5
-
-        # Mock database service response
-        self.mock_database_service.get_discussion_count.return_value = expected_count
-
-        result = self.discussion_manager.get_discussion_count()
-
-        # Verify result
-        assert result == expected_count
-
-        # Verify database service was called correctly
-        self.mock_database_service.get_discussion_count.assert_called_once()
-
-    def test_discussion_exists_success(self):
-        """Test successful discussion existence check."""
-        discussion_id = "test-id"
-
-        # Mock database service response
-        self.mock_database_service.discussion_exists.return_value = True
-
-        result = self.discussion_manager.discussion_exists(discussion_id)
-
-        # Verify result
-        assert result
-
-        # Verify database service was called correctly
-        self.mock_database_service.discussion_exists.assert_called_once_with(
-            discussion_id
-        )
-
-    def test_extract_category_and_description(self):
-        """Test category and description extraction from insight text."""
-        # Test with category pattern
-        text1 = "[顧客ニーズ] 効率性を重視する顧客層が存在する"
-        category1, description1 = (
-            self.discussion_manager._extract_category_and_description(text1)
-        )
-        assert category1 == "顧客ニーズ"
-        assert description1 == "効率性を重視する顧客層が存在する"
-
-        # Test with category pattern and dash
-        text2 = "[市場機会] - 品質と効率性を両立した商品の需要がある"
-        category2, description2 = (
-            self.discussion_manager._extract_category_and_description(text2)
-        )
-        assert category2 == "市場機会"
-        assert description2 == "品質と効率性を両立した商品の需要がある"
-
-        # Test without category pattern
-        text3 = "これは重要なインサイトです"
-        category3, description3 = (
-            self.discussion_manager._extract_category_and_description(text3)
-        )
-        assert category3 == "その他"
-        assert description3 == "これは重要なインサイトです"
 
 
 class TestDiscussionManagerWithDocuments:
@@ -1134,17 +952,6 @@ class TestDiscussionManagerValidation:
         ):
             self.manager._validate_generated_insights(insights)
 
-    def test_parse_insights_from_texts(self):
-        texts = [
-            "[ニーズ] ユーザーは高速なレスポンスを求めている",
-            "",
-            "カテゴリなしのインサイトテキスト",
-        ]
-        result = self.manager._parse_insights_from_texts(texts)
-        assert len(result) == 2
-        assert result[0].category == "ニーズ"
-        assert result[1].category == "その他"
-
     def test_parse_insights_from_structured_data_skips_invalid(self):
         data = [
             {"category": "A", "description": "valid insight", "confidence_score": 0.9},
@@ -1155,102 +962,19 @@ class TestDiscussionManagerValidation:
         assert len(result) == 1
         assert result[0].category == "A"
 
-    def test_load_categories_from_config_no_config(self):
-        discussion = Discussion.create_new(topic="T", participants=["p1"])
-        result = self.manager._load_categories_from_config(discussion)
-        assert result is None
-
-    def test_load_categories_from_config_corrupt_data(self):
-        discussion = Discussion(
-            id="d1",
-            topic="T",
-            participants=["p1"],
-            messages=[],
-            insights=[],
-            created_at=datetime.now(),
-            mode="classic",
-            agent_config={"insight_categories": [{"invalid": "data"}]},
-        )
-        result = self.manager._load_categories_from_config(discussion)
-        assert result is None
-
-    def test_get_discussions_by_topic_empty_returns_empty(self):
-        result = self.manager.get_discussions_by_topic("")
-        assert result == []
-
-    def test_get_discussions_by_participant_invalid_id(self):
-        with pytest.raises(DiscussionManagerError, match="ペルソナIDが無効"):
-            self.manager.get_discussions_by_participant("")
-
     def test_delete_discussion_invalid_id(self):
         with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
             self.manager.delete_discussion("")
-
-    def test_update_discussion_insights_invalid_id(self):
-        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
-            self.manager.update_discussion_insights("", [])
-
-    def test_update_discussion_insights_empty_insights(self):
-        with pytest.raises(DiscussionManagerError, match="インサイトが無効"):
-            self.manager.update_discussion_insights("valid-id", [])
-
-    def test_discussion_exists_empty_id(self):
-        result = self.manager.discussion_exists("")
-        assert result is False
 
     def test_get_discussion_history_database_error(self):
         self.mock_db.get_discussions.side_effect = DatabaseError("db error")
         with pytest.raises(DiscussionManagerError):
             self.manager.get_discussion_history()
 
-    def test_get_discussions_by_topic_database_error(self):
-        self.mock_db.get_discussions_by_topic.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.get_discussions_by_topic("topic")
-
-    def test_get_discussions_by_participant_database_error(self):
-        self.mock_db.get_discussions_by_participant.side_effect = DatabaseError(
-            "db error"
-        )
-        with pytest.raises(DiscussionManagerError):
-            self.manager.get_discussions_by_participant("p1")
-
     def test_delete_discussion_database_error(self):
         self.mock_db.delete_discussion.side_effect = DatabaseError("db error")
         with pytest.raises(DiscussionManagerError):
             self.manager.delete_discussion("d1")
-
-    def test_get_discussion_count_database_error(self):
-        self.mock_db.get_discussion_count.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.get_discussion_count()
-
-    def test_discussion_exists_database_error(self):
-        self.mock_db.discussion_exists.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.discussion_exists("d1")
-
-    def test_update_discussion_insights_database_error(self):
-        insights = [
-            Insight.create_new(
-                category="テスト",
-                description="十分に長い説明のインサイトです",
-                supporting_messages=[],
-                confidence_score=0.8,
-            )
-        ]
-        self.mock_db.update_discussion_insights.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.update_discussion_insights("d1", insights)
-
-    def test_save_discussion_with_insights_none_discussion(self):
-        with pytest.raises(DiscussionManagerError, match="議論オブジェクトが無効"):
-            self.manager.save_discussion_with_insights(None, [])
-
-    def test_save_discussion_with_insights_none_insights(self):
-        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
-        with pytest.raises(DiscussionManagerError, match="インサイトが無効"):
-            self.manager.save_discussion_with_insights(discussion, [])
 
     def test_regenerate_insights_invalid_id(self):
         with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
