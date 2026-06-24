@@ -89,46 +89,6 @@ class Discussion:
             reports=self.reports,
         )
 
-    def add_user_message(self, content: str) -> "Discussion":
-        """
-        Add a user message to the interview session and return a new instance.
-
-        Args:
-            content: The user's message content
-
-        Returns:
-            New Discussion instance with the user message added
-        """
-        user_message = Message.create_new(
-            persona_id="user",
-            persona_name="User",
-            content=content,
-            message_type="user_message",
-        )
-        return self.add_message(user_message)
-
-    def add_persona_response(
-        self, persona_id: str, persona_name: str, content: str
-    ) -> "Discussion":
-        """
-        Add a persona response to the interview session and return a new instance.
-
-        Args:
-            persona_id: ID of the responding persona
-            persona_name: Name of the responding persona
-            content: The persona's response content
-
-        Returns:
-            New Discussion instance with the persona response added
-        """
-        response_message = Message.create_new(
-            persona_id=persona_id,
-            persona_name=persona_name,
-            content=content,
-            message_type="statement",
-        )
-        return self.add_message(response_message)
-
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert Discussion to dictionary for serialization.

@@ -21,34 +21,3 @@ class MemoryEntry:
     relevance_score: Optional[float] = None  # 検索時の関連度スコア
     parsed_topic: Optional[Dict[str, Any]] = None  # パース済みトピック情報（表示用）
 
-    def to_dict(self) -> Dict[str, Any]:
-        """辞書に変換"""
-        return {
-            "id": self.id,
-            "actor_id": self.actor_id,
-            "session_id": self.session_id,
-            "content": self.content,
-            "metadata": self.metadata,
-            "created_at": self.created_at.isoformat(),
-            "relevance_score": self.relevance_score,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MemoryEntry":
-        """辞書から作成"""
-        # created_atが文字列の場合はdatetimeに変換
-        created_at = data.get("created_at")
-        if isinstance(created_at, str):
-            created_at = datetime.fromisoformat(created_at)
-        elif created_at is None:
-            created_at = datetime.now()
-
-        return cls(
-            id=data["id"],
-            actor_id=data["actor_id"],
-            session_id=data["session_id"],
-            content=data["content"],
-            metadata=data.get("metadata", {}),
-            created_at=created_at,
-            relevance_score=data.get("relevance_score"),
-        )

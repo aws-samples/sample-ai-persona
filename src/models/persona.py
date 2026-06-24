@@ -7,7 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import List, Dict, Any
-import json
 import uuid
 
 
@@ -154,16 +153,3 @@ class Persona:
         data["updated_at"] = datetime.fromisoformat(data["updated_at"])
         return cls(**data)
 
-    def to_json(self) -> str:
-        """
-        Convert Persona to JSON string.
-        """
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "Persona":
-        """
-        Create Persona instance from JSON string.
-        """
-        data = json.loads(json_str)
-        return cls.from_dict(data)

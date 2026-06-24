@@ -4,7 +4,6 @@ Insight data model for the AI Persona System.
 
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any
-import json
 
 
 @dataclass
@@ -53,16 +52,3 @@ class Insight:
         """
         return cls(**data)
 
-    def to_json(self) -> str:
-        """
-        Convert Insight to JSON string.
-        """
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "Insight":
-        """
-        Create Insight instance from JSON string.
-        """
-        data = json.loads(json_str)
-        return cls.from_dict(data)

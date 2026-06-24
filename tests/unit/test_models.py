@@ -63,19 +63,6 @@ class TestPersona:
         assert restored_persona.name == persona.name
         assert restored_persona.created_at == persona.created_at
 
-    def test_persona_json_serialization(self):
-        persona = Persona.create_new(**self.sample_persona_data)
-
-        json_str = persona.to_json()
-        assert isinstance(json_str, str)
-
-        parsed_json = json.loads(json_str)
-        assert parsed_json["name"] == "田中太郎"
-
-        restored_persona = Persona.from_json(json_str)
-        assert restored_persona.id == persona.id
-        assert restored_persona.name == persona.name
-
     def test_create_new_with_demographics(self):
         """gender/country/city/tags を指定して生成できる"""
         persona = Persona.create_new(
@@ -247,18 +234,6 @@ class TestMessage:
         assert restored_message.content == message.content
         assert restored_message.timestamp == message.timestamp
 
-    def test_message_json_serialization(self):
-        message = Message.create_new(
-            persona_id="test-id", persona_name="田中太郎", content="JSONテスト"
-        )
-
-        json_str = message.to_json()
-        assert isinstance(json_str, str)
-
-        restored_message = Message.from_json(json_str)
-        assert restored_message.persona_id == message.persona_id
-        assert restored_message.content == message.content
-
     def test_message_with_agent_mode_fields(self):
         message = Message.create_new(
             persona_id="test-id",
@@ -327,21 +302,6 @@ class TestInsight:
         assert insight_dict["confidence_score"] == 0.7
 
         restored_insight = Insight.from_dict(insight_dict)
-        assert restored_insight.category == insight.category
-        assert restored_insight.confidence_score == insight.confidence_score
-
-    def test_insight_json_serialization(self):
-        insight = Insight.create_new(
-            category="JSON",
-            description="JSONテスト",
-            supporting_messages=["msg1"],
-            confidence_score=0.9,
-        )
-
-        json_str = insight.to_json()
-        assert isinstance(json_str, str)
-
-        restored_insight = Insight.from_json(json_str)
         assert restored_insight.category == insight.category
         assert restored_insight.confidence_score == insight.confidence_score
 
@@ -478,47 +438,6 @@ class TestDiscussion:
 
 class TestMessageInterviewExtensions:
     """Test cases for Message model interview extensions."""
-
-    def test_user_message_creation(self):
-        user_message = Message.create_new(
-            persona_id="user",
-            persona_name="User",
-            content="ユーザーからの質問",
-            message_type="user_message",
-        )
-        assert user_message.persona_id == "user"
-        assert user_message.persona_name == "User"
-        assert user_message.message_type == "user_message"
-        assert user_message.is_user_message()
-        assert not user_message.is_persona_response()
-
-    def test_persona_response_identification(self):
-        statement_msg = Message.create_new(
-            persona_id="persona1",
-            persona_name="田中太郎",
-            content="通常の発言",
-            message_type="statement",
-        )
-        summary_msg = Message.create_new(
-            persona_id="persona1",
-            persona_name="田中太郎",
-            content="まとめ",
-            message_type="summary",
-        )
-        facilitation_msg = Message.create_new(
-            persona_id="facilitator",
-            persona_name="ファシリテーター",
-            content="進行",
-            message_type="facilitation",
-        )
-
-        assert statement_msg.is_persona_response()
-        assert summary_msg.is_persona_response()
-        assert facilitation_msg.is_persona_response()
-
-        assert not statement_msg.is_user_message()
-        assert not summary_msg.is_user_message()
-        assert not facilitation_msg.is_user_message()
 
     def test_discussion_with_documents(self):
         documents = [
