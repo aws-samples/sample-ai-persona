@@ -163,14 +163,8 @@ class MemoryService:
             ) from e
 
     @property
-    def enabled(self) -> bool:
-        """サービスが有効かどうかを返す"""
-        return self._enabled
 
     @property
-    def strategy(self) -> Optional[MemoryStrategy]:
-        """現在の記憶戦略を返す"""
-        return self._strategy
 
     def _ensure_strategy(self) -> MemoryStrategy:
         """戦略が設定されていることを確認し、戦略を返す"""
@@ -181,48 +175,6 @@ class MemoryService:
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
     )
-    def retrieve_memories(
-        self, actor_id: str, query: str, top_k: int = 5
-    ) -> List[MemoryEntry]:
-        """
-        関連する記憶を検索
-
-        Args:
-            actor_id: ペルソナID
-            query: 検索クエリ
-            top_k: 取得する最大件数
-
-        Returns:
-            関連する記憶エントリのリスト
-
-        Raises:
-            MemoryServiceError: 検索に失敗した場合
-        """
-        strategy = self._ensure_strategy()
-
-        try:
-            memories = strategy.retrieve(actor_id=actor_id, query=query, top_k=top_k)
-
-            logger.info(
-                "Retrieved %d memories for actor=%s, query='%s'",
-                len(memories),
-                actor_id,
-                query[:50] if query else "",
-            )
-
-            return memories
-
-        except RetryExhaustedError as e:
-            logger.error("Retry exhausted retrieving memories: %s", e)
-            raise MemoryServiceError(
-                f"Failed to retrieve memories after retries: {e.last_exception}"
-            ) from e
-        except MemoryOperationError:
-            # リトライ対象のエラーは再送出
-            raise
-        except Exception as e:
-            logger.error("Unexpected error retrieving memories: %s", e)
-            raise MemoryServiceError(f"Failed to retrieve memories: {e}") from e
 
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)

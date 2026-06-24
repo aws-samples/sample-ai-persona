@@ -318,21 +318,6 @@ class TestServiceFactoryMemoryService:
 
         assert result is True
 
-    @patch("src.services.memory.session_manager_factory.config")
-    def test_get_service_status_includes_memory_enabled(self, mock_config):
-        """get_service_statusがmemory_enabled情報を含むことを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_config.ENABLE_LONG_TERM_MEMORY = True
-        mock_config.AGENTCORE_MEMORY_ID = "test-memory-id"
-        mock_config.S3_BUCKET_NAME = None
-
-        factory = ServiceFactory()
-        status = factory.get_service_status()
-
-        assert "memory_enabled" in status
-        assert status["memory_enabled"] is True
-
 
 class TestServiceFactoryModuleLevelInstance:
     """モジュールレベルのservice_factoryインスタンスのテスト"""
@@ -375,11 +360,13 @@ class TestServiceFactoryS3Service:
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
+
         ServiceFactory._instance = None
 
     @patch("src.services.service_factory.config")
     def test_get_s3_service_returns_none_when_no_bucket(self, mock_config):
         from src.services.service_factory import ServiceFactory
+
         mock_config.S3_BUCKET_NAME = None
         factory = ServiceFactory()
         assert factory.get_s3_service() is None
@@ -387,10 +374,13 @@ class TestServiceFactoryS3Service:
     @patch("src.services.service_factory.config")
     def test_get_s3_service_creates_instance(self, mock_config):
         from src.services.service_factory import ServiceFactory
+
         mock_config.S3_BUCKET_NAME = "test-bucket"
         mock_config.AWS_REGION = "us-east-1"
         factory = ServiceFactory()
-        with patch("src.services.service_factory.ServiceFactory.get_s3_service") as mock_get:
+        with patch(
+            "src.services.service_factory.ServiceFactory.get_s3_service"
+        ) as mock_get:
             mock_get.return_value = Mock()
             result = factory.get_s3_service()
             assert result is not None
@@ -401,12 +391,14 @@ class TestServiceFactorySurveyService:
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
+
         ServiceFactory._instance = None
 
     @patch("src.services.service_factory.AIService")
     @patch("src.services.service_factory.config")
     def test_get_survey_service_creates_instance(self, mock_config, mock_ai_cls):
         from src.services.service_factory import ServiceFactory
+
         mock_config.S3_BUCKET_NAME = None
         mock_config.AWS_REGION = "us-east-1"
         mock_config.DYNAMODB_TABLE_PREFIX = "Test"
@@ -416,7 +408,9 @@ class TestServiceFactorySurveyService:
         mock_ai_cls.return_value = Mock()
 
         factory = ServiceFactory()
-        with patch("src.services.survey_service.SurveyService.__init__", return_value=None):
+        with patch(
+            "src.services.survey_service.SurveyService.__init__", return_value=None
+        ):
             service = factory.get_survey_service()
             assert service is not None
 
@@ -426,22 +420,5 @@ class TestServiceFactoryResetServices:
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
+
         ServiceFactory._instance = None
-
-    def test_reset_services_clears_all(self):
-        from src.services.service_factory import ServiceFactory
-        factory = ServiceFactory()
-        factory._ai_service = Mock()
-        factory._database_service = Mock()
-        factory._s3_service = Mock()
-        factory._survey_service = Mock()
-        factory._memory_service = Mock()
-
-        factory.reset_services()
-
-        assert factory._ai_service is None
-        assert factory._database_service is None
-        assert factory._s3_service is None
-        assert factory._survey_service is None
-        assert factory._memory_service is None
-        assert factory._memory_service_attempted is False

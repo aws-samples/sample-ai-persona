@@ -217,38 +217,6 @@ class ServiceFactory:
                     )
         return self._survey_service
 
-    def reset_services(self) -> None:
-        """
-        全サービスインスタンスをリセット（テスト用）
-        """
-        with self._lock:
-            self.logger.info("Resetting all service instances")
-            self._ai_service = None
-            self._agent_service = None
-            self._database_service = None
-            self._memory_service = None
-            self._memory_service_attempted = False
-            self._s3_service = None
-            self._survey_service = None
-
-    def get_service_status(self) -> dict:
-        """
-        サービスの初期化状態を取得（デバッグ用）
-
-        Returns:
-            dict: サービスの初期化状態
-        """
-        return {
-            "ai_service_initialized": self._ai_service is not None,
-            "agent_service_initialized": self._agent_service is not None,
-            "database_service_initialized": self._database_service is not None,
-            "memory_service_initialized": self._memory_service is not None,
-            "memory_enabled": self.is_memory_enabled(),
-            "s3_service_initialized": self._s3_service is not None,
-            "s3_bucket_name": config.S3_BUCKET_NAME,
-            "survey_service_initialized": self._survey_service is not None,
-        }
-
 
 # グローバルファクトリーインスタンス
 service_factory = ServiceFactory()

@@ -56,10 +56,6 @@ class Config:
 
     # マスアンケート機能設定
     BATCH_INFERENCE_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"  # バッチ推論用モデル（Claude 4.5 Haiku、クロスリージョン推論プロファイル）
-    SURVEY_S3_PREFIX: str = "survey-results/"  # アンケート結果CSV保存先S3プレフィックス
-    BATCH_INFERENCE_S3_PREFIX: str = (
-        "batch-inference/"  # バッチ推論入出力S3プレフィックス
-    )
     BEDROCK_BATCH_ROLE_ARN: Optional[str] = None
 
     # データ分析エージェント連携設定
@@ -107,10 +103,6 @@ class Config:
         # マスアンケート機能設定を環境変数から上書き
         self.BATCH_INFERENCE_MODEL_ID = os.getenv(
             "BATCH_INFERENCE_MODEL_ID", self.BATCH_INFERENCE_MODEL_ID
-        )
-        self.SURVEY_S3_PREFIX = os.getenv("SURVEY_S3_PREFIX", self.SURVEY_S3_PREFIX)
-        self.BATCH_INFERENCE_S3_PREFIX = os.getenv(
-            "BATCH_INFERENCE_S3_PREFIX", self.BATCH_INFERENCE_S3_PREFIX
         )
         self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
             "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN
