@@ -114,7 +114,6 @@ ai-persona-system/
 │   ├── managers/          # ビジネスロジック層
 │   ├── services/          # 外部サービス連携層（AI, DB, S3, Memory, Survey）
 │   ├── models/            # データモデル
-│   ├── database/          # データベース管理
 │   └── config.py          # 設定管理
 ├── cdk/                   # AWS CDKインフラストラクチャコード
 ├── tests/                 # テストコード（unit, integration, api）
@@ -164,7 +163,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 |------|------|
 | AWS認証エラー | `aws sts get-caller-identity` で認証情報を確認 |
 | ファイルアップロードエラー | 対応形式（.txt, .md）・サイズ上限（10MB）を確認 |
-| データベースエラー | `uv run python src/database/create_dynamodb_tables.py` でテーブル再作成 |
+| データベースエラー | `uv run python scripts/create_dynamodb_tables.py` でテーブル再作成 |
 | 長期記憶が動作しない | `ENABLE_LONG_TERM_MEMORY=true` と各Memory IDの設定を確認 |
 | CDKデプロイエラー | `cd cdk && npm install` → `npx cdk bootstrap` を確認 |
 
