@@ -163,7 +163,6 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 |------|------|
 | AWS認証エラー | `aws sts get-caller-identity` で認証情報を確認 |
 | ファイルアップロードエラー | 対応形式（.txt, .md）・サイズ上限（10MB）を確認 |
-| データベースエラー | `uv run python scripts/create_dynamodb_tables.py` でテーブル再作成 |
 | 長期記憶が動作しない | `ENABLE_LONG_TERM_MEMORY=true` と各Memory IDの設定を確認 |
 | CDKデプロイエラー | `cd cdk && npm install` → `npx cdk bootstrap` を確認 |
 
