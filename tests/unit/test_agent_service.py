@@ -156,7 +156,6 @@ class TestAgentService:
         assert isinstance(facilitator_agent, FacilitatorAgent)
         assert facilitator_agent.rounds == rounds
         assert facilitator_agent.additional_instructions == additional_instructions
-        assert facilitator_agent.current_round == 0
 
 
 class TestPersonaAgent:
@@ -294,30 +293,6 @@ class TestFacilitatorAgent:
             == self.additional_instructions
         )
         assert self.facilitator_agent.agent == self.mock_agent
-        assert self.facilitator_agent.current_round == 0
-
-    def test_should_continue(self):
-        """議論継続判定テスト"""
-        # 最初は継続すべき
-        assert self.facilitator_agent.should_continue() is True
-
-        # ラウンドを進める
-        self.facilitator_agent.current_round = 2
-        assert self.facilitator_agent.should_continue() is True
-
-        # 最終ラウンドに達したら継続しない
-        self.facilitator_agent.current_round = 3
-        assert self.facilitator_agent.should_continue() is False
-
-    def test_increment_round(self):
-        """ラウンドインクリメントテスト"""
-        assert self.facilitator_agent.current_round == 0
-
-        self.facilitator_agent.increment_round()
-        assert self.facilitator_agent.current_round == 1
-
-        self.facilitator_agent.increment_round()
-        assert self.facilitator_agent.current_round == 2
 
     def test_start_discussion(self):
         """議論開始テスト"""
@@ -336,58 +311,6 @@ class TestFacilitatorAgent:
         assert "佐藤花子" in start_message
         assert str(self.rounds) in start_message
 
-    def test_select_next_speaker(self):
-        """次の発言者選択テスト"""
-        # テスト用ペルソナエージェントを作成
-        persona_agents = [
-            Mock(get_persona_id=Mock(return_value="persona-1")),
-            Mock(get_persona_id=Mock(return_value="persona-2")),
-            Mock(get_persona_id=Mock(return_value="persona-3")),
-        ]
-
-        # まだ誰も発言していない場合
-        spoken_in_round = []
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected in persona_agents
-
-        # 一部が発言済みの場合
-        spoken_in_round = ["persona-1"]
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected.get_persona_id() != "persona-1"
-
-        # 全員が発言済みの場合
-        spoken_in_round = ["persona-1", "persona-2", "persona-3"]
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected is None
-
-    def test_summarize_round(self):
-        """ラウンド要約テスト"""
-        # モックの設定
-        expected_summary = "ラウンド1の要約内容"
-        self.mock_agent.return_value = expected_summary
-
-        # テスト用メッセージを作成
-        from src.models.message import Message
-
-        round_messages = [
-            Message.create_new("persona-1", "田中太郎", "私の意見は..."),
-            Message.create_new("persona-2", "佐藤花子", "それに対して..."),
-        ]
-
-        # ラウンドを要約
-        topic = "新商品のアイデア"
-        summary = self.facilitator_agent.summarize_round(1, round_messages, topic)
-
-        # 要約が正しいことを確認
-        assert summary == expected_summary
-        self.mock_agent.assert_called_once()
-
     def test_dispose(self):
         """ファシリテータエージェントのリソース解放テスト"""
         # disposeメソッドを持つモックエージェント
@@ -399,30 +322,6 @@ class TestFacilitatorAgent:
         # disposeが呼ばれたことを確認
         self.mock_agent.dispose.assert_called_once()
         assert self.facilitator_agent.agent is None
-
-    def test_create_prompt_for_persona(self):
-        """ペルソナ向けプロンプト生成テスト"""
-        # テスト用ペルソナエージェントを作成
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-
-        topic = "新商品のアイデア"
-
-        # コンテキストなしの場合（最初の発言）
-        prompt = self.facilitator_agent.create_prompt_for_persona(
-            persona_agent, topic, []
-        )
-        assert topic in prompt
-
-        # コンテキストありの場合
-        context = [
-            Message.create_new("persona-1", "佐藤", "最初の意見です"),
-            Message.create_new("persona-2", "鈴木", "2番目の意見です"),
-        ]
-        prompt = self.facilitator_agent.create_prompt_for_persona(
-            persona_agent, topic, context
-        )
-        assert topic in prompt
-        assert "佐藤" in prompt or "鈴木" in prompt
 
 
 class TestPersonaAgentMultimodal:

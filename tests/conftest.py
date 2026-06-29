@@ -173,7 +173,9 @@ def mock_agent_service() -> Mock:
 
     # FacilitatorAgentのモック
     mock_facilitator = Mock()
-    mock_facilitator.should_continue.return_value = False
+    mock_facilitator.rounds = 1
+    mock_facilitator.additional_instructions = ""
+    mock_facilitator.invoke.return_value = "ラウンドの要約"
     mock_facilitator.dispose = Mock()
 
     mock.create_facilitator_agent.return_value = mock_facilitator

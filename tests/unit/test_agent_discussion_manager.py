@@ -161,18 +161,11 @@ class TestStartAgentDiscussion:
 
         # ファシリテーターのモック
         mock_facilitator = Mock(spec=FacilitatorAgent)
-        mock_facilitator.should_continue.side_effect = [True, False]  # 1ラウンドで終了
         mock_facilitator.start_discussion.return_value = "議論を開始します"
-        mock_facilitator.select_next_speaker.side_effect = [
-            mock_persona_agent_1,
-            mock_persona_agent_2,
-            None,
-        ]
-        mock_facilitator.summarize_round.return_value = "ラウンドのまとめ"
-        mock_facilitator.increment_round.return_value = None
-        mock_facilitator.current_round = 1
+        mock_facilitator.invoke.return_value = "ラウンドのまとめ"
         mock_facilitator.rounds = 1
         mock_facilitator.additional_instructions = ""
+        mock_facilitator.clear_conversation_history = Mock()
 
         discussion = manager.start_agent_discussion(
             personas=[sample_persona, sample_persona_2],
