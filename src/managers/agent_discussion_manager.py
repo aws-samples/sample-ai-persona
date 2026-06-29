@@ -231,36 +231,9 @@ class AgentDiscussionManager:
         self._validate_discussion_input(personas, topic, persona_agents, facilitator)
 
         # Load documents if provided
-        documents_metadata = None
-        document_context = None
-        document_contents = []
-        if document_ids:
-            from .shared.document_loader import (
-                build_document_context,
-                load_documents_metadata,
-                prepare_document_contents,
-            )
-
-            documents_metadata = load_documents_metadata(
-                document_ids, self.database_service
-            )
-
-            if documents_metadata:
-                document_context = build_document_context(documents_metadata)
-                self.logger.info(
-                    f"Loaded {len(documents_metadata)} documents for agent discussion"
-                )
-
-                s3_service = service_factory.get_s3_service()
-                document_contents = prepare_document_contents(
-                    documents_metadata, s3_service
-                )
-                if document_contents:
-                    self.logger.info(
-                        f"Prepared {len(document_contents)} document contents for agents"
-                    )
-                    for agent in persona_agents:
-                        agent.set_document_contents(document_contents.copy())
+        documents_metadata, document_context, document_contents = (
+            self._load_and_attach_documents(document_ids, persona_agents)
+        )
 
         self.logger.info(
             f"Starting agent discussion with {len(persona_agents)} agents on topic: '{topic[:50]}...' "
@@ -475,6 +448,46 @@ class AgentDiscussionManager:
             self.logger.error(error_msg)
             raise AgentDiscussionManagerError(error_msg)
 
+    def _load_and_attach_documents(
+        self,
+        document_ids: Optional[List[str]],
+        persona_agents: List[PersonaAgent],
+    ) -> tuple:
+        """ドキュメントを読み込みエージェントに添付する。"""
+        documents_metadata = None
+        document_context = None
+        document_contents: List[Dict[str, Any]] = []
+
+        if document_ids:
+            from .shared.document_loader import (
+                build_document_context,
+                load_documents_metadata,
+                prepare_document_contents,
+            )
+
+            documents_metadata = load_documents_metadata(
+                document_ids, self.database_service
+            )
+
+            if documents_metadata:
+                document_context = build_document_context(documents_metadata)
+                self.logger.info(
+                    f"Loaded {len(documents_metadata)} documents for discussion"
+                )
+
+                s3_service = service_factory.get_s3_service()
+                document_contents = prepare_document_contents(
+                    documents_metadata, s3_service
+                )
+                if document_contents:
+                    self.logger.info(
+                        f"Prepared {len(document_contents)} document contents for agents"
+                    )
+                    for agent in persona_agents:
+                        agent.set_document_contents(document_contents.copy())
+
+        return documents_metadata, document_context, document_contents
+
     def _validate_discussion_input(
         self,
         personas: List[Persona],
@@ -678,36 +691,9 @@ class AgentDiscussionManager:
         self._validate_discussion_input(personas, topic, persona_agents, facilitator)
 
         # Load documents if provided
-        documents_metadata = None
-        document_context = None
-        document_contents = []
-        if document_ids:
-            from .shared.document_loader import (
-                build_document_context,
-                load_documents_metadata,
-                prepare_document_contents,
-            )
-
-            documents_metadata = load_documents_metadata(
-                document_ids, self.database_service
-            )
-
-            if documents_metadata:
-                document_context = build_document_context(documents_metadata)
-                self.logger.info(
-                    f"Loaded {len(documents_metadata)} documents for streaming agent discussion"
-                )
-
-                s3_service = service_factory.get_s3_service()
-                document_contents = prepare_document_contents(
-                    documents_metadata, s3_service
-                )
-                if document_contents:
-                    self.logger.info(
-                        f"Prepared {len(document_contents)} document contents for streaming agents"
-                    )
-                    for agent in persona_agents:
-                        agent.set_document_contents(document_contents.copy())
+        documents_metadata, document_context, document_contents = (
+            self._load_and_attach_documents(document_ids, persona_agents)
+        )
 
         self.logger.info(
             f"Starting streaming agent discussion with {len(persona_agents)} agents "

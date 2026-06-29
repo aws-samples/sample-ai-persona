@@ -13,6 +13,7 @@ from .database_service import DatabaseService
 from ..config import config
 
 if TYPE_CHECKING:
+    from .data_agent_service import DataAgentService
     from .memory.memory_service import MemoryService
     from .s3_service import S3Service
     from .survey_service import SurveyService
@@ -216,6 +217,19 @@ class ServiceFactory:
                         s3_service=s3_service,  # type: ignore[arg-type]
                     )
         return self._survey_service
+
+    def get_data_agent_service(self) -> Optional["DataAgentService"]:
+        """
+        DataAgentServiceのインスタンスを取得
+
+        Returns:
+            DataAgentService: データ分析エージェントサービス（設定なしの場合はNone）
+        """
+        if not config.DATA_AGENT_RUNTIME_ARN:
+            return None
+        from .data_agent_service import DataAgentService
+
+        return DataAgentService(config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION)
 
 
 # グローバルファクトリーインスタンス

@@ -829,6 +829,10 @@ class FacilitatorAgent:
             finally:
                 thread.join()
                 self.agent.callback_handler = original_handler
+                if agent_error:
+                    self.logger.error(
+                        f"ファシリテータストリーミング中にエージェントエラー（クライアント切断で未送出）: {agent_error}"
+                    )
 
             if agent_error:
                 raise agent_error

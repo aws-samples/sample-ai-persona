@@ -81,10 +81,17 @@ class SettingsManager:
         if not config.DATA_AGENT_RUNTIME_ARN:
             raise SettingsManagerError("Runtime ARN が設定されていません")
 
-        from ..services.data_agent_service import DataAgentService
-
-        service = DataAgentService(
-            config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION
-        )
-        result = service.query("利用可能なテーブル一覧を教えてください")
-        return result.text
+        try:
+            data_agent_service = service_factory.get_data_agent_service()
+            if not data_agent_service:
+                raise SettingsManagerError(
+                    "データ分析エージェントサービスを初期化できません"
+                )
+            result = data_agent_service.query("利用可能なテーブル一覧を教えてください")
+            return result.text
+        except SettingsManagerError:
+            raise
+        except Exception as e:
+            raise SettingsManagerError(
+                f"データ分析エージェント接続テストに失敗しました: {e}"
+            ) from e

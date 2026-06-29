@@ -1032,7 +1032,11 @@ class DiscussionManager:
 
         Yields:
             Message: 生成されたメッセージ
+
+        Raises:
+            DiscussionManagerError: バリデーション失敗時
         """
+        self._validate_discussion_input(personas, topic)
         return self.ai_service.facilitate_discussion_streaming(
             personas, topic, documents=documents
         )

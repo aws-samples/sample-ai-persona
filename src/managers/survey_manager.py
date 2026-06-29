@@ -1250,18 +1250,15 @@ class SurveyManager:
 
     def upload_temp_file(self, content: bytes, key: str) -> None:
         """一時ファイルをS3にアップロードする。"""
-        self.survey_service.s3_service.upload_file(content, key)
+        self.survey_service.upload_temp_file(content, key)
 
     def download_temp_file(self, key: str) -> bytes:
         """一時ファイルをS3からダウンロードする。"""
-        bucket = self.survey_service.s3_service.bucket_name
-        return self.survey_service.s3_service.download_file(f"s3://{bucket}/{key}")
+        return self.survey_service.download_temp_file(key)
 
     def delete_temp_file(self, key: str) -> None:
         """一時ファイルをS3から削除する。"""
-        self.survey_service.s3_service.s3_client.delete_object(
-            Bucket=self.survey_service.s3_service.bucket_name, Key=key
-        )
+        self.survey_service.delete_temp_file(key)
 
     def upload_custom_dataset(
         self,
@@ -1315,7 +1312,4 @@ class SurveyManager:
 
     def get_image_presigned_url(self, file_path: str) -> Optional[str]:
         """画像のPresigned URLを取得する。"""
-        s3_service = self.survey_service.s3_service
-        if s3_service:
-            return s3_service.generate_presigned_url(file_path)
-        return None
+        return self.survey_service.get_presigned_url(file_path)

@@ -1935,3 +1935,26 @@ class SurveyService:
             f"{summary_json}\n\n"
             "注: 上記は統計処理済みのデータです。パーセンテージ、平均値、分布などの数値を活用して洞察を導いてください。"
         )
+
+    # =========================================================================
+    # 一時ファイル操作（Manager層から呼び出し用ファサード）
+    # =========================================================================
+
+    def upload_temp_file(self, content: bytes, key: str) -> None:
+        """一時ファイルをS3にアップロードする。"""
+        self.s3_service.upload_file(content, key)
+
+    def download_temp_file(self, key: str) -> bytes:
+        """一時ファイルをS3からダウンロードする。"""
+        bucket = self.s3_service.bucket_name
+        return self.s3_service.download_file(f"s3://{bucket}/{key}")
+
+    def delete_temp_file(self, key: str) -> None:
+        """一時ファイルをS3から削除する。"""
+        self.s3_service.s3_client.delete_object(
+            Bucket=self.s3_service.bucket_name, Key=key
+        )
+
+    def get_presigned_url(self, file_path: str) -> Optional[str]:
+        """ファイルの署名付きURLを生成する。"""
+        return self.s3_service.generate_presigned_url(file_path)

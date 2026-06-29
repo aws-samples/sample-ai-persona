@@ -1029,34 +1029,9 @@ def _get_user_friendly_error_message(error: Exception) -> str:
     Returns:
         ユーザーフレンドリーなエラーメッセージ
     """
-    from botocore.exceptions import ClientError
-    from src.services.memory.memory_service import (
-        MemoryServiceError,
-        MemoryConnectionError,
-    )
-
-    # ClientErrorの場合
-    if isinstance(error, ClientError):
-        error_code = error.response.get("Error", {}).get("Code", "Unknown")
-
-        error_messages = {
-            "ThrottlingException": "サービスが一時的に混雑しています。しばらく待ってから再試行してください。",
-            "ServiceUnavailable": "記憶サービスが一時的に利用できません。後でもう一度お試しください。",
-            "ResourceNotFoundException": "記憶リソースが見つかりません。",
-            "AccessDeniedException": "記憶サービスへのアクセスが拒否されました。",
-            "ValidationException": "入力データが無効です。",
-            "InternalServerError": "サーバーエラーが発生しました。後でもう一度お試しください。",
-        }
-
-        return error_messages.get(error_code, "記憶操作中にエラーが発生しました。")
-
-    # MemoryConnectionErrorの場合
-    if isinstance(error, MemoryConnectionError):
-        return "記憶サービスへの接続に失敗しました。設定を確認してください。"
-
-    # MemoryServiceErrorの場合
-    if isinstance(error, MemoryServiceError):
-        return "記憶サービスでエラーが発生しました。後でもう一度お試しください。"
+    # PersonaManagerErrorの場合: Manager層が生成したメッセージをそのまま使用
+    if isinstance(error, PersonaManagerError):
+        return str(error)
 
     # ConnectionErrorの場合
     if isinstance(error, (ConnectionError, TimeoutError)):

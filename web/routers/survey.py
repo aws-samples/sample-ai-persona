@@ -1059,7 +1059,8 @@ def _get_image_preview_url(file_path: str) -> str:
         return ""
     try:
         manager = get_survey_manager()
-        return manager.get_image_presigned_url(file_path)
+        url = manager.get_image_presigned_url(file_path)
+        return url or ""
     except Exception as e:
         logger.warning(f"Failed to generate presigned URL: {e}")
     return ""
