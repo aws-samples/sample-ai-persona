@@ -123,13 +123,12 @@ class TestFileUploadEndpoint:
 class TestPersonaGenerateEndpoint:
     """ペルソナ生成エンドポイントのテスト"""
 
-    @patch("web.routers.persona._temp_personas_cache", {})
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_success(self, mock_get_manager, client, sample_persona):
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_success(self, mock_get_gen_manager, client, sample_persona):
         """ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
-        mock_manager.generate_personas.return_value = ([sample_persona], [])
-        mock_get_manager.return_value = mock_manager
+        mock_manager.generate_and_cache.return_value = ([sample_persona], [], [])
+        mock_get_gen_manager.return_value = mock_manager
 
         file_content = (
             "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
@@ -202,18 +201,18 @@ class TestPersonaGenerateEndpoint:
         assert response.status_code == 200
         assert "event: error" in response.text
 
-    @patch("web.routers.persona._temp_personas_cache", {})
-    @patch("web.routers.persona.get_persona_manager")
+    @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_multiple_success(
-        self, mock_get_manager, client, sample_persona, sample_persona_2
+        self, mock_get_gen_manager, client, sample_persona, sample_persona_2
     ):
         """複数ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
-        mock_manager.generate_personas.return_value = (
+        mock_manager.generate_and_cache.return_value = (
             [sample_persona, sample_persona_2],
             [{"type": "thinking", "content": "分析中..."}],
+            [],
         )
-        mock_get_manager.return_value = mock_manager
+        mock_get_gen_manager.return_value = mock_manager
 
         file_content = "これは市場調査レポートです。" * 50
         files = [
@@ -237,14 +236,18 @@ class TestPersonaGenerateEndpoint:
         assert response.status_code == 200
         assert "event: result" in response.text
 
-    @patch("web.routers.persona.get_persona_manager")
-    def test_generate_manager_error(self, mock_get_manager, client):
-        """PersonaManagerErrorが適切に処理されることを確認（SSE）"""
-        from src.managers.persona_manager import PersonaManagerError
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_manager_error(self, mock_get_gen_manager, client):
+        """PersonaGenerationManagerErrorが適切に処理されることを確認（SSE）"""
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
 
         mock_manager = Mock()
-        mock_manager.generate_personas.side_effect = PersonaManagerError("生成エラー")
-        mock_get_manager.return_value = mock_manager
+        mock_manager.generate_and_cache.side_effect = PersonaGenerationManagerError(
+            "生成エラー"
+        )
+        mock_get_gen_manager.return_value = mock_manager
 
         file_content = "テスト用テキスト。" * 10
         files = [
@@ -460,14 +463,16 @@ class TestPersonaListPartialEndpoint:
 class TestSaveSelectedPersonasEndpoint:
     """選択ペルソナ保存エンドポイントのテスト"""
 
-    @patch("web.routers.persona._temp_personas_cache")
+    @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
     def test_save_selected_success(
-        self, mock_get_manager, mock_cache, client, sample_persona
+        self, mock_get_manager, mock_get_gen_manager, client, sample_persona
     ):
         """選択ペルソナ保存が成功することを確認"""
-        mock_cache.get.return_value = sample_persona
-        mock_cache.pop.return_value = sample_persona
+        mock_gen_manager = Mock()
+        mock_gen_manager.get_cached_persona.return_value = sample_persona
+        mock_gen_manager.pop_cached_persona.return_value = sample_persona
+        mock_get_gen_manager.return_value = mock_gen_manager
 
         mock_manager = Mock()
         mock_manager.save_persona.return_value = sample_persona.id
@@ -479,23 +484,23 @@ class TestSaveSelectedPersonasEndpoint:
 
         assert response.status_code == 200
 
-    @patch("web.routers.persona._temp_personas_cache")
-    @patch("web.routers.persona.get_persona_manager")
-    def test_save_selected_empty_ids(self, mock_get_manager, mock_cache, client):
+    def test_save_selected_empty_ids(self, client):
         """空のIDリストでエラーを返すことを確認"""
         response = client.post("/persona/save-selected", data={"persona_ids": ""})
 
         # FastAPIは空文字列を422で拒否する場合がある
         assert response.status_code in [400, 422]
 
-    @patch("web.routers.persona._temp_personas_cache")
+    @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
     def test_save_selected_not_found_in_cache(
-        self, mock_get_manager, mock_cache, client
+        self, mock_get_manager, mock_get_gen_manager, client
     ):
         """キャッシュにないペルソナでエラーを返すことを確認"""
-        mock_cache.get.return_value = None
-        mock_cache.pop.return_value = None
+        mock_gen_manager = Mock()
+        mock_gen_manager.get_cached_persona.return_value = None
+        mock_gen_manager.pop_cached_persona.return_value = None
+        mock_get_gen_manager.return_value = mock_gen_manager
 
         mock_manager = Mock()
         mock_get_manager.return_value = mock_manager
