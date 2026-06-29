@@ -24,10 +24,13 @@ def mgr_with_ai() -> SurveyManager:
 
 @pytest.fixture
 def mgr_without_ai() -> SurveyManager:
-    return SurveyManager(
+    mgr = SurveyManager(
         database_service=Mock(),
         survey_service=Mock(),
+        ai_service=Mock(),
     )
+    mgr.ai_service = None  # type: ignore[assignment]
+    return mgr
 
 
 class TestGenerateAIChatResponse:

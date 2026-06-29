@@ -28,7 +28,6 @@ from src.managers.survey_manager import (
     SurveyExecutionError,
 )
 from src.models.survey_template import Question, TemplateImage
-from src.services.service_factory import service_factory
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +48,7 @@ def get_survey_manager() -> SurveyManager:
     """SurveyManagerのシングルトンインスタンスを取得"""
     global _survey_manager
     if _survey_manager is None:
-        db_service = service_factory.get_database_service()
-        survey_service = service_factory.get_survey_service()
-        ai_service = service_factory.get_ai_service()
-        _survey_manager = SurveyManager(
-            database_service=db_service,
-            survey_service=survey_service,
-            ai_service=ai_service,
-        )
+        _survey_manager = SurveyManager()
     return _survey_manager
 
 
@@ -78,15 +70,15 @@ async def survey_index(request: Request) -> Any:
 @router.get("/persona-data", response_class=HTMLResponse)
 async def persona_data_page(request: Request) -> Any:
     """ペルソナデータ設定画面"""
-    survey_service = service_factory.get_survey_service()
+    manager = get_survey_manager()
     nemotron_status = {"exists": False, "size_mb": 0}
     custom_datasets = []
     try:
-        nemotron_status = survey_service.check_nemotron_dataset_status()
+        nemotron_status = manager.check_nemotron_status()
     except Exception as e:
         logger.warning(f"Failed to check Nemotron dataset status: {e}")
     try:
-        custom_datasets = survey_service.list_custom_datasets()
+        custom_datasets = manager.list_custom_datasets()
     except Exception as e:
         logger.warning(f"Failed to list custom datasets: {e}")
     return templates.TemplateResponse(
@@ -108,8 +100,8 @@ _nemotron_download_status: dict = {"downloading": False, "error": None}
 def _download_nemotron_background() -> None:
     """バックグラウンドでNemotronデータセットをダウンロードする。"""
     try:
-        survey_service = service_factory.get_survey_service()
-        survey_service.download_nemotron_dataset()
+        manager = get_survey_manager()
+        manager.download_nemotron_dataset()
     except Exception as e:
         logger.error(f"Failed to download Nemotron dataset: {e}")
         _nemotron_download_status["error"] = str(e)
@@ -147,9 +139,9 @@ async def download_nemotron(request: Request) -> Any:
 @router.get("/persona-data/nemotron-status", response_class=HTMLResponse)
 async def nemotron_download_status(request: Request) -> Any:
     """Nemotronダウンロード状況をポーリングで返す"""
-    survey_service = service_factory.get_survey_service()
+    manager = get_survey_manager()
     try:
-        status = survey_service.check_nemotron_dataset_status()
+        status = manager.check_nemotron_status()
     except Exception:
         status = {"exists": False, "size_mb": 0}
     return templates.TemplateResponse(
@@ -186,12 +178,12 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
                     "error": "ファイルサイズは500MB以下にしてください。",
                 },
             )
-        survey_service = service_factory.get_survey_service()
-        parsed = survey_service.parse_csv_columns(content)
+        manager = get_survey_manager()
+        parsed = manager.parse_csv_columns(content)
 
         # CSVバイト列を一時的にS3に保存（マッピング確定後に使用）
         temp_key = f"persona-dataset/temp/{file.filename}"
-        survey_service.s3_service.upload_file(content, temp_key)
+        manager.upload_temp_file(content, temp_key)
 
         return templates.TemplateResponse(
             request,
@@ -203,7 +195,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
                 "columns": parsed["columns"],
                 "samples": parsed["samples"],
                 "auto_mapping": parsed["auto_mapping"],
-                "standard_columns": survey_service.STANDARD_COLUMNS,
+                "standard_columns": manager.get_standard_columns(),
             },
         )
     except Exception as e:
@@ -249,9 +241,8 @@ async def preview_persona_prompt(request: Request) -> Any:
             )
 
     try:
-        survey_service = service_factory.get_survey_service()
-        bucket = survey_service.s3_service.bucket_name
-        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+        manager = get_survey_manager()
+        csv_bytes = manager.download_temp_file(temp_key)
 
         df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000, n_rows=1)
         # マッピングに基づきリネーム
@@ -263,7 +254,7 @@ async def preview_persona_prompt(request: Request) -> Any:
             df = df.rename(rename_map)  # type: ignore[arg-type]
 
         row = df.row(0, named=True)
-        preview_text = survey_service._build_system_prompt(
+        preview_text = manager.build_system_prompt_preview(
             row,
             extra_columns=extra_columns or None,  # type: ignore[arg-type]
         )
@@ -317,15 +308,14 @@ async def upload_custom_step2(request: Request) -> Any:
             )
 
     try:
-        survey_service = service_factory.get_survey_service()
+        manager = get_survey_manager()
         # 一時保存したCSVをS3から取得
-        bucket = survey_service.s3_service.bucket_name
-        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+        csv_bytes = manager.download_temp_file(temp_key)
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             executor,
-            lambda: survey_service.upload_custom_dataset(
+            lambda: manager.upload_custom_dataset(
                 csv_bytes,
                 filename,
                 column_mapping,
@@ -335,13 +325,11 @@ async def upload_custom_step2(request: Request) -> Any:
 
         # 一時ファイルを削除
         try:
-            survey_service.s3_service.s3_client.delete_object(
-                Bucket=survey_service.s3_service.bucket_name, Key=temp_key
-            )
+            manager.delete_temp_file(temp_key)
         except Exception:
             pass
 
-        custom_datasets = survey_service.list_custom_datasets()
+        custom_datasets = manager.list_custom_datasets()
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
@@ -368,8 +356,8 @@ async def upload_custom_step2(request: Request) -> Any:
 async def custom_dataset_detail(request: Request, name: str) -> Any:
     """カスタムデータセットのマッピング情報を表示"""
     try:
-        survey_service = service_factory.get_survey_service()
-        metadata = survey_service.load_dataset_metadata(name)
+        manager = get_survey_manager()
+        metadata = manager.load_dataset_metadata(name)
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_dataset_detail.html",
@@ -377,7 +365,7 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
                 "request": request,
                 "name": name,
                 "metadata": metadata,
-                "standard_columns": survey_service.STANDARD_COLUMNS,
+                "standard_columns": manager.get_standard_columns(),
             },
         )
     except Exception as e:
@@ -391,9 +379,9 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
 async def delete_custom_dataset(request: Request, name: str) -> Any:
     """カスタムデータセットを削除"""
     try:
-        survey_service = service_factory.get_survey_service()
-        survey_service.delete_custom_dataset(name)
-        custom_datasets = survey_service.list_custom_datasets()
+        manager = get_survey_manager()
+        manager.delete_custom_dataset(name)
+        custom_datasets = manager.list_custom_datasets()
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_dataset_list.html",
@@ -495,11 +483,11 @@ async def dwh_extract(request: Request) -> Any:
         try:
             result = future.result()
             # Save CSV to temp S3
-            survey_service = service_factory.get_survey_service()
+            manager = get_survey_manager()
             import uuid as uuid_mod
 
             temp_key = f"persona-dataset/temp/dwh-{uuid_mod.uuid4().hex[:8]}.csv"
-            survey_service.s3_service.upload_file(result["csv_bytes"], temp_key)
+            manager.upload_temp_file(result["csv_bytes"], temp_key)
 
             yield _survey_sse_event(
                 "complete",
@@ -539,14 +527,12 @@ async def dwh_preview(request: Request) -> Any:
     dataset_name = str(form.get("dataset_name", ""))
 
     try:
-        survey_service = service_factory.get_survey_service()
-        bucket = survey_service.s3_service.bucket_name
-        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+        manager = get_survey_manager()
+        csv_bytes = manager.download_temp_file(temp_key)
 
-        parsed = survey_service.parse_csv_columns(csv_bytes)
+        parsed = manager.parse_csv_columns(csv_bytes)
 
         # LLMマッピング提案（標準カラム + その他カラム）
-        manager = get_survey_manager()
         suggestion = manager.suggest_column_mapping(
             parsed["columns"], parsed["samples"]
         )
@@ -565,7 +551,7 @@ async def dwh_preview(request: Request) -> Any:
                 "columns": parsed["columns"],
                 "samples": parsed["samples"],
                 "auto_mapping": merged_mapping,
-                "standard_columns": survey_service.STANDARD_COLUMNS,
+                "standard_columns": manager.get_standard_columns(),
                 "is_dwh": True,
                 "dataset_name": dataset_name,
                 "suggested_extra": suggested_extra,
@@ -617,16 +603,15 @@ async def dwh_confirm(request: Request) -> Any:
             )
 
     try:
-        survey_service = service_factory.get_survey_service()
-        bucket = survey_service.s3_service.bucket_name
-        csv_bytes = survey_service.s3_service.download_file(f"s3://{bucket}/{temp_key}")
+        manager = get_survey_manager()
+        csv_bytes = manager.download_temp_file(temp_key)
 
         filename = dataset_name + ".csv" if dataset_name else "dwh_segment.csv"
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             executor,
-            lambda: survey_service.upload_custom_dataset(
+            lambda: manager.upload_custom_dataset(
                 csv_bytes,
                 filename,
                 column_mapping,
@@ -636,13 +621,11 @@ async def dwh_confirm(request: Request) -> Any:
 
         # 一時ファイルを削除（best-effort: 失敗しても処理は継続）
         try:
-            survey_service.s3_service.s3_client.delete_object(
-                Bucket=bucket, Key=temp_key
-            )
+            manager.delete_temp_file(temp_key)
         except Exception:
             logger.warning(f"Failed to delete temp file: {temp_key}")
 
-        custom_datasets = survey_service.list_custom_datasets()
+        custom_datasets = manager.list_custom_datasets()
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
@@ -838,11 +821,8 @@ async def survey_start_page(request: Request) -> Any:
     nemotron_available = False
     datasource_counts = {}
     try:
-        survey_service = service_factory.get_survey_service()
-        nemotron_available = survey_service.check_nemotron_dataset_status().get(
-            "exists", False
-        )
-        custom_datasets = survey_service.list_custom_datasets()
+        nemotron_available = manager.check_nemotron_status().get("exists", False)
+        custom_datasets = manager.list_custom_datasets()
         # 初期表示のデータソースを決定
         if nemotron_available:
             default_ds = "nemotron"
@@ -851,14 +831,12 @@ async def survey_start_page(request: Request) -> Any:
         else:
             default_ds = None
         if default_ds:
-            filter_values = survey_service.get_available_filter_values(
-                datasource=default_ds
-            )
+            filter_values = manager.get_available_filter_values(datasource=default_ds)
         # 各データソースのペルソナ数を取得
         if nemotron_available:
-            datasource_counts["nemotron"] = survey_service._get_total_count("nemotron")
+            datasource_counts["nemotron"] = manager.get_datasource_count("nemotron")
         for ds in custom_datasets:
-            datasource_counts[f"custom:{ds['name']}"] = survey_service._get_total_count(
+            datasource_counts[f"custom:{ds['name']}"] = manager.get_datasource_count(
                 f"custom:{ds['name']}"
             )
     except Exception as e:
@@ -906,12 +884,10 @@ def _clean_filters(raw: dict) -> dict | None:
 async def filter_options(request: Request) -> Any:
     """データソースに応じたフィルタ選択肢を返す"""
     datasource = request.query_params.get("datasource", "nemotron")
-    survey_service = service_factory.get_survey_service()
+    manager = get_survey_manager()
     filter_values = {}
     try:
-        filter_values = survey_service.get_available_filter_values(
-            datasource=datasource
-        )
+        filter_values = manager.get_available_filter_values(datasource=datasource)
     except Exception as e:
         logger.warning(f"Failed to get filter values for {datasource}: {e}")
     return templates.TemplateResponse(
@@ -941,14 +917,14 @@ async def preview_personas(request: Request) -> Any:
         filters = None
 
     try:
-        survey_service = service_factory.get_survey_service()
-        total = survey_service.get_filtered_count(datasource=datasource)  # type: ignore[arg-type]
+        manager = get_survey_manager()
+        total = manager.get_filtered_count(None, datasource=datasource)  # type: ignore[arg-type]
         count = (
-            survey_service.get_filtered_count(filters, datasource=datasource)
+            manager.get_filtered_count(filters, datasource=datasource)
             if filters
             else total
         )  # type: ignore[arg-type]
-        stats = survey_service.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
+        stats = manager.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
 
     except Exception as e:
         logger.error(f"Preview failed: {e}")
@@ -1047,10 +1023,7 @@ async def upload_survey_image(file: UploadFile = File(...)) -> Any:
     try:
         from src.managers.file_manager import FileManager
 
-        file_manager = FileManager(
-            db_service=service_factory.get_database_service(),
-            s3_service=service_factory.get_s3_service(),
-        )
+        file_manager = FileManager()
         file_content = await file.read()
         metadata = file_manager.upload_survey_image(file_content, file.filename)  # type: ignore[arg-type]
         return JSONResponse(
@@ -1085,9 +1058,8 @@ def _get_image_preview_url(file_path: str) -> str:
     if not file_path or not file_path.startswith("s3://"):
         return ""
     try:
-        s3_service = service_factory.get_s3_service()
-        if s3_service:
-            return s3_service.generate_presigned_url(file_path, expiration=3600)
+        manager = get_survey_manager()
+        return manager.get_image_presigned_url(file_path)
     except Exception as e:
         logger.warning(f"Failed to generate presigned URL: {e}")
     return ""

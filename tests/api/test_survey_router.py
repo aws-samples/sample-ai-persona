@@ -38,21 +38,25 @@ class TestSurveyStartPage:
     def test_start_page_loads(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_all_templates.return_value = []
+        mock_mgr.check_nemotron_status.return_value = {"exists": False, "size_mb": 0}
+        mock_mgr.list_custom_datasets.return_value = []
+        mock_mgr.get_available_filter_values.return_value = {}
+        mock_mgr.get_datasource_count.return_value = 0
         mock_get_mgr.return_value = mock_mgr
         resp = client.get("/survey/start")
         assert resp.status_code == 200
 
 
 class TestSurveyPersonaDataPage:
-    @patch("web.routers.survey.service_factory")
-    def test_persona_data_page_loads(self, mock_sf, client):
-        mock_survey_svc = Mock()
-        mock_survey_svc.check_nemotron_dataset_status.return_value = {
+    @patch("web.routers.survey.get_survey_manager")
+    def test_persona_data_page_loads(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.check_nemotron_status.return_value = {
             "exists": False,
             "size_mb": 0,
         }
-        mock_survey_svc.list_custom_datasets.return_value = []
-        mock_sf.get_survey_service.return_value = mock_survey_svc
+        mock_mgr.list_custom_datasets.return_value = []
+        mock_get_mgr.return_value = mock_mgr
         resp = client.get("/survey/persona-data")
         assert resp.status_code == 200
 
@@ -303,14 +307,14 @@ class TestSurveyAIGenerate:
 
 
 class TestSurveyFilterOptions:
-    @patch("web.routers.survey.service_factory")
-    def test_filter_options_loads(self, mock_sf, client):
-        mock_svc = Mock()
-        mock_svc.get_available_filter_values.return_value = {
+    @patch("web.routers.survey.get_survey_manager")
+    def test_filter_options_loads(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_available_filter_values.return_value = {
             "sex": ["男性", "女性"],
             "occupation": ["エンジニア"],
         }
-        mock_sf.get_survey_service.return_value = mock_svc
+        mock_get_mgr.return_value = mock_mgr
 
         resp = client.get("/survey/filter-options?datasource=nemotron")
         assert resp.status_code == 200

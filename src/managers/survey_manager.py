@@ -17,6 +17,7 @@ from src.models.survey import (
 from src.models.survey_template import Question, SurveyTemplate, TemplateImage
 from src.services.ai_service import AIService
 from src.services.database_service import DatabaseService
+from src.services.service_factory import service_factory  # noqa: E402
 from src.services.survey_service import SurveyService
 
 logger = logging.getLogger(__name__)
@@ -45,13 +46,13 @@ class SurveyManager:
 
     def __init__(
         self,
-        database_service: DatabaseService,
-        survey_service: SurveyService,
+        database_service: Optional[DatabaseService] = None,
+        survey_service: Optional[SurveyService] = None,
         ai_service: Optional[AIService] = None,
     ) -> None:
-        self.db = database_service
-        self.survey_service = survey_service
-        self.ai_service = ai_service
+        self.db = database_service or service_factory.get_database_service()
+        self.survey_service = survey_service or service_factory.get_survey_service()
+        self.ai_service = ai_service or service_factory.get_ai_service()
 
     # =========================================================================
     # テンプレート管理
@@ -1222,3 +1223,99 @@ class SurveyManager:
             marital_status_distribution=dict(marital_counter.most_common()),
             age_stats=age_stats,
         )
+
+    # =========================================================================
+    # データセット管理ファサード（Router→Service直接参照の解消用）
+    # =========================================================================
+
+    def check_nemotron_status(self) -> Dict[str, Any]:
+        """Nemotronデータセットのステータスを取得する。"""
+        return self.survey_service.check_nemotron_dataset_status()
+
+    def download_nemotron_dataset(self) -> None:
+        """Nemotronデータセットをダウンロードする。"""
+        self.survey_service.download_nemotron_dataset()
+
+    def list_custom_datasets(self) -> List[Dict[str, Any]]:
+        """カスタムデータセット一覧を取得する。"""
+        return self.survey_service.list_custom_datasets()
+
+    def parse_csv_columns(self, content: bytes) -> Dict[str, Any]:
+        """CSVファイルのカラムを解析する。"""
+        return self.survey_service.parse_csv_columns(content)
+
+    def get_standard_columns(self) -> Dict[str, str]:
+        """標準カラム定義を取得する。"""
+        return self.survey_service.STANDARD_COLUMNS
+
+    def upload_temp_file(self, content: bytes, key: str) -> None:
+        """一時ファイルをS3にアップロードする。"""
+        self.survey_service.s3_service.upload_file(content, key)
+
+    def download_temp_file(self, key: str) -> bytes:
+        """一時ファイルをS3からダウンロードする。"""
+        bucket = self.survey_service.s3_service.bucket_name
+        return self.survey_service.s3_service.download_file(f"s3://{bucket}/{key}")
+
+    def delete_temp_file(self, key: str) -> None:
+        """一時ファイルをS3から削除する。"""
+        self.survey_service.s3_service.s3_client.delete_object(
+            Bucket=self.survey_service.s3_service.bucket_name, Key=key
+        )
+
+    def upload_custom_dataset(
+        self,
+        csv_bytes: bytes,
+        filename: str,
+        column_mapping: Dict[str, str],
+        extra_columns: List[str],
+    ) -> Dict[str, Any]:
+        """カスタムデータセットをアップロードする。"""
+        return self.survey_service.upload_custom_dataset(
+            csv_bytes, filename, column_mapping, extra_columns
+        )
+
+    def load_dataset_metadata(self, name: str) -> Dict[str, Any]:
+        """データセットのメタデータを読み込む。"""
+        return self.survey_service.load_dataset_metadata(name)
+
+    def delete_custom_dataset(self, name: str) -> None:
+        """カスタムデータセットを削除する。"""
+        self.survey_service.delete_custom_dataset(name)
+
+    def build_system_prompt_preview(
+        self, row: Dict[str, Any], extra_columns: List[str]
+    ) -> str:
+        """システムプロンプトのプレビューを生成する。"""
+        return self.survey_service._build_system_prompt(row, extra_columns)
+
+    def get_available_filter_values(self, datasource: str) -> Dict[str, List[str]]:
+        """利用可能なフィルター値を取得する。"""
+        return self.survey_service.get_available_filter_values(datasource)
+
+    def get_filtered_count(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        datasource: str = "nemotron",
+    ) -> int:
+        """フィルター条件に合致するレコード数を取得する。"""
+        return self.survey_service.get_filtered_count(filters, datasource=datasource)
+
+    def get_preview_stats(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        datasource: str = "nemotron",
+    ) -> Dict[str, Any]:
+        """プレビュー用の統計情報を取得する。"""
+        return self.survey_service.get_preview_stats(filters, datasource=datasource)
+
+    def get_datasource_count(self, datasource: str) -> int:
+        """データソースの総レコード数を取得する。"""
+        return self.survey_service._get_total_count(datasource)
+
+    def get_image_presigned_url(self, file_path: str) -> Optional[str]:
+        """画像のPresigned URLを取得する。"""
+        s3_service = self.survey_service.s3_service
+        if s3_service:
+            return s3_service.generate_presigned_url(file_path)
+        return None
