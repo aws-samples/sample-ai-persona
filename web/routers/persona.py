@@ -19,9 +19,6 @@ from fastapi.templating import Jinja2Templates
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.persona import Persona
-from src.services.service_factory import service_factory
-from src.services.s3_service import S3Service
-from src.config import config
 from ._pagination import decode_cursor, encode_cursor
 
 # 一時ペルソナ用TTLキャッシュ（30分で自動削除、最大1000件）
@@ -72,11 +69,7 @@ def get_file_manager() -> FileManager:
     """FileManagerのシングルトンインスタンスを取得"""
     global _file_manager
     if _file_manager is None:
-        # S3サービスの初期化（S3_BUCKET_NAMEが設定されている場合）
-        s3_service = None
-        if config.S3_BUCKET_NAME:
-            s3_service = S3Service(config.S3_BUCKET_NAME, config.AWS_REGION)
-        _file_manager = FileManager(s3_service=s3_service)
+        _file_manager = FileManager()
     return _file_manager
 
 
@@ -1195,34 +1188,13 @@ async def delete_persona_memory(
         - 8.3: 削除確認後、AgentCore Memoryから記憶を削除
         - 10.3: 削除失敗時にエラーメッセージを表示
     """
+    persona_manager = get_persona_manager()
     try:
-        # メモリサービスを取得
-        memory_service = service_factory.get_memory_service()
-
-        if not memory_service:
-            # 長期記憶機能が無効の場合 - エラーをインラインで表示
-            logger.warning(f"Memory service disabled, cannot delete memory {memory_id}")
-            return templates.TemplateResponse(
-                request,
-                "persona/partials/memory_delete_error.html",
-                {
-                    "request": request,
-                    "memory_id": memory_id,
-                    "error": "長期記憶機能が無効です",
-                },
-                status_code=400,
-            )
-
-        # 記憶を削除
-        success = memory_service.delete_memory(actor_id=persona_id, memory_id=memory_id)
+        success = persona_manager.delete_persona_memory(persona_id, memory_id)
 
         if success:
-            # 削除成功時は空のレスポンスを返す（htmxがDOM要素を削除）
-            logger.info(f"Memory {memory_id} deleted for persona {persona_id}")
             return HTMLResponse(content="", status_code=200)
         else:
-            # 削除失敗時はエラーメッセージを含む要素を返す
-            logger.warning(f"Memory {memory_id} not found for persona {persona_id}")
             return templates.TemplateResponse(
                 request,
                 "persona/partials/memory_delete_error.html",
@@ -1234,19 +1206,17 @@ async def delete_persona_memory(
                 status_code=400,
             )
 
-    except (ConnectionError, TimeoutError) as e:
-        # ネットワークエラー（Requirements 10.3）
+    except PersonaManagerError as e:
         error_msg = _get_user_friendly_error_message(e)
-        logger.error(f"Network error deleting memory {memory_id}: {e}")
+        logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_delete_error.html",
             {"request": request, "memory_id": memory_id, "error": error_msg},
-            status_code=503,
+            status_code=400,
         )
 
     except Exception as e:
-        # その他のエラー（Requirements 10.3）
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
@@ -1275,49 +1245,12 @@ async def delete_all_persona_memories(
         - 8.4: 全記憶削除後、空の状態を表示
         - 10.3: 削除失敗時にエラーメッセージを表示
     """
+    persona_manager = get_persona_manager()
     try:
-        # メモリサービスを取得
-        memory_service = service_factory.get_memory_service()
-
-        if not memory_service:
-            logger.warning(
-                f"Memory service disabled, cannot delete all memories for persona {persona_id}"
-            )
-            return templates.TemplateResponse(
-                request,
-                "persona/partials/memory_list.html",
-                {
-                    "request": request,
-                    "persona_id": persona_id,
-                    "memories": [],
-                    "error": "長期記憶機能が無効です",
-                    "strategy_type": strategy_type,
-                },
-            )
-
-        # 指定された戦略タイプの記憶のみを取得して削除
-        all_memories = memory_service.list_memories(actor_id=persona_id)
-        memories_to_delete = [
-            m
-            for m in all_memories
-            if m.metadata and m.metadata.get("strategy_type") == strategy_type
-        ]
-
-        deleted_count = 0
-        for memory in memories_to_delete:
-            try:
-                if memory_service.delete_memory(
-                    actor_id=persona_id, memory_id=memory.id
-                ):
-                    deleted_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to delete memory {memory.id}: {e}")
-
-        logger.info(
-            f"Deleted {deleted_count} {strategy_type} memories for persona {persona_id}"
+        deleted_count = persona_manager.delete_all_persona_memories(
+            persona_id, strategy_type
         )
 
-        # 空の記憶リストを返す（成功メッセージ付き）
         item_name = "知識" if strategy_type == "semantic" else "記憶"
         return templates.TemplateResponse(
             request,
@@ -1335,15 +1268,13 @@ async def delete_all_persona_memories(
             },
         )
 
-    except (ConnectionError, TimeoutError) as e:
-        # ネットワークエラー（Requirements 10.3）
+    except PersonaManagerError as e:
         error_msg = _get_user_friendly_error_message(e)
         logger.error(
-            f"Network error deleting all memories for persona {persona_id}: {e}"
+            f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
 
-        # エラー時は現在の記憶リストを再取得して表示
-        memories = _safe_get_memories(persona_id, strategy_type)
+        memories = persona_manager.safe_get_memories(persona_id, strategy_type)
 
         return templates.TemplateResponse(
             request,
@@ -1360,14 +1291,12 @@ async def delete_all_persona_memories(
         )
 
     except Exception as e:
-        # その他のエラー（Requirements 10.3）
         error_msg = _get_user_friendly_error_message(e)
         logger.error(
             f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
 
-        # エラー時は現在の記憶リストを再取得して表示
-        memories = _safe_get_memories(persona_id)
+        memories = persona_manager.safe_get_memories(persona_id, strategy_type)
 
         return templates.TemplateResponse(
             request,
@@ -1379,36 +1308,9 @@ async def delete_all_persona_memories(
                 "error": error_msg,
                 "current_page": 1,
                 "total_pages": 1,
+                "strategy_type": strategy_type,
             },
         )
-
-
-def _safe_get_memories(persona_id: str, strategy_type: str = "summary") -> list:
-    """
-    エラー時に安全に記憶リストを取得するヘルパー関数
-
-    Args:
-        persona_id: ペルソナID
-        strategy_type: 戦略タイプ（"summary" または "semantic"）
-
-    Returns:
-        記憶リスト（取得失敗時は空リスト）
-    """
-    try:
-        memory_service = service_factory.get_memory_service()
-        if memory_service:
-            all_memories = memory_service.list_memories(actor_id=persona_id)
-            # 戦略タイプでフィルタリング
-            memories = [
-                m
-                for m in all_memories
-                if m.metadata and m.metadata.get("strategy_type") == strategy_type
-            ]
-            memories.sort(key=lambda m: m.created_at, reverse=True)
-            return memories
-    except Exception as e:
-        logger.warning(f"Failed to retrieve memories for error recovery: {e}")
-    return []
 
 
 @router.post("/{persona_id}/memories", response_class=HTMLResponse)
@@ -1595,17 +1497,8 @@ async def upload_knowledge_file_preview(
 @router.get("/{persona_id}/kb-binding", response_class=HTMLResponse)
 async def get_kb_binding(request: Request, persona_id: str) -> Any:
     """ペルソナのナレッジベース紐付け情報を取得"""
-    db_service = service_factory.get_database_service()
-
-    knowledge_bases = db_service.get_all_knowledge_bases()
-    binding = db_service.get_kb_binding_by_persona(persona_id)
-
-    # 紐付け済みだがKBが削除されている場合、紐付けも削除
-    if binding:
-        kb = db_service.get_knowledge_base(binding.kb_id)
-        if not kb:
-            db_service.delete_kb_binding(binding.id)
-            binding = None
+    persona_manager = get_persona_manager()
+    knowledge_bases, binding = persona_manager.get_kb_binding(persona_id)
 
     return templates.TemplateResponse(
         request,
@@ -1627,10 +1520,7 @@ async def create_kb_binding(
     metadata_filters_json: str = Form(default="{}"),
 ) -> Any:
     """ナレッジベース紐付けを作成（既存があれば上書き）"""
-    import json
-    from src.models.knowledge_base import PersonaKBBinding
-
-    db_service = service_factory.get_database_service()
+    persona_manager = get_persona_manager()
 
     try:
         metadata_filters = (
@@ -1639,14 +1529,11 @@ async def create_kb_binding(
     except json.JSONDecodeError:
         metadata_filters = {}
 
-    binding = PersonaKBBinding.create_new(
+    persona_manager.create_kb_binding(
         persona_id=persona_id,
         kb_id=kb_id,
         metadata_filters=metadata_filters,
     )
-
-    db_service.save_kb_binding(binding)
-    logger.info(f"Created KB binding: persona={persona_id}, kb={kb_id}")
 
     return await get_kb_binding(request, persona_id)
 
@@ -1654,9 +1541,8 @@ async def create_kb_binding(
 @router.delete("/{persona_id}/kb-binding/{binding_id}", response_class=HTMLResponse)
 async def delete_kb_binding(request: Request, persona_id: str, binding_id: str) -> Any:
     """ナレッジベース紐付けを解除"""
-    db_service = service_factory.get_database_service()
-    db_service.delete_kb_binding(binding_id)
-    logger.info(f"Deleted KB binding: {binding_id}")
+    persona_manager = get_persona_manager()
+    persona_manager.delete_kb_binding(binding_id)
 
     return await get_kb_binding(request, persona_id)
 
@@ -1667,14 +1553,8 @@ async def delete_kb_binding(request: Request, persona_id: str, binding_id: str) 
 @router.get("/{persona_id}/dataset-bindings", response_class=HTMLResponse)
 async def get_dataset_bindings(request: Request, persona_id: str) -> Any:
     """ペルソナのデータセット紐付け一覧を取得"""
-    db_service = service_factory.get_database_service()
-
-    # 全データセットを取得
-    datasets = db_service.get_all_datasets()
-
-    # このペルソナの紐付けを取得
-    bindings = db_service.get_bindings_by_persona(persona_id)
-    bindings_map = {b.dataset_id: b for b in bindings}
+    persona_manager = get_persona_manager()
+    datasets, bindings_map = persona_manager.get_dataset_bindings(persona_id)
 
     return templates.TemplateResponse(
         request,
@@ -1697,35 +1577,22 @@ async def create_dataset_binding(
     key_value: str = Form(default=""),
 ) -> Any:
     """データセット紐付けを作成"""
-    from src.models.dataset import PersonaDatasetBinding
+    persona_manager = get_persona_manager()
 
-    db_service = service_factory.get_database_service()
+    try:
+        persona_manager.create_dataset_binding(
+            persona_id=persona_id,
+            dataset_id=dataset_id,
+            key_name=key_name,
+            key_value=key_value,
+        )
+    except PersonaManagerError as e:
+        return templates.TemplateResponse(
+            request,
+            "partials/error.html",
+            {"request": request, "error": str(e)},
+        )
 
-    binding_keys = {}
-    if key_name and key_value:
-        # カラム名の存在チェック
-        dataset = db_service.get_dataset(dataset_id)
-        if dataset:
-            valid_columns = {col.name for col in dataset.columns}
-            if key_name not in valid_columns:
-                return templates.TemplateResponse(
-                    request,
-                    "partials/error.html",
-                    {
-                        "request": request,
-                        "error": f"カラム「{key_name}」はデータセットに存在しません",
-                    },
-                )
-        binding_keys[key_name] = key_value
-
-    binding = PersonaDatasetBinding.create_new(
-        persona_id=persona_id, dataset_id=dataset_id, binding_keys=binding_keys
-    )
-
-    db_service.save_binding(binding)
-    logger.info(f"Created dataset binding: persona={persona_id}, dataset={dataset_id}")
-
-    # 成功時は一覧全体を更新（ターゲットをリダイレクト）
     response = await get_dataset_bindings(request, persona_id)
     response.headers["HX-Retarget"] = "#dataset-binding-content"
     response.headers["HX-Reswap"] = "innerHTML"
@@ -1739,9 +1606,8 @@ async def delete_dataset_binding(
     request: Request, persona_id: str, binding_id: str
 ) -> Any:
     """データセット紐付けを削除"""
-    db_service = service_factory.get_database_service()
-    db_service.delete_binding(binding_id)
-    logger.info(f"Deleted dataset binding: {binding_id}")
+    persona_manager = get_persona_manager()
+    persona_manager.delete_dataset_binding(binding_id)
 
     return await get_dataset_bindings(request, persona_id)
 

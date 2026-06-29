@@ -664,18 +664,28 @@ class TestPersonaMemories:
         response = client.get("/persona/p1/memories")
         assert response.status_code == 200  # エラーでも200でエラーメッセージ表示
 
-    @patch("web.routers.persona.service_factory")
-    def test_delete_memory_success(self, mock_sf, client):
-        mock_memory = Mock()
-        mock_memory.delete_memory.return_value = True
-        mock_sf.get_memory_service.return_value = mock_memory
+    @patch("web.routers.persona.get_persona_manager")
+    def test_delete_memory_success(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.delete_persona_memory.return_value = True
+        mock_get_mgr.return_value = mock_mgr
 
         response = client.delete("/persona/p1/memories/m1")
         assert response.status_code == 200
 
-    @patch("web.routers.persona.service_factory")
-    def test_delete_memory_disabled(self, mock_sf, client):
-        mock_sf.get_memory_service.return_value = None
+    @patch("web.routers.persona.get_persona_manager")
+    def test_delete_memory_disabled(self, mock_get_mgr, client):
+        from src.managers.persona_manager import PersonaManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.delete_persona_memory.side_effect = PersonaManagerError(
+            "長期記憶機能が無効です"
+        )
+        mock_mgr.delete_all_persona_memories.side_effect = PersonaManagerError(
+            "長期記憶機能が無効です"
+        )
+        mock_mgr.safe_get_memories.return_value = []
+        mock_get_mgr.return_value = mock_mgr
 
         response = client.delete("/persona/p1/memories/m1")
         assert response.status_code == 400

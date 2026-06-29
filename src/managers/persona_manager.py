@@ -858,3 +858,238 @@ class PersonaManager:
             return {"name": match.group(1), "content": match.group(2).strip()}
         return None
 
+    # --- メモリ削除操作 ---
+
+    def delete_persona_memory(self, persona_id: str, memory_id: str) -> bool:
+        """
+        ペルソナの特定の記憶を削除する。
+
+        Args:
+            persona_id: ペルソナID
+            memory_id: 記憶ID
+
+        Returns:
+            削除成功ならTrue
+
+        Raises:
+            PersonaManagerError: 削除に失敗した場合
+        """
+        memory_service = service_factory.get_memory_service()
+        if not memory_service:
+            raise PersonaManagerError("長期記憶機能が無効です")
+
+        try:
+            success = memory_service.delete_memory(
+                actor_id=persona_id, memory_id=memory_id
+            )
+            if success:
+                self.logger.info(f"Memory {memory_id} deleted for persona {persona_id}")
+            return success
+        except (ConnectionError, TimeoutError) as e:
+            raise PersonaManagerError("記憶サービスへの接続に失敗しました。") from e
+        except Exception as e:
+            error_msg = f"記憶の削除中にエラーが発生しました: {e}"
+            self.logger.error(error_msg)
+            raise PersonaManagerError(error_msg) from e
+
+    def delete_all_persona_memories(
+        self, persona_id: str, strategy_type: str = "summary"
+    ) -> int:
+        """
+        ペルソナの指定戦略タイプの全記憶を削除する。
+
+        Args:
+            persona_id: ペルソナID
+            strategy_type: 戦略タイプ（"summary" または "semantic"）
+
+        Returns:
+            削除件数
+
+        Raises:
+            PersonaManagerError: 削除に失敗した場合
+        """
+        memory_service = service_factory.get_memory_service()
+        if not memory_service:
+            raise PersonaManagerError("長期記憶機能が無効です")
+
+        try:
+            all_memories = memory_service.list_memories(actor_id=persona_id)
+            memories_to_delete = [
+                m
+                for m in all_memories
+                if m.metadata and m.metadata.get("strategy_type") == strategy_type
+            ]
+
+            deleted_count = 0
+            for memory in memories_to_delete:
+                try:
+                    if memory_service.delete_memory(
+                        actor_id=persona_id, memory_id=memory.id
+                    ):
+                        deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete memory {memory.id}: {e}")
+
+            self.logger.info(
+                f"Deleted {deleted_count} {strategy_type} memories for persona {persona_id}"
+            )
+            return deleted_count
+
+        except (ConnectionError, TimeoutError) as e:
+            raise PersonaManagerError("記憶サービスへの接続に失敗しました。") from e
+        except Exception as e:
+            error_msg = f"全記憶の削除中にエラーが発生しました: {e}"
+            self.logger.error(error_msg)
+            raise PersonaManagerError(error_msg) from e
+
+    def safe_get_memories(
+        self, persona_id: str, strategy_type: str = "summary"
+    ) -> list:
+        """
+        エラー時に安全に記憶リストを取得するヘルパー。
+
+        Args:
+            persona_id: ペルソナID
+            strategy_type: 戦略タイプ
+
+        Returns:
+            記憶リスト（取得失敗時は空リスト）
+        """
+        try:
+            memory_service = service_factory.get_memory_service()
+            if memory_service:
+                all_memories = memory_service.list_memories(actor_id=persona_id)
+                memories = [
+                    m
+                    for m in all_memories
+                    if m.metadata and m.metadata.get("strategy_type") == strategy_type
+                ]
+                memories.sort(key=lambda m: m.created_at, reverse=True)
+                return memories
+        except Exception as e:
+            self.logger.warning(f"Failed to retrieve memories for error recovery: {e}")
+        return []
+
+    # --- ナレッジベース紐付け操作 ---
+
+    def get_kb_binding(self, persona_id: str) -> Tuple[list, Any]:
+        """
+        ペルソナのナレッジベース紐付け情報を取得する。
+
+        Args:
+            persona_id: ペルソナID
+
+        Returns:
+            (knowledge_bases, binding) のタプル
+        """
+        knowledge_bases = self.database_service.get_all_knowledge_bases()
+        binding = self.database_service.get_kb_binding_by_persona(persona_id)
+
+        if binding:
+            kb = self.database_service.get_knowledge_base(binding.kb_id)
+            if not kb:
+                self.database_service.delete_kb_binding(binding.id)
+                binding = None
+
+        return knowledge_bases, binding
+
+    def create_kb_binding(
+        self,
+        persona_id: str,
+        kb_id: str,
+        metadata_filters: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        ナレッジベース紐付けを作成する（既存があれば上書き）。
+
+        Args:
+            persona_id: ペルソナID
+            kb_id: ナレッジベースID
+            metadata_filters: メタデータフィルター
+
+        Returns:
+            作成されたバインディング
+        """
+        from ..models.knowledge_base import PersonaKBBinding
+
+        binding = PersonaKBBinding.create_new(
+            persona_id=persona_id,
+            kb_id=kb_id,
+            metadata_filters=metadata_filters or {},
+        )
+        self.database_service.save_kb_binding(binding)
+        self.logger.info(f"Created KB binding: persona={persona_id}, kb={kb_id}")
+        return binding
+
+    def delete_kb_binding(self, binding_id: str) -> None:
+        """ナレッジベース紐付けを解除する。"""
+        self.database_service.delete_kb_binding(binding_id)
+        self.logger.info(f"Deleted KB binding: {binding_id}")
+
+    # --- データセット紐付け操作 ---
+
+    def get_dataset_bindings(self, persona_id: str) -> Tuple[list, Dict[str, Any]]:
+        """
+        ペルソナのデータセット紐付け一覧を取得する。
+
+        Args:
+            persona_id: ペルソナID
+
+        Returns:
+            (datasets, bindings_map) のタプル
+        """
+        datasets = self.database_service.get_all_datasets()
+        bindings = self.database_service.get_bindings_by_persona(persona_id)
+        bindings_map = {b.dataset_id: b for b in bindings}
+        return datasets, bindings_map
+
+    def create_dataset_binding(
+        self,
+        persona_id: str,
+        dataset_id: str,
+        key_name: str = "",
+        key_value: str = "",
+    ) -> Any:
+        """
+        データセット紐付けを作成する。
+
+        Args:
+            persona_id: ペルソナID
+            dataset_id: データセットID
+            key_name: キーカラム名
+            key_value: キー値
+
+        Returns:
+            作成されたバインディング
+
+        Raises:
+            PersonaManagerError: バリデーション失敗時
+        """
+        from ..models.dataset import PersonaDatasetBinding
+
+        binding_keys: Dict[str, str] = {}
+        if key_name and key_value:
+            dataset = self.database_service.get_dataset(dataset_id)
+            if dataset:
+                valid_columns = {col.name for col in dataset.columns}
+                if key_name not in valid_columns:
+                    raise PersonaManagerError(
+                        f"カラム「{key_name}」はデータセットに存在しません"
+                    )
+            binding_keys[key_name] = key_value
+
+        binding = PersonaDatasetBinding.create_new(
+            persona_id=persona_id,
+            dataset_id=dataset_id,
+            binding_keys=binding_keys,
+        )
+        self.database_service.save_binding(binding)
+        self.logger.info(
+            f"Created dataset binding: persona={persona_id}, dataset={dataset_id}"
+        )
+        return binding
+
+    def delete_dataset_binding(self, binding_id: str) -> None:
+        """データセット紐付けを削除する。"""
+        self.database_service.delete_binding(binding_id)
+        self.logger.info(f"Deleted dataset binding: {binding_id}")
