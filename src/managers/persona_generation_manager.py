@@ -96,11 +96,11 @@ class PersonaGenerationManager:
         custom_prompt: str | None = None,
         event_queue: Any = None,
         auto_link_behavior: bool = False,
-    ) -> tuple[list[Persona], list[dict[str, str]], list[dict[str, Any]]]:
+    ) -> tuple[list[Persona], list[dict[str, str]]]:
         """ペルソナを生成し、一時キャッシュに格納する。
 
         Returns:
-            (personas, thinking_log, candidate_datasets)
+            (personas, thinking_log)
         """
         self._validate_generation_input(
             data_type, persona_count, file_contents, data_description
@@ -141,8 +141,7 @@ class PersonaGenerationManager:
             persona.generation_context = gen_ctx
             self._personas_cache[persona.id] = persona
 
-        candidate_datasets: list[dict[str, Any]] = []
-        return personas, thinking_log, candidate_datasets
+        return personas, thinking_log
 
     def get_cached_persona(self, persona_id: str) -> Persona | None:
         """一時キャッシュからペルソナを取得する"""
@@ -182,60 +181,6 @@ class PersonaGenerationManager:
         if candidates:
             self._behavior_datasets_cache[persona_id] = candidates
         return candidates
-
-    def save_behavior_datasets(
-        self,
-        saved_persona_id: str,
-        cache_persona_id: str,
-        selected_ids: set[str],
-    ) -> int:
-        """選択された行動データセットを保存しペルソナに紐付ける。
-
-        Returns: 紐付けたデータセット数
-        """
-        from .dataset_manager import DatasetManager
-
-        cached_datasets = self._behavior_datasets_cache.pop(cache_persona_id, None)
-        if not cached_datasets:
-            logger.warning(
-                "行動データセットのキャッシュが見つかりません（期限切れの可能性）"
-            )
-            return 0
-
-        dataset_manager = DatasetManager()
-        bindings_data: list[dict[str, Any]] = []
-
-        for ds_info in cached_datasets:
-            if ds_info["temp_id"] not in selected_ids:
-                continue
-            try:
-                dataset = dataset_manager.upload_csv(
-                    file_content=ds_info["csv_bytes"],
-                    filename=f"behavior_{ds_info['temp_id']}.csv",
-                    name=ds_info["name"],
-                    description=f"{ds_info['data_type_label']}（自動取得）",
-                )
-                binding_keys: dict[str, str] = {}
-                if ds_info.get("binding_key_column") and ds_info.get(
-                    "binding_key_value"
-                ):
-                    binding_keys[ds_info["binding_key_column"]] = ds_info[
-                        "binding_key_value"
-                    ]
-                bindings_data.append(
-                    {"dataset_id": dataset.id, "binding_keys": binding_keys}
-                )
-                logger.info(f"行動データセット保存: {dataset.name} (ID: {dataset.id})")
-            except Exception as e:
-                logger.error(f"行動データセット保存エラー ({ds_info['name']}): {e}")
-
-        if bindings_data:
-            dataset_manager.set_persona_bindings(saved_persona_id, bindings_data)
-            logger.info(
-                f"ペルソナ {saved_persona_id} に {len(bindings_data)}件のデータセットを紐付け"
-            )
-
-        return len(bindings_data)
 
     # ------------------------------------------------------------------
     # 生成ワークフロー内部
@@ -524,18 +469,17 @@ class PersonaGenerationManager:
         csv_url_labels: list[str],
     ) -> list[dict[str, Any]]:
         """CSV URLリストからデータセット候補を構築する"""
-        from .dataset_manager import DatasetManager
+        from ..services.data_agent_service import DataAgentService
 
         fallback_col, fallback_val = self._extract_user_id_from_log(thinking_log)
 
-        dataset_manager = DatasetManager()
         candidates: list[dict[str, Any]] = []
         type_counter: int = 0
         label_counts: dict[str, int] = {}
 
         for idx, url in enumerate(csv_urls):
             try:
-                csv_bytes = dataset_manager.download_csv_from_url(url)
+                csv_bytes = DataAgentService.download_csv(url)
                 columns, row_count = analyze_csv_schema(csv_bytes)
                 if row_count == 0:
                     continue

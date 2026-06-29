@@ -127,7 +127,7 @@ class TestPersonaGenerateEndpoint:
     def test_generate_success(self, mock_get_gen_manager, client, sample_persona):
         """ペルソナ生成が成功することを確認（SSE）"""
         mock_manager = Mock()
-        mock_manager.generate_and_cache.return_value = ([sample_persona], [], [])
+        mock_manager.generate_and_cache.return_value = ([sample_persona], [])
         mock_get_gen_manager.return_value = mock_manager
 
         file_content = (
@@ -210,7 +210,6 @@ class TestPersonaGenerateEndpoint:
         mock_manager.generate_and_cache.return_value = (
             [sample_persona, sample_persona_2],
             [{"type": "thinking", "content": "分析中..."}],
-            [],
         )
         mock_get_gen_manager.return_value = mock_manager
 

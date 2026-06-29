@@ -157,7 +157,7 @@ def _generate_personas_sync(
     persona_count: int,
     data_description: str | None,
     custom_prompt: str | None,
-) -> tuple[list, list[dict[str, str]], list[dict[str, Any]]]:
+) -> tuple[list, list[dict[str, str]]]:
     """同期的な統一ペルソナ生成処理（スレッドプールで実行）"""
     gen_manager = get_persona_generation_manager()
     return gen_manager.generate_and_cache(
@@ -182,19 +182,10 @@ async def generate_persona(
 ) -> Any:
     """統一ペルソナ生成（SSEストリーミング）"""
 
-    # 入力検証
-    if persona_count < 1 or persona_count > 10:
-        return _sse_error("ペルソナ数は1-10の範囲で指定してください")
+    is_auto_link = data_type == "dwh" and auto_link_behavior == "true"
 
     # DWH（データ分析エージェント連携）の場合
     if data_type == "dwh":
-        if not analysis_angle or not analysis_angle.strip():
-            return _sse_error("分析の切り口を入力してください")
-
-        is_auto_link = data_type == "dwh" and auto_link_behavior == "true"
-        if is_auto_link:
-            persona_count = 1
-
         logger.info(
             f"DWH ペルソナ生成開始(SSE) - angle={analysis_angle!r}, count={persona_count}, auto_link={is_auto_link}"
         )
@@ -203,9 +194,7 @@ async def generate_persona(
 
         event_queue: queue_mod.Queue = queue_mod.Queue()
 
-        def _run_dwh_generation() -> tuple[
-            list, list[dict[str, str]], list[dict[str, Any]]
-        ]:
+        def _run_dwh_generation() -> tuple[list, list[dict[str, str]]]:
             gen_manager = get_persona_generation_manager()
             return gen_manager.generate_and_cache(
                 file_contents=[],
@@ -301,7 +290,7 @@ async def generate_persona(
                     break
 
             try:
-                generated_personas, thinking_log, _ = future.result()
+                generated_personas, thinking_log = future.result()
                 logger.info(f"{len(generated_personas)}個のDWHペルソナ生成成功")
 
                 # 行動データ自動紐付け: csv_urlイベントから候補データセットを生成
@@ -385,7 +374,7 @@ async def generate_persona(
             yield _sse_event("keepalive", "")
 
         try:
-            generated_personas, thinking_log, _ = future.result()
+            generated_personas, thinking_log = future.result()
 
             logger.info(f"{len(generated_personas)}個のペルソナ生成成功")
 
@@ -498,12 +487,43 @@ async def save_persona(
 
         persona_manager.save_persona(persona)
 
-        # 行動データセットの保存・紐付け
+        # 行動データセットの保存・紐付け（Router が2つのManagerを調整）
         if selected_behavior_datasets:
             selected_ids = {
                 t.strip() for t in selected_behavior_datasets.split(",") if t.strip()
             }
-            gen_manager.save_behavior_datasets(persona.id, persona_id, selected_ids)
+            cached_datasets = gen_manager.pop_cached_behavior_datasets(persona_id)
+            if cached_datasets:
+                from src.managers.dataset_manager import DatasetManager
+
+                dataset_manager = DatasetManager()
+                bindings_data: list[dict[str, Any]] = []
+                for ds_info in cached_datasets:
+                    if ds_info["temp_id"] not in selected_ids:
+                        continue
+                    try:
+                        dataset = dataset_manager.upload_csv(
+                            file_content=ds_info["csv_bytes"],
+                            filename=f"behavior_{ds_info['temp_id']}.csv",
+                            name=ds_info["name"],
+                            description=f"{ds_info['data_type_label']}（自動取得）",
+                        )
+                        binding_keys: dict[str, str] = {}
+                        if ds_info.get("binding_key_column") and ds_info.get(
+                            "binding_key_value"
+                        ):
+                            binding_keys[ds_info["binding_key_column"]] = ds_info[
+                                "binding_key_value"
+                            ]
+                        bindings_data.append(
+                            {"dataset_id": dataset.id, "binding_keys": binding_keys}
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"行動データセット保存エラー ({ds_info['name']}): {e}"
+                        )
+                if bindings_data:
+                    dataset_manager.set_persona_bindings(persona.id, bindings_data)
 
         return templates.TemplateResponse(
             request,

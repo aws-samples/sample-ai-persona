@@ -202,14 +202,12 @@ class TestDetectBindingKey:
 class TestBuildBehaviorDatasetCandidates:
     """_build_behavior_dataset_candidates のテスト"""
 
-    @patch("src.managers.dataset_manager.DatasetManager")
-    def test_builds_candidates_from_csv_urls(self, mock_dm_cls):
+    @patch("src.services.data_agent_service.DataAgentService.download_csv")
+    def test_builds_candidates_from_csv_urls(self, mock_download):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
         csv_content = b"user_id,purchase_date,amount\nU001,2024-01-01,5000\nU001,2024-01-15,3000\n"
-
-        mock_dm = mock_dm_cls.return_value
-        mock_dm.download_csv_from_url.return_value = csv_content
+        mock_download.return_value = csv_content
 
         mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
@@ -225,12 +223,11 @@ class TestBuildBehaviorDatasetCandidates:
         assert candidates[0]["binding_key_column"] == "user_id"
         assert candidates[0]["binding_key_value"] == "U001"
 
-    @patch("src.managers.dataset_manager.DatasetManager")
-    def test_skips_empty_csv(self, mock_dm_cls):
+    @patch("src.services.data_agent_service.DataAgentService.download_csv")
+    def test_skips_empty_csv(self, mock_download):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        mock_dm = mock_dm_cls.return_value
-        mock_dm.download_csv_from_url.return_value = b"col1\n"
+        mock_download.return_value = b"col1\n"
 
         mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
@@ -242,12 +239,11 @@ class TestBuildBehaviorDatasetCandidates:
 
         assert len(candidates) == 0
 
-    @patch("src.managers.dataset_manager.DatasetManager")
-    def test_handles_download_error_gracefully(self, mock_dm_cls):
+    @patch("src.services.data_agent_service.DataAgentService.download_csv")
+    def test_handles_download_error_gracefully(self, mock_download):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        mock_dm = mock_dm_cls.return_value
-        mock_dm.download_csv_from_url.side_effect = Exception("Download failed")
+        mock_download.side_effect = Exception("Download failed")
 
         mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
