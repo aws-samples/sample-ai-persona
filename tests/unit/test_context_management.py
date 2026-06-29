@@ -331,29 +331,14 @@ class TestAgentDiscussionContextManagement:
 
         # ファシリテータ
         mock_facilitator = Mock(spec=FacilitatorAgent)
-        # should_continue: True for each round, then False
-        mock_facilitator.should_continue.side_effect = [True] * rounds + [False]
         mock_facilitator.start_discussion.return_value = "議論を開始します"
-        # select_next_speaker: each round has 2 speakers + None
-        speaker_sequence = []
-        for _ in range(rounds):
-            speaker_sequence.extend([mock_agent_1, mock_agent_2, None])
-        mock_facilitator.select_next_speaker.side_effect = speaker_sequence
-        mock_facilitator.summarize_round.return_value = "ラウンドの要約"
-        mock_facilitator.summarize_round_streaming.side_effect = lambda *a, **kw: iter(
+        mock_facilitator.invoke.return_value = "ラウンドの要約"
+        mock_facilitator.invoke_streaming.side_effect = lambda *a, **kw: iter(
             ["ラウンド", "の", "要約"]
         )
-        mock_facilitator.increment_round.return_value = None
-        mock_facilitator.current_round = 0
         mock_facilitator.rounds = rounds
         mock_facilitator.additional_instructions = ""
         mock_facilitator.clear_conversation_history = Mock()
-
-        # increment_round で current_round を更新
-        def _increment():
-            mock_facilitator.current_round += 1
-
-        mock_facilitator.increment_round.side_effect = _increment
 
         return manager, persona_agents, mock_facilitator
 
@@ -393,7 +378,7 @@ class TestAgentDiscussionContextManagement:
         facilitator.clear_conversation_history.assert_not_called()
 
     def test_round_summaries_passed_to_prompt(self, sample_persona, sample_persona_2):
-        """ラウンド要約がプロンプト生成に渡されること"""
+        """ラウンド要約がプロンプト生成に使用されること（ラウンド2のプロンプトに要約が含まれる）"""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=2
         )
@@ -405,14 +390,11 @@ class TestAgentDiscussionContextManagement:
             facilitator=facilitator,
         )
 
-        # ラウンド2のcreate_prompt_for_persona呼び出しを確認
-        calls = facilitator.create_prompt_for_persona.call_args_list
-        # ラウンド2の呼び出し（3番目以降）にround_summariesが渡されていること
-        round2_calls = calls[2:]  # ラウンド1: 2回、ラウンド2: 2回
-        for call in round2_calls:
-            kwargs = call[1] if call[1] else {}
-            assert "round_summaries" in kwargs
-            assert kwargs["round_summaries"] == ["ラウンドの要約"]
+        # ラウンド2でrespond()に渡されたプロンプトにラウンド1の要約が含まれること
+        round2_respond_calls = persona_agents[0].respond.call_args_list[1:]
+        for call in round2_respond_calls:
+            prompt = call[0][0]
+            assert "ラウンドの要約" in prompt
 
     def test_respond_called_with_none_context(self, sample_persona, sample_persona_2):
         """respond()がcontext=Noneで呼ばれること（二重コンテキスト防止）"""

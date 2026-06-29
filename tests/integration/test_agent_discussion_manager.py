@@ -57,27 +57,14 @@ def mock_facilitator():
     """Create mock facilitator agent"""
     facilitator = Mock(spec=FacilitatorAgent)
     facilitator.rounds = 2
-    facilitator.current_round = 0
     facilitator.additional_instructions = "追加の指示"
 
-    # Mock methods - using current FacilitatorAgent interface
     facilitator.start_discussion.return_value = "議論を開始します"
-    facilitator.should_continue.side_effect = [True, True, False]  # 2 rounds
-    facilitator.select_next_speaker.side_effect = lambda agents, spoken: (
-        agents[0]
-        if agents[0].get_persona_id() not in spoken
-        else agents[1]
-        if len(agents) > 1 and agents[1].get_persona_id() not in spoken
-        else None
+    facilitator.invoke.return_value = "ラウンドの要約"
+    facilitator.invoke_streaming.side_effect = lambda prompt: iter(
+        ["ラウンド", "の", "要約"]
     )
-    facilitator.summarize_round.return_value = "ラウンドの要約"
-    facilitator.create_prompt_for_persona.return_value = "発言を促すプロンプト"
-
-    # Mock increment_round to update current_round
-    def increment_round():
-        facilitator.current_round += 1
-
-    facilitator.increment_round.side_effect = increment_round
+    facilitator.clear_conversation_history = Mock()
 
     return facilitator
 
@@ -116,7 +103,7 @@ class TestAgentDiscussionManager:
 
         # Verify facilitator was called
         mock_facilitator.start_discussion.assert_called_once()
-        assert mock_facilitator.increment_round.call_count == 2
+        assert mock_facilitator.invoke.call_count == 2
 
         # Verify persona agents responded
         for agent in mock_persona_agents:
@@ -250,7 +237,7 @@ class TestAgentDiscussionManager:
         )
 
         # Verify round progression
-        assert mock_facilitator.increment_round.call_count == 2
+        assert mock_facilitator.invoke.call_count == 2
 
         # Verify messages have correct round numbers
         round_numbers = [

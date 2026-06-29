@@ -420,11 +420,9 @@ class AgentDiscussionManager:
             all_messages: list[Any] = []
             round_summaries: list[str] = []
 
-            while facilitator.should_continue():
-                facilitator.increment_round()
-                current_round = facilitator.current_round
-
-                self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+            total_rounds = facilitator.rounds
+            for current_round in range(1, total_rounds + 1):
+                self.logger.info(f"Starting round {current_round}/{total_rounds}")
 
                 # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
                 if current_round > 1:
@@ -443,20 +441,17 @@ class AgentDiscussionManager:
 
                 # Each persona speaks once per round
                 for _ in range(len(persona_agents)):
-                    # Select next speaker
-                    speaker = facilitator.select_next_speaker(
-                        persona_agents, spoken_in_round
-                    )
+                    speaker = self._select_next_speaker(persona_agents, spoken_in_round)
 
                     if speaker is None:
                         break
 
-                    # Create prompt with round summaries + recent messages
-                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
-                    prompt = facilitator.create_prompt_for_persona(
+                    prompt = self._build_persona_prompt(
                         speaker,
                         topic,
                         all_messages[-10:],
+                        current_round,
+                        total_rounds,
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1]
                         if round_summaries
@@ -495,14 +490,16 @@ class AgentDiscussionManager:
                 # ラウンド終了後にファシリテータがラウンド全体を要約
                 if round_messages:
                     try:
-                        round_summary = facilitator.summarize_round(
+                        summary_prompt = self._build_summary_prompt(
                             current_round,
                             round_messages,
                             topic,
+                            total_rounds,
                             previous_summaries=round_summaries
                             if round_summaries
                             else None,
                         )
+                        round_summary = facilitator.invoke(summary_prompt)
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
                         round_summaries.append(round_summary)
@@ -870,11 +867,9 @@ class AgentDiscussionManager:
             all_messages: list[Any] = []
             round_summaries: list[str] = []
 
-            while facilitator.should_continue():
-                facilitator.increment_round()
-                current_round = facilitator.current_round
-
-                self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+            total_rounds = facilitator.rounds
+            for current_round in range(1, total_rounds + 1):
+                self.logger.info(f"Starting round {current_round}/{total_rounds}")
 
                 # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
                 if current_round > 1:
@@ -893,20 +888,17 @@ class AgentDiscussionManager:
 
                 # Each persona speaks once per round
                 for _ in range(len(persona_agents)):
-                    # Select next speaker
-                    speaker = facilitator.select_next_speaker(
-                        persona_agents, spoken_in_round
-                    )
+                    speaker = self._select_next_speaker(persona_agents, spoken_in_round)
 
                     if speaker is None:
                         break
 
-                    # Create prompt with round summaries + recent messages
-                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
-                    prompt = facilitator.create_prompt_for_persona(
+                    prompt = self._build_persona_prompt(
                         speaker,
                         topic,
                         all_messages[-10:],
+                        current_round,
+                        total_rounds,
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1]
                         if round_summaries
@@ -980,15 +972,17 @@ class AgentDiscussionManager:
                         )
 
                         # Stream facilitator summary tokens
-                        round_summary = ""
-                        for token in facilitator.summarize_round_streaming(
+                        summary_prompt = self._build_summary_prompt(
                             current_round,
                             round_messages,
                             topic,
+                            total_rounds,
                             previous_summaries=round_summaries
                             if round_summaries
                             else None,
-                        ):
+                        )
+                        round_summary = ""
+                        for token in facilitator.invoke_streaming(summary_prompt):
                             round_summary += token
                             yield (
                                 "message_delta",
@@ -1110,3 +1104,195 @@ class AgentDiscussionManager:
 
         except Exception as e:
             self.logger.error(f"エージェントリソース解放中に予期しないエラー: {e}")
+
+    # =========================================================================
+    # ワークフロー制御メソッド（agent_service.py FacilitatorAgent から移動）
+    # =========================================================================
+
+    def _select_next_speaker(
+        self,
+        persona_agents: List[PersonaAgent],
+        spoken_in_round: List[str],
+    ) -> Optional[PersonaAgent]:
+        """
+        次の発言者をランダムに選択する。
+
+        Args:
+            persona_agents: 参加ペルソナエージェントリスト
+            spoken_in_round: 現在のラウンドで既に発言したペルソナIDリスト
+
+        Returns:
+            選択されたペルソナエージェント（全員発言済みの場合はNone）
+        """
+        import random
+
+        available_agents = [
+            agent
+            for agent in persona_agents
+            if agent.get_persona_id() not in spoken_in_round
+        ]
+
+        if not available_agents:
+            return None
+
+        selected = random.choice(available_agents)
+        self.logger.info(f"次の発言者を選択: {selected.get_persona_name()}")
+        return selected
+
+    def _build_persona_prompt(
+        self,
+        persona_agent: PersonaAgent,
+        topic: str,
+        context: List[Message],
+        current_round: int,
+        total_rounds: int,
+        round_summaries: Optional[List[str]] = None,
+        latest_facilitator_message: Optional[str] = None,
+    ) -> str:
+        """
+        ペルソナエージェントへの発言促進プロンプトを生成する。
+
+        Args:
+            persona_agent: 対象ペルソナエージェント
+            topic: 議論テーマ
+            context: 直近の発言メッセージ
+            current_round: 現在のラウンド番号
+            total_rounds: 総ラウンド数
+            round_summaries: 各ラウンドの要約リスト
+            latest_facilitator_message: ファシリテータの最新要約
+        """
+        persona_id = persona_agent.get_persona_id()
+        is_first_round = current_round == 1
+
+        if not context and not round_summaries:
+            return (
+                f"議論テーマ「{topic}」について話し合います。\n\n"
+                f"まず、あなたの日常生活の中でこのテーマに関連する具体的な場面を一つ挙げて、"
+                f"そこで感じたこと・困ったこと・考えたことを率直に話してください。"
+            )
+
+        parts = [f"「{topic}」についての議論を続けてください。\n"]
+
+        if round_summaries:
+            past_summaries = (
+                round_summaries[:-1] if latest_facilitator_message else round_summaries
+            )
+            if past_summaries:
+                parts.append("## これまでの議論の要約")
+                for i, summary in enumerate(past_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+        if latest_facilitator_message:
+            parts.append("## ファシリテータからの問いかけ")
+            parts.append(latest_facilitator_message)
+            parts.append("")
+
+        if context:
+            own_previous = [msg for msg in context if msg.persona_id == persona_id]
+            if own_previous:
+                parts.append("## あなたの前回の発言")
+                parts.append(own_previous[-1].content)
+                parts.append("")
+
+        if context:
+            recent_others = [
+                msg
+                for msg in context
+                if msg.persona_id != "facilitator" and msg.persona_id != persona_id
+            ][-3:]
+            if recent_others:
+                parts.append("## 直近の他の参加者の発言")
+                for msg in recent_others:
+                    parts.append(f"- {msg.persona_name}: {msg.content}")
+                parts.append("")
+
+        if is_first_round:
+            parts.append(
+                "このラウンドでは、まずあなた自身の体験を共有してください。"
+                "このテーマに関連する日常の具体的な場面を挙げて、そこで感じたこと・困ったことを話し、"
+                "他の参加者の体験も踏まえて意見を述べてください。"
+            )
+        elif current_round < total_rounds:
+            parts.append(
+                "議論が深まってきました。他の参加者の意見を踏まえて、あなたの考えに変化はありますか？"
+                "新たに気づいたことや、まだ議論されていない重要な観点があれば提起してください。"
+            )
+        else:
+            parts.append(
+                "最終ラウンドです。これまでの議論を踏まえて、あなたが最も重要だと感じたポイントと、"
+                "具体的にどうすべきかについて、あなたの立場から結論を述べてください。"
+            )
+
+        if latest_facilitator_message:
+            parts.append("\nファシリテータの問いかけの観点にも着目してください。")
+
+        return "\n".join(parts)
+
+    def _build_summary_prompt(
+        self,
+        round_number: int,
+        round_messages: List[Message],
+        topic: str,
+        total_rounds: int,
+        previous_summaries: Optional[List[str]] = None,
+    ) -> str:
+        """
+        ラウンド要約用プロンプトを構築する。
+
+        Args:
+            round_number: ラウンド番号
+            round_messages: そのラウンドのメッセージリスト
+            topic: 議論トピック
+            total_rounds: 総ラウンド数
+            previous_summaries: 過去ラウンドの要約リスト
+        """
+        statements = [
+            msg
+            for msg in round_messages
+            if msg.message_type == "statement" and msg.persona_id != "facilitator"
+        ]
+
+        if not statements:
+            return f"ラウンド{round_number}では発言がありませんでした。"
+
+        statements_text = "\n".join(
+            [f"- {msg.persona_name}: {msg.content}" for msg in statements]
+        )
+
+        parts = [
+            f"議論テーマ「{topic}」のラウンド{round_number}/{total_rounds}が完了しました。\n"
+        ]
+
+        if previous_summaries:
+            parts.append("## これまでの議論の流れ")
+            for i, summary in enumerate(previous_summaries, 1):
+                parts.append(f"ラウンド{i}: {summary}")
+            parts.append("")
+
+        parts.append(f"## ラウンド{round_number}の発言")
+        parts.append(statements_text)
+        parts.append("")
+
+        if round_number < total_rounds:
+            parts.append(
+                "以下の観点で簡潔に要約してください:\n"
+                "- 各参加者の主要な意見や立場\n"
+                "- 参加者間の共通点や対立点\n"
+                "- まだ掘り下げられていない重要な観点\n"
+                "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                f"残り{total_rounds - round_number}ラウンドです。"
+            )
+            if total_rounds - round_number <= 2:
+                parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
+            parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+        else:
+            parts.append(
+                "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
+                "- 議論を通じて明らかになった主要な結論\n"
+                "- 参加者間で合意に至った点と残った対立点\n"
+                "- 議論テーマの目的に対する具体的な示唆\n"
+                "5-7文で最終まとめを作成してください。"
+            )
+
+        return "\n".join(parts)

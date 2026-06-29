@@ -536,19 +536,6 @@ class AIService:
         Raises:
             AIServiceError: 議論進行エラー
         """
-        if not personas or len(personas) < 2:
-            raise AIServiceError("議論には最低2つのペルソナが必要です")
-
-        if len(personas) > 5:
-            raise AIServiceError("議論参加ペルソナは最大5つまでです")
-
-        if not topic or not topic.strip():
-            raise AIServiceError("議論トピックが空です")
-
-        # トピックの長さチェック
-        if len(topic.strip()) > 200:
-            raise AIServiceError("議論トピックは200文字以内で入力してください")
-
         self.logger.info(
             f"議論を開始します (参加者: {len(personas)}人, トピック: {topic[:50]}..., ドキュメント: {len(documents) if documents else 0}件)"
         )
@@ -639,18 +626,6 @@ class AIService:
         Raises:
             AIServiceError: 議論進行エラー
         """
-        if not personas or len(personas) < 2:
-            raise AIServiceError("議論には最低2つのペルソナが必要です")
-
-        if len(personas) > 5:
-            raise AIServiceError("議論参加ペルソナは最大5つまでです")
-
-        if not topic or not topic.strip():
-            raise AIServiceError("議論トピックが空です")
-
-        if len(topic.strip()) > 200:
-            raise AIServiceError("議論トピックは200文字以内で入力してください")
-
         self.logger.info(f"ストリーミング議論を開始します (参加者: {len(personas)}人)")
 
         prompt = self._create_discussion_prompt(personas, topic)
@@ -815,21 +790,11 @@ class AIService:
         Raises:
             AIServiceError: インサイト抽出エラー
         """
-        if not discussion_messages:
-            raise AIServiceError("議論メッセージが空です")
-
-        if len(discussion_messages) < 2:
-            raise AIServiceError("インサイト抽出には最低2つのメッセージが必要です")
-
-        # メッセージの総文字数チェック
-        total_chars = sum(len(msg.content) for msg in discussion_messages)
-        if total_chars < 50:
-            raise AIServiceError("議論内容が短すぎます。より詳細な議論が必要です")
-
         # カテゴリーが指定されていない場合はデフォルトを使用
         if categories is None:
             categories = config.get_default_insight_categories()
 
+        total_chars = sum(len(msg.content) for msg in discussion_messages)
         self.logger.info(
             f"インサイト抽出を開始します (メッセージ数: {len(discussion_messages)}, 総文字数: {total_chars}, カテゴリー数: {len(categories)})"
         )

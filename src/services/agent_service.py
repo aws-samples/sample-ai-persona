@@ -760,6 +760,86 @@ class FacilitatorAgent:
             self.logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
             return str(result)
 
+    def invoke(self, prompt: str) -> str:
+        """
+        プロンプトを渡してテキスト応答を取得する。
+
+        Args:
+            prompt: 入力プロンプト
+
+        Returns:
+            生成されたテキスト応答
+
+        Raises:
+            AgentCommunicationError: エージェント通信エラー
+        """
+        try:
+            result = self.agent(prompt)
+            return self._extract_text_from_result(result, self.agent)
+        except Exception as e:
+            error_msg = f"ファシリテータ呼び出しに失敗: {e}"
+            self.logger.error(error_msg)
+            raise AgentCommunicationError(error_msg)
+
+    def invoke_streaming(self, prompt: str) -> Generator[str, None, None]:
+        """
+        プロンプトを渡してトークンストリーミング応答を取得する。
+
+        Args:
+            prompt: 入力プロンプト
+
+        Yields:
+            トークン文字列
+
+        Raises:
+            AgentCommunicationError: エージェント通信エラー
+        """
+        try:
+            token_queue: queue.Queue[Optional[str]] = queue.Queue()
+
+            class _TokenCapture:
+                def __call__(self, **kwargs: Any) -> None:
+                    data = kwargs.get("data", "")
+                    if data:
+                        token_queue.put(data)
+
+            original_handler = self.agent.callback_handler
+            self.agent.callback_handler = _TokenCapture()
+
+            agent_error: Optional[Exception] = None
+
+            def _run_agent() -> None:
+                nonlocal agent_error
+                try:
+                    self.agent(prompt)
+                except Exception as e:
+                    agent_error = e
+                finally:
+                    token_queue.put(None)
+
+            thread = threading.Thread(target=_run_agent, daemon=True)
+            thread.start()
+
+            try:
+                while True:
+                    token = token_queue.get()
+                    if token is None:
+                        break
+                    yield token
+            finally:
+                thread.join()
+                self.agent.callback_handler = original_handler
+
+            if agent_error:
+                raise agent_error
+
+        except AgentCommunicationError:
+            raise
+        except Exception as e:
+            error_msg = f"ファシリテータストリーミング呼び出しに失敗: {e}"
+            self.logger.error(error_msg)
+            raise AgentCommunicationError(error_msg)
+
     def dispose(self) -> None:
         """
         ファシリテータエージェントリソースを解放
