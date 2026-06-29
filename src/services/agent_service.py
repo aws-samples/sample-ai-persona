@@ -42,6 +42,65 @@ class AgentCommunicationError(AgentServiceError):
     pass
 
 
+def _clear_agent_history(agent: Any, label: str) -> None:
+    """Strands Agent内部の会話履歴をクリアする共通ヘルパー。"""
+    _logger = logging.getLogger(__name__)
+    if agent and hasattr(agent, "messages"):
+        agent.messages.clear()
+        _logger.info(f"{label} の会話履歴をクリアしました")
+
+
+def _dispose_agent(agent_ref: Any, label: str) -> None:
+    """Strands Agentリソースを解放する共通ヘルパー。解放後 agent_ref は呼び出し側で None にすること。"""
+    _logger = logging.getLogger(__name__)
+    try:
+        if hasattr(agent_ref, "dispose"):
+            agent_ref.dispose()
+        elif hasattr(agent_ref, "close"):
+            agent_ref.close()
+        _logger.info(f"{label} のリソースを解放しました")
+    except Exception as e:
+        _logger.warning(f"{label} のリソース解放中にエラー: {e}")
+
+
+def _extract_text_from_agent_result(result: Any, agent: Any = None) -> str:
+    """
+    AgentResultからテキストコンテンツを抽出する共通ヘルパー。
+
+    Strands Agent SDKの結果オブジェクトから実際のテキスト応答を取得する。
+    ツール呼び出しがある場合 result.message は空になるため、
+    エージェントの会話履歴から最新のアシスタントメッセージを取得する。
+    """
+    _logger = logging.getLogger(__name__)
+    try:
+        text_parts = []
+
+        if hasattr(result, "message") and result.message:
+            content = result.message.get("content", [])
+            for block in content:
+                if isinstance(block, dict) and "text" in block:
+                    text_parts.append(block["text"])
+
+        if not text_parts and agent and hasattr(agent, "messages"):
+            for msg in reversed(agent.messages):
+                if msg.get("role") == "assistant":
+                    msg_content = msg.get("content", [])
+                    for block in msg_content:
+                        if isinstance(block, dict) and "text" in block:
+                            text_parts.append(block["text"])
+                    if text_parts:
+                        break
+
+        if text_parts:
+            return "\n".join(text_parts)
+
+        _logger.warning("テキストブロックが見つかりません、str()でフォールバック")
+        return str(result)
+    except Exception as e:
+        _logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
+        return str(result)
+
+
 class PersonaAgent:
     """
     個別のペルソナを表現するAIエージェント
@@ -203,61 +262,12 @@ class PersonaAgent:
             raise AgentCommunicationError(error_msg)
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
-        """
-        AgentResultからテキストコンテンツを抽出
-
-        Strands Agent SDKの結果オブジェクトから、実際のテキスト応答を取得する。
-        ツール呼び出しがある場合、result.messageは空になるため、
-        エージェントの会話履歴から最新のアシスタントメッセージを取得する。
-
-        Args:
-            result: Strands Agent SDKのAgentResult
-            agent: Strands Agentインスタンス（会話履歴アクセス用）
-
-        Returns:
-            str: 抽出されたテキストコンテンツ
-        """
-        try:
-            text_parts = []
-
-            # 方法1: result.message["content"]から直接テキストを抽出
-            if hasattr(result, "message") and result.message:
-                content = result.message.get("content", [])
-                for block in content:
-                    if isinstance(block, dict) and "text" in block:
-                        text_parts.append(block["text"])
-
-            # 方法2: result.messageが空の場合、エージェントの会話履歴から取得
-            # ツール使用時はresult.messageが空になるため、agent.messagesを確認
-            if not text_parts and agent and hasattr(agent, "messages"):
-                # 最新のアシスタントメッセージからテキストを抽出
-                for msg in reversed(agent.messages):
-                    if msg.get("role") == "assistant":
-                        msg_content = msg.get("content", [])
-                        for block in msg_content:
-                            if isinstance(block, dict) and "text" in block:
-                                text_parts.append(block["text"])
-                        # 最新のアシスタントメッセージのみ処理
-                        if text_parts:
-                            break
-
-            if text_parts:
-                return "\n".join(text_parts)
-
-            # フォールバック: str()で変換
-            self.logger.warning(
-                "テキストブロックが見つかりません、str()でフォールバック"
-            )
-            return str(result)
-        except Exception as e:
-            self.logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
-            return str(result)
+        """AgentResultからテキストコンテンツを抽出"""
+        return _extract_text_from_agent_result(result, agent)
 
     def clear_conversation_history(self) -> None:
         """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
-        if self.agent and hasattr(self.agent, "messages"):
-            self.agent.messages.clear()
-            self.logger.info(f"ペルソナ {self.persona.name} の会話履歴をクリアしました")
+        _clear_agent_history(self.agent, f"ペルソナ {self.persona.name}")
 
     def get_persona_id(self) -> str:
         """ペルソナIDを取得"""
@@ -268,27 +278,9 @@ class PersonaAgent:
         return self.persona.name
 
     def dispose(self) -> None:
-        """
-        エージェントリソースを解放
-        メモリリークを防ぐためにエージェント使用後に呼び出す
-        """
-        try:
-            # Strands Agentのリソース解放（もしdisposeメソッドがあれば）
-            if hasattr(self.agent, "dispose"):
-                self.agent.dispose()
-            elif hasattr(self.agent, "close"):
-                self.agent.close()
-
-            # 参照をクリア
-            self.agent = None
-            self.logger.info(
-                f"ペルソナエージェント {self.persona.name} のリソースを解放しました"
-            )
-
-        except Exception as e:
-            self.logger.warning(
-                f"ペルソナエージェント {self.persona.name} のリソース解放中にエラー: {e}"
-            )
+        """エージェントリソースを解放"""
+        _dispose_agent(self.agent, f"ペルソナエージェント {self.persona.name}")
+        self.agent = None
 
 
 class FacilitatorAgent:
@@ -334,59 +326,11 @@ class FacilitatorAgent:
 
     def clear_conversation_history(self) -> None:
         """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
-        if self.agent and hasattr(self.agent, "messages"):
-            self.agent.messages.clear()
-            self.logger.info("ファシリテータの会話履歴をクリアしました")
+        _clear_agent_history(self.agent, "ファシリテータ")
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
-        """
-        AgentResultからテキストコンテンツを抽出
-
-        Strands Agent SDKの結果オブジェクトから、実際のテキスト応答を取得する。
-        ツール呼び出しがある場合、result.messageは空になるため、
-        エージェントの会話履歴から最新のアシスタントメッセージを取得する。
-
-        Args:
-            result: Strands Agent SDKのAgentResult
-            agent: Strands Agentインスタンス（会話履歴アクセス用）
-
-        Returns:
-            str: 抽出されたテキストコンテンツ
-        """
-        try:
-            text_parts = []
-
-            # 方法1: result.message["content"]から直接テキストを抽出
-            if hasattr(result, "message") and result.message:
-                content = result.message.get("content", [])
-                for block in content:
-                    if isinstance(block, dict) and "text" in block:
-                        text_parts.append(block["text"])
-
-            # 方法2: result.messageが空の場合、エージェントの会話履歴から取得
-            if not text_parts and agent and hasattr(agent, "messages"):
-                # 最新のアシスタントメッセージからテキストを抽出
-                for msg in reversed(agent.messages):
-                    if msg.get("role") == "assistant":
-                        msg_content = msg.get("content", [])
-                        for block in msg_content:
-                            if isinstance(block, dict) and "text" in block:
-                                text_parts.append(block["text"])
-                        # 最新のアシスタントメッセージのみ処理
-                        if text_parts:
-                            break
-
-            if text_parts:
-                return "\n".join(text_parts)
-
-            # フォールバック: str()で変換
-            self.logger.warning(
-                "テキストブロックが見つかりません、str()でフォールバック"
-            )
-            return str(result)
-        except Exception as e:
-            self.logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
-            return str(result)
+        """AgentResultからテキストコンテンツを抽出"""
+        return _extract_text_from_agent_result(result, agent)
 
     def invoke(self, prompt: str) -> str:
         """
@@ -473,25 +417,9 @@ class FacilitatorAgent:
             raise AgentCommunicationError(error_msg)
 
     def dispose(self) -> None:
-        """
-        ファシリテータエージェントリソースを解放
-        メモリリークを防ぐためにエージェント使用後に呼び出す
-        """
-        try:
-            # Strands Agentのリソース解放（もしdisposeメソッドがあれば）
-            if hasattr(self.agent, "dispose"):
-                self.agent.dispose()
-            elif hasattr(self.agent, "close"):
-                self.agent.close()
-
-            # 参照をクリア
-            self.agent = None
-            self.logger.info("ファシリテータエージェントのリソースを解放しました")
-
-        except Exception as e:
-            self.logger.warning(
-                f"ファシリテータエージェントのリソース解放中にエラー: {e}"
-            )
+        """ファシリテータエージェントリソースを解放"""
+        _dispose_agent(self.agent, "ファシリテータエージェント")
+        self.agent = None
 
 
 class AgentService:
@@ -1000,6 +928,20 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
         return base_prompt + dataset_section
 
     # --- Flexible Persona Generation ---
+    #
+    # ADR: ペルソナ生成エージェントをクラス化しない理由
+    #
+    # 決定: ペルソナ生成は PersonaAgent/FacilitatorAgent のようなラッパークラスを作らず、
+    #       AgentService のメソッドとして実装する。
+    #
+    # 背景: PersonaAgent/FacilitatorAgent がクラスになっているのは、議論ループ中に
+    #       繰り返し respond()/invoke() を呼び、ドキュメント設定・会話履歴管理・
+    #       dispose によるリソース解放が必要なため。
+    #
+    # 根拠: ペルソナ生成は agent(prompt) → agent.structured_output() の2回呼び出しで
+    #       完結する。履歴管理もドキュメント添付も不要で、ラッパーの恩恵がない。
+    #       クラス化すると呼び出し側に不要な dispose() 義務が生じるだけで複雑さが増す。
+    #
 
     @staticmethod
     def _extract_thinking_log(agent: Any) -> list[dict[str, str]]:
