@@ -211,7 +211,7 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
 async def preview_persona_prompt(request: Request) -> Any:
     """マッピング設定に基づくシステムプロンプトのプレビューを返す。"""
     form = await request.form()
-    temp_key = form.get("temp_key", "")
+    temp_key = str(form.get("temp_key", ""))
 
     # マッピング情報を収集
     column_mapping = {}

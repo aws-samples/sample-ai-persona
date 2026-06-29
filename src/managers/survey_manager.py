@@ -1244,7 +1244,7 @@ class SurveyManager:
         """CSVファイルのカラムを解析する。"""
         return self.survey_service.parse_csv_columns(content)
 
-    def get_standard_columns(self) -> Dict[str, str]:
+    def get_standard_columns(self) -> Dict[str, Dict[str, Any]]:
         """標準カラム定義を取得する。"""
         return self.survey_service.STANDARD_COLUMNS
 
@@ -1265,14 +1265,14 @@ class SurveyManager:
         csv_bytes: bytes,
         filename: str,
         column_mapping: Dict[str, str],
-        extra_columns: List[str],
+        extra_columns: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """カスタムデータセットをアップロードする。"""
         return self.survey_service.upload_custom_dataset(
             csv_bytes, filename, column_mapping, extra_columns
         )
 
-    def load_dataset_metadata(self, name: str) -> Dict[str, Any]:
+    def load_dataset_metadata(self, name: str) -> Optional[Dict[str, Any]]:
         """データセットのメタデータを読み込む。"""
         return self.survey_service.load_dataset_metadata(name)
 
@@ -1281,12 +1281,12 @@ class SurveyManager:
         self.survey_service.delete_custom_dataset(name)
 
     def build_system_prompt_preview(
-        self, row: Dict[str, Any], extra_columns: List[str]
+        self, row: Dict[str, Any], extra_columns: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """システムプロンプトのプレビューを生成する。"""
         return self.survey_service._build_system_prompt(row, extra_columns)
 
-    def get_available_filter_values(self, datasource: str) -> Dict[str, List[str]]:
+    def get_available_filter_values(self, datasource: str) -> Dict[str, Dict[str, Any]]:
         """利用可能なフィルター値を取得する。"""
         return self.survey_service.get_available_filter_values(datasource)
 

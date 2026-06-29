@@ -1016,12 +1016,12 @@ class DiscussionManager:
         self.database_service.save_discussion(discussion)
         return True
 
-    def facilitate_discussion_streaming(
+    def facilitate_discussion_streaming(  # type: ignore[return]
         self,
         personas: List[Persona],
         topic: str,
         documents: Optional[List[Dict[str, Any]]] = None,
-    ):
+    ) -> Any:
         """
         簡易モードの議論ストリーミングを実行する。
 
