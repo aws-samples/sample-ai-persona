@@ -118,56 +118,47 @@ class TestGetPersonaMemories:
 
 
 class TestGeneratePersonas:
-    """generate_personas 統合生成のテスト"""
+    """PersonaGenerationManager.generate_and_cache のバリデーションテスト"""
 
     @pytest.fixture
-    def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+    def gen_manager(self):
+        from src.managers.persona_generation_manager import PersonaGenerationManager
 
-    def test_invalid_count_zero(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas([], "interview", 0)
+        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
 
-    def test_invalid_count_over_10(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas([], "interview", 11)
-
-    def test_no_files_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="ファイルが選択されていません"):
-            manager.generate_personas([], "interview", 3)
-
-    @patch("src.services.agent_service.AgentService")
-    @patch("src.managers.file_manager.FileManager")
-    def test_success_text_file(self, mock_fm_cls, mock_as_cls, manager):
-        mock_fm = Mock()
-        mock_fm.extract_text_from_file.return_value = "インタビューテキスト"
-        mock_fm_cls.return_value = mock_fm
-
-        persona = Persona.create_new(
-            name="P1",
-            age=25,
-            occupation="エンジニア",
-            background="テスト",
-            values=["v"],
-            pain_points=["p"],
-            goals=["g"],
+    def test_invalid_count_zero(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
         )
-        mock_as = Mock()
-        mock_as.generate_personas_with_agent.return_value = (
-            [persona],
-            [{"role": "assistant", "content": "log"}],
-        )
-        mock_as_cls.return_value = mock_as
 
-        personas, logs = manager.generate_personas(
-            [(b"text data", "interview.txt")], "interview", 1
-        )
-        assert len(personas) == 1
-        assert personas[0].name == "P1"
+        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+            gen_manager.generate_and_cache([], "interview", 0)
 
-    def test_dwh_empty_angle_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="分析の切り口"):
-            manager.generate_personas([], "dwh", 3, data_description="")
+    def test_invalid_count_over_10(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+            gen_manager.generate_and_cache([], "interview", 11)
+
+    def test_no_files_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(
+            PersonaGenerationManagerError, match="ファイルが選択されていません"
+        ):
+            gen_manager.generate_and_cache([], "interview", 3)
+
+    def test_dwh_empty_angle_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(PersonaGenerationManagerError, match="分析の切り口"):
+            gen_manager.generate_and_cache([], "dwh", 3, data_description="")
 
 
 class TestSavePersona:

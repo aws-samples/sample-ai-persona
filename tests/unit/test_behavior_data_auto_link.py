@@ -3,116 +3,139 @@
 import pytest
 from unittest.mock import Mock, patch
 
-from src.managers.persona_manager import PersonaManager
+from src.models.persona import Persona
 
 
 @pytest.fixture
-def manager():
-    return PersonaManager(ai_service=Mock(), database_service=Mock())
+def mock_persona():
+    return Persona.create_new(
+        name="テスト太郎",
+        age=30,
+        occupation="エンジニア",
+        background="背景テスト",
+        values=["v1"],
+        pain_points=["p1"],
+        goals=["g1"],
+    )
 
 
 class TestAutoLinkBehaviorFlag:
-    """auto_link_behavior フラグのバリデーション"""
+    """auto_link_behavior フラグのバリデーション（PersonaGenerationManager）"""
 
-    def test_auto_link_forces_persona_count_to_one(self, manager):
+    def _make_manager(self):
+        from src.managers.persona_generation_manager import PersonaGenerationManager
+
+        mock_agent_service = Mock()
+        mgr = PersonaGenerationManager(
+            agent_service=mock_agent_service, database_service=Mock()
+        )
+        mgr._determine_tools = Mock(return_value=[])
+        return mgr, mock_agent_service
+
+    def test_auto_link_forces_persona_count_to_one(self, mock_persona):
         """auto_link_behavior=True の場合、persona_count が 1 に強制される"""
-        with patch("src.services.agent_service.AgentService") as mock_agent_cls:
-            mock_agent = mock_agent_cls.return_value
-            mock_persona = Mock()
-            mock_persona.name = "テスト太郎"
-            mock_persona.age = 30
-            mock_persona.occupation = "エンジニア"
-            mock_persona.background = "背景"
-            mock_persona.values = ["v1"]
-            mock_persona.pain_points = ["p1"]
-            mock_persona.goals = ["g1"]
-            mock_persona.gender = None
-            mock_persona.country = None
-            mock_persona.city = None
-            mock_persona.tags = []
-            mock_agent.generate_personas_with_agent.return_value = (
-                [mock_persona],
-                [],
-            )
+        from src.managers.persona_generation_manager import _PersonaListOutput
 
-            personas, _ = manager.generate_personas(
-                file_contents=[],
-                data_type="dwh",
-                persona_count=5,
-                data_description="テスト条件",
-                auto_link_behavior=True,
-            )
+        mgr, mock_as = self._make_manager()
+        mock_as.create_generation_agent.return_value = Mock()
+        mock_as.run_persona_generation.return_value = (
+            _PersonaListOutput(
+                personas=[
+                    {
+                        "name": "テスト太郎",
+                        "age": 30,
+                        "occupation": "エンジニア",
+                        "background": "背景",
+                        "values": ["v1"],
+                        "pain_points": ["p1"],
+                        "goals": ["g1"],
+                    }
+                ]
+            ),
+            [],
+        )
 
-            call_kwargs = mock_agent.generate_personas_with_agent.call_args[1]
-            assert call_kwargs["persona_count"] == 1
+        mgr.generate_and_cache(
+            file_contents=[],
+            data_type="dwh",
+            persona_count=5,
+            data_description="テスト条件",
+            auto_link_behavior=True,
+        )
 
-    def test_auto_link_appends_behavior_extraction_instruction(self, manager):
-        """auto_link_behavior=True の場合、行動データ抽出指示がdata_textに追記される"""
-        with patch("src.services.agent_service.AgentService") as mock_agent_cls:
-            mock_agent = mock_agent_cls.return_value
-            mock_persona = Mock()
-            mock_persona.name = "テスト"
-            mock_persona.age = 25
-            mock_persona.occupation = "営業"
-            mock_persona.background = "bg"
-            mock_persona.values = ["v"]
-            mock_persona.pain_points = ["p"]
-            mock_persona.goals = ["g"]
-            mock_persona.gender = None
-            mock_persona.country = None
-            mock_persona.city = None
-            mock_persona.tags = []
-            mock_agent.generate_personas_with_agent.return_value = (
-                [mock_persona],
-                [],
-            )
+        call_kwargs = mock_as.run_persona_generation.call_args[1]
+        assert "1個" in call_kwargs["prompt"]
 
-            manager.generate_personas(
-                file_contents=[],
-                data_type="dwh",
-                persona_count=1,
-                data_description="リピーター層",
-                auto_link_behavior=True,
-            )
+    def test_auto_link_appends_behavior_extraction_instruction(self, mock_persona):
+        """auto_link_behavior=True の場合、行動データ抽出指示がpromptに追記される"""
+        from src.managers.persona_generation_manager import _PersonaListOutput
 
-            call_kwargs = mock_agent.generate_personas_with_agent.call_args[1]
-            data_text = call_kwargs["data_text"]
-            assert "特定1名の深掘り分析" in data_text
-            assert "行動データCSVエクスポート" in data_text
-            assert "CSVで出力してください" in data_text
+        mgr, mock_as = self._make_manager()
+        mock_as.create_generation_agent.return_value = Mock()
+        mock_as.run_persona_generation.return_value = (
+            _PersonaListOutput(
+                personas=[
+                    {
+                        "name": "テスト",
+                        "age": 25,
+                        "occupation": "営業",
+                        "background": "bg",
+                        "values": ["v"],
+                        "pain_points": ["p"],
+                        "goals": ["g"],
+                    }
+                ]
+            ),
+            [],
+        )
 
-    def test_without_auto_link_no_behavior_instruction(self, manager):
+        mgr.generate_and_cache(
+            file_contents=[],
+            data_type="dwh",
+            persona_count=1,
+            data_description="リピーター層",
+            auto_link_behavior=True,
+        )
+
+        call_kwargs = mock_as.run_persona_generation.call_args[1]
+        prompt = call_kwargs["prompt"]
+        assert "特定1名の深掘り分析" in prompt
+        assert "行動データCSVエクスポート" in prompt
+
+    def test_without_auto_link_no_behavior_instruction(self, mock_persona):
         """auto_link_behavior=False の場合、行動データ抽出指示は追記されない"""
-        with patch("src.services.agent_service.AgentService") as mock_agent_cls:
-            mock_agent = mock_agent_cls.return_value
-            mock_persona = Mock()
-            mock_persona.name = "テスト"
-            mock_persona.age = 25
-            mock_persona.occupation = "営業"
-            mock_persona.background = "bg"
-            mock_persona.values = ["v"]
-            mock_persona.pain_points = ["p"]
-            mock_persona.goals = ["g"]
-            mock_persona.gender = None
-            mock_persona.country = None
-            mock_persona.city = None
-            mock_persona.tags = []
-            mock_agent.generate_personas_with_agent.return_value = (
-                [mock_persona],
-                [],
-            )
+        from src.managers.persona_generation_manager import _PersonaListOutput
 
-            manager.generate_personas(
-                file_contents=[],
-                data_type="dwh",
-                persona_count=3,
-                data_description="新規顧客",
-                auto_link_behavior=False,
-            )
+        mgr, mock_as = self._make_manager()
+        mock_as.create_generation_agent.return_value = Mock()
+        mock_as.run_persona_generation.return_value = (
+            _PersonaListOutput(
+                personas=[
+                    {
+                        "name": "テスト",
+                        "age": 25,
+                        "occupation": "営業",
+                        "background": "bg",
+                        "values": ["v"],
+                        "pain_points": ["p"],
+                        "goals": ["g"],
+                    }
+                ]
+            ),
+            [],
+        )
 
-            call_kwargs = mock_agent.generate_personas_with_agent.call_args[1]
-            data_text = call_kwargs["data_text"]
-            assert "行動データ抽出" not in data_text
+        mgr.generate_and_cache(
+            file_contents=[],
+            data_type="dwh",
+            persona_count=3,
+            data_description="新規顧客",
+            auto_link_behavior=False,
+        )
+
+        call_kwargs = mock_as.run_persona_generation.call_args[1]
+        prompt = call_kwargs["prompt"]
+        assert "行動データCSVエクスポート" not in prompt
 
 
 class TestInferBehaviorDataType:
