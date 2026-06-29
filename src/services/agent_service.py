@@ -977,6 +977,116 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
                         )
         return log
 
+    def create_generation_agent(
+        self,
+        system_prompt: str,
+        tools: list[Any] | None = None,
+        callback_handler: Any = None,
+    ) -> Any:
+        """渡されたsystem_promptとtoolsでペルソナ生成用Agentを生成する"""
+        if Agent is None or BedrockModel is None:
+            raise AgentInitializationError(
+                "Strands Agent SDKがインストールされていません"
+            )
+        try:
+            credentials = config.get_aws_credentials()
+            filtered_credentials = {
+                k: v
+                for k, v in credentials.items()
+                if v is not None and k != "region_name"
+            }
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+                **filtered_credentials,
+            )
+            agent_kwargs: dict = {
+                "name": "PersonaGenerator",
+                "model": model,
+                "system_prompt": system_prompt,
+                "tools": tools if tools else None,
+            }
+            if callback_handler is not None:
+                agent_kwargs["callback_handler"] = callback_handler
+
+            agent = Agent(**agent_kwargs)
+            self.logger.info("ペルソナ生成エージェントを作成")
+            return agent
+        except Exception as e:
+            raise AgentInitializationError(f"ペルソナ生成エージェント作成エラー: {e}")
+
+    def run_persona_generation(
+        self,
+        agent: Any,
+        prompt: str,
+        structured_prompt: str,
+        output_schema: type,
+    ) -> tuple[Any, list[dict[str, str]]]:
+        """Agentを実行し、Structured Outputで結果を返す。
+
+        Returns: (structured_result, thinking_log)
+        """
+        try:
+            agent(prompt)
+            thinking_log = self._extract_thinking_log(agent)
+
+            max_retries = 2
+            last_error = None
+            result = None
+            for attempt in range(max_retries + 1):
+                try:
+                    retry_prompt = structured_prompt
+                    if last_error and attempt > 0:
+                        retry_prompt = (
+                            f"前回の出力でバリデーションエラーが発生しました:\n{last_error}\n\n"
+                            f"エラーを修正して再度出力してください。\n{structured_prompt}"
+                        )
+                    result = agent.structured_output(output_schema, retry_prompt)
+                    break
+                except Exception as validation_err:
+                    last_error = str(validation_err)
+                    self.logger.warning(
+                        f"structured_output バリデーションエラー (attempt {attempt + 1}/{max_retries + 1}): {last_error}"
+                    )
+                    if attempt == max_retries:
+                        raise
+
+            assert result is not None
+            return result, thinking_log
+
+        except Exception as e:
+            raise AgentServiceError(f"ペルソナ生成実行エラー: {e}")
+
+    def create_data_agent_tools(self, event_queue: Any = None) -> list[Any]:
+        """DWH用ツールリストを生成する"""
+        from .data_agent_service import create_data_agent_tool
+
+        if not config.DATA_AGENT_RUNTIME_ARN:
+            raise AgentServiceError(
+                "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
+            )
+        tool = create_data_agent_tool(
+            config.DATA_AGENT_RUNTIME_ARN,
+            config.DATA_AGENT_REGION,
+            event_queue=event_queue,
+        )
+        return [tool]
+
+    def get_mcp_tools(self) -> list[Any]:
+        """MCP（MotherDuck）ツールリストを取得する"""
+        from .mcp_server_manager import get_mcp_manager
+
+        mcp_manager = get_mcp_manager()
+        if not mcp_manager.is_running():
+            mcp_manager.start()
+        if mcp_manager.is_running():
+            mcp_tools = mcp_manager.get_tools()
+            if mcp_tools:
+                return list(mcp_tools)
+        return []
+
+    # --- 旧インターフェース（PersonaManager互換、Phase 7で削除予定） ---
+
     def create_persona_generation_agent(
         self,
         data_type: str,

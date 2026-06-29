@@ -8,6 +8,8 @@ from typing import Any
 
 from cachetools import TTLCache  # type: ignore[import-untyped]
 
+from pydantic import BaseModel, Field
+
 from ..models.persona import Persona
 from ..services.agent_service import AgentService, AgentServiceError
 from ..services.database_service import DatabaseService
@@ -18,6 +20,7 @@ from .prompts.persona_generation_prompts import (
     DATA_TYPE_PROMPTS,
     DWH_AUTO_LINK_INSTRUCTIONS,
     PERSONA_GENERATION_SYSTEM_PROMPT_TEMPLATE,
+    STRUCTURED_OUTPUT_PROMPT,
     USER_PROMPT_TEMPLATE,
 )
 from .shared.file_utils import (
@@ -32,6 +35,33 @@ from .shared.file_utils import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# Persona (src/models/persona.py) の create_new() パラメータと同一フィールド構成。
+# Why: Strands SDK の structured_output() は Pydantic BaseModel を要求するが、Persona は dataclass のため直接渡せない。
+# Personaのフィールド変更時はここも同期すること。
+class _PersonaOutput(BaseModel):
+    name: str = Field(description="名前（国・地域に即した自然な名前。日本語表記）")
+    age: int = Field(description="年齢")
+    gender: str | None = Field(
+        default=None, description="性別（male / female / other）"
+    )
+    country: str | None = Field(
+        default=None,
+        description="居住国（ISO 3166-1 alpha-2の2文字コード。例: JP, US）",
+    )
+    city: str | None = Field(
+        default=None, description="居住都市名（日本語。不明なら省略）"
+    )
+    occupation: str = Field(description="職業")
+    background: str = Field(description="背景・経歴")
+    values: list[str] = Field(description="価値観（データから導出できるもの）")
+    pain_points: list[str] = Field(description="課題・悩み（データから導出できるもの）")
+    goals: list[str] = Field(description="目標・願望（データから導出できるもの）")
+
+
+class _PersonaListOutput(BaseModel):
+    personas: list[_PersonaOutput] = Field(description="生成されたペルソナのリスト")
 
 
 class PersonaGenerationManagerError(Exception):
@@ -245,16 +275,26 @@ class PersonaGenerationManager:
         combined_text, csv_temp_paths = self._extract_file_texts(file_contents)
         use_mcp = len(csv_temp_paths) > 0
 
+        system_prompt = self._build_system_prompt(
+            data_type, data_description, custom_prompt
+        )
+        tools = self._determine_tools(data_type, use_mcp, event_queue=None)
+        user_prompt = self._build_user_prompt(
+            combined_text, persona_count, csv_temp_paths
+        )
+
         try:
-            personas, thinking_log = self.agent_service.generate_personas_with_agent(
-                data_text=combined_text,
-                data_type=data_type,
-                persona_count=persona_count,
-                data_description=data_description,
-                custom_prompt=custom_prompt,
-                use_mcp=use_mcp,
-                csv_paths=csv_temp_paths if csv_temp_paths else None,
+            agent = self.agent_service.create_generation_agent(
+                system_prompt=system_prompt,
+                tools=tools if tools else None,
             )
+            result, thinking_log = self.agent_service.run_persona_generation(
+                agent=agent,
+                prompt=user_prompt,
+                structured_prompt=STRUCTURED_OUTPUT_PROMPT,
+                output_schema=_PersonaListOutput,
+            )
+            personas = self._convert_to_personas(result)
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(f"エージェントサービスエラー: {e}")
         except Exception as e:
@@ -262,6 +302,7 @@ class PersonaGenerationManager:
         finally:
             cleanup_temp_files(csv_temp_paths)
 
+        logger.info(f"ファイルベースペルソナ生成完了: {len(personas)}個")
         return personas, thinking_log
 
     def _generate_from_dwh(
@@ -294,15 +335,23 @@ class PersonaGenerationManager:
         if auto_link_behavior:
             data_text += DWH_AUTO_LINK_INSTRUCTIONS
 
+        system_prompt = self._build_system_prompt("dwh", analysis_angle, custom_prompt)
+        tools = self._determine_tools("dwh", False, event_queue=event_queue)
+        user_prompt = self._build_user_prompt(data_text, persona_count)
+
         try:
-            personas, thinking_log = self.agent_service.generate_personas_with_agent(
-                data_text=data_text,
-                data_type="dwh",
-                persona_count=persona_count,
-                custom_prompt=custom_prompt,
+            agent = self.agent_service.create_generation_agent(
+                system_prompt=system_prompt,
+                tools=tools if tools else None,
                 callback_handler=callback_handler,
-                event_queue=event_queue,
             )
+            result, thinking_log = self.agent_service.run_persona_generation(
+                agent=agent,
+                prompt=user_prompt,
+                structured_prompt=STRUCTURED_OUTPUT_PROMPT,
+                output_schema=_PersonaListOutput,
+            )
+            personas = self._convert_to_personas(result)
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(
                 f"データ分析エージェント連携エラー: {e}"
@@ -310,7 +359,30 @@ class PersonaGenerationManager:
         except Exception as e:
             raise PersonaGenerationManagerError(f"DWH ペルソナ生成エラー: {e}")
 
+        logger.info(f"DWH ペルソナ生成完了: {len(personas)}個")
         return personas, thinking_log
+
+    def _convert_to_personas(self, result: _PersonaListOutput) -> list[Persona]:
+        """Pydantic出力 → Personaドメインモデルへの変換"""
+        from ..models.demographics import sanitize_gender
+        from ..services.country_service import sanitize_country
+
+        personas: list[Persona] = []
+        for p in result.personas:
+            persona = Persona.create_new(
+                name=p.name,
+                age=p.age,
+                occupation=p.occupation,
+                background=p.background,
+                values=p.values,
+                pain_points=p.pain_points,
+                goals=p.goals,
+                gender=sanitize_gender(p.gender),
+                country=sanitize_country(p.country),
+                city=p.city,
+            )
+            personas.append(persona)
+        return personas
 
     def _build_system_prompt(
         self,
