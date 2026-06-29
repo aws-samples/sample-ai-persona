@@ -30,6 +30,7 @@ class PersonaManager:
         self,
         ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
+        file_manager: Any = None,
     ):
         """
         Initialize persona manager.
@@ -37,6 +38,7 @@ class PersonaManager:
         Args:
             ai_service: AI service instance for persona generation (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            file_manager: FileManager instance (optional, created lazily if not provided)
         """
         self.logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class PersonaManager:
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
+        self._file_manager = file_manager
 
     def generate_personas(
         self,
@@ -97,7 +100,7 @@ class PersonaManager:
             # 全ファイルからテキスト抽出・結合
             from ..managers.file_manager import FileManager, FileUploadError
 
-            file_manager = FileManager()
+            file_manager = self._file_manager or FileManager()
             texts = []
             csv_temp_paths: list[str] = []
 

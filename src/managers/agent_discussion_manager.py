@@ -356,54 +356,30 @@ class AgentDiscussionManager:
         document_context = None
         document_contents = []
         if document_ids:
-            from src.managers.file_manager import FileManager
-            from src.services.service_factory import service_factory
-
-            file_manager = FileManager(
-                db_service=self.database_service,
-                s3_service=service_factory.get_s3_service(),
+            from .shared.document_loader import (
+                build_document_context,
+                load_documents_metadata,
+                prepare_document_contents,
             )
 
-            # Load document metadata
-            documents_metadata = []
-            document_descriptions = []
-            for doc_id in document_ids:
-                file_metadata = file_manager.get_file_metadata(doc_id)
-                if file_metadata:
-                    documents_metadata.append(
-                        {
-                            "id": file_metadata.file_id,
-                            "filename": file_metadata.original_filename,
-                            "file_path": file_metadata.file_path,
-                            "file_size": file_metadata.file_size,
-                            "mime_type": file_metadata.mime_type,
-                            "uploaded_at": file_metadata.uploaded_at.isoformat()
-                            if file_metadata.uploaded_at
-                            else None,
-                        }
-                    )
-                    document_descriptions.append(
-                        f"- {file_metadata.original_filename} ({file_metadata.mime_type})"
-                    )
+            documents_metadata = load_documents_metadata(
+                document_ids, self.database_service
+            )
 
             if documents_metadata:
-                document_context = "\n".join(
-                    [
-                        "\n以下のドキュメントを参照しながら議論を進めてください:",
-                        *document_descriptions,
-                    ]
-                )
+                document_context = build_document_context(documents_metadata)
                 self.logger.info(
                     f"Loaded {len(documents_metadata)} documents for agent discussion"
                 )
 
-                # ドキュメントコンテンツをStrands Agent SDK用に準備
-                document_contents = self._prepare_document_contents(documents_metadata)
+                s3_service = service_factory.get_s3_service()
+                document_contents = prepare_document_contents(
+                    documents_metadata, s3_service
+                )
                 if document_contents:
                     self.logger.info(
                         f"Prepared {len(document_contents)} document contents for agents"
                     )
-                    # 各ペルソナエージェントにドキュメントコンテンツを設定
                     for agent in persona_agents:
                         agent.set_document_contents(document_contents.copy())
 
@@ -830,54 +806,30 @@ class AgentDiscussionManager:
         document_context = None
         document_contents = []
         if document_ids:
-            from src.managers.file_manager import FileManager
-            from src.services.service_factory import service_factory
-
-            file_manager = FileManager(
-                db_service=self.database_service,
-                s3_service=service_factory.get_s3_service(),
+            from .shared.document_loader import (
+                build_document_context,
+                load_documents_metadata,
+                prepare_document_contents,
             )
 
-            # Load document metadata
-            documents_metadata = []
-            document_descriptions = []
-            for doc_id in document_ids:
-                file_metadata = file_manager.get_file_metadata(doc_id)
-                if file_metadata:
-                    documents_metadata.append(
-                        {
-                            "id": file_metadata.file_id,
-                            "filename": file_metadata.original_filename,
-                            "file_path": file_metadata.file_path,
-                            "file_size": file_metadata.file_size,
-                            "mime_type": file_metadata.mime_type,
-                            "uploaded_at": file_metadata.uploaded_at.isoformat()
-                            if file_metadata.uploaded_at
-                            else None,
-                        }
-                    )
-                    document_descriptions.append(
-                        f"- {file_metadata.original_filename} ({file_metadata.mime_type})"
-                    )
+            documents_metadata = load_documents_metadata(
+                document_ids, self.database_service
+            )
 
             if documents_metadata:
-                document_context = "\n".join(
-                    [
-                        "\n以下のドキュメントを参照しながら議論を進めてください:",
-                        *document_descriptions,
-                    ]
-                )
+                document_context = build_document_context(documents_metadata)
                 self.logger.info(
                     f"Loaded {len(documents_metadata)} documents for streaming agent discussion"
                 )
 
-                # ドキュメントコンテンツをStrands Agent SDK用に準備
-                document_contents = self._prepare_document_contents(documents_metadata)
+                s3_service = service_factory.get_s3_service()
+                document_contents = prepare_document_contents(
+                    documents_metadata, s3_service
+                )
                 if document_contents:
                     self.logger.info(
                         f"Prepared {len(document_contents)} document contents for streaming agents"
                     )
-                    # 各ペルソナエージェントにドキュメントコンテンツを設定
                     for agent in persona_agents:
                         agent.set_document_contents(document_contents.copy())
 

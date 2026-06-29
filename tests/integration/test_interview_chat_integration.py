@@ -38,11 +38,8 @@ class TestInterviewChatIntegration:
             goals=["スキル向上", "独立"],
         )
 
-    @patch("src.managers.interview_manager.AgentDiscussionManager.__init__")
     @patch("src.services.service_factory.service_factory")
-    def test_interview_session_creation_and_messaging(
-        self, mock_service_factory, mock_init
-    ):
+    def test_interview_session_creation_and_messaging(self, mock_service_factory):
         """Test complete interview session creation and messaging flow."""
         # Setup service mocks
         mock_agent_service = Mock()
@@ -53,9 +50,6 @@ class TestInterviewChatIntegration:
 
         mock_service_factory.get_agent_service.return_value = mock_agent_service
         mock_service_factory.get_database_service.return_value = mock_database_service
-
-        # Setup parent class mocks
-        mock_init.return_value = None
 
         # Setup agent mocks
         mock_agent1 = Mock()

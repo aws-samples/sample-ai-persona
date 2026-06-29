@@ -1,7 +1,6 @@
 """
 Interview Manager for AI Persona System.
 Handles interview session setup, execution, and persistence.
-Extends AgentDiscussionManager for interview functionality.
 """
 
 import logging
@@ -20,7 +19,6 @@ from ..services.agent_service import (
     AgentCommunicationError,
 )
 from ..services.database_service import DatabaseService, DatabaseError
-from .agent_discussion_manager import AgentDiscussionManager
 
 
 class InterviewManagerError(Exception):
@@ -164,10 +162,9 @@ class InterviewSession:
         )
 
 
-class InterviewManager(AgentDiscussionManager):
+class InterviewManager:
     """
     Manager class for handling interview operations.
-    Extends AgentDiscussionManager to provide interview-specific functionality.
     """
 
     def __init__(
@@ -182,8 +179,13 @@ class InterviewManager(AgentDiscussionManager):
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
         """
-        super().__init__(agent_service, database_service)
+        from ..services.service_factory import service_factory
+
         self.logger = logging.getLogger(__name__)
+        self.agent_service = agent_service or service_factory.get_agent_service()
+        self.database_service = (
+            database_service or service_factory.get_database_service()
+        )
 
         # Active interview sessions (temporary storage)
         self._active_sessions: Dict[str, InterviewSession] = {}
