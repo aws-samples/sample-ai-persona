@@ -5,7 +5,6 @@
 import logging
 import asyncio
 import json
-import re
 from datetime import datetime
 from typing import Any, Optional
 from pathlib import Path
@@ -1039,21 +1038,6 @@ def _get_user_friendly_error_message(error: Exception) -> str:
 
     # その他のエラー
     return "予期しないエラーが発生しました。後でもう一度お試しください。"
-
-
-def _parse_topic_content(content: str) -> dict | None:
-    """
-    <topic name="...">...</topic> 形式のコンテンツをパース
-
-    Returns:
-        パース成功時: {"name": トピック名, "content": 内容}
-        パース失敗時: None
-    """
-    pattern = r'<topic\s+name="([^"]+)">\s*(.*?)\s*</topic>'
-    match = re.search(pattern, content, re.DOTALL)
-    if match:
-        return {"name": match.group(1), "content": match.group(2).strip()}
-    return None
 
 
 @router.get("/{persona_id}/memories", response_class=HTMLResponse)
