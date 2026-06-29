@@ -8,17 +8,17 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.models.survey import (
+from ..models.survey import (
     InsightReport,
     PersonaStatistics,
     Survey,
     VisualAnalysisData,
 )
-from src.models.survey_template import Question, SurveyTemplate, TemplateImage
-from src.services.ai_service import AIService
-from src.services.database_service import DatabaseService
-from src.services.service_factory import service_factory  # noqa: E402
-from src.services.survey_service import SurveyService
+from ..models.survey_template import Question, SurveyTemplate, TemplateImage
+from ..services.ai_service import AIService
+from ..services.database_service import DatabaseService
+from ..services.service_factory import service_factory  # noqa: E402
+from ..services.survey_service import SurveyService
 
 logger = logging.getLogger(__name__)
 
@@ -517,8 +517,8 @@ class SurveyManager:
         from strands import Agent
         from strands.models import BedrockModel
 
-        from src.config import config
-        from src.services.data_agent_service import create_data_agent_tool
+        from ..config import config
+        from ..services.data_agent_service import create_data_agent_tool
 
         if not condition or not condition.strip():
             raise SurveyValidationError("抽出条件を入力してください")
@@ -603,7 +603,7 @@ class SurveyManager:
         event_queue.put({"type": "status", "content": "CSVデータをダウンロード中..."})
         csv_url = csv_urls[-1]
         try:
-            from src.services.data_agent_service import DataAgentService
+            from ..services.data_agent_service import DataAgentService
 
             csv_bytes = DataAgentService.download_csv(csv_url)
         except Exception as e:
@@ -691,7 +691,7 @@ class SurveyManager:
         from strands import Agent
         from strands.models import BedrockModel
 
-        from src.config import config
+        from ..config import config
 
         class ExtraColumnItem(BaseModel):
             csv_column: str = Field(description="CSVカラム名")

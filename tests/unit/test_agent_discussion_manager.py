@@ -336,20 +336,12 @@ class TestDisposeAgents:
 
 
 class TestPrepareDocumentContents:
-    """ドキュメントコンテンツ準備のテスト"""
+    """ドキュメントコンテンツ準備のテスト（shared/document_loader経由）"""
 
     def test_prepare_image_content(self, tmp_path):
         """画像コンテンツの準備テスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
+        from src.managers.shared.document_loader import prepare_document_contents
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # テスト用画像ファイルを作成
         image_path = tmp_path / "test_image.png"
         image_path.write_bytes(b"fake_png_data")
 
@@ -361,7 +353,7 @@ class TestPrepareDocumentContents:
             }
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
         assert len(result) == 1
         assert "image" in result[0]
@@ -370,16 +362,8 @@ class TestPrepareDocumentContents:
 
     def test_prepare_pdf_content(self, tmp_path):
         """PDFコンテンツの準備テスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
+        from src.managers.shared.document_loader import prepare_document_contents
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # テスト用PDFファイルを作成
         pdf_path = tmp_path / "test_document.pdf"
         pdf_path.write_bytes(b"fake_pdf_data")
 
@@ -391,7 +375,7 @@ class TestPrepareDocumentContents:
             }
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
         assert len(result) == 1
         assert "document" in result[0]
@@ -400,16 +384,8 @@ class TestPrepareDocumentContents:
 
     def test_prepare_text_content(self, tmp_path):
         """テキストコンテンツの準備テスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
+        from src.managers.shared.document_loader import prepare_document_contents
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # テスト用テキストファイルを作成
         txt_path = tmp_path / "test_document.txt"
         txt_path.write_bytes(b"fake_text_data")
 
@@ -421,7 +397,7 @@ class TestPrepareDocumentContents:
             }
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
         assert len(result) == 1
         assert "document" in result[0]
@@ -429,16 +405,8 @@ class TestPrepareDocumentContents:
 
     def test_prepare_unsupported_mime_type(self, tmp_path):
         """サポートされていないMIMEタイプのテスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
+        from src.managers.shared.document_loader import prepare_document_contents
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # テスト用ファイルを作成
         file_path = tmp_path / "test_file.xyz"
         file_path.write_bytes(b"fake_data")
 
@@ -450,21 +418,13 @@ class TestPrepareDocumentContents:
             }
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
-        # サポートされていないMIMEタイプは無視される
         assert len(result) == 0
 
     def test_prepare_missing_file(self):
         """存在しないファイルのテスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
+        from src.managers.shared.document_loader import prepare_document_contents
 
         documents_metadata = [
             {
@@ -474,23 +434,14 @@ class TestPrepareDocumentContents:
             }
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
-        # 存在しないファイルは無視される
         assert len(result) == 0
 
     def test_prepare_multiple_documents(self, tmp_path):
         """複数ドキュメントの準備テスト"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
+        from src.managers.shared.document_loader import prepare_document_contents
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # テスト用ファイルを作成
         image_path = tmp_path / "test_image.jpeg"
         image_path.write_bytes(b"fake_jpeg_data")
 
@@ -510,7 +461,7 @@ class TestPrepareDocumentContents:
             },
         ]
 
-        result = manager._prepare_document_contents(documents_metadata)
+        result = prepare_document_contents(documents_metadata)
 
         assert len(result) == 2
         assert "image" in result[0]
