@@ -1015,3 +1015,57 @@ class DiscussionManager:
 
         self.database_service.save_discussion(discussion)
         return True
+
+    def facilitate_discussion_streaming(
+        self,
+        personas: List[Persona],
+        topic: str,
+        documents: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """
+        簡易モードの議論ストリーミングを実行する。
+
+        Args:
+            personas: 参加ペルソナリスト
+            topic: 議論トピック
+            documents: ドキュメントデータ（オプション）
+
+        Yields:
+            Message: 生成されたメッセージ
+        """
+        return self.ai_service.facilitate_discussion_streaming(
+            personas, topic, documents=documents
+        )
+
+    def get_document_presigned_urls(
+        self, documents: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        ドキュメントの署名付きURLを生成する。
+
+        Args:
+            documents: ドキュメントメタデータのリスト
+
+        Returns:
+            {doc_id: presigned_url} の辞書
+        """
+        document_urls: Dict[str, str] = {}
+        if not documents or not config.S3_BUCKET_NAME:
+            return document_urls
+
+        s3_service = service_factory.get_s3_service()
+        if not s3_service:
+            return document_urls
+
+        for doc in documents:
+            file_path = doc.get("file_path")
+            if file_path and file_path.startswith("s3://"):
+                try:
+                    presigned_url = s3_service.generate_presigned_url(file_path)
+                    document_urls[doc.get("id", file_path)] = presigned_url
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to generate presigned URL for {file_path}: {e}"
+                    )
+
+        return document_urls

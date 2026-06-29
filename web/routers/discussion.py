@@ -18,7 +18,6 @@ from src.managers.persona_manager import PersonaManager
 from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.file_manager import FileManager, FileUploadError
-from src.services.service_factory import service_factory
 from src.models.discussion import Discussion
 from src.models.insight_category import InsightCategory
 from ._pagination import decode_cursor, encode_cursor
@@ -75,9 +74,7 @@ def get_file_manager() -> FileManager:
     """FileManagerのシングルトンインスタンスを取得"""
     global _file_manager
     if _file_manager is None:
-        # S3サービスを取得（設定されている場合）
-        s3_service = service_factory.get_s3_service()
-        _file_manager = FileManager(s3_service=s3_service)
+        _file_manager = FileManager()
     return _file_manager
 
 
@@ -322,18 +319,19 @@ def _stream_discussion_sync(
             yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
     else:
         # 簡易モードのストリーミング
-        ai_service = service_factory.get_ai_service()
+        discussion_manager = get_discussion_manager()
 
         # ドキュメントIDからドキュメントデータを読み込み
         documents_data = None
         documents_metadata = None
         if document_ids:
-            manager = get_discussion_manager()
-            documents_data, documents_metadata = manager._load_documents(document_ids)
+            documents_data, documents_metadata = discussion_manager._load_documents(
+                document_ids
+            )
 
         messages = []
 
-        for message in ai_service.facilitate_discussion_streaming(
+        for message in discussion_manager.facilitate_discussion_streaming(
             personas, topic, documents=documents_data
         ):
             messages.append(message)
@@ -832,25 +830,11 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
 
         # ドキュメントの署名付きURLを生成
         document_urls = {}
-        if discussion.documents and config.S3_BUCKET_NAME:
-            from src.services.s3_service import S3Service
-
-            try:
-                s3_service = S3Service(
-                    bucket_name=config.S3_BUCKET_NAME, region_name=config.AWS_REGION
-                )
-                for doc in discussion.documents:
-                    file_path = doc.get("file_path")
-                    if file_path and file_path.startswith("s3://"):
-                        try:
-                            presigned_url = s3_service.generate_presigned_url(file_path)
-                            document_urls[doc.get("id", file_path)] = presigned_url
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to generate presigned URL for {file_path}: {e}"
-                            )
-            except Exception as e:
-                logger.warning(f"Failed to initialize S3 service: {e}")
+        if discussion.documents:
+            disc_manager = get_discussion_manager()
+            document_urls = disc_manager.get_document_presigned_urls(
+                discussion.documents
+            )
 
         # インタビューセッションの場合はタイトルを調整
         if discussion.mode == "interview":
