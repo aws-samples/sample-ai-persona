@@ -194,28 +194,6 @@ class TestManagerBuildPersonaPrompt:
         assert "最終" in prompt or "結論" in prompt
 
 
-class TestPersonaAgentBuildPrompt:
-    """PersonaAgent._build_prompt_with_context() 簡素化テスト"""
-
-    def setup_method(self):
-        self.persona = _create_test_persona()
-        self.mock_agent = Mock()
-        self.persona_agent = PersonaAgent(self.persona, "test", self.mock_agent)
-
-    def test_prompt_returned_as_is(self):
-        """コンテキストが渡されてもプロンプトがそのまま返ること"""
-        prompt = "構築済みプロンプト"
-        context = [Message.create_new("p1", "佐藤", "発言")]
-        result = self.persona_agent._build_prompt_with_context(prompt, context)
-        assert result == prompt
-
-    def test_prompt_without_context(self):
-        """コンテキストなしでもプロンプトがそのまま返ること"""
-        prompt = "構築済みプロンプト"
-        result = self.persona_agent._build_prompt_with_context(prompt, None)
-        assert result == prompt
-
-
 class TestManagerBuildSummaryPrompt:
     """AgentDiscussionManager._build_summary_prompt() のテスト"""
 

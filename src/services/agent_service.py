@@ -98,7 +98,7 @@ class PersonaAgent:
         """
         try:
             # コンテキストを含めたプロンプトを構築
-            full_prompt = self._build_prompt_with_context(prompt, context)
+            full_prompt = prompt
 
             # マルチモーダルコンテンツがある場合はContentBlockリストとして渡す
             if include_documents and self._document_contents:
@@ -145,7 +145,7 @@ class PersonaAgent:
             AgentCommunicationError: エージェント通信エラー
         """
         try:
-            full_prompt = self._build_prompt_with_context(prompt, context)
+            full_prompt = prompt
             token_queue: queue.Queue[Optional[str]] = queue.Queue()
 
             class _TokenCapture:
@@ -252,24 +252,6 @@ class PersonaAgent:
         except Exception as e:
             self.logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
             return str(result)
-
-    def _build_prompt_with_context(
-        self, prompt: str, context: List[Message] | None = None
-    ) -> str:
-        """
-        コンテキストを含めたプロンプトを構築
-
-        コンテキストはFacilitatorAgent.create_prompt_for_persona()で構築済みのため、
-        二重付加を防止しpromptをそのまま返す。
-
-        Args:
-            prompt: 基本プロンプト（構築済み）
-            context: 議論コンテキスト（未使用、後方互換性のため残す）
-
-        Returns:
-            str: プロンプト（そのまま）
-        """
-        return prompt
 
     def clear_conversation_history(self) -> None:
         """Strands Agent内部の会話履歴をクリア（システムプロンプトは保持）"""
