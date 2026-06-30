@@ -160,7 +160,6 @@ def mock_ai_service() -> Mock:
 def mock_agent_service() -> Mock:
     """モック化されたAgentServiceを提供"""
     mock = Mock()
-    mock.generate_persona_system_prompt.return_value = "テスト用システムプロンプト"
 
     # PersonaAgentのモック
     mock_persona_agent = Mock()
@@ -284,6 +283,7 @@ def reset_singletons():
         discussion._persona_manager = None
         discussion._discussion_manager = None
         discussion._agent_discussion_manager = None
+        discussion._report_manager = None
         discussion._file_manager = None
         interview._persona_manager = None
         interview._interview_manager = None

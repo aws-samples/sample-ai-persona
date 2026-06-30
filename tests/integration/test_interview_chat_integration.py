@@ -43,9 +43,6 @@ class TestInterviewChatIntegration:
         """Test complete interview session creation and messaging flow."""
         # Setup service mocks
         mock_agent_service = Mock()
-        mock_agent_service.generate_persona_system_prompt.return_value = (
-            "Test system prompt"
-        )
         mock_database_service = Mock()
 
         mock_service_factory.get_agent_service.return_value = mock_agent_service
@@ -62,8 +59,12 @@ class TestInterviewChatIntegration:
         mock_agent2.get_persona_name.return_value = self.persona2.name
         mock_agent2.respond.return_value = "はじめまして！デザイナーの佐藤です。"
 
-        # Mock agent service create_persona_agent method
+        # Mock agent service methods
         mock_agent_service.create_persona_agent.side_effect = [mock_agent1, mock_agent2]
+        mock_agent_service.create_persona_agent_with_integrations.side_effect = [
+            mock_agent1,
+            mock_agent2,
+        ]
 
         # Create interview manager with mocked services
         manager = InterviewManager(mock_agent_service, mock_database_service)

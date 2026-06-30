@@ -56,9 +56,6 @@ class TestCreatePersonaAgents:
         mock_db_service.initialize_database.return_value = None
 
         mock_agent_service = Mock()
-        mock_agent_service.generate_persona_system_prompt.return_value = (
-            "テストプロンプト"
-        )
 
         mock_persona_agent = Mock(spec=PersonaAgent)
         mock_persona_agent.get_persona_id.return_value = sample_persona.id

@@ -76,22 +76,19 @@ class TestAgentService:
         assert boto_config.retries["max_attempts"] == 3
         assert boto_config.retries["mode"] == "adaptive"
 
-    @patch("src.services.agent_service.Agent")
-    @patch("src.services.agent_service.BedrockModel")
-    def test_generate_persona_system_prompt(self, mock_bedrock_model, mock_agent):
-        """ペルソナシステムプロンプト生成テスト"""
-        agent_service = AgentService()
+    def test_build_persona_system_prompt(self):
+        """ペルソナシステムプロンプト生成テスト（src/prompts/に移動済み）"""
+        from src.prompts.discussion_interview_prompts import (
+            build_persona_system_prompt,
+        )
 
-        # システムプロンプトを生成
-        system_prompt = agent_service.generate_persona_system_prompt(self.test_persona)
+        system_prompt = build_persona_system_prompt(self.test_persona)
 
-        # プロンプトに必要な情報が含まれていることを確認
         assert self.test_persona.name in system_prompt
         assert str(self.test_persona.age) in system_prompt
         assert self.test_persona.occupation in system_prompt
         assert self.test_persona.background in system_prompt
 
-        # 価値観、課題、目標が含まれていることを確認
         for value in self.test_persona.values:
             assert value in system_prompt
         for pain_point in self.test_persona.pain_points:
@@ -115,8 +112,11 @@ class TestAgentService:
         # _create_tool_logging_callbackをモック（strandsモジュールが必要なため）
         agent_service._create_tool_logging_callback = Mock(return_value=None)
 
-        # システムプロンプトを生成
-        system_prompt = agent_service.generate_persona_system_prompt(self.test_persona)
+        from src.prompts.discussion_interview_prompts import (
+            build_persona_system_prompt,
+        )
+
+        system_prompt = build_persona_system_prompt(self.test_persona)
 
         # ペルソナエージェントを作成
         persona_agent = agent_service.create_persona_agent(

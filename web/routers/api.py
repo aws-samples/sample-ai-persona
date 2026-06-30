@@ -6,7 +6,6 @@ AgentCore Gateway 経由で外部AIエージェントからも利用可能。
 """
 
 import logging
-from dataclasses import replace
 from typing import Annotated, Any, Literal, Optional, List
 
 from fastapi import APIRouter, HTTPException
@@ -393,15 +392,14 @@ def _run_classic_discussion(
 ) -> dict:
     """Classic議論をバックグラウンドで実行"""
     dm = get_discussion_manager()
-    discussion = dm.start_discussion(personas=personas, topic=topic)
     cats = (
         [InsightCategory.from_dict(c.model_dump()) for c in categories]
         if categories
         else None
     )
-    insights = dm.generate_insights(discussion, categories=cats)
-    discussion = replace(discussion, insights=insights)
-    dm.save_discussion(discussion)
+    discussion = dm.run_classic_discussion(
+        personas=personas, topic=topic, categories=cats
+    )
     return _discussion_detail(discussion)
 
 
@@ -413,29 +411,18 @@ def _run_agent_discussion(
 ) -> dict:
     """Agent議論をバックグラウンドで実行"""
     adm = get_agent_discussion_manager()
-    dm = get_discussion_manager()
-
-    system_prompts: dict[str, str] = {}  # デフォルトのシステムプロンプトを使用
-    persona_agents = adm.create_persona_agents(personas, system_prompts)
-    facilitator = adm.create_facilitator_agent(rounds=rounds)
-    try:
-        discussion = adm.start_agent_discussion(
-            personas=personas,
-            topic=topic,
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
-        cats = (
-            [InsightCategory.from_dict(c.model_dump()) for c in categories]
-            if categories
-            else None
-        )
-        insights = dm.generate_insights(discussion, categories=cats)
-        discussion = replace(discussion, insights=insights)
-        adm.save_agent_discussion(discussion)
-        return _discussion_detail(discussion)
-    finally:
-        adm.cleanup_agents(persona_agents, facilitator)
+    cats = (
+        [InsightCategory.from_dict(c.model_dump()) for c in categories]
+        if categories
+        else None
+    )
+    discussion = adm.run_agent_discussion_full(
+        personas=personas,
+        topic=topic,
+        rounds=rounds,
+        categories=cats,
+    )
+    return _discussion_detail(discussion)
 
 
 def _discussion_detail(discussion: Any) -> dict:

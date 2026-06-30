@@ -8,17 +8,43 @@ AgentDiscussionManager, InterviewManager から共通利用される
 import re
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from ...services.database_service import DatabaseService
-from ...services.s3_service import S3Service
+if TYPE_CHECKING:
+    from ...services.database_service import DatabaseService
+    from ...services.s3_service import S3Service
 
 logger = logging.getLogger(__name__)
+
+SUPPORTED_IMAGE_TYPES: List[str] = [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+]
+SUPPORTED_DOCUMENT_TYPES: List[str] = [
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "text/html",
+    "text/markdown",
+]
+SUPPORTED_MIME_TYPES: List[str] = SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES
+
+
+def is_supported_mime_type(mime_type: str) -> bool:
+    """MIMEタイプがサポートされているか判定する。"""
+    return mime_type in SUPPORTED_MIME_TYPES
+
+
+def is_image_type(mime_type: str) -> bool:
+    """画像MIMEタイプか判定する。"""
+    return mime_type in SUPPORTED_IMAGE_TYPES
 
 
 def load_documents_metadata(
     document_ids: List[str],
-    database_service: DatabaseService,
+    database_service: "DatabaseService",
 ) -> List[Dict[str, Any]]:
     """
     ドキュメントIDリストからメタデータを取得する。
@@ -66,7 +92,7 @@ def load_documents_metadata(
 
 def prepare_document_contents(
     documents_metadata: List[Dict[str, Any]],
-    s3_service: Optional[S3Service] = None,
+    s3_service: Optional["S3Service"] = None,
 ) -> List[Dict[str, Any]]:
     """
     ドキュメントメタデータからStrands Agent SDK用のContentBlockリストを準備する。
@@ -90,7 +116,7 @@ def prepare_document_contents(
             if file_bytes is None:
                 continue
 
-            content_block = _build_content_block(file_bytes, mime_type, filename)
+            content_block = build_content_block(file_bytes, mime_type, filename)
             if content_block:
                 content_list.append(content_block)
 
@@ -127,7 +153,7 @@ def build_document_context(documents_metadata: List[Dict[str, Any]]) -> Optional
 
 
 def _read_file_bytes(
-    file_path: str, s3_service: Optional[S3Service]
+    file_path: str, s3_service: Optional["S3Service"]
 ) -> Optional[bytes]:
     """ファイルパスからバイト列を読み込む。"""
     if file_path.startswith("s3://"):
@@ -144,7 +170,7 @@ def _read_file_bytes(
             return f.read()
 
 
-def _build_content_block(
+def build_content_block(
     file_bytes: bytes, mime_type: str, filename: str
 ) -> Optional[Dict[str, Any]]:
     """MIMEタイプに応じたContentBlockを構築する。"""

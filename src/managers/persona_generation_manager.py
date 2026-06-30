@@ -14,7 +14,7 @@ from ..models.persona import Persona
 from ..services.agent_service import AgentService, AgentServiceError
 from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
-from .prompts.persona_generation_prompts import (
+from ..prompts.persona_generation_prompts import (
     CSV_ANALYSIS_INSTRUCTIONS,
     CUSTOM_PROMPT_SECTION,
     DATA_TYPE_PROMPTS,
@@ -393,15 +393,9 @@ class PersonaGenerationManager:
             tools.append(data_agent_tool)
 
         if use_mcp:
-            from ..services.mcp_server_manager import get_mcp_manager
-
-            mcp_manager = get_mcp_manager()
-            if not mcp_manager.is_running():
-                mcp_manager.start()
-            if mcp_manager.is_running():
-                mcp_tools = mcp_manager.get_tools()
-                if mcp_tools:
-                    tools.extend(mcp_tools)
+            mcp_tools = self.agent_service.get_mcp_tools()
+            if mcp_tools:
+                tools.extend(mcp_tools)
 
         return tools
 

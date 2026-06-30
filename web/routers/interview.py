@@ -5,8 +5,7 @@
 import logging
 import asyncio
 import json
-import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Any
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -15,7 +14,6 @@ from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from src.config import config
 from src.managers.persona_manager import PersonaManager
 from src.managers.interview_manager import (
     InterviewManager,
@@ -44,19 +42,6 @@ executor = ThreadPoolExecutor(max_workers=8)
 _persona_manager = None
 _interview_manager = None
 
-# サポートするMIMEタイプ
-SUPPORTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"]
-SUPPORTED_DOCUMENT_TYPES = [
-    "application/pdf",
-    "text/plain",
-    "text/csv",
-    "text/html",
-    "text/markdown",
-]
-# 一般ファイル上限はアプリ運用上限、画像上限はClaude(Bedrock)モデル制約。configを参照
-MAX_FILE_SIZE = config.MAX_FILE_SIZE  # 10MB
-MAX_IMAGE_SIZE = config.MAX_IMAGE_SIZE  # 5MB
-
 
 def get_persona_manager() -> PersonaManager:
     """PersonaManagerのシングルトンインスタンスを取得"""
@@ -72,73 +57,6 @@ def get_interview_manager() -> InterviewManager:
     if _interview_manager is None:
         _interview_manager = InterviewManager()
     return _interview_manager
-
-
-def _prepare_file_content_block(
-    file_bytes: bytes, mime_type: str, filename: str
-) -> Optional[Dict[str, Any]]:
-    """
-    ファイルをStrands Agent SDK用のContentBlock形式に変換
-
-    Args:
-        file_bytes: ファイルのバイナリデータ
-        mime_type: MIMEタイプ
-        filename: ファイル名
-
-    Returns:
-        ContentBlock形式の辞書、またはサポートされていない場合はNone
-    """
-    if mime_type in SUPPORTED_IMAGE_TYPES:
-        # 画像の場合
-        image_format = mime_type.split("/")[-1]
-        if image_format not in ["png", "jpeg", "gif", "webp"]:
-            image_format = "png"  # フォールバック
-        return {"image": {"format": image_format, "source": {"bytes": file_bytes}}}
-
-    elif mime_type == "application/pdf":
-        # PDFの場合
-        safe_name = (
-            re.sub(
-                r"\s+",
-                " ",
-                re.sub(r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", filename.rsplit(".", 1)[0]),
-            ).strip()[:100]
-            or "document"
-        )
-        return {
-            "document": {
-                "name": safe_name,
-                "format": "pdf",
-                "source": {"bytes": file_bytes},
-            }
-        }
-
-    elif mime_type in ["text/plain", "text/csv", "text/html", "text/markdown"]:
-        # テキスト系ドキュメントの場合
-        format_map = {
-            "text/plain": "txt",
-            "text/csv": "csv",
-            "text/html": "html",
-            "text/markdown": "md",
-        }
-        doc_format = format_map.get(mime_type, "txt")
-        safe_name = (
-            re.sub(
-                r"\s+",
-                " ",
-                re.sub(r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", filename.rsplit(".", 1)[0]),
-            ).strip()[:100]
-            or "document"
-        )
-        return {
-            "document": {
-                "name": safe_name,
-                "format": doc_format,
-                "source": {"bytes": file_bytes},
-            }
-        }
-
-    return None
 
 
 @router.post("/create", response_class=JSONResponse)
@@ -375,53 +293,15 @@ async def send_message_stream(
                 media_type="text/event-stream",
             )
 
-        # ドキュメント処理
-        document_contents: list[Dict[str, Any]] = []
-        document_metadata: list[Dict[str, Any]] = []
+        # ファイル読み込み（I/O制御はRouter責務）
+        raw_files: list[tuple] = []
         if files:
             for file in files:
                 if file.filename and file.size and file.size > 0:
-                    content_type = file.content_type or ""
-                    if content_type in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES:
-                        file_bytes = await file.read()
-                        if content_type in SUPPORTED_IMAGE_TYPES:
-                            img_format = content_type.split("/")[-1]
-                            if img_format == "jpeg":
-                                img_format = "jpeg"
-                            document_contents.append(
-                                {
-                                    "image": {
-                                        "format": img_format,
-                                        "source": {"bytes": file_bytes},
-                                    }
-                                }
-                            )
-                        else:
-                            raw_name = (file.filename or "doc").rsplit(".", 1)[0]
-                            doc_name = re.sub(
-                                r"[^a-zA-Z0-9\s\-\(\)\[\]]", " ", raw_name
-                            )
-                            doc_name = (
-                                re.sub(r"\s+", " ", doc_name).strip() or "document"
-                            )
-                            doc_format = "pdf" if "pdf" in content_type else "txt"
-                            document_contents.append(
-                                {
-                                    "document": {
-                                        "name": doc_name[:200],
-                                        "format": doc_format,
-                                        "source": {"bytes": file_bytes},
-                                    }
-                                }
-                            )
-                        document_metadata.append(
-                            {
-                                "filename": file.filename,
-                                "mime_type": content_type,
-                                "file_size": file.size,
-                                "uploaded_at": datetime.now().isoformat(),
-                            }
-                        )
+                    file_bytes = await file.read()
+                    raw_files.append(
+                        (file_bytes, file.filename, file.content_type or "")
+                    )
 
         interview_manager = get_interview_manager()
 
@@ -429,11 +309,13 @@ async def send_message_stream(
 
         def run_streaming() -> None:
             try:
-                for event_type, data in interview_manager.send_user_message_streaming(
+                for (
+                    event_type,
+                    data,
+                ) in interview_manager.send_user_message_streaming_with_files(
                     session_id,
                     message.strip(),
-                    document_contents=document_contents or None,
-                    document_metadata=document_metadata or None,
+                    raw_files=raw_files or None,
                 ):
                     if event_type == "message_start":
                         sse = f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
@@ -444,7 +326,6 @@ async def send_message_stream(
                     else:
                         continue
                     asyncio.run_coroutine_threadsafe(queue.put(sse), loop)
-                # Complete signal
                 complete_sse = (
                     f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
                 )
@@ -499,126 +380,30 @@ async def send_message(
     files: Optional[List[UploadFile]] = File(None),
 ) -> Any:
     """メッセージ送信エンドポイント（マルチモーダル対応）"""
-    logger.info(
-        f"Received message request for session {session_id} (files: {len(files) if files else 0})"
-    )
-
     try:
-        # Enhanced input validation
-        if not message:
-            return JSONResponse(
-                {
-                    "error": "メッセージが指定されていません",
-                    "error_type": "validation_error",
-                    "field": "message",
-                },
-                status_code=400,
-            )
-
-        if not message.strip():
-            return JSONResponse(
-                {
-                    "error": "メッセージが空です",
-                    "error_type": "validation_error",
-                    "field": "message",
-                },
-                status_code=400,
-            )
-
-        if len(message.strip()) > 2000:
-            return JSONResponse(
-                {
-                    "error": "メッセージが長すぎます（最大2000文字）",
-                    "error_type": "validation_error",
-                    "field": "message",
-                    "max_length": 2000,
-                    "provided_length": len(message.strip()),
-                },
-                status_code=400,
-            )
-
-        # ファイルをContentBlock形式に変換
-        document_contents = []
+        # ファイル読み込み（I/O制御はRouter責務）
+        raw_files: list[tuple] = []
         if files:
             for file in files:
-                if file.filename and file.size > 0:  # type: ignore[operator]
-                    content_type = file.content_type or ""
-
-                    # ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
-                    is_image = content_type in SUPPORTED_IMAGE_TYPES
-                    size_limit = MAX_IMAGE_SIZE if is_image else MAX_FILE_SIZE
-                    if file.size > size_limit:  # type: ignore[operator]
-                        limit_mb = size_limit // (1024 * 1024)
-                        return JSONResponse(
-                            {
-                                "error": f"ファイル '{file.filename}' が大きすぎます（最大{limit_mb}MB）",
-                                "error_type": "validation_error",
-                                "field": "files",
-                            },
-                            status_code=400,
-                        )
-
-                    # MIMEタイプチェック
-                    if (
-                        content_type
-                        not in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES
-                    ):
-                        return JSONResponse(
-                            {
-                                "error": f"ファイル '{file.filename}' のタイプ '{content_type}' はサポートされていません",
-                                "error_type": "validation_error",
-                                "field": "files",
-                                "supported_types": SUPPORTED_IMAGE_TYPES
-                                + SUPPORTED_DOCUMENT_TYPES,
-                            },
-                            status_code=400,
-                        )
-
-                    # ファイル内容を読み込み
+                if file.filename and file.size and file.size > 0:
                     file_bytes = await file.read()
-
-                    # ContentBlock形式に変換
-                    content_block = _prepare_file_content_block(
-                        file_bytes, content_type, file.filename
+                    raw_files.append(
+                        (file_bytes, file.filename, file.content_type or "")
                     )
-                    if content_block:
-                        document_contents.append(content_block)
-                        logger.info(
-                            f"Prepared file for multimodal: {file.filename} ({content_type})"
-                        )
-
-        # ドキュメントメタデータを準備（詳細画面での表示用）
-        document_metadata = []
-        if files:
-            for file in files:
-                if file.filename and file.size > 0:  # type: ignore[operator]
-                    content_type = file.content_type or ""
-                    if content_type in SUPPORTED_IMAGE_TYPES + SUPPORTED_DOCUMENT_TYPES:
-                        document_metadata.append(
-                            {
-                                "filename": file.filename,
-                                "mime_type": content_type,
-                                "file_size": file.size,
-                                "uploaded_at": datetime.now().isoformat(),
-                            }
-                        )
 
         interview_manager = get_interview_manager()
 
-        # 同期的なメッセージ処理を非同期で実行
         loop = asyncio.get_event_loop()
 
         def send_message_sync() -> Any:
-            return interview_manager.send_user_message(
+            return interview_manager.send_user_message_with_files(
                 session_id,
                 message.strip(),
-                document_contents=document_contents if document_contents else None,
-                document_metadata=document_metadata if document_metadata else None,
+                raw_files=raw_files or None,
             )
 
         responses = await loop.run_in_executor(executor, send_message_sync)
 
-        # レスポンスをJSON形式で返す
         response_data = []
         for response in responses:
             response_data.append(
@@ -634,18 +419,15 @@ async def send_message(
                 }
             )
 
-        final_response = {
-            "user_message": message.strip(),
-            "responses": response_data,
-            "message": "メッセージが正常に送信されました",
-            "response_count": len(response_data),
-            "timestamp": datetime.now().isoformat(),
-        }
-
-        logger.info(
-            f"Message processed successfully: {len(response_data)} responses generated"
+        return JSONResponse(
+            {
+                "user_message": message.strip(),
+                "responses": response_data,
+                "message": "メッセージが正常に送信されました",
+                "response_count": len(response_data),
+                "timestamp": datetime.now().isoformat(),
+            }
         )
-        return JSONResponse(final_response)
 
     except InterviewSessionNotFoundError as e:
         logger.error(f"Session not found: {e}")
@@ -661,7 +443,7 @@ async def send_message(
         logger.error(f"Validation error: {e}")
         return JSONResponse(
             {
-                "error": "入力内容に問題があります。内容を確認してください。",
+                "error": str(e),
                 "error_type": "validation_error",
             },
             status_code=400,
@@ -677,9 +459,6 @@ async def send_message(
         )
     except Exception as e:
         logger.error(f"Unexpected error in message processing: {e}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return JSONResponse(
             {
                 "error": "メッセージの送信中に予期しないエラーが発生しました",

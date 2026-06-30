@@ -3,12 +3,15 @@ Agent Discussion Manager for AI Persona System.
 Handles AI agent mode discussion setup, execution, and persistence.
 """
 
+import json
 import logging
-from typing import List, Dict, Optional, Any
+from typing import Generator, List, Dict, Optional, Any
 
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
+from ..models.insight_category import InsightCategory
+from ..prompts.discussion_interview_prompts import build_persona_system_prompt
 from ..services.agent_service import (
     AgentService,
     PersonaAgent,
@@ -116,7 +119,7 @@ class AgentDiscussionManager:
                 # Get system prompt for this persona
                 system_prompt = system_prompts.get(
                     persona.id,
-                    self.agent_service.generate_persona_system_prompt(persona),
+                    build_persona_system_prompt(persona),
                 )
 
                 # Create persona agent with memory and dataset/KB configuration
@@ -591,68 +594,15 @@ class AgentDiscussionManager:
         enable_dataset: bool,
         enable_kb: bool,
     ) -> PersonaAgent:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。両方同時に有効化可能。"""
-        from src.services.service_factory import service_factory
-
-        db_service = service_factory.get_database_service()
-        additional_tools = []
-        enhanced_prompt = system_prompt
-
-        # KB連携：ツールとプロンプト拡張を準備
-        if enable_kb:
-            kb_binding = db_service.get_kb_binding_by_persona(persona.id)
-            if kb_binding:
-                kb = db_service.get_knowledge_base(kb_binding.kb_id)
-                if kb:
-                    from src.services.knowledge_base.kb_tools import (
-                        create_kb_retrieval_tool,
-                    )
-                    from src.config import config
-
-                    kb_tool = create_kb_retrieval_tool(
-                        knowledge_base_id=kb.knowledge_base_id,
-                        metadata_filters=kb_binding.metadata_filters,
-                        region=config.AWS_REGION,
-                    )
-                    additional_tools.append(kb_tool)
-                    enhanced_prompt = self.agent_service._enhance_prompt_with_kb_info(
-                        enhanced_prompt,
-                        kb.name,
-                        kb.description,
-                        kb_binding.metadata_filters,
-                    )
-
-        # データセット連携：ツールとプロンプト拡張を準備
-        if enable_dataset:
-            bindings = db_service.get_bindings_by_persona(persona.id)
-            if bindings:
-                dataset_ids = list(set(b.dataset_id for b in bindings))
-                datasets = [db_service.get_dataset(did) for did in dataset_ids]
-                datasets = [d for d in datasets if d is not None]
-                bindings_dict = [
-                    {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
-                    for b in bindings
-                ]
-                enhanced_prompt = self.agent_service._enhance_prompt_with_dataset_info(
-                    enhanced_prompt, bindings_dict, datasets
-                )
-                from src.services.mcp_server_manager import get_mcp_manager
-
-                mcp_manager = get_mcp_manager()
-                if not mcp_manager.is_running():
-                    mcp_manager.start()
-                if mcp_manager.is_running():
-                    mcp_tools = mcp_manager.get_tools()
-                    if mcp_tools:
-                        additional_tools.extend(mcp_tools)
-
-        return self.agent_service.create_persona_agent(
+        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
+        return self.agent_service.create_persona_agent_with_integrations(
             persona=persona,
-            system_prompt=enhanced_prompt,
+            system_prompt=system_prompt,
             enable_memory=enable_memory,
             session_id=session_id,
-            additional_tools=additional_tools if additional_tools else None,
             memory_mode=memory_mode,
+            enable_kb=enable_kb,
+            enable_dataset=enable_dataset,
         )
 
     def start_agent_discussion_streaming(
@@ -1161,3 +1111,176 @@ class AgentDiscussionManager:
             )
 
         return "\n".join(parts)
+
+    # =========================================================================
+    # フルフローAPI（Router層のワークフローロジックをManager層に統合）
+    # =========================================================================
+
+    def run_agent_discussion_streaming(
+        self,
+        personas: List[Persona],
+        topic: str,
+        rounds: int = 3,
+        additional_instructions: str = "",
+        enable_memory: bool = False,
+        memory_mode: str = "full",
+        enable_dataset: bool = False,
+        enable_kb: bool = False,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Generator[str, None, None]:
+        """agentモード議論のフルフロー（ストリーミング）。
+
+        1. 入力バリデーション（memory_mode含む）
+        2. ペルソナエージェント作成
+        3. ファシリテーターエージェント作成
+        4. 議論実行（メッセージイベントをSSE文字列としてyield）
+        5. インサイト生成
+        6. カテゴリー保存
+        7. DB保存
+        8. 完了イベントをyield
+
+        Yields:
+            str: SSE data行（"data: {...}\\n\\n" 形式）
+
+        Raises:
+            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+        """
+        self._validate_memory_mode(memory_mode)
+
+        temp_discussion = Discussion.create_new(
+            topic=topic, participants=[p.id for p in personas], mode="agent"
+        )
+        session_id = temp_discussion.id
+
+        persona_agents = self.create_persona_agents(
+            personas,
+            {},
+            enable_memory=enable_memory,
+            session_id=session_id,
+            memory_mode=memory_mode,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+        )
+
+        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+
+        discussion = None
+        message_count = 0
+
+        for event_type, data in self.start_agent_discussion_streaming(
+            personas=personas,
+            topic=topic,
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+            enable_memory=enable_memory,
+            document_ids=document_ids,
+        ):
+            if event_type == "message_start":
+                yield f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
+            elif event_type == "message_delta":
+                yield f"data: {json.dumps({'type': 'message_delta', **data}, ensure_ascii=False)}\n\n"
+            elif event_type == "message_end":
+                message_count += 1
+                msg_data = {
+                    "type": "message_end",
+                    "persona_id": data.persona_id,
+                    "persona_name": data.persona_name,
+                    "content": data.content,
+                    "message_type": data.message_type,
+                }
+                yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
+            elif event_type == "complete":
+                discussion = data
+
+        if discussion:
+            discussion = self._attach_insights(discussion, categories)
+            self.save_agent_discussion(discussion)
+
+            complete_data = {
+                "type": "complete",
+                "discussion_id": discussion.id,
+                "message_count": message_count,
+                "insight_count": len(discussion.insights) if discussion.insights else 0,
+            }
+            yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
+
+    def run_agent_discussion_full(
+        self,
+        personas: List[Persona],
+        topic: str,
+        rounds: int = 3,
+        additional_instructions: str = "",
+        enable_memory: bool = False,
+        memory_mode: str = "full",
+        enable_dataset: bool = False,
+        enable_kb: bool = False,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Discussion:
+        """agentモード議論のフルフロー（非ストリーミング）。
+
+        Returns:
+            Discussion: インサイト付き保存済み議論オブジェクト
+
+        Raises:
+            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+        """
+        self._validate_memory_mode(memory_mode)
+
+        temp_discussion = Discussion.create_new(
+            topic=topic, participants=[p.id for p in personas], mode="agent"
+        )
+        session_id = temp_discussion.id
+
+        persona_agents = self.create_persona_agents(
+            personas,
+            {},
+            enable_memory=enable_memory,
+            session_id=session_id,
+            memory_mode=memory_mode,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+        )
+
+        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+
+        discussion = self.start_agent_discussion(
+            personas=personas,
+            topic=topic,
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+            enable_memory=enable_memory,
+            document_ids=document_ids,
+        )
+
+        discussion = self._attach_insights(discussion, categories)
+        self.save_agent_discussion(discussion)
+        return discussion
+
+    def _validate_memory_mode(self, memory_mode: str) -> None:
+        """memory_modeのバリデーション。"""
+        valid_modes = ["full", "retrieve_only", "disabled"]
+        if memory_mode not in valid_modes:
+            raise AgentDiscussionManagerError(
+                f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_modes)}"
+            )
+
+    def _attach_insights(
+        self,
+        discussion: Discussion,
+        categories: Optional[List[InsightCategory]],
+    ) -> Discussion:
+        """インサイト生成・カテゴリー保存の共通処理。"""
+        from .shared.insight_utils import attach_insights_to_discussion
+
+        return attach_insights_to_discussion(
+            discussion=discussion,
+            categories=categories,
+            ai_service=self._get_ai_service(),
+            logger=self.logger,
+        )
+
+    def _get_ai_service(self) -> Any:
+        """インサイト生成用にAIServiceを取得する。"""
+        return service_factory.get_ai_service()

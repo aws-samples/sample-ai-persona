@@ -5,13 +5,14 @@ Handles interview session setup, execution, and persistence.
 
 import logging
 import uuid
-from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+
 
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
+from ..models.interview_session import InterviewSession
 from ..services.agent_service import (
     AgentService,
     PersonaAgent,
@@ -55,111 +56,6 @@ class InterviewPersistenceError(InterviewManagerError):
     """Interview persistence related errors."""
 
     pass
-
-
-@dataclass
-class InterviewSession:
-    """
-    Represents an active interview session.
-    """
-
-    id: str
-    participants: List[str]  # persona_ids
-    messages: List[Message]
-    created_at: datetime
-    is_saved: bool = False
-    enable_memory: bool = False
-    documents: Optional[List[Dict[str, Any]]] = None  # Attached documents metadata
-    memory_mode: str = "full"  # "full", "retrieve_only", or "disabled"
-    enable_dataset: bool = False  # Whether external dataset access is enabled
-
-    def add_user_message(self, content: str) -> "InterviewSession":
-        """
-        Add a user message to the interview session.
-
-        Args:
-            content: User message content
-
-        Returns:
-            New InterviewSession instance with the user message added
-        """
-        user_message = Message.create_new(
-            persona_id="user",
-            persona_name="User",
-            content=content,
-            message_type="user_message",
-        )
-
-        new_messages = self.messages + [user_message]
-        return InterviewSession(
-            id=self.id,
-            participants=self.participants,
-            messages=new_messages,
-            created_at=self.created_at,
-            is_saved=self.is_saved,
-            enable_memory=self.enable_memory,
-            documents=self.documents,
-            memory_mode=self.memory_mode,
-            enable_dataset=self.enable_dataset,
-        )
-
-    def add_persona_response(
-        self, persona_id: str, persona_name: str, content: str
-    ) -> "InterviewSession":
-        """
-        Add a persona response to the interview session.
-
-        Args:
-            persona_id: ID of the responding persona
-            persona_name: Name of the responding persona
-            content: Persona response content
-
-        Returns:
-            New InterviewSession instance with the persona response added
-        """
-        response_message = Message.create_new(
-            persona_id=persona_id,
-            persona_name=persona_name,
-            content=content,
-            message_type="statement",
-        )
-
-        new_messages = self.messages + [response_message]
-        return InterviewSession(
-            id=self.id,
-            participants=self.participants,
-            messages=new_messages,
-            created_at=self.created_at,
-            is_saved=self.is_saved,
-            enable_memory=self.enable_memory,
-            documents=self.documents,
-            memory_mode=self.memory_mode,
-            enable_dataset=self.enable_dataset,
-        )
-
-    def add_document(self, document_metadata: Dict[str, Any]) -> "InterviewSession":
-        """
-        Add a document to the interview session.
-
-        Args:
-            document_metadata: Document metadata (filename, mime_type, file_size, etc.)
-
-        Returns:
-            New InterviewSession instance with the document added
-        """
-        current_docs = self.documents or []
-        new_documents = current_docs + [document_metadata]
-        return InterviewSession(
-            id=self.id,
-            participants=self.participants,
-            messages=self.messages,
-            created_at=self.created_at,
-            is_saved=self.is_saved,
-            enable_memory=self.enable_memory,
-            documents=new_documents,
-            memory_mode=self.memory_mode,
-            enable_dataset=self.enable_dataset,
-        )
 
 
 class InterviewManager:
@@ -800,9 +696,13 @@ class InterviewManager:
         for persona in personas:
             try:
                 # Get system prompt for this persona
+                from ..prompts.discussion_interview_prompts import (
+                    build_persona_system_prompt,
+                )
+
                 system_prompt = system_prompts.get(
                     persona.id,
-                    self.agent_service.generate_persona_system_prompt(persona),
+                    build_persona_system_prompt(persona),
                 )
 
                 # Create persona agent with memory, dataset, and KB configuration
@@ -855,106 +755,22 @@ class InterviewManager:
         enable_dataset: bool,
         enable_kb: bool,
     ) -> Any:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。両方同時に有効化可能。"""
-        from src.services.service_factory import service_factory
-
-        db_service = service_factory.get_database_service()
-        additional_tools = []
-        enhanced_prompt = system_prompt
-
-        # KB連携：ツールとプロンプト拡張を準備
-        if enable_kb:
-            kb_binding = db_service.get_kb_binding_by_persona(persona.id)
-            if kb_binding:
-                kb = db_service.get_knowledge_base(kb_binding.kb_id)
-                if kb:
-                    from src.services.knowledge_base.kb_tools import (
-                        create_kb_retrieval_tool,
-                    )
-                    from src.config import config
-
-                    kb_tool = create_kb_retrieval_tool(
-                        knowledge_base_id=kb.knowledge_base_id,
-                        metadata_filters=kb_binding.metadata_filters,
-                        region=config.AWS_REGION,
-                    )
-                    additional_tools.append(kb_tool)
-                    enhanced_prompt = self.agent_service._enhance_prompt_with_kb_info(
-                        enhanced_prompt,
-                        kb.name,
-                        kb.description,
-                        kb_binding.metadata_filters,
-                    )
-
-        # データセット連携：ツールとプロンプト拡張を準備
-        if enable_dataset:
-            bindings = db_service.get_bindings_by_persona(persona.id)
-            if bindings:
-                dataset_ids = list(set(b.dataset_id for b in bindings))
-                datasets = [db_service.get_dataset(did) for did in dataset_ids]
-                datasets = [d for d in datasets if d is not None]
-                bindings_dict = [
-                    {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
-                    for b in bindings
-                ]
-                enhanced_prompt = self.agent_service._enhance_prompt_with_dataset_info(
-                    enhanced_prompt, bindings_dict, datasets
-                )
-                from src.services.mcp_server_manager import get_mcp_manager
-
-                mcp_manager = get_mcp_manager()
-                if not mcp_manager.is_running():
-                    mcp_manager.start()
-                if mcp_manager.is_running():
-                    mcp_tools = mcp_manager.get_tools()
-                    if mcp_tools:
-                        additional_tools.extend(mcp_tools)
-
-        return self.agent_service.create_persona_agent(
+        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
+        return self.agent_service.create_persona_agent_with_integrations(
             persona=persona,
-            system_prompt=enhanced_prompt,
+            system_prompt=system_prompt,
             enable_memory=enable_memory,
             session_id=session_id,
-            additional_tools=additional_tools if additional_tools else None,
             memory_mode=memory_mode,
+            enable_kb=enable_kb,
+            enable_dataset=enable_dataset,
         )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
-        """
-        Generate interview-specific system prompt for a persona.
+        """インタビュー用システムプロンプトを生成する。"""
+        from ..prompts.discussion_interview_prompts import build_interview_system_prompt
 
-        Args:
-            persona: Persona object
-
-        Returns:
-            str: Generated system prompt
-        """
-        base_prompt = self.agent_service.generate_persona_system_prompt(persona)
-
-        interview_instructions = f"""
-
-# インタビューでの振る舞い
-- あなたはユーザーとの1対1のインタビューに参加しています
-- あなたの価値観、経験、考え方に基づいて正直に答えてください
-- 不満や迷い、ネガティブな経験も隠さず率直に表明してください
-- 具体的なエピソードや体験を交え、あなた自身のコミュニケーションスタイルで話してください
-- 回答の長さは質問の深さに合わせてください（単純な質問は短く、経験や理由を問う質問には具体的に）
-- 状況によって判断が変わる場合は、その条件を示してください（「普段は○○だけど、△△の場合は□□」）
-
-# ツール使用について
-- あなたにはデータ参照用のツール（execute_query）が提供されている場合があります
-- 購買履歴、過去の経験、具体的な商品について質問された場合は、**必ずツールを使用してデータを確認してから回答してください**
-- 初回は認証設定とデータ取得を1回にまとめて実行してください: `CREATE SECRET IF NOT EXISTS aws_secret (TYPE S3, PROVIDER CREDENTIAL_CHAIN); SELECT ...`
-- 2回目以降はSELECT文だけでOKです
-- 認証エラー（403）が出た場合はCREATE SECRET文を含めて再実行してください
-
-# 重要な注意事項
-- あなたは{persona.name}として一貫した人格を維持してください
-- 不適切な質問には丁寧に回答を控える旨を伝えてください
-- データセットが利用可能な場合、具体的な情報は必ずツールで確認してから回答してください
-"""
-
-        return base_prompt + interview_instructions
+        return build_interview_system_prompt(persona)
 
     def get_session_status(self, session_id: str) -> Dict[str, Any]:
         """
@@ -1417,3 +1233,147 @@ class InterviewManager:
             )
 
         return prompt
+
+    # =========================================================================
+    # ファイル処理統合（Router層のContentBlock構築ロジックをManager層に統合）
+    # =========================================================================
+
+    def _validate_and_convert_files(
+        self,
+        raw_files: List[tuple],
+    ) -> tuple:
+        """ファイルのバリデーションとContentBlock変換。
+
+        Args:
+            raw_files: [(bytes, filename, mime_type), ...] のリスト
+
+        Returns:
+            (document_contents, document_metadata) のタプル
+
+        Raises:
+            InterviewValidationError: サイズ超過、未サポートMIMEタイプ
+        """
+        from ..config import config
+        from .shared.document_loader import (
+            build_content_block,
+            is_supported_mime_type,
+            is_image_type,
+        )
+
+        document_contents: List[Dict[str, Any]] = []
+        document_metadata: List[Dict[str, Any]] = []
+
+        for file_bytes, filename, mime_type in raw_files:
+            if not file_bytes or not filename:
+                continue
+
+            # MIMEタイプバリデーション
+            if not is_supported_mime_type(mime_type):
+                raise InterviewValidationError(
+                    f"ファイル '{filename}' のタイプ '{mime_type}' はサポートされていません"
+                )
+
+            # サイズバリデーション
+            size_limit = (
+                config.MAX_IMAGE_SIZE
+                if is_image_type(mime_type)
+                else config.MAX_FILE_SIZE
+            )
+            if len(file_bytes) > size_limit:
+                limit_mb = size_limit // (1024 * 1024)
+                raise InterviewValidationError(
+                    f"ファイル '{filename}' が大きすぎます（最大{limit_mb}MB）"
+                )
+
+            # ContentBlock変換
+            content_block = build_content_block(file_bytes, mime_type, filename)
+            if content_block:
+                document_contents.append(content_block)
+                document_metadata.append(
+                    {
+                        "filename": filename,
+                        "mime_type": mime_type,
+                        "file_size": len(file_bytes),
+                        "uploaded_at": datetime.now().isoformat(),
+                    }
+                )
+
+        return document_contents, document_metadata
+
+    def send_user_message_with_files(
+        self,
+        session_id: str,
+        message: str,
+        raw_files: Optional[List[tuple]] = None,
+    ) -> List[Message]:
+        """メッセージ送信（ファイル処理統合版、非ストリーミング）。
+
+        Router層から生バイナリを受け取り、バリデーション + ContentBlock変換を
+        Manager内部で実施する。
+
+        Args:
+            session_id: セッションID
+            message: メッセージ本文
+            raw_files: [(bytes, filename, mime_type), ...] のリスト
+
+        Returns:
+            List[Message]: ペルソナ応答リスト
+
+        Raises:
+            InterviewSessionNotFoundError: セッション未存在
+            InterviewValidationError: バリデーション失敗
+            InterviewAgentError: エージェント通信失敗
+        """
+        document_contents = None
+        document_metadata = None
+
+        if raw_files:
+            document_contents, document_metadata = self._validate_and_convert_files(
+                raw_files
+            )
+
+        return self.send_user_message(
+            session_id=session_id,
+            message=message,
+            document_contents=document_contents or None,
+            document_metadata=document_metadata or None,
+        )
+
+    def send_user_message_streaming_with_files(
+        self,
+        session_id: str,
+        message: str,
+        raw_files: Optional[List[tuple]] = None,
+    ) -> Any:
+        """メッセージ送信（ファイル処理統合版、ストリーミング）。
+
+        Router層から生バイナリを受け取り、バリデーション + ContentBlock変換を
+        Manager内部で実施する。
+
+        Args:
+            session_id: セッションID
+            message: メッセージ本文
+            raw_files: [(bytes, filename, mime_type), ...] のリスト
+
+        Yields:
+            tuple: (event_type, data)
+
+        Raises:
+            InterviewSessionNotFoundError: セッション未存在
+            InterviewValidationError: バリデーション失敗
+            InterviewAgentError: エージェント通信失敗
+        """
+        document_contents = None
+        document_metadata = None
+
+        if raw_files:
+            document_contents, document_metadata = self._validate_and_convert_files(
+                raw_files
+            )
+
+        yield from self.send_user_message_streaming(
+            session_id=session_id,
+            message=message,
+            document_contents=document_contents or None,
+            document_metadata=document_metadata or None,
+        )

@@ -168,6 +168,41 @@ class ServiceFactory:
 
         return self._memory_service
 
+    def check_stm_session_exists(self, session_id: str) -> bool:
+        """AgentCore Memory STMにセッション履歴が存在するか確認する。
+
+        SDK呼び出しをService層に閉じ込める。
+        """
+        try:
+            if not self.is_memory_enabled():
+                return False
+
+            if not config.AGENTCORE_MEMORY_ID:
+                return False
+
+            from bedrock_agentcore.memory.integrations.strands.config import (
+                AgentCoreMemoryConfig,
+            )
+            from bedrock_agentcore.memory.integrations.strands.session_manager import (
+                AgentCoreMemorySessionManager,
+            )
+
+            memory_config = AgentCoreMemoryConfig(
+                memory_id=config.AGENTCORE_MEMORY_ID,
+                session_id=session_id,
+                actor_id="report-agent",
+                retrieval_config={},
+            )
+            sm = AgentCoreMemorySessionManager(
+                agentcore_memory_config=memory_config,
+                region_name=config.AGENTCORE_MEMORY_REGION,
+            )
+            session_data = sm.read_session(session_id=session_id)
+            return session_data is not None
+        except Exception as e:
+            self.logger.debug(f"STMセッション確認失敗: {e}")
+            return False
+
     def get_s3_service(self) -> Optional["S3Service"]:
         """
         S3Serviceのシングルトンインスタンスを取得

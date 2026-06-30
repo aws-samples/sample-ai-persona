@@ -7,7 +7,6 @@ import queue
 import logging
 import threading
 from typing import List, Dict, Any, Optional, Generator
-from dataclasses import asdict
 
 try:
     from strands import Agent
@@ -19,8 +18,6 @@ except ImportError:
 
 from ..config import config
 from ..models.persona import Persona
-from ..models.demographics import gender_label
-from .country_service import country_name
 from ..models.message import Message
 
 
@@ -650,34 +647,30 @@ class AgentService:
             raise AgentInitializationError(error_msg)
 
     def create_facilitator_agent(
-        self, rounds: int, additional_instructions: str = ""
+        self,
+        rounds: int,
+        additional_instructions: str = "",
+        system_prompt: Optional[str] = None,
     ) -> FacilitatorAgent:
-        """
-        ファシリテータエージェントを作成
+        """ファシリテータエージェントを作成。
 
         Args:
             rounds: ラウンド数
             additional_instructions: 追加の指示
-
-        Returns:
-            FacilitatorAgent: 作成されたファシリテータエージェント
-
-        Raises:
-            AgentInitializationError: エージェント作成エラー
+            system_prompt: 構築済みシステムプロンプト（指定時はrounds/additional_instructionsからの自動生成をスキップ）
         """
         try:
-            # システムプロンプトを生成
-            system_prompt = self._generate_facilitator_system_prompt(
-                rounds, additional_instructions
-            )
+            if system_prompt is None:
+                from ..prompts.discussion_interview_prompts import (
+                    build_facilitator_system_prompt,
+                )
 
-            # Bedrockモデルを作成
+                system_prompt = build_facilitator_system_prompt(
+                    rounds, additional_instructions
+                )
+
             model = self._create_bedrock_model()
-
-            # Agentを作成
             agent = Agent(name="Facilitator", system_prompt=system_prompt, model=model)
-
-            # FacilitatorAgentを作成
             facilitator_agent = FacilitatorAgent(rounds, additional_instructions, agent)
 
             self.logger.info(
@@ -690,115 +683,7 @@ class AgentService:
             self.logger.error(error_msg)
             raise AgentInitializationError(error_msg)
 
-    def _generate_facilitator_system_prompt(
-        self, rounds: int, additional_instructions: str
-    ) -> str:
-        """
-        ファシリテータ用システムプロンプトを生成
-
-        Args:
-            rounds: ラウンド数
-            additional_instructions: 追加の指示
-
-        Returns:
-            str: 生成されたシステムプロンプト
-        """
-        prompt = f"""あなたは議論のファシリテータです。{rounds}ラウンドの議論を進行管理します。
-
-# 役割
-- 議論の進行を管理し、深い洞察を引き出す
-- 各ラウンドの議論を要約し、次の議論の方向性を示す
-- 表面的な合意に留まらず、本質的な議論を促進する
-
-# 進行方針
-- 各ラウンドで全ペルソナが1回ずつ発言する
-- 発言順序はランダムに決定される
-- ラウンド終了後に、議論全体を要約し次ラウンドへの問いかけを行う
-- 議論が表面的になっていたら「なぜそう思うのか」「具体的にはどういう場面か」と掘り下げる
-
-# ラウンド要約のポイント
-- 各参加者の主要な意見や立場を簡潔にまとめる
-- 共通点や対立点を明確にする
-- まだ掘り下げられていない重要な観点を指摘する
-- 各ペルソナに次のラウンドで答えてほしい具体的な問いを提示する
-- 3-5文で要約し、最後に問いかけで締める
-- 最終ラウンドでは、議論全体の結論と実践的な示唆をまとめる
-"""
-
-        if additional_instructions:
-            prompt += f"\n# 追加の指示\n{additional_instructions}\n"
-
-        return prompt
-
-    def generate_persona_system_prompt(self, persona: Persona) -> str:
-        """
-        ペルソナからシステムプロンプトを自動生成
-
-        Args:
-            persona: ペルソナオブジェクト
-
-        Returns:
-            str: 生成されたシステムプロンプト
-        """
-        persona_dict = asdict(persona)
-
-        # 設定済みのデモグラフィック属性のみプロフィールに追加（表示名へ変換）
-        profile_lines = [
-            f"- 名前: {persona_dict['name']}",
-            f"- 年齢: {persona_dict['age']}歳",
-        ]
-        if persona.gender:
-            profile_lines.append(f"- 性別: {gender_label(persona.gender)}")
-        if persona.country:
-            location = country_name(persona.country)
-            if persona.city:
-                location += f"・{persona.city}"
-            profile_lines.append(f"- 居住地: {location}")
-        elif persona.city:
-            profile_lines.append(f"- 居住地: {persona.city}")
-        profile_lines.append(f"- 職業: {persona_dict['occupation']}")
-        profile_text = "\n".join(profile_lines)
-
-        prompt = f"""あなたは{persona_dict["name"]}として議論に参加します。
-
-# あなたのプロフィール
-{profile_text}
-
-# 背景
-{persona_dict["background"]}
-
-# 価値観
-{chr(10).join(f"- {value}" for value in persona_dict["values"])}
-
-# 抱えている課題
-{chr(10).join(f"- {pain}" for pain in persona_dict["pain_points"])}
-
-# 目標・願望
-{chr(10).join(f"- {goal}" for goal in persona_dict["goals"])}
-
-# この議論の目的
-あなたの率直な意見、本音、具体的な生活体験が求められています。
-議論のテーマに記載された目的を意識して発言してください。
-
-# 議論での振る舞い
-- あなたの立場から率直に意見を述べてください。同意できない点は遠慮なく指摘してください
-- 抽象的な意見ではなく、あなたの実体験や生活実感に基づいた具体的なエピソードを交えて話してください
-- 他の参加者の意見に違和感があれば、なぜそう感じるのか正直に伝えてください
-- 「なんとなく」ではなく、あなたの価値観や課題に紐づけて理由を明確にしてください
-- 不満・懐疑・迷いがあれば隠さず表明してください。無理に肯定的である必要はありません
-- 状況や条件によって判断が変わる場合は、その条件を示してください
-- あなたのコミュニケーションスタイルに合った強度で意見してください（全員が同じ強さで主張する必要はない）
-
-# 重要な注意事項
-- あなたは{persona_dict["name"]}です。この人格を一貫して維持してください
-- {persona_dict["age"]}歳の{persona_dict["occupation"]}として自然な口調で話してください
-- 発言は実際の会話のような口語体にしてください（##などの見出しは不要です）
-- 1回の発言は500文字以内に収めてください。長すぎる発言は避けてください
-"""
-
-        return prompt
-
-    def _enhance_prompt_with_kb_info(
+    def enhance_prompt_with_kb_info(
         self,
         base_prompt: str,
         kb_name: str,
@@ -833,7 +718,7 @@ class AgentService:
 """
         )
 
-    def _enhance_prompt_with_dataset_info(
+    def enhance_prompt_with_dataset_info(
         self, base_prompt: str, bindings: List[Dict], datasets: List[Any]
     ) -> str:
         """
@@ -1084,3 +969,224 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
             if mcp_tools:
                 return list(mcp_tools)
         return []
+
+    # =========================================================================
+    # 統合API（Manager層のSDK操作・MCPライフサイクル管理をService層に集約）
+    # =========================================================================
+
+    def create_persona_agent_with_integrations(
+        self,
+        persona: Persona,
+        system_prompt: str,
+        enable_memory: bool = False,
+        session_id: Optional[str] = None,
+        memory_mode: str = "full",
+        enable_kb: bool = False,
+        enable_dataset: bool = False,
+    ) -> PersonaAgent:
+        """統合機能付きペルソナエージェントを作成する。
+
+        KB連携・データセット連携のツール構成とプロンプト拡張を一括処理。
+        Manager層はenable_kb/enable_datasetのフラグ判断のみ行い、
+        実際のSDKツール生成・MCPサーバー起動はService層が担当する。
+        """
+        from .service_factory import service_factory
+
+        db_service = service_factory.get_database_service()
+        additional_tools: list[Any] = []
+        enhanced_prompt = system_prompt
+
+        if enable_kb:
+            kb_tools, kb_prompt_ext = self._setup_kb_integration(persona.id, db_service)
+            additional_tools.extend(kb_tools)
+            enhanced_prompt += kb_prompt_ext
+
+        if enable_dataset:
+            ds_tools, ds_prompt_ext = self._setup_dataset_integration(
+                persona.id, db_service
+            )
+            additional_tools.extend(ds_tools)
+            enhanced_prompt += ds_prompt_ext
+
+        return self.create_persona_agent(
+            persona=persona,
+            system_prompt=enhanced_prompt,
+            enable_memory=enable_memory,
+            session_id=session_id,
+            additional_tools=additional_tools if additional_tools else None,
+            memory_mode=memory_mode,
+        )
+
+    def _setup_kb_integration(
+        self, persona_id: str, db_service: Any
+    ) -> tuple[list[Any], str]:
+        """KB連携のツールとプロンプト拡張を準備する。"""
+        tools: list[Any] = []
+        prompt_ext = ""
+
+        kb_binding = db_service.get_kb_binding_by_persona(persona_id)
+        if kb_binding:
+            kb = db_service.get_knowledge_base(kb_binding.kb_id)
+            if kb:
+                from .knowledge_base.kb_tools import create_kb_retrieval_tool
+
+                kb_tool = create_kb_retrieval_tool(
+                    knowledge_base_id=kb.knowledge_base_id,
+                    metadata_filters=kb_binding.metadata_filters,
+                    region=config.AWS_REGION,
+                )
+                tools.append(kb_tool)
+                prompt_ext = self.enhance_prompt_with_kb_info(
+                    "",
+                    kb.name,
+                    kb.description,
+                    kb_binding.metadata_filters,
+                )
+
+        return tools, prompt_ext
+
+    def _setup_dataset_integration(
+        self, persona_id: str, db_service: Any
+    ) -> tuple[list[Any], str]:
+        """データセット連携のMCPツールとプロンプト拡張を準備する。"""
+        tools: list[Any] = []
+        prompt_ext = ""
+
+        bindings = db_service.get_bindings_by_persona(persona_id)
+        if bindings:
+            dataset_ids = list(set(b.dataset_id for b in bindings))
+            datasets = [db_service.get_dataset(did) for did in dataset_ids]
+            datasets = [d for d in datasets if d is not None]
+            bindings_dict = [
+                {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
+                for b in bindings
+            ]
+            prompt_ext = self.enhance_prompt_with_dataset_info(
+                "", bindings_dict, datasets
+            )
+            mcp_tools = self.get_mcp_tools()
+            if mcp_tools:
+                tools.extend(mcp_tools)
+
+        return tools, prompt_ext
+
+    # =========================================================================
+    # レポートエージェント（データドリブン分析）
+    # =========================================================================
+
+    def run_report_agent_streaming(
+        self,
+        system_prompt: str,
+        user_content: str,
+        event_queue: Any = None,
+        session_id: Optional[str] = None,
+    ) -> Any:
+        """データドリブンレポート用Strands Agentを作成・実行する。
+
+        event_queueが渡された場合、thinking/tool_call/tool_resultイベントを
+        リアルタイムでputし、最終的に_doneシグナルを送信する。
+        event_queueがNoneの場合はエージェント結果をyieldする。
+
+        Args:
+            system_prompt: システムプロンプト
+            user_content: ユーザーコンテンツ（議論ログ+インサイト）
+            event_queue: リアルタイムイベント用queue
+            session_id: AgentCore Memory STMセッションID
+        """
+        if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
+            msg = (
+                "⚠️ データ分析エージェントの接続設定がされていません。"
+                "設定画面から Runtime ARN を設定してください。"
+            )
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+                return
+            yield msg
+            return
+
+        try:
+            from .data_agent_service import create_data_agent_tool
+        except ImportError as e:
+            msg = f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+                return
+            yield msg
+            return
+
+        def _callback(**kwargs: Any) -> None:
+            data = kwargs.get("data", "")
+            if data and event_queue is not None:
+                event_queue.put({"type": "thinking", "content": data})
+
+        report_session_manager = None
+        if session_id:
+            try:
+                from .memory.session_manager_factory import (
+                    create_agentcore_session_manager,
+                    is_memory_enabled,
+                )
+
+                if is_memory_enabled():
+                    report_session_manager = create_agentcore_session_manager(
+                        actor_id="report-agent",
+                        session_id=session_id,
+                        retrieval_config={},
+                        memory_mode="full",
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    f"レポートエージェントのセッションマネージャー作成失敗: {e}"
+                )
+
+        try:
+            credentials = config.get_aws_credentials()
+            filtered = {
+                k: v
+                for k, v in credentials.items()
+                if v is not None and k != "region_name"
+            }
+            model = BedrockModel(
+                model_id=config.BEDROCK_MODEL_ID,
+                region_name=config.AWS_REGION,
+                **filtered,
+            )
+            data_agent_tool = create_data_agent_tool(
+                config.DATA_AGENT_RUNTIME_ARN,
+                config.DATA_AGENT_REGION,
+                event_queue=event_queue,
+            )
+
+            agent_kwargs: dict[str, Any] = {
+                "model": model,
+                "tools": [data_agent_tool],
+                "system_prompt": system_prompt,
+                "callback_handler": _callback if event_queue is not None else None,
+            }
+            if report_session_manager:
+                agent_kwargs["session_manager"] = report_session_manager
+
+            agent = Agent(**agent_kwargs)
+            result = agent(user_content)
+
+            session_has_history = (
+                report_session_manager is not None and len(agent.messages) > 2
+            )
+
+            if event_queue is not None:
+                event_queue.put(
+                    {
+                        "type": "session_id",
+                        "session_id": session_id or "",
+                        "has_history": session_has_history,
+                    }
+                )
+                event_queue.put({"type": "_done"})
+            else:
+                yield str(result)
+        except Exception as e:
+            msg = f"\n\n⚠️ レポート生成エラー: {e}"
+            if event_queue is not None:
+                event_queue.put({"type": "error", "content": msg})
+            else:
+                yield msg
