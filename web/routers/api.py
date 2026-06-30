@@ -338,15 +338,17 @@ def _run_generate_personas(
     custom_prompt: str | None,
 ) -> list[dict]:
     """バックグラウンドスレッドで実行されるペルソナ生成処理"""
-    pm = get_persona_manager()
-    personas, _logs = pm.generate_personas(
+    from src.managers.persona_generation_manager import PersonaGenerationManager
+
+    gen_manager = PersonaGenerationManager()
+    personas, _logs = gen_manager.generate_and_cache(
         file_contents=file_contents,
         data_type=data_type,
         persona_count=persona_count,
         data_description=data_description,
         custom_prompt=custom_prompt,
     )
-    # 生成されたペルソナを保存
+    pm = get_persona_manager()
     for p in personas:
         pm.save_persona(p)
     return [_persona_to_response(p).model_dump() for p in personas]
