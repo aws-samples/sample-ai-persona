@@ -147,7 +147,7 @@ class AIService:
 
         return isinstance(error, BotoCoreError)
 
-    def _invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+    def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         """Bedrock モデルを呼び出し
 
         Args:
@@ -275,8 +275,6 @@ class AIService:
                     from .service_factory import service_factory
 
                     s3_service = service_factory.get_s3_service()
-                    if not s3_service:
-                        raise AIServiceError(f"S3サービスが利用できません: {file_path}")
 
                     # S3パス全体を渡す
                     file_bytes = s3_service.download_file(file_path)
@@ -573,7 +571,7 @@ class AIService:
         prompt = self._create_discussion_prompt(personas, topic)
 
         try:
-            response = self._retry_with_backoff(self._invoke_model, prompt)
+            response = self._retry_with_backoff(self.invoke_model, prompt)
             messages = self._parse_discussion_response(response, personas)
 
             # 各ペルソナが最低1回は発言していることを確認
@@ -801,7 +799,7 @@ class AIService:
         )
 
         try:
-            response = self._retry_with_backoff(self._invoke_model, prompt)
+            response = self._retry_with_backoff(self.invoke_model, prompt)
             self.logger.debug(f"インサイト抽出AIレスポンス: {response[:500]}...")
             insights = self._parse_structured_insights_response(response, categories)
 
@@ -1122,15 +1120,17 @@ class AIService:
         """
 
         def _call_stream() -> Any:
-            return self.bedrock_client.converse_stream(
-                modelId=self.model_id,
-                messages=converse_messages,
-                system=[{"text": system_prompt}],
-                inferenceConfig={
+            kwargs: Dict[str, Any] = {
+                "modelId": self.model_id,
+                "messages": converse_messages,
+                "inferenceConfig": {
                     "maxTokens": 12000,
                     "temperature": self.temperature,
                 },
-            )
+            }
+            if system_prompt:
+                kwargs["system"] = [{"text": system_prompt}]
+            return self.bedrock_client.converse_stream(**kwargs)
 
         response = self._retry_with_backoff(_call_stream)
 
@@ -1196,12 +1196,15 @@ class AIService:
             converted.append({"role": role, "content": [{"text": content}]})
         return converted
 
-    def chat_for_survey(self, messages: List[Dict[str, str]]) -> str:
+    def chat_for_survey(
+        self, messages: List[Dict[str, str]], system_prompt: str = ""
+    ) -> str:
         """アンケートヒアリング用のマルチターン会話。
 
         Args:
             messages: [{"role": "user"|"assistant", "content": "..."}, ...] の会話履歴
                      （最後のメッセージは user 発言であることを想定）
+            system_prompt: システムプロンプト
 
         Returns:
             assistantの返答テキスト
@@ -1215,12 +1218,13 @@ class AIService:
         if not converse_messages:
             raise AIServiceError("有効なメッセージがありません")
 
+        prompt_text = system_prompt or self._SURVEY_CHAT_SYSTEM_PROMPT
         try:
             return str(
                 self._retry_with_backoff(
                     self._invoke_converse_api,
                     converse_messages,
-                    system_prompts=[{"text": self._SURVEY_CHAT_SYSTEM_PROMPT}],
+                    system_prompts=[{"text": prompt_text}],
                     max_tokens=1024,
                 )
             )
@@ -1230,9 +1234,13 @@ class AIService:
             raise AIServiceError(f"アンケートヒアリング中にエラーが発生: {e}")
 
     def generate_survey_questions_draft(
-        self, messages: List[Dict[str, str]]
+        self, messages: List[Dict[str, str]], system_prompt: str = ""
     ) -> Dict[str, Any]:
         """会話履歴から設問ドラフトを生成して JSON 辞書を返す。
+
+        Args:
+            messages: 会話履歴
+            system_prompt: システムプロンプト
 
         Returns:
             {"summary": str, "questions": [ {question_type, text, options, allow_multiple, max_selections}, ... ]}
@@ -1256,11 +1264,12 @@ class AIService:
             }
         )
 
+        prompt_text = system_prompt or self._SURVEY_DRAFT_SYSTEM_PROMPT
         try:
             response = self._retry_with_backoff(
                 self._invoke_converse_api,
                 converse_messages,
-                system_prompts=[{"text": self._SURVEY_DRAFT_SYSTEM_PROMPT}],
+                system_prompts=[{"text": prompt_text}],
                 max_tokens=4096,
             )
         except AIServiceError:

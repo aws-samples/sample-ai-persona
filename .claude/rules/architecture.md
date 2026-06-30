@@ -5,7 +5,7 @@
 Router層 → Manager層 → Service層。Models は全層から参照可。逆方向禁止。
 
 - Models (src/models/): 標準ライブラリのみインポート可。Service/Manager/Routerをインポートしてはならない
-- Service層 (src/services/): Manager層・Router層をインポートしてはならない
+- Service層 (src/services/): Manager層・Router層をインポートしてはならない。他のServiceをインポートしてはならない（Service間のオーケストレーションはManager層が担う。service_factory.pyは例外）
 - Manager層 (src/managers/): Router層をインポートしてはならない。他のManagerをインポートしてはならない
 - Shared (src/managers/shared/): Manager層の共有ユーティリティ。Service層・Router層からのインポート禁止。他のManagerからインポート可
 - Router層 (web/routers/): Service層を直接使ってはならない（Manager経由で操作する）

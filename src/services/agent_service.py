@@ -1190,3 +1190,50 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
                 event_queue.put({"type": "error", "content": msg})
             else:
                 yield msg
+
+    def run_segment_extraction_agent(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: List[Any],
+    ) -> None:
+        """Strands Agentを実行する。toolsはManager層から渡される。"""
+        model = BedrockModel(
+            model_id=config.BEDROCK_MODEL_ID,
+            region_name=config.AWS_REGION,
+        )
+        agent = Agent(
+            model=model,
+            system_prompt=system_prompt,
+            tools=tools,
+        )
+        agent(user_prompt)
+
+    def suggest_column_mapping_with_llm(self, prompt: str) -> Dict[str, Any]:
+        """Strands Agent Structured Outputでカラムマッピング提案を返す。"""
+        from pydantic import BaseModel, Field
+
+        class ExtraColumnItem(BaseModel):
+            csv_column: str = Field(description="CSVカラム名")
+            label: str = Field(description="日本語ラベル")
+            description: str = Field(description="補足説明")
+
+        class ColumnMappingOutput(BaseModel):
+            mapping: Dict[str, str] = Field(
+                description="標準カラム名→CSVカラム名のマッピング"
+            )
+            extra_columns: List[ExtraColumnItem] = Field(
+                description="標準カラム以外で有用なカラムの補足情報"
+            )
+
+        model = BedrockModel(
+            model_id=config.BEDROCK_MODEL_ID,
+            region_name=config.AWS_REGION,
+        )
+        agent = Agent(model=model, tools=[])
+        result = agent.structured_output(ColumnMappingOutput, prompt)
+
+        return {
+            "mapping": dict(result.mapping),
+            "extra_columns": [e.model_dump() for e in result.extra_columns],
+        }

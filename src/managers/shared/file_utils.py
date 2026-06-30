@@ -9,6 +9,7 @@ import os
 import re
 import uuid
 from pathlib import Path
+from typing import Any
 
 from ...models.dataset import DatasetColumn
 
@@ -156,6 +157,103 @@ def infer_behavior_data_type(columns: list[str]) -> str:
     if not scores:
         return ""
     return max(scores, key=scores.get)  # type: ignore[arg-type]
+
+
+def parse_csv_columns_with_samples(
+    csv_bytes: bytes, standard_columns: dict | None = None
+) -> dict[str, Any]:
+    """CSVカラム一覧 + サンプル値 + 行数 + 自動マッピング候補を返す。"""
+    try:
+        import polars as pl
+
+        df_preview = pl.read_csv(
+            io.BytesIO(csv_bytes), infer_schema_length=1000, n_rows=5
+        )
+    except Exception as e:
+        raise ValueError(f"CSVの読み込みに失敗しました: {e}") from e
+
+    samples: dict[str, list[str]] = {}
+    for col in df_preview.columns:
+        vals = df_preview[col].drop_nulls().head(3).to_list()
+        samples[col] = [str(v) for v in vals]
+
+    auto_mapping: dict[str, str] = {}
+    if standard_columns:
+        for col in df_preview.columns:
+            col_lower = col.lower().strip()
+            for std_col, meta in standard_columns.items():
+                if col_lower == std_col or col_lower == meta.get("label", "").lower():
+                    auto_mapping[std_col] = col
+                    break
+
+    row_count = count_csv_rows(csv_bytes)
+
+    return {
+        "columns": df_preview.columns,
+        "samples": samples,
+        "row_count": row_count,
+        "auto_mapping": auto_mapping,
+    }
+
+
+def parse_csv_first_row_with_mapping(
+    csv_bytes: bytes, column_mapping: dict[str, str]
+) -> dict[str, str]:
+    """CSVの最初の行をマッピング適用後の辞書として返す（プレビュー用）。"""
+    text = csv_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    first_row = next(reader, None)
+    if first_row is None:
+        return {}
+
+    result: dict[str, str] = {}
+    reverse_map = {v: k for k, v in column_mapping.items()}
+    for csv_col, value in first_row.items():
+        mapped_key = reverse_map.get(csv_col, csv_col)
+        result[mapped_key] = value or ""
+    return result
+
+
+def count_csv_rows(csv_bytes: bytes) -> int:
+    """CSVの全行数を返す。"""
+    import polars as pl
+
+    df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
+    return len(df)
+
+
+def build_results_csv_bytes(headers: list[str], rows: list[list[str]]) -> bytes:
+    """CSVヘッダーと行データからCSVバイト列を生成する（BOM付きUTF-8）。"""
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow(row)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def parse_results_csv(csv_bytes: bytes) -> list[dict[str, str]]:
+    """CSVバイト列を回答データ構造にパースする。"""
+    text = csv_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    return [dict(row) for row in reader]
+
+
+def compress_image_for_batch(
+    image_bytes: bytes, max_side: int = 768, quality: int = 50
+) -> tuple[bytes, str]:
+    """画像をリサイズ・JPEG圧縮してバイト列とメディアタイプを返す。"""
+    from PIL import Image
+    from PIL.Image import Resampling
+
+    img: Any = Image.open(io.BytesIO(image_bytes))
+    if max(img.size) > max_side:
+        img.thumbnail((max_side, max_side), Resampling.LANCZOS)
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue(), "image/jpeg"
 
 
 def _infer_column_type(values: list[str]) -> str:

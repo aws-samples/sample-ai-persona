@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .data_agent_service import DataAgentService
     from .memory.memory_service import MemoryService
     from .s3_service import S3Service
-    from .survey_service import SurveyService
+    from .survey_batch_service import SurveyBatchService
 
 
 class ServiceFactory:
@@ -48,7 +48,7 @@ class ServiceFactory:
         self._memory_service: Optional["MemoryService"] = None
         self._memory_service_attempted: bool = False
         self._s3_service: Optional["S3Service"] = None
-        self._survey_service: Optional["SurveyService"] = None
+        self._survey_batch_service: Optional["SurveyBatchService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -203,55 +203,40 @@ class ServiceFactory:
             self.logger.debug(f"STMセッション確認失敗: {e}")
             return False
 
-    def get_s3_service(self) -> Optional["S3Service"]:
-        """
-        S3Serviceのシングルトンインスタンスを取得
-        S3_BUCKET_NAMEが設定されていない場合はNoneを返す
-
-        Returns:
-            Optional[S3Service]: S3Serviceインスタンス、または設定されていない場合はNone
-        """
-        if self._s3_service is None and config.S3_BUCKET_NAME:
+    def get_s3_service(self) -> "S3Service":
+        """S3Serviceのシングルトンインスタンスを取得。S3_BUCKET_NAME未設定時はRuntimeError。"""
+        if self._s3_service is None:
             with self._lock:
-                if self._s3_service is None and config.S3_BUCKET_NAME:
-                    try:
-                        from .s3_service import S3Service
-
-                        self.logger.info(
-                            f"Creating new S3Service instance "
-                            f"(bucket={config.S3_BUCKET_NAME}, region={config.AWS_REGION})"
+                if self._s3_service is None:
+                    if not config.S3_BUCKET_NAME:
+                        raise RuntimeError(
+                            "S3_BUCKET_NAME が設定されていません。環境変数を確認してください。"
                         )
-                        self._s3_service = S3Service(
-                            bucket_name=config.S3_BUCKET_NAME,
-                            region_name=config.AWS_REGION,
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Failed to create S3Service: {e}")
-                        self._s3_service = None
+                    from .s3_service import S3Service
 
+                    self.logger.info(
+                        f"Creating new S3Service instance "
+                        f"(bucket={config.S3_BUCKET_NAME}, region={config.AWS_REGION})"
+                    )
+                    self._s3_service = S3Service(
+                        bucket_name=config.S3_BUCKET_NAME,
+                        region_name=config.AWS_REGION,
+                    )
         return self._s3_service
 
-    def get_survey_service(self) -> "SurveyService":
-        """
-        SurveyServiceのシングルトンインスタンスを取得
-
-        Returns:
-            SurveyService: アンケートサービスインスタンス
-        """
-        if self._survey_service is None:
-            # 依存サービスをロック外で先に取得（デッドロック防止）
-            ai_service = self.get_ai_service()
-            s3_service = self.get_s3_service()
+    def get_survey_batch_service(self) -> "SurveyBatchService":
+        """SurveyBatchServiceのシングルトンインスタンスを取得"""
+        if self._survey_batch_service is None:
             with self._lock:
-                if self._survey_service is None:
-                    from .survey_service import SurveyService
+                if self._survey_batch_service is None:
+                    from .survey_batch_service import SurveyBatchService
 
-                    self.logger.info("Creating new SurveyService instance")
-                    self._survey_service = SurveyService(
-                        ai_service=ai_service,
-                        s3_service=s3_service,  # type: ignore[arg-type]
+                    self.logger.info("Creating new SurveyBatchService instance")
+                    self._survey_batch_service = SurveyBatchService(
+                        bucket_name=config.S3_BUCKET_NAME or "",
+                        region_name=config.AWS_REGION,
                     )
-        return self._survey_service
+        return self._survey_batch_service
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """

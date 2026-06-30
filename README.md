@@ -75,7 +75,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 |---------|------|
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
 | AI | Amazon Bedrock (Claude Sonnet 4.6 / Haiku 4.5), Strands Agent SDK |
-| データ | DynamoDB, DuckDB, Polars, S3 |
+| データ | DynamoDB, DuckDB, Polars, S3, Parquet |
 | インフラ | AWS CDK (TypeScript), ECS Express Mode, CloudFront, Lambda@Edge, WAF, ECR, Cognito |
 | リアルタイム | Server-Sent Events (SSE) |
 
@@ -112,15 +112,36 @@ ai-persona-system/
 │   └── static/            # 静的ファイル（CSS/JS）
 ├── src/
 │   ├── managers/          # ビジネスロジック層
-│   ├── services/          # 外部サービス連携層（AI, DB, S3, Memory, Survey）
-│   ├── models/            # データモデル
-│   ├── database/          # データベース管理
+│   │   ├── shared/       # 複数Managerが共有するユーティリティ（file_utils, document_loader等）
+│   │   ├── persona_manager.py           # ペルソナCRUD・検索
+│   │   ├── persona_generation_manager.py # ペルソナ生成ワークフロー
+│   │   ├── persona_memory_manager.py    # 長期記憶（AgentCore Memory）管理
+│   │   ├── discussion_manager.py        # 簡易議論の実行・インサイト抽出
+│   │   ├── agent_discussion_manager.py  # エージェント駆動議論（しっかり議論）
+│   │   ├── interview_manager.py         # リアルタイムインタビュー
+│   │   ├── survey_template_manager.py   # テンプレートCRUD + AI設問生成
+│   │   ├── survey_dataset_manager.py    # データセット管理 + DWH連携
+│   │   ├── survey_execution_manager.py  # アンケート実行制御
+│   │   ├── survey_analysis_manager.py   # ビジュアル分析 + インサイトレポート
+│   │   ├── report_manager.py            # レポート生成（議論・インタビュー）
+│   │   ├── dataset_manager.py           # 行動データ管理
+│   │   └── file_manager.py, settings_manager.py, job_manager.py
+│   ├── services/          # 外部サービス連携層（SDK呼び出しのみ、Service間依存なし）
+│   │   ├── ai_service.py              # Bedrock Converse/Invoke API
+│   │   ├── agent_service.py           # Strands Agent SDK操作
+│   │   ├── database_service.py        # DynamoDB CRUD
+│   │   ├── s3_service.py              # S3操作
+│   │   ├── survey_batch_service.py    # DuckDB/Parquet + Bedrock Batch Inference
+│   │   ├── data_agent_service.py      # DWHエージェントツール
+│   │   └── service_factory.py         # DI用シングルトンファクトリー
+│   ├── prompts/           # プロンプトテンプレート定数・ヘルパー関数
+│   ├── models/            # データモデル（イミュータブル、標準ライブラリのみ依存）
 │   └── config.py          # 設定管理
 ├── cdk/                   # AWS CDKインフラストラクチャコード
 ├── tests/                 # テストコード（unit, integration, api）
 ├── docs/                  # ドキュメント
 ├── scripts/               # ユーティリティスクリプト
-└── sample_data/             # サンプルデータセット
+└── sample_data/           # サンプルデータセット
 ```
 
 </details>

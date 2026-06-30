@@ -124,7 +124,7 @@ class TestAIService:
 
         self.mock_bedrock_client.invoke_model.return_value = mock_response
 
-        result = self.ai_service._invoke_model("テストプロンプト")
+        result = self.ai_service.invoke_model("テストプロンプト")
 
         assert result == "テスト応答"
         self.mock_bedrock_client.invoke_model.assert_called_once()
@@ -137,7 +137,7 @@ class TestAIService:
         self.mock_bedrock_client.invoke_model.return_value = mock_response
 
         with pytest.raises(BedrockAPIError, match="モデルからの応答が空です"):
-            self.ai_service._invoke_model("テストプロンプト")
+            self.ai_service.invoke_model("テストプロンプト")
 
     def test_invoke_model_json_decode_error(self):
         """モデル呼び出しで JSON 解析エラーの場合のテスト"""
@@ -147,7 +147,7 @@ class TestAIService:
         self.mock_bedrock_client.invoke_model.return_value = mock_response
 
         with pytest.raises(BedrockAPIError, match="レスポンスの JSON 解析に失敗"):
-            self.ai_service._invoke_model("テストプロンプト")
+            self.ai_service.invoke_model("テストプロンプト")
 
     def test_facilitate_discussion_success(self):
         """議論進行成功のテスト"""

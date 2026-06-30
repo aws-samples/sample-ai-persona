@@ -292,7 +292,10 @@ def reset_singletons():
     try:
         from web.routers import survey
 
-        survey._survey_manager = None
+        survey._template_manager = None
+        survey._dataset_manager = None
+        survey._execution_manager = None
+        survey._analysis_manager = None
     except (ImportError, AttributeError):
         pass
     try:

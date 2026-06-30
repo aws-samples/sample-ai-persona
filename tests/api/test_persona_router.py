@@ -320,7 +320,7 @@ class TestPersonaSaveEndpoint:
         )
 
         assert response.status_code == 500
-        assert "保存エラー" in response.text
+        assert "ペルソナの保存中にエラーが発生しました" in response.text
 
 
 class TestPersonaDetailEndpoint:

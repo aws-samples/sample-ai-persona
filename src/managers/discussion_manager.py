@@ -774,8 +774,6 @@ class DiscussionManager:
             return document_urls
 
         s3_service = service_factory.get_s3_service()
-        if not s3_service:
-            return document_urls
 
         for doc in documents:
             file_path = doc.get("file_path")

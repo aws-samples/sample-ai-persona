@@ -552,7 +552,7 @@ async def save_persona(
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"保存エラー: {str(e)}"},
+            {"request": request, "error": "ペルソナの保存中にエラーが発生しました"},
             status_code=500,
         )
 
@@ -653,7 +653,7 @@ async def update_persona(
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"更新エラー: {str(e)}"},
+            {"request": request, "error": "ペルソナの更新中にエラーが発生しました"},
             status_code=500,
         )
 
@@ -717,7 +717,7 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"削除エラー: {str(e)}"},
+            {"request": request, "error": "ペルソナの削除中にエラーが発生しました"},
             status_code=500,
         )
 

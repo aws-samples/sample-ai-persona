@@ -108,9 +108,13 @@ class FileManager:
         self.survey_images_dir = Path("survey_images")
         self.max_file_size = config.MAX_FILE_SIZE
         self.allowed_extensions = config.ALLOWED_FILE_EXTENSIONS
-        self.s3_service = (
-            s3_service if s3_service is not None else service_factory.get_s3_service()
-        )
+        if s3_service is not None:
+            self.s3_service = s3_service
+        else:
+            try:
+                self.s3_service = service_factory.get_s3_service()
+            except RuntimeError:
+                self.s3_service = None  # type: ignore[assignment]
 
         # Use singleton database service if not provided
         self.db_service = db_service or service_factory.get_database_service()

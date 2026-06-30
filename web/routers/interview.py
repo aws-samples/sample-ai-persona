@@ -332,7 +332,7 @@ async def send_message_stream(
                 asyncio.run_coroutine_threadsafe(queue.put(complete_sse), loop)
             except Exception as e:
                 logger.error(f"Interview streaming error: {e}")
-                error_sse = f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                error_sse = f"data: {json.dumps({'type': 'error', 'message': '応答の生成中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
                 asyncio.run_coroutine_threadsafe(queue.put(error_sse), loop)
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
