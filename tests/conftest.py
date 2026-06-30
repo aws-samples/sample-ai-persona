@@ -217,9 +217,8 @@ def file_manager(temp_upload_dir) -> Generator:
 def persona_manager(mock_database_service) -> Generator:
     """テスト用PersonaManagerを提供"""
     from src.managers.persona_manager import PersonaManager
-    from unittest.mock import Mock
 
-    manager = PersonaManager(ai_service=Mock(), database_service=mock_database_service)
+    manager = PersonaManager(database_service=mock_database_service)
     yield manager
 
 
@@ -280,6 +279,7 @@ def reset_singletons():
         api._persona_manager = None
         api._discussion_manager = None
         persona._persona_manager = None
+        persona._persona_memory_manager = None
         persona._file_manager = None
         discussion._persona_manager = None
         discussion._discussion_manager = None

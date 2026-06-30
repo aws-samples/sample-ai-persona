@@ -15,6 +15,10 @@ from fastapi.templating import Jinja2Templates
 
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.managers.persona_memory_manager import (
+    PersonaMemoryManager,
+    PersonaMemoryManagerError,
+)  # noqa: E501
 from src.managers.persona_generation_manager import PersonaGenerationManager  # noqa: E501
 from src.models.persona import Persona
 from ._pagination import decode_cursor, encode_cursor
@@ -46,6 +50,7 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 # シングルトンマネージャーインスタンス（モジュールレベルで共有）
 _persona_manager: PersonaManager | None = None
+_persona_memory_manager: PersonaMemoryManager | None = None
 _file_manager: FileManager | None = None
 _persona_generation_manager: PersonaGenerationManager | None = None
 
@@ -56,6 +61,14 @@ def get_persona_manager() -> PersonaManager:
     if _persona_manager is None:
         _persona_manager = PersonaManager()
     return _persona_manager
+
+
+def get_persona_memory_manager() -> PersonaMemoryManager:
+    """PersonaMemoryManagerのシングルトンインスタンスを取得"""
+    global _persona_memory_manager
+    if _persona_memory_manager is None:
+        _persona_memory_manager = PersonaMemoryManager()
+    return _persona_memory_manager
 
 
 def get_file_manager() -> FileManager:
@@ -594,18 +607,7 @@ async def update_persona(
     try:
         persona_manager = get_persona_manager()
 
-        # 既存ペルソナを取得
-        existing_persona = persona_manager.get_persona(persona_id)
-        if not existing_persona:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "ペルソナが見つかりません"},
-                status_code=404,
-            )
-
-        # ペルソナを更新
-        updated_persona = persona_manager.edit_persona(
+        updated_persona = persona_manager.update_persona(
             persona_id=persona_id,
             name=name,
             age=age,
@@ -614,8 +616,6 @@ async def update_persona(
             values=[v.strip() for v in values.split("\n") if v.strip()],
             pain_points=[p.strip() for p in pain_points.split("\n") if p.strip()],
             goals=[g.strip() for g in goals.split("\n") if g.strip()],
-            # 空文字はそのまま渡し、update() 側でクリア（None化）させる。
-            # gender/country/city は None=変更なし、""=クリアのセマンティクス。
             gender=gender.strip(),
             country=country.strip().upper(),
             city=city.strip(),
@@ -637,8 +637,8 @@ async def update_persona(
             return templates.TemplateResponse(
                 request,
                 "partials/error.html",
-                {"request": request, "error": "ペルソナの更新に失敗しました"},
-                status_code=400,
+                {"request": request, "error": "ペルソナが見つかりません"},
+                status_code=404,
             )
     except PersonaManagerError as e:
         logger.error(f"ペルソナ更新エラー: {e}")
@@ -808,15 +808,12 @@ def _get_user_friendly_error_message(error: Exception) -> str:
     Returns:
         ユーザーフレンドリーなエラーメッセージ
     """
-    # PersonaManagerErrorの場合: Manager層が生成したメッセージをそのまま使用
-    if isinstance(error, PersonaManagerError):
+    if isinstance(error, (PersonaManagerError, PersonaMemoryManagerError)):
         return str(error)
 
-    # ConnectionErrorの場合
     if isinstance(error, (ConnectionError, TimeoutError)):
         return "ネットワーク接続エラーが発生しました。接続を確認してください。"
 
-    # その他のエラー
     return "予期しないエラーが発生しました。後でもう一度お試しください。"
 
 
@@ -840,10 +837,9 @@ async def get_persona_memories(
         - 10.3: エラー時にユーザーにエラーメッセージを表示
     """
     try:
-        persona_manager = get_persona_manager()
+        memory_manager = get_persona_memory_manager()
 
-        # PersonaManagerを通じて記憶を取得
-        memories, current_page, total_pages = persona_manager.get_persona_memories(
+        memories, current_page, total_pages = memory_manager.get_memories(
             persona_id=persona_id,
             strategy_type=strategy_type,
             page=page,
@@ -863,10 +859,8 @@ async def get_persona_memories(
             },
         )
 
-    except PersonaManagerError as e:
-        logger.warning(
-            f"PersonaManager error getting memories for persona {persona_id}: {e}"
-        )
+    except PersonaMemoryManagerError as e:
+        logger.warning(f"Memory error for persona {persona_id}: {e}")
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_list.html",
@@ -879,24 +873,7 @@ async def get_persona_memories(
             },
         )
 
-    except (ConnectionError, TimeoutError) as e:
-        # ネットワークエラー（Requirements 10.3）
-        error_msg = _get_user_friendly_error_message(e)
-        logger.error(f"Network error getting memories for persona {persona_id}: {e}")
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/memory_list.html",
-            {
-                "request": request,
-                "persona_id": persona_id,
-                "memories": [],
-                "error": error_msg,
-                "strategy_type": strategy_type,
-            },
-        )
-
     except Exception as e:
-        # その他のエラー（Requirements 10.3）
         error_msg = _get_user_friendly_error_message(e)
         logger.error(
             f"Error getting memories for persona {persona_id}: {e}", exc_info=True
@@ -918,18 +895,10 @@ async def get_persona_memories(
 async def delete_persona_memory(
     request: Request, persona_id: str, memory_id: str
 ) -> Any:
-    """
-    ペルソナの特定の記憶を削除（htmx対応）
-
-    Requirements:
-        - 8.1: 各記憶エントリに削除ボタンを提供
-        - 8.2: 削除確認ダイアログを表示
-        - 8.3: 削除確認後、AgentCore Memoryから記憶を削除
-        - 10.3: 削除失敗時にエラーメッセージを表示
-    """
-    persona_manager = get_persona_manager()
+    """ペルソナの特定の記憶を削除（htmx対応）"""
+    memory_manager = get_persona_memory_manager()
     try:
-        success = persona_manager.delete_persona_memory(persona_id, memory_id)
+        success = memory_manager.delete_memory(persona_id, memory_id)
 
         if success:
             return HTMLResponse(content="", status_code=200)
@@ -945,7 +914,7 @@ async def delete_persona_memory(
                 status_code=400,
             )
 
-    except PersonaManagerError as e:
+    except PersonaMemoryManagerError as e:
         error_msg = _get_user_friendly_error_message(e)
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
@@ -970,25 +939,10 @@ async def delete_persona_memory(
 async def delete_all_persona_memories(
     request: Request, persona_id: str, strategy_type: str = "summary"
 ) -> Any:
-    """
-    ペルソナの全記憶を削除（htmx対応）
-
-    Args:
-        persona_id: ペルソナID
-        strategy_type: 戦略タイプ（"summary" または "semantic"）
-
-    Requirements:
-        - 8.5: 「全ての記憶を削除」オプションを提供（確認付き）
-        - 8.2: 削除確認ダイアログを表示
-        - 8.3: 削除確認後、AgentCore Memoryから記憶を削除
-        - 8.4: 全記憶削除後、空の状態を表示
-        - 10.3: 削除失敗時にエラーメッセージを表示
-    """
-    persona_manager = get_persona_manager()
+    """ペルソナの全記憶を削除（htmx対応）"""
+    memory_manager = get_persona_memory_manager()
     try:
-        deleted_count = persona_manager.delete_all_persona_memories(
-            persona_id, strategy_type
-        )
+        deleted_count = memory_manager.delete_all_memories(persona_id, strategy_type)
 
         item_name = "知識" if strategy_type == "semantic" else "記憶"
         return templates.TemplateResponse(
@@ -1007,13 +961,13 @@ async def delete_all_persona_memories(
             },
         )
 
-    except PersonaManagerError as e:
+    except PersonaMemoryManagerError as e:
         error_msg = _get_user_friendly_error_message(e)
         logger.error(
             f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
 
-        memories = persona_manager.safe_get_memories(persona_id, strategy_type)
+        memories = memory_manager.safe_get_memories(persona_id, strategy_type)
 
         return templates.TemplateResponse(
             request,
@@ -1035,7 +989,7 @@ async def delete_all_persona_memories(
             f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
 
-        memories = persona_manager.safe_get_memories(persona_id, strategy_type)
+        memories = memory_manager.safe_get_memories(persona_id, strategy_type)
 
         return templates.TemplateResponse(
             request,
@@ -1060,20 +1014,11 @@ async def add_persona_memory(
     topic_content: str = Form(...),
     strategy_type: str = Form(default="semantic"),
 ) -> Any:
-    """
-    ペルソナに手動で知識を追加（htmx対応）
-
-    Args:
-        persona_id: ペルソナID
-        topic_name: トピック名（例: 好きな食べ物）
-        topic_content: トピック内容（例: ラーメンが好き）
-        strategy_type: 戦略タイプ（"semantic"）
-    """
+    """ペルソナに手動で知識を追加（htmx対応）"""
     try:
-        persona_manager = get_persona_manager()
+        memory_manager = get_persona_memory_manager()
 
-        # PersonaManagerを通じて知識を追加
-        persona_manager.add_persona_knowledge(
+        memory_manager.add_knowledge(
             persona_id=persona_id, topic_name=topic_name, topic_content=topic_content
         )
 
@@ -1082,8 +1027,7 @@ async def add_persona_memory(
             f"Manual knowledge added for persona {persona_id}: {topic_name_clean}"
         )
 
-        # 更新された記憶リストを取得
-        memories, current_page, total_pages = persona_manager.get_persona_memories(
+        memories, current_page, total_pages = memory_manager.get_memories(
             persona_id=persona_id,
             strategy_type="semantic",
             page=1,
@@ -1104,10 +1048,8 @@ async def add_persona_memory(
             },
         )
 
-    except PersonaManagerError as e:
-        logger.warning(
-            f"PersonaManager error adding memory for persona {persona_id}: {e}"
-        )
+    except PersonaMemoryManagerError as e:
+        logger.warning(f"Memory error adding knowledge for persona {persona_id}: {e}")
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_add_error.html",

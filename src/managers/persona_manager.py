@@ -1,15 +1,14 @@
 """
 Persona Manager for AI Persona System.
-Handles persona generation workflow, editing, and saving functionality.
+ペルソナのCRUD、バリデーション、KB/Datasetバインディング管理を担当する。
 """
 
 import logging
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..models.persona import Persona
 from ..models.demographics import VALID_GENDERS
 from ..services import country_service
-from ..services.ai_service import AIService
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
@@ -22,32 +21,22 @@ class PersonaManagerError(Exception):
 
 class PersonaManager:
     """
-    Manager class for handling persona-related operations.
-    Orchestrates persona generation workflow, editing, and persistence.
+    ペルソナのCRUD操作とバインディング管理を行うManager。
+    記憶管理はPersonaMemoryManagerに委譲済み。
     """
 
     def __init__(
         self,
-        ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
-        file_manager: Any = None,
     ):
         """
-        Initialize persona manager.
-
         Args:
-            ai_service: AI service instance for persona generation (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
-            file_manager: FileManager instance (optional, created lazily if not provided)
         """
         self.logger = logging.getLogger(__name__)
-
-        # Use singleton services if not provided
-        self.ai_service = ai_service or service_factory.get_ai_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
-        self._file_manager = file_manager
 
     def save_persona(self, persona: Persona) -> str:
         """
@@ -166,49 +155,6 @@ class PersonaManager:
         personas, _ = self.get_all_personas(search_all=True)
         return personas
 
-    def update_persona(self, persona: Persona) -> bool:
-        """
-        Update an existing persona in the database.
-
-        Args:
-            persona: Updated persona object
-
-        Returns:
-            True if update was successful, False if persona not found
-
-        Raises:
-            PersonaManagerError: If update operation fails
-        """
-        if not persona:
-            raise PersonaManagerError("ペルソナオブジェクトが無効です")
-
-        # Validate persona before updating
-        self._validate_persona_for_save(persona)
-
-        try:
-            # Update the updated_at timestamp
-            updated_persona = (
-                persona.update()
-            )  # This creates a new instance with updated timestamp
-
-            success = self.database_service.update_persona(updated_persona)
-            if success:
-                self.logger.info(
-                    f"Persona updated successfully: {persona.name} (ID: {persona.id})"
-                )
-            else:
-                self.logger.warning(f"Persona not found for update: {persona.id}")
-            return success
-
-        except DatabaseError as e:
-            error_msg = f"Database error while updating persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error while updating persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-
     def delete_persona(self, persona_id: str) -> bool:
         """
         Delete a persona from the database.
@@ -242,7 +188,7 @@ class PersonaManager:
             self.logger.error(error_msg)
             raise PersonaManagerError(error_msg)
 
-    def edit_persona(
+    def update_persona(
         self,
         persona_id: str,
         name: str | None = None,
@@ -470,289 +416,6 @@ class PersonaManager:
                 # data属性ではカンマ区切りでフィルタに渡すため、タグ内のカンマを禁止
                 if "," in tag:
                     raise PersonaManagerError("タグにカンマ（,）は使用できません")
-
-    # ============================================
-    # Memory Management Methods
-    # ============================================
-
-    def add_persona_knowledge(
-        self, persona_id: str, topic_name: str, topic_content: str
-    ) -> str:
-        """
-        ペルソナに手動で知識（Semantic Memory）を追加する。
-
-        短期記憶を経由せず、直接長期記憶（LTM）に保存する。
-
-        Args:
-            persona_id: ペルソナID
-            topic_name: トピック名（例: 好きな食べ物）
-            topic_content: トピック内容（例: ラーメンが好き）
-
-        Returns:
-            保存された記憶のID
-
-        Raises:
-            PersonaManagerError: 追加に失敗した場合
-        """
-        # 入力検証
-        if not persona_id or not persona_id.strip():
-            raise PersonaManagerError("ペルソナIDが無効です")
-
-        if not topic_name or not topic_name.strip():
-            raise PersonaManagerError("トピック名を入力してください")
-
-        if not topic_content or not topic_content.strip():
-            raise PersonaManagerError("内容を入力してください")
-
-        if len(topic_name) > 100:
-            raise PersonaManagerError("トピック名は100文字以内で設定してください")
-
-        if len(topic_content) > 10000:
-            raise PersonaManagerError("内容は10000文字以内で設定してください")
-
-        # ペルソナの存在確認
-        persona = self.get_persona(persona_id)
-        if not persona:
-            raise PersonaManagerError("ペルソナが見つかりません")
-
-        # メモリサービスを取得
-        memory_service = service_factory.get_memory_service()
-
-        if not memory_service:
-            raise PersonaManagerError("長期記憶機能が無効です")
-
-        # Semantic戦略が有効か確認
-        if not memory_service._semantic_strategy:
-            raise PersonaManagerError(
-                "Semantic記憶戦略が設定されていません。"
-                "SEMANTIC_MEMORY_STRATEGY_IDを設定してください。"
-            )
-
-        try:
-            # トピック形式でコンテンツを構築
-            topic_name_clean = topic_name.strip()
-            topic_content_clean = topic_content.strip()
-            formatted_content = (
-                f'<topic name="{topic_name_clean}">{topic_content_clean}</topic>'
-            )
-
-            # 直接LTMに保存（短期記憶を経由しない）
-            memory_id = memory_service._semantic_strategy.save_directly_to_ltm(
-                actor_id=persona_id,
-                content=formatted_content,
-                metadata={"source": "manual", "topic_name": topic_name_clean},
-            )
-
-            self.logger.info(
-                f"Knowledge added directly to LTM for persona {persona_id}: {topic_name_clean} (memory_id: {memory_id})"
-            )
-
-            return memory_id
-
-        except Exception as e:
-            error_msg = f"知識の追加中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-
-    def get_persona_memories(
-        self,
-        persona_id: str,
-        strategy_type: str = "summary",
-        page: int = 1,
-        per_page: int = 10,
-    ) -> tuple:
-        """
-        ペルソナの記憶を取得する。
-
-        Args:
-            persona_id: ペルソナID
-            strategy_type: 戦略タイプ（"summary" または "semantic"）
-            page: ページ番号
-            per_page: 1ページあたりの件数
-
-        Returns:
-            (memories, current_page, total_pages) のタプル
-
-        Raises:
-            PersonaManagerError: 取得に失敗した場合
-        """
-
-        if not persona_id or not persona_id.strip():
-            raise PersonaManagerError("ペルソナIDが無効です")
-
-        # ペルソナの存在確認
-        persona = self.get_persona(persona_id)
-        if not persona:
-            raise PersonaManagerError("ペルソナが見つかりません")
-
-        # メモリサービスを取得
-        memory_service = service_factory.get_memory_service()
-
-        if not memory_service:
-            # 長期記憶機能が無効の場合は空を返す
-            return ([], 1, 1)
-
-        try:
-            # 全記憶を取得
-            all_memories = memory_service.list_memories(actor_id=persona_id)
-
-            # 戦略タイプでフィルタリング
-            filtered_memories = [
-                m
-                for m in all_memories
-                if m.metadata and m.metadata.get("strategy_type") == strategy_type
-            ]
-
-            # 作成日時でソート（新しい順）
-            filtered_memories.sort(key=lambda m: m.created_at, reverse=True)
-
-            # ページネーション計算
-            total_count = len(filtered_memories)
-            total_pages = max(1, (total_count + per_page - 1) // per_page)
-            page = max(1, min(page, total_pages))
-
-            start_idx = (page - 1) * per_page
-            end_idx = start_idx + per_page
-            page_memories = filtered_memories[start_idx:end_idx]
-
-            # 各記憶にパース済みトピック情報を付与
-            for memory in page_memories:
-                memory.parsed_topic = self._parse_topic_content(memory.content)
-
-            return (page_memories, page, total_pages)
-
-        except Exception as e:
-            error_msg = f"記憶の取得中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
-
-    def _parse_topic_content(self, content: str) -> Optional[dict]:
-        """
-        <topic name="...">...</topic> 形式のコンテンツをパース
-
-        Returns:
-            パース成功時: {"name": トピック名, "content": 内容}
-            パース失敗時: None
-        """
-        import re
-
-        pattern = r'<topic\s+name="([^"]+)">\s*(.*?)\s*</topic>'
-        match = re.search(pattern, content, re.DOTALL)
-        if match:
-            return {"name": match.group(1), "content": match.group(2).strip()}
-        return None
-
-    # --- メモリ削除操作 ---
-
-    def delete_persona_memory(self, persona_id: str, memory_id: str) -> bool:
-        """
-        ペルソナの特定の記憶を削除する。
-
-        Args:
-            persona_id: ペルソナID
-            memory_id: 記憶ID
-
-        Returns:
-            削除成功ならTrue
-
-        Raises:
-            PersonaManagerError: 削除に失敗した場合
-        """
-        memory_service = service_factory.get_memory_service()
-        if not memory_service:
-            raise PersonaManagerError("長期記憶機能が無効です")
-
-        try:
-            success = memory_service.delete_memory(
-                actor_id=persona_id, memory_id=memory_id
-            )
-            if success:
-                self.logger.info(f"Memory {memory_id} deleted for persona {persona_id}")
-            return success
-        except (ConnectionError, TimeoutError) as e:
-            raise PersonaManagerError("記憶サービスへの接続に失敗しました。") from e
-        except Exception as e:
-            error_msg = f"記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg) from e
-
-    def delete_all_persona_memories(
-        self, persona_id: str, strategy_type: str = "summary"
-    ) -> int:
-        """
-        ペルソナの指定戦略タイプの全記憶を削除する。
-
-        Args:
-            persona_id: ペルソナID
-            strategy_type: 戦略タイプ（"summary" または "semantic"）
-
-        Returns:
-            削除件数
-
-        Raises:
-            PersonaManagerError: 削除に失敗した場合
-        """
-        memory_service = service_factory.get_memory_service()
-        if not memory_service:
-            raise PersonaManagerError("長期記憶機能が無効です")
-
-        try:
-            all_memories = memory_service.list_memories(actor_id=persona_id)
-            memories_to_delete = [
-                m
-                for m in all_memories
-                if m.metadata and m.metadata.get("strategy_type") == strategy_type
-            ]
-
-            deleted_count = 0
-            for memory in memories_to_delete:
-                try:
-                    if memory_service.delete_memory(
-                        actor_id=persona_id, memory_id=memory.id
-                    ):
-                        deleted_count += 1
-                except Exception as e:
-                    self.logger.warning(f"Failed to delete memory {memory.id}: {e}")
-
-            self.logger.info(
-                f"Deleted {deleted_count} {strategy_type} memories for persona {persona_id}"
-            )
-            return deleted_count
-
-        except (ConnectionError, TimeoutError) as e:
-            raise PersonaManagerError("記憶サービスへの接続に失敗しました。") from e
-        except Exception as e:
-            error_msg = f"全記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg) from e
-
-    def safe_get_memories(
-        self, persona_id: str, strategy_type: str = "summary"
-    ) -> list:
-        """
-        エラー時に安全に記憶リストを取得するヘルパー。
-
-        Args:
-            persona_id: ペルソナID
-            strategy_type: 戦略タイプ
-
-        Returns:
-            記憶リスト（取得失敗時は空リスト）
-        """
-        try:
-            memory_service = service_factory.get_memory_service()
-            if memory_service:
-                all_memories = memory_service.list_memories(actor_id=persona_id)
-                memories = [
-                    m
-                    for m in all_memories
-                    if m.metadata and m.metadata.get("strategy_type") == strategy_type
-                ]
-                memories.sort(key=lambda m: m.created_at, reverse=True)
-                return memories
-        except Exception as e:
-            self.logger.warning(f"Failed to retrieve memories for error recovery: {e}")
-        return []
 
     # --- ナレッジベース紐付け操作 ---
 
