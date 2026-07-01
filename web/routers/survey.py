@@ -989,10 +989,10 @@ async def results_list(request: Request) -> Any:
 async def result_detail(request: Request, survey_id: str) -> Any:
     """結果詳細画面"""
     exec_mgr = get_execution_manager()
-    tmpl_mgr = get_template_manager()
     survey = exec_mgr.get_survey(survey_id)
     if survey is None:
         raise HTTPException(status_code=404, detail="アンケートが見つかりません")
+    tmpl_mgr = get_template_manager()
     # テンプレートの画像情報を取得（プレビューURL付き）
     survey_template = tmpl_mgr.get_template(survey.template_id)
     image_preview_urls = {}

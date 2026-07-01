@@ -274,12 +274,17 @@ class TestPersonaGenerateEndpoint:
 class TestPersonaSaveEndpoint:
     """ペルソナ保存エンドポイントのテスト"""
 
+    @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
-    def test_save_success(self, mock_get_manager, client):
+    def test_save_success(self, mock_get_manager, mock_get_gen_manager, client):
         """ペルソナ保存が成功することを確認"""
         mock_manager = Mock()
         mock_manager.save_persona.return_value = "new-persona-id"
         mock_get_manager.return_value = mock_manager
+        mock_gen_manager = Mock()
+        mock_gen_manager.pop_cached_persona.return_value = None
+        mock_gen_manager.pop_cached_behavior_datasets.return_value = None
+        mock_get_gen_manager.return_value = mock_gen_manager
 
         response = client.post(
             "/persona/save",
