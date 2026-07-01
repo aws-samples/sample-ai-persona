@@ -3,18 +3,19 @@ AIペルソナシステム - メインアプリケーション
 FastAPI + Jinja2 + htmxベースのWebアプリケーション
 """
 
-from typing import Any
 import logging
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
 
-from web.routers import persona, discussion, interview, api, settings, survey
+from src import __version__
 from web.middleware import CSRFMiddleware
+from web.routers import persona, discussion, interview, api, settings, survey
 
 # ログ設定
 logging.basicConfig(
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI) -> Any:
 app = FastAPI(
     title="AIペルソナシステム",
     description="AIペルソナを生成し、議論を通じてインサイトを生成",
-    version="0.16.4",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -61,6 +62,9 @@ from web.sanitize import render_markdown  # noqa: E402
 # マークダウンフィルターを追加
 templates.env.filters["markdown"] = render_markdown
 
+# テンプレートグローバル変数
+templates.env.globals["app_version"] = __version__
+
 # ルーターの登録
 app.include_router(persona.router, prefix="/persona", tags=["persona"])
 app.include_router(discussion.router, prefix="/discussion", tags=["discussion"])
@@ -81,4 +85,4 @@ async def index(request: Request) -> Any:
 @app.get("/health")
 async def health_check() -> Any:
     """ヘルスチェック"""
-    return {"status": "healthy", "version": "0.16.4"}
+    return {"status": "healthy", "version": __version__}
