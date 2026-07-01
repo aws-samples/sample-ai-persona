@@ -285,7 +285,7 @@ class SurveyAnalysisManager:
                     bracket = f"{(age_val // 10) * 10}代"
                     age_bracket_counter[bracket] += 1
                 except (ValueError, TypeError):
-                    pass
+                    continue  # 非数値の年齢文字列はスキップ
 
             occupation = row.get("occupation", "").strip()
             if occupation:

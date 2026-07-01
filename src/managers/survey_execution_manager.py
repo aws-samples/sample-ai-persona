@@ -138,7 +138,7 @@ class SurveyExecutionManager:
                     metadata = json.loads(raw.decode("utf-8"))
                     extra_columns = metadata.get("extra_columns")
                 except Exception:
-                    pass
+                    pass  # メタデータ取得失敗時はextra_columns無しで続行
 
             # 質問テキスト構築
             questions_text = self._format_questions_for_prompt(template.questions)
@@ -535,7 +535,7 @@ class SurveyExecutionManager:
                         try:
                             range_cleaned[kk] = int(float(vv))
                         except (ValueError, TypeError):
-                            pass
+                            continue  # 数値変換できない値はフィルタから除外
                 if range_cleaned:
                     cleaned[k] = range_cleaned
             elif isinstance(v, list):

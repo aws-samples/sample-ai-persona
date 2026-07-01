@@ -178,7 +178,7 @@ class SurveyDatasetManager:
         try:
             self.s3_service.s3_client.delete_object(Bucket=bucket, Key=meta_key)
         except Exception:
-            pass
+            pass  # メタデータ削除失敗はデータセット削除全体を止めない
         self.batch_service.invalidate_datasource(f"custom:{name}")
         logger.info(f"Custom dataset deleted: {key}")
 

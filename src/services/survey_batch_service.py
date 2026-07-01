@@ -451,7 +451,7 @@ class SurveyBatchService:
                 )
                 stats[label] = dict(zip(df["val"].to_list(), df["cnt"].to_list()))
             except Exception:
-                pass
+                continue  # カラム不在・型不一致時はこの属性をスキップ
 
         try:
             df = self._query_duckdb(
@@ -469,7 +469,7 @@ class SurveyBatchService:
                     "最大": int(df["max_age"][0]),
                 }
         except Exception:
-            pass
+            pass  # 年齢統計取得失敗は無視して他の統計を返す
 
         return stats
 
