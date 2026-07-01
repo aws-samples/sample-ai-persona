@@ -342,9 +342,7 @@ class TestDetectEncoding:
 
     def test_shift_jis(self):
         """Shift_JISが正しく検出されること"""
-        # Shift_JIS固有のバイト列（UTF-8では不正）
-        content = "表計算".encode("shift_jis")
-        # UTF-8でデコード可能な場合もあるのでShift_JIS固有文字を使う
+        # UTF-8でデコード不可なShift_JIS固有バイト列
         content = b"\x83\x65\x83\x58\x83\x67"  # テスト in Shift_JIS
         assert detect_encoding(content) == "shift_jis"
 

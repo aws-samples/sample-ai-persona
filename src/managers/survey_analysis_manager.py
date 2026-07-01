@@ -155,7 +155,7 @@ class SurveyAnalysisManager:
                             distribution[val] += 1
                         numeric_values.append(float(val))
                     except (ValueError, TypeError):
-                        pass
+                        continue  # 非数値回答はスキップ
                 average = (
                     sum(numeric_values) / len(numeric_values) if numeric_values else 0.0
                 )

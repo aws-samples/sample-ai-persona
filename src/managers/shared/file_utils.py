@@ -76,7 +76,7 @@ def cleanup_temp_files(paths: list[str]) -> None:
         try:
             os.unlink(p)
         except OSError:
-            pass
+            continue  # ベストエフォート削除: ファイル不存在・権限不足は無視
 
 
 def analyze_csv_schema(
