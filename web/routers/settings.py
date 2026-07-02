@@ -415,17 +415,11 @@ async def save_data_agent_settings(
     enabled: str = Form(""),
 ) -> Any:
     """データ分析エージェント接続設定を保存"""
-    from src.config import config
-
-    config.DATA_AGENT_RUNTIME_ARN = runtime_arn.strip() or None
-    config.DATA_AGENT_REGION = region.strip() or "ap-northeast-1"
-    config.ENABLE_DATA_AGENT = enabled == "true"
-
-    logger.info(
-        "データ分析エージェント設定更新: enabled=%s, arn=%s, region=%s",
-        config.ENABLE_DATA_AGENT,
-        config.DATA_AGENT_RUNTIME_ARN,
-        config.DATA_AGENT_REGION,
+    settings_manager = get_settings_manager()
+    settings_manager.save_data_agent_settings(
+        runtime_arn=runtime_arn.strip() or None,
+        region=region.strip() or "ap-northeast-1",
+        enabled=(enabled == "true"),
     )
 
     return templates.TemplateResponse(

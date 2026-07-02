@@ -74,7 +74,24 @@ class SettingsManager:
             else [],
         }
 
-    # --- データ分析エージェント接続テスト ---
+    # --- データ分析エージェント設定 ---
+
+    def save_data_agent_settings(
+        self,
+        runtime_arn: Optional[str],
+        region: str,
+        enabled: bool,
+    ) -> None:
+        """データ分析エージェント接続設定を保存する。"""
+        config.DATA_AGENT_RUNTIME_ARN = runtime_arn
+        config.DATA_AGENT_REGION = region
+        config.ENABLE_DATA_AGENT = enabled
+        logger.info(
+            "データ分析エージェント設定更新: enabled=%s, arn=%s, region=%s",
+            enabled,
+            runtime_arn,
+            region,
+        )
 
     def test_data_agent_connection(self) -> str:
         """データ分析エージェントへの接続テストを実行する。"""

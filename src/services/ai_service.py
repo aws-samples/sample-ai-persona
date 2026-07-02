@@ -541,23 +541,7 @@ class AIService:
                 messages = self._facilitate_discussion_with_documents(
                     personas, topic, documents
                 )
-
-                # 各ペルソナが最低1回は発言していることを確認
-                persona_message_count: dict[str, int] = {}
-                for message in messages:
-                    persona_message_count[message.persona_id] = (
-                        persona_message_count.get(message.persona_id, 0) + 1
-                    )
-
-                for persona in personas:
-                    if persona_message_count.get(persona.id, 0) == 0:
-                        self.logger.warning(
-                            f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                        )
-
-                self.logger.info(
-                    f"議論が完了しました (メッセージ数: {len(messages)}, 参加者別発言数: {persona_message_count})"
-                )
+                self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
                 return messages
 
             except AIServiceError:
@@ -574,22 +558,7 @@ class AIService:
             response = self._retry_with_backoff(self.invoke_model, prompt)
             messages = self._parse_discussion_response(response, personas)
 
-            # 各ペルソナが最低1回は発言していることを確認
-            persona_message_count = {}
-            for message in messages:
-                persona_message_count[message.persona_id] = (
-                    persona_message_count.get(message.persona_id, 0) + 1
-                )
-
-            for persona in personas:
-                if persona_message_count.get(persona.id, 0) == 0:
-                    self.logger.warning(
-                        f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                    )
-
-            self.logger.info(
-                f"議論が完了しました (メッセージ数: {len(messages)}, 参加者別発言数: {persona_message_count})"
-            )
+            self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
             return messages
 
         except AIServiceError:
