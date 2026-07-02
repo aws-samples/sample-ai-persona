@@ -93,6 +93,10 @@ class SettingsManager:
             region,
         )
 
+    def is_data_agent_available(self) -> bool:
+        """データ分析エージェントが利用可能かどうかを判定する。"""
+        return bool(config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN)
+
     def test_data_agent_connection(self) -> str:
         """データ分析エージェントへの接続テストを実行する。"""
         if not config.DATA_AGENT_RUNTIME_ARN:

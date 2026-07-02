@@ -564,6 +564,8 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
         else:
             title = f"議論: {discussion.topic}"
 
+        from src.managers.settings_manager import SettingsManager
+
         return templates.TemplateResponse(
             request,
             "discussion/detail.html",
@@ -577,6 +579,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
                 "custom_categories": custom_categories,
                 "document_urls": document_urls,
+                "enable_data_driven_report": SettingsManager().is_data_agent_available(),
             },
         )
     except HTTPException:
@@ -903,7 +906,7 @@ async def save_report(
         report_manager.save_report(discussion_id=discussion_id, report=report)
 
         # 保存後、reportsセクション全体を再描画
-        from src.config import Config
+        from src.managers.settings_manager import SettingsManager
 
         discussion = report_manager.get_discussion(discussion_id)
         response = templates.TemplateResponse(
@@ -913,7 +916,7 @@ async def save_report(
                 "request": request,
                 "discussion": discussion,
                 "discussion_id": discussion_id,
-                "config": Config(),
+                "enable_data_driven_report": SettingsManager().is_data_agent_available(),
             },
         )
         response.headers["HX-Retarget"] = "#reports-container"
