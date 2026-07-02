@@ -126,7 +126,7 @@ ai-persona-system/
 │   │   ├── report_manager.py            # レポート生成（議論・インタビュー）
 │   │   ├── dataset_manager.py           # 行動データ管理
 │   │   └── file_manager.py, settings_manager.py, job_manager.py
-│   ├── services/          # 外部サービス連携層（SDK呼び出しのみ、Service間依存なし）
+│   ├── services/          # 外部サービス連携層
 │   │   ├── ai_service.py              # Bedrock Converse/Invoke API
 │   │   ├── agent_service.py           # Strands Agent SDK操作
 │   │   ├── database_service.py        # DynamoDB CRUD
