@@ -64,6 +64,8 @@ templates.env.filters["markdown"] = render_markdown
 
 # テンプレートグローバル変数
 templates.env.globals["app_version"] = __version__
+for _mod in [persona, discussion, interview, settings, survey]:
+    _mod.templates.env.globals["app_version"] = __version__
 
 # ルーターの登録
 app.include_router(persona.router, prefix="/persona", tags=["persona"])
