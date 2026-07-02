@@ -579,7 +579,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
                 "custom_categories": custom_categories,
                 "document_urls": document_urls,
-                "enable_data_driven_report": SettingsManager().is_data_agent_available(),
+                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
             },
         )
     except HTTPException:
@@ -916,7 +916,7 @@ async def save_report(
                 "request": request,
                 "discussion": discussion,
                 "discussion_id": discussion_id,
-                "enable_data_driven_report": SettingsManager().is_data_agent_available(),
+                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
             },
         )
         response.headers["HX-Retarget"] = "#reports-container"

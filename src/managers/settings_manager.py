@@ -93,7 +93,8 @@ class SettingsManager:
             region,
         )
 
-    def is_data_agent_available(self) -> bool:
+    @staticmethod
+    def is_data_agent_available() -> bool:
         """データ分析エージェントが利用可能かどうかを判定する。"""
         return bool(config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN)
 
