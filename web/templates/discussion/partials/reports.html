@@ -4,7 +4,7 @@
     <!-- レポート生成フォーム -->
     <div class="mb-6">
         <h3 class="text-sm font-semibold text-gray-700 mb-3">テンプレートを選択</h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 {% if config and config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN %}lg:grid-cols-4{% else %}md:grid-cols-3{% endif %} gap-3 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 {% if enable_data_driven_report %}lg:grid-cols-4{% else %}md:grid-cols-3{% endif %} gap-3 mb-4">
             <button type="button" @click="selectedTemplate = 'summary'; showCustomPrompt = false; showDataDrivenPrompt = false"
                     :class="selectedTemplate === 'summary' ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">
@@ -38,7 +38,7 @@
                 </div>
                 <p class="text-xs text-gray-500">自由にプロンプトを入力して出力形式を指定</p>
             </button>
-            {% if config and config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN %}
+            {% if enable_data_driven_report %}
             <button type="button" @click="selectedTemplate = 'data_driven'; showCustomPrompt = false; showDataDrivenPrompt = true"
                     :class="selectedTemplate === 'data_driven' ? 'border-teal-500 bg-teal-50 ring-1 ring-teal-500' : 'border-gray-200 hover:border-gray-300'"
                     class="border rounded-lg p-3 text-left transition-all">

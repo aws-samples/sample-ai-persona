@@ -160,7 +160,7 @@ class TestAgentServiceDatasetIntegration:
         datasets = [sample_dataset]
 
         base_prompt = "あなたはマーケターです。"
-        enhanced = agent_service._enhance_prompt_with_dataset_info(
+        enhanced = agent_service.enhance_prompt_with_dataset_info(
             base_prompt, bindings, datasets
         )
 

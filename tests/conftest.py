@@ -160,7 +160,6 @@ def mock_ai_service() -> Mock:
 def mock_agent_service() -> Mock:
     """モック化されたAgentServiceを提供"""
     mock = Mock()
-    mock.generate_persona_system_prompt.return_value = "テスト用システムプロンプト"
 
     # PersonaAgentのモック
     mock_persona_agent = Mock()
@@ -173,7 +172,9 @@ def mock_agent_service() -> Mock:
 
     # FacilitatorAgentのモック
     mock_facilitator = Mock()
-    mock_facilitator.should_continue.return_value = False
+    mock_facilitator.rounds = 1
+    mock_facilitator.additional_instructions = ""
+    mock_facilitator.invoke.return_value = "ラウンドの要約"
     mock_facilitator.dispose = Mock()
 
     mock.create_facilitator_agent.return_value = mock_facilitator
@@ -215,9 +216,8 @@ def file_manager(temp_upload_dir) -> Generator:
 def persona_manager(mock_database_service) -> Generator:
     """テスト用PersonaManagerを提供"""
     from src.managers.persona_manager import PersonaManager
-    from unittest.mock import Mock
 
-    manager = PersonaManager(ai_service=Mock(), database_service=mock_database_service)
+    manager = PersonaManager(database_service=mock_database_service)
     yield manager
 
 
@@ -278,10 +278,12 @@ def reset_singletons():
         api._persona_manager = None
         api._discussion_manager = None
         persona._persona_manager = None
+        persona._persona_memory_manager = None
         persona._file_manager = None
         discussion._persona_manager = None
         discussion._discussion_manager = None
         discussion._agent_discussion_manager = None
+        discussion._report_manager = None
         discussion._file_manager = None
         interview._persona_manager = None
         interview._interview_manager = None
@@ -290,7 +292,10 @@ def reset_singletons():
     try:
         from web.routers import survey
 
-        survey._survey_manager = None
+        survey._template_manager = None
+        survey._dataset_manager = None
+        survey._execution_manager = None
+        survey._analysis_manager = None
     except (ImportError, AttributeError):
         pass
     try:

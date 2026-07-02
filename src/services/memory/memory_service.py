@@ -11,7 +11,7 @@ Requirements:
 """
 
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from src.models.memory import MemoryEntry
 
@@ -167,6 +167,55 @@ class MemoryService:
         if not self._strategy:
             raise MemoryServiceError("Memory strategy not configured")
         return self._strategy
+
+    @property
+    def is_semantic_enabled(self) -> bool:
+        """Semantic戦略が有効かどうかを返す"""
+        return self._semantic_strategy is not None
+
+    @with_retry(
+        max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)
+    )
+    def save_knowledge(
+        self,
+        actor_id: str,
+        content: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """
+        Semantic戦略で直接LTMに知識を保存する。
+
+        Args:
+            actor_id: ペルソナID
+            content: 保存するコンテンツ
+            metadata: 追加メタデータ
+
+        Returns:
+            保存された記憶のID
+
+        Raises:
+            MemoryServiceError: Semantic戦略が未設定、または保存失敗時
+        """
+        if not self._semantic_strategy:
+            raise MemoryServiceError(
+                "Semantic memory strategy is not configured. "
+                "Set SEMANTIC_MEMORY_STRATEGY_ID to enable this feature."
+            )
+
+        try:
+            memory_id = self._semantic_strategy.save_directly_to_ltm(
+                actor_id=actor_id,
+                content=content,
+                metadata=metadata,
+            )
+            logger.info("Knowledge saved: actor=%s, memory_id=%s", actor_id, memory_id)
+            return memory_id
+
+        except (MemoryOperationError, RetryExhaustedError):
+            raise
+        except Exception as e:
+            logger.error("Unexpected error saving knowledge: %s", e)
+            raise MemoryServiceError(f"Failed to save knowledge: {e}") from e
 
     @with_retry(
         max_retries=3, base_delay=1.0, retryable_exceptions=(MemoryOperationError,)

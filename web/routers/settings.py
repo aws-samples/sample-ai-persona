@@ -12,10 +12,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.dataset_manager import DatasetManager
-from src.services.mcp_server_manager import get_mcp_manager
-from src.services.service_factory import service_factory
+from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
 from src.models.dataset import DatasetColumn
-from src.models.knowledge_base import KnowledgeBase
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +22,7 @@ templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates"
 
 # シングルトンマネージャー
 _dataset_manager: Optional[DatasetManager] = None
+_settings_manager: Optional[SettingsManager] = None
 
 
 def get_dataset_manager() -> DatasetManager:
@@ -33,17 +32,23 @@ def get_dataset_manager() -> DatasetManager:
     return _dataset_manager
 
 
+def get_settings_manager() -> SettingsManager:
+    global _settings_manager
+    if _settings_manager is None:
+        _settings_manager = SettingsManager()
+    return _settings_manager
+
+
 @router.get("", response_class=HTMLResponse)
 async def settings_page(request: Request) -> Any:
     """システム設定ページ"""
     dataset_manager = get_dataset_manager()
-    mcp_manager = get_mcp_manager()
-    db_service = service_factory.get_database_service()
+    settings_manager = get_settings_manager()
 
     datasets = dataset_manager.get_datasets()
     datasets_dict = [d.to_dict() for d in datasets]
-    mcp_enabled = mcp_manager.is_running()
-    knowledge_bases = db_service.get_all_knowledge_bases()
+    mcp_enabled = settings_manager.is_mcp_running()
+    knowledge_bases = settings_manager.get_all_knowledge_bases()
     kb_list = [kb.to_dict() for kb in knowledge_bases]
 
     return templates.TemplateResponse(
@@ -62,10 +67,10 @@ async def settings_page(request: Request) -> Any:
 @router.post("/mcp/toggle", response_class=HTMLResponse)
 async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
     """MCP有効/無効切り替え"""
-    mcp_manager = get_mcp_manager()
-    success = mcp_manager.toggle(enabled)
-
-    if not success:
+    settings_manager = get_settings_manager()
+    try:
+        is_running = settings_manager.toggle_mcp(enabled)
+    except Exception:
         return templates.TemplateResponse(
             request,
             "partials/error.html",
@@ -76,18 +81,18 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
     return templates.TemplateResponse(
         request,
         "settings/partials/mcp_status.html",
-        {"request": request, "mcp_enabled": mcp_manager.is_running()},
+        {"request": request, "mcp_enabled": is_running},
     )
 
 
 @router.get("/mcp/status", response_class=HTMLResponse)
 async def mcp_status(request: Request) -> Any:
     """MCP状態取得"""
-    mcp_manager = get_mcp_manager()
+    settings_manager = get_settings_manager()
     return templates.TemplateResponse(
         request,
         "settings/partials/mcp_status.html",
-        {"request": request, "mcp_enabled": mcp_manager.is_running()},
+        {"request": request, "mcp_enabled": settings_manager.is_mcp_running()},
     )
 
 
@@ -300,8 +305,8 @@ async def api_list_datasets() -> Any:
 @router.get("/api/mcp/status")
 async def api_mcp_status() -> Any:
     """MCP状態API"""
-    mcp_manager = get_mcp_manager()
-    return {"enabled": mcp_manager.is_running()}
+    settings_manager = get_settings_manager()
+    return {"enabled": settings_manager.is_mcp_running()}
 
 
 # ==================== ナレッジベース管理 ====================
@@ -310,8 +315,8 @@ async def api_mcp_status() -> Any:
 @router.get("/knowledge-bases", response_class=HTMLResponse)
 async def list_knowledge_bases(request: Request) -> Any:
     """ナレッジベース一覧"""
-    db_service = service_factory.get_database_service()
-    knowledge_bases = db_service.get_all_knowledge_bases()
+    settings_manager = get_settings_manager()
+    knowledge_bases = settings_manager.get_all_knowledge_bases()
     kb_list = [kb.to_dict() for kb in knowledge_bases]
 
     return templates.TemplateResponse(
@@ -329,17 +334,15 @@ async def create_knowledge_base(
     description: str = Form(""),
 ) -> Any:
     """ナレッジベース登録"""
+    settings_manager = get_settings_manager()
     try:
-        db_service = service_factory.get_database_service()
-        kb = KnowledgeBase.create_new(
-            knowledge_base_id=knowledge_base_id.strip(),
-            name=name.strip(),
-            description=description.strip(),
+        settings_manager.create_knowledge_base(
+            knowledge_base_id=knowledge_base_id,
+            name=name,
+            description=description,
         )
-        db_service.save_knowledge_base(kb)
-        logger.info(f"Knowledge base registered: {kb.id} ({knowledge_base_id})")
 
-        knowledge_bases = db_service.get_all_knowledge_bases()
+        knowledge_bases = settings_manager.get_all_knowledge_bases()
         kb_list = [kb.to_dict() for kb in knowledge_bases]
         return templates.TemplateResponse(
             request,
@@ -359,11 +362,10 @@ async def create_knowledge_base(
 @router.delete("/knowledge-bases/{kb_id}", response_class=HTMLResponse)
 async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
     """ナレッジベース削除"""
-    db_service = service_factory.get_database_service()
-    db_service.delete_knowledge_base(kb_id)
-    logger.info(f"Knowledge base deleted: {kb_id}")
+    settings_manager = get_settings_manager()
+    settings_manager.delete_knowledge_base(kb_id)
 
-    knowledge_bases = db_service.get_all_knowledge_bases()
+    knowledge_bases = settings_manager.get_all_knowledge_bases()
     kb_list = [kb.to_dict() for kb in knowledge_bases]
     return templates.TemplateResponse(
         request,
@@ -376,8 +378,8 @@ async def delete_knowledge_base(request: Request, kb_id: str) -> Any:
 @router.get("/api/knowledge-bases")
 async def api_list_knowledge_bases() -> Any:
     """ナレッジベース一覧API"""
-    db_service = service_factory.get_database_service()
-    knowledge_bases = db_service.get_all_knowledge_bases()
+    settings_manager = get_settings_manager()
+    knowledge_bases = settings_manager.get_all_knowledge_bases()
     return [kb.to_dict() for kb in knowledge_bases]
 
 
@@ -413,17 +415,11 @@ async def save_data_agent_settings(
     enabled: str = Form(""),
 ) -> Any:
     """データ分析エージェント接続設定を保存"""
-    from src.config import config
-
-    config.DATA_AGENT_RUNTIME_ARN = runtime_arn.strip() or None
-    config.DATA_AGENT_REGION = region.strip() or "ap-northeast-1"
-    config.ENABLE_DATA_AGENT = enabled == "true"
-
-    logger.info(
-        "データ分析エージェント設定更新: enabled=%s, arn=%s, region=%s",
-        config.ENABLE_DATA_AGENT,
-        config.DATA_AGENT_RUNTIME_ARN,
-        config.DATA_AGENT_REGION,
+    settings_manager = get_settings_manager()
+    settings_manager.save_data_agent_settings(
+        runtime_arn=runtime_arn.strip() or None,
+        region=region.strip() or "ap-northeast-1",
+        enabled=(enabled == "true"),
     )
 
     return templates.TemplateResponse(
@@ -440,23 +436,12 @@ async def save_data_agent_settings(
 @router.post("/data-agent/test", response_class=HTMLResponse)
 async def test_data_agent_connection(request: Request) -> Any:
     """データ分析エージェント接続テスト"""
-    from src.config import config
-
-    if not config.DATA_AGENT_RUNTIME_ARN:
-        return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">Runtime ARN が設定されていません</div>'
-        )
-
+    settings_manager = get_settings_manager()
     try:
-        from src.services.data_agent_service import DataAgentService
-
-        service = DataAgentService(
-            config.DATA_AGENT_RUNTIME_ARN, config.DATA_AGENT_REGION
-        )
-        agent_result = service.query("利用可能なテーブル一覧を教えてください")
+        result_text = settings_manager.test_data_agent_connection()
         import html as html_mod
 
-        escaped = html_mod.escape(agent_result.text)
+        escaped = html_mod.escape(result_text)
         return HTMLResponse(
             '<div class="text-sm bg-green-50 rounded p-3 border border-green-200">'
             '<div class="text-green-700 font-semibold mb-2">✅ 接続成功</div>'
@@ -468,6 +453,10 @@ async def test_data_agent_connection(request: Request) -> Any:
             "el.innerHTML=DOMPurify.sanitize(marked.parse(el.textContent,{breaks:true}));"
             "}"
             "</script>"
+        )
+    except SettingsManagerError as e:
+        return HTMLResponse(
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">{e}</div>'
         )
     except Exception:
         logger.exception("データ分析エージェント接続テストエラー")

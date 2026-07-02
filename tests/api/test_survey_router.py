@@ -10,7 +10,7 @@ class TestSurveyIndexPage:
 
 
 class TestSurveyTemplatesPage:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_templates_list_loads(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_all_templates.return_value = []
@@ -24,41 +24,52 @@ class TestSurveyTemplatesPage:
 
 
 class TestSurveyResultsPage:
-    @patch("web.routers.survey.get_survey_manager")
-    def test_results_list_loads(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_all_surveys.return_value = []
-        mock_get_mgr.return_value = mock_mgr
+    @patch("web.routers.survey.get_template_manager")
+    @patch("web.routers.survey.get_execution_manager")
+    def test_results_list_loads(self, mock_get_exec, mock_get_tmpl, client):
+        mock_exec = Mock()
+        mock_exec.get_all_surveys.return_value = []
+        mock_get_exec.return_value = mock_exec
+        mock_tmpl = Mock()
+        mock_tmpl.get_all_templates.return_value = []
+        mock_get_tmpl.return_value = mock_tmpl
         resp = client.get("/survey/results")
         assert resp.status_code == 200
 
 
 class TestSurveyStartPage:
-    @patch("web.routers.survey.get_survey_manager")
-    def test_start_page_loads(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_all_templates.return_value = []
-        mock_get_mgr.return_value = mock_mgr
+    @patch("web.routers.survey.get_dataset_manager")
+    @patch("web.routers.survey.get_template_manager")
+    def test_start_page_loads(self, mock_get_tmpl, mock_get_ds, client):
+        mock_ds = Mock()
+        mock_ds.check_nemotron_status.return_value = {"exists": False, "size_mb": 0}
+        mock_ds.list_custom_datasets.return_value = []
+        mock_ds.get_available_filter_values.return_value = {}
+        mock_ds.get_datasource_count.return_value = 0
+        mock_get_ds.return_value = mock_ds
+        mock_tmpl = Mock()
+        mock_tmpl.get_all_templates.return_value = []
+        mock_get_tmpl.return_value = mock_tmpl
         resp = client.get("/survey/start")
         assert resp.status_code == 200
 
 
 class TestSurveyPersonaDataPage:
-    @patch("web.routers.survey.service_factory")
-    def test_persona_data_page_loads(self, mock_sf, client):
-        mock_survey_svc = Mock()
-        mock_survey_svc.check_nemotron_dataset_status.return_value = {
+    @patch("web.routers.survey.get_dataset_manager")
+    def test_persona_data_page_loads(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.check_nemotron_status.return_value = {
             "exists": False,
             "size_mb": 0,
         }
-        mock_survey_svc.list_custom_datasets.return_value = []
-        mock_sf.get_survey_service.return_value = mock_survey_svc
+        mock_mgr.list_custom_datasets.return_value = []
+        mock_get_mgr.return_value = mock_mgr
         resp = client.get("/survey/persona-data")
         assert resp.status_code == 200
 
 
 class TestSurveyTemplateCreate:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_create_template(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.create_template.return_value = Mock(id="t1")
@@ -76,7 +87,7 @@ class TestSurveyTemplateCreate:
 
 
 class TestSurveyTemplateDelete:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_delete_template(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.delete_template.return_value = True
@@ -89,7 +100,7 @@ class TestSurveyTemplateDelete:
 
 
 class TestSurveyResultDelete:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_execution_manager")
     def test_delete_result(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.delete_survey.return_value = True
@@ -102,7 +113,7 @@ class TestSurveyResultDelete:
 
 
 class TestSurveyTemplateEdit:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_edit_page_loads(self, mock_get_mgr, client):
         from src.models.survey_template import SurveyTemplate, Question
 
@@ -115,7 +126,7 @@ class TestSurveyTemplateEdit:
         assert resp.status_code == 200
         assert "テンプレート編集" in resp.text
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_edit_page_not_found(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_template.return_value = None
@@ -126,23 +137,26 @@ class TestSurveyTemplateEdit:
 
 
 class TestSurveyResultDetail:
-    @patch("web.routers.survey.get_survey_manager")
-    def test_result_detail_loads(self, mock_get_mgr, client):
+    @patch("web.routers.survey.get_template_manager")
+    @patch("web.routers.survey.get_execution_manager")
+    def test_result_detail_loads(self, mock_get_exec, mock_get_tmpl, client):
         from src.models.survey import Survey
         from src.models.survey_template import SurveyTemplate, Question
 
         survey = Survey.create_new("テスト", "", "tmpl-1", 100)
         survey.status = "completed"
         tmpl = SurveyTemplate.create_new("T", [Question.create_free_text("Q")])
-        mock_mgr = Mock()
-        mock_mgr.get_survey.return_value = survey
-        mock_mgr.get_template.return_value = tmpl
-        mock_get_mgr.return_value = mock_mgr
+        mock_exec = Mock()
+        mock_exec.get_survey.return_value = survey
+        mock_get_exec.return_value = mock_exec
+        mock_tmpl = Mock()
+        mock_tmpl.get_template.return_value = tmpl
+        mock_get_tmpl.return_value = mock_tmpl
 
         resp = client.get(f"/survey/results/{survey.id}")
         assert resp.status_code == 200
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_execution_manager")
     def test_result_detail_not_found(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_survey.return_value = None
@@ -153,7 +167,7 @@ class TestSurveyResultDetail:
 
 
 class TestSurveyDownload:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_execution_manager")
     def test_download_redirects(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.get_download_url.return_value = "https://s3.example.com/signed"
@@ -163,12 +177,14 @@ class TestSurveyDownload:
         assert resp.status_code == 307
         assert resp.headers["location"] == "https://s3.example.com/signed"
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_execution_manager")
     def test_download_not_found(self, mock_get_mgr, client):
-        from src.managers.survey_manager import SurveyManagerError
+        from src.managers.survey_execution_manager import SurveyExecutionManagerError
 
         mock_mgr = Mock()
-        mock_mgr.get_download_url.side_effect = SurveyManagerError("見つかりません")
+        mock_mgr.get_download_url.side_effect = SurveyExecutionManagerError(
+            "見つかりません"
+        )
         mock_get_mgr.return_value = mock_mgr
 
         resp = client.get("/survey/results/bad-id/download")
@@ -176,7 +192,7 @@ class TestSurveyDownload:
 
 
 class TestSurveyPersonaStatistics:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_analysis_manager")
     def test_statistics_success(self, mock_get_mgr, client):
         from src.models.survey import PersonaStatistics
 
@@ -197,12 +213,12 @@ class TestSurveyPersonaStatistics:
         resp = client.get("/survey/results/s1/personas")
         assert resp.status_code == 200
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_analysis_manager")
     def test_statistics_error(self, mock_get_mgr, client):
-        from src.managers.survey_manager import SurveyManagerError
+        from src.managers.survey_analysis_manager import SurveyAnalysisManagerError
 
         mock_mgr = Mock()
-        mock_mgr.get_persona_statistics.side_effect = SurveyManagerError(
+        mock_mgr.get_persona_statistics.side_effect = SurveyAnalysisManagerError(
             "見つかりません"
         )
         mock_get_mgr.return_value = mock_mgr
@@ -212,7 +228,7 @@ class TestSurveyPersonaStatistics:
 
 
 class TestSurveyVisualAnalysis:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_analysis_manager")
     def test_visual_analysis_success(self, mock_get_mgr, client):
         from src.models.survey import VisualAnalysisData
 
@@ -227,12 +243,14 @@ class TestSurveyVisualAnalysis:
         resp = client.get("/survey/results/s1/visual")
         assert resp.status_code == 200
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_analysis_manager")
     def test_visual_analysis_error(self, mock_get_mgr, client):
-        from src.managers.survey_manager import SurveyManagerError
+        from src.managers.survey_analysis_manager import SurveyAnalysisManagerError
 
         mock_mgr = Mock()
-        mock_mgr.get_visual_analysis.side_effect = SurveyManagerError("結果なし")
+        mock_mgr.get_visual_analysis.side_effect = SurveyAnalysisManagerError(
+            "結果なし"
+        )
         mock_get_mgr.return_value = mock_mgr
 
         resp = client.get("/survey/results/bad-id/visual")
@@ -240,7 +258,7 @@ class TestSurveyVisualAnalysis:
 
 
 class TestSurveyAIChat:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_ai_chat_success(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.generate_ai_chat_response.return_value = "AIの回答です"
@@ -253,7 +271,7 @@ class TestSurveyAIChat:
         assert resp.status_code == 200
         assert resp.json()["assistant_message"] == "AIの回答です"
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_ai_chat_invalid_messages(self, mock_get_mgr, client):
         resp = client.post(
             "/survey/templates/ai-chat",
@@ -267,7 +285,7 @@ class TestSurveyAIChat:
 
 
 class TestSurveyAIGenerate:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_ai_generate_success(self, mock_get_mgr, client):
         mock_mgr = Mock()
         mock_mgr.generate_ai_questions_draft.return_value = {
@@ -285,13 +303,13 @@ class TestSurveyAIGenerate:
         data = resp.json()
         assert "questions" in data
 
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_template_manager")
     def test_ai_generate_validation_error(self, mock_get_mgr, client):
-        from src.managers.survey_manager import SurveyValidationError
+        from src.managers.survey_template_manager import SurveyTemplateValidationError
 
         mock_mgr = Mock()
-        mock_mgr.generate_ai_questions_draft.side_effect = SurveyValidationError(
-            "会話履歴が空です"
+        mock_mgr.generate_ai_questions_draft.side_effect = (
+            SurveyTemplateValidationError("会話履歴が空です")
         )
         mock_get_mgr.return_value = mock_mgr
 
@@ -303,21 +321,21 @@ class TestSurveyAIGenerate:
 
 
 class TestSurveyFilterOptions:
-    @patch("web.routers.survey.service_factory")
-    def test_filter_options_loads(self, mock_sf, client):
-        mock_svc = Mock()
-        mock_svc.get_available_filter_values.return_value = {
+    @patch("web.routers.survey.get_dataset_manager")
+    def test_filter_options_loads(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_available_filter_values.return_value = {
             "sex": ["男性", "女性"],
             "occupation": ["エンジニア"],
         }
-        mock_sf.get_survey_service.return_value = mock_svc
+        mock_get_mgr.return_value = mock_mgr
 
         resp = client.get("/survey/filter-options?datasource=nemotron")
         assert resp.status_code == 200
 
 
 class TestSurveyExecute:
-    @patch("web.routers.survey.get_survey_manager")
+    @patch("web.routers.survey.get_execution_manager")
     def test_execute_success(self, mock_get_mgr, client):
         from src.models.survey import Survey
 

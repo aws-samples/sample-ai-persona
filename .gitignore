@@ -17,19 +17,16 @@ knowledge_files/
 .playwright-cli
 survey_images/
 examples/
-unicode_data/
-constants/
-data/
+.hypothesis/
+docs/note
+.DS_Store
+.coverage
 
 # Claude Code
 .claude/
 
 # Kiro
-.kiro/specs/
-.kiro/hooks/
-.kiro/settings/
-.kiro/agents/
-.kiro/steering/deploy.md
+.kiro/
 
 # CDK
 cdk/node_modules/
@@ -38,11 +35,7 @@ cdk/parameters_bk.ts
 cdk.out/
 .cdk.staging/
 cdk/cdk.context.json
+cdk/lambda/auth-at-edge/node_modules/
 
 # Tailwind CSS standalone CLI binary
 tailwindcss
-.hypothesis/
-.DS_Store
-cdk/lambda/auth-at-edge/node_modules/
-test-results/
-.coverage

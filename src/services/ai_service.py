@@ -7,7 +7,6 @@ import json
 import time
 import logging
 from typing import List, Dict, Any, Optional
-from dataclasses import asdict
 
 try:
     import boto3
@@ -20,8 +19,6 @@ except ImportError:
 
 from ..config import config
 from ..models.persona import Persona
-from ..models.demographics import gender_label
-from .country_service import country_name
 from ..models.message import Message
 from ..models.insight_category import InsightCategory
 
@@ -150,7 +147,7 @@ class AIService:
 
         return isinstance(error, BotoCoreError)
 
-    def _invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+    def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         """Bedrock モデルを呼び出し
 
         Args:
@@ -278,8 +275,6 @@ class AIService:
                     from .service_factory import service_factory
 
                     s3_service = service_factory.get_s3_service()
-                    if not s3_service:
-                        raise AIServiceError(f"S3サービスが利用できません: {file_path}")
 
                     # S3パス全体を渡す
                     file_bytes = s3_service.download_file(file_path)
@@ -536,19 +531,6 @@ class AIService:
         Raises:
             AIServiceError: 議論進行エラー
         """
-        if not personas or len(personas) < 2:
-            raise AIServiceError("議論には最低2つのペルソナが必要です")
-
-        if len(personas) > 5:
-            raise AIServiceError("議論参加ペルソナは最大5つまでです")
-
-        if not topic or not topic.strip():
-            raise AIServiceError("議論トピックが空です")
-
-        # トピックの長さチェック
-        if len(topic.strip()) > 200:
-            raise AIServiceError("議論トピックは200文字以内で入力してください")
-
         self.logger.info(
             f"議論を開始します (参加者: {len(personas)}人, トピック: {topic[:50]}..., ドキュメント: {len(documents) if documents else 0}件)"
         )
@@ -559,23 +541,7 @@ class AIService:
                 messages = self._facilitate_discussion_with_documents(
                     personas, topic, documents
                 )
-
-                # 各ペルソナが最低1回は発言していることを確認
-                persona_message_count: dict[str, int] = {}
-                for message in messages:
-                    persona_message_count[message.persona_id] = (
-                        persona_message_count.get(message.persona_id, 0) + 1
-                    )
-
-                for persona in personas:
-                    if persona_message_count.get(persona.id, 0) == 0:
-                        self.logger.warning(
-                            f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                        )
-
-                self.logger.info(
-                    f"議論が完了しました (メッセージ数: {len(messages)}, 参加者別発言数: {persona_message_count})"
-                )
+                self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
                 return messages
 
             except AIServiceError:
@@ -589,25 +555,10 @@ class AIService:
         prompt = self._create_discussion_prompt(personas, topic)
 
         try:
-            response = self._retry_with_backoff(self._invoke_model, prompt)
+            response = self._retry_with_backoff(self.invoke_model, prompt)
             messages = self._parse_discussion_response(response, personas)
 
-            # 各ペルソナが最低1回は発言していることを確認
-            persona_message_count = {}
-            for message in messages:
-                persona_message_count[message.persona_id] = (
-                    persona_message_count.get(message.persona_id, 0) + 1
-                )
-
-            for persona in personas:
-                if persona_message_count.get(persona.id, 0) == 0:
-                    self.logger.warning(
-                        f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                    )
-
-            self.logger.info(
-                f"議論が完了しました (メッセージ数: {len(messages)}, 参加者別発言数: {persona_message_count})"
-            )
+            self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
             return messages
 
         except AIServiceError:
@@ -639,18 +590,6 @@ class AIService:
         Raises:
             AIServiceError: 議論進行エラー
         """
-        if not personas or len(personas) < 2:
-            raise AIServiceError("議論には最低2つのペルソナが必要です")
-
-        if len(personas) > 5:
-            raise AIServiceError("議論参加ペルソナは最大5つまでです")
-
-        if not topic or not topic.strip():
-            raise AIServiceError("議論トピックが空です")
-
-        if len(topic.strip()) > 200:
-            raise AIServiceError("議論トピックは200文字以内で入力してください")
-
         self.logger.info(f"ストリーミング議論を開始します (参加者: {len(personas)}人)")
 
         prompt = self._create_discussion_prompt(personas, topic)
@@ -815,21 +754,11 @@ class AIService:
         Raises:
             AIServiceError: インサイト抽出エラー
         """
-        if not discussion_messages:
-            raise AIServiceError("議論メッセージが空です")
-
-        if len(discussion_messages) < 2:
-            raise AIServiceError("インサイト抽出には最低2つのメッセージが必要です")
-
-        # メッセージの総文字数チェック
-        total_chars = sum(len(msg.content) for msg in discussion_messages)
-        if total_chars < 50:
-            raise AIServiceError("議論内容が短すぎます。より詳細な議論が必要です")
-
         # カテゴリーが指定されていない場合はデフォルトを使用
         if categories is None:
             categories = config.get_default_insight_categories()
 
+        total_chars = sum(len(msg.content) for msg in discussion_messages)
         self.logger.info(
             f"インサイト抽出を開始します (メッセージ数: {len(discussion_messages)}, 総文字数: {total_chars}, カテゴリー数: {len(categories)})"
         )
@@ -839,42 +768,16 @@ class AIService:
         )
 
         try:
-            response = self._retry_with_backoff(self._invoke_model, prompt)
+            response = self._retry_with_backoff(self.invoke_model, prompt)
             self.logger.debug(f"インサイト抽出AIレスポンス: {response[:500]}...")
             insights = self._parse_structured_insights_response(response, categories)
 
-            # インサイトの品質チェック
-            if len(insights) < 3:
-                self.logger.warning(
-                    f"抽出されたインサイト数が少なすぎます: {len(insights)}"
-                )
-                self.logger.warning(f"AIレスポンス全文: {response}")
-                # 警告は出すが、エラーにはしない
-
-            # 重複チェック
-            unique_insights = []
-            seen_descriptions = set()
-            for insight in insights:
-                description_lower = insight["description"].lower().strip()
-                if (
-                    description_lower not in seen_descriptions
-                    and len(insight["description"].strip()) > 10
-                ):
-                    unique_insights.append(insight)
-                    seen_descriptions.add(description_lower)
-
-            if len(unique_insights) != len(insights):
-                self.logger.info(
-                    f"重複インサイトを除去しました (元: {len(insights)}, 除去後: {len(unique_insights)})"
-                )
-
             self.logger.info(
-                f"インサイト抽出が完了しました (インサイト数: {len(unique_insights)})"
+                f"インサイト抽出が完了しました (インサイト数: {len(insights)})"
             )
-            return unique_insights
+            return insights
 
         except AIServiceError:
-            # AIServiceError は再発生
             raise
         except Exception as e:
             error_msg = f"インサイト抽出中にエラーが発生: {e}"
@@ -883,66 +786,9 @@ class AIService:
 
     def _create_discussion_prompt(self, personas: List[Persona], topic: str) -> str:
         """議論進行用のプロンプトを作成"""
-        personas_info = []
-        for persona in personas:
-            persona_dict = asdict(persona)
-            persona_info = f"\n**{persona_dict['name']}**\n"
-            persona_info += f"- 年齢: {persona_dict['age']}歳\n"
-            if persona.gender:
-                persona_info += f"- 性別: {gender_label(persona.gender)}\n"
-            if persona.country:
-                location = country_name(persona.country)
-                if persona.city:
-                    location += f"・{persona.city}"
-                persona_info += f"- 居住地: {location}\n"
-            elif persona.city:
-                persona_info += f"- 居住地: {persona.city}\n"
-            persona_info += f"- 職業: {persona_dict['occupation']}\n"
-            persona_info += f"- 背景: {persona_dict['background']}\n"
-            persona_info += f"- 価値観: {', '.join(persona_dict['values'])}\n"
-            persona_info += (
-                f"- 抱えている課題: {', '.join(persona_dict['pain_points'])}\n"
-            )
-            persona_info += f"- 目標・願望: {', '.join(persona_dict['goals'])}\n"
-            personas_info.append(persona_info)
+        from ..prompts.discussion_interview_prompts import build_discussion_prompt
 
-        personas_text = "\n".join(personas_info)
-
-        prompt = f"""あなたはマーケティング専門家として、以下のペルソナたちによる「{topic}」についての議論をファシリテートしてください。
-
-# 参加ペルソナ
-{personas_text}
-
-# 議論の進行方針
-1. **多角的な視点**: 各ペルソナの価値観、背景、課題、目標に基づいた異なる視点を反映
-2. **リアルな対話**: 合意に至らない場合は無理に結論を出さず、対立点を明確にする
-3. **実践的な内容**: 具体的なエピソードや経験に基づいた議論（抽象論を避ける）
-4. **自然な流れ**: リアルな会話として成立する自然な議論の進行
-5. **個性の反映**: 各ペルソナのコミュニケーションスタイル（主張の強さ、論理/感情の重視度）を反映する
-
-# 議論の構成
-- 各ペルソナが4-5回ずつ発言
-- 最初は各自の立場や考えを表明
-- 中盤では他のペルソナの意見に対する反応や質問（不満や懐疑も含む）
-- 終盤では議論を通じた気づきの共有（全員一致を強制しない）
-
-# 出力形式
-以下の形式で厳密に出力してください。他の説明文は一切含めないでください：
-
-[{personas[0].name}]: 発言内容
-[{personas[1].name}]: 発言内容
-[{personas[0].name}]: 発言内容
-...
-
-# 重要な注意事項
-- 各ペルソナの個性と特徴を明確に区別して表現
-- 発言内容は具体的で実践的な内容にする
-- ペルソナ名は必ず角括弧で囲む、氏名だけで職業など不要なものは角括弧に絶対に含めないこと
-- 発言内容は自然で現実的な会話にする
-- 議論の質を高めるため、深い洞察や具体例を含める
-
-議論を開始してください。"""
-        return prompt
+        return build_discussion_prompt(personas, topic)
 
     def _create_insight_extraction_prompt(
         self,
@@ -951,96 +797,9 @@ class AIService:
         topic: str = "",
     ) -> str:
         """インサイト抽出用のプロンプトを作成"""
-        # ペルソナの最終ラウンド発言とファシリテータの要約を分離
-        max_round = max((msg.round_number or 0) for msg in messages)
-        persona_final_statements = [
-            f"**{msg.persona_name}**: {msg.content}"
-            for msg in messages
-            if msg.persona_id != "facilitator"
-            and (msg.round_number or 0) > max_round - 3
-        ]
-        facilitator_summaries = [
-            f"ラウンド{msg.round_number}: {msg.content}"
-            for msg in messages
-            if msg.persona_id == "facilitator"
-        ]
+        from ..prompts.insight_prompts import build_insight_extraction_prompt
 
-        persona_text = "\n".join(persona_final_statements)
-        facilitator_text = (
-            "\n".join(facilitator_summaries) if facilitator_summaries else ""
-        )
-
-        # カテゴリーがNoneの場合はデフォルトを使用
-        if categories is None:
-            from src.config import Config
-
-            categories = Config().get_default_insight_categories()
-
-        # カテゴリーセクションを動的に生成
-        categories_section = ""
-        for i, category in enumerate(categories, 1):
-            categories_section += f"\n## {i}. {category.name}\n"
-            categories_section += f"- {category.description}\n"
-
-        # カテゴリー名のリストを生成（JSON例とバリデーション用）
-        category_names = [cat.name for cat in categories]
-        category_names_str = "、".join([f'"{name}"' for name in category_names])
-
-        topic_section = f"\n# 議論テーマと目的\n{topic}\n" if topic else ""
-
-        prompt = f"""以下のペルソナ議論を分析し、議論テーマの目的に沿った実践的なインサイトを抽出してください。
-{topic_section}
-# ペルソナの直近の発言
-{persona_text}
-"""
-        if facilitator_text:
-            prompt += f"""
-# 各ラウンドのファシリテータ要約（議論の流れ）
-{facilitator_text}
-"""
-
-        prompt += f"""
-# インサイト抽出の観点
-以下の{len(categories)}つのカテゴリーから、議論内容に基づいた具体的で実践的なインサイトを抽出してください：
-{categories_section}
-
-# 信頼度スコアの基準
-各インサイトには以下の基準で信頼度スコア（0.0-1.0）を付与してください：
-
-- **0.9-1.0 (非常に高い)**: 複数のペルソナが明確に言及し、具体的な根拠がある
-- **0.7-0.8 (高い)**: 議論の中で明確に表現され、十分な根拠がある
-- **0.5-0.6 (中程度)**: 議論から推測できるが、間接的な根拠
-- **0.3-0.4 (低い)**: 議論の文脈から読み取れるが、推測の要素が強い
-- **0.1-0.2 (非常に低い)**: 一般的な推測に基づく
-
-# 出力形式
-以下のJSON形式で正確に出力してください。他の説明文は一切含めないでください：
-
-[
-    {{
-        "category": "{category_names[0]}",
-        "description": "具体的で実践的なインサイトの内容",
-        "confidence_score": 0.85
-    }},
-    {{
-        "category": "{category_names[1] if len(category_names) > 1 else category_names[0]}",
-        "description": "具体的で実践的なインサイトの内容",
-        "confidence_score": 0.72
-    }}
-]
-
-# 重要な注意事項
-- 各インサイトは議論内容に基づいた根拠のある内容にする
-- 抽象的な表現ではなく、具体的で実行可能な示唆を提供
-- 議論テーマの目的に沿った実務で活用できるレベルの詳細度
-- 最低3個、最大10個程度のインサイトを抽出
-- カテゴリーは{category_names_str}のいずれかを使用
-- 信頼度スコアは議論内容の根拠の強さに基づいて適切に設定
-- JSON形式を厳密に守り、構文エラーがないようにする
-- 出力はJSONのみで、他の説明や前置きは不要
-
-インサイトの抽出を開始してください。"""
-        return prompt
+        return build_insight_extraction_prompt(messages, categories, topic)
 
     def _parse_discussion_response(
         self, response: str, personas: List[Persona]
@@ -1144,26 +903,16 @@ class AIService:
     def _validate_and_normalize_insight(
         self, insight: Dict[str, Any], index: int, categories: List[InsightCategory]
     ) -> Dict[str, Any]:
-        """
-        インサイトデータを検証・正規化
+        """AIレスポンスから抽出したインサイトの必須フィールドを検証し型変換する。
 
-        Args:
-            insight: 検証するインサイトデータ
-            index: インサイトのインデックス（エラーメッセージ用）
-            categories: 有効なインサイトカテゴリーのリスト
-
-        Returns:
-            Dict[str, Any]: 検証・正規化されたインサイトデータ
-
-        Raises:
-            AIServiceError: 検証エラー
+        ビジネスルール（カテゴリ正規化、confidence clamp、重複除去）は
+        Manager層(shared/insight_utils)で実行する。
         """
         if not isinstance(insight, dict):
             raise AIServiceError(
                 f"インサイト {index + 1} は辞書形式である必要があります"
             )
 
-        # 必須フィールドの確認
         required_fields = ["category", "description", "confidence_score"]
         for field in required_fields:
             if field not in insight:
@@ -1171,50 +920,17 @@ class AIService:
                     f"インサイト {index + 1} に必須フィールド '{field}' がありません"
                 )
 
-        # カテゴリーの検証・正規化
-        category = str(insight["category"]).strip()
-        valid_categories = [cat.name for cat in categories]
-
-        # カテゴリー名の正規化（部分一致を許可）
-        normalized_category = None
-        for valid_cat in valid_categories:
-            if valid_cat in category or category in valid_cat:
-                normalized_category = valid_cat
-                break
-
-        if not normalized_category:
-            # デフォルトカテゴリーを設定（最初のカテゴリーまたは「その他」）
-            default_category = valid_categories[-1] if valid_categories else "その他"
-            normalized_category = default_category
-            self.logger.warning(
-                f"インサイト {index + 1} のカテゴリー '{category}' が無効なため、'{default_category}' に設定しました"
-            )
-
-        # 説明の検証
         description = str(insight["description"]).strip()
-        if not description or len(description) < 10:
-            raise AIServiceError(
-                f"インサイト {index + 1} の説明が短すぎます（最低10文字必要）"
-            )
+        if not description:
+            raise AIServiceError(f"インサイト {index + 1} の説明が空です")
 
-        # 信頼度スコアの検証・正規化
         try:
             confidence_score = float(insight["confidence_score"])
-            if not 0.0 <= confidence_score <= 1.0:
-                # 範囲外の場合は0.0-1.0に正規化
-                confidence_score = max(0.0, min(1.0, confidence_score))
-                self.logger.warning(
-                    f"インサイト {index + 1} の信頼度スコアを正規化しました: {confidence_score}"
-                )
         except (ValueError, TypeError):
-            # 無効な値の場合はデフォルト値を設定
             confidence_score = 0.5
-            self.logger.warning(
-                f"インサイト {index + 1} の信頼度スコアが無効なため、デフォルト値 0.5 を設定しました"
-            )
 
         return {
-            "category": normalized_category,
+            "category": str(insight["category"]).strip(),
             "description": description,
             "confidence_score": confidence_score,
         }
@@ -1354,90 +1070,36 @@ class AIService:
 
         return insights
 
-    def generate_discussion_report(
+    def generate_standard_report_streaming(
         self,
-        messages: List[Message],
-        insights: List[Dict[str, Any]],
-        topic: str,
-        template_type: str,
-        custom_prompt: Optional[str] = None,
-        personas: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
-        """
-        議論データからテンプレートに基づくレポートを生成
+        system_prompt: str,
+        converse_messages: List[Dict[str, Any]],
+    ) -> Any:
+        """Bedrock converse_streamを使った標準レポートストリーミング生成。
+
+        テンプレートルーティングやコンテキスト構築は呼び出し元(ReportManager)が担当。
+        本メソッドは純粋なBedrock API呼び出しのみ行う。
 
         Args:
-            messages: 議論メッセージのリスト
-            insights: 抽出済みインサイトのリスト
-            topic: 議論トピック
-            template_type: テンプレート種別 ("summary", "review", "custom")
-            custom_prompt: カスタムプロンプト (template_type == "custom" の場合)
-            personas: 参加ペルソナのプロフィール情報
-
-        Returns:
-            str: 生成されたレポート（Markdown形式）
-        """
-        system_prompt = self._build_report_system_prompt(
-            topic, template_type, custom_prompt
-        )
-        converse_messages = self._build_report_context(
-            messages, insights, topic, personas
-        )
-
-        return self._invoke_converse_api(
-            converse_messages,
-            system_prompts=[{"text": system_prompt}],
-            max_tokens=12000,
-        )
-
-    def generate_discussion_report_streaming(
-        self,
-        messages: List[Message],
-        insights: List[Dict[str, Any]],
-        topic: str,
-        template_type: str,
-        custom_prompt: Optional[str] = None,
-        personas: Optional[List[Dict[str, Any]]] = None,
-        event_queue: Any = None,
-        session_id: Optional[str] = None,
-        is_followup: bool = False,
-    ) -> Any:
-        """
-        議論データからレポートをストリーミング生成する。
+            system_prompt: システムプロンプト
+            converse_messages: Converse API形式のメッセージリスト
 
         Yields:
             str: テキストチャンク
         """
-        if template_type == "data_driven":
-            yield from self._generate_data_driven_report_streaming(
-                messages,
-                insights,
-                topic,
-                custom_prompt,
-                personas,
-                event_queue=event_queue,
-                session_id=session_id,
-                is_followup=is_followup,
-            )
-            return
-
-        system_prompt = self._build_report_system_prompt(
-            topic, template_type, custom_prompt
-        )
-        converse_messages = self._build_report_context(
-            messages, insights, topic, personas
-        )
 
         def _call_stream() -> Any:
-            return self.bedrock_client.converse_stream(
-                modelId=self.model_id,
-                messages=converse_messages,
-                system=[{"text": system_prompt}],
-                inferenceConfig={
+            kwargs: Dict[str, Any] = {
+                "modelId": self.model_id,
+                "messages": converse_messages,
+                "inferenceConfig": {
                     "maxTokens": 12000,
                     "temperature": self.temperature,
                 },
-            )
+            }
+            if system_prompt:
+                kwargs["system"] = [{"text": system_prompt}]
+            return self.bedrock_client.converse_stream(**kwargs)
 
         response = self._retry_with_backoff(_call_stream)
 
@@ -1446,290 +1108,6 @@ class AIService:
                 delta = event["contentBlockDelta"].get("delta", {})
                 if "text" in delta:
                     yield delta["text"]
-
-    def _build_report_context(
-        self,
-        messages: List[Message],
-        insights: List[Dict[str, Any]],
-        topic: str,
-        personas: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """レポート生成用のコンテキストメッセージを構築する"""
-        context_parts = [f"## 議論トピック\n{topic}\n"]
-
-        if personas:
-            context_parts.append("## 参加ペルソナのプロフィール")
-            for p in personas:
-                context_parts.append(
-                    f"### {p['name']}（{p['age']}歳 / {p['occupation']}）\n"
-                    f"- 価値観: {', '.join(p.get('values', []))}\n"
-                    f"- 課題: {', '.join(p.get('pain_points', []))}\n"
-                    f"- 目標: {', '.join(p.get('goals', []))}"
-                )
-
-        context_parts.append("\n## 議論ログ")
-        for msg in messages:
-            context_parts.append(f"**{msg.persona_name}**: {msg.content}")
-        context_parts.append("\n## 抽出済みインサイト")
-        for ins in insights:
-            context_parts.append(
-                f"- [{ins.get('category', '')}] {ins.get('description', '')} (信頼度: {ins.get('confidence_score', 0)})"
-            )
-
-        user_content = "\n".join(context_parts)
-        return [{"role": "user", "content": [{"text": user_content}]}]
-
-    def _build_report_system_prompt(
-        self, topic: str, template_type: str, custom_prompt: Optional[str] = None
-    ) -> str:
-        """テンプレート種別に応じたシステムプロンプトを構築"""
-        base = (
-            f"あなたは定性調査の分析専門家です。"
-            f"以下の議論・インタビューデータ（トピック: {topic}）を分析し、"
-            f"施策やアクションに繋がる実用的なレポートを生成してください。"
-            f"出力はMarkdown形式で記述してください。"
-            f"簡潔かつ要点を絞った記述を心がけ、冗長な説明は避けてください。"
-        )
-
-        if template_type == "summary":
-            return (
-                f"{base}\n\n"
-                "以下の構成でレポートを作成してください:\n\n"
-                "## 1. エグゼクティブサマリ\n"
-                "議論全体の要点を3-5行で簡潔にまとめる。\n\n"
-                "## 2. 参加ペルソナの概要\n"
-                "各ペルソナの属性と特徴的な価値観・課題を2-3行で紹介。\n\n"
-                "## 3. 主要な発見（Key Findings）\n"
-                "3-5個に絞り、各発見について以下を記述:\n"
-                "- **根拠**: どのペルソナの具体的な発言か（引用）\n"
-                "- **背景**: その発言の背景にある価値観や課題\n"
-                "- **合意度**: 他のペルソナも同意しているか、対立意見はあるか\n"
-                "- **意味合い**: この発見がビジネスにとって何を意味するか\n\n"
-                "## 4. 示唆と推奨アクション\n"
-                "各施策について「どの発見から導かれたか」を明記し、表形式で整理。\n"
-                "表の列: 根拠となる発見 / 施策内容 / 対象セグメント / 期待効果（具体的に） / 優先度（高/中/低）。5件以内。\n\n"
-                "## 5. 追加調査が必要な領域\n"
-                "2-3個を箇条書きで、ペルソナ間で意見が分かれた点や検証が不十分な仮説を挙げる。"
-            )
-        elif template_type == "review":
-            return (
-                f"{base}\n\n"
-                "レビューコメント形式で出力してください。5-10件に絞ってください。\n"
-                "各コメントには以下を含めてください:\n"
-                "- **該当箇所**: 議論中の具体的な発言や論点\n"
-                "- **指摘内容**: その箇所から読み取れる課題・機会・リスク\n"
-                "- **重要度**: 高/中/低\n"
-                "- **推奨アクション**: この指摘に対して取るべき具体的なアクション\n\n"
-                "表形式で整理してください。"
-            )
-        elif template_type == "custom" and custom_prompt:
-            return f"{base}\n\nユーザーからの指示:\n{custom_prompt}"
-        else:
-            return base
-
-    def _build_data_driven_followup_system_prompt(
-        self, topic: str, custom_prompt: Optional[str] = None
-    ) -> str:
-        """フォローアップ分析用の軽量 system_prompt を構築"""
-        prompt = (
-            f"あなたは定性調査 × 実データ分析の専門家です。\n"
-            f"議論トピック「{topic}」について、前回の分析セッションの続きとして追加分析を行います。\n\n"
-            "# ツール\n"
-            "ask_data_agent: DWH の業務データに自然言語で問い合わせ可能。\n"
-            "前回のセッションでテーブル構造は確認済みのため、テーブル一覧の再確認は不要です。\n"
-            "ユーザーの追加指示に直接関連するクエリのみ実行してください。\n"
-            "大量データの全件取得はトークン消費が大きいため避けること。\n"
-            "集計・分布・上位N件で十分な場合はその形で依頼し、\n"
-            "特定条件で絞り込んだ少数の明細データが必要な場合は件数を限定して取得すること。\n\n"
-            "# CSV出力\n"
-            "セグメント抽出やCSV出力が依頼された場合は、ask_data_agent に対して\n"
-            "「〜をCSVで出力してください」と明示的に依頼すること。\n"
-            "データエージェントがCSVファイルを生成しダウンロードURLを返すため、\n"
-            "レポート内にデータをインライン展開してはならない。\n"
-            "CSV出力はS3に直接書き出されトークンを消費しないため、件数制限は不要。\n\n"
-            "# 出力\n"
-            "- Markdown 形式\n"
-            "- ユーザーの追加指示に対する回答に集中する\n"
-            "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
-            "- データ根拠を必ず明示する\n"
-        )
-        if custom_prompt:
-            prompt += f"\n# ユーザーからの追加指示（最優先）\n{custom_prompt}\n"
-        return prompt
-
-    def _build_data_driven_system_prompt(
-        self, topic: str, custom_prompt: Optional[str] = None
-    ) -> str:
-        """データドリブン分析レポート用 system_prompt を構築"""
-        prompt = (
-            f"あなたは定性調査 × 実データ分析の専門家です。\n"
-            f"議論トピック「{topic}」について、定性インタビューで得られたインサイトを\n"
-            "DWH（データウェアハウス）の実データと照合し、信頼性の高い意思決定・施策実行に\n"
-            "つながるレポートを生成してください。\n\n"
-            "# ツール\n"
-            "ask_data_agent: DWH の業務データに自然言語で問い合わせ可能。\n"
-            "まず利用可能なテーブル一覧を確認し、データ構造を踏まえて適切な質問を組み立ててください。\n"
-            "1回の呼び出しに数十秒かかるため、1回につき1つの質問に絞り、必要に応じて3〜15回程度で段階的に情報を集めてください。\n"
-            "大量データの全件取得はトークン消費が大きいため避けること。\n"
-            "集計・分布・上位N件で十分な場合はその形で依頼し、\n"
-            "特定条件で絞り込んだ少数の明細データが必要な場合は件数を限定して取得すること。\n\n"
-            "# 分析の基本構成（カスタムプロンプトがあれば優先）\n"
-            "## 1. インサイト × 実データ照合\n"
-            "主要なインサイトについて以下を明記:\n"
-            "- 定性インサイトの内容と信頼度（元値を引用）\n"
-            "- 実データでの裏付け / 反証 / 追加発見（ask_data_agent の結果を引用）\n"
-            "- 総合判定（✅ 裏付けあり / ⚠️ 要追加調査 / ❌ 反証）\n\n"
-            "## 2. 実データから見えた追加インサイト\n"
-            "定性では見えなかったが実データで顕在化した発見を1〜3件。\n\n"
-            "## 3. 意思決定・施策実行への示唆\n"
-            "- 裏付けあり → すぐ実行可能な施策\n"
-            "- 要追加調査 → 追加で必要なデータや検証方法\n"
-            "- セグメント抽出やCSV出力が依頼された場合は、ask_data_agent に対して\n"
-            "  「〜をCSVで出力してください」と明示的に依頼すること。\n"
-            "  データエージェントがCSVファイルを生成しダウンロードURLを返すため、\n"
-            "  レポート内にデータをインライン展開してはならない。\n\n"
-            "# 出力\n"
-            "- Markdown 形式\n"
-            "- 冗長な説明は避け、意思決定に直結する要点のみ\n"
-            "- データ根拠を必ず明示する\n"
-        )
-        if custom_prompt:
-            prompt += f"\n# ユーザーからの追加指示（最優先）\n{custom_prompt}\n"
-        return prompt
-
-    def _generate_data_driven_report_streaming(
-        self,
-        messages: List[Message],
-        insights: List[Dict[str, Any]],
-        topic: str,
-        custom_prompt: Optional[str],
-        personas: Optional[List[Dict[str, Any]]],
-        event_queue: Any = None,
-        session_id: Optional[str] = None,
-        is_followup: bool = False,
-    ) -> Any:
-        """データドリブン分析レポートを生成する（Strands Agent + データ分析エージェント）。
-
-        event_queue が渡された場合、thinking/tool_call/tool_result イベントを
-        リアルタイムで put し、最終テキストも chunk として put する。
-        event_queue が None の場合は従来通りテキスト chunk を yield する。
-
-        session_id: AgentCore Memory STMのセッションID。指定時はセッション継続。
-        is_followup: フォローアップ分析かどうか。Trueの場合は専用プロンプトを使用。
-        """
-        if not config.ENABLE_DATA_AGENT or not config.DATA_AGENT_RUNTIME_ARN:
-            if event_queue is not None:
-                event_queue.put(
-                    {
-                        "type": "error",
-                        "content": "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。",
-                    }
-                )
-                return
-            yield "⚠️ データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください。"
-            return
-
-        try:
-            from strands import Agent
-            from strands.models import BedrockModel
-            from .data_agent_service import create_data_agent_tool
-        except ImportError as e:
-            msg = f"⚠️ Strands Agent SDK の初期化に失敗しました: {e}"
-            if event_queue is not None:
-                event_queue.put({"type": "error", "content": msg})
-                return
-            yield msg
-            return
-
-        if is_followup:
-            system_prompt = self._build_data_driven_followup_system_prompt(
-                topic, custom_prompt
-            )
-        else:
-            system_prompt = self._build_data_driven_system_prompt(topic, custom_prompt)
-        user_content = "\n".join(
-            part["content"][0]["text"]
-            for part in self._build_report_context(messages, insights, topic, personas)
-        )
-
-        credentials = config.get_aws_credentials()
-        filtered = {
-            k: v for k, v in credentials.items() if v is not None and k != "region_name"
-        }
-
-        def _callback(**kwargs: Any) -> None:
-            """Agent のテキスト出力を event_queue に thinking として送信"""
-            data = kwargs.get("data", "")
-            if data and event_queue is not None:
-                event_queue.put({"type": "thinking", "content": data})
-
-        # セッションマネージャーを構築（AgentCore Memory STM）
-        report_session_manager = None
-        if session_id:
-            try:
-                from .memory.session_manager_factory import (
-                    create_agentcore_session_manager,
-                    is_memory_enabled,
-                )
-
-                if is_memory_enabled():
-                    report_session_manager = create_agentcore_session_manager(
-                        actor_id="report-agent",
-                        session_id=session_id,
-                        retrieval_config={},
-                        memory_mode="full",
-                    )
-            except Exception as e:
-                self.logger.warning(
-                    f"レポートエージェントのセッションマネージャー作成失敗: {e}"
-                )
-
-        try:
-            model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID,
-                region_name=config.AWS_REGION,
-                **filtered,
-            )
-            data_agent_tool = create_data_agent_tool(
-                config.DATA_AGENT_RUNTIME_ARN,
-                config.DATA_AGENT_REGION,
-                event_queue=event_queue,
-            )
-
-            agent_kwargs: Dict[str, Any] = {
-                "model": model,
-                "tools": [data_agent_tool],
-                "system_prompt": system_prompt,
-                "callback_handler": _callback if event_queue is not None else None,
-            }
-            if report_session_manager:
-                agent_kwargs["session_manager"] = report_session_manager
-
-            agent = Agent(**agent_kwargs)
-            result = agent(user_content)
-
-            # セッションに履歴があるか確認してSTM有効フラグを通知
-            session_has_history = (
-                report_session_manager is not None and len(agent.messages) > 2
-            )
-
-            if event_queue is not None:
-                event_queue.put(
-                    {
-                        "type": "session_id",
-                        "session_id": session_id or "",
-                        "has_history": session_has_history,
-                    }
-                )
-                event_queue.put({"type": "_done"})
-            else:
-                yield str(result)
-        except Exception as e:
-            msg = f"\n\n⚠️ レポート生成エラー: {e}"
-            if event_queue is not None:
-                event_queue.put({"type": "error", "content": msg})
-            else:
-                yield msg
 
     # =========================================================================
     # アンケートAI生成（Issue #23）
@@ -1787,12 +1165,15 @@ class AIService:
             converted.append({"role": role, "content": [{"text": content}]})
         return converted
 
-    def chat_for_survey(self, messages: List[Dict[str, str]]) -> str:
+    def chat_for_survey(
+        self, messages: List[Dict[str, str]], system_prompt: str = ""
+    ) -> str:
         """アンケートヒアリング用のマルチターン会話。
 
         Args:
             messages: [{"role": "user"|"assistant", "content": "..."}, ...] の会話履歴
                      （最後のメッセージは user 発言であることを想定）
+            system_prompt: システムプロンプト
 
         Returns:
             assistantの返答テキスト
@@ -1806,12 +1187,13 @@ class AIService:
         if not converse_messages:
             raise AIServiceError("有効なメッセージがありません")
 
+        prompt_text = system_prompt or self._SURVEY_CHAT_SYSTEM_PROMPT
         try:
             return str(
                 self._retry_with_backoff(
                     self._invoke_converse_api,
                     converse_messages,
-                    system_prompts=[{"text": self._SURVEY_CHAT_SYSTEM_PROMPT}],
+                    system_prompts=[{"text": prompt_text}],
                     max_tokens=1024,
                 )
             )
@@ -1821,9 +1203,13 @@ class AIService:
             raise AIServiceError(f"アンケートヒアリング中にエラーが発生: {e}")
 
     def generate_survey_questions_draft(
-        self, messages: List[Dict[str, str]]
+        self, messages: List[Dict[str, str]], system_prompt: str = ""
     ) -> Dict[str, Any]:
         """会話履歴から設問ドラフトを生成して JSON 辞書を返す。
+
+        Args:
+            messages: 会話履歴
+            system_prompt: システムプロンプト
 
         Returns:
             {"summary": str, "questions": [ {question_type, text, options, allow_multiple, max_selections}, ... ]}
@@ -1847,11 +1233,12 @@ class AIService:
             }
         )
 
+        prompt_text = system_prompt or self._SURVEY_DRAFT_SYSTEM_PROMPT
         try:
             response = self._retry_with_backoff(
                 self._invoke_converse_api,
                 converse_messages,
-                system_prompts=[{"text": self._SURVEY_DRAFT_SYSTEM_PROMPT}],
+                system_prompts=[{"text": prompt_text}],
                 max_tokens=4096,
             )
         except AIServiceError:

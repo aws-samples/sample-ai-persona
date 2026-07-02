@@ -3,12 +3,15 @@ Agent Discussion Manager for AI Persona System.
 Handles AI agent mode discussion setup, execution, and persistence.
 """
 
+import json
 import logging
-from typing import List, Dict, Optional, Any
+from typing import Generator, List, Dict, Optional, Any
 
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
+from ..models.insight_category import InsightCategory
+from ..prompts.discussion_interview_prompts import build_persona_system_prompt
 from ..services.agent_service import (
     AgentService,
     PersonaAgent,
@@ -57,127 +60,6 @@ class AgentDiscussionManager:
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
-
-    def _prepare_document_contents(
-        self, documents_metadata: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        ドキュメントメタデータからStrands Agent SDK用のContentBlockリストを準備
-
-        Args:
-            documents_metadata: ドキュメントメタデータのリスト
-                各辞書は以下のキーを含む:
-                - file_path: ファイルパス（ローカルまたはs3://）
-                - mime_type: MIMEタイプ
-                - filename: ファイル名
-
-        Returns:
-            List[Dict[str, Any]]: Strands Agent SDK用のContentBlockリスト
-        """
-        content_list = []
-
-        for doc in documents_metadata:
-            try:
-                file_path = doc.get("file_path", "")
-                mime_type = doc.get("mime_type", "")
-                filename = doc.get("filename", "document")
-
-                # ファイルを読み込み（S3またはローカル）
-                if file_path.startswith("s3://"):
-                    # S3から読み込み
-                    s3_service = service_factory.get_s3_service()
-                    if not s3_service:
-                        self.logger.warning(f"S3サービスが利用できません: {file_path}")
-                        continue
-                    file_bytes = s3_service.download_file(file_path)
-                else:
-                    # ローカルファイルから読み込み
-                    from pathlib import Path
-
-                    if not Path(file_path).exists():
-                        self.logger.warning(f"ファイルが見つかりません: {file_path}")
-                        continue
-                    with open(file_path, "rb") as f:
-                        file_bytes = f.read()
-
-                # MIMEタイプに応じてContentBlock形式を決定
-                if mime_type.startswith("image/"):
-                    # 画像の場合
-                    image_format = mime_type.split("/")[-1]
-                    # webpはサポートされているか確認
-                    if image_format not in ["png", "jpeg", "gif", "webp"]:
-                        image_format = "png"  # フォールバック
-                    content_list.append(
-                        {
-                            "image": {
-                                "format": image_format,
-                                "source": {"bytes": file_bytes},
-                            }
-                        }
-                    )
-                    self.logger.info(f"画像を追加しました: {filename} ({image_format})")
-
-                elif mime_type == "application/pdf":
-                    # PDFの場合
-                    # ファイル名から拡張子を除去し、英数字とアンダースコアのみに
-                    import re
-
-                    safe_name = re.sub(
-                        r"[^a-zA-Z0-9_]", "_", filename.rsplit(".", 1)[0]
-                    )[:100]
-                    content_list.append(
-                        {
-                            "document": {
-                                "name": safe_name,
-                                "format": "pdf",
-                                "source": {"bytes": file_bytes},
-                            }
-                        }
-                    )
-                    self.logger.info(f"PDFを追加しました: {filename}")
-
-                elif mime_type in [
-                    "text/plain",
-                    "text/csv",
-                    "text/html",
-                    "text/markdown",
-                ]:
-                    # テキスト系ドキュメントの場合
-                    format_map = {
-                        "text/plain": "txt",
-                        "text/csv": "csv",
-                        "text/html": "html",
-                        "text/markdown": "md",
-                    }
-                    doc_format = format_map.get(mime_type, "txt")
-                    import re
-
-                    safe_name = re.sub(
-                        r"[^a-zA-Z0-9_]", "_", filename.rsplit(".", 1)[0]
-                    )[:100]
-                    content_list.append(
-                        {
-                            "document": {
-                                "name": safe_name,
-                                "format": doc_format,
-                                "source": {"bytes": file_bytes},
-                            }
-                        }
-                    )
-                    self.logger.info(
-                        f"テキストドキュメントを追加しました: {filename} ({doc_format})"
-                    )
-
-                else:
-                    self.logger.warning(
-                        f"サポートされていないMIMEタイプ: {mime_type} ({filename})"
-                    )
-
-            except Exception as e:
-                self.logger.error(f"ドキュメント処理エラー ({filename}): {e}")
-                continue
-
-        return content_list
 
     def create_persona_agents(
         self,
@@ -237,7 +119,7 @@ class AgentDiscussionManager:
                 # Get system prompt for this persona
                 system_prompt = system_prompts.get(
                     persona.id,
-                    self.agent_service.generate_persona_system_prompt(persona),
+                    build_persona_system_prompt(persona),
                 )
 
                 # Create persona agent with memory and dataset/KB configuration
@@ -352,60 +234,9 @@ class AgentDiscussionManager:
         self._validate_discussion_input(personas, topic, persona_agents, facilitator)
 
         # Load documents if provided
-        documents_metadata = None
-        document_context = None
-        document_contents = []
-        if document_ids:
-            from src.managers.file_manager import FileManager
-            from src.services.service_factory import service_factory
-
-            file_manager = FileManager(
-                db_service=self.database_service,
-                s3_service=service_factory.get_s3_service(),
-            )
-
-            # Load document metadata
-            documents_metadata = []
-            document_descriptions = []
-            for doc_id in document_ids:
-                file_metadata = file_manager.get_file_metadata(doc_id)
-                if file_metadata:
-                    documents_metadata.append(
-                        {
-                            "id": file_metadata.file_id,
-                            "filename": file_metadata.original_filename,
-                            "file_path": file_metadata.file_path,
-                            "file_size": file_metadata.file_size,
-                            "mime_type": file_metadata.mime_type,
-                            "uploaded_at": file_metadata.uploaded_at.isoformat()
-                            if file_metadata.uploaded_at
-                            else None,
-                        }
-                    )
-                    document_descriptions.append(
-                        f"- {file_metadata.original_filename} ({file_metadata.mime_type})"
-                    )
-
-            if documents_metadata:
-                document_context = "\n".join(
-                    [
-                        "\n以下のドキュメントを参照しながら議論を進めてください:",
-                        *document_descriptions,
-                    ]
-                )
-                self.logger.info(
-                    f"Loaded {len(documents_metadata)} documents for agent discussion"
-                )
-
-                # ドキュメントコンテンツをStrands Agent SDK用に準備
-                document_contents = self._prepare_document_contents(documents_metadata)
-                if document_contents:
-                    self.logger.info(
-                        f"Prepared {len(document_contents)} document contents for agents"
-                    )
-                    # 各ペルソナエージェントにドキュメントコンテンツを設定
-                    for agent in persona_agents:
-                        agent.set_document_contents(document_contents.copy())
+        documents_metadata, document_context, document_contents = (
+            self._load_and_attach_documents(document_ids, persona_agents)
+        )
 
         self.logger.info(
             f"Starting agent discussion with {len(persona_agents)} agents on topic: '{topic[:50]}...' "
@@ -444,11 +275,9 @@ class AgentDiscussionManager:
             all_messages: list[Any] = []
             round_summaries: list[str] = []
 
-            while facilitator.should_continue():
-                facilitator.increment_round()
-                current_round = facilitator.current_round
-
-                self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+            total_rounds = facilitator.rounds
+            for current_round in range(1, total_rounds + 1):
+                self.logger.info(f"Starting round {current_round}/{total_rounds}")
 
                 # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
                 if current_round > 1:
@@ -467,20 +296,17 @@ class AgentDiscussionManager:
 
                 # Each persona speaks once per round
                 for _ in range(len(persona_agents)):
-                    # Select next speaker
-                    speaker = facilitator.select_next_speaker(
-                        persona_agents, spoken_in_round
-                    )
+                    speaker = self._select_next_speaker(persona_agents, spoken_in_round)
 
                     if speaker is None:
                         break
 
-                    # Create prompt with round summaries + recent messages
-                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
-                    prompt = facilitator.create_prompt_for_persona(
+                    prompt = self._build_persona_prompt(
                         speaker,
                         topic,
                         all_messages[-10:],
+                        current_round,
+                        total_rounds,
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1]
                         if round_summaries
@@ -519,14 +345,16 @@ class AgentDiscussionManager:
                 # ラウンド終了後にファシリテータがラウンド全体を要約
                 if round_messages:
                     try:
-                        round_summary = facilitator.summarize_round(
+                        summary_prompt = self._build_summary_prompt(
                             current_round,
                             round_messages,
                             topic,
+                            total_rounds,
                             previous_summaries=round_summaries
                             if round_summaries
                             else None,
                         )
+                        round_summary = facilitator.invoke(summary_prompt)
 
                         # 要約を蓄積（次ラウンドのコンテキストとして使用）
                         round_summaries.append(round_summary)
@@ -622,6 +450,46 @@ class AgentDiscussionManager:
             error_msg = f"Unexpected error while saving agent discussion: {e}"
             self.logger.error(error_msg)
             raise AgentDiscussionManagerError(error_msg)
+
+    def _load_and_attach_documents(
+        self,
+        document_ids: Optional[List[str]],
+        persona_agents: List[PersonaAgent],
+    ) -> tuple:
+        """ドキュメントを読み込みエージェントに添付する。"""
+        documents_metadata = None
+        document_context = None
+        document_contents: List[Dict[str, Any]] = []
+
+        if document_ids:
+            from .shared.document_loader import (
+                build_document_context,
+                load_documents_metadata,
+                prepare_document_contents,
+            )
+
+            documents_metadata = load_documents_metadata(
+                document_ids, self.database_service
+            )
+
+            if documents_metadata:
+                document_context = build_document_context(documents_metadata)
+                self.logger.info(
+                    f"Loaded {len(documents_metadata)} documents for discussion"
+                )
+
+                s3_service = service_factory.get_s3_service()
+                document_contents = prepare_document_contents(
+                    documents_metadata, s3_service
+                )
+                if document_contents:
+                    self.logger.info(
+                        f"Prepared {len(document_contents)} document contents for agents"
+                    )
+                    for agent in persona_agents:
+                        agent.set_document_contents(document_contents.copy())
+
+        return documents_metadata, document_context, document_contents
 
     def _validate_discussion_input(
         self,
@@ -726,67 +594,23 @@ class AgentDiscussionManager:
         enable_dataset: bool,
         enable_kb: bool,
     ) -> PersonaAgent:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。両方同時に有効化可能。"""
-        from src.services.service_factory import service_factory
+        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
+        from .shared.agent_integration import prepare_integration_tools_and_prompt
 
-        db_service = service_factory.get_database_service()
-        additional_tools = []
-        enhanced_prompt = system_prompt
-
-        # KB連携：ツールとプロンプト拡張を準備
-        if enable_kb:
-            kb_binding = db_service.get_kb_binding_by_persona(persona.id)
-            if kb_binding:
-                kb = db_service.get_knowledge_base(kb_binding.kb_id)
-                if kb:
-                    from src.services.knowledge_base.kb_tools import (
-                        create_kb_retrieval_tool,
-                    )
-                    from src.config import config
-
-                    kb_tool = create_kb_retrieval_tool(
-                        knowledge_base_id=kb.knowledge_base_id,
-                        metadata_filters=kb_binding.metadata_filters,
-                        region=config.AWS_REGION,
-                    )
-                    additional_tools.append(kb_tool)
-                    enhanced_prompt = self.agent_service._enhance_prompt_with_kb_info(
-                        enhanced_prompt,
-                        kb.name,
-                        kb.description,
-                        kb_binding.metadata_filters,
-                    )
-
-        # データセット連携：ツールとプロンプト拡張を準備
-        if enable_dataset:
-            bindings = db_service.get_bindings_by_persona(persona.id)
-            if bindings:
-                dataset_ids = list(set(b.dataset_id for b in bindings))
-                datasets = [db_service.get_dataset(did) for did in dataset_ids]
-                datasets = [d for d in datasets if d is not None]
-                bindings_dict = [
-                    {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
-                    for b in bindings
-                ]
-                enhanced_prompt = self.agent_service._enhance_prompt_with_dataset_info(
-                    enhanced_prompt, bindings_dict, datasets
-                )
-                from src.services.mcp_server_manager import get_mcp_manager
-
-                mcp_manager = get_mcp_manager()
-                if not mcp_manager.is_running():
-                    mcp_manager.start()
-                if mcp_manager.is_running():
-                    mcp_tools = mcp_manager.get_tools()
-                    if mcp_tools:
-                        additional_tools.extend(mcp_tools)
-
+        enhanced_prompt, additional_tools = prepare_integration_tools_and_prompt(
+            agent_service=self.agent_service,
+            database_service=self.database_service,
+            persona_id=persona.id,
+            base_prompt=system_prompt,
+            enable_kb=enable_kb,
+            enable_dataset=enable_dataset,
+        )
         return self.agent_service.create_persona_agent(
             persona=persona,
             system_prompt=enhanced_prompt,
             enable_memory=enable_memory,
             session_id=session_id,
-            additional_tools=additional_tools if additional_tools else None,
+            additional_tools=additional_tools,
             memory_mode=memory_mode,
         )
 
@@ -826,60 +650,9 @@ class AgentDiscussionManager:
         self._validate_discussion_input(personas, topic, persona_agents, facilitator)
 
         # Load documents if provided
-        documents_metadata = None
-        document_context = None
-        document_contents = []
-        if document_ids:
-            from src.managers.file_manager import FileManager
-            from src.services.service_factory import service_factory
-
-            file_manager = FileManager(
-                db_service=self.database_service,
-                s3_service=service_factory.get_s3_service(),
-            )
-
-            # Load document metadata
-            documents_metadata = []
-            document_descriptions = []
-            for doc_id in document_ids:
-                file_metadata = file_manager.get_file_metadata(doc_id)
-                if file_metadata:
-                    documents_metadata.append(
-                        {
-                            "id": file_metadata.file_id,
-                            "filename": file_metadata.original_filename,
-                            "file_path": file_metadata.file_path,
-                            "file_size": file_metadata.file_size,
-                            "mime_type": file_metadata.mime_type,
-                            "uploaded_at": file_metadata.uploaded_at.isoformat()
-                            if file_metadata.uploaded_at
-                            else None,
-                        }
-                    )
-                    document_descriptions.append(
-                        f"- {file_metadata.original_filename} ({file_metadata.mime_type})"
-                    )
-
-            if documents_metadata:
-                document_context = "\n".join(
-                    [
-                        "\n以下のドキュメントを参照しながら議論を進めてください:",
-                        *document_descriptions,
-                    ]
-                )
-                self.logger.info(
-                    f"Loaded {len(documents_metadata)} documents for streaming agent discussion"
-                )
-
-                # ドキュメントコンテンツをStrands Agent SDK用に準備
-                document_contents = self._prepare_document_contents(documents_metadata)
-                if document_contents:
-                    self.logger.info(
-                        f"Prepared {len(document_contents)} document contents for streaming agents"
-                    )
-                    # 各ペルソナエージェントにドキュメントコンテンツを設定
-                    for agent in persona_agents:
-                        agent.set_document_contents(document_contents.copy())
+        documents_metadata, document_context, document_contents = (
+            self._load_and_attach_documents(document_ids, persona_agents)
+        )
 
         self.logger.info(
             f"Starting streaming agent discussion with {len(persona_agents)} agents "
@@ -918,11 +691,9 @@ class AgentDiscussionManager:
             all_messages: list[Any] = []
             round_summaries: list[str] = []
 
-            while facilitator.should_continue():
-                facilitator.increment_round()
-                current_round = facilitator.current_round
-
-                self.logger.info(f"Starting round {current_round}/{facilitator.rounds}")
+            total_rounds = facilitator.rounds
+            for current_round in range(1, total_rounds + 1):
+                self.logger.info(f"Starting round {current_round}/{total_rounds}")
 
                 # ラウンド開始時: 全エージェントの会話履歴をクリア（コンテキスト膨張防止）
                 if current_round > 1:
@@ -941,20 +712,17 @@ class AgentDiscussionManager:
 
                 # Each persona speaks once per round
                 for _ in range(len(persona_agents)):
-                    # Select next speaker
-                    speaker = facilitator.select_next_speaker(
-                        persona_agents, spoken_in_round
-                    )
+                    speaker = self._select_next_speaker(persona_agents, spoken_in_round)
 
                     if speaker is None:
                         break
 
-                    # Create prompt with round summaries + recent messages
-                    # 直近10件を渡し、create_prompt_for_persona内で自分/他者/ファシリテータを分離
-                    prompt = facilitator.create_prompt_for_persona(
+                    prompt = self._build_persona_prompt(
                         speaker,
                         topic,
                         all_messages[-10:],
+                        current_round,
+                        total_rounds,
                         round_summaries=round_summaries if round_summaries else None,
                         latest_facilitator_message=round_summaries[-1]
                         if round_summaries
@@ -1028,15 +796,17 @@ class AgentDiscussionManager:
                         )
 
                         # Stream facilitator summary tokens
-                        round_summary = ""
-                        for token in facilitator.summarize_round_streaming(
+                        summary_prompt = self._build_summary_prompt(
                             current_round,
                             round_messages,
                             topic,
+                            total_rounds,
                             previous_summaries=round_summaries
                             if round_summaries
                             else None,
-                        ):
+                        )
+                        round_summary = ""
+                        for token in facilitator.invoke_streaming(summary_prompt):
                             round_summary += token
                             yield (
                                 "message_delta",
@@ -1158,3 +928,368 @@ class AgentDiscussionManager:
 
         except Exception as e:
             self.logger.error(f"エージェントリソース解放中に予期しないエラー: {e}")
+
+    # =========================================================================
+    # ワークフロー制御メソッド（agent_service.py FacilitatorAgent から移動）
+    # =========================================================================
+
+    def _select_next_speaker(
+        self,
+        persona_agents: List[PersonaAgent],
+        spoken_in_round: List[str],
+    ) -> Optional[PersonaAgent]:
+        """
+        次の発言者をランダムに選択する。
+
+        Args:
+            persona_agents: 参加ペルソナエージェントリスト
+            spoken_in_round: 現在のラウンドで既に発言したペルソナIDリスト
+
+        Returns:
+            選択されたペルソナエージェント（全員発言済みの場合はNone）
+        """
+        import random
+
+        available_agents = [
+            agent
+            for agent in persona_agents
+            if agent.get_persona_id() not in spoken_in_round
+        ]
+
+        if not available_agents:
+            return None
+
+        selected = random.choice(available_agents)
+        self.logger.info(f"次の発言者を選択: {selected.get_persona_name()}")
+        return selected
+
+    def _build_persona_prompt(
+        self,
+        persona_agent: PersonaAgent,
+        topic: str,
+        context: List[Message],
+        current_round: int,
+        total_rounds: int,
+        round_summaries: Optional[List[str]] = None,
+        latest_facilitator_message: Optional[str] = None,
+    ) -> str:
+        """
+        ペルソナエージェントへの発言促進プロンプトを生成する。
+
+        Args:
+            persona_agent: 対象ペルソナエージェント
+            topic: 議論テーマ
+            context: 直近の発言メッセージ
+            current_round: 現在のラウンド番号
+            total_rounds: 総ラウンド数
+            round_summaries: 各ラウンドの要約リスト
+            latest_facilitator_message: ファシリテータの最新要約
+        """
+        persona_id = persona_agent.get_persona_id()
+        is_first_round = current_round == 1
+
+        if not context and not round_summaries:
+            return (
+                f"議論テーマ「{topic}」について話し合います。\n\n"
+                f"まず、あなたの日常生活の中でこのテーマに関連する具体的な場面を一つ挙げて、"
+                f"そこで感じたこと・困ったこと・考えたことを率直に話してください。"
+            )
+
+        parts = [f"「{topic}」についての議論を続けてください。\n"]
+
+        if round_summaries:
+            past_summaries = (
+                round_summaries[:-1] if latest_facilitator_message else round_summaries
+            )
+            if past_summaries:
+                parts.append("## これまでの議論の要約")
+                for i, summary in enumerate(past_summaries, 1):
+                    parts.append(f"ラウンド{i}: {summary}")
+                parts.append("")
+
+        if latest_facilitator_message:
+            parts.append("## ファシリテータからの問いかけ")
+            parts.append(latest_facilitator_message)
+            parts.append("")
+
+        if context:
+            own_previous = [msg for msg in context if msg.persona_id == persona_id]
+            if own_previous:
+                parts.append("## あなたの前回の発言")
+                parts.append(own_previous[-1].content)
+                parts.append("")
+
+        if context:
+            recent_others = [
+                msg
+                for msg in context
+                if msg.persona_id != "facilitator" and msg.persona_id != persona_id
+            ][-3:]
+            if recent_others:
+                parts.append("## 直近の他の参加者の発言")
+                for msg in recent_others:
+                    parts.append(f"- {msg.persona_name}: {msg.content}")
+                parts.append("")
+
+        if is_first_round:
+            parts.append(
+                "このラウンドでは、まずあなた自身の体験を共有してください。"
+                "このテーマに関連する日常の具体的な場面を挙げて、そこで感じたこと・困ったことを話し、"
+                "他の参加者の体験も踏まえて意見を述べてください。"
+            )
+        elif current_round < total_rounds:
+            parts.append(
+                "議論が深まってきました。他の参加者の意見を踏まえて、あなたの考えに変化はありますか？"
+                "新たに気づいたことや、まだ議論されていない重要な観点があれば提起してください。"
+            )
+        else:
+            parts.append(
+                "最終ラウンドです。これまでの議論を踏まえて、あなたが最も重要だと感じたポイントと、"
+                "具体的にどうすべきかについて、あなたの立場から結論を述べてください。"
+            )
+
+        if latest_facilitator_message:
+            parts.append("\nファシリテータの問いかけの観点にも着目してください。")
+
+        return "\n".join(parts)
+
+    def _build_summary_prompt(
+        self,
+        round_number: int,
+        round_messages: List[Message],
+        topic: str,
+        total_rounds: int,
+        previous_summaries: Optional[List[str]] = None,
+    ) -> str:
+        """
+        ラウンド要約用プロンプトを構築する。
+
+        Args:
+            round_number: ラウンド番号
+            round_messages: そのラウンドのメッセージリスト
+            topic: 議論トピック
+            total_rounds: 総ラウンド数
+            previous_summaries: 過去ラウンドの要約リスト
+        """
+        statements = [
+            msg
+            for msg in round_messages
+            if msg.message_type == "statement" and msg.persona_id != "facilitator"
+        ]
+
+        if not statements:
+            return f"ラウンド{round_number}では発言がありませんでした。"
+
+        statements_text = "\n".join(
+            [f"- {msg.persona_name}: {msg.content}" for msg in statements]
+        )
+
+        parts = [
+            f"議論テーマ「{topic}」のラウンド{round_number}/{total_rounds}が完了しました。\n"
+        ]
+
+        if previous_summaries:
+            parts.append("## これまでの議論の流れ")
+            for i, summary in enumerate(previous_summaries, 1):
+                parts.append(f"ラウンド{i}: {summary}")
+            parts.append("")
+
+        parts.append(f"## ラウンド{round_number}の発言")
+        parts.append(statements_text)
+        parts.append("")
+
+        if round_number < total_rounds:
+            parts.append(
+                "以下の観点で簡潔に要約してください:\n"
+                "- 各参加者の主要な意見や立場\n"
+                "- 参加者間の共通点や対立点\n"
+                "- まだ掘り下げられていない重要な観点\n"
+                "- 各ペルソナに次のラウンドで答えてほしい具体的な問い（1-2個）\n"
+                f"残り{total_rounds - round_number}ラウンドです。"
+            )
+            if total_rounds - round_number <= 2:
+                parts.append("論点を絞り込み、結論に向けて議論を収束させてください。")
+            parts.append("3-5文で要約し、最後に問いかけで締めてください。")
+        else:
+            parts.append(
+                "最終ラウンドが完了しました。以下の観点で議論全体をまとめてください:\n"
+                "- 議論を通じて明らかになった主要な結論\n"
+                "- 参加者間で合意に至った点と残った対立点\n"
+                "- 議論テーマの目的に対する具体的な示唆\n"
+                "5-7文で最終まとめを作成してください。"
+            )
+
+        return "\n".join(parts)
+
+    # =========================================================================
+    # フルフローAPI（Router層のワークフローロジックをManager層に統合）
+    # =========================================================================
+
+    def run_agent_discussion_streaming(
+        self,
+        personas: List[Persona],
+        topic: str,
+        rounds: int = 3,
+        additional_instructions: str = "",
+        enable_memory: bool = False,
+        memory_mode: str = "full",
+        enable_dataset: bool = False,
+        enable_kb: bool = False,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Generator[str, None, None]:
+        """agentモード議論のフルフロー（ストリーミング）。
+
+        1. 入力バリデーション（memory_mode含む）
+        2. ペルソナエージェント作成
+        3. ファシリテーターエージェント作成
+        4. 議論実行（メッセージイベントをSSE文字列としてyield）
+        5. インサイト生成
+        6. カテゴリー保存
+        7. DB保存
+        8. 完了イベントをyield
+
+        Yields:
+            str: SSE data行（"data: {...}\\n\\n" 形式）
+
+        Raises:
+            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+        """
+        self._validate_memory_mode(memory_mode)
+
+        temp_discussion = Discussion.create_new(
+            topic=topic, participants=[p.id for p in personas], mode="agent"
+        )
+        session_id = temp_discussion.id
+
+        persona_agents = self.create_persona_agents(
+            personas,
+            {},
+            enable_memory=enable_memory,
+            session_id=session_id,
+            memory_mode=memory_mode,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+        )
+
+        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+
+        discussion = None
+        message_count = 0
+
+        for event_type, data in self.start_agent_discussion_streaming(
+            personas=personas,
+            topic=topic,
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+            enable_memory=enable_memory,
+            document_ids=document_ids,
+        ):
+            if event_type == "message_start":
+                yield f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
+            elif event_type == "message_delta":
+                yield f"data: {json.dumps({'type': 'message_delta', **data}, ensure_ascii=False)}\n\n"
+            elif event_type == "message_end":
+                message_count += 1
+                msg_data = {
+                    "type": "message_end",
+                    "persona_id": data.persona_id,
+                    "persona_name": data.persona_name,
+                    "content": data.content,
+                    "message_type": data.message_type,
+                }
+                yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
+            elif event_type == "complete":
+                discussion = data
+
+        if discussion:
+            discussion = self._attach_insights(discussion, categories)
+            self.save_agent_discussion(discussion)
+
+            complete_data = {
+                "type": "complete",
+                "discussion_id": discussion.id,
+                "message_count": message_count,
+                "insight_count": len(discussion.insights) if discussion.insights else 0,
+            }
+            yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
+
+    def run_agent_discussion_full(
+        self,
+        personas: List[Persona],
+        topic: str,
+        rounds: int = 3,
+        additional_instructions: str = "",
+        enable_memory: bool = False,
+        memory_mode: str = "full",
+        enable_dataset: bool = False,
+        enable_kb: bool = False,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Discussion:
+        """agentモード議論のフルフロー（非ストリーミング）。
+
+        Returns:
+            Discussion: インサイト付き保存済み議論オブジェクト
+
+        Raises:
+            AgentDiscussionManagerError: バリデーション失敗、エージェント/DB例外
+        """
+        self._validate_memory_mode(memory_mode)
+
+        temp_discussion = Discussion.create_new(
+            topic=topic, participants=[p.id for p in personas], mode="agent"
+        )
+        session_id = temp_discussion.id
+
+        persona_agents = self.create_persona_agents(
+            personas,
+            {},
+            enable_memory=enable_memory,
+            session_id=session_id,
+            memory_mode=memory_mode,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+        )
+
+        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+
+        discussion = self.start_agent_discussion(
+            personas=personas,
+            topic=topic,
+            persona_agents=persona_agents,
+            facilitator=facilitator,
+            enable_memory=enable_memory,
+            document_ids=document_ids,
+        )
+
+        discussion = self._attach_insights(discussion, categories)
+        self.save_agent_discussion(discussion)
+        return discussion
+
+    def _validate_memory_mode(self, memory_mode: str) -> None:
+        """memory_modeのバリデーション。"""
+        valid_modes = ["full", "retrieve_only", "disabled"]
+        if memory_mode not in valid_modes:
+            raise AgentDiscussionManagerError(
+                f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_modes)}"
+            )
+
+    def _attach_insights(
+        self,
+        discussion: Discussion,
+        categories: Optional[List[InsightCategory]],
+    ) -> Discussion:
+        """インサイト生成・カテゴリー保存の共通処理。"""
+        from .shared.insight_utils import attach_insights_to_discussion
+
+        return attach_insights_to_discussion(
+            discussion=discussion,
+            categories=categories,
+            ai_service=self._get_ai_service(),
+            logger=self.logger,
+        )
+
+    def _get_ai_service(self) -> Any:
+        """インサイト生成用にAIServiceを取得する。"""
+        return service_factory.get_ai_service()

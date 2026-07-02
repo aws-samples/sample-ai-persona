@@ -6,7 +6,6 @@ AgentCore Gateway 経由で外部AIエージェントからも利用可能。
 """
 
 import logging
-from dataclasses import replace
 from typing import Annotated, Any, Literal, Optional, List
 
 from fastapi import APIRouter, HTTPException
@@ -338,15 +337,17 @@ def _run_generate_personas(
     custom_prompt: str | None,
 ) -> list[dict]:
     """バックグラウンドスレッドで実行されるペルソナ生成処理"""
-    pm = get_persona_manager()
-    personas, _logs = pm.generate_personas(
+    from src.managers.persona_generation_manager import PersonaGenerationManager
+
+    gen_manager = PersonaGenerationManager()
+    personas, _logs = gen_manager.generate_and_cache(
         file_contents=file_contents,
         data_type=data_type,
         persona_count=persona_count,
         data_description=data_description,
         custom_prompt=custom_prompt,
     )
-    # 生成されたペルソナを保存
+    pm = get_persona_manager()
     for p in personas:
         pm.save_persona(p)
     return [_persona_to_response(p).model_dump() for p in personas]
@@ -391,15 +392,14 @@ def _run_classic_discussion(
 ) -> dict:
     """Classic議論をバックグラウンドで実行"""
     dm = get_discussion_manager()
-    discussion = dm.start_discussion(personas=personas, topic=topic)
     cats = (
         [InsightCategory.from_dict(c.model_dump()) for c in categories]
         if categories
         else None
     )
-    insights = dm.generate_insights(discussion, categories=cats)
-    discussion = replace(discussion, insights=insights)
-    dm.save_discussion(discussion)
+    discussion = dm.run_classic_discussion(
+        personas=personas, topic=topic, categories=cats
+    )
     return _discussion_detail(discussion)
 
 
@@ -411,29 +411,18 @@ def _run_agent_discussion(
 ) -> dict:
     """Agent議論をバックグラウンドで実行"""
     adm = get_agent_discussion_manager()
-    dm = get_discussion_manager()
-
-    system_prompts: dict[str, str] = {}  # デフォルトのシステムプロンプトを使用
-    persona_agents = adm.create_persona_agents(personas, system_prompts)
-    facilitator = adm.create_facilitator_agent(rounds=rounds)
-    try:
-        discussion = adm.start_agent_discussion(
-            personas=personas,
-            topic=topic,
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
-        cats = (
-            [InsightCategory.from_dict(c.model_dump()) for c in categories]
-            if categories
-            else None
-        )
-        insights = dm.generate_insights(discussion, categories=cats)
-        discussion = replace(discussion, insights=insights)
-        adm.save_agent_discussion(discussion)
-        return _discussion_detail(discussion)
-    finally:
-        adm.cleanup_agents(persona_agents, facilitator)
+    cats = (
+        [InsightCategory.from_dict(c.model_dump()) for c in categories]
+        if categories
+        else None
+    )
+    discussion = adm.run_agent_discussion_full(
+        personas=personas,
+        topic=topic,
+        rounds=rounds,
+        categories=cats,
+    )
+    return _discussion_detail(discussion)
 
 
 def _discussion_detail(discussion: Any) -> dict:

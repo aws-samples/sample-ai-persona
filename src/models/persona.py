@@ -148,8 +148,7 @@ class Persona:
         """
         Create Persona instance from dictionary.
         """
-        # Convert ISO format strings back to datetime objects
-        data["created_at"] = datetime.fromisoformat(data["created_at"])
-        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
-        return cls(**data)
-
+        parsed = {**data}
+        parsed["created_at"] = datetime.fromisoformat(parsed["created_at"])
+        parsed["updated_at"] = datetime.fromisoformat(parsed["updated_at"])
+        return cls(**parsed)
