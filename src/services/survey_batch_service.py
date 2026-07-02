@@ -906,3 +906,91 @@ class SurveyBatchService:
         responses = df[answer_col].drop_nulls().to_list()
         responses.sort(key=len, reverse=True)
         return responses[:limit]
+
+    # =========================================================================
+    # 汎用データセットプレビュー
+    # =========================================================================
+
+    def execute_dataset_preview(
+        self,
+        s3_path: str,
+        count_sql: str,
+        data_sql: str,
+        params: Optional[List[Any]] = None,
+    ) -> Tuple[int, List[str], List[List[Any]]]:
+        """任意のデータセットファイルに対してCOUNT + SELECTプレビューを実行する。
+
+        DuckDB接続を作成し、S3/ローカルファイルをVIEW "dataset" として登録後、
+        指定されたSQLを実行する。接続はキャッシュせず都度closeする。
+
+        Returns:
+            (total_count, column_names, rows)
+        """
+        conn = duckdb.connect(":memory:")
+        try:
+            if s3_path.startswith("s3://"):
+                conn.execute(
+                    "INSTALL httpfs; LOAD httpfs;"
+                )  # nosemgrep: sqlalchemy-execute-raw-query
+
+                import boto3
+
+                session = boto3.Session()
+                credentials = session.get_credentials()
+                if credentials:
+                    creds = credentials.get_frozen_credentials()
+                    conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
+                        "SET s3_access_key_id = $1;", [creds.access_key]
+                    )  # gitleaks:allow
+                    conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
+                        "SET s3_secret_access_key = $1;", [creds.secret_key]
+                    )  # gitleaks:allow
+                    if creds.token:
+                        conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
+                            "SET s3_session_token = $1;", [creds.token]
+                        )  # gitleaks:allow
+                conn.execute(
+                    "SET s3_region = $1;", [self.region_name]
+                )  # nosemgrep: sqlalchemy-execute-raw-query
+
+                if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/]+", s3_path):
+                    raise SurveyBatchServiceError(f"Invalid S3 URI format: {s3_path}")
+
+                read_fn = (
+                    "read_parquet" if s3_path.endswith(".parquet") else "read_csv_auto"
+                )
+                conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
+                    f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{s3_path}');"
+                )
+            else:
+                local_path = s3_path.replace("local://", "")
+                if ".." in local_path or not re.fullmatch(
+                    r"[a-zA-Z0-9_][a-zA-Z0-9.\-_/]*", local_path
+                ):
+                    raise SurveyBatchServiceError(
+                        f"Invalid local path format: {local_path}"
+                    )
+                read_fn = (
+                    "read_parquet"
+                    if local_path.endswith(".parquet")
+                    else "read_csv_auto"
+                )
+                conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
+                    f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{local_path}');"
+                )
+
+            count_result = conn.execute(
+                count_sql, params or []
+            )  # nosemgrep: sqlalchemy-execute-raw-query
+            count_row = count_result.fetchone()
+            total_count = count_row[0] if count_row else 0
+
+            data_result = conn.execute(
+                data_sql, params or []
+            )  # nosemgrep: sqlalchemy-execute-raw-query
+            columns = [desc[0] for desc in data_result.description]
+            rows = [list(row) for row in data_result.fetchall()]
+
+            return total_count, columns, rows
+        finally:
+            conn.close()

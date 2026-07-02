@@ -1,7 +1,7 @@
 """議論・インタビュー関連プロンプトテンプレート。"""
 
 from dataclasses import asdict
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from ..models.persona import Persona
 from ..models.demographics import gender_label
@@ -189,3 +189,127 @@ def build_discussion_prompt(personas: List[Persona], topic: str) -> str:
 - 議論の質を高めるため、深い洞察や具体例を含める
 
 議論を開始してください。"""
+
+
+def build_kb_prompt_section(
+    name: str,
+    description: str,
+    metadata_filters: Optional[Dict[str, str]] = None,
+) -> str:
+    """KB連携用プロンプトセクションを構築する。"""
+    filter_desc = ""
+    if metadata_filters:
+        filter_desc = (
+            "（フィルタ: "
+            + ", ".join(f"{k}={v}" for k, v in metadata_filters.items())
+            + "）"
+        )
+
+    desc_line = ""
+    if description:
+        desc_line = f"\n内容: {description}"
+
+    return f"""
+
+# 【ナレッジベース連携】
+
+あなたにはナレッジベース「{name}」{filter_desc}を検索するツール（search_knowledge_base）が提供されています。{desc_line}
+
+## 使用ルール
+1. 議論トピックに関連する具体的な情報（商品情報、仕様、データなど）が必要な場合、ナレッジベースを検索してください
+2. 検索結果を参考にしつつ、あなた自身のペルソナとしての視点で発言してください
+3. 検索結果をそのまま読み上げるのではなく、自分の言葉で自然に組み込んでください
+"""
+
+
+def build_dataset_prompt_section(
+    bindings: List[Dict[str, Any]],
+    datasets: List[Any],
+) -> str:
+    """データセット連携用プロンプトセクションを構築する。"""
+    if not bindings or not datasets:
+        return ""
+
+    dataset_map = {d.id: d for d in datasets}
+
+    dataset_info_parts = []
+    for binding in bindings:
+        dataset = dataset_map.get(binding.get("dataset_id"))
+        if not dataset:
+            continue
+
+        binding_keys = binding.get("binding_keys", {})
+        columns_str = ", ".join(c.name for c in dataset.columns)
+
+        if binding_keys:
+            keys_str = ", ".join(f"{k}='{v}'" for k, v in binding_keys.items())
+            filter_condition = " AND ".join(
+                f"{k} = '{v}'" for k, v in binding_keys.items()
+            )
+            query_example = (
+                f"SELECT * FROM read_csv('{dataset.s3_path}') WHERE {filter_condition};"
+            )
+        else:
+            keys_str = "（全行がこのペルソナのデータ）"
+            query_example = f"SELECT * FROM read_csv('{dataset.s3_path}');"
+
+        dataset_info_parts.append(f"""
+### データセット: {dataset.name}
+- 説明: {dataset.description}
+- あなたの識別キー: {keys_str}
+- S3パス: {dataset.s3_path}
+- カラム: {columns_str}
+- 行数: {dataset.row_count}行
+
+あなたのデータを取得するクエリ:
+```sql
+{query_example}
+```
+""")
+
+    if not dataset_info_parts:
+        return ""
+
+    return (
+        """
+# 【重要】外部データセットへのアクセス - 必ず使用すること
+
+あなたには外部データセットにアクセスするためのツール（execute_query）が提供されています。
+このツールを使って、あなた自身の購買履歴や経験に関する具体的なデータを取得できます。
+
+## ★★★ 絶対に守るべきルール ★★★
+
+1. **購買履歴、過去の経験、具体的な商品名について話す場合は、必ず最初にデータセットを参照してください**
+2. **データを参照せずに購買履歴や具体的な経験を話すことは禁止です**
+
+## データの取得方法
+
+**初回のみ**: 認証設定とデータ取得を1回のクエリにまとめて実行してください：
+```sql
+CREATE SECRET IF NOT EXISTS aws_secret (TYPE S3, PROVIDER CREDENTIAL_CHAIN);
+SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
+```
+
+**2回目以降**: 認証は設定済みなのでSELECT文だけでOKです：
+```sql
+SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
+```
+
+## 利用可能なデータセット
+"""
+        + "".join(dataset_info_parts)
+        + """
+
+## ツール使用時の注意事項
+
+- **認証エラー（403 Forbidden）が出た場合**: CREATE SECRET文を含めて再実行してください
+- **データが見つからない場合**: 条件を確認し、正しい識別キーを使用しているか確認してください
+
+## 回答の仕方
+
+1. ユーザーから購買履歴や経験について質問されたら、まずツールでデータを取得
+2. 取得したデータに基づいて、具体的な商品名、日付、金額を含めて回答
+3. データがない場合のみ、「データを確認しましたが、該当する記録がありませんでした」と正直に伝える
+
+"""
+    )

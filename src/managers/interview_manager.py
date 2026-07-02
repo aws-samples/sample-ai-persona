@@ -756,14 +756,23 @@ class InterviewManager:
         enable_kb: bool,
     ) -> Any:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        return self.agent_service.create_persona_agent_with_integrations(
-            persona=persona,
-            system_prompt=system_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            memory_mode=memory_mode,
+        from .shared.agent_integration import prepare_integration_tools_and_prompt
+
+        enhanced_prompt, additional_tools = prepare_integration_tools_and_prompt(
+            agent_service=self.agent_service,
+            database_service=self.database_service,
+            persona_id=persona.id,
+            base_prompt=system_prompt,
             enable_kb=enable_kb,
             enable_dataset=enable_dataset,
+        )
+        return self.agent_service.create_persona_agent(
+            persona=persona,
+            system_prompt=enhanced_prompt,
+            enable_memory=enable_memory,
+            session_id=session_id,
+            additional_tools=additional_tools,
+            memory_mode=memory_mode,
         )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:

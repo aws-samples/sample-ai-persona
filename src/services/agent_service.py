@@ -683,134 +683,65 @@ class AgentService:
             self.logger.error(error_msg)
             raise AgentInitializationError(error_msg)
 
-    def enhance_prompt_with_kb_info(
-        self,
-        base_prompt: str,
-        kb_name: str,
-        kb_description: str,
-        metadata_filters: Dict[str, str] | None = None,
-    ) -> str:
-        """ナレッジベース情報をシステムプロンプトに追加"""
-        filter_desc = ""
-        if metadata_filters:
-            filter_desc = (
-                "（フィルタ: "
-                + ", ".join(f"{k}={v}" for k, v in metadata_filters.items())
-                + "）"
-            )
+    def get_kb_tools(
+        self, persona_id: str, db_service: Any
+    ) -> tuple[list[Any], Optional[Dict[str, Any]]]:
+        """KB連携ツールとKBメタ情報を返す。プロンプト構築はしない。
 
-        desc_line = ""
-        if kb_description:
-            desc_line = f"\n内容: {kb_description}"
-
-        return (
-            base_prompt
-            + f"""
-
-# 【ナレッジベース連携】
-
-あなたにはナレッジベース「{kb_name}」{filter_desc}を検索するツール（search_knowledge_base）が提供されています。{desc_line}
-
-## 使用ルール
-1. 議論トピックに関連する具体的な情報（商品情報、仕様、データなど）が必要な場合、ナレッジベースを検索してください
-2. 検索結果を参考にしつつ、あなた自身のペルソナとしての視点で発言してください
-3. 検索結果をそのまま読み上げるのではなく、自分の言葉で自然に組み込んでください
-"""
-        )
-
-    def enhance_prompt_with_dataset_info(
-        self, base_prompt: str, bindings: List[Dict], datasets: List[Any]
-    ) -> str:
+        Returns:
+            (tools, kb_info) — kb_infoは {"name": str, "description": str, "metadata_filters": dict|None}
+            バインディング未設定時は ([], None)
         """
-        データセット情報をシステムプロンプトに追加
-        """
-        if not bindings or not datasets:
-            return base_prompt
+        tools: list[Any] = []
 
-        # データセットIDからデータセットを検索するマップ
-        dataset_map = {d.id: d for d in datasets}
+        kb_binding = db_service.get_kb_binding_by_persona(persona_id)
+        if kb_binding:
+            kb = db_service.get_knowledge_base(kb_binding.kb_id)
+            if kb:
+                from .knowledge_base.kb_tools import create_kb_retrieval_tool
 
-        dataset_info_parts = []
-        for binding in bindings:
-            dataset = dataset_map.get(binding.get("dataset_id"))
-            if not dataset:
-                continue
-
-            binding_keys = binding.get("binding_keys", {})
-            columns_str = ", ".join(c.name for c in dataset.columns)
-
-            if binding_keys:
-                keys_str = ", ".join(f"{k}='{v}'" for k, v in binding_keys.items())
-                filter_condition = " AND ".join(
-                    f"{k} = '{v}'" for k, v in binding_keys.items()
+                kb_tool = create_kb_retrieval_tool(
+                    knowledge_base_id=kb.knowledge_base_id,
+                    metadata_filters=kb_binding.metadata_filters,
+                    region=config.AWS_REGION,
                 )
-                query_example = f"SELECT * FROM read_csv('{dataset.s3_path}') WHERE {filter_condition};"
-            else:
-                keys_str = "（全行がこのペルソナのデータ）"
-                query_example = f"SELECT * FROM read_csv('{dataset.s3_path}');"
+                tools.append(kb_tool)
+                return tools, {
+                    "name": kb.name,
+                    "description": kb.description,
+                    "metadata_filters": kb_binding.metadata_filters,
+                }
 
-            dataset_info_parts.append(f"""
-### データセット: {dataset.name}
-- 説明: {dataset.description}
-- あなたの識別キー: {keys_str}
-- S3パス: {dataset.s3_path}
-- カラム: {columns_str}
-- 行数: {dataset.row_count}行
+        return tools, None
 
-あなたのデータを取得するクエリ:
-```sql
-{query_example}
-```
-""")
+    def get_dataset_tools(
+        self, persona_id: str, db_service: Any
+    ) -> tuple[list[Any], List[Dict], List[Any]]:
+        """データセット連携ツールとバインディング/データセット情報を返す。
 
-        if not dataset_info_parts:
-            return base_prompt
+        Returns:
+            (tools, bindings_dict, datasets)
+            バインディング未設定時は ([], [], [])
+        """
+        tools: list[Any] = []
 
-        dataset_section = (
-            """
-# 【重要】外部データセットへのアクセス - 必ず使用すること
+        bindings = db_service.get_bindings_by_persona(persona_id)
+        if not bindings:
+            return tools, [], []
 
-あなたには外部データセットにアクセスするためのツール（execute_query）が提供されています。
-このツールを使って、あなた自身の購買履歴や経験に関する具体的なデータを取得できます。
+        dataset_ids = list(set(b.dataset_id for b in bindings))
+        datasets = [db_service.get_dataset(did) for did in dataset_ids]
+        datasets = [d for d in datasets if d is not None]
+        bindings_dict = [
+            {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
+            for b in bindings
+        ]
 
-## ★★★ 絶対に守るべきルール ★★★
+        mcp_tools = self.get_mcp_tools()
+        if mcp_tools:
+            tools.extend(mcp_tools)
 
-1. **購買履歴、過去の経験、具体的な商品名について話す場合は、必ず最初にデータセットを参照してください**
-2. **データを参照せずに購買履歴や具体的な経験を話すことは禁止です**
-
-## データの取得方法
-
-**初回のみ**: 認証設定とデータ取得を1回のクエリにまとめて実行してください：
-```sql
-CREATE SECRET IF NOT EXISTS aws_secret (TYPE S3, PROVIDER CREDENTIAL_CHAIN);
-SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
-```
-
-**2回目以降**: 認証は設定済みなのでSELECT文だけでOKです：
-```sql
-SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
-```
-
-## 利用可能なデータセット
-"""
-            + "".join(dataset_info_parts)
-            + """
-
-## ツール使用時の注意事項
-
-- **認証エラー（403 Forbidden）が出た場合**: CREATE SECRET文を含めて再実行してください
-- **データが見つからない場合**: 条件を確認し、正しい識別キーを使用しているか確認してください
-
-## 回答の仕方
-
-1. ユーザーから購買履歴や経験について質問されたら、まずツールでデータを取得
-2. 取得したデータに基づいて、具体的な商品名、日付、金額を含めて回答
-3. データがない場合のみ、「データを確認しましたが、該当する記録がありませんでした」と正直に伝える
-
-"""
-        )
-
-        return base_prompt + dataset_section
+        return tools, bindings_dict, datasets
 
     # --- Flexible Persona Generation ---
     #
@@ -971,104 +902,6 @@ SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
         return []
 
     # =========================================================================
-    # 統合API（Manager層のSDK操作・MCPライフサイクル管理をService層に集約）
-    # =========================================================================
-
-    def create_persona_agent_with_integrations(
-        self,
-        persona: Persona,
-        system_prompt: str,
-        enable_memory: bool = False,
-        session_id: Optional[str] = None,
-        memory_mode: str = "full",
-        enable_kb: bool = False,
-        enable_dataset: bool = False,
-    ) -> PersonaAgent:
-        """統合機能付きペルソナエージェントを作成する。
-
-        KB連携・データセット連携のツール構成とプロンプト拡張を一括処理。
-        Manager層はenable_kb/enable_datasetのフラグ判断のみ行い、
-        実際のSDKツール生成・MCPサーバー起動はService層が担当する。
-        """
-        from .service_factory import service_factory
-
-        db_service = service_factory.get_database_service()
-        additional_tools: list[Any] = []
-        enhanced_prompt = system_prompt
-
-        if enable_kb:
-            kb_tools, kb_prompt_ext = self._setup_kb_integration(persona.id, db_service)
-            additional_tools.extend(kb_tools)
-            enhanced_prompt += kb_prompt_ext
-
-        if enable_dataset:
-            ds_tools, ds_prompt_ext = self._setup_dataset_integration(
-                persona.id, db_service
-            )
-            additional_tools.extend(ds_tools)
-            enhanced_prompt += ds_prompt_ext
-
-        return self.create_persona_agent(
-            persona=persona,
-            system_prompt=enhanced_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            additional_tools=additional_tools if additional_tools else None,
-            memory_mode=memory_mode,
-        )
-
-    def _setup_kb_integration(
-        self, persona_id: str, db_service: Any
-    ) -> tuple[list[Any], str]:
-        """KB連携のツールとプロンプト拡張を準備する。"""
-        tools: list[Any] = []
-        prompt_ext = ""
-
-        kb_binding = db_service.get_kb_binding_by_persona(persona_id)
-        if kb_binding:
-            kb = db_service.get_knowledge_base(kb_binding.kb_id)
-            if kb:
-                from .knowledge_base.kb_tools import create_kb_retrieval_tool
-
-                kb_tool = create_kb_retrieval_tool(
-                    knowledge_base_id=kb.knowledge_base_id,
-                    metadata_filters=kb_binding.metadata_filters,
-                    region=config.AWS_REGION,
-                )
-                tools.append(kb_tool)
-                prompt_ext = self.enhance_prompt_with_kb_info(
-                    "",
-                    kb.name,
-                    kb.description,
-                    kb_binding.metadata_filters,
-                )
-
-        return tools, prompt_ext
-
-    def _setup_dataset_integration(
-        self, persona_id: str, db_service: Any
-    ) -> tuple[list[Any], str]:
-        """データセット連携のMCPツールとプロンプト拡張を準備する。"""
-        tools: list[Any] = []
-        prompt_ext = ""
-
-        bindings = db_service.get_bindings_by_persona(persona_id)
-        if bindings:
-            dataset_ids = list(set(b.dataset_id for b in bindings))
-            datasets = [db_service.get_dataset(did) for did in dataset_ids]
-            datasets = [d for d in datasets if d is not None]
-            bindings_dict = [
-                {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
-                for b in bindings
-            ]
-            prompt_ext = self.enhance_prompt_with_dataset_info(
-                "", bindings_dict, datasets
-            )
-            mcp_tools = self.get_mcp_tools()
-            if mcp_tools:
-                tools.extend(mcp_tools)
-
-        return tools, prompt_ext
 
     # =========================================================================
     # レポートエージェント（データドリブン分析）
