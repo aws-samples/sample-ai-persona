@@ -18,7 +18,7 @@ knowledge_files/
 survey_images/
 examples/
 .hypothesis/
-docs/note
+docs/note/
 .DS_Store
 .coverage
 
