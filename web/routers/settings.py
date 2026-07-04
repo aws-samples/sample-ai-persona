@@ -436,12 +436,12 @@ async def save_data_agent_settings(
 @router.post("/data-agent/test", response_class=HTMLResponse)
 async def test_data_agent_connection(request: Request) -> Any:
     """データ分析エージェント接続テスト"""
+    import html
+
     settings_manager = get_settings_manager()
     try:
         result_text = settings_manager.test_data_agent_connection()
-        import html as html_mod
-
-        escaped = html_mod.escape(result_text)
+        escaped = html.escape(result_text)
         return HTMLResponse(
             '<div class="text-sm bg-green-50 rounded p-3 border border-green-200">'
             '<div class="text-green-700 font-semibold mb-2">✅ 接続成功</div>'
@@ -455,8 +455,9 @@ async def test_data_agent_connection(request: Request) -> Any:
             "</script>"
         )
     except SettingsManagerError as e:
+        escaped = html.escape(str(e))
         return HTMLResponse(
-            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">{e}</div>'
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">{escaped}</div>'
         )
     except Exception:
         logger.exception("データ分析エージェント接続テストエラー")
