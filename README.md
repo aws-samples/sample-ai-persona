@@ -11,6 +11,10 @@
 - [AWS CDK を利用したデプロイ手順](./cdk/README.md)
 - [AWS Generative AI Solution Box からのワンクリックデプロイ](https://aws-samples.github.io/sample-one-click-generative-ai-solutions/solutions/ai-persona/)
 
+### バージョン更新
+
+最新のコードを取り込んで再デプロイする場合は [更新時の再デプロイ](./cdk/README.md#更新時の再デプロイ) を参照してください。
+
 ### ローカル開発
 
 コードのカスタマイズやローカルでの動作確認を行う場合は [ローカル開発ガイド](docs/local_development.md) を参照してください。
