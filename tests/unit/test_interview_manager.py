@@ -173,11 +173,6 @@ class TestInterviewManager:
             Mock(get_persona_id=Mock(return_value="persona-2")),
         ]
 
-        # agent_service のメソッドをモック
-        self.mock_agent_service.generate_persona_system_prompt.return_value = (
-            "基本プロンプト"
-        )
-
         # _create_interview_persona_agents メソッドをモック
         self.interview_manager._create_interview_persona_agents = Mock(
             return_value=mock_persona_agents
@@ -403,19 +398,12 @@ class TestInterviewManager:
 
     def test_generate_interview_system_prompt(self):
         """インタビュー用システムプロンプト生成テスト"""
-        # ベースプロンプトのモック設定
-        base_prompt = "基本的なペルソナプロンプト"
-        self.mock_agent_service.generate_persona_system_prompt.return_value = (
-            base_prompt
-        )
-
-        # プロンプトを生成
         prompt = self.interview_manager._generate_interview_system_prompt(
             self.test_personas[0]
         )
 
-        # ベースプロンプトが含まれていることを確認
-        assert base_prompt in prompt
+        # ベースプロンプト（ペルソナ情報）が含まれていることを確認
+        assert self.test_personas[0].name in prompt
 
         # インタビュー固有の指示が含まれていることを確認
         assert "インタビュー" in prompt

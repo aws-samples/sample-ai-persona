@@ -364,12 +364,13 @@ class TestServiceFactoryS3Service:
         ServiceFactory._instance = None
 
     @patch("src.services.service_factory.config")
-    def test_get_s3_service_returns_none_when_no_bucket(self, mock_config):
+    def test_get_s3_service_raises_when_no_bucket(self, mock_config):
         from src.services.service_factory import ServiceFactory
 
         mock_config.S3_BUCKET_NAME = None
         factory = ServiceFactory()
-        assert factory.get_s3_service() is None
+        with pytest.raises(RuntimeError, match="S3_BUCKET_NAME"):
+            factory.get_s3_service()
 
     @patch("src.services.service_factory.config")
     def test_get_s3_service_creates_instance(self, mock_config):
@@ -386,33 +387,29 @@ class TestServiceFactoryS3Service:
             assert result is not None
 
 
-class TestServiceFactorySurveyService:
-    """SurveyServiceの取得テスト"""
+class TestServiceFactorySurveyBatchService:
+    """SurveyBatchServiceの取得テスト"""
 
     def setup_method(self):
         from src.services.service_factory import ServiceFactory
 
         ServiceFactory._instance = None
 
-    @patch("src.services.service_factory.AIService")
     @patch("src.services.service_factory.config")
-    def test_get_survey_service_creates_instance(self, mock_config, mock_ai_cls):
+    def test_get_survey_batch_service_creates_instance(self, mock_config):
         from src.services.service_factory import ServiceFactory
 
-        mock_config.S3_BUCKET_NAME = None
+        mock_config.S3_BUCKET_NAME = "test-bucket"
         mock_config.AWS_REGION = "us-east-1"
         mock_config.DYNAMODB_TABLE_PREFIX = "Test"
         mock_config.DYNAMODB_REGION = "us-east-1"
         mock_config.BEDROCK_MODEL_ID = "test-model"
         mock_config.BATCH_INFERENCE_MODEL_ID = "test-model"
-        mock_ai_cls.return_value = Mock()
 
         factory = ServiceFactory()
-        with patch(
-            "src.services.survey_service.SurveyService.__init__", return_value=None
-        ):
-            service = factory.get_survey_service()
-            assert service is not None
+        service = factory.get_survey_batch_service()
+        assert service is not None
+        assert service.bucket_name == "test-bucket"
 
 
 class TestServiceFactoryResetServices:

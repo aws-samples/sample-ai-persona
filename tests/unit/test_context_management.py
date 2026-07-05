@@ -89,31 +89,34 @@ class TestFacilitatorAgentClearHistory:
         self.facilitator.clear_conversation_history()  # should not raise
 
 
-class TestFacilitatorPromptWithSummaries:
-    """FacilitatorAgent.create_prompt_for_persona() の要約コンテキスト対応テスト"""
+class TestManagerBuildPersonaPrompt:
+    """AgentDiscussionManager._build_persona_prompt() のテスト"""
 
     def setup_method(self):
-        self.mock_agent = Mock()
-        self.facilitator = FacilitatorAgent(5, "", self.mock_agent)
+        from src.managers.agent_discussion_manager import AgentDiscussionManager
 
-    def test_first_round_no_summaries(self):
-        """ラウンド1: 具体的なエピソードを引き出す問いかけ"""
-        self.facilitator.current_round = 1
+        self.manager = AgentDiscussionManager(
+            agent_service=Mock(), database_service=Mock()
+        )
+
+    def test_first_round_no_context(self):
+        """ラウンド1・コンテキストなし: 具体的なエピソードを引き出す問いかけ"""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
         )
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "新商品について", []
+        prompt = self.manager._build_persona_prompt(
+            persona_agent, "新商品について", [], 1, 5
         )
         assert "新商品について" in prompt
-        assert "具体的な場面" in prompt or "エピソード" in prompt
-        assert "これまでの議論の要約" not in prompt
+        assert "具体的な場面" in prompt
 
     def test_with_round_summaries(self):
         """ラウンド2以降: 要約コンテキストが含まれること"""
-        self.facilitator.current_round = 3
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
+        persona_agent = Mock(
+            get_persona_name=Mock(return_value="田中太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
         summaries = [
             "ラウンド1では価格と品質のトレードオフが議論された",
             "ラウンド2ではターゲット層の絞り込みが論点に",
@@ -122,173 +125,116 @@ class TestFacilitatorPromptWithSummaries:
             Message.create_new("p1", "佐藤", "品質が重要です"),
             Message.create_new("p2", "鈴木", "コストも考慮すべき"),
         ]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "新商品について", recent, round_summaries=summaries
+        prompt = self.manager._build_persona_prompt(
+            persona_agent,
+            "新商品について",
+            recent,
+            3,
+            5,
+            round_summaries=summaries,
         )
         assert "これまでの議論の要約" in prompt
         assert "ラウンド1" in prompt
         assert "ラウンド2" in prompt
-        assert "佐藤" in prompt
-        assert "鈴木" in prompt
 
-    def test_with_summaries_no_recent(self):
-        """要約ありだが直近発言なし"""
-        self.facilitator.current_round = 2
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-        summaries = ["ラウンド1の要約内容"]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", [], round_summaries=summaries
-        )
-        assert "これまでの議論の要約" in prompt
-        assert "直近の発言" not in prompt
-
-    def test_recent_messages_include_facilitator(self):
-        """ファシリテータの要約が専用セクションで表示されること"""
-        self.facilitator.current_round = 2
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-        summaries = ["ラウンド1の要約"]
-        recent = [
-            Message.create_new("p1", "佐藤", "意見です", message_type="statement"),
-            Message.create_new(
-                "facilitator",
-                "ファシリテータ",
-                "論点整理: 次は価格について",
-                message_type="summary",
-            ),
-            Message.create_new("p2", "鈴木", "賛成です", message_type="statement"),
-        ]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent,
-            "テーマ",
-            recent,
-            round_summaries=summaries,
-            latest_facilitator_message="論点整理: 次は価格について",
-        )
-        # ファシリテータの問いかけが専用セクションに表示される
-        assert "ファシリテータからの問いかけ" in prompt
-        assert "論点整理" in prompt
-        # 直近発言にはペルソナの発言のみ
-        assert "佐藤" in prompt
-        assert "鈴木" in prompt
-
-    def test_backward_compatibility_no_summaries_param(self):
-        """round_summaries未指定でも動作すること（後方互換性）"""
-        self.facilitator.current_round = 2
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-        recent = [Message.create_new("p1", "佐藤", "意見です")]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent
-        )
-        assert "テーマ" in prompt
-        assert "佐藤" in prompt
-
-    def test_early_round_phase_instruction(self):
-        """ラウンド1: 自分の体験を共有する指示"""
-        self.facilitator.current_round = 1
+    def test_facilitator_message_section(self):
+        """ファシリテータの問いかけが専用セクションに表示されること"""
         persona_agent = Mock(
             get_persona_name=Mock(return_value="田中太郎"),
             get_persona_id=Mock(return_value="p1"),
         )
-        summaries = ["ラウンド1の要約"]
-        recent = [Message.create_new("p2", "佐藤", "意見です")]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent, round_summaries=summaries
+        recent = [
+            Message.create_new("p1", "佐藤", "意見です", message_type="statement"),
+            Message.create_new("p2", "鈴木", "賛成です", message_type="statement"),
+        ]
+        prompt = self.manager._build_persona_prompt(
+            persona_agent,
+            "テーマ",
+            recent,
+            2,
+            5,
+            round_summaries=["ラウンド1の要約"],
+            latest_facilitator_message="論点整理: 次は価格について",
         )
-        assert "体験" in prompt
+        assert "ファシリテータからの問いかけ" in prompt
+        assert "論点整理" in prompt
 
     def test_mid_round_phase_instruction(self):
         """中盤ラウンド: 考えの変化・新たな観点を促す指示"""
-        self.facilitator.current_round = 3
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-        summaries = ["要約1", "要約2"]
+        persona_agent = Mock(
+            get_persona_name=Mock(return_value="田中太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
         recent = [Message.create_new("p1", "佐藤", "意見です")]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent, round_summaries=summaries
+        prompt = self.manager._build_persona_prompt(
+            persona_agent,
+            "テーマ",
+            recent,
+            3,
+            5,
+            round_summaries=["要約1", "要約2"],
         )
         assert "変化" in prompt or "気づ" in prompt
 
     def test_final_round_phase_instruction(self):
         """最終ラウンド: 結論を促す指示"""
-        self.facilitator.current_round = 5
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-        summaries = ["要約1", "要約2", "要約3", "要約4"]
+        persona_agent = Mock(
+            get_persona_name=Mock(return_value="田中太郎"),
+            get_persona_id=Mock(return_value="p1"),
+        )
         recent = [Message.create_new("p1", "佐藤", "意見です")]
-        prompt = self.facilitator.create_prompt_for_persona(
-            persona_agent, "テーマ", recent, round_summaries=summaries
+        prompt = self.manager._build_persona_prompt(
+            persona_agent,
+            "テーマ",
+            recent,
+            5,
+            5,
+            round_summaries=["要約1", "要約2", "要約3", "要約4"],
         )
         assert "最終" in prompt or "結論" in prompt
 
 
-class TestPersonaAgentBuildPrompt:
-    """PersonaAgent._build_prompt_with_context() 簡素化テスト"""
+class TestManagerBuildSummaryPrompt:
+    """AgentDiscussionManager._build_summary_prompt() のテスト"""
 
     def setup_method(self):
-        self.persona = _create_test_persona()
-        self.mock_agent = Mock()
-        self.persona_agent = PersonaAgent(self.persona, "test", self.mock_agent)
+        from src.managers.agent_discussion_manager import AgentDiscussionManager
 
-    def test_prompt_returned_as_is(self):
-        """コンテキストが渡されてもプロンプトがそのまま返ること"""
-        prompt = "構築済みプロンプト"
-        context = [Message.create_new("p1", "佐藤", "発言")]
-        result = self.persona_agent._build_prompt_with_context(prompt, context)
-        assert result == prompt
+        self.manager = AgentDiscussionManager(
+            agent_service=Mock(), database_service=Mock()
+        )
 
-    def test_prompt_without_context(self):
-        """コンテキストなしでもプロンプトがそのまま返ること"""
-        prompt = "構築済みプロンプト"
-        result = self.persona_agent._build_prompt_with_context(prompt, None)
-        assert result == prompt
-
-
-class TestSummarizeRoundImproved:
-    """FacilitatorAgent.summarize_round() の改善テスト"""
-
-    def setup_method(self):
-        self.mock_agent = Mock()
-        self.facilitator = FacilitatorAgent(3, "", self.mock_agent)
-
-    def test_summarize_round_prompt_contains_structure(self):
+    def test_summary_prompt_contains_structure(self):
         """要約プロンプトに構造的な指示が含まれること"""
-        self.mock_agent.return_value = "要約テキスト"
         messages = [
             Message.create_new("p1", "田中", "価格が重要", message_type="statement"),
             Message.create_new("p2", "佐藤", "品質が重要", message_type="statement"),
         ]
-        self.facilitator.summarize_round(1, messages, "新商品")
-
-        call_args = self.mock_agent.call_args
-        prompt = call_args[0][0] if call_args[0] else call_args[1].get("prompt", "")
+        prompt = self.manager._build_summary_prompt(1, messages, "新商品", 3)
         assert "共通点" in prompt or "対立点" in prompt
         assert "問い" in prompt
 
-    def test_summarize_round_with_previous_summaries(self):
+    def test_summary_prompt_with_previous_summaries(self):
         """過去の要約が含まれること"""
-        self.mock_agent.return_value = "ラウンド2の要約"
         messages = [
             Message.create_new(
                 "p1", "田中", "具体的な価格帯は...", message_type="statement"
             ),
         ]
         prev = ["ラウンド1では価格vs品質が論点になった"]
-        self.facilitator.summarize_round(2, messages, "新商品", previous_summaries=prev)
-
-        call_args = self.mock_agent.call_args
-        prompt = call_args[0][0]
+        prompt = self.manager._build_summary_prompt(
+            2, messages, "新商品", 3, previous_summaries=prev
+        )
         assert "これまでの議論の流れ" in prompt
         assert "ラウンド1" in prompt
         assert "価格vs品質" in prompt
 
-    def test_summarize_round_without_previous_summaries(self):
+    def test_summary_prompt_without_previous_summaries(self):
         """ラウンド1では過去要約セクションが含まれないこと"""
-        self.mock_agent.return_value = "ラウンド1の要約"
         messages = [
             Message.create_new("p1", "田中", "意見です", message_type="statement"),
         ]
-        self.facilitator.summarize_round(1, messages, "新商品")
-
-        call_args = self.mock_agent.call_args
-        prompt = call_args[0][0]
+        prompt = self.manager._build_summary_prompt(1, messages, "新商品", 3)
         assert "これまでの議論の流れ" not in prompt
 
 
@@ -331,29 +277,14 @@ class TestAgentDiscussionContextManagement:
 
         # ファシリテータ
         mock_facilitator = Mock(spec=FacilitatorAgent)
-        # should_continue: True for each round, then False
-        mock_facilitator.should_continue.side_effect = [True] * rounds + [False]
         mock_facilitator.start_discussion.return_value = "議論を開始します"
-        # select_next_speaker: each round has 2 speakers + None
-        speaker_sequence = []
-        for _ in range(rounds):
-            speaker_sequence.extend([mock_agent_1, mock_agent_2, None])
-        mock_facilitator.select_next_speaker.side_effect = speaker_sequence
-        mock_facilitator.summarize_round.return_value = "ラウンドの要約"
-        mock_facilitator.summarize_round_streaming.side_effect = lambda *a, **kw: iter(
+        mock_facilitator.invoke.return_value = "ラウンドの要約"
+        mock_facilitator.invoke_streaming.side_effect = lambda *a, **kw: iter(
             ["ラウンド", "の", "要約"]
         )
-        mock_facilitator.increment_round.return_value = None
-        mock_facilitator.current_round = 0
         mock_facilitator.rounds = rounds
         mock_facilitator.additional_instructions = ""
         mock_facilitator.clear_conversation_history = Mock()
-
-        # increment_round で current_round を更新
-        def _increment():
-            mock_facilitator.current_round += 1
-
-        mock_facilitator.increment_round.side_effect = _increment
 
         return manager, persona_agents, mock_facilitator
 
@@ -393,7 +324,7 @@ class TestAgentDiscussionContextManagement:
         facilitator.clear_conversation_history.assert_not_called()
 
     def test_round_summaries_passed_to_prompt(self, sample_persona, sample_persona_2):
-        """ラウンド要約がプロンプト生成に渡されること"""
+        """ラウンド要約がプロンプト生成に使用されること（ラウンド2のプロンプトに要約が含まれる）"""
         manager, persona_agents, facilitator = self._setup_manager_and_mocks(
             sample_persona, sample_persona_2, rounds=2
         )
@@ -405,14 +336,11 @@ class TestAgentDiscussionContextManagement:
             facilitator=facilitator,
         )
 
-        # ラウンド2のcreate_prompt_for_persona呼び出しを確認
-        calls = facilitator.create_prompt_for_persona.call_args_list
-        # ラウンド2の呼び出し（3番目以降）にround_summariesが渡されていること
-        round2_calls = calls[2:]  # ラウンド1: 2回、ラウンド2: 2回
-        for call in round2_calls:
-            kwargs = call[1] if call[1] else {}
-            assert "round_summaries" in kwargs
-            assert kwargs["round_summaries"] == ["ラウンドの要約"]
+        # ラウンド2でrespond()に渡されたプロンプトにラウンド1の要約が含まれること
+        round2_respond_calls = persona_agents[0].respond.call_args_list[1:]
+        for call in round2_respond_calls:
+            prompt = call[0][0]
+            assert "ラウンドの要約" in prompt
 
     def test_respond_called_with_none_context(self, sample_persona, sample_persona_2):
         """respond()がcontext=Noneで呼ばれること（二重コンテキスト防止）"""

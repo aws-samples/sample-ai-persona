@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.models.dataset import Dataset, DatasetColumn
 from src.models.persona import Persona
 
 
@@ -24,150 +25,51 @@ def mock_db():
 
 @pytest.fixture
 def manager(mock_db):
-    return PersonaManager(ai_service=Mock(), database_service=mock_db)
-
-
-class TestAddPersonaKnowledge:
-    """add_persona_knowledge のテスト"""
-
-    def test_empty_persona_id(self, manager):
-        with pytest.raises(PersonaManagerError, match="ペルソナIDが無効"):
-            manager.add_persona_knowledge("", "topic", "content")
-
-    def test_empty_topic_name(self, manager):
-        with pytest.raises(PersonaManagerError, match="トピック名"):
-            manager.add_persona_knowledge("p1", "", "content")
-
-    def test_empty_content(self, manager):
-        with pytest.raises(PersonaManagerError, match="内容を入力"):
-            manager.add_persona_knowledge("p1", "topic", "")
-
-    def test_topic_name_too_long(self, manager):
-        with pytest.raises(PersonaManagerError, match="100文字以内"):
-            manager.add_persona_knowledge("p1", "x" * 101, "content")
-
-    def test_content_too_long(self, manager):
-        with pytest.raises(PersonaManagerError, match="10000文字以内"):
-            manager.add_persona_knowledge("p1", "topic", "x" * 10001)
-
-    def test_persona_not_found(self, manager, mock_db):
-        mock_db.get_persona.return_value = None
-        with pytest.raises(PersonaManagerError, match="ペルソナが見つかりません"):
-            manager.add_persona_knowledge("p1", "topic", "content")
-
-    @patch("src.managers.persona_manager.service_factory")
-    def test_memory_disabled(self, mock_sf, manager):
-        mock_sf.get_memory_service.return_value = None
-        with pytest.raises(PersonaManagerError, match="長期記憶機能が無効"):
-            manager.add_persona_knowledge("p1", "topic", "content")
-
-    @patch("src.managers.persona_manager.service_factory")
-    def test_success(self, mock_sf, manager):
-        mock_memory = Mock()
-        mock_memory._semantic_strategy = Mock()
-        mock_memory._semantic_strategy.save_directly_to_ltm.return_value = "mem-id"
-        mock_sf.get_memory_service.return_value = mock_memory
-
-        result = manager.add_persona_knowledge("p1", "好きな食べ物", "ラーメン")
-        assert result == "mem-id"
-
-
-class TestGetPersonaMemories:
-    """get_persona_memories のテスト"""
-
-    def test_empty_persona_id(self, manager):
-        with pytest.raises(PersonaManagerError, match="ペルソナIDが無効"):
-            manager.get_persona_memories("")
-
-    def test_persona_not_found(self, manager, mock_db):
-        mock_db.get_persona.return_value = None
-        with pytest.raises(PersonaManagerError, match="ペルソナが見つかりません"):
-            manager.get_persona_memories("p1")
-
-    @patch("src.managers.persona_manager.service_factory")
-    def test_memory_disabled_returns_empty(self, mock_sf, manager):
-        mock_sf.get_memory_service.return_value = None
-        memories, page, total = manager.get_persona_memories("p1")
-        assert memories == []
-        assert page == 1
-        assert total == 1
-
-    @patch("src.managers.persona_manager.service_factory")
-    def test_success_with_memories(self, mock_sf, manager):
-        from src.models.memory import MemoryEntry
-        from datetime import datetime
-
-        mock_memory = Mock()
-        entries = [
-            MemoryEntry(
-                id=f"m{i}",
-                actor_id="p1",
-                session_id="s1",
-                content=f"content {i}",
-                metadata={"strategy_type": "summary"},
-                created_at=datetime.now(),
-            )
-            for i in range(3)
-        ]
-        mock_memory.list_memories.return_value = entries
-        mock_sf.get_memory_service.return_value = mock_memory
-
-        memories, page, total = manager.get_persona_memories("p1", "summary")
-        assert len(memories) == 3
-        assert page == 1
+    return PersonaManager(database_service=mock_db)
 
 
 class TestGeneratePersonas:
-    """generate_personas 統合生成のテスト"""
+    """PersonaGenerationManager.generate_and_cache のバリデーションテスト"""
 
     @pytest.fixture
-    def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+    def gen_manager(self):
+        from src.managers.persona_generation_manager import PersonaGenerationManager
 
-    def test_invalid_count_zero(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas([], "interview", 0)
+        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
 
-    def test_invalid_count_over_10(self, manager):
-        with pytest.raises(PersonaManagerError, match="1-10の範囲"):
-            manager.generate_personas([], "interview", 11)
-
-    def test_no_files_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="ファイルが選択されていません"):
-            manager.generate_personas([], "interview", 3)
-
-    @patch("src.services.agent_service.AgentService")
-    @patch("src.managers.file_manager.FileManager")
-    def test_success_text_file(self, mock_fm_cls, mock_as_cls, manager):
-        mock_fm = Mock()
-        mock_fm.extract_text_from_file.return_value = "インタビューテキスト"
-        mock_fm_cls.return_value = mock_fm
-
-        persona = Persona.create_new(
-            name="P1",
-            age=25,
-            occupation="エンジニア",
-            background="テスト",
-            values=["v"],
-            pain_points=["p"],
-            goals=["g"],
+    def test_invalid_count_zero(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
         )
-        mock_as = Mock()
-        mock_as.generate_personas_with_agent.return_value = (
-            [persona],
-            [{"role": "assistant", "content": "log"}],
-        )
-        mock_as_cls.return_value = mock_as
 
-        personas, logs = manager.generate_personas(
-            [(b"text data", "interview.txt")], "interview", 1
-        )
-        assert len(personas) == 1
-        assert personas[0].name == "P1"
+        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+            gen_manager.generate_and_cache([], "interview", 0)
 
-    def test_dwh_empty_angle_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="分析の切り口"):
-            manager.generate_personas([], "dwh", 3, data_description="")
+    def test_invalid_count_over_10(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+            gen_manager.generate_and_cache([], "interview", 11)
+
+    def test_no_files_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(
+            PersonaGenerationManagerError, match="ファイルが選択されていません"
+        ):
+            gen_manager.generate_and_cache([], "interview", 3)
+
+    def test_dwh_empty_angle_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with pytest.raises(PersonaGenerationManagerError, match="分析の切り口"):
+            gen_manager.generate_and_cache([], "dwh", 3, data_description="")
 
 
 class TestSavePersona:
@@ -175,7 +77,7 @@ class TestSavePersona:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+        return PersonaManager(database_service=Mock())
 
     def test_none_persona_raises(self, manager):
         with pytest.raises(PersonaManagerError, match="無効"):
@@ -218,7 +120,7 @@ class TestGetPersona:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+        return PersonaManager(database_service=Mock())
 
     def test_empty_id_raises(self, manager):
         with pytest.raises(PersonaManagerError, match="IDが無効"):
@@ -256,7 +158,7 @@ class TestGetAllPersonas:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+        return PersonaManager(database_service=Mock())
 
     def test_success(self, manager):
         manager.database_service.get_all_personas.return_value = (["p1", "p2"], None)
@@ -278,7 +180,7 @@ class TestGetAllPersonas:
 
 
 class TestEditPersona:
-    """edit_persona のテスト"""
+    """update_persona のテスト"""
 
     @pytest.fixture
     def manager(self):
@@ -294,19 +196,19 @@ class TestEditPersona:
         )
         mock_db.get_persona.return_value = persona
         mock_db.update_persona.return_value = True
-        return PersonaManager(ai_service=Mock(), database_service=mock_db)
+        return PersonaManager(database_service=mock_db)
 
     def test_empty_id_raises(self, manager):
         with pytest.raises(PersonaManagerError, match="IDが無効"):
-            manager.edit_persona("")
+            manager.update_persona("")
 
     def test_persona_not_found(self, manager):
         manager.database_service.get_persona.return_value = None
-        result = manager.edit_persona("p1", name="新名前")
+        result = manager.update_persona("p1", name="新名前")
         assert result is None
 
     def test_success(self, manager):
-        result = manager.edit_persona("p1", name="新名前")
+        result = manager.update_persona("p1", name="新名前")
         assert result is not None
         assert result.name == "新名前"
         manager.database_service.update_persona.assert_called_once()
@@ -314,7 +216,7 @@ class TestEditPersona:
     def test_update_failure_raises(self, manager):
         manager.database_service.update_persona.return_value = False
         with pytest.raises(PersonaManagerError, match="更新に失敗"):
-            manager.edit_persona("p1", name="新名前")
+            manager.update_persona("p1", name="新名前")
 
 
 class TestDeletePersona:
@@ -322,7 +224,7 @@ class TestDeletePersona:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+        return PersonaManager(database_service=Mock())
 
     def test_empty_id_raises(self, manager):
         with pytest.raises(PersonaManagerError, match="IDが無効"):
@@ -371,7 +273,7 @@ class TestSearchPersonas:
             ),
         ]
         mock_db.get_all_personas.return_value = (personas, None)
-        return PersonaManager(ai_service=Mock(), database_service=mock_db)
+        return PersonaManager(database_service=mock_db)
 
 
 class TestPersonaCount:
@@ -379,8 +281,374 @@ class TestPersonaCount:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(ai_service=Mock(), database_service=Mock())
+        return PersonaManager(database_service=Mock())
 
     def test_count(self, manager):
         manager.database_service.get_persona_count.return_value = 5
         assert manager.get_persona_count() == 5
+
+
+# --- Lines 306-542: _validate_persona_for_save, KB/Dataset bindings ---
+
+
+def _valid_persona(**overrides):
+    """バリデーションを通る最小限のペルソナを返すヘルパー"""
+    defaults = dict(
+        name="テスト太郎",
+        age=30,
+        occupation="会社員",
+        background="テスト背景です",
+        values=["価値観1"],
+        pain_points=["課題1"],
+        goals=["目標1"],
+    )
+    defaults.update(overrides)
+    return Persona.create_new(**defaults)
+
+
+@pytest.mark.unit
+class TestValidatePersonaForSave:
+    """_validate_persona_for_save のバリデーションを save_persona 経由でテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        mock_db = Mock()
+        mock_db.save_persona.return_value = "id-123"
+        return PersonaManager(database_service=mock_db)
+
+    # --- 必須フィールド ---
+
+    def test_empty_name_raises(self, manager):
+        persona = _valid_persona(name="")
+        with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
+            manager.save_persona(persona)
+
+    def test_whitespace_name_raises(self, manager):
+        persona = _valid_persona(name="   ")
+        with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
+            manager.save_persona(persona)
+
+    def test_age_none_raises(self, manager):
+        persona = _valid_persona()
+        persona.age = None
+        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+            manager.save_persona(persona)
+
+    def test_age_negative_raises(self, manager):
+        persona = _valid_persona(age=-1)
+        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+            manager.save_persona(persona)
+
+    def test_age_over_150_raises(self, manager):
+        persona = _valid_persona(age=151)
+        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+            manager.save_persona(persona)
+
+    def test_empty_occupation_raises(self, manager):
+        persona = _valid_persona(occupation="")
+        with pytest.raises(PersonaManagerError, match="職業が設定されていません"):
+            manager.save_persona(persona)
+
+    def test_empty_background_raises(self, manager):
+        persona = _valid_persona(background="")
+        with pytest.raises(PersonaManagerError, match="背景が設定されていません"):
+            manager.save_persona(persona)
+
+    # --- リストフィールド（空リスト）---
+
+    def test_empty_values_raises(self, manager):
+        persona = _valid_persona(values=[])
+        with pytest.raises(PersonaManagerError, match="価値観が設定されていません"):
+            manager.save_persona(persona)
+
+    def test_empty_pain_points_raises(self, manager):
+        persona = _valid_persona(pain_points=[])
+        with pytest.raises(PersonaManagerError, match="課題・悩みが設定されていません"):
+            manager.save_persona(persona)
+
+    def test_empty_goals_raises(self, manager):
+        persona = _valid_persona(goals=[])
+        with pytest.raises(PersonaManagerError, match="目標・願望が設定されていません"):
+            manager.save_persona(persona)
+
+    # --- リストフィールド（空文字項目）---
+
+    def test_empty_string_in_values_raises(self, manager):
+        persona = _valid_persona(values=["valid", ""])
+        with pytest.raises(PersonaManagerError, match="価値観に空の項目"):
+            manager.save_persona(persona)
+
+    def test_empty_string_in_pain_points_raises(self, manager):
+        persona = _valid_persona(pain_points=["valid", "  "])
+        with pytest.raises(PersonaManagerError, match="課題・悩みに空の項目"):
+            manager.save_persona(persona)
+
+    def test_empty_string_in_goals_raises(self, manager):
+        persona = _valid_persona(goals=["valid", ""])
+        with pytest.raises(PersonaManagerError, match="目標・願望に空の項目"):
+            manager.save_persona(persona)
+
+    # --- 文字数上限 ---
+
+    def test_name_over_100_chars_raises(self, manager):
+        persona = _valid_persona(name="あ" * 101)
+        with pytest.raises(PersonaManagerError, match="100文字以内"):
+            manager.save_persona(persona)
+
+    def test_occupation_over_200_chars_raises(self, manager):
+        persona = _valid_persona(occupation="あ" * 201)
+        with pytest.raises(PersonaManagerError, match="200文字以内"):
+            manager.save_persona(persona)
+
+    def test_background_over_2000_chars_raises(self, manager):
+        persona = _valid_persona(background="あ" * 2001)
+        with pytest.raises(PersonaManagerError, match="2000文字以内"):
+            manager.save_persona(persona)
+
+    # --- リスト項目数上限 ---
+
+    def test_values_over_10_items_raises(self, manager):
+        persona = _valid_persona(values=[f"v{i}" for i in range(11)])
+        with pytest.raises(PersonaManagerError, match="10項目以内"):
+            manager.save_persona(persona)
+
+    def test_pain_points_over_10_items_raises(self, manager):
+        persona = _valid_persona(pain_points=[f"p{i}" for i in range(11)])
+        with pytest.raises(PersonaManagerError, match="10項目以内"):
+            manager.save_persona(persona)
+
+    def test_goals_over_10_items_raises(self, manager):
+        persona = _valid_persona(goals=[f"g{i}" for i in range(11)])
+        with pytest.raises(PersonaManagerError, match="10項目以内"):
+            manager.save_persona(persona)
+
+    # --- 性別バリデーション ---
+
+    def test_invalid_gender_raises(self, manager):
+        persona = _valid_persona(gender="invalid_gender")
+        with pytest.raises(PersonaManagerError, match="性別は"):
+            manager.save_persona(persona)
+
+    def test_valid_gender_passes(self, manager):
+        persona = _valid_persona(gender="male")
+        result = manager.save_persona(persona)
+        assert result == "id-123"
+
+    def test_none_gender_passes(self, manager):
+        persona = _valid_persona(gender=None)
+        result = manager.save_persona(persona)
+        assert result == "id-123"
+
+    # --- 国コードバリデーション ---
+
+    @patch("src.managers.persona_manager.country_service")
+    def test_invalid_country_raises(self, mock_cs, manager):
+        mock_cs.is_valid_country.return_value = False
+        persona = _valid_persona(country="XX")
+        with pytest.raises(PersonaManagerError, match="ISO 3166-1 alpha-2"):
+            manager.save_persona(persona)
+
+    @patch("src.managers.persona_manager.country_service")
+    def test_valid_country_passes(self, mock_cs, manager):
+        mock_cs.is_valid_country.return_value = True
+        persona = _valid_persona(country="JP")
+        result = manager.save_persona(persona)
+        assert result == "id-123"
+
+    # --- 都市バリデーション ---
+
+    def test_city_over_100_chars_raises(self, manager):
+        persona = _valid_persona(city="あ" * 101)
+        with pytest.raises(PersonaManagerError, match="100文字以内"):
+            manager.save_persona(persona)
+
+    # --- タグバリデーション ---
+
+    def test_tags_over_20_items_raises(self, manager):
+        persona = _valid_persona(tags=[f"tag{i}" for i in range(21)])
+        with pytest.raises(PersonaManagerError, match="20個以内"):
+            manager.save_persona(persona)
+
+    def test_empty_tag_raises(self, manager):
+        persona = _valid_persona(tags=["valid", ""])
+        with pytest.raises(PersonaManagerError, match="タグに空の項目"):
+            manager.save_persona(persona)
+
+    def test_tag_over_50_chars_raises(self, manager):
+        persona = _valid_persona(tags=["あ" * 51])
+        with pytest.raises(PersonaManagerError, match="50文字以内"):
+            manager.save_persona(persona)
+
+    def test_tag_with_comma_raises(self, manager):
+        persona = _valid_persona(tags=["tag,with,comma"])
+        with pytest.raises(PersonaManagerError, match="カンマ"):
+            manager.save_persona(persona)
+
+    def test_valid_tags_passes(self, manager):
+        persona = _valid_persona(tags=["タグ1", "タグ2"])
+        result = manager.save_persona(persona)
+        assert result == "id-123"
+
+
+@pytest.mark.unit
+class TestGetKBBinding:
+    """get_kb_binding のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_binding_exists_and_kb_exists(self, manager):
+        mock_binding = Mock(id="b1", kb_id="kb1")
+        mock_kb = Mock(id="kb1")
+        manager.database_service.get_all_knowledge_bases.return_value = [mock_kb]
+        manager.database_service.get_kb_binding_by_persona.return_value = mock_binding
+        manager.database_service.get_knowledge_base.return_value = mock_kb
+
+        kbs, binding = manager.get_kb_binding("p1")
+        assert kbs == [mock_kb]
+        assert binding == mock_binding
+        manager.database_service.delete_kb_binding.assert_not_called()
+
+    def test_binding_exists_but_kb_missing_deletes_binding(self, manager):
+        mock_binding = Mock(id="b1", kb_id="kb-gone")
+        manager.database_service.get_all_knowledge_bases.return_value = []
+        manager.database_service.get_kb_binding_by_persona.return_value = mock_binding
+        manager.database_service.get_knowledge_base.return_value = None
+
+        kbs, binding = manager.get_kb_binding("p1")
+        assert kbs == []
+        assert binding is None
+        manager.database_service.delete_kb_binding.assert_called_once_with("b1")
+
+    def test_no_binding(self, manager):
+        manager.database_service.get_all_knowledge_bases.return_value = [Mock()]
+        manager.database_service.get_kb_binding_by_persona.return_value = None
+
+        kbs, binding = manager.get_kb_binding("p1")
+        assert len(kbs) == 1
+        assert binding is None
+
+
+@pytest.mark.unit
+class TestCreateKBBinding:
+    """create_kb_binding のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_creates_binding_without_filters(self, manager):
+        result = manager.create_kb_binding("p1", "kb1")
+        assert result.persona_id == "p1"
+        assert result.kb_id == "kb1"
+        assert result.metadata_filters == {}
+        manager.database_service.save_kb_binding.assert_called_once()
+
+    def test_creates_binding_with_filters(self, manager):
+        filters = {"category": "tech"}
+        result = manager.create_kb_binding("p1", "kb1", metadata_filters=filters)
+        assert result.metadata_filters == {"category": "tech"}
+        manager.database_service.save_kb_binding.assert_called_once()
+
+
+@pytest.mark.unit
+class TestDeleteKBBinding:
+    """delete_kb_binding のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_delegates_to_db(self, manager):
+        manager.delete_kb_binding("b1")
+        manager.database_service.delete_kb_binding.assert_called_once_with("b1")
+
+
+@pytest.mark.unit
+class TestGetDatasetBindings:
+    """get_dataset_bindings のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_returns_datasets_and_bindings_map(self, manager):
+        mock_ds = Mock(id="ds1")
+        mock_binding = Mock(dataset_id="ds1")
+        manager.database_service.get_all_datasets.return_value = [mock_ds]
+        manager.database_service.get_bindings_by_persona.return_value = [mock_binding]
+
+        datasets, bindings_map = manager.get_dataset_bindings("p1")
+        assert datasets == [mock_ds]
+        assert bindings_map == {"ds1": mock_binding}
+
+    def test_empty_bindings(self, manager):
+        manager.database_service.get_all_datasets.return_value = [Mock()]
+        manager.database_service.get_bindings_by_persona.return_value = []
+
+        datasets, bindings_map = manager.get_dataset_bindings("p1")
+        assert len(datasets) == 1
+        assert bindings_map == {}
+
+
+@pytest.mark.unit
+class TestCreateDatasetBinding:
+    """create_dataset_binding のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_invalid_column_raises(self, manager):
+        dataset = Dataset.create_new(
+            name="テストDS",
+            description="テスト",
+            s3_path="s3://bucket/key",
+            columns=[DatasetColumn(name="user_id", data_type="string")],
+        )
+        manager.database_service.get_dataset.return_value = dataset
+
+        with pytest.raises(PersonaManagerError, match="データセットに存在しません"):
+            manager.create_dataset_binding(
+                "p1", "ds1", key_name="invalid_col", key_value="v1"
+            )
+
+    def test_valid_column_saves_binding(self, manager):
+        dataset = Dataset.create_new(
+            name="テストDS",
+            description="テスト",
+            s3_path="s3://bucket/key",
+            columns=[DatasetColumn(name="user_id", data_type="string")],
+        )
+        manager.database_service.get_dataset.return_value = dataset
+
+        result = manager.create_dataset_binding(
+            "p1", "ds1", key_name="user_id", key_value="U123"
+        )
+        assert result.persona_id == "p1"
+        assert result.dataset_id == "ds1"
+        assert result.binding_keys == {"user_id": "U123"}
+        manager.database_service.save_binding.assert_called_once()
+
+    def test_no_key_saves_with_empty_binding_keys(self, manager):
+        result = manager.create_dataset_binding("p1", "ds1")
+        assert result.binding_keys == {}
+        manager.database_service.save_binding.assert_called_once()
+
+    def test_empty_key_name_saves_with_empty_binding_keys(self, manager):
+        result = manager.create_dataset_binding("p1", "ds1", key_name="", key_value="")
+        assert result.binding_keys == {}
+
+
+@pytest.mark.unit
+class TestDeleteDatasetBinding:
+    """delete_dataset_binding のテスト"""
+
+    @pytest.fixture
+    def manager(self):
+        return PersonaManager(database_service=Mock())
+
+    def test_delegates_to_db(self, manager):
+        manager.delete_dataset_binding("b1")
+        manager.database_service.delete_binding.assert_called_once_with("b1")

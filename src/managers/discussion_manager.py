@@ -3,8 +3,9 @@ Discussion Manager for AI Persona System.
 Handles discussion setup, progress management, and insight generation functionality.
 """
 
+import json
 import logging
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Generator, List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from datetime import datetime
 
@@ -13,7 +14,6 @@ from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.insight import Insight
 from ..models.insight_category import InsightCategory
-from ..models.discussion_report import DiscussionReport
 from ..services.ai_service import AIService, AIServiceError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
@@ -732,286 +732,172 @@ class DiscussionManager:
             documents=discussion.documents,
         )
 
-    def generate_report(
+    def facilitate_discussion_streaming(  # type: ignore[return]
         self,
-        discussion_id: str,
-        template_type: str,
-        custom_prompt: Optional[str] = None,
-    ) -> DiscussionReport:
+        personas: List[Persona],
+        topic: str,
+        documents: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
         """
-        議論からレポートをプレビュー生成する（DB保存しない）。
+        簡易モードの議論ストリーミングを実行する。
 
         Args:
-            discussion_id: 議論ID
-            template_type: テンプレート種別 ("summary", "review", "custom")
-            custom_prompt: カスタムプロンプト
+            personas: 参加ペルソナリスト
+            topic: 議論トピック
+            documents: ドキュメントデータ（オプション）
 
-        Returns:
-            生成されたDiscussionReport（未保存）
+        Yields:
+            Message: 生成されたメッセージ
 
         Raises:
-            DiscussionManagerError: 議論が見つからない場合やAIエラー
+            DiscussionManagerError: バリデーション失敗時
         """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
+        self._validate_discussion_input(personas, topic)
+        return self.ai_service.facilitate_discussion_streaming(
+            personas, topic, documents=documents
+        )
 
-        try:
-            insights_data, personas_data = self._get_report_context(discussion)
+    def get_document_presigned_urls(
+        self, documents: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        ドキュメントの署名付きURLを生成する。
 
-            content = self.ai_service.generate_discussion_report(
-                messages=discussion.messages,
-                insights=insights_data,
-                topic=discussion.topic,
-                template_type=template_type,
-                custom_prompt=custom_prompt,
-                personas=personas_data,
-            )
+        Args:
+            documents: ドキュメントメタデータのリスト
 
-            return DiscussionReport.create_new(
-                template_type=template_type,
-                content=content,
-                custom_prompt=custom_prompt,
-            )
+        Returns:
+            {doc_id: presigned_url} の辞書
+        """
+        document_urls: Dict[str, str] = {}
+        if not documents or not config.S3_BUCKET_NAME:
+            return document_urls
 
-        except AIServiceError as e:
-            raise DiscussionManagerError(f"レポート生成エラー: {e}")
+        s3_service = service_factory.get_s3_service()
 
-    def _get_report_context(self, discussion: Discussion) -> tuple:
-        """レポート生成用のインサイトデータとペルソナデータを取得する"""
-        insights_data = [
-            {
-                "category": ins.category,
-                "description": ins.description,
-                "confidence_score": ins.confidence_score,
+        for doc in documents:
+            file_path = doc.get("file_path")
+            if file_path and file_path.startswith("s3://"):
+                try:
+                    presigned_url = s3_service.generate_presigned_url(file_path)
+                    document_urls[doc.get("id", file_path)] = presigned_url
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to generate presigned URL for {file_path}: {e}"
+                    )
+
+        return document_urls
+
+    # =========================================================================
+    # フルフローAPI（Router層のワークフローロジックをManager層に統合）
+    # =========================================================================
+
+    def run_classic_discussion_streaming(
+        self,
+        personas: List[Persona],
+        topic: str,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Generator[str, None, None]:
+        """classicモード議論のフルフロー（ストリーミング）。
+
+        1. 入力バリデーション
+        2. ドキュメント読み込み
+        3. 議論実行（メッセージをSSEイベント文字列としてyield）
+        4. Discussionオブジェクト構築
+        5. インサイト生成
+        6. カテゴリー保存
+        7. DB保存
+        8. 完了イベントをyield
+
+        Yields:
+            str: SSE data行（"data: {...}\\n\\n" 形式）
+
+        Raises:
+            DiscussionManagerError: バリデーション失敗、AI/DB例外
+        """
+        self._validate_discussion_input(personas, topic)
+
+        documents_data, documents_metadata = (
+            self._load_documents(document_ids) if document_ids else (None, None)
+        )
+
+        messages = []
+        for message in self.ai_service.facilitate_discussion_streaming(
+            personas, topic, documents=documents_data
+        ):
+            messages.append(message)
+            msg_data = {
+                "type": "message",
+                "persona_id": message.persona_id,
+                "persona_name": message.persona_name,
+                "content": message.content,
             }
-            for ins in discussion.insights
-        ]
-        personas_data = []
-        for pid in discussion.participants:
-            persona = self.database_service.get_persona(pid)
-            if persona:
-                personas_data.append(
-                    {
-                        "name": persona.name,
-                        "age": persona.age,
-                        "occupation": persona.occupation,
-                        "values": persona.values,
-                        "pain_points": persona.pain_points,
-                        "goals": persona.goals,
-                    }
-                )
-        return insights_data, personas_data
+            yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
 
-    def generate_report_streaming(
-        self,
-        discussion_id: str,
-        template_type: str,
-        custom_prompt: Optional[str] = None,
-        event_queue: Any = None,
-        session_id: Optional[str] = None,
-        is_followup: bool = False,
-    ) -> Any:
-        """
-        議論からレポートをストリーミング生成する。
-
-        Args:
-            session_id: AgentCore Memory STMセッションID（data_driven時）
-            is_followup: フォローアップ分析かどうか
-
-        Yields:
-            str: テキストチャンク
-        """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
-
-        insights_data, personas_data = self._get_report_context(discussion)
-
-        effective_session_id = session_id
-        if template_type == "data_driven" and not effective_session_id:
-            effective_session_id = f"report-{discussion_id}"
-
-        yield from self.ai_service.generate_discussion_report_streaming(
-            messages=discussion.messages,
-            insights=insights_data,
-            topic=discussion.topic,
-            template_type=template_type,
-            custom_prompt=custom_prompt,
-            personas=personas_data,
-            event_queue=event_queue,
-            session_id=effective_session_id,
-            is_followup=is_followup,
+        discussion = Discussion.create_new(
+            topic=topic,
+            participants=[p.id for p in personas],
+            documents=documents_metadata,
         )
+        for msg in messages:
+            discussion = discussion.add_message(msg)
 
-    def generate_followup_report_streaming(
-        self,
-        discussion_id: str,
-        followup_prompt: str,
-        previous_report: str,
-        event_queue: Any = None,
-        session_id: Optional[str] = None,
-    ) -> Any:
-        """前回レポートを踏まえたフォローアップ分析をストリーミング生成する。
-
-        STMセッションが有効なら前回履歴が自動復元されるため追加指示のみ渡す。
-        STMが期限切れの場合はprevious_reportをフォールバックとしてプロンプトに注入。
-
-        Args:
-            discussion_id: 議論ID
-            followup_prompt: ユーザーの追加指示
-            previous_report: 先に生成された分析レポート本文（フォールバック用）
-            event_queue: リアルタイムイベント用 queue
-            session_id: AgentCore Memory STMセッションID
-
-        Yields:
-            str: テキストチャンク
-        """
-        effective_session_id = session_id or f"report-{discussion_id}"
-
-        stm_available = self._check_stm_session(effective_session_id)
-
-        if stm_available:
-            self.logger.info(
-                f"フォローアップ: STMセッション継続 (session_id={effective_session_id})"
-            )
-            effective_prompt = (
-                f"追加指示: {followup_prompt}\n\n"
-                "重要: 前回の会話でテーブル構造やデータ分析は実施済みです。"
-                "テーブル一覧の再確認は不要です。追加指示に直接関連するクエリのみ実行してください。"
-            )
-        else:
-            self.logger.info(
-                f"フォローアップ: STMセッション未検出、フォールバック使用 (session_id={effective_session_id})"
-            )
-            effective_prompt = (
-                "以下は先に生成した分析レポートです。このレポートを前提として追加分析を行ってください:\n\n"
-                f"---\n{previous_report}\n---\n\n"
-                f"追加指示: {followup_prompt}\n\n"
-                "重要: 前回レポートでテーブル構造は確認済みです。テーブル一覧の再確認は不要です。"
-                "追加指示に直接関連するクエリのみ実行してください。"
-            )
-
-        yield from self.generate_report_streaming(
-            discussion_id=discussion_id,
-            template_type="data_driven",
-            custom_prompt=effective_prompt,
-            event_queue=event_queue,
-            session_id=effective_session_id,
-            is_followup=True,
-        )
-
-    def _check_stm_session(self, session_id: str) -> bool:
-        """AgentCore Memory STMにセッション履歴が存在するか確認する。"""
-        try:
-            from src.services.memory.session_manager_factory import is_memory_enabled
-
-            if not is_memory_enabled():
-                return False
-
-            from bedrock_agentcore.memory.integrations.strands.config import (
-                AgentCoreMemoryConfig,
-            )
-            from bedrock_agentcore.memory.integrations.strands.session_manager import (
-                AgentCoreMemorySessionManager,
-            )
-
-            if not config.AGENTCORE_MEMORY_ID:
-                return False
-
-            memory_config = AgentCoreMemoryConfig(
-                memory_id=config.AGENTCORE_MEMORY_ID,
-                session_id=session_id,
-                actor_id="report-agent",
-                retrieval_config={},
-            )
-            sm = AgentCoreMemorySessionManager(
-                agentcore_memory_config=memory_config,
-                region_name=config.AGENTCORE_MEMORY_REGION,
-            )
-            session_data = sm.read_session(session_id=session_id)
-            return session_data is not None
-        except Exception as e:
-            self.logger.debug(f"STMセッション確認失敗（フォールバック使用）: {e}")
-            return False
-
-    def save_report(self, discussion_id: str, report: DiscussionReport) -> None:
-        """
-        生成済みレポートをDBに保存する。
-
-        Args:
-            discussion_id: 議論ID
-            report: 保存するDiscussionReport
-
-        Raises:
-            DiscussionManagerError: 議論が見つからない場合や上限超過
-        """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
-
-        if len(discussion.reports) >= 3:
-            raise DiscussionManagerError(
-                "レポートは最大3件まで保存できます。不要なレポートを削除してください。"
-            )
-
-        discussion.reports.append(report)
-        self.database_service.save_discussion(discussion)
-
-    def update_report_content(
-        self, discussion_id: str, report_id: str, content: str
-    ) -> None:
-        """既存レポートの内容を更新する。
-
-        Args:
-            discussion_id: 議論ID
-            report_id: レポートID
-            content: 更新後のレポート内容
-
-        Raises:
-            DiscussionManagerError: 議論やレポートが見つからない場合
-        """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
-
-        updated = False
-        for i, report in enumerate(discussion.reports):
-            if report.id == report_id:
-                from dataclasses import replace
-
-                discussion.reports[i] = replace(report, content=content)
-                updated = True
-                break
-
-        if not updated:
-            raise DiscussionManagerError("レポートが見つかりません")
+        discussion = self._attach_insights(discussion, categories)
 
         self.database_service.save_discussion(discussion)
 
-    def delete_report(self, discussion_id: str, report_id: str) -> bool:
-        """
-        議論からレポートを削除する。
+        complete_data = {
+            "type": "complete",
+            "discussion_id": discussion.id,
+            "message_count": len(messages),
+            "insight_count": len(discussion.insights) if discussion.insights else 0,
+        }
+        yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
-        Args:
-            discussion_id: 議論ID
-            report_id: レポートID
+    def run_classic_discussion(
+        self,
+        personas: List[Persona],
+        topic: str,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Discussion:
+        """classicモード議論のフルフロー（非ストリーミング）。
+
+        start_discussion() + generate_insights() + save_discussion() を一括実行。
 
         Returns:
-            True if deleted
+            Discussion: インサイト付き保存済み議論オブジェクト
 
         Raises:
-            DiscussionManagerError: 議論やレポートが見つからない場合
+            DiscussionManagerError: バリデーション失敗、AI/DB例外
         """
-        discussion = self.database_service.get_discussion(discussion_id)
-        if not discussion:
-            raise DiscussionManagerError("議論が見つかりません")
+        discussion = self.start_discussion(
+            personas=personas, topic=topic, document_ids=document_ids
+        )
 
-        original_len = len(discussion.reports)
-        discussion.reports = [r for r in discussion.reports if r.id != report_id]
+        discussion = self._attach_insights(discussion, categories)
 
-        if len(discussion.reports) == original_len:
-            raise DiscussionManagerError("レポートが見つかりません")
+        self.save_discussion(discussion)
+        return discussion
 
-        self.database_service.save_discussion(discussion)
-        return True
+    def get_default_categories(self) -> List[Dict[str, Any]]:
+        """デフォルトインサイトカテゴリーを取得する。"""
+        from .shared.insight_utils import get_default_insight_categories
+
+        return [cat.to_dict() for cat in get_default_insight_categories()]
+
+    def _attach_insights(
+        self,
+        discussion: Discussion,
+        categories: Optional[List[InsightCategory]],
+    ) -> Discussion:
+        """インサイト生成・カテゴリー保存の共通処理。"""
+        from .shared.insight_utils import attach_insights_to_discussion
+
+        return attach_insights_to_discussion(
+            discussion=discussion,
+            categories=categories,
+            ai_service=self.ai_service,
+            logger=self.logger,
+        )

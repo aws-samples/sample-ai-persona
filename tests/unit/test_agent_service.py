@@ -76,22 +76,19 @@ class TestAgentService:
         assert boto_config.retries["max_attempts"] == 3
         assert boto_config.retries["mode"] == "adaptive"
 
-    @patch("src.services.agent_service.Agent")
-    @patch("src.services.agent_service.BedrockModel")
-    def test_generate_persona_system_prompt(self, mock_bedrock_model, mock_agent):
-        """ペルソナシステムプロンプト生成テスト"""
-        agent_service = AgentService()
+    def test_build_persona_system_prompt(self):
+        """ペルソナシステムプロンプト生成テスト（src/prompts/に移動済み）"""
+        from src.prompts.discussion_interview_prompts import (
+            build_persona_system_prompt,
+        )
 
-        # システムプロンプトを生成
-        system_prompt = agent_service.generate_persona_system_prompt(self.test_persona)
+        system_prompt = build_persona_system_prompt(self.test_persona)
 
-        # プロンプトに必要な情報が含まれていることを確認
         assert self.test_persona.name in system_prompt
         assert str(self.test_persona.age) in system_prompt
         assert self.test_persona.occupation in system_prompt
         assert self.test_persona.background in system_prompt
 
-        # 価値観、課題、目標が含まれていることを確認
         for value in self.test_persona.values:
             assert value in system_prompt
         for pain_point in self.test_persona.pain_points:
@@ -115,8 +112,11 @@ class TestAgentService:
         # _create_tool_logging_callbackをモック（strandsモジュールが必要なため）
         agent_service._create_tool_logging_callback = Mock(return_value=None)
 
-        # システムプロンプトを生成
-        system_prompt = agent_service.generate_persona_system_prompt(self.test_persona)
+        from src.prompts.discussion_interview_prompts import (
+            build_persona_system_prompt,
+        )
+
+        system_prompt = build_persona_system_prompt(self.test_persona)
 
         # ペルソナエージェントを作成
         persona_agent = agent_service.create_persona_agent(
@@ -156,7 +156,6 @@ class TestAgentService:
         assert isinstance(facilitator_agent, FacilitatorAgent)
         assert facilitator_agent.rounds == rounds
         assert facilitator_agent.additional_instructions == additional_instructions
-        assert facilitator_agent.current_round == 0
 
 
 class TestPersonaAgent:
@@ -294,30 +293,6 @@ class TestFacilitatorAgent:
             == self.additional_instructions
         )
         assert self.facilitator_agent.agent == self.mock_agent
-        assert self.facilitator_agent.current_round == 0
-
-    def test_should_continue(self):
-        """議論継続判定テスト"""
-        # 最初は継続すべき
-        assert self.facilitator_agent.should_continue() is True
-
-        # ラウンドを進める
-        self.facilitator_agent.current_round = 2
-        assert self.facilitator_agent.should_continue() is True
-
-        # 最終ラウンドに達したら継続しない
-        self.facilitator_agent.current_round = 3
-        assert self.facilitator_agent.should_continue() is False
-
-    def test_increment_round(self):
-        """ラウンドインクリメントテスト"""
-        assert self.facilitator_agent.current_round == 0
-
-        self.facilitator_agent.increment_round()
-        assert self.facilitator_agent.current_round == 1
-
-        self.facilitator_agent.increment_round()
-        assert self.facilitator_agent.current_round == 2
 
     def test_start_discussion(self):
         """議論開始テスト"""
@@ -336,58 +311,6 @@ class TestFacilitatorAgent:
         assert "佐藤花子" in start_message
         assert str(self.rounds) in start_message
 
-    def test_select_next_speaker(self):
-        """次の発言者選択テスト"""
-        # テスト用ペルソナエージェントを作成
-        persona_agents = [
-            Mock(get_persona_id=Mock(return_value="persona-1")),
-            Mock(get_persona_id=Mock(return_value="persona-2")),
-            Mock(get_persona_id=Mock(return_value="persona-3")),
-        ]
-
-        # まだ誰も発言していない場合
-        spoken_in_round = []
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected in persona_agents
-
-        # 一部が発言済みの場合
-        spoken_in_round = ["persona-1"]
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected.get_persona_id() != "persona-1"
-
-        # 全員が発言済みの場合
-        spoken_in_round = ["persona-1", "persona-2", "persona-3"]
-        selected = self.facilitator_agent.select_next_speaker(
-            persona_agents, spoken_in_round
-        )
-        assert selected is None
-
-    def test_summarize_round(self):
-        """ラウンド要約テスト"""
-        # モックの設定
-        expected_summary = "ラウンド1の要約内容"
-        self.mock_agent.return_value = expected_summary
-
-        # テスト用メッセージを作成
-        from src.models.message import Message
-
-        round_messages = [
-            Message.create_new("persona-1", "田中太郎", "私の意見は..."),
-            Message.create_new("persona-2", "佐藤花子", "それに対して..."),
-        ]
-
-        # ラウンドを要約
-        topic = "新商品のアイデア"
-        summary = self.facilitator_agent.summarize_round(1, round_messages, topic)
-
-        # 要約が正しいことを確認
-        assert summary == expected_summary
-        self.mock_agent.assert_called_once()
-
     def test_dispose(self):
         """ファシリテータエージェントのリソース解放テスト"""
         # disposeメソッドを持つモックエージェント
@@ -399,30 +322,6 @@ class TestFacilitatorAgent:
         # disposeが呼ばれたことを確認
         self.mock_agent.dispose.assert_called_once()
         assert self.facilitator_agent.agent is None
-
-    def test_create_prompt_for_persona(self):
-        """ペルソナ向けプロンプト生成テスト"""
-        # テスト用ペルソナエージェントを作成
-        persona_agent = Mock(get_persona_name=Mock(return_value="田中太郎"))
-
-        topic = "新商品のアイデア"
-
-        # コンテキストなしの場合（最初の発言）
-        prompt = self.facilitator_agent.create_prompt_for_persona(
-            persona_agent, topic, []
-        )
-        assert topic in prompt
-
-        # コンテキストありの場合
-        context = [
-            Message.create_new("persona-1", "佐藤", "最初の意見です"),
-            Message.create_new("persona-2", "鈴木", "2番目の意見です"),
-        ]
-        prompt = self.facilitator_agent.create_prompt_for_persona(
-            persona_agent, topic, context
-        )
-        assert topic in prompt
-        assert "佐藤" in prompt or "鈴木" in prompt
 
 
 class TestPersonaAgentMultimodal:
@@ -534,98 +433,67 @@ class TestPersonaAgentMultimodal:
 
 
 class TestStructuredOutputRetry:
-    """structured_output リトライロジックのテスト"""
+    """run_persona_generation リトライロジックのテスト"""
 
     def _make_mock_agent(self):
         mock_agent_instance = MagicMock()
         mock_agent_instance.messages = []
         return mock_agent_instance
 
-    @patch.object(AgentService, "create_persona_generation_agent")
-    def test_structured_output_succeeds_first_try(self, mock_create_agent):
+    def test_structured_output_succeeds_first_try(self):
         """初回成功時はリトライなしで結果を返す"""
         mock_agent_instance = self._make_mock_agent()
-        mock_create_agent.return_value = mock_agent_instance
 
         mock_result = MagicMock()
-        mock_persona = MagicMock()
-        mock_persona.name = "田中太郎"
-        mock_persona.age = 30
-        mock_persona.occupation = "エンジニア"
-        mock_persona.background = "IT企業勤務"
-        mock_persona.values = ["効率性"]
-        mock_persona.pain_points = ["時間不足"]
-        mock_persona.goals = ["キャリアアップ"]
-        mock_persona.gender = "male"
-        mock_persona.country = "JP"
-        mock_persona.city = "東京都"
-        mock_result.personas = [mock_persona]
-
         mock_agent_instance.structured_output.return_value = mock_result
 
         agent_service = AgentService()
-        personas, _ = agent_service.generate_personas_with_agent(
-            data_text="テストデータ",
-            data_type="text",
-            persona_count=1,
+        result, thinking_log = agent_service.run_persona_generation(
+            agent=mock_agent_instance,
+            prompt="テストデータ",
+            structured_prompt="JSON出力してください",
+            output_schema=MagicMock,
         )
 
-        assert len(personas) == 1
-        assert personas[0].name == "田中太郎"
+        assert result == mock_result
         assert mock_agent_instance.structured_output.call_count == 1
 
-    @patch.object(AgentService, "create_persona_generation_agent")
-    def test_structured_output_retries_on_validation_error(self, mock_create_agent):
+    def test_structured_output_retries_on_validation_error(self):
         """バリデーションエラー時にリトライして成功する"""
         mock_agent_instance = self._make_mock_agent()
-        mock_create_agent.return_value = mock_agent_instance
 
         mock_result = MagicMock()
-        mock_persona = MagicMock()
-        mock_persona.name = "鈴木花子"
-        mock_persona.age = 25
-        mock_persona.occupation = "デザイナー"
-        mock_persona.background = "フリーランス"
-        mock_persona.values = ["創造性"]
-        mock_persona.pain_points = ["収入不安定"]
-        mock_persona.goals = ["独立"]
-        mock_persona.gender = "female"
-        mock_persona.country = "JP"
-        mock_persona.city = "大阪府"
-        mock_result.personas = [mock_persona]
-
         mock_agent_instance.structured_output.side_effect = [
             ValueError("1 validation error for PersonaListOutput"),
             mock_result,
         ]
 
         agent_service = AgentService()
-        personas, _ = agent_service.generate_personas_with_agent(
-            data_text="テストデータ",
-            data_type="dwh",
-            persona_count=1,
+        result, _ = agent_service.run_persona_generation(
+            agent=mock_agent_instance,
+            prompt="テストデータ",
+            structured_prompt="JSON出力してください",
+            output_schema=MagicMock,
         )
 
-        assert len(personas) == 1
-        assert personas[0].name == "鈴木花子"
+        assert result == mock_result
         assert mock_agent_instance.structured_output.call_count == 2
 
-    @patch.object(AgentService, "create_persona_generation_agent")
-    def test_structured_output_fails_after_max_retries(self, mock_create_agent):
+    def test_structured_output_fails_after_max_retries(self):
         """最大リトライ回数を超えたら例外を発生"""
         mock_agent_instance = self._make_mock_agent()
-        mock_create_agent.return_value = mock_agent_instance
 
         mock_agent_instance.structured_output.side_effect = ValueError(
             "validation error"
         )
 
         agent_service = AgentService()
-        with pytest.raises(AgentServiceError, match="ペルソナ生成エラー"):
-            agent_service.generate_personas_with_agent(
-                data_text="テストデータ",
-                data_type="dwh",
-                persona_count=1,
+        with pytest.raises(AgentServiceError, match="ペルソナ生成実行エラー"):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
             )
 
         assert mock_agent_instance.structured_output.call_count == 3

@@ -140,7 +140,6 @@ class TestDiscussionStartEndpoint:
         sample_discussion,
     ):
         """従来モードでの議論開始が成功することを確認"""
-        # ペルソナマネージャーのモック
         mock_persona_manager = Mock()
         mock_persona_manager.get_persona.side_effect = [
             sample_persona,
@@ -148,13 +147,8 @@ class TestDiscussionStartEndpoint:
         ]
         mock_get_persona.return_value = mock_persona_manager
 
-        # 議論マネージャーのモック
         mock_discussion_manager = Mock()
-        mock_discussion_manager.start_discussion.return_value = sample_discussion
-        mock_discussion_manager.generate_insights.return_value = []
-        mock_discussion_manager.save_discussion_with_insights.return_value = (
-            sample_discussion.id
-        )
+        mock_discussion_manager.run_classic_discussion.return_value = sample_discussion
         mock_get_discussion.return_value = mock_discussion_manager
 
         response = client.post(
@@ -204,6 +198,8 @@ class TestDiscussionDetailEndpoint:
         """議論詳細ページが正常に表示されることを確認"""
         mock_discussion_manager = Mock()
         mock_discussion_manager.get_discussion.return_value = sample_discussion
+        mock_discussion_manager.get_default_categories.return_value = []
+        mock_discussion_manager.get_document_presigned_urls.return_value = {}
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
@@ -463,10 +459,8 @@ class TestDiscussionStartWithDocuments:
         )
 
         mock_discussion_manager = Mock()
-        mock_discussion_manager.start_discussion.return_value = discussion_with_docs
-        mock_discussion_manager.generate_insights.return_value = []
-        mock_discussion_manager.save_discussion_with_insights.return_value = (
-            discussion_with_docs.id
+        mock_discussion_manager.run_classic_discussion.return_value = (
+            discussion_with_docs
         )
         mock_get_discussion.return_value = mock_discussion_manager
 
@@ -482,9 +476,9 @@ class TestDiscussionStartWithDocuments:
 
         assert response.status_code == 200
 
-        # start_discussionがdocument_idsパラメータで呼ばれたことを確認
-        call_args = mock_discussion_manager.start_discussion.call_args
-        assert "document_ids" in call_args[1] or len(call_args[0]) > 2
+        # run_classic_discussionがdocument_idsパラメータで呼ばれたことを確認
+        call_args = mock_discussion_manager.run_classic_discussion.call_args
+        assert "document_ids" in call_args[1]
 
     @patch("web.routers.discussion.get_discussion_manager")
     @patch("web.routers.discussion.get_persona_manager")
@@ -506,13 +500,8 @@ class TestDiscussionStartWithDocuments:
         ]
         mock_get_persona.return_value = mock_persona_manager
 
-        # 議論マネージャーのモック
         mock_discussion_manager = Mock()
-        mock_discussion_manager.start_discussion.return_value = sample_discussion
-        mock_discussion_manager.generate_insights.return_value = []
-        mock_discussion_manager.save_discussion_with_insights.return_value = (
-            sample_discussion.id
-        )
+        mock_discussion_manager.run_classic_discussion.return_value = sample_discussion
         mock_get_discussion.return_value = mock_discussion_manager
 
         response = client.post(
@@ -571,6 +560,8 @@ class TestDiscussionDetailWithDocuments:
 
         mock_discussion_manager = Mock()
         mock_discussion_manager.get_discussion.return_value = discussion_with_docs
+        mock_discussion_manager.get_default_categories.return_value = []
+        mock_discussion_manager.get_document_presigned_urls.return_value = {}
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
@@ -594,6 +585,8 @@ class TestDiscussionDetailWithDocuments:
         """ドキュメントなし議論詳細が正常に表示されることを確認"""
         mock_discussion_manager = Mock()
         mock_discussion_manager.get_discussion.return_value = sample_discussion
+        mock_discussion_manager.get_default_categories.return_value = []
+        mock_discussion_manager.get_document_presigned_urls.return_value = {}
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
@@ -608,7 +601,7 @@ class TestDiscussionDetailWithDocuments:
 class TestDiscussionReportEndpoints:
     """議論レポートエンドポイントのテスト"""
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_generate_report_success(self, mock_get_manager, client):
         """レポートSSEストリーミングが成功することを確認"""
         mock_manager = Mock()
@@ -625,7 +618,7 @@ class TestDiscussionReportEndpoints:
         assert "text/event-stream" in response.headers["content-type"]
         mock_manager.generate_report_streaming.assert_called_once()
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_generate_report_custom(self, mock_get_manager, client):
         """カスタムプロンプトでSSEストリーミングできることを確認"""
         mock_manager = Mock()
@@ -639,7 +632,7 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers["content-type"]
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_generate_report_failure(self, mock_get_manager, client):
         """レポート生成失敗時にSSEでエラーを返すことを確認"""
         from src.managers.discussion_manager import DiscussionManagerError
@@ -657,7 +650,7 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         assert "error" in response.text
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_delete_report_success(self, mock_get_manager, client):
         """レポート削除が成功することを確認"""
         mock_manager = Mock()
@@ -672,7 +665,7 @@ class TestDiscussionReportEndpoints:
             report_id="report-123",
         )
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_export_report_md(self, mock_get_manager, client):
         """Markdownエクスポートが成功することを確認"""
         from src.models.discussion_report import DiscussionReport
@@ -695,7 +688,7 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         assert "# レポート内容" in response.text
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_export_report_txt(self, mock_get_manager, client):
         """テキストエクスポートが成功することを確認"""
         from src.models.discussion_report import DiscussionReport
@@ -719,7 +712,7 @@ class TestDiscussionReportEndpoints:
         # Markdown記法が除去されていること
         assert "#" not in response.text or "レポート内容" in response.text
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_save_report_success(self, mock_get_manager, client):
         """レポート保存が成功することを確認"""
         from src.models.discussion import Discussion
@@ -742,7 +735,7 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         mock_manager.save_report.assert_called_once()
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_get_report_success(self, mock_get_manager, client):
         """保存済みレポート取得が成功することを確認"""
         from src.models.discussion_report import DiscussionReport
@@ -762,7 +755,7 @@ class TestDiscussionReportEndpoints:
         assert response.status_code == 200
         assert "保存済みレポート" in response.text
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_get_report_not_found(self, mock_get_manager, client):
         """存在しないレポートの取得で404を返すことを確認"""
         discussion = Mock()
@@ -776,7 +769,7 @@ class TestDiscussionReportEndpoints:
 
         assert response.status_code == 404
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_generate_report_invalid_template_type(self, mock_get_manager, client):
         """無効なtemplate_typeが拒否されることを確認"""
         response = client.get(
@@ -790,7 +783,7 @@ class TestDiscussionReportEndpoints:
 class TestDiscussionFollowupReportEndpoint:
     """フォローアップ分析エンドポイントのテスト"""
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_followup_report_success(self, mock_get_manager, client):
         """フォローアップSSEストリーミングが成功することを確認"""
         mock_manager = Mock()
@@ -814,7 +807,7 @@ class TestDiscussionFollowupReportEndpoint:
         assert call_kwargs["followup_prompt"] == "顧客セグメントをCSVで出力して"
         assert "初回分析レポート" in call_kwargs["previous_report"]
 
-    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_report_manager")
     def test_followup_report_failure(self, mock_get_manager, client):
         """フォローアップ生成失敗時にSSEでエラーを返すことを確認"""
         from src.managers.discussion_manager import DiscussionManagerError

@@ -4,7 +4,13 @@ Tests for knowledge file upload functionality
 
 import pytest
 from pathlib import Path
+from unittest.mock import Mock
+
 from src.managers.file_manager import FileUploadError
+from src.managers.persona_memory_manager import (
+    PersonaMemoryManager,
+    PersonaMemoryManagerError,
+)
 
 
 class TestKnowledgeFileUpload:
@@ -34,81 +40,71 @@ class TestKnowledgeFileUpload:
         assert "空です" in str(exc_info.value)
 
 
+@pytest.mark.unit
 class TestPersonaKnowledgeAddition:
     """Test persona knowledge addition with character limits"""
 
-    def test_add_knowledge_exceeds_limit(
-        self, persona_manager, sample_persona, mock_database_service
-    ):
+    @pytest.fixture
+    def mock_db(self, sample_persona):
+        mock = Mock()
+        mock.get_persona.return_value = sample_persona
+        return mock
+
+    @pytest.fixture
+    def mock_memory_svc(self):
+        mock = Mock()
+        mock.is_semantic_enabled = True
+        mock.save_knowledge.return_value = "mem-123"
+        return mock
+
+    @pytest.fixture
+    def memory_manager(self, mock_db, mock_memory_svc):
+        return PersonaMemoryManager(
+            database_service=mock_db, memory_service=mock_memory_svc
+        )
+
+    def test_add_knowledge_exceeds_limit(self, memory_manager, sample_persona):
         """Test that knowledge exceeding 10000 characters is rejected"""
-        from src.managers.persona_manager import PersonaManagerError
-
-        # Mock get_persona to return the sample persona
-        mock_database_service.get_persona.return_value = sample_persona
-
         topic_name = "Test Topic"
-        topic_content = "A" * 10001  # 10001 chars, exceeds limit
+        topic_content = "A" * 10001
 
-        with pytest.raises(PersonaManagerError) as exc_info:
-            persona_manager.add_persona_knowledge(
-                sample_persona.id, topic_name, topic_content
-            )
+        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+            memory_manager.add_knowledge(sample_persona.id, topic_name, topic_content)
 
         assert "10000文字以内" in str(exc_info.value)
 
-    def test_add_knowledge_topic_name_limit(
-        self, persona_manager, sample_persona, mock_database_service
-    ):
+    def test_add_knowledge_topic_name_limit(self, memory_manager, sample_persona):
         """Test that topic name exceeding 100 characters is rejected"""
-        from src.managers.persona_manager import PersonaManagerError
-
-        # Mock get_persona to return the sample persona
-        mock_database_service.get_persona.return_value = sample_persona
-
-        topic_name = "A" * 101  # 101 chars, exceeds limit
+        topic_name = "A" * 101
         topic_content = "Test content"
 
-        with pytest.raises(PersonaManagerError) as exc_info:
-            persona_manager.add_persona_knowledge(
-                sample_persona.id, topic_name, topic_content
-            )
+        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+            memory_manager.add_knowledge(sample_persona.id, topic_name, topic_content)
 
         assert "100文字以内" in str(exc_info.value)
 
-    def test_add_knowledge_empty_content(
-        self, persona_manager, sample_persona, mock_database_service
-    ):
+    def test_add_knowledge_empty_content(self, memory_manager, sample_persona):
         """Test that empty content is rejected"""
-        from src.managers.persona_manager import PersonaManagerError
-
-        # Mock get_persona to return the sample persona
-        mock_database_service.get_persona.return_value = sample_persona
-
-        with pytest.raises(PersonaManagerError) as exc_info:
-            persona_manager.add_persona_knowledge(sample_persona.id, "Test Topic", "")
+        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+            memory_manager.add_knowledge(sample_persona.id, "Test Topic", "")
 
         assert "内容を入力してください" in str(exc_info.value)
 
-    def test_add_knowledge_within_limit(
-        self, persona_manager, sample_persona, mock_database_service
-    ):
+    def test_add_knowledge_within_limit(self, memory_manager, sample_persona):
         """Test that knowledge within 10000 character limit passes validation"""
-        from unittest.mock import patch
-        from src.managers.persona_manager import PersonaManagerError
-
-        # Mock get_persona to return the sample persona
-        mock_database_service.get_persona.return_value = sample_persona
-
         topic_name = "Test Topic"
-        topic_content = "A" * 5000  # 5000 chars, within limit
+        topic_content = "A" * 5000
 
-        # This will fail at memory service check, but validation should pass
-        with patch("src.managers.persona_manager.service_factory") as mock_sf:
-            mock_sf.get_memory_service.return_value = None
-            with pytest.raises(PersonaManagerError) as exc_info:
-                persona_manager.add_persona_knowledge(
-                    sample_persona.id, topic_name, topic_content
-                )
+        result = memory_manager.add_knowledge(
+            sample_persona.id, topic_name, topic_content
+        )
+        assert result == "mem-123"
 
-        # Should fail at memory service, not at validation
+    def test_add_knowledge_memory_disabled(self, mock_db, sample_persona):
+        """Test that disabled memory service raises error"""
+        mgr = PersonaMemoryManager(database_service=mock_db, memory_service=None)
+
+        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+            mgr.add_knowledge(sample_persona.id, "Test Topic", "content")
+
         assert "長期記憶機能が無効" in str(exc_info.value)

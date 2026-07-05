@@ -150,7 +150,7 @@ chmod +x deploy.sh
 ./destroy.sh --env prod --region us-west-2
 ```
 
-#### コード更新時の再デプロイ
+#### 更新時の再デプロイ
 
 ```bash
 cd sample-ai-persona

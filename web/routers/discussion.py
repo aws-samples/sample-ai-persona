@@ -17,9 +17,8 @@ from fastapi.templating import Jinja2Templates
 from src.managers.persona_manager import PersonaManager
 from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
+from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
-from src.services.service_factory import service_factory
-from src.models.discussion import Discussion
 from src.models.insight_category import InsightCategory
 from ._pagination import decode_cursor, encode_cursor
 
@@ -52,6 +51,7 @@ executor = ThreadPoolExecutor(max_workers=8)
 _persona_manager = None
 _discussion_manager = None
 _agent_discussion_manager = None
+_report_manager = None
 _file_manager = None
 
 
@@ -75,9 +75,7 @@ def get_file_manager() -> FileManager:
     """FileManagerのシングルトンインスタンスを取得"""
     global _file_manager
     if _file_manager is None:
-        # S3サービスを取得（設定されている場合）
-        s3_service = service_factory.get_s3_service()
-        _file_manager = FileManager(s3_service=s3_service)
+        _file_manager = FileManager()
     return _file_manager
 
 
@@ -87,6 +85,14 @@ def get_agent_discussion_manager() -> AgentDiscussionManager:
     if _agent_discussion_manager is None:
         _agent_discussion_manager = AgentDiscussionManager()
     return _agent_discussion_manager
+
+
+def get_report_manager() -> ReportManager:
+    """ReportManagerのシングルトンインスタンスを取得"""
+    global _report_manager
+    if _report_manager is None:
+        _report_manager = ReportManager()
+    return _report_manager
 
 
 def _get_participant_personas(participant_ids: List[str]) -> dict:
@@ -208,178 +214,6 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
         )
 
 
-def _stream_discussion_sync(
-    topic: str,
-    personas: list,
-    mode: str = "traditional",
-    rounds: int = 3,
-    additional_instructions: str = "",
-    enable_memory: bool = False,
-    memory_mode: str = "full",
-    enable_dataset: bool = False,
-    enable_kb: bool = False,
-    categories: Optional[List[InsightCategory]] = None,
-    document_ids: Optional[List[str]] = None,
-) -> Any:
-    """同期的なストリーミング議論処理（簡易モード・エージェントモード両対応）"""
-
-    if mode == "agent":
-        # エージェントモードのストリーミング
-        agent_manager = get_agent_discussion_manager()
-
-        # ペルソナエージェントを作成（メモリ設定を渡す）
-        system_prompts: dict[str, str] = {}
-
-        # 議論IDを事前に生成（メモリのsession_idとして使用）
-        # Note: Discussion is imported at module level
-        temp_discussion = Discussion.create_new(
-            topic=topic, participants=[p.id for p in personas], mode="agent"
-        )
-        session_id = temp_discussion.id
-
-        persona_agents = agent_manager.create_persona_agents(
-            personas,
-            system_prompts,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            memory_mode=memory_mode,
-            enable_dataset=enable_dataset,
-            enable_kb=enable_kb,
-        )
-
-        # ファシリテーターエージェントを作成
-        facilitator = agent_manager.create_facilitator_agent(
-            rounds, additional_instructions
-        )
-
-        discussion = None
-        message_count = 0
-
-        # ストリーミング議論を実行（メモリ設定とドキュメントIDを渡す）
-        for event_type, data in agent_manager.start_agent_discussion_streaming(
-            personas=personas,
-            topic=topic,
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-            enable_memory=enable_memory,
-            document_ids=document_ids,
-        ):
-            if event_type == "message_start":
-                yield f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
-            elif event_type == "message_delta":
-                yield f"data: {json.dumps({'type': 'message_delta', **data}, ensure_ascii=False)}\n\n"
-            elif event_type == "message_end":
-                message_count += 1
-                msg_data = {
-                    "type": "message_end",
-                    "persona_id": data.persona_id,
-                    "persona_name": data.persona_name,
-                    "content": data.content,
-                    "message_type": data.message_type,
-                }
-                yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
-            elif event_type == "message":
-                # 後方互換: 非ストリーミングメッセージ
-                message_count += 1
-                msg_data = {
-                    "type": "message",
-                    "persona_id": data.persona_id,
-                    "persona_name": data.persona_name,
-                    "content": data.content,
-                    "content_html": render_markdown(data.content),
-                    "message_type": data.message_type,
-                }
-                yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
-            elif event_type == "complete":
-                discussion = data
-
-        # インサイト生成と保存（カテゴリーを渡す）
-        if discussion:
-            try:
-                insight_manager = get_discussion_manager()
-                insights = insight_manager.generate_insights(
-                    discussion, categories=categories
-                )
-                for insight in insights:
-                    discussion = discussion.add_insight(insight)
-                # カテゴリーを保存
-                if categories:
-                    discussion = insight_manager._save_categories_to_config(
-                        discussion, categories
-                    )
-                agent_manager.save_agent_discussion(discussion)
-            except Exception as e:
-                logger.warning(f"インサイト生成に失敗: {e}")
-                agent_manager.save_agent_discussion(discussion)
-
-            # 完了イベントを送信
-            complete_data = {
-                "type": "complete",
-                "discussion_id": discussion.id,
-                "message_count": message_count,
-                "insight_count": len(discussion.insights) if discussion.insights else 0,
-            }
-            yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
-    else:
-        # 簡易モードのストリーミング
-        ai_service = service_factory.get_ai_service()
-
-        # ドキュメントIDからドキュメントデータを読み込み
-        documents_data = None
-        documents_metadata = None
-        if document_ids:
-            manager = get_discussion_manager()
-            documents_data, documents_metadata = manager._load_documents(document_ids)
-
-        messages = []
-
-        for message in ai_service.facilitate_discussion_streaming(
-            personas, topic, documents=documents_data
-        ):
-            messages.append(message)
-            msg_data = {
-                "type": "message",
-                "persona_id": message.persona_id,
-                "persona_name": message.persona_name,
-                "content": message.content,
-                "content_html": render_markdown(message.content),
-            }
-            yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
-
-        # 議論完了後、Discussionオブジェクトを作成して保存
-        discussion = Discussion.create_new(
-            topic=topic,
-            participants=[p.id for p in personas],
-            documents=documents_metadata,
-        )
-        for msg in messages:
-            discussion = discussion.add_message(msg)
-
-        # インサイト生成と保存（カテゴリーを渡す）
-        try:
-            manager = get_discussion_manager()
-            insights = manager.generate_insights(discussion, categories=categories)
-            for insight in insights:
-                discussion = discussion.add_insight(insight)
-            # カテゴリーを保存
-            if categories:
-                discussion = manager._save_categories_to_config(discussion, categories)
-            manager.save_discussion(discussion)
-        except Exception as e:
-            logger.warning(f"インサイト生成に失敗: {e}")
-            manager = get_discussion_manager()
-            manager.save_discussion(discussion)
-
-        # 完了イベントを送信
-        complete_data = {
-            "type": "complete",
-            "discussion_id": discussion.id,
-            "message_count": len(messages),
-            "insight_count": len(discussion.insights) if discussion.insights else 0,
-        }
-        yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
-
-
 @router.get("/stream")
 async def stream_discussion(
     request: Request,
@@ -409,8 +243,8 @@ async def stream_discussion(
             )
 
         persona_manager = get_persona_manager()
-        personas = [persona_manager.get_persona(pid.strip()) for pid in ids]
-        personas = [p for p in personas if p is not None]
+        personas_raw = [persona_manager.get_persona(pid.strip()) for pid in ids]
+        personas = [p for p in personas_raw if p is not None]
 
         if len(personas) < 2:
             return StreamingResponse(
@@ -421,11 +255,6 @@ async def stream_discussion(
                 ),
                 media_type="text/event-stream",
             )
-
-        # memory_modeの検証
-        valid_memory_modes = ["full", "retrieve_only", "disabled"]
-        if memory_mode not in valid_memory_modes:
-            memory_mode = "full"  # デフォルトにフォールバック
 
         # カテゴリー情報を解析
         categories = None
@@ -454,41 +283,44 @@ async def stream_discussion(
         async def event_generator() -> Any:
             yield f"data: {json.dumps(participants_data, ensure_ascii=False)}\n\n"
 
-            # キューを使って同期ジェネレータからのイベントを非同期で受け取る
             queue: asyncio.Queue[Any] = asyncio.Queue()
 
             def run_sync_generator() -> Any:
-                """同期ジェネレータを実行してキューにイベントを追加"""
                 try:
-                    for event in _stream_discussion_sync(
-                        topic,
-                        personas,
-                        mode,
-                        rounds,
-                        additional_instructions,
-                        enable_memory,
-                        memory_mode,
-                        enable_dataset,
-                        enable_kb,
-                        categories,
-                        doc_ids,
-                    ):
-                        # メインスレッドのイベントループにキュー追加をスケジュール
+                    if mode == "agent":
+                        manager = get_agent_discussion_manager()
+                        gen = manager.run_agent_discussion_streaming(
+                            personas=personas,
+                            topic=topic,
+                            rounds=rounds,
+                            additional_instructions=additional_instructions,
+                            enable_memory=enable_memory,
+                            memory_mode=memory_mode,
+                            enable_dataset=enable_dataset,
+                            enable_kb=enable_kb,
+                            categories=categories,
+                            document_ids=doc_ids,
+                        )
+                    else:
+                        dm = get_discussion_manager()
+                        gen = dm.run_classic_discussion_streaming(
+                            personas=personas,
+                            topic=topic,
+                            categories=categories,
+                            document_ids=doc_ids,
+                        )
+                    for event in gen:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
                 except Exception as e:
                     logger.error(f"ストリーミング処理エラー: {e}")
                     error_event = f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
                     asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
                 finally:
-                    # 終了シグナルを送信
                     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
             loop = asyncio.get_event_loop()
-
-            # 別スレッドで同期ジェネレータを実行
             executor.submit(run_sync_generator)
 
-            # キューからイベントを取り出して順次yield（keep-alive付き）
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
@@ -496,7 +328,6 @@ async def stream_discussion(
                         break
                     yield event
                 except asyncio.TimeoutError:
-                    # 15秒間データがなければkeep-aliveを送信
                     yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
@@ -601,118 +432,6 @@ async def discussion_results_page(
     )
 
 
-def _start_discussion_sync(
-    topic: str,
-    personas: list,
-    mode: str,
-    rounds: int,
-    additional_instructions: str = "",
-    enable_memory: bool = False,
-    memory_mode: str = "full",
-    categories: Optional[List[InsightCategory]] = None,
-    document_ids: Optional[List[str]] = None,
-) -> Any:
-    """同期的な議論開始処理（スレッドプールで実行）"""
-    if mode == "agent":
-        # エージェントモードの場合
-        agent_manager = get_agent_discussion_manager()
-
-        # 議論IDを事前に生成（メモリのsession_idとして使用）
-        # Note: Discussion is imported at module level
-        temp_discussion = Discussion.create_new(
-            topic=topic, participants=[p.id for p in personas], mode="agent"
-        )
-        session_id = temp_discussion.id
-
-        # ペルソナエージェントを作成（メモリ設定を渡す）
-        system_prompts: dict[str, str] = {}  # デフォルトのシステムプロンプトを使用
-        persona_agents = agent_manager.create_persona_agents(
-            personas,
-            system_prompts,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            memory_mode=memory_mode,
-        )
-
-        # ファシリテーターエージェントを作成
-        facilitator = agent_manager.create_facilitator_agent(
-            rounds, additional_instructions
-        )
-
-        # 議論を開始（メモリ設定とドキュメントIDを渡す）
-        discussion = agent_manager.start_agent_discussion(
-            personas=personas,
-            topic=topic,
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-            enable_memory=enable_memory,
-            document_ids=document_ids,
-        )
-
-        # インサイトを生成（DiscussionManagerを使用、カテゴリーを渡す）
-        try:
-            insight_manager = get_discussion_manager()
-            insights = insight_manager.generate_insights(
-                discussion, categories=categories
-            )
-
-            # インサイトを議論オブジェクトに追加
-            for insight in insights:
-                discussion = discussion.add_insight(insight)
-
-            # カテゴリーを議論のagent_configに保存
-            if categories:
-                discussion = insight_manager._save_categories_to_config(
-                    discussion, categories
-                )
-
-            logger.info(
-                f"エージェントモード議論のインサイトを{len(insights)}件生成しました"
-            )
-        except Exception as e:
-            logger.warning(f"エージェントモードのインサイト生成に失敗しました: {e}")
-
-        # 議論をデータベースに保存
-        agent_manager.save_agent_discussion(discussion)
-
-        return discussion
-    else:
-        # 従来モードの場合
-        manager = get_discussion_manager()
-        discussion = manager.start_discussion(
-            topic=topic, personas=personas, document_ids=document_ids
-        )
-
-        logger.info(
-            f"Discussion created with {len(discussion.documents) if discussion.documents else 0} documents"
-        )
-
-        # 議論をデータベースに保存
-        try:
-            # インサイトを生成して保存（カテゴリーを渡す）
-            insights = manager.generate_insights(discussion, categories=categories)
-
-            # インサイトを議論オブジェクトに追加
-            for insight in insights:
-                discussion = discussion.add_insight(insight)
-
-            # カテゴリーを議論のagent_configに保存
-            if categories:
-                discussion = manager._save_categories_to_config(discussion, categories)
-
-            # 議論を保存
-            logger.info(f"Saving discussion with documents: {discussion.documents}")
-            manager.save_discussion(discussion)
-        except Exception as e:
-            logger.warning(
-                f"インサイト生成または保存に失敗しましたが、議論は保存します: {e}"
-            )
-            # インサイトなしで議論を保存
-            manager.save_discussion(discussion)
-
-        return discussion
-
-
 @router.post("/start", response_class=HTMLResponse)
 async def start_discussion(
     request: Request,
@@ -727,9 +446,6 @@ async def start_discussion(
 ) -> Any:
     """議論開始処理（htmx対応）"""
     try:
-        logger.info(f"start_discussion called with document_ids: {document_ids}")
-
-        # インタビューモードの場合はエラーを返す（インタビューは別のエンドポイントで処理）
         if mode == "interview":
             return templates.TemplateResponse(
                 request,
@@ -750,8 +466,8 @@ async def start_discussion(
             )
 
         persona_manager = get_persona_manager()
-        personas = [persona_manager.get_persona(pid) for pid in persona_ids]
-        personas = [p for p in personas if p is not None]
+        personas_raw = [persona_manager.get_persona(pid) for pid in persona_ids]
+        personas = [p for p in personas_raw if p is not None]
 
         if len(personas) < 2:
             return templates.TemplateResponse(
@@ -761,30 +477,39 @@ async def start_discussion(
                 status_code=400,
             )
 
-        # memory_modeの検証
-        valid_memory_modes = ["full", "retrieve_only", "disabled"]
-        if memory_mode not in valid_memory_modes:
-            memory_mode = "full"  # デフォルトにフォールバック
-
-        # カテゴリー情報を取得
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
 
-        # 同期的なAI処理をスレッドプールで非同期実行
         loop = asyncio.get_event_loop()
-        discussion = await loop.run_in_executor(
-            executor,
-            _start_discussion_sync,
-            topic,
-            personas,
-            mode,
-            rounds,
-            additional_instructions,
-            enable_memory,
-            memory_mode,
-            categories,
-            document_ids,
-        )
+
+        if mode == "agent":
+
+            def _run_agent() -> Any:
+                manager = get_agent_discussion_manager()
+                return manager.run_agent_discussion_full(
+                    personas=personas,
+                    topic=topic,
+                    rounds=rounds,
+                    additional_instructions=additional_instructions,
+                    enable_memory=enable_memory,
+                    memory_mode=memory_mode,
+                    categories=categories,
+                    document_ids=document_ids,
+                )
+
+            discussion = await loop.run_in_executor(executor, _run_agent)
+        else:
+
+            def _run_classic() -> Any:
+                manager = get_discussion_manager()
+                return manager.run_classic_discussion(
+                    personas=personas,
+                    topic=topic,
+                    categories=categories,
+                    document_ids=document_ids,
+                )
+
+            discussion = await loop.run_in_executor(executor, _run_classic)
 
         return templates.TemplateResponse(
             request,
@@ -818,12 +543,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
         participant_personas = _get_participant_personas(discussion.participants)
 
         # デフォルトカテゴリーを取得（再生成モーダル用）
-        from src.config import Config
-
-        config = Config()
-        default_categories = [
-            cat.to_dict() for cat in config.get_default_insight_categories()
-        ]
+        default_categories = discussion_manager.get_default_categories()
 
         # カスタムカテゴリーを取得（agent_configから）
         custom_categories = None
@@ -832,31 +552,19 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
 
         # ドキュメントの署名付きURLを生成
         document_urls = {}
-        if discussion.documents and config.S3_BUCKET_NAME:
-            from src.services.s3_service import S3Service
-
-            try:
-                s3_service = S3Service(
-                    bucket_name=config.S3_BUCKET_NAME, region_name=config.AWS_REGION
-                )
-                for doc in discussion.documents:
-                    file_path = doc.get("file_path")
-                    if file_path and file_path.startswith("s3://"):
-                        try:
-                            presigned_url = s3_service.generate_presigned_url(file_path)
-                            document_urls[doc.get("id", file_path)] = presigned_url
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to generate presigned URL for {file_path}: {e}"
-                            )
-            except Exception as e:
-                logger.warning(f"Failed to initialize S3 service: {e}")
+        if discussion.documents:
+            disc_manager = get_discussion_manager()
+            document_urls = disc_manager.get_document_presigned_urls(
+                discussion.documents
+            )
 
         # インタビューセッションの場合はタイトルを調整
         if discussion.mode == "interview":
             title = "インタビューセッション"
         else:
             title = f"議論: {discussion.topic}"
+
+        from src.managers.settings_manager import SettingsManager
 
         return templates.TemplateResponse(
             request,
@@ -871,7 +579,7 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
                 "custom_categories": custom_categories,
                 "document_urls": document_urls,
-                "config": config,
+                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
             },
         )
     except HTTPException:
@@ -882,25 +590,21 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
 async def regenerate_insights(request: Request, discussion_id: str) -> Any:
     """インサイト再生成エンドポイント（htmx対応）"""
     try:
-        # フォームデータからカテゴリーを取得
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
 
-        # 同期処理をスレッドプールで実行
+        discussion_manager = get_discussion_manager()
+
         loop = asyncio.get_event_loop()
         new_insights = await loop.run_in_executor(
-            executor, _regenerate_insights_sync, discussion_id, categories
+            executor,
+            discussion_manager.regenerate_insights,
+            discussion_id,
+            categories,
         )
 
-        # デフォルトカテゴリーを取得（モーダル用）
-        from src.config import Config
+        default_categories = discussion_manager.get_default_categories()
 
-        config = Config()
-        default_categories = [
-            cat.to_dict() for cat in config.get_default_insight_categories()
-        ]
-
-        # 更新されたインサイトパーシャルを返す
         return templates.TemplateResponse(
             request,
             "discussion/partials/insights.html",
@@ -922,14 +626,6 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             },
             status_code=500,
         )
-
-
-def _regenerate_insights_sync(
-    discussion_id: str, categories: Optional[List[InsightCategory]]
-) -> list:
-    """同期的なインサイト再生成処理"""
-    manager = get_discussion_manager()
-    return manager.regenerate_insights(discussion_id, categories=categories)
 
 
 @router.delete("/{discussion_id}", response_class=HTMLResponse)
@@ -1020,16 +716,15 @@ async def generate_report_stream(
 
     def stream_generator() -> Any:
         try:
-            discussion_manager = get_discussion_manager()
+            report_manager = get_report_manager()
 
             if template_type == "data_driven":
-                # event_queue パターン: thinking/tool_call/tool_result をリアルタイム送信
                 import queue as queue_mod
 
                 eq: queue_mod.Queue = queue_mod.Queue()
 
                 def _run() -> None:
-                    for _ in discussion_manager.generate_report_streaming(
+                    for _ in report_manager.generate_report_streaming(
                         discussion_id=discussion_id,
                         template_type=template_type,
                         custom_prompt=custom_prompt or None,
@@ -1074,7 +769,6 @@ async def generate_report_stream(
                         yield f"data: {json.dumps({'type': 'error', 'message': content}, ensure_ascii=False)}\n\n"
                         return
 
-                # future の例外チェック
                 if future.done() and future.exception():
                     logger.error(f"レポート生成エラー: {future.exception()}")
                     yield f"data: {json.dumps({'type': 'error', 'message': 'レポートの生成に失敗しました'}, ensure_ascii=False)}\n\n"
@@ -1083,8 +777,7 @@ async def generate_report_stream(
                 yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
                 return
 
-            # 既存テンプレート (summary/review/custom)
-            for chunk in discussion_manager.generate_report_streaming(
+            for chunk in report_manager.generate_report_streaming(
                 discussion_id=discussion_id,
                 template_type=template_type,
                 custom_prompt=custom_prompt or None,
@@ -1122,13 +815,13 @@ async def generate_followup_report_stream(
 
     def stream_generator() -> Any:
         try:
-            discussion_manager = get_discussion_manager()
+            report_manager = get_report_manager()
             import queue as queue_mod
 
             eq: queue_mod.Queue = queue_mod.Queue()
 
             def _run() -> None:
-                for _ in discussion_manager.generate_followup_report_streaming(
+                for _ in report_manager.generate_followup_report_streaming(
                     discussion_id=discussion_id,
                     followup_prompt=followup_prompt,
                     previous_report=previous_report,
@@ -1209,13 +902,13 @@ async def save_report(
             custom_prompt=custom_prompt or None,
         )
 
-        discussion_manager = get_discussion_manager()
-        discussion_manager.save_report(discussion_id=discussion_id, report=report)
+        report_manager = get_report_manager()
+        report_manager.save_report(discussion_id=discussion_id, report=report)
 
         # 保存後、reportsセクション全体を再描画
-        from src.config import Config
+        from src.managers.settings_manager import SettingsManager
 
-        discussion = discussion_manager.get_discussion(discussion_id)
+        discussion = report_manager.get_discussion(discussion_id)
         response = templates.TemplateResponse(
             request,
             "discussion/partials/reports.html",
@@ -1223,7 +916,7 @@ async def save_report(
                 "request": request,
                 "discussion": discussion,
                 "discussion_id": discussion_id,
-                "config": Config(),
+                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
             },
         )
         response.headers["HX-Retarget"] = "#reports-container"
@@ -1260,8 +953,8 @@ async def update_report_content(
 ) -> Any:
     """レポート内容を更新する"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion_manager.update_report_content(
+        report_manager = get_report_manager()
+        report_manager.update_report_content(
             discussion_id=discussion_id,
             report_id=report_id,
             content=content,
@@ -1285,8 +978,8 @@ async def get_report(
 ) -> Any:
     """レポート内容を取得する"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion = discussion_manager.get_discussion(discussion_id)
+        report_manager = get_report_manager()
+        discussion = report_manager.get_discussion(discussion_id)
         if not discussion:
             return HTMLResponse(content="議論が見つかりません", status_code=404)
 
@@ -1312,8 +1005,8 @@ async def export_report(
 ) -> Any:
     """レポートをファイルエクスポートする"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion = discussion_manager.get_discussion(discussion_id)
+        report_manager = get_report_manager()
+        discussion = report_manager.get_discussion(discussion_id)
         if not discussion:
             return HTMLResponse(content="議論が見つかりません", status_code=404)
 
@@ -1353,8 +1046,8 @@ async def delete_report(
 ) -> Any:
     """レポートを削除する"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion_manager.delete_report(
+        report_manager = get_report_manager()
+        report_manager.delete_report(
             discussion_id=discussion_id,
             report_id=report_id,
         )

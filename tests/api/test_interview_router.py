@@ -11,6 +11,7 @@ from src.models.message import Message
 from src.managers.interview_manager import (
     InterviewSession,
     InterviewSessionNotFoundError,
+    InterviewValidationError,
 )
 
 
@@ -147,7 +148,7 @@ class TestSendMessageEndpoint:
         )
 
         mock_manager = Mock()
-        mock_manager.send_user_message.return_value = [mock_response]
+        mock_manager.send_user_message_with_files.return_value = [mock_response]
         mock_get_manager.return_value = mock_manager
 
         response = client.post(
@@ -174,6 +175,12 @@ class TestSendMessageEndpoint:
     @patch("web.routers.interview.get_interview_manager")
     def test_send_message_whitespace_only(self, mock_get_manager, client):
         """空白のみのメッセージでエラーを返すことを確認"""
+        mock_manager = Mock()
+        mock_manager.send_user_message_with_files.side_effect = (
+            InterviewValidationError("メッセージが空です")
+        )
+        mock_get_manager.return_value = mock_manager
+
         response = client.post(
             "/interview/test-session/message", data={"message": "   "}
         )
@@ -187,6 +194,12 @@ class TestSendMessageEndpoint:
         """長すぎるメッセージでエラーを返すことを確認"""
         long_message = "あ" * 2001
 
+        mock_manager = Mock()
+        mock_manager.send_user_message_with_files.side_effect = (
+            InterviewValidationError("メッセージが長すぎます（最大2000文字）")
+        )
+        mock_get_manager.return_value = mock_manager
+
         response = client.post(
             "/interview/test-session/message", data={"message": long_message}
         )
@@ -199,8 +212,8 @@ class TestSendMessageEndpoint:
     def test_send_message_session_not_found(self, mock_get_manager, client):
         """存在しないセッションでエラーを返すことを確認"""
         mock_manager = Mock()
-        mock_manager.send_user_message.side_effect = InterviewSessionNotFoundError(
-            "セッションが見つかりません"
+        mock_manager.send_user_message_with_files.side_effect = (
+            InterviewSessionNotFoundError("セッションが見つかりません")
         )
         mock_get_manager.return_value = mock_manager
 

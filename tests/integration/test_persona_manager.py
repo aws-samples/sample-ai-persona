@@ -83,16 +83,14 @@ class TestPersonaManagerIntegration:
 
     @pytest.fixture
     def mock_ai_service(self):
-        """Create a mock AI service for testing."""
+        """Create a mock AI service for testing (kept for backward compat)."""
         mock_service = Mock(spec=AIService)
         return mock_service
 
     @pytest.fixture
-    def persona_manager(self, mock_ai_service, database_service):
-        """Create a persona manager with mocked AI service and real database."""
-        return PersonaManager(
-            ai_service=mock_ai_service, database_service=database_service
-        )
+    def persona_manager(self, database_service):
+        """Create a persona manager with real database."""
+        return PersonaManager(database_service=database_service)
 
     @pytest.fixture
     def sample_interview_text(self):
@@ -148,20 +146,14 @@ class TestPersonaManagerIntegration:
     @patch("src.managers.persona_manager.service_factory")
     def test_persona_manager_initialization(self, mock_sf, mock_database_service):
         """Test persona manager initialization."""
-        mock_sf.get_ai_service.return_value = Mock(spec=AIService)
         mock_sf.get_database_service.return_value = mock_database_service
 
         # Test with default services
         manager = PersonaManager()
-        assert manager.ai_service is not None
         assert manager.database_service is not None
 
         # Test with custom services
-        ai_service = Mock(spec=AIService)
-        manager = PersonaManager(
-            ai_service=ai_service, database_service=mock_database_service
-        )
-        assert manager.ai_service == ai_service
+        manager = PersonaManager(database_service=mock_database_service)
         assert manager.database_service == mock_database_service
 
     def test_save_persona_success(self, persona_manager, sample_persona_data):
@@ -285,35 +277,30 @@ class TestPersonaManagerIntegration:
         assert "佐藤 太郎" in persona_names
 
     def test_update_persona_success(self, persona_manager, sample_persona_data):
-        """Test successful persona update."""
+        """Test successful persona update via update_persona (partial update)."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
         persona_manager.save_persona(persona)
 
-        # Update persona
-        updated_persona = persona.update(
-            name="田中 花子（更新済み）", age=36, occupation="シニアマーケター"
+        # Update persona using partial update interface
+        result = persona_manager.update_persona(
+            persona.id,
+            name="田中 花子（更新済み）",
+            age=36,
+            occupation="シニアマーケター",
         )
 
-        result = persona_manager.update_persona(updated_persona)
-
         # Verify update was successful
-        assert result is True
-
-        # Verify updated data in database
-        saved_persona = persona_manager.get_persona(persona.id)
-        assert saved_persona.name == "田中 花子（更新済み）"
-        assert saved_persona.age == 36
-        assert saved_persona.occupation == "シニアマーケター"
-        assert saved_persona.updated_at > saved_persona.created_at
+        assert result is not None
+        assert result.name == "田中 花子（更新済み）"
+        assert result.age == 36
+        assert result.occupation == "シニアマーケター"
+        assert result.updated_at > result.created_at
 
     def test_update_persona_not_found(self, persona_manager, sample_persona_data):
         """Test updating non-existent persona."""
-        persona = Persona.create_new(**sample_persona_data)
-        # Don't save the persona, so it won't exist in database
-
-        result = persona_manager.update_persona(persona)
-        assert result is False
+        result = persona_manager.update_persona("non-existent-id", name="New Name")
+        assert result is None
 
     def test_delete_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona deletion."""
@@ -336,21 +323,21 @@ class TestPersonaManagerIntegration:
         result = persona_manager.delete_persona("non-existent-id")
         assert result is False
 
-    def test_edit_persona_success(self, persona_manager, sample_persona_data):
-        """Test successful persona editing."""
+    def test_update_persona_partial_fields(self, persona_manager, sample_persona_data):
+        """Test partial field update preserves other fields."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
         persona_manager.save_persona(persona)
 
-        # Edit persona
-        result = persona_manager.edit_persona(
+        # Update only some fields
+        result = persona_manager.update_persona(
             persona.id,
             name="田中 花子（編集済み）",
             age=37,
             values=["効率性", "革新性", "協調性"],
         )
 
-        # Verify edit was successful
+        # Verify update was successful
         assert result is not None
         assert result.name == "田中 花子（編集済み）"
         assert result.age == 37
@@ -359,9 +346,9 @@ class TestPersonaManagerIntegration:
         assert result.occupation == sample_persona_data["occupation"]
         assert result.background == sample_persona_data["background"]
 
-    def test_edit_persona_not_found(self, persona_manager):
-        """Test editing non-existent persona."""
-        result = persona_manager.edit_persona("non-existent-id", name="New Name")
+    def test_update_persona_not_found_returns_none(self, persona_manager):
+        """Test updating non-existent persona returns None."""
+        result = persona_manager.update_persona("non-existent-id", name="New Name")
         assert result is None
 
     def test_get_persona_count(self, persona_manager, sample_persona_data):
@@ -380,7 +367,7 @@ class TestPersonaManagerIntegration:
         persona_manager.save_persona(persona2)
         assert persona_manager.get_persona_count() == 2
 
-    def test_database_error_handling(self, mock_ai_service, mock_database_service):
+    def test_database_error_handling(self, mock_database_service):
         """Test handling of database errors."""
         # Create a mock database service that raises an error
         error_db_service = Mock()
@@ -388,9 +375,7 @@ class TestPersonaManagerIntegration:
             "Database save failed"
         )
 
-        manager = PersonaManager(
-            ai_service=mock_ai_service, database_service=error_db_service
-        )
+        manager = PersonaManager(database_service=error_db_service)
 
         # Test that database errors are properly handled
         persona = Persona.create_new(
