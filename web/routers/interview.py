@@ -443,7 +443,7 @@ async def send_message(
         logger.error(f"Validation error: {e}")
         return JSONResponse(
             {
-                "error": str(e),
+                "error": "入力内容に問題があります",
                 "error_type": "validation_error",
             },
             status_code=400,
