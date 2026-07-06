@@ -1345,6 +1345,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         persona_manager = get_persona_manager()
         saved_count = 0
+        cache_miss_count = 0
 
         # 各ペルソナを保存
         gen_manager = get_persona_generation_manager()
@@ -1357,6 +1358,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
                     saved_count += 1
                     logger.info(f"ペルソナ保存成功: {persona.name} (ID: {persona_id})")
                 else:
+                    cache_miss_count += 1
                     logger.warning(f"ペルソナが見つかりません (ID: {persona_id})")
             except Exception as e:
                 logger.error(f"ペルソナ保存エラー (ID: {persona_id}): {e}")
@@ -1368,10 +1370,14 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
             gen_manager.pop_cached_persona(persona_id)
 
         if saved_count == 0:
+            if cache_miss_count == len(id_list):
+                error_msg = "生成されたペルソナの一時データが期限切れです。お手数ですが再度生成してください。"
+            else:
+                error_msg = "ペルソナの保存に失敗しました"
             return templates.TemplateResponse(
                 request,
                 "partials/error.html",
-                {"request": request, "error": "ペルソナの保存に失敗しました"},
+                {"request": request, "error": error_msg},
                 status_code=500,
             )
 

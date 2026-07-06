@@ -11,6 +11,7 @@ from cachetools import TTLCache  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 from ..models.persona import Persona
+from ..config import config
 from ..services.agent_service import AgentService, AgentServiceError
 from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
@@ -80,8 +81,12 @@ class PersonaGenerationManager:
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
-        self._personas_cache: TTLCache = TTLCache(maxsize=1000, ttl=1800)
-        self._behavior_datasets_cache: TTLCache = TTLCache(maxsize=100, ttl=1800)
+        self._personas_cache: TTLCache = TTLCache(
+            maxsize=1000, ttl=config.PERSONA_CACHE_TTL_SECONDS
+        )
+        self._behavior_datasets_cache: TTLCache = TTLCache(
+            maxsize=100, ttl=config.PERSONA_CACHE_TTL_SECONDS
+        )
 
     # ------------------------------------------------------------------
     # 公開API
@@ -374,7 +379,6 @@ class PersonaGenerationManager:
         self, data_type: str, use_mcp: bool, event_queue: Any
     ) -> list[Any]:
         """生成に使用するツールリストを決定する"""
-        from ..config import config
 
         tools: list[Any] = []
 

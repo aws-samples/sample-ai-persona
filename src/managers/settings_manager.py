@@ -114,6 +114,7 @@ class SettingsManager:
         except SettingsManagerError:
             raise
         except Exception as e:
+            logger.error(f"データ分析エージェント接続テストエラー: {e}")
             raise SettingsManagerError(
-                f"データ分析エージェント接続テストに失敗しました: {e}"
+                "データ分析エージェント接続テストに失敗しました"
             ) from e
