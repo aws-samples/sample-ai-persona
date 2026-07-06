@@ -500,7 +500,7 @@ class TestSaveSelectedPersonasEndpoint:
     def test_save_selected_not_found_in_cache(
         self, mock_get_manager, mock_get_gen_manager, client
     ):
-        """キャッシュにないペルソナでエラーを返すことを確認"""
+        """キャッシュ期限切れで専用エラーメッセージを返すことを確認"""
         mock_gen_manager = Mock()
         mock_gen_manager.get_cached_persona.return_value = None
         mock_gen_manager.pop_cached_persona.return_value = None
@@ -514,7 +514,28 @@ class TestSaveSelectedPersonasEndpoint:
         )
 
         assert response.status_code == 500
-        assert "保存に失敗しました" in response.text
+        assert "一時データが期限切れ" in response.text
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    @patch("web.routers.persona.get_persona_manager")
+    def test_save_selected_partial_cache_miss(
+        self, mock_get_manager, mock_get_gen_manager, client, sample_persona
+    ):
+        """一部キャッシュ切れでも保存成功分はカウントされることを確認"""
+        mock_gen_manager = Mock()
+        mock_gen_manager.get_cached_persona.side_effect = [sample_persona, None]
+        mock_gen_manager.pop_cached_persona.return_value = None
+        mock_get_gen_manager.return_value = mock_gen_manager
+
+        mock_manager = Mock()
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            "/persona/save-selected", data={"persona_ids": "id1,id2"}
+        )
+
+        assert response.status_code == 200
+        mock_manager.save_persona.assert_called_once_with(sample_persona)
 
 
 class TestPersonaEditForm:

@@ -63,6 +63,9 @@ class Config:
     DATA_AGENT_REGION: str = "ap-northeast-1"
     ENABLE_DATA_AGENT: bool = False
 
+    # ペルソナ生成キャッシュ設定
+    PERSONA_CACHE_TTL_SECONDS: int = 14400  # 4 hours
+
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
         # 環境変数から設定を上書き
@@ -118,6 +121,11 @@ class Config:
             self.ENABLE_DATA_AGENT = True
         elif enable_val in ("false", "0", "no"):
             self.ENABLE_DATA_AGENT = False
+
+        # ペルソナ生成キャッシュ設定を環境変数から上書き
+        persona_cache_ttl = os.getenv("PERSONA_CACHE_TTL_SECONDS")
+        if persona_cache_ttl:
+            self.PERSONA_CACHE_TTL_SECONDS = int(persona_cache_ttl)
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()

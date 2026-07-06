@@ -521,8 +521,11 @@ class InterviewManager:
         # Enhanced validation with specific error messages
         try:
             self._validate_session_for_save(session)
+        except InterviewValidationError:
+            raise
         except Exception as e:
-            raise InterviewValidationError(f"セッション保存の検証に失敗しました: {e}")
+            self.logger.error(f"セッション保存の検証エラー: {e}")
+            raise InterviewValidationError("セッション保存の検証に失敗しました")
 
         # Check if already saved
         if session.is_saved:
