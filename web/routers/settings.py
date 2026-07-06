@@ -454,10 +454,9 @@ async def test_data_agent_connection(request: Request) -> Any:
             "}"
             "</script>"
         )
-    except SettingsManagerError as e:
-        escaped = html.escape(str(e))
+    except SettingsManagerError:
         return HTMLResponse(
-            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">{escaped}</div>'
+            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: データ分析エージェントに接続できませんでした</div>'
         )
     except Exception:
         logger.exception("データ分析エージェント接続テストエラー")

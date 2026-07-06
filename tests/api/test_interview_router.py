@@ -206,7 +206,7 @@ class TestSendMessageEndpoint:
 
         assert response.status_code == 400
         data = response.json()
-        assert "長すぎます" in data["error"]
+        assert data["error"] == "入力内容に問題があります"
 
     @patch("web.routers.interview.get_interview_manager")
     def test_send_message_session_not_found(self, mock_get_manager, client):
