@@ -54,7 +54,6 @@ class AIService:
         self.logger = logging.getLogger(__name__)
         self.model_id = config.BEDROCK_MODEL_ID
         self.max_tokens = config.MAX_TOKENS
-        self.temperature = config.TEMPERATURE
 
         # リトライ設定
         self.max_retries = 3
@@ -158,7 +157,6 @@ class AIService:
             request_body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-                "temperature": self.temperature,
                 "messages": [{"role": "user", "content": prompt}],
             }
 
@@ -209,7 +207,6 @@ class AIService:
                 "messages": messages,
                 "inferenceConfig": {
                     "maxTokens": max_tokens or self.max_tokens,
-                    "temperature": self.temperature,
                 },
             }
 
@@ -610,7 +607,6 @@ class AIService:
                         messages=[{"role": "user", "content": message_content}],
                         inferenceConfig={
                             "maxTokens": self.max_tokens,
-                            "temperature": self.temperature,
                         },
                     )
 
@@ -660,7 +656,6 @@ class AIService:
             request_body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
                 "messages": [{"role": "user", "content": prompt}],
             }
 
@@ -1094,7 +1089,6 @@ class AIService:
                 "messages": converse_messages,
                 "inferenceConfig": {
                     "maxTokens": 12000,
-                    "temperature": self.temperature,
                 },
             }
             if system_prompt:
