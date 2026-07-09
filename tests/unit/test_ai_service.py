@@ -119,7 +119,7 @@ class TestAIService:
         # モックレスポンスを設定
         mock_response = {"body": Mock()}
         mock_response["body"].read.return_value = json.dumps(
-            {"content": [{"text": "テスト応答"}]}
+            {"content": [{"type": "text", "text": "テスト応答"}]}
         ).encode()
 
         self.mock_bedrock_client.invoke_model.return_value = mock_response
@@ -128,6 +128,42 @@ class TestAIService:
 
         assert result == "テスト応答"
         self.mock_bedrock_client.invoke_model.assert_called_once()
+
+    def test_invoke_model_skips_thinking_block(self):
+        """thinkingブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        mock_response = {"body": Mock()}
+        mock_response["body"].read.return_value = json.dumps(
+            {
+                "content": [
+                    {"type": "thinking", "thinking": "内部思考", "signature": "sig"},
+                    {"type": "text", "text": "テスト応答"},
+                ]
+            }
+        ).encode()
+
+        self.mock_bedrock_client.invoke_model.return_value = mock_response
+
+        result = self.ai_service.invoke_model("テストプロンプト")
+
+        assert result == "テスト応答"
+
+    def test_invoke_model_ignores_non_text_type_block_with_text_key(self):
+        """type!="text"のブロックが"text"キーを持っていても誤って抽出しないことのテスト"""
+        mock_response = {"body": Mock()}
+        mock_response["body"].read.return_value = json.dumps(
+            {
+                "content": [
+                    {"type": "tool_use", "text": "これは本文ではない"},
+                    {"type": "text", "text": "テスト応答"},
+                ]
+            }
+        ).encode()
+
+        self.mock_bedrock_client.invoke_model.return_value = mock_response
+
+        result = self.ai_service.invoke_model("テストプロンプト")
+
+        assert result == "テスト応答"
 
     def test_invoke_model_empty_response(self):
         """モデル呼び出しで空のレスポンスの場合のテスト"""
@@ -196,6 +232,45 @@ class TestAIService:
 
             # ストリーム取得がリトライ経由で行われたこと
             mock_retry.assert_called_once()
+
+    def test_facilitate_discussion_streaming_ignores_thinking_deltas(self):
+        """InvokeModelストリーミングでthinking系デルタ(signature_delta)が
+        発言バッファに混入しないことのテスト"""
+
+        def _make_chunk(chunk_data):
+            return {"chunk": {"bytes": json.dumps(chunk_data).encode()}}
+
+        stream_events = [
+            _make_chunk(
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": "signature_delta", "signature": "sig"},
+                }
+            ),
+            _make_chunk(
+                {
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "text_delta",
+                        "text": "[田中太郎]: こんにちは\n",
+                    },
+                }
+            ),
+        ]
+        mock_response = {"body": stream_events}
+
+        with patch.object(
+            self.ai_service, "_retry_with_backoff", return_value=mock_response
+        ):
+            personas = [self.test_persona, self.test_persona2]
+            messages = list(
+                self.ai_service.facilitate_discussion_streaming(
+                    personas, "テストトピック"
+                )
+            )
+
+        assert len(messages) == 1
+        assert messages[0].content == "こんにちは"
 
     def test_extract_insights_success(self):
         """インサイト抽出成功のテスト（構造化データ）"""
@@ -530,6 +605,27 @@ class TestAIService:
         messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
 
         mock_response = {"output": {"message": {"content": [{"text": "こんにちは！"}]}}}
+
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ):
+            response = self.ai_service._invoke_converse_api(messages)
+            assert response == "こんにちは！"
+
+    def test_invoke_converse_api_skips_reasoning_block(self):
+        """reasoningContentブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
+
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "内部思考"}}},
+                        {"text": "こんにちは！"},
+                    ]
+                }
+            }
+        }
 
         with patch.object(
             self.ai_service.bedrock_client, "converse", return_value=mock_response

@@ -146,6 +146,38 @@ class AIService:
 
         return isinstance(error, BotoCoreError)
 
+    @staticmethod
+    def _extract_first_text_block(content_blocks: List[Dict[str, Any]]) -> str:
+        """InvokeModel(Anthropic Messages API形式)のcontent配列から最初のテキスト
+        ブロックを抽出する。
+
+        Sonnet 5以降はadaptive thinkingが常時有効なため、content[0]が
+        {"type": "thinking", ...} になりテキストがそれ以降に来ることがある。
+        先頭固定ではなく type=="text" のブロックを探す（thinking/tool_use等の
+        非textブロックが将来"text"キーを持つ可能性を考慮し、typeで判定する）。
+        """
+        for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return str(block["text"])
+        raise BedrockAPIError("応答にテキストブロックが含まれていません")
+
+    @staticmethod
+    def _extract_first_converse_text_block(content_blocks: List[Dict[str, Any]]) -> str:
+        """Converse APIのcontent配列から最初のテキストブロックを抽出する。
+
+        Converse API形式のテキストブロックは {"text": "..."} でtypeフィールドを
+        持たないため、thinkingブロック {"reasoningContent": {...}} を除外する
+        ことで判定する。
+        """
+        for block in content_blocks:
+            if (
+                isinstance(block, dict)
+                and "reasoningContent" not in block
+                and "text" in block
+            ):
+                return str(block["text"])
+        raise BedrockAPIError("応答にテキストブロックが含まれていません")
+
     def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         """Bedrock モデルを呼び出し
 
@@ -169,7 +201,7 @@ class AIService:
             response_body = json.loads(response["body"].read())
 
             if "content" in response_body and len(response_body["content"]) > 0:
-                return str(response_body["content"][0]["text"])
+                return self._extract_first_text_block(response_body["content"])
             else:
                 raise BedrockAPIError("モデルからの応答が空です")
 
@@ -219,7 +251,7 @@ class AIService:
             if "output" in response and "message" in response["output"]:
                 message = response["output"]["message"]
                 if "content" in message and len(message["content"]) > 0:
-                    return str(message["content"][0]["text"])
+                    return self._extract_first_converse_text_block(message["content"])
 
             raise BedrockAPIError("Converse APIからの応答が空です")
 
@@ -620,7 +652,7 @@ class AIService:
                 for event in response.get("stream", []):
                     if "contentBlockDelta" in event:
                         delta = event["contentBlockDelta"].get("delta", {})
-                        if "text" in delta:
+                        if "reasoningContent" not in delta and "text" in delta:
                             accumulated_text += delta["text"]
 
                             # 完成したメッセージを検出してyield
@@ -677,8 +709,8 @@ class AIService:
                     chunk_data = json.loads(chunk.get("bytes", b"{}").decode())
                     if chunk_data.get("type") == "content_block_delta":
                         delta = chunk_data.get("delta", {})
-                        text = delta.get("text", "")
-                        buffer += text
+                        if delta.get("type") == "text_delta":
+                            buffer += delta.get("text", "")
 
                         # 改行で区切って完成した発言を検出
                         while "\n" in buffer:
@@ -1100,7 +1132,7 @@ class AIService:
         for event in response.get("stream", []):
             if "contentBlockDelta" in event:
                 delta = event["contentBlockDelta"].get("delta", {})
-                if "text" in delta:
+                if "reasoningContent" not in delta and "text" in delta:
                     yield delta["text"]
 
     # =========================================================================
