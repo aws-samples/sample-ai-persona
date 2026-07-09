@@ -147,21 +147,6 @@ class AIService:
         return isinstance(error, BotoCoreError)
 
     @staticmethod
-    def _extract_first_text_block(content_blocks: List[Dict[str, Any]]) -> str:
-        """InvokeModel(Anthropic Messages API形式)のcontent配列から最初のテキスト
-        ブロックを抽出する。
-
-        Sonnet 5以降はadaptive thinkingが常時有効なため、content[0]が
-        {"type": "thinking", ...} になりテキストがそれ以降に来ることがある。
-        先頭固定ではなく type=="text" のブロックを探す（thinking/tool_use等の
-        非textブロックが将来"text"キーを持つ可能性を考慮し、typeで判定する）。
-        """
-        for block in content_blocks:
-            if isinstance(block, dict) and block.get("type") == "text":
-                return str(block["text"])
-        raise BedrockAPIError("応答にテキストブロックが含まれていません")
-
-    @staticmethod
     def _extract_first_converse_text_block(content_blocks: List[Dict[str, Any]]) -> str:
         """Converse APIのcontent配列から最初のテキストブロックを抽出する。
 
@@ -179,40 +164,14 @@ class AIService:
         raise BedrockAPIError("応答にテキストブロックが含まれていません")
 
     def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
-        """Bedrock モデルを呼び出し
+        """Bedrock モデルを呼び出し（Converse API経由）
 
         Args:
             prompt: プロンプト文字列
             max_tokens: 最大トークン数（Noneの場合はデフォルト値を使用）
         """
-        try:
-            request_body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-
-            response = self.bedrock_client.invoke_model(
-                modelId=self.model_id,
-                body=json.dumps(request_body),
-                contentType="application/json",
-            )
-
-            response_body = json.loads(response["body"].read())
-
-            if "content" in response_body and len(response_body["content"]) > 0:
-                return self._extract_first_text_block(response_body["content"])
-            else:
-                raise BedrockAPIError("モデルからの応答が空です")
-
-        except json.JSONDecodeError as e:
-            raise BedrockAPIError(f"レスポンスの JSON 解析に失敗: {e}")
-        except KeyError as e:
-            raise BedrockAPIError(f"レスポンス形式が不正です: {e}")
-        except Exception as e:
-            if isinstance(e, (BedrockAPIError, ClientError, BotoCoreError)):
-                raise
-            raise BedrockAPIError(f"モデル呼び出し中に予期しないエラーが発生: {e}")
+        messages = [{"role": "user", "content": [{"text": prompt}]}]
+        return self._invoke_converse_api(messages, max_tokens=max_tokens)
 
     def _invoke_converse_api(
         self,
@@ -625,131 +584,58 @@ class AIService:
         persona_map = {persona.name: persona.id for persona in personas}
 
         try:
-            # ドキュメントがある場合はconverse_streamを使用
+            # メッセージコンテンツを構築（ドキュメントがある場合は添付を追加）
+            message_content: List[Dict[str, Any]] = [{"text": prompt}]
             if documents:
-                # ドキュメントコンテンツを準備
-                document_contents = self._prepare_document_content(documents)
+                message_content += self._prepare_document_content(documents)
 
-                # メッセージコンテンツを構築
-                message_content = [{"text": prompt}] + document_contents
-
-                def _call_converse_stream() -> Any:
-                    return self.bedrock_client.converse_stream(
-                        modelId=self.model_id,
-                        messages=[{"role": "user", "content": message_content}],
-                        inferenceConfig={
-                            "maxTokens": self.max_tokens,
-                        },
-                    )
-
-                # 一過性の接続エラー対策として指数バックオフでリトライ
-                response = self._retry_with_backoff(_call_converse_stream)
-
-                # ストリーミングレスポンスを処理
-                accumulated_text = ""
-                yielded_messages = set()
-
-                for event in response.get("stream", []):
-                    if "contentBlockDelta" in event:
-                        delta = event["contentBlockDelta"].get("delta", {})
-                        if "reasoningContent" not in delta and "text" in delta:
-                            accumulated_text += delta["text"]
-
-                            # 完成したメッセージを検出してyield
-                            lines = accumulated_text.split("\n")
-                            for i, line in enumerate(
-                                lines[:-1]
-                            ):  # 最後の行は未完成の可能性
-                                line = line.strip()
-                                if line.startswith("[") and "]:" in line:
-                                    try:
-                                        end_bracket = line.index("]:")
-                                        persona_name = line[1:end_bracket]
-                                        content = line[end_bracket + 2 :].strip()
-
-                                        message_key = f"{persona_name}:{content[:50]}"
-                                        if (
-                                            persona_name in persona_map
-                                            and content
-                                            and message_key not in yielded_messages
-                                        ):
-                                            message = Message.create_new(
-                                                persona_id=persona_map[persona_name],
-                                                persona_name=persona_name,
-                                                content=content,
-                                            )
-                                            yielded_messages.add(message_key)
-                                            yield message
-                                    except (ValueError, IndexError):
-                                        continue
-                return
-
-            # ドキュメントがない場合は従来のストリーミングAPI
-            request_body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": self.max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-
-            def _call_invoke_stream() -> Any:
-                return self.bedrock_client.invoke_model_with_response_stream(
+            def _call_converse_stream() -> Any:
+                return self.bedrock_client.converse_stream(
                     modelId=self.model_id,
-                    body=json.dumps(request_body),
-                    contentType="application/json",
+                    messages=[{"role": "user", "content": message_content}],
+                    inferenceConfig={
+                        "maxTokens": self.max_tokens,
+                    },
                 )
 
             # 一過性の接続エラー対策として指数バックオフでリトライ
-            response = self._retry_with_backoff(_call_invoke_stream)
+            response = self._retry_with_backoff(_call_converse_stream)
 
-            # ストリームからテキストを蓄積して発言を検出
-            buffer = ""
-            for event in response.get("body", []):
-                chunk = event.get("chunk")
-                if chunk:
-                    chunk_data = json.loads(chunk.get("bytes", b"{}").decode())
-                    if chunk_data.get("type") == "content_block_delta":
-                        delta = chunk_data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            buffer += delta.get("text", "")
+            # ストリーミングレスポンスを処理
+            accumulated_text = ""
+            yielded_messages = set()
 
-                        # 改行で区切って完成した発言を検出
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
+            for event in response.get("stream", []):
+                if "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
+                    if "reasoningContent" not in delta and "text" in delta:
+                        accumulated_text += delta["text"]
+
+                        # 完成したメッセージを検出してyield
+                        lines = accumulated_text.split("\n")
+                        for line in lines[:-1]:  # 最後の行は未完成の可能性
                             line = line.strip()
-                            if line and line.startswith("[") and "]:" in line:
+                            if line.startswith("[") and "]:" in line:
                                 try:
                                     end_bracket = line.index("]:")
                                     persona_name = line[1:end_bracket]
                                     content = line[end_bracket + 2 :].strip()
 
-                                    if persona_name in persona_map and content:
+                                    message_key = f"{persona_name}:{content[:50]}"
+                                    if (
+                                        persona_name in persona_map
+                                        and content
+                                        and message_key not in yielded_messages
+                                    ):
                                         message = Message.create_new(
                                             persona_id=persona_map[persona_name],
                                             persona_name=persona_name,
                                             content=content,
                                         )
+                                        yielded_messages.add(message_key)
                                         yield message
                                 except (ValueError, IndexError):
                                     continue
-
-            # バッファに残った最後の発言を処理
-            if buffer.strip():
-                line = buffer.strip()
-                if line.startswith("[") and "]:" in line:
-                    try:
-                        end_bracket = line.index("]:")
-                        persona_name = line[1:end_bracket]
-                        content = line[end_bracket + 2 :].strip()
-
-                        if persona_name in persona_map and content:
-                            message = Message.create_new(
-                                persona_id=persona_map[persona_name],
-                                persona_name=persona_name,
-                                content=content,
-                            )
-                            yield message
-                    except (ValueError, IndexError):
-                        pass
 
             self.logger.info("ストリーミング議論が完了しました")
 
