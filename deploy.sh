@@ -176,7 +176,7 @@ export const devParameter: AppParameter = {
   summaryMemoryStrategyId: '',
   semanticMemoryStrategyId: '',
   agentCoreMemoryEventExpiryDays: 30,
-  bedrockModelId: 'global.anthropic.claude-sonnet-4-6',
+  bedrockModelId: 'global.anthropic.claude-sonnet-5',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',

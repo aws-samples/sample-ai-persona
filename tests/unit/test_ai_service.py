@@ -2,7 +2,6 @@
 AI サービスの単体テスト
 """
 
-import json
 import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
@@ -115,38 +114,39 @@ class TestAIService:
         assert self.ai_service._is_retryable_error(other_error) is False
 
     def test_invoke_model_success(self):
-        """モデル呼び出し成功のテスト"""
-        # モックレスポンスを設定
-        mock_response = {"body": Mock()}
-        mock_response["body"].read.return_value = json.dumps(
-            {"content": [{"text": "テスト応答"}]}
-        ).encode()
-
-        self.mock_bedrock_client.invoke_model.return_value = mock_response
+        """モデル呼び出し成功のテスト（Converse API経由）"""
+        mock_response = {"output": {"message": {"content": [{"text": "テスト応答"}]}}}
+        self.mock_bedrock_client.converse.return_value = mock_response
 
         result = self.ai_service.invoke_model("テストプロンプト")
 
         assert result == "テスト応答"
-        self.mock_bedrock_client.invoke_model.assert_called_once()
+        self.mock_bedrock_client.converse.assert_called_once()
+
+    def test_invoke_model_skips_reasoning_block(self):
+        """reasoningContentブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "内部思考"}}},
+                        {"text": "テスト応答"},
+                    ]
+                }
+            }
+        }
+        self.mock_bedrock_client.converse.return_value = mock_response
+
+        result = self.ai_service.invoke_model("テストプロンプト")
+
+        assert result == "テスト応答"
 
     def test_invoke_model_empty_response(self):
         """モデル呼び出しで空のレスポンスの場合のテスト"""
-        mock_response = {"body": Mock()}
-        mock_response["body"].read.return_value = json.dumps({"content": []}).encode()
+        mock_response = {"output": {"message": {"content": []}}}
+        self.mock_bedrock_client.converse.return_value = mock_response
 
-        self.mock_bedrock_client.invoke_model.return_value = mock_response
-
-        with pytest.raises(BedrockAPIError, match="モデルからの応答が空です"):
-            self.ai_service.invoke_model("テストプロンプト")
-
-    def test_invoke_model_json_decode_error(self):
-        """モデル呼び出しで JSON 解析エラーの場合のテスト"""
-        mock_response = {"body": Mock()}
-        mock_response["body"].read.return_value = b"invalid json"
-
-        self.mock_bedrock_client.invoke_model.return_value = mock_response
-
-        with pytest.raises(BedrockAPIError, match="レスポンスの JSON 解析に失敗"):
+        with pytest.raises(BedrockAPIError, match="Converse APIからの応答が空です"):
             self.ai_service.invoke_model("テストプロンプト")
 
     def test_facilitate_discussion_success(self):
@@ -175,14 +175,13 @@ class TestAIService:
                 self.ai_service.facilitate_discussion(personas, "テストトピック")
 
     def test_facilitate_discussion_streaming_uses_retry(self):
-        """ストリーミング議論（ドキュメントなし）がリトライ経由でストリームを取得する
+        """ストリーミング議論がリトライ経由でストリームを取得する
 
         一過性の接続エラー（Connection closed）対策として
-        invoke_model_with_response_stream が _retry_with_backoff 経由で
-        呼ばれることを検証する。
+        converse_stream が _retry_with_backoff 経由で呼ばれることを検証する。
         """
         # ストリームイベントを返すモックレスポンス
-        mock_response = {"body": []}
+        mock_response = {"stream": []}
 
         with patch.object(
             self.ai_service, "_retry_with_backoff", return_value=mock_response
@@ -196,6 +195,32 @@ class TestAIService:
 
             # ストリーム取得がリトライ経由で行われたこと
             mock_retry.assert_called_once()
+
+    def test_facilitate_discussion_streaming_ignores_reasoning_deltas(self):
+        """Converse APIストリーミングでreasoningContent系デルタが
+        発言バッファに混入しないことのテスト"""
+        stream_events = [
+            {
+                "contentBlockDelta": {
+                    "delta": {"reasoningContent": {"text": "内部思考"}}
+                }
+            },
+            {"contentBlockDelta": {"delta": {"text": "[田中太郎]: こんにちは\n"}}},
+        ]
+        mock_response = {"stream": stream_events}
+
+        with patch.object(
+            self.ai_service, "_retry_with_backoff", return_value=mock_response
+        ):
+            personas = [self.test_persona, self.test_persona2]
+            messages = list(
+                self.ai_service.facilitate_discussion_streaming(
+                    personas, "テストトピック"
+                )
+            )
+
+        assert len(messages) == 1
+        assert messages[0].content == "こんにちは"
 
     def test_extract_insights_success(self):
         """インサイト抽出成功のテスト（構造化データ）"""
@@ -530,6 +555,27 @@ class TestAIService:
         messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
 
         mock_response = {"output": {"message": {"content": [{"text": "こんにちは！"}]}}}
+
+        with patch.object(
+            self.ai_service.bedrock_client, "converse", return_value=mock_response
+        ):
+            response = self.ai_service._invoke_converse_api(messages)
+            assert response == "こんにちは！"
+
+    def test_invoke_converse_api_skips_reasoning_block(self):
+        """reasoningContentブロックがcontent[0]に来ても後続のテキストブロックを抽出できることのテスト"""
+        messages = [{"role": "user", "content": [{"text": "こんにちは"}]}]
+
+        mock_response = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "内部思考"}}},
+                        {"text": "こんにちは！"},
+                    ]
+                }
+            }
+        }
 
         with patch.object(
             self.ai_service.bedrock_client, "converse", return_value=mock_response

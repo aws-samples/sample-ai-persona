@@ -68,7 +68,6 @@ class TestConfigDefaults:
 
         config = Config()
         assert config.MAX_TOKENS == 4000
-        assert config.TEMPERATURE == 0.7
 
     def test_default_agent_settings(self):
         """デフォルトのエージェント設定を確認"""

@@ -34,11 +34,10 @@ class Config:
 
     # AWS Bedrock設定
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-4-6"
+    BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-5"
 
     # AI生成設定
     MAX_TOKENS: int = 4000
-    TEMPERATURE: float = 0.7
 
     # Agent Mode設定
     AGENT_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
