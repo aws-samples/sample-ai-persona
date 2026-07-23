@@ -39,6 +39,16 @@ class AgentCommunicationError(AgentServiceError):
     pass
 
 
+class GenerationCapacityError(AgentServiceError):
+    """出力トークン上限超過・応答タイムアウト等、生成負荷に起因するエラー。
+
+    ペルソナ数やファイル量が多すぎて1回の生成に収まらない場合に発生する。
+    ユーザーには件数・入力量を減らす旨を案内する。
+    """
+
+    pass
+
+
 def _clear_agent_history(agent: Any, label: str) -> None:
     """Strands Agent内部の会話履歴をクリアする共通ヘルパー。"""
     _logger = logging.getLogger(__name__)
@@ -513,6 +523,41 @@ class AgentService:
             self.logger.error(error_msg)
             raise AgentInitializationError(error_msg)
 
+    @staticmethod
+    def _build_boto_config() -> Any:
+        """Strands Agent経由のBedrock呼び出し用のboto3クライアント設定を返す。
+
+        read_timeoutを未設定にするとStrands SDKの既定120秒が適用され、
+        複数件生成やadaptive thinkingで応答が遅延した際にReadTimeoutErrorとなる。
+        接続エラー対策としてboto3標準リトライも有効化する。
+        """
+        from botocore.config import Config as BotoConfig
+
+        return BotoConfig(
+            connect_timeout=30,
+            read_timeout=300,
+            retries={"max_attempts": 3, "mode": "adaptive"},
+        )
+
+    def _build_generation_model(self) -> Any:
+        """ペルソナ生成・レポート等に使う既定モデル(config.BEDROCK_MODEL_ID)を生成する。
+
+        max_tokensを明示しないとBedrock/モデル側の補完デフォルト(Sonnet 5で4,096)に
+        張り付き、複数件の一括生成やadaptive thinkingで上限を超過して
+        MaxTokensReachedExceptionとなる。timeout/retryも併せて統一する。
+        """
+        credentials = config.get_aws_credentials()
+        filtered_credentials = {
+            k: v for k, v in credentials.items() if v is not None and k != "region_name"
+        }
+        return BedrockModel(
+            model_id=config.BEDROCK_MODEL_ID,
+            region_name=config.AWS_REGION,
+            max_tokens=config.AGENT_MAX_TOKENS,
+            boto_client_config=self._build_boto_config(),
+            **filtered_credentials,
+        )
+
     def create_persona_agent(
         self,
         persona: Persona,
@@ -805,17 +850,7 @@ class AgentService:
                 "Strands Agent SDKがインストールされていません"
             )
         try:
-            credentials = config.get_aws_credentials()
-            filtered_credentials = {
-                k: v
-                for k, v in credentials.items()
-                if v is not None and k != "region_name"
-            }
-            model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID,
-                region_name=config.AWS_REGION,
-                **filtered_credentials,
-            )
+            model = self._build_generation_model()
             agent_kwargs: dict = {
                 "name": "PersonaGenerator",
                 "model": model,
@@ -871,7 +906,37 @@ class AgentService:
             return result, thinking_log
 
         except Exception as e:
+            if self._is_capacity_error(e):
+                self.logger.warning(f"生成負荷に起因するエラー: {e}")
+                raise GenerationCapacityError(
+                    "生成するデータ量が大きすぎて処理しきれませんでした。"
+                    "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+                )
             raise AgentServiceError(f"ペルソナ生成実行エラー: {e}")
+
+    @staticmethod
+    def _is_capacity_error(error: Exception) -> bool:
+        """出力トークン上限超過・応答タイムアウト等の生成負荷起因エラーか判定する。
+
+        StrandsのMaxTokensReachedException、structured_outputのmax_tokens起因
+        ValueError、Bedrock接続のReadTimeoutを型名・メッセージから検出する。
+        """
+        error_type_names = {type(error).__name__}
+        cause = error.__cause__ or error.__context__
+        if cause is not None:
+            error_type_names.add(type(cause).__name__)
+
+        capacity_type_names = {
+            "MaxTokensReachedException",
+            "ReadTimeoutError",
+            "ConnectTimeoutError",
+        }
+        if error_type_names & capacity_type_names:
+            return True
+
+        message = str(error).lower()
+        capacity_markers = ("max_tokens", "read timed out", "read timeout")
+        return any(marker in message for marker in capacity_markers)
 
     def create_data_agent_tools(self, event_queue: Any = None) -> list[Any]:
         """DWH用ツールリストを生成する"""
@@ -973,17 +1038,7 @@ class AgentService:
                 )
 
         try:
-            credentials = config.get_aws_credentials()
-            filtered = {
-                k: v
-                for k, v in credentials.items()
-                if v is not None and k != "region_name"
-            }
-            model = BedrockModel(
-                model_id=config.BEDROCK_MODEL_ID,
-                region_name=config.AWS_REGION,
-                **filtered,
-            )
+            model = self._build_generation_model()
             data_agent_tool = create_data_agent_tool(
                 config.DATA_AGENT_RUNTIME_ARN,
                 config.DATA_AGENT_REGION,
@@ -1018,7 +1073,19 @@ class AgentService:
             else:
                 yield str(result)
         except Exception as e:
-            msg = f"\n\n⚠️ レポート生成エラー: {e}"
+            if self._is_capacity_error(e):
+                self.logger.warning(f"レポート生成の負荷超過: {e}")
+                msg = (
+                    "\n\n⚠️ 分析対象のデータ量が大きすぎてレポートを生成しきれませんでした。"
+                    "対象を絞るか、議論ログを短くして再度お試しください。"
+                )
+            else:
+                # 内部例外の詳細はログにのみ出力し、ユーザーには一般的なメッセージを返す
+                self.logger.error("レポート生成エラーが発生しました。", exc_info=True)
+                msg = (
+                    "\n\n⚠️ レポート生成中にエラーが発生しました。"
+                    "時間をおいて再度お試しください。"
+                )
             if event_queue is not None:
                 event_queue.put({"type": "error", "content": msg})
             else:
@@ -1031,10 +1098,7 @@ class AgentService:
         tools: List[Any],
     ) -> None:
         """Strands Agentを実行する。toolsはManager層から渡される。"""
-        model = BedrockModel(
-            model_id=config.BEDROCK_MODEL_ID,
-            region_name=config.AWS_REGION,
-        )
+        model = self._build_generation_model()
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
@@ -1059,10 +1123,7 @@ class AgentService:
                 description="標準カラム以外で有用なカラムの補足情報"
             )
 
-        model = BedrockModel(
-            model_id=config.BEDROCK_MODEL_ID,
-            region_name=config.AWS_REGION,
-        )
+        model = self._build_generation_model()
         agent = Agent(model=model, tools=[])
         result = agent.structured_output(ColumnMappingOutput, prompt)
 

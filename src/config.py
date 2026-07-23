@@ -38,6 +38,10 @@ class Config:
 
     # AI生成設定
     MAX_TOKENS: int = 4000
+    # Strands Agent経由（ペルソナ生成・レポート等）の出力トークン上限。
+    # 未設定だとBedrock/モデル側の補完デフォルト(Sonnet 5で4,096)に張り付き、
+    # 複数件の一括生成やadaptive thinkingで上限超過(MaxTokensReachedException)する。
+    AGENT_MAX_TOKENS: int = 32000
 
     # Agent Mode設定
     AGENT_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -70,6 +74,9 @@ class Config:
         # 環境変数から設定を上書き
         self.AWS_REGION = os.getenv("AWS_REGION", self.AWS_REGION)
         self.BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", self.BEDROCK_MODEL_ID)
+        agent_max_tokens = os.getenv("AGENT_MAX_TOKENS")
+        if agent_max_tokens:
+            self.AGENT_MAX_TOKENS = int(agent_max_tokens)
 
         # DynamoDB設定を環境変数から上書き
         self.DYNAMODB_TABLE_PREFIX = os.getenv(
