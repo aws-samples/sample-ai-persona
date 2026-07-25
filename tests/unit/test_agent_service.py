@@ -535,6 +535,46 @@ class TestStructuredOutputRetry:
                 output_schema=MagicMock,
             )
 
+    def test_capacity_error_fails_fast_without_retry(self):
+        """容量起因エラーはバリデーションリトライせず1回で確定的に失敗する"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_agent_instance.structured_output.side_effect = Exception(
+            "Model returned stop_reason: max_tokens instead of tool_use."
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(GenerationCapacityError):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
+            )
+
+        # リトライループを即抜けるため呼び出しは1回のみ（従来は3回リトライしていた）
+        assert mock_agent_instance.structured_output.call_count == 1
+
+    def test_validation_error_still_retries(self):
+        """通常のバリデーションエラーは従来通りリトライされる（fail-fastの巻き添えにしない）"""
+        mock_agent_instance = self._make_mock_agent()
+
+        mock_result = MagicMock()
+        mock_agent_instance.structured_output.side_effect = [
+            ValueError("1 validation error for PersonaListOutput: field required"),
+            mock_result,
+        ]
+
+        agent_service = AgentService()
+        result, _ = agent_service.run_persona_generation(
+            agent=mock_agent_instance,
+            prompt="テストデータ",
+            structured_prompt="JSON出力してください",
+            output_schema=MagicMock,
+        )
+
+        assert result == mock_result
+        assert mock_agent_instance.structured_output.call_count == 2
+
     def test_generic_error_stays_agent_service_error(self):
         """負荷起因でないエラーは従来通り AgentServiceError のまま"""
         mock_agent_instance = self._make_mock_agent()

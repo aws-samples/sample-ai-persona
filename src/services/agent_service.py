@@ -895,6 +895,10 @@ class AgentService:
                     result = agent.structured_output(output_schema, retry_prompt)
                     break
                 except Exception as validation_err:
+                    if self._is_capacity_error(validation_err):
+                        # 容量起因（トークン上限超過・タイムアウト）は確定的失敗であり、
+                        # 出力修正のリトライで回復しないため即座に外側で変換する
+                        raise
                     last_error = str(validation_err)
                     self.logger.warning(
                         f"structured_output バリデーションエラー (attempt {attempt + 1}/{max_retries + 1}): {last_error}"
