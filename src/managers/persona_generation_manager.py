@@ -260,7 +260,11 @@ class PersonaGenerationManager:
             )
             personas = self._convert_to_personas(result)
         except GenerationCapacityError as e:
-            raise PersonaGenerationCapacityError(str(e))
+            # リテラル文言でraiseし直す（元例外の内容をレスポンスに流さない）
+            raise PersonaGenerationCapacityError(
+                "生成するデータ量が大きすぎて処理しきれませんでした。"
+                "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+            ) from e
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(f"エージェントサービスエラー: {e}")
         except Exception as e:
@@ -319,7 +323,11 @@ class PersonaGenerationManager:
             )
             personas = self._convert_to_personas(result)
         except GenerationCapacityError as e:
-            raise PersonaGenerationCapacityError(str(e))
+            # リテラル文言でraiseし直す（元例外の内容をレスポンスに流さない）
+            raise PersonaGenerationCapacityError(
+                "生成するデータ量が大きすぎて処理しきれませんでした。"
+                "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+            ) from e
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(
                 f"データ分析エージェント連携エラー: {e}"
