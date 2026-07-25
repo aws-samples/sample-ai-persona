@@ -19,7 +19,10 @@ from src.managers.persona_memory_manager import (
     PersonaMemoryManager,
     PersonaMemoryManagerError,
 )  # noqa: E501
-from src.managers.persona_generation_manager import PersonaGenerationManager  # noqa: E501
+from src.managers.persona_generation_manager import (  # noqa: E501
+    PersonaGenerationManager,
+    PersonaGenerationCapacityError,
+)
 from src.models.persona import Persona
 from ._pagination import decode_cursor, encode_cursor
 
@@ -344,6 +347,14 @@ async def generate_persona(
                 yield _sse_event("result", html)
                 yield _sse_event("done", "")
 
+            except PersonaGenerationCapacityError as e:
+                # 例外内容はログのみに出力し、レスポンスには固定文言を返す（#103と同方針）
+                logger.warning(f"DWH ペルソナ生成の負荷超過: {e}")
+                yield _sse_event(
+                    "error",
+                    "生成するデータ量が大きすぎて処理しきれませんでした。"
+                    "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。",
+                )
             except Exception:
                 logger.exception("DWH ペルソナ生成エラー")
                 yield _sse_event(
@@ -416,6 +427,14 @@ async def generate_persona(
             yield _sse_event("result", html)
             yield _sse_event("done", "")
 
+        except PersonaGenerationCapacityError as e:
+            # 例外内容はログのみに出力し、レスポンスには固定文言を返す（#103と同方針）
+            logger.warning(f"ペルソナ生成の負荷超過: {e}")
+            yield _sse_event(
+                "error",
+                "生成するデータ量が大きすぎて処理しきれませんでした。"
+                "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。",
+            )
         except Exception:
             # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
             logger.error("ペルソナ生成エラーが発生しました。", exc_info=True)

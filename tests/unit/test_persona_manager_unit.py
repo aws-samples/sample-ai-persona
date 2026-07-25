@@ -71,6 +71,28 @@ class TestGeneratePersonas:
         with pytest.raises(PersonaGenerationManagerError, match="分析の切り口"):
             gen_manager.generate_and_cache([], "dwh", 3, data_description="")
 
+    def test_capacity_error_converted(self):
+        """Service層のGenerationCapacityErrorはPersonaGenerationCapacityErrorに変換される"""
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManager,
+            PersonaGenerationCapacityError,
+        )
+        from src.services.agent_service import GenerationCapacityError
+
+        agent_service = Mock()
+        agent_service.create_generation_agent.return_value = Mock()
+        agent_service.run_persona_generation.side_effect = GenerationCapacityError(
+            "生成するデータ量が大きすぎて処理しきれませんでした。"
+        )
+        gen_manager = PersonaGenerationManager(
+            agent_service=agent_service, database_service=Mock()
+        )
+
+        with pytest.raises(PersonaGenerationCapacityError):
+            gen_manager.generate_and_cache(
+                [(b"sample interview text", "interview.txt")], "interview", 10
+            )
+
 
 class TestSavePersona:
     """save_persona のテスト"""

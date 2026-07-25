@@ -10,6 +10,7 @@ from src.services.agent_service import (
     AgentService,
     AgentInitializationError,
     AgentServiceError,
+    GenerationCapacityError,
     PersonaAgent,
     FacilitatorAgent,
 )
@@ -497,3 +498,197 @@ class TestStructuredOutputRetry:
             )
 
         assert mock_agent_instance.structured_output.call_count == 3
+
+    def test_max_tokens_error_raises_capacity_error(self):
+        """出力トークン上限超過は GenerationCapacityError に変換される"""
+        mock_agent_instance = self._make_mock_agent()
+
+        class MaxTokensReachedException(Exception):
+            pass
+
+        mock_agent_instance.side_effect = MaxTokensReachedException(
+            "Agent has reached an unrecoverable state due to max_tokens limit."
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(GenerationCapacityError, match="ペルソナ生成数を減らす"):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
+            )
+
+    def test_read_timeout_raises_capacity_error(self):
+        """Bedrock応答タイムアウトは GenerationCapacityError に変換される"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_agent_instance.structured_output.side_effect = Exception(
+            "AWSHTTPSConnectionPool(host='bedrock-runtime...'): Read timed out."
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(GenerationCapacityError):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
+            )
+
+    def test_capacity_error_fails_fast_without_retry(self):
+        """容量起因エラーはバリデーションリトライせず1回で確定的に失敗する"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_agent_instance.structured_output.side_effect = Exception(
+            "Model returned stop_reason: max_tokens instead of tool_use."
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(GenerationCapacityError):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
+            )
+
+        # リトライループを即抜けるため呼び出しは1回のみ（従来は3回リトライしていた）
+        assert mock_agent_instance.structured_output.call_count == 1
+
+    def test_validation_error_still_retries(self):
+        """通常のバリデーションエラーは従来通りリトライされる（fail-fastの巻き添えにしない）"""
+        mock_agent_instance = self._make_mock_agent()
+
+        mock_result = MagicMock()
+        mock_agent_instance.structured_output.side_effect = [
+            ValueError("1 validation error for PersonaListOutput: field required"),
+            mock_result,
+        ]
+
+        agent_service = AgentService()
+        result, _ = agent_service.run_persona_generation(
+            agent=mock_agent_instance,
+            prompt="テストデータ",
+            structured_prompt="JSON出力してください",
+            output_schema=MagicMock,
+        )
+
+        assert result == mock_result
+        assert mock_agent_instance.structured_output.call_count == 2
+
+    def test_generic_error_stays_agent_service_error(self):
+        """負荷起因でないエラーは従来通り AgentServiceError のまま"""
+        mock_agent_instance = self._make_mock_agent()
+        mock_agent_instance.structured_output.side_effect = RuntimeError(
+            "予期しない内部エラー"
+        )
+
+        agent_service = AgentService()
+        with pytest.raises(AgentServiceError, match="ペルソナ生成実行エラー"):
+            agent_service.run_persona_generation(
+                agent=mock_agent_instance,
+                prompt="テストデータ",
+                structured_prompt="JSON出力してください",
+                output_schema=MagicMock,
+            )
+
+
+class TestReportGenerationCapacity:
+    """run_report_agent_streaming の負荷超過エラーハンドリングのテスト。
+
+    Issue #110 が明示する「レポート・DWH双方でのMaxTokensReachedException」の
+    うちレポート経路（データドリブンレポート）を検証する。
+    """
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    @patch("src.services.data_agent_service.create_data_agent_tool")
+    def test_report_max_tokens_error_returns_capacity_message_no_queue(
+        self, mock_tool, mock_config, mock_bedrock_model, mock_agent
+    ):
+        """event_queueなし: 出力トークン上限超過は負荷超過メッセージをyieldする。"""
+        mock_config.ENABLE_DATA_AGENT = True
+        mock_config.DATA_AGENT_RUNTIME_ARN = "arn:aws:...:runtime/test"
+        mock_config.DATA_AGENT_REGION = "ap-northeast-1"
+        mock_config.get_aws_credentials.return_value = {}
+
+        class MaxTokensReachedException(Exception):
+            pass
+
+        mock_agent.return_value.side_effect = MaxTokensReachedException(
+            "Agent has reached an unrecoverable state due to max_tokens limit."
+        )
+
+        agent_service = AgentService()
+        chunks = list(
+            agent_service.run_report_agent_streaming(
+                system_prompt="sys",
+                user_content="data",
+            )
+        )
+
+        assert len(chunks) == 1
+        assert "データ量が大きすぎて" in chunks[0]
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    @patch("src.services.data_agent_service.create_data_agent_tool")
+    def test_report_read_timeout_puts_capacity_error_on_queue(
+        self, mock_tool, mock_config, mock_bedrock_model, mock_agent
+    ):
+        """event_queueあり: 応答タイムアウトは負荷超過errorイベントをputする。"""
+        import queue as queue_mod
+
+        mock_config.ENABLE_DATA_AGENT = True
+        mock_config.DATA_AGENT_RUNTIME_ARN = "arn:aws:...:runtime/test"
+        mock_config.DATA_AGENT_REGION = "ap-northeast-1"
+        mock_config.get_aws_credentials.return_value = {}
+
+        mock_agent.return_value.side_effect = Exception(
+            "AWSHTTPSConnectionPool(host='bedrock-runtime...'): Read timed out."
+        )
+
+        eq: queue_mod.Queue = queue_mod.Queue()
+        agent_service = AgentService()
+        list(
+            agent_service.run_report_agent_streaming(
+                system_prompt="sys",
+                user_content="data",
+                event_queue=eq,
+            )
+        )
+
+        evt = eq.get_nowait()
+        assert evt["type"] == "error"
+        assert "データ量が大きすぎて" in evt["content"]
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    @patch("src.services.data_agent_service.create_data_agent_tool")
+    def test_report_generic_error_returns_generic_message(
+        self, mock_tool, mock_config, mock_bedrock_model, mock_agent
+    ):
+        """負荷起因でないエラーは一般的なメッセージを返し内部詳細を露出しない。"""
+        mock_config.ENABLE_DATA_AGENT = True
+        mock_config.DATA_AGENT_RUNTIME_ARN = "arn:aws:...:runtime/test"
+        mock_config.DATA_AGENT_REGION = "ap-northeast-1"
+        mock_config.get_aws_credentials.return_value = {}
+
+        mock_agent.return_value.side_effect = RuntimeError(
+            "内部スタックトレースを含む詳細"
+        )
+
+        agent_service = AgentService()
+        chunks = list(
+            agent_service.run_report_agent_streaming(
+                system_prompt="sys",
+                user_content="data",
+            )
+        )
+
+        assert len(chunks) == 1
+        assert "エラーが発生しました" in chunks[0]
+        assert "内部スタックトレース" not in chunks[0]
+        assert "データ量が大きすぎて" not in chunks[0]

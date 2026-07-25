@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 
 from ..models.persona import Persona
 from ..config import config
-from ..services.agent_service import AgentService, AgentServiceError
+from ..services.agent_service import (
+    AgentService,
+    AgentServiceError,
+    GenerationCapacityError,
+)
 from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from ..prompts.persona_generation_prompts import (
@@ -66,6 +70,16 @@ class _PersonaListOutput(BaseModel):
 
 
 class PersonaGenerationManagerError(Exception):
+    pass
+
+
+class PersonaGenerationCapacityError(PersonaGenerationManagerError):
+    """生成数・入力量が多すぎて処理しきれなかった場合のエラー。
+
+    Service層のGenerationCapacityError（出力トークン上限超過・タイムアウト）を
+    変換したもの。ユーザーには件数・入力量の削減を案内する。
+    """
+
     pass
 
 
@@ -245,6 +259,12 @@ class PersonaGenerationManager:
                 output_schema=_PersonaListOutput,
             )
             personas = self._convert_to_personas(result)
+        except GenerationCapacityError as e:
+            # リテラル文言でraiseし直す（元例外の内容をレスポンスに流さない）
+            raise PersonaGenerationCapacityError(
+                "生成するデータ量が大きすぎて処理しきれませんでした。"
+                "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+            ) from e
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(f"エージェントサービスエラー: {e}")
         except Exception as e:
@@ -302,6 +322,12 @@ class PersonaGenerationManager:
                 output_schema=_PersonaListOutput,
             )
             personas = self._convert_to_personas(result)
+        except GenerationCapacityError as e:
+            # リテラル文言でraiseし直す（元例外の内容をレスポンスに流さない）
+            raise PersonaGenerationCapacityError(
+                "生成するデータ量が大きすぎて処理しきれませんでした。"
+                "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+            ) from e
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(
                 f"データ分析エージェント連携エラー: {e}"
