@@ -101,9 +101,12 @@ def create_agentcore_session_manager(
             retrieval_config_obj = {}
 
             # Summary戦略のnamespace（常に有効）
+            # sessions/{sessionId} を含めると検索範囲が現在進行中のセッションに
+            # 固定され、過去セッションの記憶が一切ヒットしなくなるため、
+            # actor（ペルソナ）配下をプレフィックス検索して全セッション横断で取得する
             if config.SUMMARY_MEMORY_STRATEGY_ID:
                 retrieval_config_obj[
-                    f"/strategies/{config.SUMMARY_MEMORY_STRATEGY_ID}/actors/{{actorId}}/sessions/{{sessionId}}"
+                    f"/strategies/{config.SUMMARY_MEMORY_STRATEGY_ID}/actors/{{actorId}}"
                 ] = RetrievalConfig(
                     top_k=config.MEMORY_MAX_RESULTS, relevance_score=0.3
                 )

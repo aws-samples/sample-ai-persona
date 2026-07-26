@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 # bedrock_agentcoreモジュールが必要なテストをマーク
 try:
     import bedrock_agentcore  # noqa: F401
+
     HAS_BEDROCK_AGENTCORE = True
 except ImportError:
     HAS_BEDROCK_AGENTCORE = False
@@ -141,6 +142,45 @@ class TestSessionManagerFactory:
 
         assert result is mock_session_manager_instance
         mock_session_manager.assert_called_once()
+
+    @patch(
+        "bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager"
+    )
+    @patch("bedrock_agentcore.memory.integrations.strands.config.AgentCoreMemoryConfig")
+    @patch("bedrock_agentcore.memory.integrations.strands.config.RetrievalConfig")
+    @patch("src.services.memory.session_manager_factory.config")
+    def test_default_summary_namespace_spans_all_sessions(
+        self,
+        mock_config,
+        mock_retrieval_config,
+        mock_memory_config,
+        mock_session_manager,
+    ):
+        """デフォルトのSummary検索namespaceがセッション横断であること
+
+        sessions/{sessionId} を含むと検索範囲が現在のセッションに固定され、
+        過去セッションの記憶が取得できなくなるリグレッションを防ぐ。
+        """
+        from src.services.memory.session_manager_factory import (
+            create_agentcore_session_manager,
+        )
+
+        mock_config.ENABLE_LONG_TERM_MEMORY = True
+        mock_config.AGENTCORE_MEMORY_ID = "test-memory-id"
+        mock_config.AGENTCORE_MEMORY_REGION = "us-east-1"
+        mock_config.SUMMARY_MEMORY_STRATEGY_ID = "summary-test"
+        mock_config.SEMANTIC_MEMORY_STRATEGY_ID = None
+        mock_config.MEMORY_MAX_RESULTS = 5
+
+        create_agentcore_session_manager(
+            actor_id="test-actor", session_id="test-session"
+        )
+
+        retrieval_namespaces = mock_memory_config.call_args.kwargs[
+            "retrieval_config"
+        ].keys()
+        assert "/strategies/summary-test/actors/{actorId}" in retrieval_namespaces
+        assert all("{sessionId}" not in namespace for namespace in retrieval_namespaces)
 
     @patch("src.services.memory.session_manager_factory.config")
     def test_create_session_manager_handles_import_error(self, mock_config):
