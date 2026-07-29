@@ -17,10 +17,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import duckdb
 import polars as pl
 
+from ..models.errors import CodedError
+
 logger = logging.getLogger(__name__)
 
 
-class SurveyBatchServiceError(Exception):
+class SurveyBatchServiceError(CodedError):
     """SurveyBatchService層の基底例外"""
 
     pass

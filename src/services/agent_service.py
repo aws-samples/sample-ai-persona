@@ -17,11 +17,12 @@ except ImportError:
     BedrockModel = None  # type: ignore[assignment,misc]
 
 from ..config import config
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.message import Message
 
 
-class AgentServiceError(Exception):
+class AgentServiceError(CodedError):
     """Agent Service関連のエラー"""
 
     pass

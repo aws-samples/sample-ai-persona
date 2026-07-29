@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..models.errors import CodedError
 from ..models.survey_template import Question, SurveyTemplate, TemplateImage
 from ..prompts.survey_prompts import (
     SURVEY_CHAT_SYSTEM_PROMPT,
@@ -19,7 +20,7 @@ from ..services.service_factory import service_factory
 logger = logging.getLogger(__name__)
 
 
-class SurveyTemplateManagerError(Exception):
+class SurveyTemplateManagerError(CodedError):
     """SurveyTemplateManager層の基底例外"""
 
     pass

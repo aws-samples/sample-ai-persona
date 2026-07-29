@@ -7,6 +7,7 @@ classic/agent両モードの議論で共通利用される。
 import logging
 from typing import Any, Dict, List, Optional
 
+from ..models.errors import CodedError
 from ..models.discussion import Discussion
 from ..models.discussion_report import DiscussionReport
 from ..services.ai_service import AIService
@@ -20,7 +21,7 @@ from ..prompts.report_prompts import (
 )
 
 
-class ReportManagerError(Exception):
+class ReportManagerError(CodedError):
     """レポートManager固有の例外。"""
 
     pass

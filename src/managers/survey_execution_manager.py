@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..models.errors import CodedError
 from ..models.survey import Survey
 from ..services.database_service import DatabaseService
 from ..services.s3_service import S3Service
@@ -16,7 +17,7 @@ from ..services.survey_batch_service import SurveyBatchService
 logger = logging.getLogger(__name__)
 
 
-class SurveyExecutionManagerError(Exception):
+class SurveyExecutionManagerError(CodedError):
     """SurveyExecutionManager層の基底例外"""
 
     pass

@@ -6,6 +6,7 @@ Persona Manager for AI Persona System.
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.demographics import VALID_GENDERS
 from ..services import country_service
@@ -13,7 +14,7 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
 
-class PersonaManagerError(Exception):
+class PersonaManagerError(CodedError):
     """Custom exception for persona manager related errors."""
 
     pass

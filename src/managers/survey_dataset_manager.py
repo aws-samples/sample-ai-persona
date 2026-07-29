@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models.errors import CodedError
 from ..prompts.survey_prompts import (
     DWH_SEGMENT_SYSTEM_PROMPT,
     STANDARD_COLUMNS,
@@ -32,7 +33,7 @@ from .shared.file_utils import (
 logger = logging.getLogger(__name__)
 
 
-class SurveyDatasetManagerError(Exception):
+class SurveyDatasetManagerError(CodedError):
     """SurveyDatasetManager層の基底例外"""
 
     pass

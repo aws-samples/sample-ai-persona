@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Generator, List, Dict, Optional, Any
 
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -23,7 +24,7 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
 
-class AgentDiscussionManagerError(Exception):
+class AgentDiscussionManagerError(CodedError):
     """Base exception for agent discussion manager related errors."""
 
     pass

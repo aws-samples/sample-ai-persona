@@ -28,6 +28,16 @@ _CATALOG: dict[ErrorCode, str] = {
         "分析対象のデータ量が大きすぎてレポートを生成しきれませんでした。"
         "対象を絞るか、議論ログを短くして再度お試しください。"
     ),
+    ErrorCode.FILE_TOO_LARGE: (
+        "ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
+    ),
+    ErrorCode.FILE_FORMAT_NOT_ALLOWED: (
+        "許可されていないファイル形式です。対応形式: {allowed_formats}"
+    ),
+    ErrorCode.FILE_MIME_UNSUPPORTED: "サポートされていないファイル種別です。",
+    ErrorCode.FILE_OPERATION_FAILED: (
+        "ファイルの処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
 }
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"

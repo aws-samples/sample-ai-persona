@@ -9,6 +9,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..models.errors import CodedError
 from ..models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
 from ..models.survey_template import SurveyTemplate
 from ..prompts.survey_prompts import INSIGHT_REPORT_SYSTEM_PROMPT, build_insight_prompt
@@ -22,7 +23,7 @@ from .shared.file_utils import parse_results_csv
 logger = logging.getLogger(__name__)
 
 
-class SurveyAnalysisManagerError(Exception):
+class SurveyAnalysisManagerError(CodedError):
     """SurveyAnalysisManager層の基底例外"""
 
     pass

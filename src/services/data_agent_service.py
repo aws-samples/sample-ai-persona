@@ -16,6 +16,8 @@ from typing import Any
 import boto3
 from botocore.config import Config as BotoConfig
 
+from ..models.errors import CodedError
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +29,7 @@ class DataAgentResult:
     csv_urls: list[str] = field(default_factory=list)
 
 
-class DataAgentServiceError(Exception):
+class DataAgentServiceError(CodedError):
     """DataAgent サービスのエラー"""
 
 

@@ -15,6 +15,7 @@ from src.managers.file_manager import (
     FileSecurityError,
     FileMetadata,
 )
+from src.models.errors import ErrorCode
 
 
 class TestFileManager:
@@ -435,20 +436,22 @@ class TestFileManager:
         content = b"test content"
         filename = "test.txt"
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_discussion_document(content, filename)
 
-        assert "許可されていないファイル形式" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
+        assert ".pdf" in str(exc_info.value.context["allowed_formats"])
 
     def test_upload_discussion_document_oversized(self):
         """議論用ドキュメントサイズ制限テスト (Task 2)"""
         large_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * (11 * 1024 * 1024)  # 11MB
         filename = "large.png"
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_discussion_document(large_content, filename)
 
-        assert "ファイルサイズが制限を超えています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+        assert exc_info.value.context["max_size_mb"] == 5.0
 
 
 class TestMarketReportTextExtraction:
@@ -736,7 +739,8 @@ class TestFileManagerUtilities:
         content = b"\x00" * (5 * 1024 * 1024 + 1)  # 5MB超
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager._validate_discussion_document("photo.png", content)
-        assert "5.0MB" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+        assert exc_info.value.context["max_size_mb"] == 5.0
 
     def test_validate_discussion_document_pdf_within_10mb(self):
         """PDFは画像より緩く10MBまで許容する"""
@@ -749,4 +753,5 @@ class TestFileManagerUtilities:
         content = b"\x00" * (10 * 1024 * 1024 + 1)  # 10MB超
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager._validate_discussion_document("doc.pdf", content)
-        assert "10.0MB" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+        assert exc_info.value.context["max_size_mb"] == 10.0

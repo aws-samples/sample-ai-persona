@@ -10,6 +10,7 @@ from cachetools import TTLCache  # type: ignore[import-untyped]
 
 from pydantic import BaseModel, Field
 
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..config import config
 from ..services.agent_service import (
@@ -69,7 +70,7 @@ class _PersonaListOutput(BaseModel):
     personas: list[_PersonaOutput] = Field(description="生成されたペルソナのリスト")
 
 
-class PersonaGenerationManagerError(Exception):
+class PersonaGenerationManagerError(CodedError):
     pass
 
 

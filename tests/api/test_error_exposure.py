@@ -41,7 +41,6 @@ _BASELINE: dict[str, set[str]] = {
         "save_report",
         "start_discussion",
         "stream_discussion",
-        "upload_discussion_document",
     },
     "interview.py": {
         "save_interview_session",

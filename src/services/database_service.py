@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError, NoCredentialsError, PartialCredenti
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 # Import models
+from ..models.errors import CodedError
 from ..models.persona import Persona
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from ..models.knowledge_base import KnowledgeBase, PersonaKBBinding
 
 
-class DatabaseError(Exception):
+class DatabaseError(CodedError):
     """Custom exception for database-related errors."""
 
     pass

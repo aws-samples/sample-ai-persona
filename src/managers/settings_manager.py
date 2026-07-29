@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import config
+from ..models.errors import CodedError
 from ..models.knowledge_base import KnowledgeBase
 from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
@@ -14,7 +15,7 @@ from ..services.service_factory import service_factory
 logger = logging.getLogger(__name__)
 
 
-class SettingsManagerError(Exception):
+class SettingsManagerError(CodedError):
     pass
 
 

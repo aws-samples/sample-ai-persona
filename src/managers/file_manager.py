@@ -11,6 +11,7 @@ from typing import Optional, Tuple, List, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 
 from ..config import config
+from ..models.errors import CodedError, ErrorCode
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
@@ -18,18 +19,16 @@ if TYPE_CHECKING:
     from ..services.s3_service import S3Service
 
 
-class FileUploadError(Exception):
-    """ファイルアップロード関連のエラー（ユーザー向けバリデーションメッセージ）"""
+class FileUploadError(CodedError):
+    """ファイルアップロード関連のエラー。
 
-    @property
-    def user_message(self) -> str:
-        return self.args[0] if self.args else "ファイルのアップロードに失敗しました"
+    アップロード時のバリデーション失敗と、ファイル操作そのものの失敗の
+    両方を表すため、code は raise 箇所ごとに指定する。
+    """
 
 
-class FileSecurityError(Exception):
+class FileSecurityError(CodedError):
     """ファイルセキュリティ関連のエラー"""
-
-    pass
 
 
 class FileMetadata:
@@ -204,15 +203,21 @@ class FileManager:
         file_ext = Path(filename).suffix.lower()
         if file_ext not in self.DISCUSSION_DOCUMENT_FORMATS:
             raise FileUploadError(
-                f"許可されていないファイル形式です。"
-                f"対応形式: {', '.join(self.DISCUSSION_DOCUMENT_FORMATS)}"
+                f"extension {file_ext!r} not in discussion document formats",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={
+                    "allowed_formats": ", ".join(self.DISCUSSION_DOCUMENT_FORMATS)
+                },
             )
 
         # MIMEタイプチェック（簡易）
         mime_type = mimetypes.guess_type(filename)[0]
         allowed_mimes = {"image/png", "image/jpeg", "application/pdf"}
         if mime_type not in allowed_mimes:
-            raise FileUploadError(f"サポートされていないMIMEタイプです: {mime_type}")
+            raise FileUploadError(
+                f"mime type {mime_type!r} not allowed for discussion documents",
+                code=ErrorCode.FILE_MIME_UNSUPPORTED,
+            )
 
         # ファイルサイズチェック（画像はBedrockの上限に合わせて5MB）
         is_image = mime_type in self.DISCUSSION_IMAGE_MIMES
@@ -222,9 +227,10 @@ class FileManager:
             else self.DISCUSSION_DOCUMENT_MAX_SIZE
         )
         if len(file_content) > size_limit:
-            max_size_mb = size_limit / (1024 * 1024)
             raise FileUploadError(
-                f"ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
+                f"file size {len(file_content)} exceeds limit {size_limit}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={"max_size_mb": size_limit / (1024 * 1024)},
             )
 
         # ファイル内容が空でないかチェック
@@ -470,8 +476,9 @@ class FileManager:
             raise
         except Exception as e:
             raise FileUploadError(
-                f"議論用ドキュメントアップロード中にエラーが発生しました: {str(e)}"
-            )
+                f"discussion document upload failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def upload_survey_image(self, file_content: bytes, filename: str) -> FileMetadata:
         """

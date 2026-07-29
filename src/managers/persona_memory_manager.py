@@ -7,12 +7,13 @@ import logging
 import re
 from typing import Optional
 
+from ..models.errors import CodedError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.memory.memory_service import MemoryService, MemoryServiceError
 from ..services.service_factory import service_factory
 
 
-class PersonaMemoryManagerError(Exception):
+class PersonaMemoryManagerError(CodedError):
     """記憶管理操作エラー"""
 
     pass

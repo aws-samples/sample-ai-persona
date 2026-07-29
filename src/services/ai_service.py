@@ -18,12 +18,13 @@ except ImportError:
     BotoCoreError = Exception
 
 from ..config import config
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.message import Message
 from ..models.insight_category import InsightCategory
 
 
-class AIServiceError(Exception):
+class AIServiceError(CodedError):
     """AI サービス関連のエラー"""
 
     pass

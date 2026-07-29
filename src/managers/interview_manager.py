@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -22,7 +23,7 @@ from ..services.agent_service import (
 from ..services.database_service import DatabaseService, DatabaseError
 
 
-class InterviewManagerError(Exception):
+class InterviewManagerError(CodedError):
     """Base exception for interview manager related errors."""
 
     pass

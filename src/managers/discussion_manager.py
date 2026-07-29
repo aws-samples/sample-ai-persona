@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 from ..config import config
+from ..models.errors import CodedError
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.insight import Insight
@@ -19,7 +20,7 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
 
-class DiscussionManagerError(Exception):
+class DiscussionManagerError(CodedError):
     """Custom exception for discussion manager related errors."""
 
     pass

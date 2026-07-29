@@ -20,6 +20,7 @@ from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.models.insight_category import InsightCategory
+from web.error_messages import user_message_for
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -175,10 +176,17 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
         )
 
     except FileUploadError as e:
-        logger.error(f"ドキュメントアップロードエラー: {e}")
-        return JSONResponse({"error": e.user_message}, status_code=400)
-    except Exception as e:
-        logger.error(f"ドキュメントアップロードエラー: {e}")
+        logger.warning("ドキュメントアップロードエラー", exc_info=True)
+        return JSONResponse(
+            {
+                "error": user_message_for(
+                    e, default="ドキュメントのアップロードに失敗しました"
+                )
+            },
+            status_code=400,
+        )
+    except Exception:
+        logger.error("ドキュメントアップロードエラー", exc_info=True)
         return JSONResponse(
             {"error": "ドキュメントのアップロードに失敗しました"}, status_code=400
         )

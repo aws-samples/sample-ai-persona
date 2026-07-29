@@ -35,6 +35,13 @@ class ErrorCode(StrEnum):
     GENERATION_CAPACITY_EXCEEDED = "generation_capacity_exceeded"
     REPORT_CAPACITY_EXCEEDED = "report_capacity_exceeded"
 
+    # --- Files ---
+    FILE_TOO_LARGE = "file_too_large"
+    FILE_FORMAT_NOT_ALLOWED = "file_format_not_allowed"
+    FILE_MIME_UNSUPPORTED = "file_mime_unsupported"
+    # Catch-all for file operations that failed for internal reasons.
+    FILE_OPERATION_FAILED = "file_operation_failed"
+
 
 class CodedError(Exception):
     """Base class for exceptions carrying an :class:`ErrorCode`.
