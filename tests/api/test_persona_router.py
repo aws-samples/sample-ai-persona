@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from io import BytesIO
 
 from src.managers.file_manager import FileUploadError, FileSecurityError, FileMetadata
+from src.models.errors import ErrorCode
 
 
 class TestPersonaGenerationPage:
@@ -92,7 +93,9 @@ class TestFileUploadEndpoint:
         """無効なファイル拡張子でエラーを返すことを確認"""
         mock_manager = Mock()
         mock_manager.upload_interview_file.side_effect = FileUploadError(
-            "許可されていないファイル形式です"
+            "extension of 'interview.pdf' not in allowed extensions",
+            code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+            context={"allowed_formats": ".txt, .md"},
         )
         mock_get_manager.return_value = mock_manager
 
@@ -101,14 +104,16 @@ class TestFileUploadEndpoint:
         response = client.post("/persona/upload", files=files)
 
         assert response.status_code == 400
-        assert "アップロードエラー" in response.text
+        assert "許可されていないファイル形式" in response.text
+        assert ".txt, .md" in response.text
 
     @patch("web.routers.persona.get_file_manager")
     def test_upload_security_error(self, mock_get_manager, client):
         """セキュリティエラーが適切に処理されることを確認"""
         mock_manager = Mock()
         mock_manager.upload_interview_file.side_effect = FileSecurityError(
-            "ファイル名に不正な文字が含まれています"
+            "filename contains a path traversal or invalid character",
+            code=ErrorCode.FILE_NAME_INVALID,
         )
         mock_get_manager.return_value = mock_manager
 
@@ -117,7 +122,26 @@ class TestFileUploadEndpoint:
         response = client.post("/persona/upload", files=files)
 
         assert response.status_code == 400
-        assert "セキュリティエラー" in response.text
+        assert "ファイル名に不正な文字が含まれています" in response.text
+
+    @patch("web.routers.persona.get_file_manager")
+    def test_upload_does_not_expose_internal_detail(self, mock_get_manager, client):
+        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
+        mock_manager = Mock()
+        mock_manager.upload_interview_file.side_effect = FileUploadError(
+            "interview file upload failed (ClientError): "
+            "arn:aws:s3:::internal-bucket/secret",
+            code=ErrorCode.FILE_OPERATION_FAILED,
+        )
+        mock_get_manager.return_value = mock_manager
+
+        files = {"file": ("interview.txt", BytesIO(b"test content"), "text/plain")}
+
+        response = client.post("/persona/upload", files=files)
+
+        assert response.status_code == 400
+        assert "arn:aws:s3" not in response.text
+        assert "ClientError" not in response.text
 
 
 class TestPersonaGenerateEndpoint:

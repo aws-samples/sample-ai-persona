@@ -11,6 +11,7 @@ from src.managers.persona_memory_manager import (
     PersonaMemoryManager,
     PersonaMemoryManagerError,
 )
+from src.models.errors import ErrorCode
 
 
 class TestKnowledgeFileUpload:
@@ -30,14 +31,14 @@ class TestKnowledgeFileUpload:
         with pytest.raises(FileUploadError) as exc_info:
             file_manager.upload_knowledge_file(large_content, "large.txt")
 
-        assert "制限を超えています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
     def test_upload_empty_file(self, file_manager):
         """Test that empty files are rejected"""
         with pytest.raises(FileUploadError) as exc_info:
             file_manager.upload_knowledge_file(b"", "empty.txt")
 
-        assert "空です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
 
 @pytest.mark.unit

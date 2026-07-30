@@ -140,23 +140,23 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
             },
         )
     except FileSecurityError as e:
-        logger.warning(f"ファイルセキュリティエラー: {e}")
+        logger.warning("ファイルセキュリティエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"セキュリティエラー: {str(e)}"},
+            {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
     except FileUploadError as e:
-        logger.warning(f"ファイルアップロードエラー: {e}")
+        logger.warning("ファイルアップロードエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"アップロードエラー: {str(e)}"},
+            {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
-    except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
+    except Exception:
+        logger.error("予期しないエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
@@ -1152,24 +1152,29 @@ async def upload_knowledge_file_preview(
         )
 
     except FileUploadError as e:
-        logger.warning(f"Knowledge file upload error for persona {persona_id}: {e}")
+        logger.warning(
+            "Knowledge file upload error for persona %s", persona_id, exc_info=True
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/knowledge_file_error.html",
-            {"request": request, "error": str(e)},
+            {"request": request, "error": user_message_for(e)},
         )
 
     except FileSecurityError as e:
-        logger.warning(f"Knowledge file security error for persona {persona_id}: {e}")
+        logger.warning(
+            "Knowledge file security error for persona %s", persona_id, exc_info=True
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/knowledge_file_error.html",
-            {"request": request, "error": f"セキュリティエラー: {str(e)}"},
+            {"request": request, "error": user_message_for(e)},
         )
 
-    except Exception as e:
+    except Exception:
         logger.error(
-            f"Unexpected error uploading knowledge file for persona {persona_id}: {e}",
+            "Unexpected error uploading knowledge file for persona %s",
+            persona_id,
             exc_info=True,
         )
         return templates.TemplateResponse(

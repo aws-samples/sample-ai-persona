@@ -142,20 +142,22 @@ class FileManager:
         # ファイル拡張子チェック
         if not config.is_allowed_file_extension(filename):
             raise FileUploadError(
-                f"許可されていないファイル形式です。"
-                f"対応形式: {', '.join(self.allowed_extensions)}"
+                f"extension of {filename!r} not in allowed extensions",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={"allowed_formats": ", ".join(self.allowed_extensions)},
             )
 
         # ファイルサイズチェック
         if len(file_content) > self.max_file_size:
-            max_size_mb = self.max_file_size / (1024 * 1024)
             raise FileUploadError(
-                f"ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
+                f"file size {len(file_content)} exceeds limit {self.max_file_size}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={"max_size_mb": self.max_file_size / (1024 * 1024)},
             )
 
         # ファイル内容が空でないかチェック
         if len(file_content) == 0:
-            raise FileUploadError("ファイルが空です。")
+            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
         # テキストファイルとして読み取り可能かチェック
         try:
@@ -165,8 +167,8 @@ class FileManager:
             # 最小限の内容チェック（10文字以上）
             if len(content_str.strip()) < 10:
                 raise FileUploadError(
-                    "ファイル内容が短すぎます。"
-                    "インタビューなどの内容を含むテキストファイルをアップロードしてください。"
+                    f"content length {len(content_str.strip())} below minimum 10",
+                    code=ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT,
                 )
 
         except UnicodeDecodeError:
@@ -176,12 +178,11 @@ class FileManager:
             except UnicodeDecodeError:
                 try:
                     content_str = file_content.decode("euc-jp")
-                except UnicodeDecodeError:
+                except UnicodeDecodeError as e:
                     raise FileUploadError(
-                        "テキストファイルとして読み取れません。"
-                        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
-                        "テキストファイルをアップロードしてください。"
-                    )
+                        "content is not decodable as utf-8, shift_jis or euc-jp",
+                        code=ErrorCode.FILE_ENCODING_UNSUPPORTED,
+                    ) from e
 
         return True
 
@@ -235,7 +236,7 @@ class FileManager:
 
         # ファイル内容が空でないかチェック
         if len(file_content) == 0:
-            raise FileUploadError("ファイルが空です。")
+            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
         return True
 
@@ -260,8 +261,9 @@ class FileManager:
         file_ext = Path(filename).suffix.lower()
         if file_ext not in self.KNOWLEDGE_FILE_FORMATS:
             raise FileUploadError(
-                f"許可されていないファイル形式です。"
-                f"対応形式: {', '.join(self.KNOWLEDGE_FILE_FORMATS)}"
+                f"extension {file_ext!r} not in knowledge file formats",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={"allowed_formats": ", ".join(self.KNOWLEDGE_FILE_FORMATS)},
             )
 
         try:
@@ -275,7 +277,10 @@ class FileManager:
             return result.text_content
 
         except Exception as e:
-            raise FileUploadError(f"ファイルのマークダウン変換に失敗しました: {str(e)}")
+            raise FileUploadError(
+                f"markdown conversion failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def extract_text_from_file(self, file_content: bytes, filename: str) -> str:
         """
@@ -302,20 +307,25 @@ class FileManager:
         file_ext = Path(filename).suffix.lower()
         if file_ext not in self.MARKET_REPORT_FORMATS:
             raise FileUploadError(
-                f"許可されていないファイル形式です。"
-                f"対応形式: {', '.join(self.MARKET_REPORT_FORMATS)}"
+                f"extension {file_ext!r} not in market report formats",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={"allowed_formats": ", ".join(self.MARKET_REPORT_FORMATS)},
             )
 
         # ファイルサイズチェック
         if len(file_content) > self.MARKET_REPORT_MAX_SIZE:
-            max_size_mb = self.MARKET_REPORT_MAX_SIZE / (1024 * 1024)
             raise FileUploadError(
-                f"ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
+                f"file size {len(file_content)} exceeds limit "
+                f"{self.MARKET_REPORT_MAX_SIZE}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={
+                    "max_size_mb": self.MARKET_REPORT_MAX_SIZE / (1024 * 1024)
+                },
             )
 
         # ファイル内容が空でないかチェック
         if len(file_content) == 0:
-            raise FileUploadError("ファイルが空です。")
+            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
         try:
             # テキストファイルの場合は直接デコード
@@ -330,9 +340,9 @@ class FileManager:
                             text = file_content.decode("euc-jp")
                         except UnicodeDecodeError:
                             raise FileUploadError(
-                                "テキストファイルとして読み取れません。"
-                                "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
-                                "テキストファイルをアップロードしてください。"
+                                "content is not decodable as utf-8, shift_jis "
+                                "or euc-jp",
+                                code=ErrorCode.FILE_ENCODING_UNSUPPORTED,
                             )
             elif file_ext == ".csv":
                 # CSVファイルはテキストとして読み込み
@@ -344,8 +354,8 @@ class FileManager:
                         continue
                 else:
                     raise FileUploadError(
-                        "CSVファイルとして読み取れません。"
-                        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードしてください。"
+                        "csv content is not decodable as utf-8, shift_jis or euc-jp",
+                        code=ErrorCode.CSV_ENCODING_UNSUPPORTED,
                     )
             else:
                 # PDF/Wordの場合はmarkitdownで変換
@@ -358,8 +368,8 @@ class FileManager:
             # 最小限の内容チェック（100文字以上）
             if len(text.strip()) < 100:
                 raise FileUploadError(
-                    "ファイル内容が短すぎます。"
-                    "市場調査レポートなどの詳細な内容を含むファイルをアップロードしてください。"
+                    f"extracted text length {len(text.strip())} below minimum",
+                    code=ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT,
                 )
 
             return text
@@ -367,7 +377,10 @@ class FileManager:
         except FileUploadError:
             raise
         except Exception as e:
-            raise FileUploadError(f"ファイルからのテキスト抽出に失敗しました: {str(e)}")
+            raise FileUploadError(
+                f"text extraction failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def upload_interview_file(
         self, file_content: bytes, filename: str, allow_duplicates: bool = False
@@ -428,8 +441,9 @@ class FileManager:
         except Exception as e:
             # その他のエラーはFileUploadErrorでラップ
             raise FileUploadError(
-                f"ファイルアップロード中にエラーが発生しました: {str(e)}"
-            )
+                f"interview file upload failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def upload_discussion_document(
         self, file_content: bytes, filename: str
@@ -500,14 +514,23 @@ class FileManager:
             file_ext = Path(filename).suffix.lower()
             if file_ext not in self.SURVEY_IMAGE_FORMATS:
                 raise FileUploadError(
-                    f"許可されていないファイル形式です。対応形式: {', '.join(self.SURVEY_IMAGE_FORMATS)}"
+                    f"extension {file_ext!r} not in survey image formats",
+                    code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                    context={
+                        "allowed_formats": ", ".join(self.SURVEY_IMAGE_FORMATS)
+                    },
                 )
             if len(file_content) > self.SURVEY_IMAGE_MAX_SIZE:
                 raise FileUploadError(
-                    f"ファイルサイズが制限を超えています。最大サイズ: {self.SURVEY_IMAGE_MAX_SIZE / (1024 * 1024):.1f}MB"
+                    f"file size {len(file_content)} exceeds limit "
+                    f"{self.SURVEY_IMAGE_MAX_SIZE}",
+                    code=ErrorCode.FILE_TOO_LARGE,
+                    context={
+                        "max_size_mb": self.SURVEY_IMAGE_MAX_SIZE / (1024 * 1024)
+                    },
                 )
             if len(file_content) == 0:
-                raise FileUploadError("ファイルが空です。")
+                raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
             file_metadata = self._create_file_metadata(
                 filename, file_content, file_type="survey_image"
@@ -522,8 +545,9 @@ class FileManager:
             raise
         except Exception as e:
             raise FileUploadError(
-                f"アンケート画像アップロード中にエラーが発生しました: {str(e)}"
-            )
+                f"survey image upload failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def upload_knowledge_file(
         self, file_content: bytes, filename: str
@@ -549,12 +573,15 @@ class FileManager:
             if len(file_content) > self.KNOWLEDGE_FILE_MAX_SIZE:
                 max_size_mb = self.KNOWLEDGE_FILE_MAX_SIZE / (1024 * 1024)
                 raise FileUploadError(
-                    f"ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
+                    f"file size {len(file_content)} exceeds limit "
+                    f"{self.KNOWLEDGE_FILE_MAX_SIZE}",
+                    code=ErrorCode.FILE_TOO_LARGE,
+                    context={"max_size_mb": max_size_mb},
                 )
 
             # ファイル内容が空でないかチェック
             if len(file_content) == 0:
-                raise FileUploadError("ファイルが空です。")
+                raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
             # マークダウンに変換
             markdown_content = self.convert_file_to_markdown(file_content, filename)
@@ -579,8 +606,9 @@ class FileManager:
             raise
         except Exception as e:
             raise FileUploadError(
-                f"知識ファイルアップロード中にエラーが発生しました: {str(e)}"
-            )
+                f"knowledge file upload failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def _decode_file_content(self, file_content: bytes) -> str:
         """
@@ -606,9 +634,8 @@ class FileManager:
 
         # すべてのエンコーディングで失敗した場合
         raise FileUploadError(
-            "テキストファイルとして読み取れません。"
-            "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
-            "テキストファイルをアップロードしてください。"
+            "content is not decodable with any supported encoding",
+            code=ErrorCode.FILE_ENCODING_UNSUPPORTED,
         )
 
     def get_uploaded_file_content(self, file_path: str) -> str:
@@ -628,7 +655,10 @@ class FileManager:
             # S3パスの場合
             if file_path.startswith("s3://"):
                 if not self.s3_service:
-                    raise FileUploadError("S3サービスが設定されていません。")
+                    raise FileUploadError(
+                        "s3 service is not configured",
+                        code=ErrorCode.FILE_OPERATION_FAILED,
+                    )
                 file_content = self.s3_service.download_file(file_path)
                 return self._decode_file_content(file_content)
 
@@ -636,7 +666,9 @@ class FileManager:
             path = Path(file_path)
 
             if not path.exists():
-                raise FileUploadError("指定されたファイルが見つかりません。")
+                raise FileUploadError(
+                    "file path does not exist", code=ErrorCode.FILE_NOT_FOUND
+                )
 
             with open(path, "rb") as f:
                 file_content = f.read()
@@ -644,7 +676,10 @@ class FileManager:
             return self._decode_file_content(file_content)
 
         except OSError as e:
-            raise FileUploadError(f"ファイル読み取り中にエラーが発生しました: {str(e)}")
+            raise FileUploadError(
+                f"file read failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def delete_uploaded_file(self, file_id: str) -> bool:
         """
@@ -676,7 +711,10 @@ class FileManager:
 
                 # アップロードディレクトリ内のファイルかチェック
                 if not str(path.absolute()).startswith(str(self.upload_dir.absolute())):
-                    raise FileSecurityError("指定されたファイルは削除できません。")
+                    raise FileSecurityError(
+                        "resolved path is outside the upload directory",
+                        code=ErrorCode.FILE_DELETE_NOT_ALLOWED,
+                    )
 
                 # ファイルを削除
                 deleted_file = False
@@ -692,7 +730,10 @@ class FileManager:
         except (FileUploadError, FileSecurityError):
             raise
         except Exception as e:
-            raise FileUploadError(f"ファイル削除中にエラーが発生しました: {str(e)}")
+            raise FileUploadError(
+                f"file delete failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def _delete_file_metadata(self, file_id: str) -> bool:
         """
@@ -721,7 +762,10 @@ class FileManager:
         try:
             return self._get_all_file_metadata()
         except Exception as e:
-            raise FileUploadError(f"ファイル一覧取得中にエラーが発生しました: {str(e)}")
+            raise FileUploadError(
+                f"file listing failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
         """
@@ -737,8 +781,9 @@ class FileManager:
             return self._get_file_metadata_by_id(file_id)
         except Exception as e:
             raise FileUploadError(
-                f"ファイルメタデータ取得中にエラーが発生しました: {str(e)}"
-            )
+                f"file metadata fetch failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     # プライベートメソッド
 
@@ -823,20 +868,31 @@ class FileManager:
         """
         # ファイル名の安全性チェック
         if ".." in filename or "/" in filename or "\\" in filename:
-            raise FileSecurityError("ファイル名に不正な文字が含まれています。")
+            raise FileSecurityError(
+                "filename contains a path traversal or invalid character",
+                code=ErrorCode.FILE_NAME_INVALID,
+            )
 
         # ファイル名の長さチェック
         if len(filename) > 255:
-            raise FileSecurityError("ファイル名が長すぎます。")
+            raise FileSecurityError(
+                f"filename length {len(filename)} exceeds 255",
+                code=ErrorCode.FILE_NAME_TOO_LONG,
+            )
 
         # 隠しファイルのチェック
         if filename.startswith("."):
-            raise FileSecurityError("隠しファイルはアップロードできません。")
+            raise FileSecurityError(
+                "filename starts with a dot", code=ErrorCode.FILE_HIDDEN_NOT_ALLOWED
+            )
 
         # バイナリファイルの簡易チェック（NULL文字の存在）
         # allow_binaryがTrueの場合はスキップ
         if not allow_binary and b"\x00" in file_content[:1024]:  # 最初の1KBをチェック
-            raise FileSecurityError("バイナリファイルはアップロードできません。")
+            raise FileSecurityError(
+                "NUL byte found in the first 1KB",
+                code=ErrorCode.FILE_BINARY_NOT_ALLOWED,
+            )
 
     def _create_file_metadata(
         self,
@@ -930,7 +986,10 @@ class FileManager:
             # 一時ファイルが残っている場合は削除
             if temp_path.exists():
                 temp_path.unlink()
-            raise FileUploadError(f"ファイル保存中にエラーが発生しました: {str(e)}")
+            raise FileUploadError(
+                f"file save failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def _save_file_metadata(
         self, metadata: FileMetadata, file_type: str = "persona_interview"

@@ -35,6 +35,30 @@ _CATALOG: dict[ErrorCode, str] = {
         "許可されていないファイル形式です。対応形式: {allowed_formats}"
     ),
     ErrorCode.FILE_MIME_UNSUPPORTED: "サポートされていないファイル種別です。",
+    ErrorCode.FILE_EMPTY: "ファイルが空です。",
+    ErrorCode.FILE_NOT_FOUND: "指定されたファイルが見つかりません。",
+    ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT: (
+        "ファイル内容が短すぎます。"
+        "インタビューなどの内容を含むテキストファイルをアップロードしてください。"
+    ),
+    ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT: (
+        "ファイル内容が短すぎます。"
+        "市場調査レポートなどの詳細な内容を含むファイルをアップロードしてください。"
+    ),
+    ErrorCode.FILE_ENCODING_UNSUPPORTED: (
+        "テキストファイルとして読み取れません。"
+        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
+        "テキストファイルをアップロードしてください。"
+    ),
+    ErrorCode.CSV_ENCODING_UNSUPPORTED: (
+        "CSVファイルとして読み取れません。"
+        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードしてください。"
+    ),
+    ErrorCode.FILE_NAME_INVALID: "ファイル名に不正な文字が含まれています。",
+    ErrorCode.FILE_NAME_TOO_LONG: "ファイル名が長すぎます。",
+    ErrorCode.FILE_HIDDEN_NOT_ALLOWED: "隠しファイルはアップロードできません。",
+    ErrorCode.FILE_BINARY_NOT_ALLOWED: "バイナリファイルはアップロードできません。",
+    ErrorCode.FILE_DELETE_NOT_ALLOWED: "指定されたファイルは削除できません。",
     ErrorCode.FILE_OPERATION_FAILED: (
         "ファイルの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),

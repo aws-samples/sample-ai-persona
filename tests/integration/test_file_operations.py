@@ -13,6 +13,7 @@ import pytest
 
 from src.managers.file_manager import FileManager, FileUploadError
 from src.config import Config
+from src.models.errors import ErrorCode
 
 
 class TestFileOperationsIntegration:
@@ -233,7 +234,7 @@ class TestFileOperationsIntegration:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_interview_file(content_bytes, filename)
 
-        assert "ファイルサイズが制限を超えています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
         # ファイルが保存されていないことを確認
         file_list = self.file_manager.list_uploaded_files()
@@ -255,7 +256,7 @@ class TestFileOperationsIntegration:
             with pytest.raises(FileUploadError) as exc_info:
                 self.file_manager.upload_interview_file(content_bytes, filename)
 
-            assert "許可されていないファイル形式" in str(exc_info.value)
+            assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
         # ファイルが保存されていないことを確認
         file_list = self.file_manager.list_uploaded_files()

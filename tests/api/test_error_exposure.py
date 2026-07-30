@@ -52,8 +52,6 @@ _BASELINE: dict[str, set[str]] = {
         "delete_persona_memory",
         "get_persona_memories",
         "update_persona",
-        "upload_file",
-        "upload_knowledge_file_preview",
     },
     "settings.py": {
         "create_dataset",

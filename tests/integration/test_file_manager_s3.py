@@ -15,6 +15,7 @@ from unittest.mock import Mock  # noqa: E402
 
 from src.managers.file_manager import FileManager, FileUploadError  # noqa: E402
 from src.services.s3_service import S3Service  # noqa: E402
+from src.models.errors import ErrorCode  # noqa: E402
 
 
 @pytest.fixture
@@ -288,4 +289,4 @@ def test_read_s3_file_without_s3_service(file_manager_with_s3, mock_database_ser
     # S3ファイルを読もうとするとエラー
     with pytest.raises(FileUploadError) as exc_info:
         fm_no_s3.get_uploaded_file_content(s3_path)
-    assert "S3サービスが設定されていません" in str(exc_info.value)
+    assert exc_info.value.code is ErrorCode.FILE_OPERATION_FAILED

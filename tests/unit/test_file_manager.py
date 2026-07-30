@@ -116,7 +116,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_file_format(filename, content)
 
-        assert "許可されていないファイル形式" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_validate_file_format_file_too_large(self):
         """ファイルサイズ制限超過のテスト"""
@@ -128,7 +128,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_file_format(filename, content)
 
-        assert "ファイルサイズが制限を超えています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
     def test_validate_file_format_empty_file(self):
         """空ファイルのテスト"""
@@ -138,7 +138,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_file_format(filename, content)
 
-        assert "ファイルが空です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
     def test_validate_file_format_content_too_short(self):
         """内容が短すぎるファイルのテスト"""
@@ -148,7 +148,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_file_format(filename, content)
 
-        assert "ファイル内容が短すぎます" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT
 
     def test_validate_file_format_invalid_encoding(self):
         """無効なエンコーディングのテスト"""
@@ -159,7 +159,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.validate_file_format(filename, content)
 
-        assert "テキストファイルとして読み取れません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_ENCODING_UNSUPPORTED
 
     def test_validate_file_format_shift_jis_encoding(self):
         """Shift_JISエンコーディングのテスト"""
@@ -268,7 +268,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.get_uploaded_file_content(non_existent_path)
 
-        assert "指定されたファイルが見つかりません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
 
     def test_delete_uploaded_file_success(self):
         """ファイル削除の成功テスト"""
@@ -344,7 +344,7 @@ class TestFileManager:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager._decode_file_content(content)
 
-        assert "テキストファイルとして読み取れません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_ENCODING_UNSUPPORTED
 
     def test_security_check_success(self):
         """セキュリティチェック成功テスト"""
@@ -362,7 +362,7 @@ class TestFileManager:
         with pytest.raises(FileSecurityError) as exc_info:
             self.file_manager._security_check(filename, content)
 
-        assert "ファイル名に不正な文字が含まれています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_NAME_INVALID
 
     def test_security_check_hidden_file(self):
         """隠しファイルのテスト"""
@@ -372,7 +372,7 @@ class TestFileManager:
         with pytest.raises(FileSecurityError) as exc_info:
             self.file_manager._security_check(filename, content)
 
-        assert "隠しファイルはアップロードできません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_HIDDEN_NOT_ALLOWED
 
     def test_security_check_binary_file(self):
         """バイナリファイルのテスト"""
@@ -382,7 +382,7 @@ class TestFileManager:
         with pytest.raises(FileSecurityError) as exc_info:
             self.file_manager._security_check(filename, content)
 
-        assert "バイナリファイルはアップロードできません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_BINARY_NOT_ALLOWED
 
     def test_get_file_metadata_success(self):
         """ファイルメタデータ取得成功テスト"""
@@ -517,7 +517,7 @@ class TestMarketReportTextExtraction:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.extract_text_from_file(content, filename)
 
-        assert "許可されていないファイル形式" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_extract_text_file_too_large(self):
         """ファイルサイズ制限超過テスト"""
@@ -527,7 +527,7 @@ class TestMarketReportTextExtraction:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.extract_text_from_file(content, filename)
 
-        assert "ファイルサイズが制限を超えています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
     def test_extract_text_empty_file(self):
         """空ファイルでエラーを返すテスト"""
@@ -537,7 +537,7 @@ class TestMarketReportTextExtraction:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.extract_text_from_file(content, filename)
 
-        assert "ファイルが空です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
     def test_extract_text_content_too_short(self):
         """内容が短すぎるファイルでエラーを返すテスト"""
@@ -547,7 +547,7 @@ class TestMarketReportTextExtraction:
         with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.extract_text_from_file(content, filename)
 
-        assert "ファイル内容が短すぎます" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT
 
     def test_extract_text_shift_jis_encoding(self):
         """Shift_JISエンコーディングのテキスト抽出テスト"""
@@ -621,17 +621,21 @@ class TestFileManagerSurveyImage:
         assert result.mime_type == "image/png"
 
     def test_upload_survey_image_invalid_format(self):
-        with pytest.raises(FileUploadError, match="許可されていないファイル形式"):
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_survey_image(b"content", "test.txt")
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_upload_survey_image_empty(self):
-        with pytest.raises(FileUploadError, match="ファイルが空"):
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_survey_image(b"", "test.png")
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
     def test_upload_survey_image_too_large(self):
         large_content = b"\x89PNG" + b"\x00" * (6 * 1024 * 1024)
-        with pytest.raises(FileUploadError, match="ファイルサイズが制限"):
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_survey_image(large_content, "test.png")
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+        assert exc_info.value.context["max_size_mb"] == 5.0
 
 
 class TestFileManagerKnowledgeFile:
@@ -671,8 +675,10 @@ class TestFileManagerKnowledgeFile:
 
     def test_upload_knowledge_file_too_large(self):
         large_content = b"x" * (11 * 1024 * 1024)
-        with pytest.raises(FileUploadError, match="ファイルサイズ"):
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.upload_knowledge_file(large_content, "test.txt")
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+        assert exc_info.value.context["max_size_mb"] == 10.0
 
 
 class TestFileManagerConvertToMarkdown:
@@ -694,8 +700,9 @@ class TestFileManagerConvertToMarkdown:
         assert "テストテキスト" in result
 
     def test_convert_invalid_format(self):
-        with pytest.raises(FileUploadError, match="許可されていないファイル形式"):
+        with pytest.raises(FileUploadError) as exc_info:
             self.file_manager.convert_file_to_markdown(b"content", "test.exe")
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_convert_pdf_with_markitdown(self):
         with patch("markitdown.MarkItDown") as mock_md_cls:
