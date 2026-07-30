@@ -6,7 +6,7 @@ Persona Manager for AI Persona System.
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.demographics import VALID_GENDERS
 from ..services import country_service
@@ -53,7 +53,9 @@ class PersonaManager:
             PersonaManagerError: If save operation fails
         """
         if not persona:
-            raise PersonaManagerError("ペルソナオブジェクトが無効です")
+            raise PersonaManagerError(
+                "persona object is falsy", code=ErrorCode.PERSONA_INVALID
+            )
 
         # Validate persona before saving
         self._validate_persona_for_save(persona)
@@ -66,13 +68,17 @@ class PersonaManager:
             return persona_id
 
         except DatabaseError as e:
-            error_msg = f"Database error while saving persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Database error while saving persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona save failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error while saving persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Unexpected error while saving persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona save failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def get_persona(self, persona_id: str) -> Optional[Persona]:
         """
@@ -88,7 +94,9 @@ class PersonaManager:
             PersonaManagerError: If retrieval operation fails
         """
         if not persona_id or not persona_id.strip():
-            raise PersonaManagerError("ペルソナIDが無効です")
+            raise PersonaManagerError(
+                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+            )
 
         try:
             persona = self.database_service.get_persona(persona_id.strip())
@@ -101,13 +109,19 @@ class PersonaManager:
             return persona
 
         except DatabaseError as e:
-            error_msg = f"Database error while retrieving persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Database error while retrieving persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona retrieval failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error while retrieving persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error(
+                "Unexpected error while retrieving persona", exc_info=True
+            )
+            raise PersonaManagerError(
+                f"persona retrieval failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def get_all_personas(
         self,
@@ -140,13 +154,21 @@ class PersonaManager:
             return personas, next_cursor
 
         except DatabaseError as e:
-            error_msg = f"Database error while retrieving all personas: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error(
+                "Database error while retrieving all personas", exc_info=True
+            )
+            raise PersonaManagerError(
+                f"persona retrieval failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error while retrieving all personas: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error(
+                "Unexpected error while retrieving all personas", exc_info=True
+            )
+            raise PersonaManagerError(
+                f"persona retrieval failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def get_all_personas_full(self) -> List[Persona]:
         """
@@ -170,7 +192,9 @@ class PersonaManager:
             PersonaManagerError: If deletion operation fails
         """
         if not persona_id or not persona_id.strip():
-            raise PersonaManagerError("ペルソナIDが無効です")
+            raise PersonaManagerError(
+                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+            )
 
         try:
             success = self.database_service.delete_persona(persona_id.strip())
@@ -181,13 +205,17 @@ class PersonaManager:
             return success
 
         except DatabaseError as e:
-            error_msg = f"Database error while deleting persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Database error while deleting persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona delete failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error while deleting persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Unexpected error while deleting persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona delete failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def update_persona(
         self,
@@ -228,7 +256,9 @@ class PersonaManager:
             PersonaManagerError: If edit operation fails
         """
         if not persona_id or not persona_id.strip():
-            raise PersonaManagerError("ペルソナIDが無効です")
+            raise PersonaManagerError(
+                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+            )
 
         try:
             # Get existing persona
@@ -263,15 +293,20 @@ class PersonaManager:
                 )
                 return updated_persona
             else:
-                raise PersonaManagerError("ペルソナの更新に失敗しました")
+                raise PersonaManagerError(
+                    "database reported update failure",
+                    code=ErrorCode.PERSONA_UPDATE_FAILED,
+                )
 
         except PersonaManagerError:
             # Re-raise PersonaManagerError
             raise
         except Exception as e:
-            error_msg = f"Unexpected error while editing persona: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error("Unexpected error while editing persona", exc_info=True)
+            raise PersonaManagerError(
+                f"persona update failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def get_persona_count(self) -> int:
         """
@@ -290,9 +325,13 @@ class PersonaManager:
             # Re-raise PersonaManagerError
             raise
         except Exception as e:
-            error_msg = f"Unexpected error while getting persona count: {e}"
-            self.logger.error(error_msg)
-            raise PersonaManagerError(error_msg)
+            self.logger.error(
+                "Unexpected error while getting persona count", exc_info=True
+            )
+            raise PersonaManagerError(
+                f"persona count failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
 
     def _validate_generated_persona(self, persona: Persona) -> None:
         """
@@ -305,18 +344,23 @@ class PersonaManager:
             PersonaManagerError: If validation fails
         """
         if not persona:
-            raise PersonaManagerError("生成されたペルソナが無効です")
+            raise PersonaManagerError(
+                "generated persona object is falsy", code=ErrorCode.PERSONA_INVALID
+            )
 
         # Basic validation
         self._validate_persona_for_save(persona)
 
         # Additional validation for generated personas
         if not persona.id:
-            raise PersonaManagerError("生成されたペルソナにIDが設定されていません")
+            raise PersonaManagerError(
+                "generated persona has no id", code=ErrorCode.PERSONA_INVALID
+            )
 
         if not persona.created_at or not persona.updated_at:
             raise PersonaManagerError(
-                "生成されたペルソナにタイムスタンプが設定されていません"
+                "generated persona has no timestamps",
+                code=ErrorCode.PERSONA_INVALID,
             )
 
     def _validate_persona_for_save(self, persona: Persona) -> None:
@@ -330,93 +374,112 @@ class PersonaManager:
             PersonaManagerError: If validation fails
         """
         if not persona:
-            raise PersonaManagerError("ペルソナオブジェクトが無効です")
+            raise PersonaManagerError(
+                "persona object is falsy", code=ErrorCode.PERSONA_INVALID
+            )
 
         # Validate required fields
-        if not persona.name or not persona.name.strip():
-            raise PersonaManagerError("ペルソナ名が設定されていません")
+        for field, value in (
+            ("name", persona.name),
+            ("occupation", persona.occupation),
+            ("background", persona.background),
+        ):
+            if not value or not value.strip():
+                raise PersonaManagerError(
+                    f"{field} is blank",
+                    code=ErrorCode.PERSONA_FIELD_REQUIRED,
+                    context={"field": field},
+                )
 
         if persona.age is None or persona.age < 0 or persona.age > 150:
-            raise PersonaManagerError("年齢は0から150の範囲で設定してください")
+            raise PersonaManagerError(
+                f"age {persona.age} out of range 0-150",
+                code=ErrorCode.PERSONA_AGE_OUT_OF_RANGE,
+                context={"min_age": 0, "max_age": 150},
+            )
 
-        if not persona.occupation or not persona.occupation.strip():
-            raise PersonaManagerError("職業が設定されていません")
-
-        if not persona.background or not persona.background.strip():
-            raise PersonaManagerError("背景が設定されていません")
-
-        # Validate list fields
-        if not persona.values or len(persona.values) == 0:
-            raise PersonaManagerError("価値観が設定されていません")
-
-        if not persona.pain_points or len(persona.pain_points) == 0:
-            raise PersonaManagerError("課題・悩みが設定されていません")
-
-        if not persona.goals or len(persona.goals) == 0:
-            raise PersonaManagerError("目標・願望が設定されていません")
-
-        # Validate list content
-        for value in persona.values:
-            if not value or not value.strip():
-                raise PersonaManagerError("価値観に空の項目があります")
-
-        for pain_point in persona.pain_points:
-            if not pain_point or not pain_point.strip():
-                raise PersonaManagerError("課題・悩みに空の項目があります")
-
-        for goal in persona.goals:
-            if not goal or not goal.strip():
-                raise PersonaManagerError("目標・願望に空の項目があります")
+        # Validate list fields: presence, item content and size
+        for field, items in (
+            ("values", persona.values),
+            ("pain_points", persona.pain_points),
+            ("goals", persona.goals),
+        ):
+            if not items:
+                raise PersonaManagerError(
+                    f"{field} is empty",
+                    code=ErrorCode.PERSONA_LIST_EMPTY,
+                    context={"field": field},
+                )
+            for item in items:
+                if not item or not item.strip():
+                    raise PersonaManagerError(
+                        f"{field} contains a blank item",
+                        code=ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM,
+                        context={"field": field},
+                    )
+            if len(items) > 10:
+                raise PersonaManagerError(
+                    f"{field} has {len(items)} items, max is 10",
+                    code=ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS,
+                    context={"field": field, "max_items": 10},
+                )
 
         # Validate field lengths
-        if len(persona.name) > 100:
-            raise PersonaManagerError("ペルソナ名は100文字以内で設定してください")
-
-        if len(persona.occupation) > 200:
-            raise PersonaManagerError("職業は200文字以内で設定してください")
-
-        if len(persona.background) > 2000:
-            raise PersonaManagerError("背景は2000文字以内で設定してください")
-
-        # Validate list sizes
-        if len(persona.values) > 10:
-            raise PersonaManagerError("価値観は10項目以内で設定してください")
-
-        if len(persona.pain_points) > 10:
-            raise PersonaManagerError("課題・悩みは10項目以内で設定してください")
-
-        if len(persona.goals) > 10:
-            raise PersonaManagerError("目標・願望は10項目以内で設定してください")
+        for field, text, max_length in (
+            ("name", persona.name, 100),
+            ("occupation", persona.occupation, 200),
+            ("background", persona.background, 2000),
+            ("city", persona.city, 100),
+        ):
+            if text and len(text) > max_length:
+                raise PersonaManagerError(
+                    f"{field} length {len(text)} exceeds {max_length}",
+                    code=ErrorCode.PERSONA_FIELD_TOO_LONG,
+                    context={"field": field, "max_length": max_length},
+                )
 
         # Validate demographic fields (optional, only when set)
         if persona.gender is not None and persona.gender not in VALID_GENDERS:
             raise PersonaManagerError(
-                f"性別は {', '.join(sorted(VALID_GENDERS))} のいずれかで設定してください"
+                f"gender {persona.gender!r} not in VALID_GENDERS",
+                code=ErrorCode.PERSONA_GENDER_INVALID,
+                context={"allowed_genders": ", ".join(sorted(VALID_GENDERS))},
             )
 
         if persona.country and not country_service.is_valid_country(persona.country):
             # ISO 3166-1 alpha-2 として実在する国コードのみ許可（架空コード XX や
             # alpha-3 JPN を弾く）。検証は pycountry ベースの country_service に委譲。
             raise PersonaManagerError(
-                "国はISO 3166-1 alpha-2の実在する国コードで設定してください"
+                f"country {persona.country!r} is not a valid ISO 3166-1 alpha-2 code",
+                code=ErrorCode.PERSONA_COUNTRY_INVALID,
             )
-
-        if persona.city and len(persona.city) > 100:
-            raise PersonaManagerError("居住都市は100文字以内で設定してください")
 
         if persona.tags:
             if len(persona.tags) > 20:
-                raise PersonaManagerError("タグは20個以内で設定してください")
+                raise PersonaManagerError(
+                    f"tags has {len(persona.tags)} items, max is 20",
+                    code=ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS,
+                    context={"field": "tags", "max_items": 20},
+                )
             for tag in persona.tags:
                 if not tag or not tag.strip():
-                    raise PersonaManagerError("タグに空の項目があります")
+                    raise PersonaManagerError(
+                        "tags contains a blank item",
+                        code=ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM,
+                        context={"field": "tags"},
+                    )
                 if len(tag) > 50:
                     raise PersonaManagerError(
-                        "タグは1個あたり50文字以内で設定してください"
+                        f"tag length {len(tag)} exceeds 50",
+                        code=ErrorCode.PERSONA_LIST_ITEM_TOO_LONG,
+                        context={"field": "tags", "max_length": 50},
                     )
                 # data属性ではカンマ区切りでフィルタに渡すため、タグ内のカンマを禁止
                 if "," in tag:
-                    raise PersonaManagerError("タグにカンマ（,）は使用できません")
+                    raise PersonaManagerError(
+                        "tag contains a comma",
+                        code=ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED,
+                    )
 
     # --- ナレッジベース紐付け操作 ---
 
@@ -522,7 +585,9 @@ class PersonaManager:
                 valid_columns = {col.name for col in dataset.columns}
                 if key_name not in valid_columns:
                     raise PersonaManagerError(
-                        f"カラム「{key_name}」はデータセットに存在しません"
+                        f"column {key_name!r} not in dataset columns",
+                        code=ErrorCode.DATASET_COLUMN_NOT_FOUND,
+                        context={"column": key_name},
                     )
             binding_keys[key_name] = key_value
 

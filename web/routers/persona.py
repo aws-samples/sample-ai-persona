@@ -651,15 +651,15 @@ async def update_persona(
                 status_code=404,
             )
     except PersonaManagerError as e:
-        logger.error(f"ペルソナ更新エラー: {e}")
+        logger.warning("ペルソナ更新エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"更新エラー: {str(e)}"},
+            {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
-    except Exception as e:
-        logger.error(f"ペルソナ更新エラー: {e}")
+    except Exception:
+        logger.error("ペルソナ更新エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
@@ -808,25 +808,6 @@ class MemoryUIError(Exception):
     pass
 
 
-def _get_user_friendly_error_message(error: Exception) -> str:
-    """
-    エラーをユーザーフレンドリーなメッセージに変換
-
-    Args:
-        error: 発生した例外
-
-    Returns:
-        ユーザーフレンドリーなエラーメッセージ
-    """
-    if isinstance(error, (PersonaManagerError, PersonaMemoryManagerError)):
-        return str(error)
-
-    if isinstance(error, (ConnectionError, TimeoutError)):
-        return "ネットワーク接続エラーが発生しました。接続を確認してください。"
-
-    return "予期しないエラーが発生しました。後でもう一度お試しください。"
-
-
 @router.get("/{persona_id}/memories", response_class=HTMLResponse)
 async def get_persona_memories(
     request: Request, persona_id: str, page: int = 1, strategy_type: str = "summary"
@@ -870,7 +851,7 @@ async def get_persona_memories(
         )
 
     except PersonaMemoryManagerError as e:
-        logger.warning(f"Memory error for persona {persona_id}: {e}")
+        logger.warning("Memory error for persona %s", persona_id, exc_info=True)
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_list.html",
@@ -878,13 +859,15 @@ async def get_persona_memories(
                 "request": request,
                 "persona_id": persona_id,
                 "memories": [],
-                "error": str(e),
+                "error": user_message_for(e),
                 "strategy_type": strategy_type,
             },
         )
 
     except Exception as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(
             f"Error getting memories for persona {persona_id}: {e}", exc_info=True
         )
@@ -925,7 +908,9 @@ async def delete_persona_memory(
             )
 
     except PersonaMemoryManagerError as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
             request,
@@ -935,7 +920,9 @@ async def delete_persona_memory(
         )
 
     except Exception as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
         return templates.TemplateResponse(
             request,
@@ -972,7 +959,9 @@ async def delete_all_persona_memories(
         )
 
     except PersonaMemoryManagerError as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(
             f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
@@ -994,7 +983,9 @@ async def delete_all_persona_memories(
         )
 
     except Exception as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(
             f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
         )
@@ -1059,16 +1050,20 @@ async def add_persona_memory(
         )
 
     except PersonaMemoryManagerError as e:
-        logger.warning(f"Memory error adding knowledge for persona {persona_id}: {e}")
+        logger.warning(
+            "Memory error adding knowledge for persona %s", persona_id, exc_info=True
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_add_error.html",
-            {"request": request, "error": str(e)},
+            {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
 
     except (ConnectionError, TimeoutError) as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(f"Network error adding memory for persona {persona_id}: {e}")
         return templates.TemplateResponse(
             request,
@@ -1078,7 +1073,9 @@ async def add_persona_memory(
         )
 
     except Exception as e:
-        error_msg = _get_user_friendly_error_message(e)
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
         logger.error(
             f"Error adding memory for persona {persona_id}: {e}", exc_info=True
         )
@@ -1283,10 +1280,11 @@ async def create_dataset_binding(
             key_value=key_value,
         )
     except PersonaManagerError as e:
+        logger.warning("データセット紐付けエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": str(e)},
+            {"request": request, "error": user_message_for(e)},
         )
 
     response = await get_dataset_bindings(request, persona_id)
@@ -1405,11 +1403,8 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
             {"request": request, "saved_count": saved_count},
         )
 
-    except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
-        import traceback
-
-        logger.error(f"エラー詳細: {traceback.format_exc()}")
+    except Exception:
+        logger.error("ペルソナ保存で予期しないエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",

@@ -45,14 +45,6 @@ _BASELINE: dict[str, set[str]] = {
     "interview.py": {
         "save_interview_session",
     },
-    "persona.py": {
-        "add_persona_memory",
-        "create_dataset_binding",
-        "delete_all_persona_memories",
-        "delete_persona_memory",
-        "get_persona_memories",
-        "update_persona",
-    },
     "settings.py": {
         "create_dataset",
         "create_knowledge_base",
@@ -61,7 +53,7 @@ _BASELINE: dict[str, set[str]] = {
 }
 
 # traceback を文字列化している未移行モジュール。Issue #112 の移行で空にする。
-_TRACEBACK_BASELINE: set[str] = {"interview.py", "persona.py"}
+_TRACEBACK_BASELINE: set[str] = {"interview.py"}
 
 
 def _router_modules() -> list[Path]:

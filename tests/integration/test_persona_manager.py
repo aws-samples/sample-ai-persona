@@ -4,6 +4,9 @@ Tests the complete persona management workflow including AI service and database
 """
 
 import pytest
+
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
@@ -175,7 +178,7 @@ class TestPersonaManagerIntegration:
     def test_save_persona_invalid_data(self, persona_manager):
         """Test saving persona with invalid data."""
         # Test with None persona
-        with pytest.raises(PersonaManagerError, match="ペルソナオブジェクトが無効です"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_INVALID):
             persona_manager.save_persona(None)
 
         # Test with invalid persona (missing name)
@@ -188,13 +191,20 @@ class TestPersonaManagerIntegration:
             pain_points=["pain1"],
             goals=["goal1"],
         )
-        with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
+        ):
             persona_manager.save_persona(invalid_persona)
 
     def test_save_persona_city_too_long(self, persona_manager, sample_persona_data):
         """居住都市が100文字超だと拒否される。"""
         persona = Persona.create_new(**sample_persona_data, city="あ" * 101)
-        with pytest.raises(PersonaManagerError, match="居住都市は100文字以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_FIELD_TOO_LONG,
+            field="city",
+            max_length=100,
+        ):
             persona_manager.save_persona(persona)
 
     def test_save_persona_tag_with_comma_rejected(
@@ -202,13 +212,18 @@ class TestPersonaManagerIntegration:
     ):
         """タグにカンマが含まれると拒否される（フィルタ区切りの破損防止）。"""
         persona = Persona.create_new(**sample_persona_data, tags=["B2B, enterprise"])
-        with pytest.raises(PersonaManagerError, match="タグにカンマ"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED):
             persona_manager.save_persona(persona)
 
     def test_save_persona_tag_too_long(self, persona_manager, sample_persona_data):
         """タグが50文字超だと拒否される。"""
         persona = Persona.create_new(**sample_persona_data, tags=["あ" * 51])
-        with pytest.raises(PersonaManagerError, match="タグは1個あたり50文字以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_LIST_ITEM_TOO_LONG,
+            field="tags",
+            max_length=50,
+        ):
             persona_manager.save_persona(persona)
 
     def test_save_persona_valid_demographics(
@@ -245,10 +260,10 @@ class TestPersonaManagerIntegration:
 
     def test_get_persona_invalid_id(self, persona_manager):
         """Test persona retrieval with invalid ID."""
-        with pytest.raises(PersonaManagerError, match="ペルソナIDが無効です"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             persona_manager.get_persona("")
 
-        with pytest.raises(PersonaManagerError, match="ペルソナIDが無効です"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             persona_manager.get_persona("   ")
 
     def test_get_all_personas(self, persona_manager, sample_persona_data):
@@ -388,7 +403,7 @@ class TestPersonaManagerIntegration:
             goals=["test"],
         )
 
-        with pytest.raises(PersonaManagerError, match="Database"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.save_persona(persona)
 
     def test_validation_edge_cases(self, persona_manager):
@@ -419,7 +434,7 @@ class TestPersonaManagerIntegration:
             goals=["目標1"],
         )
 
-        with pytest.raises(
-            PersonaManagerError, match="年齢は0から150の範囲で設定してください"
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE
         ):
             persona_manager.save_persona(invalid_persona)

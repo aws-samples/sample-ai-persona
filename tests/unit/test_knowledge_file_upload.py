@@ -12,6 +12,7 @@ from src.managers.persona_memory_manager import (
     PersonaMemoryManagerError,
 )
 from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 
 
 class TestKnowledgeFileUpload:
@@ -69,27 +70,31 @@ class TestPersonaKnowledgeAddition:
         topic_name = "Test Topic"
         topic_content = "A" * 10001
 
-        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+        with raises_code(
+            PersonaMemoryManagerError,
+            ErrorCode.MEMORY_CONTENT_TOO_LONG,
+            max_length=10000,
+        ):
             memory_manager.add_knowledge(sample_persona.id, topic_name, topic_content)
-
-        assert "10000文字以内" in str(exc_info.value)
 
     def test_add_knowledge_topic_name_limit(self, memory_manager, sample_persona):
         """Test that topic name exceeding 100 characters is rejected"""
         topic_name = "A" * 101
         topic_content = "Test content"
 
-        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+        with raises_code(
+            PersonaMemoryManagerError,
+            ErrorCode.MEMORY_TOPIC_NAME_TOO_LONG,
+            max_length=100,
+        ):
             memory_manager.add_knowledge(sample_persona.id, topic_name, topic_content)
-
-        assert "100文字以内" in str(exc_info.value)
 
     def test_add_knowledge_empty_content(self, memory_manager, sample_persona):
         """Test that empty content is rejected"""
-        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+        with raises_code(
+            PersonaMemoryManagerError, ErrorCode.MEMORY_CONTENT_REQUIRED
+        ):
             memory_manager.add_knowledge(sample_persona.id, "Test Topic", "")
-
-        assert "内容を入力してください" in str(exc_info.value)
 
     def test_add_knowledge_within_limit(self, memory_manager, sample_persona):
         """Test that knowledge within 10000 character limit passes validation"""
@@ -105,7 +110,7 @@ class TestPersonaKnowledgeAddition:
         """Test that disabled memory service raises error"""
         mgr = PersonaMemoryManager(database_service=mock_db, memory_service=None)
 
-        with pytest.raises(PersonaMemoryManagerError) as exc_info:
+        with raises_code(
+            PersonaMemoryManagerError, ErrorCode.MEMORY_FEATURE_DISABLED
+        ):
             mgr.add_knowledge(sample_persona.id, "Test Topic", "content")
-
-        assert "長期記憶機能が無効" in str(exc_info.value)

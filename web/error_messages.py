@@ -17,9 +17,27 @@ from src.models.errors import ErrorCode
 
 logger = logging.getLogger(__name__)
 
+# Field key -> display label. Managers put the stable key in
+# ``context["field"]`` so that only this file holds Japanese labels.
+_FIELD_LABELS: dict[str, str] = {
+    "name": "ペルソナ名",
+    "occupation": "職業",
+    "background": "背景",
+    "city": "居住都市",
+    "values": "価値観",
+    "pain_points": "課題・悩み",
+    "goals": "目標・願望",
+    "tags": "タグ",
+    "topic_name": "トピック名",
+    "topic_content": "内容",
+}
+
 # ErrorCode -> user-facing wording. Values are ``str.format`` templates whose
 # placeholders are filled from ``CodedError.context``.
 _CATALOG: dict[ErrorCode, str] = {
+    ErrorCode.NETWORK_ERROR: (
+        "ネットワーク接続エラーが発生しました。接続を確認してください。"
+    ),
     ErrorCode.GENERATION_CAPACITY_EXCEEDED: (
         "生成するデータ量が大きすぎて処理しきれませんでした。"
         "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
@@ -120,6 +138,52 @@ _CATALOG: dict[ErrorCode, str] = {
         "データ分析エージェントの接続設定がされていません。"
         "設定画面から Runtime ARN を設定してください"
     ),
+    # --- ペルソナ ---
+    # {field} は _FIELD_LABELS で表示名に解決される。
+    ErrorCode.PERSONA_FIELD_REQUIRED: "{field}が設定されていません",
+    ErrorCode.PERSONA_FIELD_TOO_LONG: "{field}は{max_length}文字以内で設定してください",
+    ErrorCode.PERSONA_LIST_EMPTY: "{field}が1つも設定されていません",
+    ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM: "{field}に空の項目があります",
+    ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS: "{field}は{max_items}項目以内で設定してください",
+    ErrorCode.PERSONA_LIST_ITEM_TOO_LONG: (
+        "{field}は1個あたり{max_length}文字以内で設定してください"
+    ),
+    ErrorCode.PERSONA_AGE_OUT_OF_RANGE: (
+        "年齢は{min_age}から{max_age}の範囲で設定してください"
+    ),
+    ErrorCode.PERSONA_GENDER_INVALID: (
+        "性別は {allowed_genders} のいずれかで設定してください"
+    ),
+    ErrorCode.PERSONA_COUNTRY_INVALID: (
+        "国はISO 3166-1 alpha-2の実在する国コードで設定してください"
+    ),
+    ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED: "タグにカンマ（,）は使用できません",
+    ErrorCode.PERSONA_INVALID: "ペルソナの内容が正しくありません",
+    ErrorCode.PERSONA_ID_INVALID: "ペルソナIDが無効です",
+    ErrorCode.PERSONA_NOT_FOUND: "ペルソナが見つかりません",
+    ErrorCode.PERSONA_UPDATE_FAILED: "ペルソナの更新に失敗しました",
+    ErrorCode.PERSONA_OPERATION_FAILED: (
+        "ペルソナの処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.DATASET_COLUMN_NOT_FOUND: (
+        "カラム「{column}」はデータセットに存在しません"
+    ),
+    # --- 長期記憶 ---
+    ErrorCode.MEMORY_TOPIC_NAME_REQUIRED: "トピック名を入力してください",
+    ErrorCode.MEMORY_CONTENT_REQUIRED: "内容を入力してください",
+    ErrorCode.MEMORY_TOPIC_NAME_TOO_LONG: (
+        "トピック名は{max_length}文字以内で設定してください"
+    ),
+    ErrorCode.MEMORY_CONTENT_TOO_LONG: "内容は{max_length}文字以内で設定してください",
+    ErrorCode.MEMORY_FEATURE_DISABLED: "長期記憶機能が無効です",
+    ErrorCode.MEMORY_STRATEGY_NOT_CONFIGURED: (
+        "Semantic記憶戦略が設定されていません。"
+        "SEMANTIC_MEMORY_STRATEGY_IDを設定してください。"
+    ),
+    ErrorCode.MEMORY_SERVICE_UNAVAILABLE: "記憶サービスへの接続に失敗しました。",
+    ErrorCode.MEMORY_OPERATION_FAILED: (
+        "記憶の処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
 }
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"
@@ -142,6 +206,11 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
     """
     fallback = default or FALLBACK_MESSAGE
     code = getattr(exc, "code", None)
+    if not isinstance(code, ErrorCode) or code is ErrorCode.UNKNOWN:
+        # Builtin transport failures carry no code but are worth distinguishing,
+        # since the user can act on them (check the connection and retry).
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            code = ErrorCode.NETWORK_ERROR
     template = _CATALOG.get(code) if isinstance(code, ErrorCode) else None
     if template is None:
         return fallback
@@ -149,6 +218,9 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
     context = getattr(exc, "context", None)
     if not isinstance(context, dict):
         context = {}
+    if "field" in context:
+        # Managers pass a stable field key; the display label lives here.
+        context = {**context, "field": _FIELD_LABELS.get(context["field"], "入力値")}
     try:
         return template.format(**context)
     except (KeyError, IndexError, ValueError, TypeError):

@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.memory.memory_service import MemoryService, MemoryServiceError
 from ..services.service_factory import service_factory
@@ -64,16 +64,28 @@ class PersonaMemoryManager:
         self._validate_persona_id(persona_id)
 
         if not topic_name or not topic_name.strip():
-            raise PersonaMemoryManagerError("トピック名を入力してください")
+            raise PersonaMemoryManagerError(
+                "topic name is blank", code=ErrorCode.MEMORY_TOPIC_NAME_REQUIRED
+            )
 
         if not topic_content or not topic_content.strip():
-            raise PersonaMemoryManagerError("内容を入力してください")
+            raise PersonaMemoryManagerError(
+                "topic content is blank", code=ErrorCode.MEMORY_CONTENT_REQUIRED
+            )
 
         if len(topic_name) > 100:
-            raise PersonaMemoryManagerError("トピック名は100文字以内で設定してください")
+            raise PersonaMemoryManagerError(
+                f"topic name length {len(topic_name)} exceeds 100",
+                code=ErrorCode.MEMORY_TOPIC_NAME_TOO_LONG,
+                context={"max_length": 100},
+            )
 
         if len(topic_content) > 10000:
-            raise PersonaMemoryManagerError("内容は10000文字以内で設定してください")
+            raise PersonaMemoryManagerError(
+                f"topic content length {len(topic_content)} exceeds 10000",
+                code=ErrorCode.MEMORY_CONTENT_TOO_LONG,
+                context={"max_length": 10000},
+            )
 
         self._validate_persona_exists(persona_id)
 
@@ -81,8 +93,8 @@ class PersonaMemoryManager:
 
         if not memory_service.is_semantic_enabled:
             raise PersonaMemoryManagerError(
-                "Semantic記憶戦略が設定されていません。"
-                "SEMANTIC_MEMORY_STRATEGY_IDを設定してください。"
+                "SEMANTIC_MEMORY_STRATEGY_ID is not set",
+                code=ErrorCode.MEMORY_STRATEGY_NOT_CONFIGURED,
             )
 
         try:
@@ -102,13 +114,17 @@ class PersonaMemoryManager:
             return memory_id
 
         except MemoryServiceError as e:
-            error_msg = f"知識の追加中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("知識の追加中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory add failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"知識の追加中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("知識の追加中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory add failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
 
     def get_memories(
         self,
@@ -165,13 +181,17 @@ class PersonaMemoryManager:
             return (page_memories, page, total_pages)
 
         except MemoryServiceError as e:
-            error_msg = f"記憶の取得中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("記憶の取得中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory fetch failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"記憶の取得中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("記憶の取得中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory fetch failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
 
     def delete_memory(self, persona_id: str, memory_id: str) -> bool:
         """
@@ -198,16 +218,21 @@ class PersonaMemoryManager:
             return success
         except (ConnectionError, TimeoutError) as e:
             raise PersonaMemoryManagerError(
-                "記憶サービスへの接続に失敗しました。"
+                "memory service connection failed",
+                code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE,
             ) from e
         except MemoryServiceError as e:
-            error_msg = f"記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("記憶の削除中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory delete failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("記憶の削除中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory delete failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
 
     def delete_all_memories(
         self, persona_id: str, strategy_type: str = "summary"
@@ -252,16 +277,21 @@ class PersonaMemoryManager:
 
         except (ConnectionError, TimeoutError) as e:
             raise PersonaMemoryManagerError(
-                "記憶サービスへの接続に失敗しました。"
+                "memory service connection failed",
+                code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE,
             ) from e
         except MemoryServiceError as e:
-            error_msg = f"全記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("全記憶の削除中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory bulk delete failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"全記憶の削除中にエラーが発生しました: {e}"
-            self.logger.error(error_msg)
-            raise PersonaMemoryManagerError(error_msg) from e
+            self.logger.error("全記憶の削除中にエラーが発生しました", exc_info=True)
+            raise PersonaMemoryManagerError(
+                f"memory bulk delete failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
 
     def safe_get_memories(
         self, persona_id: str, strategy_type: str = "summary"
@@ -296,7 +326,10 @@ class PersonaMemoryManager:
             self._memory_service_resolved = True
 
         if not self._memory_service:
-            raise PersonaMemoryManagerError("長期記憶機能が無効です")
+            raise PersonaMemoryManagerError(
+                "long-term memory feature is disabled",
+                code=ErrorCode.MEMORY_FEATURE_DISABLED,
+            )
 
         return self._memory_service
 
@@ -310,16 +343,24 @@ class PersonaMemoryManager:
     def _validate_persona_id(self, persona_id: str) -> None:
         """persona_idの空文字/None検証"""
         if not persona_id or not persona_id.strip():
-            raise PersonaMemoryManagerError("ペルソナIDが無効です")
+            raise PersonaMemoryManagerError(
+                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+            )
 
     def _validate_persona_exists(self, persona_id: str) -> None:
         """ペルソナの存在を確認する。不在の場合はエラー。"""
         try:
             persona = self.database_service.get_persona(persona_id.strip())
             if not persona:
-                raise PersonaMemoryManagerError("ペルソナが見つかりません")
+                raise PersonaMemoryManagerError(
+                    f"persona {persona_id!r} not found",
+                    code=ErrorCode.PERSONA_NOT_FOUND,
+                )
         except DatabaseError as e:
-            raise PersonaMemoryManagerError(f"ペルソナの確認に失敗しました: {e}") from e
+            raise PersonaMemoryManagerError(
+                f"persona lookup failed ({type(e).__name__})",
+                code=ErrorCode.MEMORY_OPERATION_FAILED,
+            ) from e
 
     def _format_topic_content(self, topic_name: str, topic_content: str) -> str:
         """トピック形式のコンテンツを構築"""

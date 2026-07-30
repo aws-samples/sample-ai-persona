@@ -1,6 +1,9 @@
 """PersonaMemoryManager の単体テスト"""
 
 import pytest
+
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 from datetime import datetime
 from unittest.mock import Mock
 
@@ -58,48 +61,48 @@ class TestAddKnowledge:
         assert '<topic name="好きな食べ物">ラーメン</topic>' in call_kwargs["content"]
 
     def test_empty_persona_id(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="ペルソナIDが無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.add_knowledge("", "topic", "content")
 
     def test_whitespace_persona_id(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="ペルソナIDが無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.add_knowledge("   ", "topic", "content")
 
     def test_empty_topic_name(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="トピック名"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_TOPIC_NAME_REQUIRED):
             manager.add_knowledge("p1", "", "content")
 
     def test_empty_topic_content(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="内容を入力"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_CONTENT_REQUIRED):
             manager.add_knowledge("p1", "topic", "")
 
     def test_topic_name_too_long(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="100文字以内"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_TOPIC_NAME_TOO_LONG, max_length=100):
             manager.add_knowledge("p1", "x" * 101, "content")
 
     def test_topic_content_too_long(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="10000文字以内"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_CONTENT_TOO_LONG, max_length=10000):
             manager.add_knowledge("p1", "topic", "x" * 10001)
 
     def test_persona_not_found(self, manager, mock_db):
         mock_db.get_persona.return_value = None
-        with pytest.raises(PersonaMemoryManagerError, match="ペルソナが見つかりません"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.add_knowledge("p1", "topic", "content")
 
     def test_memory_service_disabled(self, mock_db):
         mgr = PersonaMemoryManager(database_service=mock_db, memory_service=None)
         # _memory_service_resolved=True なので service_factory は呼ばれない
-        with pytest.raises(PersonaMemoryManagerError, match="長期記憶機能が無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_FEATURE_DISABLED):
             mgr.add_knowledge("p1", "topic", "content")
 
     def test_semantic_not_enabled(self, manager, mock_memory_service):
         mock_memory_service.is_semantic_enabled = False
-        with pytest.raises(PersonaMemoryManagerError, match="Semantic記憶戦略"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_STRATEGY_NOT_CONFIGURED):
             manager.add_knowledge("p1", "topic", "content")
 
     def test_memory_service_error(self, manager, mock_memory_service):
         mock_memory_service.save_knowledge.side_effect = MemoryServiceError("fail")
-        with pytest.raises(PersonaMemoryManagerError, match="知識の追加中にエラー"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_OPERATION_FAILED):
             manager.add_knowledge("p1", "topic", "content")
 
 
@@ -174,12 +177,12 @@ class TestGetMemories:
         assert total_pages == 2
 
     def test_empty_persona_id(self, manager):
-        with pytest.raises(PersonaMemoryManagerError, match="ペルソナIDが無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.get_memories("")
 
     def test_persona_not_found(self, manager, mock_db):
         mock_db.get_persona.return_value = None
-        with pytest.raises(PersonaMemoryManagerError, match="ペルソナが見つかりません"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.get_memories("p1")
 
     def test_memory_disabled_returns_empty(self, mock_db):
@@ -208,17 +211,17 @@ class TestDeleteMemory:
 
     def test_memory_disabled(self, mock_db):
         mgr = PersonaMemoryManager(database_service=mock_db, memory_service=None)
-        with pytest.raises(PersonaMemoryManagerError, match="長期記憶機能が無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_FEATURE_DISABLED):
             mgr.delete_memory("p1", "mem-1")
 
     def test_connection_error(self, manager, mock_memory_service):
         mock_memory_service.delete_memory.side_effect = ConnectionError("timeout")
-        with pytest.raises(PersonaMemoryManagerError, match="接続に失敗"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_SERVICE_UNAVAILABLE):
             manager.delete_memory("p1", "mem-1")
 
     def test_service_error(self, manager, mock_memory_service):
         mock_memory_service.delete_memory.side_effect = MemoryServiceError("fail")
-        with pytest.raises(PersonaMemoryManagerError, match="記憶の削除中にエラー"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_OPERATION_FAILED):
             manager.delete_memory("p1", "mem-1")
 
 
@@ -262,7 +265,7 @@ class TestDeleteAllMemories:
 
     def test_memory_disabled(self, mock_db):
         mgr = PersonaMemoryManager(database_service=mock_db, memory_service=None)
-        with pytest.raises(PersonaMemoryManagerError, match="長期記憶機能が無効"):
+        with raises_code(PersonaMemoryManagerError, ErrorCode.MEMORY_FEATURE_DISABLED):
             mgr.delete_all_memories("p1")
 
     def test_partial_failure(self, manager, mock_memory_service):

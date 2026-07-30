@@ -31,6 +31,9 @@ class ErrorCode(StrEnum):
     # Fallback for exceptions that carry no code yet.
     UNKNOWN = "unknown"
 
+    # --- Generic ---
+    NETWORK_ERROR = "network_error"
+
     # --- Generation capacity ---
     GENERATION_CAPACITY_EXCEEDED = "generation_capacity_exceeded"
     REPORT_CAPACITY_EXCEEDED = "report_capacity_exceeded"
@@ -82,6 +85,38 @@ class ErrorCode(StrEnum):
     SURVEY_OPERATION_FAILED = "survey_operation_failed"
     SURVEY_EXECUTION_FAILED = "survey_execution_failed"
     SURVEY_REPORT_GENERATION_FAILED = "survey_report_generation_failed"
+
+    # --- Personas ---
+    # Field-level validation is expressed as a validation *kind* plus a stable
+    # field key in ``context["field"]``; the catalog maps that key to a label.
+    # This keeps every Japanese string in the presentation layer instead of
+    # spreading one code per field across the enum.
+    PERSONA_FIELD_REQUIRED = "persona_field_required"
+    PERSONA_FIELD_TOO_LONG = "persona_field_too_long"
+    PERSONA_LIST_EMPTY = "persona_list_empty"
+    PERSONA_LIST_HAS_EMPTY_ITEM = "persona_list_has_empty_item"
+    PERSONA_LIST_TOO_MANY_ITEMS = "persona_list_too_many_items"
+    PERSONA_LIST_ITEM_TOO_LONG = "persona_list_item_too_long"
+    PERSONA_AGE_OUT_OF_RANGE = "persona_age_out_of_range"
+    PERSONA_GENDER_INVALID = "persona_gender_invalid"
+    PERSONA_COUNTRY_INVALID = "persona_country_invalid"
+    PERSONA_TAG_COMMA_NOT_ALLOWED = "persona_tag_comma_not_allowed"
+    PERSONA_INVALID = "persona_invalid"
+    PERSONA_ID_INVALID = "persona_id_invalid"
+    PERSONA_NOT_FOUND = "persona_not_found"
+    PERSONA_UPDATE_FAILED = "persona_update_failed"
+    PERSONA_OPERATION_FAILED = "persona_operation_failed"
+    DATASET_COLUMN_NOT_FOUND = "dataset_column_not_found"
+
+    # --- Persona long-term memory ---
+    MEMORY_TOPIC_NAME_REQUIRED = "memory_topic_name_required"
+    MEMORY_CONTENT_REQUIRED = "memory_content_required"
+    MEMORY_TOPIC_NAME_TOO_LONG = "memory_topic_name_too_long"
+    MEMORY_CONTENT_TOO_LONG = "memory_content_too_long"
+    MEMORY_FEATURE_DISABLED = "memory_feature_disabled"
+    MEMORY_STRATEGY_NOT_CONFIGURED = "memory_strategy_not_configured"
+    MEMORY_SERVICE_UNAVAILABLE = "memory_service_unavailable"
+    MEMORY_OPERATION_FAILED = "memory_operation_failed"
 
     # --- Survey persona datasets (DWH segment extraction) ---
     SEGMENT_CONDITION_REQUIRED = "segment_condition_required"
