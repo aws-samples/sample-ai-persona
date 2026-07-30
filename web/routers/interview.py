@@ -550,10 +550,12 @@ async def save_interview_session(
         def get_session_status_sync() -> Any:
             try:
                 return interview_manager.get_session_status(session_id)
-            except InterviewSessionNotFoundError as e:
-                raise e
+            except InterviewSessionNotFoundError:
+                raise
             except Exception as e:
-                raise InterviewSessionNotFoundError(f"セッション状態の取得に失敗: {e}")
+                raise InterviewSessionNotFoundError(
+                    f"session status fetch failed ({type(e).__name__})"
+                ) from e
 
         loop = asyncio.get_event_loop()
 
@@ -688,11 +690,8 @@ async def save_interview_session(
             },
             status_code=503,
         )
-    except Exception as e:
-        logger.error(f"Unexpected error saving interview session: {e}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
+    except Exception:
+        logger.error("Unexpected error saving interview session", exc_info=True)
         return JSONResponse(
             {
                 "error": "セッション保存中に予期しないエラーが発生しました",

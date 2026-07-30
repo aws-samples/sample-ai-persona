@@ -118,6 +118,19 @@ class ErrorCode(StrEnum):
     MEMORY_SERVICE_UNAVAILABLE = "memory_service_unavailable"
     MEMORY_OPERATION_FAILED = "memory_operation_failed"
 
+    # --- Discussions ---
+    DISCUSSION_PERSONAS_REQUIRED = "discussion_personas_required"
+    DISCUSSION_TOO_FEW_PERSONAS = "discussion_too_few_personas"
+    DISCUSSION_TOO_MANY_PERSONAS = "discussion_too_many_personas"
+    DISCUSSION_PERSONA_INVALID = "discussion_persona_invalid"
+    DISCUSSION_PERSONA_DUPLICATED = "discussion_persona_duplicated"
+    DISCUSSION_TOPIC_REQUIRED = "discussion_topic_required"
+    DISCUSSION_TOPIC_TOO_SHORT = "discussion_topic_too_short"
+    DISCUSSION_TOPIC_TOO_LONG = "discussion_topic_too_long"
+    DISCUSSION_DOCUMENTS_TOO_LARGE = "discussion_documents_too_large"
+    DISCUSSION_NOT_FOUND = "discussion_not_found"
+    DISCUSSION_OPERATION_FAILED = "discussion_operation_failed"
+
     # --- Survey persona datasets (DWH segment extraction) ---
     SEGMENT_CONDITION_REQUIRED = "segment_condition_required"
     SEGMENT_ROW_COUNT_TOO_LOW = "segment_row_count_too_low"

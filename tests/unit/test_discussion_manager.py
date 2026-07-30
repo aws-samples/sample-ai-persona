@@ -3,6 +3,8 @@ Unit tests for Discussion Manager.
 """
 
 import pytest
+
+from src.models.errors import ErrorCode
 from unittest.mock import Mock
 from datetime import datetime
 
@@ -118,18 +120,18 @@ class TestDiscussionManager:
         # Test with empty personas list
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion([], topic)
-        assert "議論参加ペルソナが指定されていません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_PERSONAS_REQUIRED
 
         # Test with single persona
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion([self.persona1], topic)
-        assert "議論には最低2つのペルソナが必要です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
 
         # Test with too many personas
         personas = [self.persona1] * 6
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, topic)
-        assert "議論参加ペルソナは最大5つまでです" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_MANY_PERSONAS
 
     def test_start_discussion_invalid_topic(self):
         """Test discussion start with invalid topic."""
@@ -138,18 +140,18 @@ class TestDiscussionManager:
         # Test with empty topic
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, "")
-        assert "議論トピックが空です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_REQUIRED
 
         # Test with short topic
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, "短い")
-        assert "議論トピックが短すぎます" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
 
         # Test with long topic
         long_topic = "a" * 201
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, long_topic)
-        assert "議論トピックが長すぎます" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_LONG
 
     def test_start_discussion_duplicate_personas(self):
         """Test discussion start with duplicate personas."""
@@ -158,7 +160,7 @@ class TestDiscussionManager:
 
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.start_discussion(personas, topic)
-        assert "重複したペルソナが含まれています" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_PERSONA_DUPLICATED
 
     def test_start_discussion_ai_service_error(self):
         """Test discussion start with AI service error."""
@@ -386,7 +388,7 @@ class TestDiscussionManager:
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.regenerate_insights("nonexistent-id")
 
-        assert "議論が見つかりません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_NOT_FOUND
 
     def test_regenerate_insights_with_default_categories(self):
         """Test insight regeneration with default categories."""
@@ -667,7 +669,7 @@ class TestDiscussionManagerWithDocuments:
             with pytest.raises(DiscussionManagerError) as exc_info:
                 self.discussion_manager._load_documents(["doc1"])
 
-            assert "合計サイズが制限を超えています" in str(exc_info.value)
+            assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE
 
 
 class TestDiscussionManagerValidation:

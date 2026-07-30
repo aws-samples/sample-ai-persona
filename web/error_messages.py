@@ -125,6 +125,30 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.SURVEY_REPORT_GENERATION_FAILED: (
         "レポート生成に失敗しました。再試行してください。"
     ),
+    # --- 議論 ---
+    ErrorCode.DISCUSSION_PERSONAS_REQUIRED: "議論参加ペルソナが指定されていません",
+    ErrorCode.DISCUSSION_TOO_FEW_PERSONAS: (
+        "議論には最低{min_personas}つのペルソナが必要です"
+    ),
+    ErrorCode.DISCUSSION_TOO_MANY_PERSONAS: (
+        "議論参加ペルソナは最大{max_personas}つまでです"
+    ),
+    ErrorCode.DISCUSSION_PERSONA_INVALID: "選択したペルソナの情報が正しくありません",
+    ErrorCode.DISCUSSION_PERSONA_DUPLICATED: "重複したペルソナが含まれています",
+    ErrorCode.DISCUSSION_TOPIC_REQUIRED: "議論トピックが空です",
+    ErrorCode.DISCUSSION_TOPIC_TOO_SHORT: (
+        "議論トピックが短すぎます。{min_length}文字以上で入力してください"
+    ),
+    ErrorCode.DISCUSSION_TOPIC_TOO_LONG: (
+        "議論トピックが長すぎます。{max_length}文字以内で入力してください"
+    ),
+    ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE: (
+        "ドキュメントの合計サイズが制限を超えています（最大{max_size_mb:.0f}MB）"
+    ),
+    ErrorCode.DISCUSSION_NOT_FOUND: "議論が見つかりません",
+    ErrorCode.DISCUSSION_OPERATION_FAILED: (
+        "議論の処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
     # --- ペルソナデータのセグメント抽出（DWH） ---
     ErrorCode.SEGMENT_CONDITION_REQUIRED: "抽出条件を入力してください",
     ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW: (

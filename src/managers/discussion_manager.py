@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 from ..config import config
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.insight import Insight
@@ -360,7 +360,10 @@ class DiscussionManager:
             # Retrieve existing discussion
             discussion = self.get_discussion(discussion_id.strip())
             if not discussion:
-                raise DiscussionManagerError(f"議論が見つかりません: {discussion_id}")
+                raise DiscussionManagerError(
+                    f"discussion {discussion_id!r} not found",
+                    code=ErrorCode.DISCUSSION_NOT_FOUND,
+                )
 
             # Generate new insights with specified categories
             new_insights = self.generate_insights(discussion, categories=categories)
@@ -412,41 +415,65 @@ class DiscussionManager:
         """
         # Validate personas
         if not personas:
-            raise DiscussionManagerError("議論参加ペルソナが指定されていません")
+            raise DiscussionManagerError(
+                "persona list is empty",
+                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
+            )
 
         if len(personas) < 2:
-            raise DiscussionManagerError("議論には最低2つのペルソナが必要です")
+            raise DiscussionManagerError(
+                f"{len(personas)} personas given, minimum is 2",
+                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
+                context={"min_personas": 2},
+            )
 
         if len(personas) > 5:
-            raise DiscussionManagerError("議論参加ペルソナは最大5つまでです")
+            raise DiscussionManagerError(
+                f"{len(personas)} personas given, maximum is 5",
+                code=ErrorCode.DISCUSSION_TOO_MANY_PERSONAS,
+                context={"max_personas": 5},
+            )
 
         # Validate each persona
         for i, persona in enumerate(personas):
             if not persona:
-                raise DiscussionManagerError(f"ペルソナ {i + 1} が無効です")
+                raise DiscussionManagerError(
+                    f"persona at index {i} is falsy",
+                    code=ErrorCode.DISCUSSION_PERSONA_INVALID,
+                )
 
             if not persona.id or not persona.name:
                 raise DiscussionManagerError(
-                    f"ペルソナ {i + 1} のIDまたは名前が設定されていません"
+                    f"persona at index {i} has no id or name",
+                    code=ErrorCode.DISCUSSION_PERSONA_INVALID,
                 )
 
         # Check for duplicate personas
         persona_ids = [persona.id for persona in personas]
         if len(set(persona_ids)) != len(persona_ids):
-            raise DiscussionManagerError("重複したペルソナが含まれています")
+            raise DiscussionManagerError(
+                "persona list contains duplicate ids",
+                code=ErrorCode.DISCUSSION_PERSONA_DUPLICATED,
+            )
 
         # Validate topic
         if not topic or not topic.strip():
-            raise DiscussionManagerError("議論トピックが空です")
+            raise DiscussionManagerError(
+                "topic is blank", code=ErrorCode.DISCUSSION_TOPIC_REQUIRED
+            )
 
         if len(topic.strip()) < 5:
             raise DiscussionManagerError(
-                "議論トピックが短すぎます。5文字以上で入力してください"
+                f"topic length {len(topic.strip())} below minimum 5",
+                code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
+                context={"min_length": 5},
             )
 
         if len(topic.strip()) > 200:
             raise DiscussionManagerError(
-                "議論トピックが長すぎます。200文字以内で入力してください"
+                f"topic length {len(topic.strip())} exceeds 200",
+                code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
+                context={"max_length": 200},
             )
 
     def _load_documents(
@@ -501,7 +528,9 @@ class DiscussionManager:
             total_size += file_size
             if total_size > max_total_size:
                 raise DiscussionManagerError(
-                    "ドキュメントの合計サイズが制限を超えています（最大32MB）"
+                    f"total document size {total_size} exceeds {max_total_size}",
+                    code=ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE,
+                    context={"max_size_mb": max_total_size / (1024 * 1024)},
                 )
 
             # Add to documents_data for AI service

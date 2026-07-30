@@ -541,9 +541,11 @@ async def save_persona(
                         bindings_data.append(
                             {"dataset_id": dataset.id, "binding_keys": binding_keys}
                         )
-                    except Exception as e:
+                    except Exception:
                         logger.error(
-                            f"行動データセット保存エラー ({ds_info['name']}): {e}"
+                            "行動データセット保存エラー (%s)",
+                            ds_info["name"],
+                            exc_info=True,
                         )
                 if bindings_data:
                     dataset_manager.set_persona_bindings(persona.id, bindings_data)
@@ -869,7 +871,7 @@ async def get_persona_memories(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
         logger.error(
-            f"Error getting memories for persona {persona_id}: {e}", exc_info=True
+            "Error getting memories for persona %s", persona_id, exc_info=True
         )
         return templates.TemplateResponse(
             request,
@@ -963,7 +965,7 @@ async def delete_all_persona_memories(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
         logger.error(
-            f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
+            "Error deleting all memories for persona %s", persona_id, exc_info=True
         )
 
         memories = memory_manager.safe_get_memories(persona_id, strategy_type)
@@ -987,7 +989,7 @@ async def delete_all_persona_memories(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
         logger.error(
-            f"Error deleting all memories for persona {persona_id}: {e}", exc_info=True
+            "Error deleting all memories for persona %s", persona_id, exc_info=True
         )
 
         memories = memory_manager.safe_get_memories(persona_id, strategy_type)
@@ -1077,7 +1079,7 @@ async def add_persona_memory(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
         logger.error(
-            f"Error adding memory for persona {persona_id}: {e}", exc_info=True
+            "Error adding memory for persona %s", persona_id, exc_info=True
         )
         return templates.TemplateResponse(
             request,

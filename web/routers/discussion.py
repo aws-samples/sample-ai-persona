@@ -320,8 +320,11 @@ async def stream_discussion(
                     for event in gen:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
                 except Exception as e:
-                    logger.error(f"ストリーミング処理エラー: {e}")
-                    error_event = f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                    logger.error("ストリーミング処理エラー", exc_info=True)
+                    message = user_message_for(
+                        e, default="議論の実行中にエラーが発生しました"
+                    )
+                    error_event = f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                     asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
                 finally:
                     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
@@ -525,13 +528,15 @@ async def start_discussion(
             {"request": request, "discussion": discussion},
         )
     except Exception as e:
-        logger.error(f"議論開始エラー: {e}")
+        logger.error("議論開始エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
             {
                 "request": request,
-                "error": f"議論の開始中にエラーが発生しました: {str(e)}",
+                "error": user_message_for(
+                    e, default="議論の開始中にエラーが発生しました"
+                ),
             },
             status_code=500,
         )
@@ -624,13 +629,15 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             },
         )
     except Exception as e:
-        logger.error(f"インサイト再生成エラー: {e}")
+        logger.error("インサイト再生成エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
             {
                 "request": request,
-                "error": f"インサイトの再生成中にエラーが発生しました: {str(e)}",
+                "error": user_message_for(
+                    e, default="インサイトの再生成中にエラーが発生しました"
+                ),
             },
             status_code=500,
         )
@@ -663,11 +670,14 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                 status_code=400,
             )
     except Exception as e:
-        logger.error(f"議論削除エラー: {e}")
+        logger.error("議論削除エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "error": f"削除エラー: {str(e)}"},
+            {
+                "request": request,
+                "error": user_message_for(e, default="議論の削除に失敗しました"),
+            },
             status_code=500,
         )
 
@@ -948,7 +958,7 @@ async def save_report(
         response.headers["HX-Retarget"] = "#reports-container"
         return response
     except Exception as e:
-        logger.error(f"レポート保存エラー: {e}")
+        logger.error("レポート保存エラー", exc_info=True)
         from src.models.discussion_report import DiscussionReport as DR
 
         report = DR(
@@ -965,7 +975,9 @@ async def save_report(
                 "request": request,
                 "report": report,
                 "discussion_id": discussion_id,
-                "save_error": str(e),
+                "save_error": user_message_for(
+                    e, default="レポートの保存に失敗しました"
+                ),
             },
         )
 
@@ -1079,10 +1091,11 @@ async def delete_report(
         )
         return HTMLResponse(content="<div>レポートを削除しました</div>")
     except Exception as e:
-        logger.error(f"レポート削除エラー: {e}")
+        logger.error("レポート削除エラー", exc_info=True)
         from markupsafe import escape
 
+        message = user_message_for(e, default="レポートの削除に失敗しました")
         return HTMLResponse(
-            content=f"<div class='text-red-600'>{escape(str(e))}</div>",
+            content=f"<div class='text-red-600'>{escape(message)}</div>",
             status_code=400,
         )

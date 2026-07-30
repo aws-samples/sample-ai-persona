@@ -15,10 +15,9 @@
 ユーザー向け文言は `web/error_messages.user_message_for()` から取得すること。
 詳細は `docs/note/exception-message-design.md` を参照。
 
-移行は段階的に進めるため、未移行の箇所は `_BASELINE` に明示的に列挙する
-ラチェット方式をとる。検出結果が baseline と完全一致することを検査するので、
-新規の漏出は即座に失敗し、移行済みの箇所を baseline に残したままにもできない。
-移行完了時に `_BASELINE` は空になる。
+検出結果が `_BASELINE` と完全一致することを検査するラチェット方式をとる。
+移行が完了したため baseline は空であり、漏出が1箇所でも入れば失敗する。
+段階的な移行が再び必要になった場合のみ baseline に列挙する。
 """
 
 import ast
@@ -31,29 +30,13 @@ _ROUTERS_DIR = Path(__file__).parent.parent.parent / "web" / "routers"
 # 例外変数を渡してよい関数。ログ出力と文言カタログの参照のみ。
 _ALLOWED_CALLS = frozenset({"user_message_for", "isinstance", "type"})
 
-# 未移行の漏出箇所（module -> 関数名の集合）。Issue #112 の移行で空にする。
-# 行番号ではなく関数名で管理するのは、無関係な編集で baseline がずれないため。
-_BASELINE: dict[str, set[str]] = {
-    "discussion.py": {
-        "delete_discussion",
-        "delete_report",
-        "regenerate_insights",
-        "save_report",
-        "start_discussion",
-        "stream_discussion",
-    },
-    "interview.py": {
-        "save_interview_session",
-    },
-    "settings.py": {
-        "create_dataset",
-        "create_knowledge_base",
-        "update_dataset",
-    },
-}
+# 既知の漏出箇所（module -> 関数名の集合）。Issue #112 の移行で空になった。
+# 関数名で管理するのは、無関係な編集で baseline がずれないため。新たに漏出を
+# 追加する場合はここに列挙するのではなく user_message_for() を使うこと。
+_BASELINE: dict[str, set[str]] = {}
 
-# traceback を文字列化している未移行モジュール。Issue #112 の移行で空にする。
-_TRACEBACK_BASELINE: set[str] = {"interview.py"}
+# traceback を文字列化しているモジュール。同様に空を維持する。
+_TRACEBACK_BASELINE: set[str] = set()
 
 
 def _router_modules() -> list[Path]:

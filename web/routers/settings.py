@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from src.managers.dataset_manager import DatasetManager
 from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
 from src.models.dataset import DatasetColumn
+from web.error_messages import user_message_for
 
 logger = logging.getLogger(__name__)
 
@@ -210,11 +211,16 @@ async def create_dataset(
         )
 
     except Exception as e:
-        logger.error(f"Dataset creation failed: {e}")
+        logger.error("Dataset creation failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "message": f"データセット作成に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(
+                    e, default="データセット作成に失敗しました"
+                ),
+            },
             status_code=500,
         )
 
@@ -261,11 +267,16 @@ async def update_dataset(
         )
 
     except Exception as e:
-        logger.error(f"Dataset update failed: {e}")
+        logger.error("Dataset update failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "message": f"データセット更新に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(
+                    e, default="データセット更新に失敗しました"
+                ),
+            },
             status_code=500,
         )
 
@@ -350,11 +361,16 @@ async def create_knowledge_base(
             {"request": request, "knowledge_bases": kb_list},
         )
     except Exception as e:
-        logger.error(f"KB registration failed: {e}")
+        logger.error("KB registration failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {"request": request, "message": f"ナレッジベースの登録に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(
+                    e, default="ナレッジベースの登録に失敗しました"
+                ),
+            },
             status_code=500,
         )
 
