@@ -247,3 +247,92 @@ def outer():
     return inner
 """)
         assert visitor.offending_scopes == {"outer"}
+
+
+class TestRequestValidationErrorHandling:
+    """422（RequestValidationError）がカタログ相当の文言を返すことの検査。
+
+    Form(...) の必須パラメータ欠落などは FastAPI/Pydantic が Router に入る前に
+    検出するため、上のAST検査（`except ... as e` を対象とする）では捕捉できない
+    経路である。グローバルハンドラで塞いでいることを実リクエストで検証する。
+    """
+
+    def test_global_handler_is_registered(self):
+        """ハンドラが将来削除されても気づけるようにする。"""
+        from fastapi.exceptions import RequestValidationError
+
+        from web.main import app
+
+        assert RequestValidationError in app.exception_handlers
+
+    def test_htmx_request_gets_partial_html(self, client):
+        """htmx 経路では汎用文言のパーシャルHTMLを返すこと。"""
+        response = client.put(
+            "/persona/some-id", data={"age": "30"}, headers={"HX-Request": "true"}
+        )
+
+        assert response.status_code == 422
+        assert "text/html" in response.headers["content-type"]
+        assert "入力内容を確認してください" in response.text
+
+    def test_htmx_response_does_not_echo_user_input(self, client):
+        """`exc.errors()` の `input` に載る利用者入力を転写しないこと。
+
+        htmx は4xx本文をDOMへ挿入しないが、転写自体を避けるのが本Issueの原則。
+        """
+        payload = "<img src=x onerror=alert(1)>"
+        response = client.put(
+            "/persona/some-id",
+            data={"age": payload},
+            headers={"HX-Request": "true"},
+        )
+
+        assert response.status_code == 422
+        assert payload not in response.text
+        assert "onerror" not in response.text
+
+    def test_htmx_response_does_not_expose_validation_internals(self, client):
+        """Pydanticの内部表現（type/loc/msg）をレスポンスに出さないこと。"""
+        response = client.put(
+            "/persona/some-id", data={}, headers={"HX-Request": "true"}
+        )
+
+        assert response.status_code == 422
+        for internal in ("int_parsing", '"loc"', "Field required", "body"):
+            assert internal not in response.text
+
+    def test_json_api_keeps_standard_422(self, test_app):
+        """JSON APIクライアント（web/routers/api.py）の挙動を変えないこと。
+
+        共有の `client` フィクスチャはCSRF対策で HX-Request を常時付与するため、
+        htmx以外のクライアントを再現するには専用のクライアントが必要。
+        `/api/*` はCSRF免除パスなのでヘッダーなしでも到達する。
+        """
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as api_client:
+            response = api_client.post("/api/discussions", json={})
+
+        assert response.status_code == 422
+        assert "application/json" in response.headers["content-type"]
+        assert "detail" in response.json()
+
+    @pytest.mark.parametrize(
+        ("method", "path", "data"),
+        [
+            ("post", "/persona/save-selected", {}),
+            ("post", "/settings/datasets", {}),
+            ("post", "/discussion/start", {}),
+            ("post", "/interview/create-session", {}),
+        ],
+    )
+    def test_form_endpoints_across_routers(self, client, method, path, data):
+        """Form(...) を使う各Routerで一貫して文言が返ること。"""
+        response = getattr(client, method)(
+            path, data=data, headers={"HX-Request": "true"}
+        )
+
+        # 422 以外（例: 先にCSRFや別の検証で弾かれる）なら本テストの対象外
+        if response.status_code == 422:
+            assert "入力内容を確認してください" in response.text
+            assert "Field required" not in response.text

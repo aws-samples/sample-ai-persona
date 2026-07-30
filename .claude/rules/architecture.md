@@ -85,9 +85,18 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 - 内部エラーの詳細は `logger.*(..., exc_info=True)` でログに出す。`traceback.format_exc()` は使わない
 - フィールド単位のバリデーションは、フィールドごとにコードを作らず「バリデーション種別 + `context["field"]` の安定キー」で表現する（キー→表示名の写像はカタログが持つ）
 
+### リクエスト検証エラー（422）
+
+`Form(...)` / Pydanticボディの検証失敗は FastAPI が Router に入る**前**に検出するため、Router内の `except` では捕捉できずカタログを経由しない。`web/main.py` のグローバルハンドラ（`RequestValidationError`）で処理する。
+
+- htmx リクエスト（`HX-Request` ヘッダー）にはパーシャルHTMLを返し、それ以外はFastAPI標準のJSON応答を維持する（`web/routers/api.py` のJSONクライアント互換のため）
+- `exc.errors()` の `input` には利用者の入力値が載る。**レスポンスに転写してはならない**（Router層で `str(e)` を書かない原則と同じ扱い）
+- Router 個別に `try/except` を足して対処しない（`Form(...)` は40箇所以上あり、分散させるとこの穴が再発する）
+
 ### 検査
 
 - `tests/api/test_error_exposure.py` が `web/routers/` をASTで走査し、例外変数がログ・`user_message_for()` 以外から参照されていないことを機械的に検査する
+- 同ファイルの `TestRequestValidationErrorHandling` が422のグローバルハンドラの登録と挙動（文言・入力値の非転写・JSON経路の維持）を検査する
 - `tests/unit/test_error_messages.py` が全 `ErrorCode` のカタログ登録漏れを検知する
 - テストで文言をアサートしない。`tests/error_helpers.raises_code()` でエラーコードを検証する
 

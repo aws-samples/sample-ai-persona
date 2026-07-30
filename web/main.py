@@ -8,7 +8,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -74,6 +76,36 @@ app.include_router(interview.router, prefix="/interview", tags=["interview"])
 app.include_router(api.router, prefix="/api", tags=["api"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(survey.router, prefix="/survey", tags=["survey"])
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> Response:
+    """リクエスト検証エラー（422）をhtmx向けのパーシャルHTMLに変換する。
+
+    Form(...) の必須パラメータ欠落などは FastAPI/Pydantic がRouterに入る前に
+    検出するため、Router内の except では捕捉できず、文言カタログ
+    （web/error_messages.py）を経由しない。htmx はレスポンス本文を描画せず
+    app.js の汎用フォールバックにフォールスルーするため、そのままでは
+    「エラーが発生しました」しか表示されない。
+
+    `exc.errors()` には利用者の入力値が `input` として含まれるため、
+    レスポンスには一切転写しない（診断はログのみ）。これは Router層で
+    `str(e)` を書かない原則（.claude/rules/architecture.md）と同じ扱い。
+    """
+    logger.warning(
+        "リクエスト検証エラー: %s %s", request.method, request.url.path, exc_info=True
+    )
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request,
+            "partials/error.html",
+            {"request": request, "error": "入力内容を確認してください"},
+            status_code=422,
+        )
+    # JSON APIクライアント（web/routers/api.py）向けには標準の422応答を維持する
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.get("/", response_class=HTMLResponse)
