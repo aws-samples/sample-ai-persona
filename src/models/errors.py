@@ -129,7 +129,15 @@ class ErrorCode(StrEnum):
     DISCUSSION_TOPIC_TOO_LONG = "discussion_topic_too_long"
     DISCUSSION_DOCUMENTS_TOO_LARGE = "discussion_documents_too_large"
     DISCUSSION_NOT_FOUND = "discussion_not_found"
+    DISCUSSION_ROUNDS_TOO_FEW = "discussion_rounds_too_few"
+    DISCUSSION_ROUNDS_TOO_MANY = "discussion_rounds_too_many"
+    DISCUSSION_AGENT_SETUP_FAILED = "discussion_agent_setup_failed"
     DISCUSSION_OPERATION_FAILED = "discussion_operation_failed"
+
+    # --- Discussion reports ---
+    REPORT_NOT_FOUND = "report_not_found"
+    REPORT_LIMIT_REACHED = "report_limit_reached"
+    REPORT_OPERATION_FAILED = "report_operation_failed"
 
     # --- Survey persona datasets (DWH segment extraction) ---
     SEGMENT_CONDITION_REQUIRED = "segment_condition_required"

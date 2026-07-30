@@ -6,6 +6,17 @@ from src.models.errors import CodedError, ErrorCode
 from web import error_messages
 from web.error_messages import FALLBACK_MESSAGE, user_message_for
 
+# 補間キーの上位集合。どのテンプレートでも補間が成立するようにまとめて渡す。
+_SAMPLE_CONTEXT: dict[str, object] = {
+    "max_reports": 3,
+    "min_length": 5,
+    "max_length": 200,
+    "min_personas": 2,
+    "max_personas": 5,
+    "min_rounds": 1,
+    "max_rounds": 10,
+}
+
 
 class TestCatalogCoverage:
     """カタログの網羅性。コード追加時の登録漏れを検知する。"""
@@ -148,3 +159,72 @@ class TestNoMessageLeakage:
             context={"survey_id": "srv-secret-0001"},
         )
         assert "srv-secret-0001" not in user_message_for(exc)
+
+
+class TestActionableWordingPreserved:
+    """対処方法を含む文言が総称文言に劣化していないことの回帰テスト。
+
+    コード未付与の例外は `default` にフォールバックするため、Manager 側で
+    コードを付け忘れると「〜に失敗しました」だけが表示され、ユーザーが
+    次に何をすればよいか分からなくなる。実際に一度その劣化を起こしたため、
+    ユーザーが行動できる文言については解決後の文字列を直接検証する。
+    """
+
+    def test_report_limit_tells_user_to_delete_one(self):
+        exc = CodedError(
+            "discussion has 3 reports, max is 3",
+            code=ErrorCode.REPORT_LIMIT_REACHED,
+            context={"max_reports": 3},
+        )
+        message = user_message_for(exc, default="レポートの保存に失敗しました")
+        assert "最大3件" in message
+        assert "削除してください" in message
+
+    def test_discussion_topic_length_tells_user_the_bound(self):
+        short = CodedError(
+            "topic length 2 below minimum 5",
+            code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
+            context={"min_length": 5},
+        )
+        long = CodedError(
+            "topic length 300 exceeds 200",
+            code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
+            context={"max_length": 200},
+        )
+        default = "議論の開始中にエラーが発生しました"
+        assert "5文字以上" in user_message_for(short, default=default)
+        assert "200文字以内" in user_message_for(long, default=default)
+
+    def test_discussion_rounds_tells_user_the_bound(self):
+        few = CodedError(
+            "rounds 0 below minimum 1",
+            code=ErrorCode.DISCUSSION_ROUNDS_TOO_FEW,
+            context={"min_rounds": 1},
+        )
+        many = CodedError(
+            "rounds 12 exceeds maximum 10",
+            code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY,
+            context={"max_rounds": 10},
+        )
+        default = "議論の開始中にエラーが発生しました"
+        assert "1以上" in user_message_for(few, default=default)
+        assert "10以下" in user_message_for(many, default=default)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.REPORT_LIMIT_REACHED,
+            ErrorCode.REPORT_NOT_FOUND,
+            ErrorCode.DISCUSSION_TOPIC_REQUIRED,
+            ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
+            ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
+            ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
+            ErrorCode.DISCUSSION_ROUNDS_TOO_FEW,
+            ErrorCode.DISCUSSION_ROUNDS_TOO_MANY,
+        ],
+    )
+    def test_actionable_codes_never_fall_back_to_default(self, code):
+        """これらのコードは必ずカタログ文言を返し、default に落ちてはならない。"""
+        sentinel = "SENTINEL_GENERIC_FAILURE"
+        exc = CodedError("diagnostic detail", code=code, context=_SAMPLE_CONTEXT)
+        assert user_message_for(exc, default=sentinel) != sentinel

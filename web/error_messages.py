@@ -146,8 +146,26 @@ _CATALOG: dict[ErrorCode, str] = {
         "ドキュメントの合計サイズが制限を超えています（最大{max_size_mb:.0f}MB）"
     ),
     ErrorCode.DISCUSSION_NOT_FOUND: "議論が見つかりません",
+    ErrorCode.DISCUSSION_ROUNDS_TOO_FEW: (
+        "ラウンド数は{min_rounds}以上で指定してください"
+    ),
+    ErrorCode.DISCUSSION_ROUNDS_TOO_MANY: (
+        "ラウンド数は{max_rounds}以下で指定してください"
+    ),
+    ErrorCode.DISCUSSION_AGENT_SETUP_FAILED: (
+        "議論エージェントの準備に失敗しました。時間をおいて再度お試しください。"
+    ),
     ErrorCode.DISCUSSION_OPERATION_FAILED: (
         "議論の処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    # --- 議論レポート ---
+    ErrorCode.REPORT_NOT_FOUND: "レポートが見つかりません",
+    ErrorCode.REPORT_LIMIT_REACHED: (
+        "レポートは最大{max_reports}件まで保存できます。"
+        "不要なレポートを削除してください。"
+    ),
+    ErrorCode.REPORT_OPERATION_FAILED: (
+        "レポートの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
     # --- ペルソナデータのセグメント抽出（DWH） ---
     ErrorCode.SEGMENT_CONDITION_REQUIRED: "抽出条件を入力してください",

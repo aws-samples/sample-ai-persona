@@ -3,6 +3,8 @@ Integration tests for Agent Discussion Manager
 """
 
 import pytest
+
+from src.models.errors import ErrorCode
 from unittest.mock import Mock
 
 from src.managers.agent_discussion_manager import (
@@ -309,5 +311,6 @@ class TestAgentDiscussionManager:
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.save_agent_discussion(discussion)
 
-        assert "Invalid discussion mode" in str(exc_info.value)
-        assert "Expected 'agent'" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_OPERATION_FAILED
+        # 診断メッセージには不正だったモードが残る（ログ用）
+        assert "'classic'" in str(exc_info.value)

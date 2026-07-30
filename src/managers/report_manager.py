@@ -7,7 +7,7 @@ classic/agent両モードの議論で共通利用される。
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.discussion import Discussion
 from ..models.discussion_report import DiscussionReport
 from ..services.ai_service import AIService
@@ -29,6 +29,9 @@ class ReportManagerError(CodedError):
 
 class ReportManager:
     """レポート生成・管理を担当するManager。"""
+
+    # 1議論あたりに保存できるレポート数の上限
+    MAX_REPORTS_PER_DISCUSSION = 3
 
     def __init__(
         self,
@@ -129,7 +132,10 @@ class ReportManager:
         """
         discussion = self.database_service.get_discussion(discussion_id)
         if not discussion:
-            raise ReportManagerError("議論が見つかりません")
+            raise ReportManagerError(
+                f"discussion {discussion_id!r} not found",
+                code=ErrorCode.DISCUSSION_NOT_FOUND,
+            )
 
         insights_data, personas_data = self._get_report_context(discussion)
 
@@ -249,11 +255,17 @@ class ReportManager:
         """
         discussion = self.database_service.get_discussion(discussion_id)
         if not discussion:
-            raise ReportManagerError("議論が見つかりません")
-
-        if len(discussion.reports) >= 3:
             raise ReportManagerError(
-                "レポートは最大3件まで保存できます。不要なレポートを削除してください。"
+                f"discussion {discussion_id!r} not found",
+                code=ErrorCode.DISCUSSION_NOT_FOUND,
+            )
+
+        if len(discussion.reports) >= self.MAX_REPORTS_PER_DISCUSSION:
+            raise ReportManagerError(
+                f"discussion has {len(discussion.reports)} reports, "
+                f"max is {self.MAX_REPORTS_PER_DISCUSSION}",
+                code=ErrorCode.REPORT_LIMIT_REACHED,
+                context={"max_reports": self.MAX_REPORTS_PER_DISCUSSION},
             )
 
         discussion.reports.append(report)
@@ -269,7 +281,10 @@ class ReportManager:
         """
         discussion = self.database_service.get_discussion(discussion_id)
         if not discussion:
-            raise ReportManagerError("議論が見つかりません")
+            raise ReportManagerError(
+                f"discussion {discussion_id!r} not found",
+                code=ErrorCode.DISCUSSION_NOT_FOUND,
+            )
 
         updated = False
         for i, report in enumerate(discussion.reports):
@@ -281,7 +296,10 @@ class ReportManager:
                 break
 
         if not updated:
-            raise ReportManagerError("レポートが見つかりません")
+            raise ReportManagerError(
+                f"report {report_id!r} not found in discussion",
+                code=ErrorCode.REPORT_NOT_FOUND,
+            )
 
         self.database_service.save_discussion(discussion)
 
@@ -296,13 +314,19 @@ class ReportManager:
         """
         discussion = self.database_service.get_discussion(discussion_id)
         if not discussion:
-            raise ReportManagerError("議論が見つかりません")
+            raise ReportManagerError(
+                f"discussion {discussion_id!r} not found",
+                code=ErrorCode.DISCUSSION_NOT_FOUND,
+            )
 
         original_len = len(discussion.reports)
         discussion.reports = [r for r in discussion.reports if r.id != report_id]
 
         if len(discussion.reports) == original_len:
-            raise ReportManagerError("レポートが見つかりません")
+            raise ReportManagerError(
+                f"report {report_id!r} not found in discussion",
+                code=ErrorCode.REPORT_NOT_FOUND,
+            )
 
         self.database_service.save_discussion(discussion)
         return True
