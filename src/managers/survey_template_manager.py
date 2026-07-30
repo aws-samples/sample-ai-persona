@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.survey_template import Question, SurveyTemplate, TemplateImage
 from ..prompts.survey_prompts import (
     SURVEY_CHAT_SYSTEM_PROMPT,
@@ -93,7 +93,8 @@ class SurveyTemplateManager:
         existing = self.db.get_survey_template(template_id)
         if existing is None:
             raise SurveyTemplateManagerError(
-                f"テンプレートが見つかりません: {template_id}"
+                f"survey template {template_id!r} not found",
+                code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
             )
 
         updated = SurveyTemplate(
@@ -122,11 +123,15 @@ class SurveyTemplateManager:
     def generate_ai_chat_response(self, messages: List[Dict[str, str]]) -> str:
         """AIチャットヒアリングの1ターンを処理してassistant発言を返す。"""
         if self.ai_service is None:
-            raise SurveyTemplateManagerError("AIService が利用できません")
+            raise SurveyTemplateManagerError(
+                "ai service is not configured",
+                code=ErrorCode.SURVEY_AI_UNAVAILABLE,
+            )
         self._validate_ai_messages(messages)
         if messages[-1].get("role") != "user":
             raise SurveyTemplateValidationError(
-                "最後のメッセージはユーザー発言である必要があります"
+                "last message role is not 'user'",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
             )
         return self.ai_service.chat_for_survey(
             messages, system_prompt=SURVEY_CHAT_SYSTEM_PROMPT
@@ -137,7 +142,10 @@ class SurveyTemplateManager:
     ) -> Dict[str, Any]:
         """会話履歴からアンケート設問ドラフトを生成して返す。"""
         if self.ai_service is None:
-            raise SurveyTemplateManagerError("AIService が利用できません")
+            raise SurveyTemplateManagerError(
+                "ai service is not configured",
+                code=ErrorCode.SURVEY_AI_UNAVAILABLE,
+            )
         self._validate_ai_messages(messages)
 
         raw = self.ai_service.generate_survey_questions_draft(
@@ -145,7 +153,10 @@ class SurveyTemplateManager:
         )
         questions = [self._build_question_from_ai(q) for q in raw.get("questions", [])]
         if not questions:
-            raise SurveyTemplateManagerError("AIが有効な設問を生成できませんでした")
+            raise SurveyTemplateManagerError(
+                "ai returned no valid questions",
+                code=ErrorCode.SURVEY_AI_NO_QUESTIONS,
+            )
         self._validate_questions(questions)
         return {
             "summary": raw.get("summary", ""),
@@ -162,51 +173,77 @@ class SurveyTemplateManager:
         """テンプレート名のバリデーション。"""
         if not name or not name.strip():
             raise SurveyTemplateValidationError(
-                "テンプレート名は空白のみでは登録できません"
+                "template name is blank",
+                code=ErrorCode.SURVEY_TEMPLATE_NAME_BLANK,
             )
 
     @staticmethod
     def _validate_questions(questions: List[Question]) -> None:
         """質問リストのバリデーション。"""
         if not questions:
-            raise SurveyTemplateValidationError("質問が1つも含まれていません")
+            raise SurveyTemplateValidationError(
+                "question list is empty",
+                code=ErrorCode.SURVEY_TEMPLATE_NO_QUESTIONS,
+            )
         for q in questions:
             if q.question_type == "multiple_choice" and len(q.options) < 2:
                 raise SurveyTemplateValidationError(
-                    f"選択式質問「{q.text}」には2つ以上の選択肢が必要です"
+                    f"multiple choice question has {len(q.options)} options",
+                    code=ErrorCode.SURVEY_TEMPLATE_TOO_FEW_OPTIONS,
+                    context={"question_text": q.text},
                 )
 
     @staticmethod
     def _validate_images(images: List[TemplateImage]) -> None:
         """画像リストのバリデーション。"""
         if len(images) > 1:
-            raise SurveyTemplateValidationError("画像は1枚まで添付できます")
+            raise SurveyTemplateValidationError(
+                f"{len(images)} images attached, max is 1",
+                code=ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES,
+            )
         for img in images:
             if not img.name or not img.name.strip():
-                raise SurveyTemplateValidationError("画像には名前を設定してください")
+                raise SurveyTemplateValidationError(
+                    "image name is blank",
+                    code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING,
+                )
 
     def _validate_ai_messages(self, messages: List[Dict[str, str]]) -> None:
         if not isinstance(messages, list) or not messages:
-            raise SurveyTemplateValidationError("会話履歴が空です")
+            raise SurveyTemplateValidationError(
+                "conversation history is empty",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+            )
         if len(messages) > self._MAX_AI_MESSAGES:
             raise SurveyTemplateValidationError(
-                f"会話履歴が長すぎます（最大 {self._MAX_AI_MESSAGES} 件）"
+                f"conversation has {len(messages)} messages, "
+                f"max is {self._MAX_AI_MESSAGES}",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_TOO_LONG,
+                context={"max_messages": self._MAX_AI_MESSAGES},
             )
         for m in messages:
             if not isinstance(m, dict):
-                raise SurveyTemplateValidationError("会話履歴の形式が不正です")
+                raise SurveyTemplateValidationError(
+                    f"message is {type(m).__name__}, expected dict",
+                    code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+                )
             if m.get("role") not in ("user", "assistant"):
                 raise SurveyTemplateValidationError(
-                    "会話履歴に不正な role が含まれています"
+                    "message role is neither 'user' nor 'assistant'",
+                    code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
                 )
             content = m.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise SurveyTemplateValidationError(
-                    "会話履歴に空のメッセージが含まれています"
+                    "message content is empty",
+                    code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
                 )
             if len(content) > self._MAX_AI_MESSAGE_LENGTH:
                 raise SurveyTemplateValidationError(
-                    f"1メッセージは{self._MAX_AI_MESSAGE_LENGTH}文字以内にしてください"
+                    f"message length {len(content)} exceeds "
+                    f"{self._MAX_AI_MESSAGE_LENGTH}",
+                    code=ErrorCode.SURVEY_AI_MESSAGE_TOO_LONG,
+                    context={"max_length": self._MAX_AI_MESSAGE_LENGTH},
                 )
 
     @staticmethod
@@ -215,7 +252,10 @@ class SurveyTemplateManager:
         qtype = str(data.get("question_type", "")).strip()
         text = str(data.get("text", "")).strip()
         if not text:
-            raise SurveyTemplateValidationError("AI生成の設問に質問文がありません")
+            raise SurveyTemplateValidationError(
+                "ai generated question has no text",
+                code=ErrorCode.SURVEY_AI_NO_QUESTIONS,
+            )
         if qtype == "multiple_choice":
             options = [
                 str(o).strip() for o in data.get("options", []) if str(o).strip()
@@ -237,4 +277,7 @@ class SurveyTemplateManager:
             return Question.create_free_text(text=text)
         if qtype == "scale_rating":
             return Question.create_scale_rating(text=text)
-        raise SurveyTemplateValidationError(f"AI生成の設問タイプが不正です: {qtype}")
+        raise SurveyTemplateValidationError(
+            f"ai generated question type {qtype!r} is invalid",
+            code=ErrorCode.SURVEY_AI_NO_QUESTIONS,
+        )

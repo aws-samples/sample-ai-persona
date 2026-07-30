@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
 from ..models.survey_template import SurveyTemplate
 from ..prompts.survey_prompts import INSIGHT_REPORT_SYSTEM_PROMPT, build_insight_prompt
@@ -69,10 +69,14 @@ class SurveyAnalysisManager:
         """アンケートを取得し結果が存在することを確認する。"""
         survey = self.db.get_survey(survey_id)
         if survey is None:
-            raise SurveyAnalysisManagerError(f"アンケートが見つかりません: {survey_id}")
+            raise SurveyAnalysisManagerError(
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
+            )
         if not survey.s3_result_path:
             raise SurveyAnalysisManagerError(
-                f"アンケート結果がまだ生成されていません: {survey_id}"
+                f"survey {survey_id!r} has no s3 result path",
+                code=ErrorCode.SURVEY_RESULT_NOT_READY,
             )
         return survey
 
@@ -81,7 +85,8 @@ class SurveyAnalysisManager:
         template = self.db.get_survey_template(template_id)
         if template is None:
             raise SurveyAnalysisManagerError(
-                f"テンプレートが見つかりません: {template_id}"
+                f"survey template {template_id!r} not found",
+                code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
             )
         return template
 
@@ -356,7 +361,8 @@ class SurveyAnalysisManager:
         except Exception as e:
             logger.error(f"Failed to generate insight report: {e}")
             raise SurveyAnalysisManagerError(
-                f"レポート生成に失敗しました。再試行してください: {e}"
+                f"insight report generation failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_REPORT_GENERATION_FAILED,
             ) from e
 
     def generate_insight_report_streaming(self, survey_id: str) -> Any:
@@ -380,7 +386,10 @@ class SurveyAnalysisManager:
         """ストリーミング生成済みのレポートを保存する。"""
         survey = self.db.get_survey(survey_id)
         if survey is None:
-            raise SurveyAnalysisManagerError(f"アンケートが見つかりません: {survey_id}")
+            raise SurveyAnalysisManagerError(
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
+            )
 
         report = InsightReport.create_new(survey_id=survey_id, content=content)
         survey.insight_report = report

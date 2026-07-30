@@ -6,6 +6,8 @@ from unittest.mock import Mock
 import polars as pl
 import pytest
 
+from src.models.errors import ErrorCode
+
 from src.managers.survey_execution_manager import (
     SurveyExecutionManager,
     SurveyExecutionManagerError,
@@ -702,8 +704,9 @@ class TestExecuteSurvey:
 
     def test_survey_not_found(self, mgr: SurveyExecutionManager, mock_db: Mock) -> None:
         mock_db.get_survey.return_value = None
-        with pytest.raises(SurveyExecutionManagerError, match="見つかりません"):
+        with pytest.raises(SurveyExecutionManagerError) as exc_info:
             mgr.execute_survey("missing_id")
+        assert exc_info.value.code is ErrorCode.SURVEY_NOT_FOUND
 
     def test_template_not_found(
         self,
@@ -714,10 +717,9 @@ class TestExecuteSurvey:
         mock_db.get_survey.return_value = survey_record
         mock_db.get_survey_template.return_value = None
 
-        with pytest.raises(
-            SurveyExecutionManagerError, match="テンプレートが見つかりません"
-        ):
+        with pytest.raises(SurveyExecutionManagerError) as exc_info:
             mgr.execute_survey(survey_record.id)
+        assert exc_info.value.code is ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
 
     def test_batch_error_sets_error_status(
         self,
@@ -879,5 +881,6 @@ class TestEnsureParquetUri:
         mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
         from src.managers.survey_execution_manager import SurveyExecutionError
 
-        with pytest.raises(SurveyExecutionError, match="ダウンロードされていません"):
+        with pytest.raises(SurveyExecutionError) as exc_info:
             mgr._ensure_parquet_uri("nemotron")
+        assert exc_info.value.code is ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.survey import Survey
 from ..services.database_service import DatabaseService
 from ..services.s3_service import S3Service
@@ -67,7 +67,8 @@ class SurveyExecutionManager:
         template = self.db.get_survey_template(template_id)
         if template is None:
             raise SurveyExecutionManagerError(
-                f"テンプレートが見つかりません: {template_id}"
+                f"survey template {template_id!r} not found",
+                code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
             )
 
         has_images = bool(template.images)
@@ -108,13 +109,15 @@ class SurveyExecutionManager:
         survey = self.db.get_survey(survey_id)
         if survey is None:
             raise SurveyExecutionManagerError(
-                f"アンケートが見つかりません: {survey_id}"
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
             )
 
         template = self.db.get_survey_template(survey.template_id)
         if template is None:
             raise SurveyExecutionManagerError(
-                f"テンプレートが見つかりません: {survey.template_id}"
+                f"survey template {survey.template_id!r} not found",
+                code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
             )
 
         survey.status = "running"
@@ -239,7 +242,8 @@ class SurveyExecutionManager:
             self.db.update_survey(survey)
             logger.error(f"Survey execution failed: {survey.id} - {e}")
             raise SurveyExecutionError(
-                f"アンケート実行中にエラーが発生しました: {e}"
+                f"survey execution failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_EXECUTION_FAILED,
             ) from e
 
     def _ensure_parquet_uri(self, datasource: str) -> None:
@@ -258,7 +262,8 @@ class SurveyExecutionManager:
                     )
                 except Exception:
                     raise SurveyExecutionError(
-                        "Nemotronデータセットがまだダウンロードされていません。"
+                        "nemotron parquet uri is not configured",
+                        code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
                     )
 
     def _save_results_to_s3(
@@ -490,7 +495,10 @@ class SurveyExecutionManager:
         """アンケートを削除する。"""
         survey = self.db.get_survey(survey_id)
         if survey is None:
-            raise SurveyExecutionManagerError(f"Survey not found: {survey_id}")
+            raise SurveyExecutionManagerError(
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
+            )
         self.db.delete_survey(survey_id)
         logger.info(f"Survey deleted: {survey_id}")
 
@@ -499,11 +507,13 @@ class SurveyExecutionManager:
         survey = self.db.get_survey(survey_id)
         if survey is None:
             raise SurveyExecutionManagerError(
-                f"アンケートが見つかりません: {survey_id}"
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
             )
         if not survey.s3_result_path:
             raise SurveyExecutionManagerError(
-                f"アンケート結果がまだ生成されていません: {survey_id}"
+                f"survey {survey_id!r} has no s3 result path",
+                code=ErrorCode.SURVEY_RESULT_NOT_READY,
             )
         return self.s3_service.generate_presigned_url(survey.s3_result_path, expiration)
 
@@ -512,11 +522,13 @@ class SurveyExecutionManager:
         survey = self.db.get_survey(survey_id)
         if survey is None:
             raise SurveyExecutionManagerError(
-                f"アンケートが見つかりません: {survey_id}"
+                f"survey {survey_id!r} not found",
+                code=ErrorCode.SURVEY_NOT_FOUND,
             )
         if not survey.s3_result_path:
             raise SurveyExecutionManagerError(
-                f"アンケート結果がまだ生成されていません: {survey_id}"
+                f"survey {survey_id!r} has no s3 result path",
+                code=ErrorCode.SURVEY_RESULT_NOT_READY,
             )
         return self.s3_service.download_file(survey.s3_result_path)
 
@@ -555,14 +567,22 @@ class SurveyExecutionManager:
         """ペルソナ数のバリデーション。"""
         if not isinstance(count, int) or count < 100:
             raise SurveyExecutionValidationError(
-                "対象ペルソナ数は100以上で指定してください"
+                f"target count {count} below minimum 100",
+                code=ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
+                context={"min_count": 100},
             )
         if has_images and count > 1000:
             raise SurveyExecutionValidationError(
-                "画像付きアンケートの場合、対象ペルソナ数は1000人までです"
+                f"target count {count} exceeds 1000 for image survey",
+                code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES,
+                context={"max_count": 1000},
             )
         if not has_images and count > 10000:
-            raise SurveyExecutionValidationError("対象ペルソナ数は10000人までです")
+            raise SurveyExecutionValidationError(
+                f"target count {count} exceeds 10000",
+                code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,
+                context={"max_count": 10000},
+            )
 
     @staticmethod
     def generate_default_survey_name(template_name: str) -> str:

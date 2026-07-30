@@ -62,6 +62,64 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.FILE_OPERATION_FAILED: (
         "ファイルの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
+    # --- アンケート ---
+    # ID は画面に出さずログにのみ残す（診断情報とユーザー向け案内の分離）。
+    ErrorCode.SURVEY_NOT_FOUND: "アンケートが見つかりません",
+    ErrorCode.SURVEY_RESULT_NOT_READY: "アンケート結果がまだ生成されていません",
+    ErrorCode.SURVEY_TEMPLATE_NOT_FOUND: "テンプレートが見つかりません",
+    ErrorCode.SURVEY_TEMPLATE_NAME_BLANK: (
+        "テンプレート名は空白のみでは登録できません"
+    ),
+    ErrorCode.SURVEY_TEMPLATE_NO_QUESTIONS: "質問が1つも含まれていません",
+    ErrorCode.SURVEY_TEMPLATE_TOO_FEW_OPTIONS: (
+        "選択式質問「{question_text}」には2つ以上の選択肢が必要です"
+    ),
+    ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES: "画像は1枚まで添付できます",
+    ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
+    ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW: (
+        "対象ペルソナ数は{min_count}以上で指定してください"
+    ),
+    ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH: "対象ペルソナ数は{max_count}人までです",
+    ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES: (
+        "画像付きアンケートの場合、対象ペルソナ数は{max_count}人までです"
+    ),
+    ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED: (
+        "Nemotronデータセットがまだダウンロードされていません。"
+        "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
+    ),
+    ErrorCode.SURVEY_AI_UNAVAILABLE: (
+        "AIによる生成機能が利用できません。設定を確認してください。"
+    ),
+    ErrorCode.SURVEY_AI_NO_QUESTIONS: "AIが有効な設問を生成できませんでした",
+    ErrorCode.SURVEY_AI_CONVERSATION_INVALID: "会話履歴の形式が正しくありません",
+    ErrorCode.SURVEY_AI_CONVERSATION_TOO_LONG: (
+        "会話履歴が長すぎます（最大 {max_messages} 件）"
+    ),
+    ErrorCode.SURVEY_AI_MESSAGE_TOO_LONG: (
+        "1メッセージは{max_length}文字以内にしてください"
+    ),
+    ErrorCode.SURVEY_OPERATION_FAILED: (
+        "アンケートの処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.SURVEY_EXECUTION_FAILED: (
+        "アンケートの実行中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.SURVEY_REPORT_GENERATION_FAILED: (
+        "レポート生成に失敗しました。再試行してください。"
+    ),
+    # --- ペルソナデータのセグメント抽出（DWH） ---
+    ErrorCode.SEGMENT_CONDITION_REQUIRED: "抽出条件を入力してください",
+    ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW: (
+        "抽出件数が少なすぎます（{row_count}件）。最低{min_rows}件のデータが必要です。"
+    ),
+    ErrorCode.SEGMENT_ROW_COUNT_TOO_HIGH: (
+        "抽出件数が多すぎます（{row_count}件）。最大{max_rows}件までです。"
+    ),
+    ErrorCode.SEGMENT_CSV_URL_MISSING: "CSVエクスポートURLを取得できませんでした。",
+    ErrorCode.DATA_AGENT_NOT_CONFIGURED: (
+        "データ分析エージェントの接続設定がされていません。"
+        "設定画面から Runtime ARN を設定してください"
+    ),
 }
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"

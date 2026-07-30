@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
+from web.error_messages import user_message_for  # noqa: E402
 from web.sanitize import render_markdown  # noqa: E402
 
 # マークダウンフィルターを追加
@@ -531,9 +532,8 @@ async def dwh_extract(request: Request) -> Any:
             yield _survey_sse_event("done", "")
 
         except (SurveyDatasetValidationError, SurveyDatasetManagerError) as e:
-            yield _survey_sse_event(
-                "error", e.args[0] if e.args else "エラーが発生しました"
-            )
+            logger.warning("DWH セグメント抽出エラー", exc_info=True)
+            yield _survey_sse_event("error", user_message_for(e))
         except Exception:
             logger.exception("DWH セグメント抽出エラー")
             yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
@@ -937,11 +937,14 @@ async def preview_personas(request: Request) -> Any:
         stats = manager.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
 
     except Exception as e:
-        logger.error(f"Preview failed: {e}")
+        logger.error("Preview failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": f"プレビューに失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(e, default="プレビューに失敗しました"),
+            },
         )
 
     return templates.TemplateResponse(
@@ -1113,17 +1116,22 @@ async def create_template(request: Request) -> Any:
     try:
         manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyTemplateValidationError as e:
+        logger.warning("テンプレートのバリデーションエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
+            {"request": request, "message": user_message_for(e)},
             status_code=400,
         )
     except SurveyTemplateManagerError as e:
+        logger.error("テンプレート保存エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": f"保存に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(e, default="保存に失敗しました"),
+            },
             status_code=500,
         )
 
@@ -1168,17 +1176,22 @@ async def update_template(request: Request, template_id: str) -> Any:
             images=images or None,
         )
     except SurveyTemplateValidationError as e:
+        logger.warning("テンプレートのバリデーションエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
+            {"request": request, "message": user_message_for(e)},
             status_code=400,
         )
     except SurveyTemplateManagerError as e:
+        logger.error("テンプレート更新エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": f"更新に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(e, default="更新に失敗しました"),
+            },
             status_code=500,
         )
 
@@ -1194,10 +1207,14 @@ async def delete_template(request: Request, template_id: str) -> Any:
     try:
         manager.delete_template(template_id)
     except SurveyTemplateManagerError as e:
+        logger.error("テンプレート削除エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": f"削除に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(e, default="削除に失敗しました"),
+            },
             status_code=500,
         )
     # 削除成功 - カードを空にする
@@ -1266,20 +1283,27 @@ async def execute_survey(request: Request) -> Any:
             datasource=datasource,
         )
     except SurveyExecutionValidationError as e:
+        logger.warning("アンケート実行のバリデーションエラー", exc_info=True)
         response = templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
+            {"request": request, "message": user_message_for(e)},
             status_code=400,
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
         return response
     except SurveyExecutionManagerError as e:
+        logger.error("アンケート作成エラー", exc_info=True)
         response = templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": f"アンケート作成に失敗しました: {e}"},
+            {
+                "request": request,
+                "message": user_message_for(
+                    e, default="アンケート作成に失敗しました"
+                ),
+            },
             status_code=500,
         )
         response.headers["HX-Retarget"] = "#execute-error"
@@ -1312,7 +1336,8 @@ async def download_csv(survey_id: str) -> Any:
         presigned_url = manager.get_download_url(survey_id, expiration=300)
         return RedirectResponse(url=presigned_url)
     except SurveyExecutionManagerError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.warning("CSVダウンロードURL取得エラー", exc_info=True)
+        raise HTTPException(status_code=404, detail=user_message_for(e))
 
 
 @router.get("/results/{survey_id}/personas", response_class=HTMLResponse)
@@ -1322,10 +1347,11 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
     try:
         stats = manager.get_persona_statistics(survey_id)
     except SurveyAnalysisManagerError as e:
+        logger.warning("アンケート分析データ取得エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
+            {"request": request, "message": user_message_for(e)},
             status_code=400,
         )
     return templates.TemplateResponse(
@@ -1342,10 +1368,11 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     try:
         data = manager.get_visual_analysis(survey_id)
     except SurveyAnalysisManagerError as e:
+        logger.warning("アンケート分析データ取得エラー", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
+            {"request": request, "message": user_message_for(e)},
             status_code=400,
         )
     return templates.TemplateResponse(

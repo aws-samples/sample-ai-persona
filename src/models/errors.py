@@ -57,6 +57,39 @@ class ErrorCode(StrEnum):
     # Catch-all for file operations that failed for internal reasons.
     FILE_OPERATION_FAILED = "file_operation_failed"
 
+    # --- Surveys ---
+    SURVEY_NOT_FOUND = "survey_not_found"
+    SURVEY_RESULT_NOT_READY = "survey_result_not_ready"
+    SURVEY_TEMPLATE_NOT_FOUND = "survey_template_not_found"
+    SURVEY_TEMPLATE_NAME_BLANK = "survey_template_name_blank"
+    SURVEY_TEMPLATE_NO_QUESTIONS = "survey_template_no_questions"
+    SURVEY_TEMPLATE_TOO_FEW_OPTIONS = "survey_template_too_few_options"
+    SURVEY_TEMPLATE_TOO_MANY_IMAGES = "survey_template_too_many_images"
+    SURVEY_TEMPLATE_IMAGE_NAME_MISSING = "survey_template_image_name_missing"
+    SURVEY_TARGET_COUNT_TOO_LOW = "survey_target_count_too_low"
+    SURVEY_TARGET_COUNT_TOO_HIGH = "survey_target_count_too_high"
+    SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES = (
+        "survey_target_count_too_high_with_images"
+    )
+    SURVEY_DATASET_NOT_DOWNLOADED = "survey_dataset_not_downloaded"
+    # AI-assisted template authoring.
+    SURVEY_AI_UNAVAILABLE = "survey_ai_unavailable"
+    SURVEY_AI_NO_QUESTIONS = "survey_ai_no_questions"
+    SURVEY_AI_CONVERSATION_INVALID = "survey_ai_conversation_invalid"
+    SURVEY_AI_CONVERSATION_TOO_LONG = "survey_ai_conversation_too_long"
+    SURVEY_AI_MESSAGE_TOO_LONG = "survey_ai_message_too_long"
+    # Catch-alls for survey operations that failed for internal reasons.
+    SURVEY_OPERATION_FAILED = "survey_operation_failed"
+    SURVEY_EXECUTION_FAILED = "survey_execution_failed"
+    SURVEY_REPORT_GENERATION_FAILED = "survey_report_generation_failed"
+
+    # --- Survey persona datasets (DWH segment extraction) ---
+    SEGMENT_CONDITION_REQUIRED = "segment_condition_required"
+    SEGMENT_ROW_COUNT_TOO_LOW = "segment_row_count_too_low"
+    SEGMENT_ROW_COUNT_TOO_HIGH = "segment_row_count_too_high"
+    SEGMENT_CSV_URL_MISSING = "segment_csv_url_missing"
+    DATA_AGENT_NOT_CONFIGURED = "data_agent_not_configured"
+
 
 class CodedError(Exception):
     """Base class for exceptions carrying an :class:`ErrorCode`.

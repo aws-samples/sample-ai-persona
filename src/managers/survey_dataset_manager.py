@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..prompts.survey_prompts import (
     DWH_SEGMENT_SYSTEM_PROMPT,
     STANDARD_COLUMNS,
@@ -101,8 +101,8 @@ class SurveyDatasetManager:
             self.batch_service.set_parquet_s3_uri(s3_uri)
         except self.s3_service.s3_client.exceptions.ClientError:
             raise SurveyDatasetManagerError(
-                "Nemotronデータセットがまだダウンロードされていません。"
-                "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
+                "nemotron parquet uri is not configured",
+                code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
             )
 
     # =========================================================================
@@ -205,11 +205,14 @@ class SurveyDatasetManager:
         )
 
         if not condition or not condition.strip():
-            raise SurveyDatasetValidationError("抽出条件を入力してください")
+            raise SurveyDatasetValidationError(
+                "extraction condition is blank",
+                code=ErrorCode.SEGMENT_CONDITION_REQUIRED,
+            )
         if not config.DATA_AGENT_RUNTIME_ARN:
             raise SurveyDatasetManagerError(
-                "データ分析エージェントの接続設定がされていません。"
-                "設定画面から Runtime ARN を設定してください"
+                "DATA_AGENT_RUNTIME_ARN is not set",
+                code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
             )
 
         logger.info(f"DWH セグメント抽出開始 (condition={condition!r})")
@@ -264,7 +267,8 @@ class SurveyDatasetManager:
 
         if not csv_urls:
             raise SurveyDatasetManagerError(
-                "CSVエクスポートURLを取得できませんでした。"
+                "data agent returned no csv export url",
+                code=ErrorCode.SEGMENT_CSV_URL_MISSING,
             )
 
         csv_url = csv_urls[-1]
@@ -310,13 +314,15 @@ class SurveyDatasetManager:
         """抽出件数バリデーション。"""
         if row_count < self.MIN_SEGMENT_ROWS:
             raise SurveyDatasetValidationError(
-                f"抽出件数が少なすぎます（{row_count}件）。"
-                f"最低{self.MIN_SEGMENT_ROWS}件のデータが必要です。"
+                f"row count {row_count} below minimum {self.MIN_SEGMENT_ROWS}",
+                code=ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW,
+                context={"row_count": row_count, "min_rows": self.MIN_SEGMENT_ROWS},
             )
         if row_count > self.MAX_SEGMENT_ROWS:
             raise SurveyDatasetValidationError(
-                f"抽出件数が多すぎます（{row_count}件）。"
-                f"最大{self.MAX_SEGMENT_ROWS}件までです。"
+                f"row count {row_count} exceeds maximum {self.MAX_SEGMENT_ROWS}",
+                code=ErrorCode.SEGMENT_ROW_COUNT_TOO_HIGH,
+                context={"row_count": row_count, "max_rows": self.MAX_SEGMENT_ROWS},
             )
 
     # =========================================================================

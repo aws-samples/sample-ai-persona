@@ -5,6 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.models.errors import ErrorCode
+
 from src.managers.survey_dataset_manager import (
     SurveyDatasetManager,
     SurveyDatasetValidationError,
@@ -222,10 +224,9 @@ class TestEnsureParquetUri:
         mock_s3_service.s3_client.head_object.side_effect = _FakeClientError(
             "not found"
         )
-        with pytest.raises(
-            SurveyDatasetManagerError, match="まだダウンロードされていません"
-        ):
+        with pytest.raises(SurveyDatasetManagerError) as exc_info:
             mgr._ensure_parquet_uri()
+        assert exc_info.value.code is ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED
 
 
 @pytest.mark.unit

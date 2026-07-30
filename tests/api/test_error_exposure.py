@@ -58,17 +58,6 @@ _BASELINE: dict[str, set[str]] = {
         "create_knowledge_base",
         "update_dataset",
     },
-    "survey.py": {
-        "create_template",
-        "delete_template",
-        "download_csv",
-        "dwh_extract",
-        "execute_survey",
-        "persona_statistics",
-        "preview_personas",
-        "update_template",
-        "visual_analysis",
-    },
 }
 
 # traceback を文字列化している未移行モジュール。Issue #112 の移行で空にする。
