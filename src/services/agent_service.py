@@ -17,7 +17,7 @@ except ImportError:
     BedrockModel = None  # type: ignore[assignment,misc]
 
 from ..config import config
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.message import Message
 
@@ -44,10 +44,18 @@ class GenerationCapacityError(AgentServiceError):
     """出力トークン上限超過・応答タイムアウト等、生成負荷に起因するエラー。
 
     ペルソナ数やファイル量が多すぎて1回の生成に収まらない場合に発生する。
-    ユーザーには件数・入力量を減らす旨を案内する。
     """
 
-    pass
+    code = ErrorCode.GENERATION_CAPACITY_EXCEEDED
+
+
+class ReportGenerationCapacityError(AgentServiceError):
+    """レポート生成が負荷に起因して完了しなかった場合のエラー。
+
+    議論ログ・分析対象が多く出力トークン上限を超過した場合に発生する。
+    """
+
+    code = ErrorCode.REPORT_CAPACITY_EXCEEDED
 
 
 def _clear_agent_history(agent: Any, label: str) -> None:
@@ -912,12 +920,14 @@ class AgentService:
 
         except Exception as e:
             if self._is_capacity_error(e):
-                self.logger.warning(f"生成負荷に起因するエラー: {e}")
+                self.logger.warning("生成負荷に起因するエラー", exc_info=True)
                 raise GenerationCapacityError(
-                    "生成するデータ量が大きすぎて処理しきれませんでした。"
-                    "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
-                )
-            raise AgentServiceError(f"ペルソナ生成実行エラー: {e}")
+                    f"persona generation hit capacity limit ({type(e).__name__}), "
+                    f"agent_max_tokens={config.AGENT_MAX_TOKENS}"
+                ) from e
+            raise AgentServiceError(
+                f"persona generation failed ({type(e).__name__})"
+            ) from e
 
     @staticmethod
     def _is_capacity_error(error: Exception) -> bool:
@@ -1078,23 +1088,19 @@ class AgentService:
             else:
                 yield str(result)
         except Exception as e:
+            # ユーザー向け文言はプレゼンテーション層のカタログが持つ。ここでは
+            # エラー種別をコード付き例外として送出するだけに留める。呼び出し側
+            # (Router) は event_queue 経路でも future.exception() で受け取る。
             if self._is_capacity_error(e):
-                self.logger.warning(f"レポート生成の負荷超過: {e}")
-                msg = (
-                    "\n\n⚠️ 分析対象のデータ量が大きすぎてレポートを生成しきれませんでした。"
-                    "対象を絞るか、議論ログを短くして再度お試しください。"
-                )
-            else:
-                # 内部例外の詳細はログにのみ出力し、ユーザーには一般的なメッセージを返す
-                self.logger.error("レポート生成エラーが発生しました。", exc_info=True)
-                msg = (
-                    "\n\n⚠️ レポート生成中にエラーが発生しました。"
-                    "時間をおいて再度お試しください。"
-                )
-            if event_queue is not None:
-                event_queue.put({"type": "error", "content": msg})
-            else:
-                yield msg
+                self.logger.warning("レポート生成の負荷超過", exc_info=True)
+                raise ReportGenerationCapacityError(
+                    f"report generation hit capacity limit ({type(e).__name__}), "
+                    f"agent_max_tokens={config.AGENT_MAX_TOKENS}"
+                ) from e
+            self.logger.error("レポート生成エラーが発生しました。", exc_info=True)
+            raise AgentServiceError(
+                f"report generation failed ({type(e).__name__})"
+            ) from e
 
     def run_segment_extraction_agent(
         self,

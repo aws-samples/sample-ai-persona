@@ -778,8 +778,14 @@ async def generate_report_stream(
                         return
 
                 if future.done() and future.exception():
-                    logger.error(f"レポート生成エラー: {future.exception()}")
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'レポートの生成に失敗しました'}, ensure_ascii=False)}\n\n"
+                    # 容量超過など種別が判る例外はカタログの文言を返す。
+                    # 診断情報は exc_info でログにのみ残す。
+                    exc = future.exception()
+                    logger.error("レポート生成エラー", exc_info=exc)
+                    message = user_message_for(
+                        exc, default="レポートの生成に失敗しました"
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                     return
 
                 yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
@@ -797,9 +803,14 @@ async def generate_report_stream(
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error(f"レポート生成エラー: {e}")
+            logger.error("レポート生成エラー", exc_info=True)
             data = json.dumps(
-                {"type": "error", "message": "レポートの生成に失敗しました"},
+                {
+                    "type": "error",
+                    "message": user_message_for(
+                        e, default="レポートの生成に失敗しました"
+                    ),
+                },
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"
@@ -873,14 +884,21 @@ async def generate_followup_report_stream(
                     return
 
             if future.done() and future.exception():
-                logger.error(f"フォローアップレポート生成エラー: {future.exception()}")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'フォローアップ分析の生成に失敗しました'}, ensure_ascii=False)}\n\n"
+                exc = future.exception()
+                logger.error("フォローアップレポート生成エラー", exc_info=exc)
+                message = user_message_for(
+                    exc, default="フォローアップ分析の生成に失敗しました"
+                )
+                yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                 return
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error(f"フォローアップレポート生成エラー: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'フォローアップ分析の生成に失敗しました'}, ensure_ascii=False)}\n\n"
+            logger.error("フォローアップレポート生成エラー", exc_info=True)
+            message = user_message_for(
+                e, default="フォローアップ分析の生成に失敗しました"
+            )
+            yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         stream_generator(),
