@@ -67,6 +67,32 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
   - エージェントインスタンス生成・破棄（Strands Agent SDK操作）
   - クエリ実行（DuckDB、Parquet）
 
+## 例外とエラーコード
+
+**原則:** 例外メッセージは開発者のもの、ユーザー向け文言はプレゼンテーション層のもの。
+
+- **Models (`src/models/errors.py`):** `ErrorCode` enum と `CodedError` 基底クラス。全層から参照可
+- **Service層:** 外部SDK例外を自ドメインの例外型 + `ErrorCode` に変換する。**メッセージは技術的事実のみ（英語可）**。`from e` を必ず付けてチェーンを維持する。ユーザー向け文言を持ってはならない
+- **Manager層:** エラーコードを決定し、文言に必要な値は `context` に載せる（**文言そのものを組み立ててはならない**）
+- **Router層:** `web/error_messages.py` の `user_message_for()` のみを参照する。**レスポンスに `str(e)` / `{e}` / `e.args` / 例外の属性を書いてはならない**
+
+### 規約の詳細
+
+- 新規例外は `CodedError` を継承し、コードを付与して定義する
+- 1つの例外型が複数のユーザー向け状況を表す場合（`FileUploadError` 等）は、例外クラスを増やさず `raise` 時に `code=` を指定する
+- 文言カタログは `web/error_messages.py` に集約する。`_CATALOG` を直接参照してはならない（i18n拡張時の変更を1ファイルに閉じるため）
+- `context` に載せてよいのは**ユーザーに見せて安全な値**（サイズ上限、件数上限、対応形式一覧等）のみ。ID・ファイルパス・SDK例外文はログにのみ出す
+- 内部エラーの詳細は `logger.*(..., exc_info=True)` でログに出す。`traceback.format_exc()` は使わない
+- フィールド単位のバリデーションは、フィールドごとにコードを作らず「バリデーション種別 + `context["field"]` の安定キー」で表現する（キー→表示名の写像はカタログが持つ）
+
+### 検査
+
+- `tests/api/test_error_exposure.py` が `web/routers/` をASTで走査し、例外変数がログ・`user_message_for()` 以外から参照されていないことを機械的に検査する
+- `tests/unit/test_error_messages.py` が全 `ErrorCode` のカタログ登録漏れを検知する
+- テストで文言をアサートしない。`tests/error_helpers.raises_code()` でエラーコードを検証する
+
+詳細な設計背景は `docs/note/exception-message-design.md` を参照。
+
 ## テスト
 
 - マーカー: `unit`(src/managers), `integration`(src/services), `api`(web/routers)
