@@ -26,12 +26,8 @@
 import ast
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
-
-from src.managers.persona_manager import PersonaManagerError
-from src.models.errors import ErrorCode
 
 _ROUTERS_DIR = Path(__file__).parent.parent.parent / "web" / "routers"
 
@@ -376,59 +372,60 @@ class TestTransientErrorsUseToast:
         "goals": "目標",
     }
 
-    @staticmethod
-    def _manager_raising(exc):
-        """update_persona が `exc` を送出する Manager のモックを返す。
-
-        Manager クラスではなく Router の `get_*_manager()` を差し替えるのは、
-        実インスタンスの生成（AWS認証を要する）を避けるため。CI には認証情報が
-        ないので、クラスメソッドを patch すると生成時に DatabaseError になり
-        意図した経路に到達しない。
-        """
-        manager = Mock()
-        manager.update_persona.side_effect = exc
-        return manager
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_transient_returns_empty_body_with_toast(self, mock_get_manager, client):
+    def test_transient_returns_empty_body_with_toast(self, client):
         """入力フォームを消さないため本文を返さない。"""
-        mock_get_manager.return_value = self._manager_raising(
-            PersonaManagerError(
+        from unittest.mock import patch
+
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
                 "persona update failed (DatabaseError)",
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
-            )
-        )
-
-        response = client.put("/persona/p1", data=self._FORM)
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
 
         assert response.text == ""
         payload = json.loads(response.headers["HX-Trigger"])
         assert "ペルソナの処理中にエラー" in payload["showToast"]["message"]
 
-    @patch("web.routers.persona.get_persona_manager")
-    def test_validation_still_returns_partial_html(self, mock_get_manager, client):
+    def test_validation_still_returns_partial_html(self, client):
         """入力を直せば解決するものは従来どおり本文で返す。"""
-        mock_get_manager.return_value = self._manager_raising(
-            PersonaManagerError(
+        from unittest.mock import patch
+
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
                 "name is blank",
                 code=ErrorCode.PERSONA_FIELD_REQUIRED,
                 context={"field": "name"},
-            )
-        )
-
-        response = client.put("/persona/p1", data=self._FORM)
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
 
         assert "HX-Trigger" not in response.headers
         assert "ペルソナ名が設定されていません" in response.text
 
-    @patch("web.routers.persona.get_persona_manager")
-    def test_toast_does_not_leak_exception_message(self, mock_get_manager, client):
-        secret = "arn:aws:dynamodb:ap-northeast-1:123456789012:table/internal"
-        mock_get_manager.return_value = self._manager_raising(
-            PersonaManagerError(secret, code=ErrorCode.PERSONA_OPERATION_FAILED)
-        )
+    def test_toast_does_not_leak_exception_message(self, client):
+        from unittest.mock import patch
 
-        response = client.put("/persona/p1", data=self._FORM)
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        secret = "arn:aws:dynamodb:ap-northeast-1:123456789012:table/internal"
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
+                secret, code=ErrorCode.PERSONA_OPERATION_FAILED
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
 
         assert secret not in response.headers["HX-Trigger"]
         assert secret not in response.text
