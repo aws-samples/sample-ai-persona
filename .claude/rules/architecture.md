@@ -100,24 +100,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 
 - 分類は**命名から機械的に決まらない**。実際の `raise` 箇所を見て「ユーザーが何をすれば解決するか」で判断する（例: `SEGMENT_CSV_URL_MISSING` は名前に `MISSING` を含むが内部要因なので `TRANSIENT`、`FILE_DELETE_NOT_ALLOWED` は入力修正で解決しないので `VALIDATION` ではない）
 - `UNKNOWN` は `TRANSIENT`。未分類の失敗が「入力を直せば解決する」ように見えてはならない
-- テンプレート統合・インライン表示化は Issue #117 のステップ3以降
-
-#### TRANSIENT の表示（実装済み）
-
-再試行で解決しうるエラーは**画面を書き換えず** `toast_response(e)` を返す。
-
-```python
-except PersonaManagerError as e:
-    logger.warning("...", exc_info=True)
-    if is_transient(e):
-        return toast_response(e)          # 入力を保持したままトースト通知
-    return templates.TemplateResponse(...)  # VALIDATION 等は従来どおり
-```
-
-- Manager層の例外型は VALIDATION と TRANSIENT の**両方**を投げるため、`except` 節は型では区別できない。判断は `is_transient()` に集約する（Routerに kind 分岐を散らさない）
-- `toast_response()` は本文を返さず `HX-Trigger` ヘッダーでクライアントに通知する。htmx は `HX-Trigger` をスワップ判定より前に処理するため、**4xxでも動作する**（htmx 1.9.10 は4xx本文をスワップしないという制約を受けない）
-- HTTPヘッダーは latin-1 のみなので、文言は `json.dumps` の既定（`ensure_ascii=True`）で `\uXXXX` にエスケープする。`ensure_ascii=False` にすると `UnicodeEncodeError` になる
-- クライアント側は `app.js` の `showToast` リスナーが `showFlashMessage()` に委譲する
+- 表示方法の実装（テンプレート統合・インライン表示化）は Issue #117 のステップ2以降
 
 ### リクエスト検証エラー（422）
 

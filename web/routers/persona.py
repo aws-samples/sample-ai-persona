@@ -24,7 +24,7 @@ from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationCapacityError,
 )
 from src.models.persona import Persona
-from web.error_messages import is_transient, toast_response, user_message_for
+from web.error_messages import user_message_for
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -654,19 +654,19 @@ async def update_persona(
             )
     except PersonaManagerError as e:
         logger.warning("ペルソナ更新エラー", exc_info=True)
-        if is_transient(e):
-            # 再試行で解決しうるエラーは編集フォームを消さずトーストで通知する
-            return toast_response(e)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
             {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
-    except Exception as e:
+    except Exception:
         logger.error("ペルソナ更新エラー", exc_info=True)
-        return toast_response(
-            e, default="ペルソナの更新中にエラーが発生しました", status_code=500
+        return templates.TemplateResponse(
+            request,
+            "partials/error.html",
+            {"request": request, "error": "ペルソナの更新中にエラーが発生しました"},
+            status_code=500,
         )
 
 
@@ -870,7 +870,9 @@ async def get_persona_memories(
         error_msg = user_message_for(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
-        logger.error("Error getting memories for persona %s", persona_id, exc_info=True)
+        logger.error(
+            "Error getting memories for persona %s", persona_id, exc_info=True
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_list.html",
@@ -1053,9 +1055,6 @@ async def add_persona_memory(
         logger.warning(
             "Memory error adding knowledge for persona %s", persona_id, exc_info=True
         )
-        if is_transient(e):
-            # 入力フォームを含む記憶一覧を置換せず、入力内容を保持する
-            return toast_response(e)
         return templates.TemplateResponse(
             request,
             "persona/partials/memory_add_error.html",
@@ -1064,16 +1063,28 @@ async def add_persona_memory(
         )
 
     except (ConnectionError, TimeoutError) as e:
-        logger.error(
-            "Network error adding memory for persona %s", persona_id, exc_info=True
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
-        return toast_response(e, status_code=503)
+        logger.error(f"Network error adding memory for persona {persona_id}: {e}")
+        return templates.TemplateResponse(
+            request,
+            "persona/partials/memory_add_error.html",
+            {"request": request, "error": error_msg},
+            status_code=503,
+        )
 
     except Exception as e:
-        logger.error("Error adding memory for persona %s", persona_id, exc_info=True)
-        return toast_response(
-            e,
-            default="予期しないエラーが発生しました。後でもう一度お試しください。",
+        error_msg = user_message_for(
+            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
+        )
+        logger.error(
+            "Error adding memory for persona %s", persona_id, exc_info=True
+        )
+        return templates.TemplateResponse(
+            request,
+            "persona/partials/memory_add_error.html",
+            {"request": request, "error": error_msg},
             status_code=500,
         )
 

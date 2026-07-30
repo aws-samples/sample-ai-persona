@@ -18,23 +18,9 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
     console.log('htmx request completed:', evt.detail.pathInfo.requestPath);
 });
 
-// サーバーからのトースト指示（HX-Trigger: {"showToast": {...}}）。
-// 再試行で解決しうるエラー（ErrorKind.TRANSIENT）は、画面を書き換えず
-// トーストで通知する。入力内容を保持するため（Issue #117）。
-// htmx は HX-Trigger をスワップ判定より前に処理するので 4xx でも発火する。
-document.body.addEventListener('showToast', function(evt) {
-    const detail = evt.detail || {};
-    showFlashMessage(detail.message || 'エラーが発生しました。', detail.type || 'error');
-});
-
 document.body.addEventListener('htmx:responseError', function(evt) {
     // エラー時の処理
     console.error('htmx request error:', evt.detail);
-    // サーバーがトーストを指示している場合は showToast 側で表示するため、
-    // ここで汎用文言を重ねて出さない
-    if (evt.detail.xhr && evt.detail.xhr.getResponseHeader('HX-Trigger')) {
-        return;
-    }
     showFlashMessage('エラーが発生しました。再度お試しください。', 'error');
 });
 

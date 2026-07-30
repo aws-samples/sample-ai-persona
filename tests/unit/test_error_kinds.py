@@ -7,12 +7,9 @@
 「新しいコードを追加したが分類を考えていない」状態を検出できる。
 """
 
-import json
-
 import pytest
 
 from src.models.errors import CodedError, ErrorCode, ErrorKind
-from web.error_messages import is_transient, toast_response, user_message_for
 
 
 class TestKindAssignment:
@@ -113,83 +110,3 @@ class TestCodedErrorExposesKind:
             code = ErrorCode.PERSONA_NOT_FOUND
 
         assert _Err("diag").code.kind is ErrorKind.NOT_FOUND
-
-
-class TestToastResponse:
-    """TRANSIENT エラーをトーストで通知する経路の契約テスト（#117 ステップ2）。
-
-    再試行で解決しうるエラーは画面を書き換えずトーストで通知する。これにより
-    ユーザーの入力が保持され、かつ htmx 1.9.10 が4xx本文をスワップしない制約も
-    回避できる（HX-Trigger はスワップ判定より前に処理されるため）。
-    """
-
-    def test_body_is_empty(self):
-        """本文を返さない（スワップされても画面を壊さない）。"""
-        response = toast_response(
-            CodedError("diag", code=ErrorCode.PERSONA_OPERATION_FAILED)
-        )
-        assert response.body == b""
-
-    def test_hx_trigger_carries_the_catalog_wording(self):
-        response = toast_response(
-            CodedError("diag", code=ErrorCode.PERSONA_OPERATION_FAILED)
-        )
-        payload = json.loads(response.headers["HX-Trigger"])
-        assert payload["showToast"]["type"] == "error"
-        assert payload["showToast"]["message"] == user_message_for(
-            CodedError("diag", code=ErrorCode.PERSONA_OPERATION_FAILED)
-        )
-
-    def test_header_is_latin1_encodable(self):
-        """HTTPヘッダーは latin-1 のみ。日本語文言は \\uXXXX にエスケープする。
-
-        ensure_ascii=False にすると Starlette が UnicodeEncodeError を投げる。
-        """
-        response = toast_response(
-            CodedError("diag", code=ErrorCode.MEMORY_OPERATION_FAILED)
-        )
-        header = response.headers["HX-Trigger"]
-        header.encode("latin-1")  # 例外が出なければ送信可能
-        assert "\\u" in json.dumps(json.loads(header), ensure_ascii=True)
-
-    def test_does_not_leak_the_exception_message(self):
-        """例外メッセージがヘッダーに転写されないこと。
-
-        `toast_response` は AST検査（tests/api/test_error_exposure.py）の
-        許可リストに入っているため、漏出しないことを直接検証する。
-        """
-        secret = "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret/key"
-        response = toast_response(
-            CodedError(secret, code=ErrorCode.PERSONA_OPERATION_FAILED)
-        )
-        assert secret not in response.headers["HX-Trigger"]
-
-    def test_status_code_stays_4xx_by_default(self):
-        """htmx:responseError の意味論とログの正確さを保つため既定は4xx。"""
-        response = toast_response(CodedError("diag", code=ErrorCode.UNKNOWN))
-        assert 400 <= response.status_code < 500
-
-    def test_uncoded_exception_uses_default(self):
-        response = toast_response(RuntimeError("boom"), default="保存に失敗しました")
-        payload = json.loads(response.headers["HX-Trigger"])
-        assert payload["showToast"]["message"] == "保存に失敗しました"
-
-
-class TestIsTransient:
-    """Router が表示方法を判断するためのヘルパー。"""
-
-    def test_true_for_transient_codes(self):
-        assert is_transient(CodedError("d", code=ErrorCode.PERSONA_OPERATION_FAILED))
-
-    def test_false_for_validation_codes(self):
-        assert not is_transient(CodedError("d", code=ErrorCode.PERSONA_FIELD_REQUIRED))
-
-    def test_false_for_not_found_codes(self):
-        assert not is_transient(CodedError("d", code=ErrorCode.PERSONA_NOT_FOUND))
-
-    def test_true_for_uncoded_exception(self):
-        """分類できない失敗は入力修正で直るように見せない。"""
-        assert is_transient(RuntimeError("boom"))
-
-    def test_true_for_connection_errors(self):
-        assert is_transient(ConnectionError("unreachable"))
