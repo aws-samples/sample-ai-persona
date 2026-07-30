@@ -9,11 +9,18 @@ mechanically by ``tests/api/test_error_exposure.py``.
 The catalog is module-private on purpose: keeping every lookup behind
 :func:`user_message_for` means adding a locale dimension later stays confined to
 this file, with no change at the call sites.
+
+:func:`toast_response` renders ``ErrorKind.TRANSIENT`` errors as a toast instead
+of a body swap, so that the user's input survives a retryable failure
+(Issue #117).
 """
 
+import json
 import logging
 
-from src.models.errors import ErrorCode
+from fastapi import Response
+
+from src.models.errors import ErrorCode, ErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +276,67 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
         # A wording bug must not become a 500, and must not leak the message.
         logger.warning("エラー文言の補間に失敗しました (code=%s)", code, exc_info=True)
         return fallback
+
+
+def error_kind_of(exc: BaseException | None) -> ErrorKind:
+    """Resolve the presentation kind of an exception.
+
+    Uncoded exceptions resolve to :attr:`ErrorKind.TRANSIENT` so that an
+    unclassified failure is never presented as something the user can fix by
+    editing input. ``ConnectionError`` / ``TimeoutError`` are mapped the same way
+    as in :func:`user_message_for`.
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, ErrorCode) and code is not ErrorCode.UNKNOWN:
+        return code.kind
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return ErrorCode.NETWORK_ERROR.kind
+    return ErrorCode.UNKNOWN.kind
+
+
+def toast_response(
+    exc: BaseException | None,
+    *,
+    default: str | None = None,
+    status_code: int = 400,
+) -> Response:
+    """Return an empty response that shows the error as a toast.
+
+    For ``ErrorKind.TRANSIENT`` errors there is nothing for the user to correct,
+    so replacing the page region with an error panel only destroys the form they
+    already filled in. Instead this returns no body and asks the client to raise
+    a toast via ``HX-Trigger``.
+
+    htmx processes ``HX-Trigger`` in ``htmx:beforeOnLoad``, before it decides
+    whether to swap, so this works on 4xx responses even on htmx 1.9.10 (which
+    refuses to swap non-2xx bodies). That is why TRANSIENT errors are unaffected
+    by the swap limitation described in Issue #117.
+
+    Args:
+        exc: The caught exception. Only its code/context are used.
+        default: Wording for exceptions carrying no usable code.
+        status_code: HTTP status. Kept in the 4xx range so that
+            ``htmx:responseError`` semantics and server logs stay accurate.
+    """
+    message = user_message_for(exc, default=default)
+    # HTTPヘッダーは latin-1 でしかエンコードできないため、日本語文言は
+    # ensure_ascii=True（既定）で \uXXXX にエスケープする。JSON.parse する
+    # クライアント側で元の文字列に戻る。
+    return Response(
+        status_code=status_code,
+        headers={
+            "HX-Trigger": json.dumps(
+                {"showToast": {"message": message, "type": "error"}}
+            )
+        },
+    )
+
+
+def is_transient(exc: BaseException | None) -> bool:
+    """再試行で解決しうるエラー（画面を書き換えずトーストで通知すべきもの）か。
+
+    Manager層の例外型は VALIDATION と TRANSIENT の両方を投げるため、Router の
+    ``except`` 節は型では区別できない。表示方法の判断はこの関数に集約する
+    （Router側に kind の分岐ロジックを散らさないため）。
+    """
+    return error_kind_of(exc) is ErrorKind.TRANSIENT
