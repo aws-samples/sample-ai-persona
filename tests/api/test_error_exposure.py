@@ -683,3 +683,135 @@ class TestErrorPartialsReachTheScreen:
             encoding="utf-8",
         )
         assert self._unreachable([module]) == []
+
+
+class TestErrorTemplatesAreConsolidated:
+    """エラー表示テンプレートが統合された状態を保つこと（#117 ステップ5）。
+
+    以前は5種に分裂し、変数名も `error` と `message` が混在していた。
+    Router が「どれを返すか」を個別に判断する根拠がなく、`message` を
+    渡しているのに `{{ error }}` を描画するテンプレート（settings.py の
+    7箇所）では**エラー枠が空で表示される**バグも生じていた。
+    """
+
+    _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "web" / "templates"
+
+    #: 統合で廃止したテンプレート。復活したら気づけるようにする
+    _REMOVED = (
+        "partials/error.html",
+        "survey/partials/error_message.html",
+        "persona/partials/memory_add_error.html",
+    )
+
+    def test_removed_templates_are_not_reintroduced(self):
+        existing = [t for t in self._REMOVED if (self._TEMPLATES_DIR / t).exists()]
+        assert existing == [], (
+            "統合で廃止したテンプレートが復活している。"
+            "partials/error_inline.html（フォーム近傍）または "
+            f"partials/error_banner.html（領域置換）を使うこと: {existing}"
+        )
+
+    def test_consolidated_templates_exist(self):
+        for name in ("partials/error_inline.html", "partials/error_banner.html"):
+            assert (self._TEMPLATES_DIR / name).exists(), f"{name} が無い"
+
+    def test_routers_do_not_reference_removed_templates(self):
+        offenders = []
+        for path in _router_modules():
+            src = path.read_text(encoding="utf-8")
+            for removed in self._REMOVED:
+                if f'"{removed}"' in src or f"'{removed}'" in src:
+                    offenders.append(f"{path.name} -> {removed}")
+        assert offenders == [], offenders
+
+    def test_error_partials_use_the_error_variable(self):
+        """変数名が `error` に統一されていること（`message` 混在の再発防止）。"""
+        for name in ("partials/error_inline.html", "partials/error_banner.html"):
+            body = (self._TEMPLATES_DIR / name).read_text(encoding="utf-8")
+            assert "{{ error }}" in body, f"{name} が error を描画していない"
+            assert "{{ message }}" not in body, f"{name} に message が残っている"
+
+    @staticmethod
+    def _render(name: str, **ctx: object) -> str:
+        """テンプレートを実際に描画する（注釈ではなく出力を検証するため）。"""
+        from jinja2 import Environment, FileSystemLoader
+
+        env = Environment(
+            loader=FileSystemLoader(
+                Path(__file__).parent.parent.parent / "web" / "templates"
+            )
+        )
+        return env.get_template(name).render(**ctx)
+
+    def test_inline_template_has_no_reload_prompt(self):
+        """入力を直せば解決するエラーで「更新」を促してはならない。
+
+        更新すると直そうとしている入力が破棄されるため。
+        """
+        out = self._render("partials/error_inline.html", error="入力が長すぎます")
+
+        assert "入力が長すぎます" in out
+        assert "location.reload" not in out
+        assert "ページを更新" not in out
+
+    def test_banner_template_offers_recovery(self):
+        """領域置換型は再試行の導線を持つこと。"""
+        out = self._render("partials/error_banner.html", error="見つかりません")
+
+        assert "見つかりません" in out
+        assert "location.reload" in out
+
+    def test_banner_template_can_show_a_back_link(self):
+        """NOT_FOUND では復帰リンクを出せること。"""
+        out = self._render(
+            "partials/error_banner.html",
+            error="ペルソナが見つかりません",
+            back_url="/persona/management",
+            back_label="ペルソナ一覧へ",
+        )
+
+        assert "/persona/management" in out
+        assert "ペルソナ一覧へ" in out
+
+    def test_dom_coupled_templates_keep_their_contracts(self):
+        """DOM契約を持つ2種は統合せず、契約を維持していること。
+
+        htmx のスワップ先IDや領域クリアの契約を共通テンプレートへ寄せると
+        差し替えが壊れるため、外側は各テンプレートに残す設計にしている。
+        """
+        deleted = self._render(
+            "persona/partials/memory_delete_error.html",
+            error="削除できません",
+            memory_id="m1",
+        )
+        assert 'id="memory-item-m1"' in deleted
+        assert "削除できません" in deleted
+
+        upload = self._render(
+            "persona/partials/knowledge_file_error.html", error="形式が不正です"
+        )
+        assert "#file-upload-preview-area" in upload
+        assert "形式が不正です" in upload
+
+
+class TestHtmxHandlersAreNotDuplicated:
+    """htmx ハンドラが二重登録されていないこと（#117 ステップ5）。
+
+    base.html と app.js の両方に afterSwap / beforeRequest / afterRequest を
+    登録していたため、fade-in が二重に適用されていた。
+    """
+
+    def test_base_html_does_not_register_htmx_handlers(self):
+        base = (
+            Path(__file__).parent.parent.parent / "web" / "templates" / "base.html"
+        ).read_text(encoding="utf-8")
+        assert "addEventListener('htmx:" not in base, (
+            "base.html で htmx ハンドラを登録している。app.js に集約すること"
+        )
+
+    def test_app_js_registers_the_handlers(self):
+        app_js = (
+            Path(__file__).parent.parent.parent / "web" / "static" / "js" / "app.js"
+        ).read_text(encoding="utf-8")
+        for event in ("htmx:beforeSwap", "htmx:responseError", "showToast"):
+            assert f"addEventListener('{event}'" in app_js, f"{event} が無い"

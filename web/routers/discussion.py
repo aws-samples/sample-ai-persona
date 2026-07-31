@@ -203,8 +203,13 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
-                    {"request": request, "error": "議論が見つかりません"},
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": "議論が見つかりません",
+                        "back_url": "/discussion/results",
+                        "back_label": "議論一覧に戻る",
+                    },
                     status_code=404,
                 )
             )
@@ -219,7 +224,7 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {"request": request, "error": "議論結果の取得に失敗しました"},
                 status_code=500,
             )
@@ -465,7 +470,7 @@ async def start_discussion(
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {
                         "request": request,
                         "error": "インタビューモードは別のエンドポイントで処理されます",
@@ -478,7 +483,7 @@ async def start_discussion(
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {
                         "request": request,
                         "error": "議論には最低2体のペルソナが必要です",
@@ -495,7 +500,7 @@ async def start_discussion(
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {"request": request, "error": "有効なペルソナが2体以上必要です"},
                     status_code=400,
                 )
@@ -668,7 +673,7 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {"request": request, "error": "議論の削除に失敗しました"},
                     status_code=400,
                 )
@@ -690,8 +695,13 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
-                    {"request": request, "error": "議論が見つかりません"},
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": "議論が見つかりません",
+                        "back_url": "/discussion/results",
+                        "back_label": "議論一覧に戻る",
+                    },
                     status_code=404,
                 )
             )
@@ -706,7 +716,7 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {"request": request, "error": "インサイトの取得に失敗しました"},
                 status_code=500,
             )

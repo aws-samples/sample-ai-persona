@@ -940,10 +940,10 @@ async def preview_personas(request: Request) -> Any:
         logger.error("Preview failed", exc_info=True)
         return templates.TemplateResponse(
             request,
-            "survey/partials/error_message.html",
+            "partials/error_inline.html",
             {
                 "request": request,
-                "message": user_message_for(e, default="プレビューに失敗しました"),
+                "error": user_message_for(e, default="プレビューに失敗しました"),
             },
         )
 
@@ -1100,8 +1100,8 @@ async def create_template(request: Request) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": "質問データの形式が不正です"},
+                "partials/error_inline.html",
+                {"request": request, "error": "質問データの形式が不正です"},
                 status_code=400,
             )
         )
@@ -1122,8 +1122,8 @@ async def create_template(request: Request) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": user_message_for(e)},
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
         )
@@ -1132,10 +1132,10 @@ async def create_template(request: Request) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
+                "partials/error_inline.html",
                 {
                     "request": request,
-                    "message": user_message_for(e, default="保存に失敗しました"),
+                    "error": user_message_for(e, default="保存に失敗しました"),
                 },
                 status_code=500,
             )
@@ -1161,8 +1161,8 @@ async def update_template(request: Request, template_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": "質問データの形式が不正です"},
+                "partials/error_inline.html",
+                {"request": request, "error": "質問データの形式が不正です"},
                 status_code=400,
             )
         )
@@ -1188,8 +1188,8 @@ async def update_template(request: Request, template_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": user_message_for(e)},
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
         )
@@ -1198,10 +1198,10 @@ async def update_template(request: Request, template_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
+                "partials/error_inline.html",
                 {
                     "request": request,
-                    "message": user_message_for(e, default="更新に失敗しました"),
+                    "error": user_message_for(e, default="更新に失敗しました"),
                 },
                 status_code=500,
             )
@@ -1223,10 +1223,10 @@ async def delete_template(request: Request, template_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
+                "partials/error_inline.html",
                 {
                     "request": request,
-                    "message": user_message_for(e, default="削除に失敗しました"),
+                    "error": user_message_for(e, default="削除に失敗しました"),
                 },
                 status_code=500,
             )
@@ -1273,8 +1273,8 @@ async def execute_survey(request: Request) -> Any:
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": "ペルソナ数は整数で入力してください"},
+                "partials/error_inline.html",
+                {"request": request, "error": "ペルソナ数は整数で入力してください"},
                 status_code=400,
             )
         )
@@ -1305,8 +1305,8 @@ async def execute_survey(request: Request) -> Any:
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": user_message_for(e)},
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
         )
@@ -1318,10 +1318,10 @@ async def execute_survey(request: Request) -> Any:
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
+                "partials/error_inline.html",
                 {
                     "request": request,
-                    "message": user_message_for(
+                    "error": user_message_for(
                         e, default="アンケート作成に失敗しました"
                     ),
                 },
@@ -1373,8 +1373,8 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": user_message_for(e)},
+                "partials/error_banner.html",
+                {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
         )
@@ -1396,8 +1396,8 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "survey/partials/error_message.html",
-                {"request": request, "message": user_message_for(e)},
+                "partials/error_banner.html",
+                {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
         )

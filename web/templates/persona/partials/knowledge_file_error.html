@@ -1,19 +1,16 @@
-{# 知識ファイルアップロードエラーパーシャル #}
-<div class="bg-red-100 border-2 border-red-400 text-red-700 px-4 py-3 rounded-md flex items-start gap-3 shadow-md">
-    <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-    </svg>
-    <div class="flex-1">
-        <p class="font-semibold text-base">ファイルアップロードエラー</p>
-        <p class="text-sm mt-1">{{ error }}</p>
-    </div>
-    <button 
-        onclick="this.closest('#file-upload-preview-area').innerHTML = ''"
-        class="text-red-700 hover:text-red-900 flex-shrink-0"
-        title="閉じる"
-    >
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-        </svg>
-    </button>
+{% from "components/error_body.html" import error_body %}
+{#
+  知識ファイルアップロードエラーパーシャル。
+
+  閉じるボタンは #file-upload-preview-area の中身を空にする契約を持つため、
+  共通テンプレートに寄せずここで持つ（Issue #117 ステップ5）。
+  見た目は error_body に統一。
+#}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4" role="alert">
+    {{ error_body(
+        error,
+        title="ファイルアップロードエラー",
+        dismiss_target="#file-upload-preview-area",
+        dismiss_clear=true,
+    ) }}
 </div>

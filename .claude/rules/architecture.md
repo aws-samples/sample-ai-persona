@@ -114,10 +114,58 @@ except PersonaManagerError as e:
     return templates.TemplateResponse(...)  # VALIDATION 等は従来どおり
 ```
 
-- Manager層の例外型は VALIDATION と TRANSIENT の**両方**を投げるため、`except` 節は型では区別できない。判断は `is_transient()` に集約する（Routerに kind 分岐を散らさない）
+- Manager層の例外型は VALIDATION と TRANSIENT の**両方**を投げるため、`except` 節は型では区別できない。判断は `is_transient()` / `is_correctable()` に集約する（Routerに kind 分岐を散らさない）
 - `toast_response()` は本文を返さず `HX-Trigger` ヘッダーでクライアントに通知する。htmx は `HX-Trigger` をスワップ判定より前に処理するため、**4xxでも動作する**（htmx 1.9.10 は4xx本文をスワップしないという制約を受けない）
 - HTTPヘッダーは latin-1 のみなので、文言は `json.dumps` の既定（`ensure_ascii=True`）で `\uXXXX` にエスケープする。`ensure_ascii=False` にすると `UnicodeEncodeError` になる
 - クライアント側は `app.js` の `showToast` リスナーが `showFlashMessage()` に委譲する
+- **変更系（POST/PUT/DELETE）の `except Exception`（総称ハンドラ）はエラーパーシャルを返してはならない。** コードを持たない例外は TRANSIENT に落ちるため `toast_response()` を使う（`tests/api/test_error_exposure.py` の `TestGenericExceptionsDoNotReplaceContent` が機械検査する）
+
+#### 非2xx応答を画面に届ける（実装済み）
+
+htmx 1.9.10 は `status>=200 && status<400 && status!==204` 以外の本文をスワップしない。**4xx/5xx でエラーパーシャルを返す場合は `mark_renderable()` で印を付ける。**付けないと文言は生成されているのに画面へ届かず、`app.js` の汎用フォールバックだけが出る。
+
+```python
+return mark_renderable(
+    templates.TemplateResponse(
+        request, "partials/error_inline.html",
+        {"request": request, "error": user_message_for(e)},
+        status_code=400,
+    )
+)
+```
+
+- ステータスコードで一律にスワップを許可**してはならない**。汎用パーシャルが `hx-target`（本体コンテンツや一覧）に流れ込むとフォームごと消える経路がある。「表示してよい」判断はサーバー側が持つ
+- `tests/api/test_error_exposure.py` の `TestErrorPartialsReachTheScreen` が、非2xxでエラーパーシャルを返す全箇所に印が付いていることをASTで検査する
+- `HX-Retarget` は**単独では効かない**（スワップ判定より前に処理されるが `shouldSwap` は false のまま）。差し替え先を変える場合も `mark_renderable()` を併用する
+
+#### VALIDATION / CAPACITY の表示（実装済み）
+
+入力を直せば解決するエラーは**送信値を保持**する。判断は `is_correctable()`（VALIDATION と CAPACITY の両方）。
+
+2つの方式があり、フォームが Alpine 管理下かどうかで選ぶ。
+
+| 方式 | 使う場面 | 例 |
+|---|---|---|
+| フォーム再描画 | 素のHTMLフォーム | `persona/partials/edit_form.html`（送信値を `form` で渡し `persona` にフォールバック） |
+| `HX-Retarget` で専用領域だけ差し替え | Alpine が表示状態を持つフォーム | 知識追加（`#memory-form-error`）。再描画すると `x-show` が初期値に戻り入力欄が閉じる |
+
+- フィールド単位の表示は `web/templates/components/form_errors.html` のマクロ（`field_error` / `field_border` / `form_error_summary`）を使う。対象フィールドは `field_of(e)` で取得する
+- **Jinjaテンプレートで送信値を参照するときは `f['key']` 形式を使う。** `f.values` / `f.items` / `f.keys` は dict のメソッドに解決され、入力値が消える
+- **Jinjaの注釈（`{# #}`）内にタグ記法を書いてはならない。** コメントでも解析され未定義エラーになる
+- `HX-Retarget` の差し替え先IDがテンプレートに存在することを `TestFormErrorTargetExists` が検査する
+
+### エラー表示テンプレート
+
+**2種のみ。** 機能別に増やしてはならない。変数名は `error` に統一する（`message` は使わない）。
+
+| テンプレート | 用途 | 特徴 |
+|---|---|---|
+| `partials/error_inline.html` | フォーム近傍（VALIDATION / CAPACITY） | **再試行の導線を持たない**（更新すると直そうとしている入力が破棄される） |
+| `partials/error_banner.html` | 領域置換（GET の読み込み失敗 / NOT_FOUND） | 再試行ボタン + 任意の復帰リンク（`back_url` / `back_label`） |
+
+- 例外: htmx のスワップ契約（差し替え先ID・領域クリア）を持つ2種は外側を各テンプレートに残し、見た目だけ `components/error_body.html` のマクロで揃える（`memory_delete_error.html` / `knowledge_file_error.html`）
+- htmx のイベントハンドラは `web/static/js/app.js` に集約する。`base.html` に登録してはならない（二重登録で `fade-in` が重複適用される）
+- 上記は `TestErrorTemplatesAreConsolidated` / `TestHtmxHandlersAreNotDuplicated` が検査する
 
 ### リクエスト検証エラー（422）
 

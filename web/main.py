@@ -104,7 +104,8 @@ async def validation_exception_handler(
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                # 入力の誤りなので、更新を促さないインライン表示を使う
+                "partials/error_inline.html",
                 {"request": request, "error": "入力内容を確認してください"},
                 status_code=422,
             )

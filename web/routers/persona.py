@@ -151,7 +151,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_inline.html",
                 {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
@@ -161,7 +161,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_inline.html",
                 {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
@@ -587,8 +587,13 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
-                    {"request": request, "error": "ペルソナが見つかりません"},
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": "ペルソナが見つかりません",
+                        "back_url": "/persona/management",
+                        "back_label": "ペルソナ一覧に戻る",
+                    },
                     status_code=404,
                 )
             )
@@ -603,7 +608,7 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {"request": request, "error": "編集フォームの取得に失敗しました"},
                 status_code=500,
             )
@@ -706,8 +711,13 @@ async def update_persona(
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
-                    {"request": request, "error": "ペルソナが見つかりません"},
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": "ペルソナが見つかりません",
+                        "back_url": "/persona/management",
+                        "back_label": "ペルソナ一覧に戻る",
+                    },
                     status_code=404,
                 )
             )
@@ -798,7 +808,7 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {"request": request, "error": "ペルソナの削除に失敗しました"},
                     status_code=400,
                 )
@@ -869,7 +879,7 @@ async def get_persona_list_partial(
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {"request": request, "error": "ペルソナ一覧の取得に失敗しました"},
                 status_code=500,
             )
@@ -1143,7 +1153,7 @@ async def add_persona_memory(
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
-                "persona/partials/memory_add_error.html",
+                "partials/error_inline.html",
                 {"request": request, "error": user_message_for(e)},
                 status_code=400,
             )
@@ -1363,7 +1373,7 @@ async def create_dataset_binding(
         logger.warning("データセット紐付けエラー", exc_info=True)
         return templates.TemplateResponse(
             request,
-            "partials/error.html",
+            "partials/error_inline.html",
             {"request": request, "error": user_message_for(e)},
         )
 
@@ -1430,7 +1440,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {"request": request, "error": "保存するペルソナを選択してください"},
                     status_code=400,
                 )
@@ -1472,7 +1482,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
-                    "partials/error.html",
+                    "partials/error_inline.html",
                     {"request": request, "error": error_msg},
                     status_code=500,
                 )

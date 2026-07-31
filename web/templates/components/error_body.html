@@ -1,0 +1,40 @@
+{% from "components/icons.html" import icon_x_circle, icon_x %}
+{#
+  エラー表示の中身（アイコン + 文言 + 閉じるボタン）を組み立てるマクロ。
+
+  外側の要素は呼び出し側が持つ。htmx のスワップ先として特定のIDや
+  クラスを出す必要があるテンプレート（記憶アイテムの差し替え、
+  ファイルプレビュー領域のクリア）があり、外側まで共通化すると
+  hx-swap の契約が壊れるため（Issue #117 ステップ5）。
+
+  外側を持たないケースは partials/error_inline.html /
+  partials/error_banner.html を直接使う。
+
+  引数:
+    error         ... 表示する文言
+    title         ... 任意。太字の見出し（省略すると文言のみ）
+    dismiss_target... 任意。閉じるボタンが削除する要素のCSSセレクタ。
+                      省略すると閉じるボタンを出さない
+    dismiss_clear ... true なら削除ではなく innerHTML を空にする
+#}
+{% macro error_body(error, title=none, dismiss_target=none, dismiss_clear=false) %}
+<div class="flex items-start gap-3">
+    {{ icon_x_circle("w-5 h-5 text-red-500 flex-shrink-0 mt-0.5") }}
+    <div class="flex-1">
+        {%- if title %}
+        <p class="text-red-700 text-sm font-medium">{{ title }}</p>
+        <p class="text-red-600 text-sm mt-1">{{ error }}</p>
+        {%- else %}
+        <p class="text-red-800 text-sm">{{ error }}</p>
+        {%- endif %}
+    </div>
+    {%- if dismiss_target %}
+    <button type="button"
+            onclick="this.closest('{{ dismiss_target }}'){% if dismiss_clear %}.innerHTML = ''{% else %}.remove(){% endif %}"
+            class="text-red-400 hover:text-red-600 p-1 rounded transition-colors flex-shrink-0"
+            title="閉じる">
+        {{ icon_x("w-4 h-4") }}
+    </button>
+    {%- endif %}
+</div>
+{% endmacro %}

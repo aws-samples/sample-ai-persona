@@ -256,7 +256,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {
                     "request": request,
                     "error": "指定されたインタビューセッションが見つかりません。セッションが終了しているか、無効なURLの可能性があります。",
@@ -269,7 +269,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {
                     "request": request,
                     "error": "ページの読み込み中にエラーが発生しました。しばらく待ってから再試行してください。",

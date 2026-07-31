@@ -132,7 +132,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_inline.html",
                 {"request": request, "error": "CSVファイルのみアップロード可能です"},
                 status_code=400,
             )
@@ -143,7 +143,7 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_inline.html",
                 {
                     "request": request,
                     "error": "ファイルサイズは10MB以下にしてください",
@@ -283,7 +283,7 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
         return mark_renderable(
             templates.TemplateResponse(
                 request,
-                "partials/error.html",
+                "partials/error_banner.html",
                 {"request": request, "error": "データセットの削除に失敗しました"},
                 status_code=404,
             )

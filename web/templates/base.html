@@ -163,25 +163,11 @@
     </footer>
     
     <!-- グローバルスクリプト -->
+    {# htmx のイベントハンドラは app.js に集約している。以前はここにも
+       afterSwap / beforeRequest / afterRequest を重複登録していたため、
+       fade-in が二重に適用されていた（Issue #117 ステップ5）。 #}
     <script src="/static/js/app.js"></script>
-    <script>
-        // htmxイベントハンドラ
-        document.body.addEventListener('htmx:afterSwap', function(evt) {
-            // 新しいコンテンツにフェードインアニメーションを適用
-            if (evt.detail.target) {
-                evt.detail.target.classList.add('fade-in');
-            }
-        });
-        
-        document.body.addEventListener('htmx:beforeRequest', function(evt) {
-            // リクエスト開始時の処理
-        });
-        
-        document.body.addEventListener('htmx:afterRequest', function(evt) {
-            // リクエスト完了時の処理
-        });
-    </script>
-    
+
     {% block scripts %}{% endblock %}
 </body>
 </html>
