@@ -20,7 +20,7 @@ from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.models.insight_category import InsightCategory
-from web.error_messages import toast_response, user_message_for
+from web.error_messages import mark_renderable, toast_response, user_message_for
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -200,11 +200,13 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
         discussion = discussion_manager.get_discussion(discussion_id)
 
         if not discussion:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "議論が見つかりません"},
-                status_code=404,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "議論が見つかりません"},
+                    status_code=404,
+                )
             )
 
         return templates.TemplateResponse(
@@ -214,11 +216,13 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
         )
     except Exception as e:
         logger.error(f"議論結果パーシャル取得エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "議論結果の取得に失敗しました"},
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "議論結果の取得に失敗しました"},
+                status_code=500,
+            )
         )
 
 
@@ -458,22 +462,29 @@ async def start_discussion(
     """議論開始処理（htmx対応）"""
     try:
         if mode == "interview":
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {
-                    "request": request,
-                    "error": "インタビューモードは別のエンドポイントで処理されます",
-                },
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {
+                        "request": request,
+                        "error": "インタビューモードは別のエンドポイントで処理されます",
+                    },
+                    status_code=400,
+                )
             )
 
         if len(persona_ids) < 2:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "議論には最低2体のペルソナが必要です"},
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {
+                        "request": request,
+                        "error": "議論には最低2体のペルソナが必要です",
+                    },
+                    status_code=400,
+                )
             )
 
         persona_manager = get_persona_manager()
@@ -481,11 +492,13 @@ async def start_discussion(
         personas = [p for p in personas_raw if p is not None]
 
         if len(personas) < 2:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "有効なペルソナが2体以上必要です"},
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "有効なペルソナが2体以上必要です"},
+                    status_code=400,
+                )
             )
 
         form_data = await request.form()
@@ -652,11 +665,13 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                 {"request": request, "message": "議論を削除しました"},
             )
         else:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "議論の削除に失敗しました"},
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "議論の削除に失敗しました"},
+                    status_code=400,
+                )
             )
     except Exception as e:
         # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
@@ -672,11 +687,13 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
         discussion = discussion_manager.get_discussion(discussion_id)
 
         if not discussion:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "議論が見つかりません"},
-                status_code=404,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "議論が見つかりません"},
+                    status_code=404,
+                )
             )
 
         return templates.TemplateResponse(
@@ -686,11 +703,13 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
         )
     except Exception as e:
         logger.error(f"インサイト取得エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "インサイトの取得に失敗しました"},
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "インサイトの取得に失敗しました"},
+                status_code=500,
+            )
         )
 
 

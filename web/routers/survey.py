@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-from web.error_messages import user_message_for  # noqa: E402
+from web.error_messages import mark_renderable, user_message_for  # noqa: E402
 from web.sanitize import render_markdown  # noqa: E402
 
 # マークダウンフィルターを追加
@@ -1097,11 +1097,13 @@ async def create_template(request: Request) -> Any:
     try:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "質問データの形式が不正です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": "質問データの形式が不正です"},
+                status_code=400,
+            )
         )
 
     try:
@@ -1117,22 +1119,26 @@ async def create_template(request: Request) -> Any:
         manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyTemplateValidationError as e:
         logger.warning("テンプレートのバリデーションエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": user_message_for(e)},
+                status_code=400,
+            )
         )
     except SurveyTemplateManagerError as e:
         logger.error("テンプレート保存エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {
-                "request": request,
-                "message": user_message_for(e, default="保存に失敗しました"),
-            },
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {
+                    "request": request,
+                    "message": user_message_for(e, default="保存に失敗しました"),
+                },
+                status_code=500,
+            )
         )
 
     # 成功時はテンプレート一覧にリダイレクト（htmx対応）
@@ -1152,11 +1158,13 @@ async def update_template(request: Request, template_id: str) -> Any:
     try:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "質問データの形式が不正です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": "質問データの形式が不正です"},
+                status_code=400,
+            )
         )
 
     try:
@@ -1177,22 +1185,26 @@ async def update_template(request: Request, template_id: str) -> Any:
         )
     except SurveyTemplateValidationError as e:
         logger.warning("テンプレートのバリデーションエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": user_message_for(e)},
+                status_code=400,
+            )
         )
     except SurveyTemplateManagerError as e:
         logger.error("テンプレート更新エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {
-                "request": request,
-                "message": user_message_for(e, default="更新に失敗しました"),
-            },
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {
+                    "request": request,
+                    "message": user_message_for(e, default="更新に失敗しました"),
+                },
+                status_code=500,
+            )
         )
 
     response = HTMLResponse(content="", status_code=200)
@@ -1208,14 +1220,16 @@ async def delete_template(request: Request, template_id: str) -> Any:
         manager.delete_template(template_id)
     except SurveyTemplateManagerError as e:
         logger.error("テンプレート削除エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {
-                "request": request,
-                "message": user_message_for(e, default="削除に失敗しました"),
-            },
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {
+                    "request": request,
+                    "message": user_message_for(e, default="削除に失敗しました"),
+                },
+                status_code=500,
+            )
         )
     # 削除成功 - カードを空にする
     return HTMLResponse(content="")
@@ -1254,11 +1268,15 @@ async def execute_survey(request: Request) -> Any:
     try:
         persona_count = int(persona_count_str)
     except (ValueError, TypeError):
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "ペルソナ数は整数で入力してください"},
-            status_code=400,
+        # HX-Retarget はスワップ判定より前に処理されるが、それだけでは非2xx本文が
+        # スワップされないため mark_renderable が必要（Issue #117）
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": "ペルソナ数は整数で入力してください"},
+                status_code=400,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
@@ -1284,27 +1302,31 @@ async def execute_survey(request: Request) -> Any:
         )
     except SurveyExecutionValidationError as e:
         logger.warning("アンケート実行のバリデーションエラー", exc_info=True)
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": user_message_for(e)},
-            status_code=400,
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": user_message_for(e)},
+                status_code=400,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
         return response
     except SurveyExecutionManagerError as e:
         logger.error("アンケート作成エラー", exc_info=True)
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {
-                "request": request,
-                "message": user_message_for(
-                    e, default="アンケート作成に失敗しました"
-                ),
-            },
-            status_code=500,
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {
+                    "request": request,
+                    "message": user_message_for(
+                        e, default="アンケート作成に失敗しました"
+                    ),
+                },
+                status_code=500,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
@@ -1348,11 +1370,13 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
         stats = manager.get_persona_statistics(survey_id)
     except SurveyAnalysisManagerError as e:
         logger.warning("アンケート分析データ取得エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": user_message_for(e)},
+                status_code=400,
+            )
         )
     return templates.TemplateResponse(
         request,
@@ -1369,11 +1393,13 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
         data = manager.get_visual_analysis(survey_id)
     except SurveyAnalysisManagerError as e:
         logger.warning("アンケート分析データ取得エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "survey/partials/error_message.html",
+                {"request": request, "message": user_message_for(e)},
+                status_code=400,
+            )
         )
     return templates.TemplateResponse(
         request,

@@ -24,7 +24,12 @@ from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationCapacityError,
 )
 from src.models.persona import Persona
-from web.error_messages import is_transient, toast_response, user_message_for
+from web.error_messages import (
+    is_transient,
+    mark_renderable,
+    toast_response,
+    user_message_for,
+)
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -141,19 +146,23 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
         )
     except FileSecurityError as e:
         logger.warning("ファイルセキュリティエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     except FileUploadError as e:
         logger.warning("ファイルアップロードエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     except Exception as e:
         # 再試行で解決しうるエラーはアップロード欄を消さずトーストで通知する
@@ -573,11 +582,13 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
         persona = persona_manager.get_persona(persona_id)
 
         if not persona:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "ペルソナが見つかりません"},
-                status_code=404,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "ペルソナが見つかりません"},
+                    status_code=404,
+                )
             )
 
         return templates.TemplateResponse(
@@ -587,11 +598,13 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
         )
     except Exception as e:
         logger.error(f"ペルソナ編集フォーム取得エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "編集フォームの取得に失敗しました"},
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "編集フォームの取得に失敗しました"},
+                status_code=500,
+            )
         )
 
 
@@ -642,22 +655,26 @@ async def update_persona(
                 },
             )
         else:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "ペルソナが見つかりません"},
-                status_code=404,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "ペルソナが見つかりません"},
+                    status_code=404,
+                )
             )
     except PersonaManagerError as e:
         logger.warning("ペルソナ更新エラー", exc_info=True)
         if is_transient(e):
             # 再試行で解決しうるエラーは編集フォームを消さずトーストで通知する
             return toast_response(e)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     except Exception as e:
         logger.error("ペルソナ更新エラー", exc_info=True)
@@ -714,11 +731,13 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
                 {"request": request, "message": "ペルソナを削除しました"},
             )
         else:
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "ペルソナの削除に失敗しました"},
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "ペルソナの削除に失敗しました"},
+                    status_code=400,
+                )
             )
     except Exception as e:
         # 再試行で解決しうるエラーは一覧を消さずトーストで通知する
@@ -783,11 +802,13 @@ async def get_persona_list_partial(
         )
     except Exception as e:
         logger.error(f"ペルソナ一覧取得エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "ペルソナ一覧の取得に失敗しました"},
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "ペルソナ一覧の取得に失敗しました"},
+                status_code=500,
+            )
         )
 
 
@@ -890,15 +911,17 @@ async def delete_persona_memory(
         if success:
             return HTMLResponse(content="", status_code=200)
         else:
-            return templates.TemplateResponse(
-                request,
-                "persona/partials/memory_delete_error.html",
-                {
-                    "request": request,
-                    "memory_id": memory_id,
-                    "error": "記憶の削除に失敗しました。記憶が見つからないか、既に削除されている可能性があります。",
-                },
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "persona/partials/memory_delete_error.html",
+                    {
+                        "request": request,
+                        "memory_id": memory_id,
+                        "error": "記憶の削除に失敗しました。記憶が見つからないか、既に削除されている可能性があります。",
+                    },
+                    status_code=400,
+                )
             )
 
     except PersonaMemoryManagerError as e:
@@ -906,11 +929,13 @@ async def delete_persona_memory(
             e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
         )
         logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/memory_delete_error.html",
-            {"request": request, "memory_id": memory_id, "error": error_msg},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "persona/partials/memory_delete_error.html",
+                {"request": request, "memory_id": memory_id, "error": error_msg},
+                status_code=400,
+            )
         )
 
     except Exception as e:
@@ -1048,11 +1073,13 @@ async def add_persona_memory(
         if is_transient(e):
             # 入力フォームを含む記憶一覧を置換せず、入力内容を保持する
             return toast_response(e)
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/memory_add_error.html",
-            {"request": request, "error": user_message_for(e)},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "persona/partials/memory_add_error.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
 
     except (ConnectionError, TimeoutError) as e:
@@ -1330,11 +1357,13 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         if not id_list:
             logger.warning("保存するペルソナが選択されていません")
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": "保存するペルソナを選択してください"},
-                status_code=400,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": "保存するペルソナを選択してください"},
+                    status_code=400,
+                )
             )
 
         logger.info(f"{len(id_list)}個のペルソナ保存開始")
@@ -1370,11 +1399,13 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
                 error_msg = "生成されたペルソナの一時データが期限切れです。お手数ですが再度生成してください。"
             else:
                 error_msg = "ペルソナの保存に失敗しました"
-            return templates.TemplateResponse(
-                request,
-                "partials/error.html",
-                {"request": request, "error": error_msg},
-                status_code=500,
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error.html",
+                    {"request": request, "error": error_msg},
+                    status_code=500,
+                )
             )
 
         logger.info(f"{saved_count}個のペルソナ保存完了")

@@ -24,6 +24,7 @@ from src.managers.interview_manager import (
     InterviewAgentError,
     InterviewPersistenceError,
 )
+from web.error_messages import mark_renderable
 
 logger = logging.getLogger(__name__)
 
@@ -252,25 +253,29 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
 
     except InterviewSessionNotFoundError as e:
         logger.error(f"Interview session not found: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": "指定されたインタビューセッションが見つかりません。セッションが終了しているか、無効なURLの可能性があります。",
-            },
-            status_code=404,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {
+                    "request": request,
+                    "error": "指定されたインタビューセッションが見つかりません。セッションが終了しているか、無効なURLの可能性があります。",
+                },
+                status_code=404,
+            )
         )
     except Exception as e:
         logger.error(f"Error loading interview chat page: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": "ページの読み込み中にエラーが発生しました。しばらく待ってから再試行してください。",
-            },
-            status_code=500,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {
+                    "request": request,
+                    "error": "ページの読み込み中にエラーが発生しました。しばらく待ってから再試行してください。",
+                },
+                status_code=500,
+            )
         )
 
 

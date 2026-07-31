@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from src.managers.dataset_manager import DatasetManager
 from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
 from src.models.dataset import DatasetColumn
-from web.error_messages import toast_response
+from web.error_messages import mark_renderable, toast_response
 
 logger = logging.getLogger(__name__)
 
@@ -129,20 +129,27 @@ async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> An
 async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     """CSVファイルのスキーマを解析"""
     if not file.filename.endswith(".csv"):  # type: ignore[union-attr]
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "CSVファイルのみアップロード可能です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "CSVファイルのみアップロード可能です"},
+                status_code=400,
+            )
         )
 
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:  # 10MB制限
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "ファイルサイズは10MB以下にしてください"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {
+                    "request": request,
+                    "error": "ファイルサイズは10MB以下にしてください",
+                },
+                status_code=400,
+            )
         )
 
     dataset_manager = get_dataset_manager()
@@ -273,11 +280,13 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
     success = dataset_manager.delete_dataset(dataset_id)
 
     if not success:
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "データセットの削除に失敗しました"},
-            status_code=404,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "データセットの削除に失敗しました"},
+                status_code=404,
+            )
         )
 
     datasets = dataset_manager.get_datasets()

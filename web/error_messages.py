@@ -17,12 +17,17 @@ of a body swap, so that the user's input survives a retryable failure
 
 import json
 import logging
+from typing import TypeVar
 
 from fastapi import Response
 
 from src.models.errors import ErrorCode, ErrorKind
 
 logger = logging.getLogger(__name__)
+
+#: ``mark_renderable`` は受け取った応答型をそのまま返す（TemplateResponse を
+#: 渡した呼び出し元が Response に狭められないようにするため）。
+_ResponseT = TypeVar("_ResponseT", bound=Response)
 
 # Field key -> display label. Managers put the stable key in
 # ``context["field"]`` so that only this file holds Japanese labels.
@@ -340,3 +345,35 @@ def is_transient(exc: BaseException | None) -> bool:
     （Router側に kind の分岐ロジックを散らさないため）。
     """
     return error_kind_of(exc) is ErrorKind.TRANSIENT
+
+
+#: 非2xx応答の本文をスワップさせるためのヘッダー。
+#:
+#: htmx 1.9.10 は ``status>=200 && status<400 && status!==204`` 以外の本文を
+#: スワップしないため、4xx/5xx でエラーパーシャルを返しても画面に反映されない。
+#: このヘッダーが付いた応答だけをクライアント側で許可する
+#: （``web/static/js/app.js`` の ``htmx:beforeSwap`` を参照）。
+#:
+#: ステータスコードで一律に許可しないのは、汎用エラーパーシャルが ``hx-target``
+#: （本体コンテンツや一覧）に流れ込んでフォームごと消える経路があるため。
+#: 「表示してよい」判断はサーバー側が持つ（Issue #117）。
+RENDER_RESPONSE_HEADER = {"X-Render-Response": "true"}
+
+
+def mark_renderable(response: _ResponseT) -> _ResponseT:
+    """非2xx応答をクライアントがDOMに反映してよいものとして印を付ける。
+
+    Router は各画面固有のテンプレート・コンテキストを持つため、応答の組み立て
+    自体はRouterに残し、この関数は「表示してよい」印だけを付ける。
+
+    Examples:
+        >>> return mark_renderable(
+        ...     templates.TemplateResponse(
+        ...         request, "partials/error.html",
+        ...         {"request": request, "error": user_message_for(e)},
+        ...         status_code=400,
+        ...     )
+        ... )
+    """
+    response.headers.update(RENDER_RESPONSE_HEADER)
+    return response

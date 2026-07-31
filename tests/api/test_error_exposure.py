@@ -534,3 +534,116 @@ class TestGenericExceptionsDoNotReplaceContent:
             "tests.api.test_error_exposure._router_modules", return_value=[module]
         ):
             assert self._violations() != []
+
+
+class TestErrorPartialsReachTheScreen:
+    """非2xxで返すエラーパーシャルが画面に届くこと（#117 ステップ3）。
+
+    htmx 1.9.10 は ``status>=200 && status<400 && status!==204`` 以外の本文を
+    スワップしない。したがって 4xx/5xx でエラーパーシャルを返しても、文言は
+    生成されているのにDOMへ反映されず、`app.js` の汎用フォールバック
+    （「エラーが発生しました。再度お試しください。」）だけが表示される。
+    #112 で84件の文言カタログを整備したにもかかわらず、その半数が画面に
+    到達していなかった原因がこれである。
+
+    サーバーが ``X-Render-Response: true``（``mark_renderable()``）を付けた
+    応答のみクライアントがスワップする。この検査は「非2xxでエラーパーシャルを
+    返すなら印が付いている」ことをASTで保証し、Routerを追加した際に同じ失敗が
+    再発するのを防ぐ。#112 の `str(e)` 露出検査と同じ「構造で保証する」方針。
+
+    ステータスコードで一律にスワップを許可しない理由は Issue #117 の原因B
+    （汎用パーシャルが本体コンテンツを置換してフォームごと消える）を参照。
+    """
+
+    def _unreachable(self, modules: list[Path] | None = None) -> list[str]:
+        """非2xxで返すエラーパーシャルのうち、印が付いていない箇所を集める。"""
+        found = []
+        for path in modules if modules is not None else _router_modules():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+
+            # mark_renderable(...) の引数として渡されている呼び出しの位置
+            marked = {
+                (arg.lineno, arg.col_offset)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "mark_renderable"
+                for arg in node.args
+                if isinstance(arg, ast.Call)
+            }
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if "TemplateResponse" not in ast.unparse(node.func):
+                    continue
+                template = next(
+                    (
+                        a.value
+                        for a in node.args
+                        if isinstance(a, ast.Constant)
+                        and isinstance(a.value, str)
+                        and a.value.endswith(".html")
+                    ),
+                    None,
+                )
+                if not template or "error" not in template:
+                    continue
+                status = next(
+                    (
+                        kw.value.value
+                        for kw in node.keywords
+                        if kw.arg == "status_code"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, int)
+                    ),
+                    200,
+                )
+                # 2xx は htmx がそのままスワップするので印は不要
+                if 200 <= status < 300:
+                    continue
+                if (node.lineno, node.col_offset) in marked:
+                    continue
+                found.append(f"{path.name}:{node.lineno} -> {template} ({status})")
+        return sorted(found)
+
+    def test_all_error_partials_are_marked_renderable(self):
+        unreachable = self._unreachable()
+        assert unreachable == [], (
+            "非2xxでエラーパーシャルを返しているが mark_renderable() が無い。"
+            "htmx が本文を破棄するため文言が画面に届かない:\n" + "\n".join(unreachable)
+        )
+
+    def test_check_detects_an_unmarked_partial(self, tmp_path):
+        """検査が実際に機能することを確認する（常に空を返していないこと）。"""
+        module = tmp_path / "unmarked.py"
+        module.write_text(
+            "async def handler(request):\n"
+            "    return templates.TemplateResponse(\n"
+            "        request, 'partials/error.html',\n"
+            "        {'error': 'x'}, status_code=404)\n",
+            encoding="utf-8",
+        )
+        assert self._unreachable([module]) != []
+
+    def test_marked_partial_passes_the_check(self, tmp_path):
+        module = tmp_path / "marked.py"
+        module.write_text(
+            "async def handler(request):\n"
+            "    return mark_renderable(templates.TemplateResponse(\n"
+            "        request, 'partials/error.html',\n"
+            "        {'error': 'x'}, status_code=404))\n",
+            encoding="utf-8",
+        )
+        assert self._unreachable([module]) == []
+
+    def test_2xx_partial_needs_no_mark(self, tmp_path):
+        """2xx は htmx がスワップするので印を強制しない。"""
+        module = tmp_path / "ok.py"
+        module.write_text(
+            "async def handler(request):\n"
+            "    return templates.TemplateResponse(\n"
+            "        request, 'partials/error.html', {'error': 'x'})\n",
+            encoding="utf-8",
+        )
+        assert self._unreachable([module]) == []

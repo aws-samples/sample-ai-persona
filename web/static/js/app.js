@@ -27,12 +27,29 @@ document.body.addEventListener('showToast', function(evt) {
     showFlashMessage(detail.message || 'エラーが発生しました。', detail.type || 'error');
 });
 
+// 非2xx応答のDOM反映（Issue #117）。
+// htmx 1.9.10 は 2xx 以外の本文をスワップしないため、4xx/5xx でエラー文言を
+// 返しても画面に届かない。サーバーが X-Render-Response: true を明示した応答
+// だけをスワップ対象にする。
+// ステータスコードで一律に許可しないのは、汎用エラーパーシャルが hx-target
+// （本体コンテンツや一覧）に流れ込んでフォームごと消える経路があるため。
+// 「表示してよい」判断はサーバー側が持つ。
+document.body.addEventListener('htmx:beforeSwap', function(evt) {
+    const xhr = evt.detail.xhr;
+    if (xhr && xhr.getResponseHeader('X-Render-Response') === 'true') {
+        evt.detail.shouldSwap = true;
+        evt.detail.isError = false;
+    }
+});
+
 document.body.addEventListener('htmx:responseError', function(evt) {
     // エラー時の処理
     console.error('htmx request error:', evt.detail);
-    // サーバーがトーストを指示している場合は showToast 側で表示するため、
-    // ここで汎用文言を重ねて出さない
-    if (evt.detail.xhr && evt.detail.xhr.getResponseHeader('HX-Trigger')) {
+    // サーバーがトースト表示または本文の反映を指示している場合は、それぞれの
+    // 経路で文言が出るため、ここで汎用文言を重ねて出さない
+    const xhr = evt.detail.xhr;
+    if (xhr && (xhr.getResponseHeader('HX-Trigger') ||
+                xhr.getResponseHeader('X-Render-Response') === 'true')) {
         return;
     }
     showFlashMessage('エラーが発生しました。再度お試しください。', 'error');
