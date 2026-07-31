@@ -75,7 +75,11 @@ function showFlashMessage(message, type = 'info') {
     };
     
     const div = document.createElement('div');
-    div.className = `${colors[type]} border rounded-lg p-4 mb-4 fade-in`;
+    // コンテナは pointer-events-none（下の要素を操作できるように）なので、
+    // 閉じるボタンを押せるようトースト自身だけクリックを受け付ける。
+    // shadow-lg は本文コンテンツの上に重なるため境界を分かりやすくする。
+    div.className =
+        `${colors[type]} border rounded-lg p-4 mb-2 fade-in shadow-lg pointer-events-auto`;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'flex items-center justify-between';

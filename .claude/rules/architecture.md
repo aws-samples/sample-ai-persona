@@ -177,6 +177,23 @@ return mark_renderable(
 - `exc.errors()` の `input` には利用者の入力値が載る。**レスポンスに転写してはならない**（Router層で `str(e)` を書かない原則と同じ扱い）
 - Router 個別に `try/except` を足して対処しない（`Form(...)` は40箇所以上あり、分散させるとこの穴が再発する）
 
+### `HTTPException`（フルページ表示）
+
+`raise HTTPException(404, detail=...)` は FastAPI の既定ハンドラが `{"detail": "..."}` を返すため、**ブラウザのフルページ遷移では生のJSONが表示される**。`web/main.py` のグローバルハンドラ（`StarletteHTTPException`）で `partials/error_page.html` に変換する。
+
+- 対象は「`/api/*` 以外」かつ「htmx リクエストでない」かつ「`Accept` に `text/html` を含む」もの（`_wants_html_page()`）。JSON APIクライアントと htmx パーシャルの挙動は変えない
+- `detail` はRouter内で組み立てた**固定文言**なので表示してよい（例外メッセージではない）。`str(e)` を渡してはならない
+- 復帰先は `_back_url_for()` がパスから推定する。NOT_FOUND から一覧へ戻れるようにするため
+- `partials/error_page.html` は `base.html` を継承したフルページ。パーシャル2種（`error_inline` / `error_banner`）とは用途が異なる
+
+### トースト通知の表示
+
+TRANSIENT と 422 はトーストが**唯一の通知手段**なので、スクロール位置に依存せず見える必要がある。
+
+- `#flash-messages` は `<main>` の外に置き、`fixed top-20 right-4 z-50` で画面右上に固定する。`<main>` 内にインライン挿入すると、長いフォームを下にスクロールした状態で視認できない
+- コンテナは `pointer-events-none`（下の要素を操作できるように）。トースト自身に `pointer-events-auto` を付けて閉じるボタンを押せるようにする（`app.js` の `showFlashMessage`）
+- **`web/static/css/tailwind.css` はビルド成果物をコミットしている。** テンプレートやJSでクラスを足したら `./scripts/build-css.sh --minify` を実行する。忘れるとクラスが存在せず無効になる（`TestToastIsVisibleRegardlessOfScroll` が検査する）
+
 ### 検査
 
 - `tests/api/test_error_exposure.py` が `web/routers/` をASTで走査し、例外変数がログ・`user_message_for()` 以外から参照されていないことを機械的に検査する

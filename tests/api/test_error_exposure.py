@@ -817,3 +817,158 @@ class TestHtmxHandlersAreNotDuplicated:
         ).read_text(encoding="utf-8")
         for event in ("htmx:beforeSwap", "htmx:responseError", "showToast"):
             assert f"addEventListener('{event}'" in app_js, f"{event} が無い"
+
+
+class TestHttpExceptionRendersHtmlPage:
+    """`HTTPException` をブラウザに生JSONで返さないこと（#117）。
+
+    フルページ表示のエンドポイント（`GET /persona/{id}` 等）が
+    `raise HTTPException(404, ...)` すると、FastAPI の既定ハンドラが
+    `{"detail": "..."}` を返し**生のJSONがブラウザに表示される**。
+    NOT_FOUND の表示（文言 + 復帰リンク）がこの経路だけ抜けていた。
+    """
+
+    _BROWSER = {"accept": "text/html,application/xhtml+xml"}
+
+    def test_global_handler_is_registered(self):
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        from web.main import app
+
+        assert StarletteHTTPException in app.exception_handlers
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_persona_not_found_renders_html(self, mock_get_mgr, test_app):
+        from fastapi.testclient import TestClient
+
+        mgr = Mock()
+        mgr.get_persona.return_value = None
+        mock_get_mgr.return_value = mgr
+
+        with TestClient(test_app) as browser:
+            response = browser.get("/persona/nope", headers=self._BROWSER)
+
+        assert response.status_code == 404
+        assert "text/html" in response.headers["content-type"]
+        # 生のJSONを返していないこと
+        assert not response.text.strip().startswith("{")
+        assert '"detail"' not in response.text
+        # 文言と復帰リンクが出ること
+        assert "ペルソナが見つかりません" in response.text
+        assert "/persona/management" in response.text
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_discussion_not_found_renders_html(self, mock_get_mgr, test_app):
+        from fastapi.testclient import TestClient
+
+        mgr = Mock()
+        mgr.get_discussion.return_value = None
+        mock_get_mgr.return_value = mgr
+
+        with TestClient(test_app) as browser:
+            response = browser.get("/discussion/nope", headers=self._BROWSER)
+
+        assert response.status_code == 404
+        assert not response.text.strip().startswith("{")
+        assert "/discussion/results" in response.text
+
+    def test_json_api_keeps_json_response(self, test_app):
+        """`/api/*` はJSONクライアント向けなので既定の挙動を維持する。"""
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as browser:
+            # Accept に text/html を含めてもJSONを返すこと
+            response = browser.get("/api/personas/nope", headers=self._BROWSER)
+
+        assert "application/json" in response.headers["content-type"]
+
+    def test_htmx_request_is_not_given_a_full_page(self, test_app):
+        """htmx 経路はパーシャルを返す設計なので、フルページに差し替えない。"""
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as hx:
+            response = hx.get(
+                "/persona/nope",
+                headers={"HX-Request": "true", **self._BROWSER},
+            )
+
+        # base.html を継承したフルページ（ナビ・フッター）を返していないこと
+        assert "<footer" not in response.text
+
+    def test_error_page_does_not_leak_exception_details(self, test_app):
+        """内部エラー（500）で例外の内容を画面に出さないこと。"""
+        from fastapi.testclient import TestClient
+
+        secret = "arn:aws:dynamodb:ap-northeast-1:999999999999:table/prod"
+        mgr = Mock()
+        mgr.get_persona.side_effect = RuntimeError(secret)
+
+        with patch("web.routers.persona.get_persona_manager", return_value=mgr):
+            with TestClient(test_app, raise_server_exceptions=False) as browser:
+                response = browser.get("/persona/p1", headers=self._BROWSER)
+
+        assert secret not in response.text
+
+
+class TestToastIsVisibleRegardlessOfScroll:
+    """トーストが画面右上に固定表示されること（#117）。
+
+    TRANSIENT と 422 はトーストが唯一の通知手段なので、スクロール位置に
+    依存せず必ず見える必要がある。従来は `main` の先頭にインライン挿入して
+    いたため、長いフォームを下にスクロールした状態では視認できなかった。
+    """
+
+    _ROOT = Path(__file__).parent.parent.parent
+
+    def test_container_is_fixed_positioned(self):
+        base = (self._ROOT / "web" / "templates" / "base.html").read_text(
+            encoding="utf-8"
+        )
+        # id="flash-messages" を含む要素のクラスを取り出す
+        import re
+
+        m = re.search(r'id="flash-messages"[^>]*', base, re.DOTALL)
+        assert m, "flash-messages コンテナが無い"
+        tag = m.group(0)
+        for cls in ("fixed", "z-50"):
+            assert cls in tag, f"{cls} が無い（スクロールで見えなくなる）"
+
+    def test_required_classes_exist_in_built_css(self):
+        """ビルド済みCSSに必要なユーティリティが含まれていること。
+
+        `web/static/css/tailwind.css` はビルド成果物をコミットしているため、
+        テンプレート側でクラスを足しても再ビルドを忘れると効かない。
+        """
+        import re
+
+        css = (self._ROOT / "web" / "static" / "css" / "tailwind.css").read_text(
+            encoding="utf-8"
+        )
+        missing = [
+            cls
+            for cls in (
+                "fixed",
+                "top-20",
+                "right-4",
+                "z-50",
+                "max-w-sm",
+                "pointer-events-none",
+                "pointer-events-auto",
+                "shadow-lg",
+            )
+            if not re.search(r"\." + re.escape(cls) + r"(?=[,{:\s])", css)
+        ]
+        assert missing == [], (
+            f"ビルド済みCSSにクラスが無い。./scripts/build-css.sh --minify "
+            f"を実行すること: {missing}"
+        )
+
+    def test_toast_element_accepts_clicks(self):
+        """コンテナは pointer-events-none なので、トースト自身で戻すこと。
+
+        戻さないと閉じるボタンが押せない。
+        """
+        app_js = (self._ROOT / "web" / "static" / "js" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        assert "pointer-events-auto" in app_js
