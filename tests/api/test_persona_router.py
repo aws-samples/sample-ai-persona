@@ -873,21 +873,57 @@ class TestPersonaMemories:
         assert response.status_code == 200
 
     @patch("web.routers.persona.get_persona_memory_manager")
-    def test_delete_memory_disabled(self, mock_get_mgr, client):
+    def test_delete_memory_config_error_replaces_item(self, mock_get_mgr, client):
+        """機能無効（CONFIG）は入力修正で解決しないので、アイテムを
+        エラーカードで置換してよい（記憶はそもそも削除できない状態）。"""
         from src.managers.persona_memory_manager import PersonaMemoryManagerError
 
         mock_mgr = Mock()
         mock_mgr.delete_memory.side_effect = PersonaMemoryManagerError(
-            "長期記憶機能が無効です"
+            "memory feature disabled", code=ErrorCode.MEMORY_FEATURE_DISABLED
         )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.delete("/persona/p1/memories/m1")
+
+        assert response.status_code == 400
+        assert response.headers.get("X-Render-Response") == "true"
+        assert 'id="memory-item-m1"' in response.text
+
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_delete_memory_transient_uses_toast(self, mock_get_mgr, client):
+        """再試行で解決しうるエラーでは記憶項目を残す（#117）。
+
+        削除の hx-swap は outerHTML。サービス障害・タイムアウトでは記憶は
+        まだ存在するため、アイテムをエラーカードで置換すると一覧が実データと
+        食い違い、再試行もできなくなる。トーストで通知する。
+        """
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.delete_memory.side_effect = PersonaMemoryManagerError(
+            "memory service timeout", code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.delete("/persona/p1/memories/m1")
+
+        # 記憶アイテムを置換しない（本文なし）
+        assert response.text == ""
+        assert "HX-Trigger" in response.headers
+        # 記憶アイテムを差し替える id は出さない
+        assert "memory-item-m1" not in response.headers.get("HX-Trigger", "")
+
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_delete_all_memories_disabled(self, mock_get_mgr, client):
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        mock_mgr = Mock()
         mock_mgr.delete_all_memories.side_effect = PersonaMemoryManagerError(
             "長期記憶機能が無効です"
         )
         mock_mgr.safe_get_memories.return_value = []
         mock_get_mgr.return_value = mock_mgr
-
-        response = client.delete("/persona/p1/memories/m1")
-        assert response.status_code == 400
 
         response = client.delete("/persona/p1/memories")
         assert response.status_code == 200
@@ -924,8 +960,9 @@ class TestAddMemoryValidationPreservesInput:
         assert response.status_code == 400
         # 画面に届く印が付いていること
         assert response.headers.get("X-Render-Response") == "true"
-        # 一覧ではなくフォーム内の専用領域に差し替わること
-        assert response.headers.get("HX-Retarget") == "#memory-form-error"
+        # 一覧ではなく、送信元フォーム内の専用領域に差し替わること。
+        # find 相対セレクタで、同じ領域を持つ別フォームと混同しないようにする
+        assert response.headers.get("HX-Retarget") == "find .memory-form-error"
         assert response.headers.get("HX-Reswap") == "innerHTML"
         assert "トピック名を入力してください" in response.text
 
@@ -944,7 +981,7 @@ class TestAddMemoryValidationPreservesInput:
         response = client.post("/persona/p1/memories", data=self._FORM)
 
         assert response.status_code == 400
-        assert response.headers.get("HX-Retarget") == "#memory-form-error"
+        assert response.headers.get("HX-Retarget") == "find .memory-form-error"
         assert "内容は10000文字以内で設定してください" in response.text
 
     @patch("web.routers.persona.get_persona_memory_manager")
@@ -966,29 +1003,32 @@ class TestAddMemoryValidationPreservesInput:
 
 
 class TestFormErrorTargetExists:
-    """HX-Retarget の指すDOM要素がテンプレート側に存在すること（#117）。
+    """HX-Retarget の差し替え先がテンプレート側に存在すること（#117）。
 
-    サーバーが `HX-Retarget: #memory-form-error` を返しても、その要素が
-    テンプレートに無ければ htmx は差し替え先を見つけられず文言が出ない。
+    サーバーが `HX-Retarget: find .memory-form-error` を返しても、送信元
+    フォーム内にその要素が無ければ htmx は差し替え先を見つけられず文言が
+    出ない。find 相対セレクタなので **各 form の内側**にあることが必要。
     サーバーとテンプレートの対応をテストで固定する。
     """
 
-    def test_templates_that_post_memories_define_the_error_area(self):
+    def test_forms_posting_memories_contain_the_error_area(self):
+        import re
         from pathlib import Path
 
         templates_dir = Path(__file__).parent.parent.parent / "web" / "templates"
-        posting = [
-            p
-            for p in templates_dir.rglob("*.html")
-            if "/memories" in p.read_text(encoding="utf-8")
-            and "hx-post" in p.read_text(encoding="utf-8")
-        ]
-        assert posting, "記憶追加を POST するテンプレートが見つからない"
-        missing = [
-            p.name
-            for p in posting
-            if 'id="memory-form-error"' not in p.read_text(encoding="utf-8")
-        ]
-        assert missing == [], (
-            f"HX-Retarget の差し替え先 #memory-form-error が無い: {missing}"
+        offenders = []
+        for path in templates_dir.rglob("*.html"):
+            html = path.read_text(encoding="utf-8")
+            # /memories へ POST する <form ...> ... </form> を取り出す
+            for form in re.findall(r"<form\b.*?</form>", html, re.DOTALL):
+                if 'hx-post="/persona/' not in form or "/memories" not in form:
+                    continue
+                # upload-preview（プレビュー生成）は記憶追加ではないので対象外
+                if "/memories/upload-preview" in form:
+                    continue
+                if "memory-form-error" not in form:
+                    offenders.append(path.name)
+        assert offenders == [], (
+            "記憶追加フォーム内に .memory-form-error が無い"
+            f"（find 相対セレクタが解決できない）: {offenders}"
         )

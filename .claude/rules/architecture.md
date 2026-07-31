@@ -147,12 +147,13 @@ return mark_renderable(
 | 方式 | 使う場面 | 例 |
 |---|---|---|
 | フォーム再描画 | 素のHTMLフォーム | `persona/partials/edit_form.html`（送信値を `form` で渡し `persona` にフォールバック） |
-| `HX-Retarget` で専用領域だけ差し替え | Alpine が表示状態を持つフォーム | 知識追加（`#memory-form-error`）。再描画すると `x-show` が初期値に戻り入力欄が閉じる |
+| `HX-Retarget` で専用領域だけ差し替え | Alpine が表示状態を持つフォーム | 知識追加（`find .memory-form-error`）。再描画すると `x-show` が初期値に戻り入力欄が閉じる |
 
 - フィールド単位の表示は `web/templates/components/form_errors.html` のマクロ（`field_error` / `field_border` / `form_error_summary`）を使う。対象フィールドは `field_of(e)` で取得する
 - **Jinjaテンプレートで送信値を参照するときは `f['key']` 形式を使う。** `f.values` / `f.items` / `f.keys` は dict のメソッドに解決され、入力値が消える
 - **Jinjaの注釈（`{# #}`）内にタグ記法を書いてはならない。** コメントでも解析され未定義エラーになる
-- `HX-Retarget` の差し替え先IDがテンプレートに存在することを `TestFormErrorTargetExists` が検査する
+- `HX-Retarget` の差し替え先を **絶対 id にしてはならない**。同じ領域を持つフォームが複数同時にDOM上へ存在しうる（手動入力タブ / ファイルプレビュー）と id が重複し、送信元と別のフォームが選ばれてエラーが見えなくなる。`find <セレクタ>`（送信元要素からの相対解決）を使い、差し替え先は各 form の内側に置く
+- `HX-Retarget` の差し替え先が各フォーム内に存在することを `TestFormErrorTargetExists` が検査する
 
 ### エラー表示テンプレート
 
@@ -171,7 +172,8 @@ return mark_renderable(
 
 `Form(...)` / Pydanticボディの検証失敗は FastAPI が Router に入る**前**に検出するため、Router内の `except` では捕捉できずカタログを経由しない。`web/main.py` のグローバルハンドラ（`RequestValidationError`）で処理する。
 
-- htmx リクエスト（`HX-Request` ヘッダー）にはパーシャルHTMLを返し、それ以外はFastAPI標準のJSON応答を維持する（`web/routers/api.py` のJSONクライアント互換のため）
+- htmx リクエスト（`HX-Request` ヘッダー）には **`toast_response()` でトースト通知**し、それ以外はFastAPI標準のJSON応答を維持する（`web/routers/api.py` のJSONクライアント互換のため）
+- **パーシャルHTMLを返してはならない。** このハンドラは全フォーム共通で発火元の `hx-target` を知らないため、本文を返すとペルソナ編集などで本体コンテナへスワップされフォームと入力値が消える（#117 原因B）。トーストならDOMを書き換えず入力を保持できる
 - `exc.errors()` の `input` には利用者の入力値が載る。**レスポンスに転写してはならない**（Router層で `str(e)` を書かない原則と同じ扱い）
 - Router 個別に `try/except` を足して対処しない（`Form(...)` は40箇所以上あり、分散させるとこの穴が再発する）
 

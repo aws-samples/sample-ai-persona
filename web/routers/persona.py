@@ -999,15 +999,23 @@ async def delete_persona_memory(
             )
 
     except PersonaMemoryManagerError as e:
-        error_msg = user_message_for(
-            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
-        )
-        logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
+        logger.warning("Memory error deleting memory %s", memory_id, exc_info=True)
+        # 削除の hx-swap は outerHTML で、失敗時にエラーカードが記憶アイテム
+        # そのものを置換する。再試行で解決しうるエラー（サービス障害・タイム
+        # アウト）ではその記憶はまだ存在するため、アイテムを消してしまうと
+        # 一覧の状態が実データと食い違い、再試行の導線も失われる。TRANSIENT は
+        # DOMを書き換えずトーストで通知する（#117）
+        if is_transient(e):
+            return toast_response(e)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
                 "persona/partials/memory_delete_error.html",
-                {"request": request, "memory_id": memory_id, "error": error_msg},
+                {
+                    "request": request,
+                    "memory_id": memory_id,
+                    "error": user_message_for(e),
+                },
                 status_code=400,
             )
         )
@@ -1149,7 +1157,10 @@ async def add_persona_memory(
             return toast_response(e)
         # 入力を直せば解決するエラーは、フォーム内の専用領域だけを差し替える。
         # hx-target（記憶一覧）を置換すると Alpine の showForm が false に戻って
-        # 入力欄が閉じ、入力内容も失われる（Issue #117）
+        # 入力欄が閉じ、入力内容も失われる（Issue #117）。
+        # find 相対セレクタで送信元フォーム内の領域を指す。手動入力タブと
+        # ファイルプレビューが同時にDOM上へ存在するため、絶対 id では別フォーム
+        # 側の領域が選ばれてエラーが見えなくなる。
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1158,7 +1169,7 @@ async def add_persona_memory(
                 status_code=400,
             )
         )
-        response.headers["HX-Retarget"] = "#memory-form-error"
+        response.headers["HX-Retarget"] = "find .memory-form-error"
         response.headers["HX-Reswap"] = "innerHTML"
         return response
 

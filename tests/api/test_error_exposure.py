@@ -289,32 +289,28 @@ class TestRequestValidationErrorHandling:
 
         assert RequestValidationError in app.exception_handlers
 
-    def test_htmx_request_gets_partial_html(self, client):
-        """htmx 経路では汎用文言のパーシャルHTMLを返すこと。"""
-        response = client.put(
-            "/persona/some-id", data={"age": "30"}, headers={"HX-Request": "true"}
-        )
+    def test_htmx_request_gets_toast_not_partial(self, client):
+        """htmx 経路ではトーストで通知し、本文を返さないこと。
 
-        assert response.status_code == 422
-        assert "text/html" in response.headers["content-type"]
-        assert "入力内容を確認してください" in response.text
-
-    def test_htmx_422_is_marked_renderable(self, client):
-        """422 の本文も印が無ければ htmx に破棄される（#117 ステップ3）。
-
-        文言を返していても X-Render-Response が無いと画面には届かず、
-        app.js の汎用フォールバックだけが出る。
+        このハンドラは全フォーム共通で発火元の hx-target を知らない。
+        パーシャルHTMLを返すとペルソナ編集などで本体コンテナへスワップされ、
+        フォームと入力値が消える（#117 原因B）。DOMを書き換えず入力を保持
+        できるトーストにする。
         """
         response = client.put(
             "/persona/some-id", data={"age": "30"}, headers={"HX-Request": "true"}
         )
 
-        assert response.headers.get("X-Render-Response") == "true"
+        assert response.status_code == 422
+        # 本文は返さない（スワップされる本文が存在しない）
+        assert response.text == ""
+        # 文言は HX-Trigger のトーストで届く
+        payload = json.loads(response.headers["HX-Trigger"])
+        assert "入力内容を確認してください" in payload["showToast"]["message"]
 
-    def test_json_client_response_is_not_marked(self, test_app):
-        """JSON APIクライアント向けの標準422応答には印を付けない。
+    def test_json_client_response_is_not_a_toast(self, test_app):
+        """JSON APIクライアント向けには標準422応答（JSON本文）を維持する。
 
-        印は htmx にDOM反映を許可するためのものなので、JSON経路には不要。
         `client` フィクスチャは HX-Request を常に付けるため、ここでは付けない
         クライアントを用意する（CSRFは X-Requested-With で通す）。
         """
@@ -327,13 +323,10 @@ class TestRequestValidationErrorHandling:
 
         assert response.status_code == 422
         assert "application/json" in response.headers["content-type"]
-        assert "X-Render-Response" not in response.headers
+        assert "HX-Trigger" not in response.headers
 
     def test_htmx_response_does_not_echo_user_input(self, client):
-        """`exc.errors()` の `input` に載る利用者入力を転写しないこと。
-
-        htmx は4xx本文をDOMへ挿入しないが、転写自体を避けるのが本Issueの原則。
-        """
+        """`exc.errors()` の `input` に載る利用者入力を転写しないこと。"""
         payload = "<img src=x onerror=alert(1)>"
         response = client.put(
             "/persona/some-id",
@@ -342,18 +335,22 @@ class TestRequestValidationErrorHandling:
         )
 
         assert response.status_code == 422
+        # 本文にもヘッダー（トースト文言）にも利用者入力を載せない
         assert payload not in response.text
-        assert "onerror" not in response.text
+        assert payload not in response.headers.get("HX-Trigger", "")
+        assert "onerror" not in response.headers.get("HX-Trigger", "")
 
     def test_htmx_response_does_not_expose_validation_internals(self, client):
-        """Pydanticの内部表現（type/loc/msg）をレスポンスに出さないこと。"""
+        """Pydanticの内部表現（type/loc/msg）を本文にもヘッダーにも出さないこと。"""
         response = client.put(
             "/persona/some-id", data={}, headers={"HX-Request": "true"}
         )
 
         assert response.status_code == 422
+        trigger = response.headers.get("HX-Trigger", "")
         for internal in ("int_parsing", '"loc"', "Field required", "body"):
             assert internal not in response.text
+            assert internal not in trigger
 
     def test_json_api_keeps_standard_422(self, test_app):
         """JSON APIクライアント（web/routers/api.py）の挙動を変えないこと。
@@ -381,15 +378,20 @@ class TestRequestValidationErrorHandling:
         ],
     )
     def test_form_endpoints_across_routers(self, client, method, path, data):
-        """Form(...) を使う各Routerで一貫して文言が返ること。"""
+        """Form(...) を使う各Routerで一貫してトースト文言が返ること。"""
         response = getattr(client, method)(
             path, data=data, headers={"HX-Request": "true"}
         )
 
         # 422 以外（例: 先にCSRFや別の検証で弾かれる）なら本テストの対象外
         if response.status_code == 422:
-            assert "入力内容を確認してください" in response.text
+            # HX-Trigger は latin-1 制約で \uXXXX エスケープされるので parse する
+            trigger = response.headers.get("HX-Trigger", "")
+            message = json.loads(trigger)["showToast"]["message"] if trigger else ""
+            assert "入力内容を確認してください" in message
+            # 内部表現は本文にもヘッダーにも出さない
             assert "Field required" not in response.text
+            assert "Field required" not in trigger
 
 
 class TestTransientErrorsUseToast:

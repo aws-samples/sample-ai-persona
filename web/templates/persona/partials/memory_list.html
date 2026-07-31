@@ -83,8 +83,13 @@
                       バリデーション失敗時はサーバーが HX-Retarget でこの領域へ
                       差し替える。フォームごと置換すると Alpine の showForm が
                       false に戻って入力欄が閉じ、入力内容も失われるため。
+
+                      id ではなく class にするのは、同じ領域を持つフォームが
+                      複数（手動入力タブ / ファイルプレビュー）同時にDOM上へ
+                      存在しうるため。id が重複すると HX-Retarget（find 相対
+                      セレクタ）が最初の要素を選び、別フォームのエラーが見えない。
                     #}
-                    <div id="memory-form-error"></div>
+                    <div class="memory-form-error"></div>
 
                     <div class="space-y-3">
                         <div>
