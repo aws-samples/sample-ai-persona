@@ -7,6 +7,8 @@ user-facing wording belongs to the presentation layer.
 - Exception message: a technical fact for logs. Never rendered to a response.
 - ``ErrorCode``: a machine-readable error kind, resolved to user-facing wording
   by ``web/error_messages.py``.
+- ``ErrorCode.kind``: what the user can do about it, which determines *how* the
+  error should be presented (see :class:`ErrorKind`).
 - ``CodedError.context``: structured values used both for diagnostic logging and
   for interpolating the wording template.
 
@@ -16,6 +18,29 @@ See ``docs/note/exception-message-design.md`` for the full rationale.
 from enum import StrEnum
 
 
+class ErrorKind(StrEnum):
+    """What the user can do about an error, which decides how to present it.
+
+    The wording catalog answers "what do we say"; this answers "how do we show
+    it". Presentation code should branch on the kind instead of on the HTTP
+    status or on individual codes (Issue #117).
+    """
+
+    #: The user can fix it by correcting their input. Show it inline next to the
+    #: field and keep what they typed.
+    VALIDATION = "validation"
+    #: The user can fix it by reducing the amount of input. Show it near the
+    #: form, with the limit spelled out.
+    CAPACITY = "capacity"
+    #: The target does not exist or is not ready yet. Replace the affected
+    #: region and offer a way back.
+    NOT_FOUND = "not_found"
+    #: An operator must change configuration. Point at the settings screen.
+    CONFIG = "config"
+    #: May succeed on retry. Show it without destroying the user's input.
+    TRANSIENT = "transient"
+
+
 class ErrorCode(StrEnum):
     """Machine-readable error kinds shared across all layers.
 
@@ -23,128 +48,232 @@ class ErrorCode(StrEnum):
     calls for a distinct user action gets its own code, while internal
     operation failures collapse into a per-feature catch-all code.
 
+    Each member carries an :class:`ErrorKind` so that presentation code can
+    decide how to display it without hard-coding per-code branches. The kind is
+    part of the member definition (rather than a separate mapping) so that a new
+    code cannot be added without classifying it.
+
     Every member except ``UNKNOWN`` must have an entry in the wording catalog
     (``web/error_messages.py``); ``tests/unit/test_error_messages.py`` enforces
     this.
     """
 
-    # Fallback for exceptions that carry no code yet.
-    UNKNOWN = "unknown"
+    _kind: ErrorKind
+
+    def __new__(cls, value: str, kind: ErrorKind) -> "ErrorCode":
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member._kind = kind
+        return member
+
+    @property
+    def kind(self) -> ErrorKind:
+        """How this error should be presented."""
+        return self._kind
+
+    # Fallback for exceptions that carry no code yet. Treated as TRANSIENT
+    # because an unclassified failure must not silently look like a validation
+    # error the user can fix.
+    UNKNOWN = ("unknown", ErrorKind.TRANSIENT)
 
     # --- Generic ---
-    NETWORK_ERROR = "network_error"
+    NETWORK_ERROR = ("network_error", ErrorKind.TRANSIENT)
 
     # --- Generation capacity ---
-    GENERATION_CAPACITY_EXCEEDED = "generation_capacity_exceeded"
-    REPORT_CAPACITY_EXCEEDED = "report_capacity_exceeded"
+    GENERATION_CAPACITY_EXCEEDED = (
+        "generation_capacity_exceeded",
+        ErrorKind.CAPACITY,
+    )
+    REPORT_CAPACITY_EXCEEDED = ("report_capacity_exceeded", ErrorKind.CAPACITY)
 
     # --- Files ---
-    FILE_TOO_LARGE = "file_too_large"
-    FILE_FORMAT_NOT_ALLOWED = "file_format_not_allowed"
-    FILE_MIME_UNSUPPORTED = "file_mime_unsupported"
-    FILE_EMPTY = "file_empty"
-    FILE_NOT_FOUND = "file_not_found"
+    FILE_TOO_LARGE = ("file_too_large", ErrorKind.CAPACITY)
+    FILE_FORMAT_NOT_ALLOWED = ("file_format_not_allowed", ErrorKind.VALIDATION)
+    FILE_MIME_UNSUPPORTED = ("file_mime_unsupported", ErrorKind.VALIDATION)
+    FILE_EMPTY = ("file_empty", ErrorKind.VALIDATION)
+    FILE_NOT_FOUND = ("file_not_found", ErrorKind.NOT_FOUND)
     # Text-bearing uploads: too little content to work with, or undecodable.
     # The two "too short" codes are separate because the guidance differs by
     # upload purpose, and the guidance wording belongs in the catalog.
-    INTERVIEW_FILE_CONTENT_TOO_SHORT = "interview_file_content_too_short"
-    MARKET_REPORT_CONTENT_TOO_SHORT = "market_report_content_too_short"
-    FILE_ENCODING_UNSUPPORTED = "file_encoding_unsupported"
-    CSV_ENCODING_UNSUPPORTED = "csv_encoding_unsupported"
-    # Security checks on the filename and the payload.
-    FILE_NAME_INVALID = "file_name_invalid"
-    FILE_NAME_TOO_LONG = "file_name_too_long"
-    FILE_HIDDEN_NOT_ALLOWED = "file_hidden_not_allowed"
-    FILE_BINARY_NOT_ALLOWED = "file_binary_not_allowed"
-    FILE_DELETE_NOT_ALLOWED = "file_delete_not_allowed"
+    INTERVIEW_FILE_CONTENT_TOO_SHORT = (
+        "interview_file_content_too_short",
+        ErrorKind.VALIDATION,
+    )
+    MARKET_REPORT_CONTENT_TOO_SHORT = (
+        "market_report_content_too_short",
+        ErrorKind.VALIDATION,
+    )
+    FILE_ENCODING_UNSUPPORTED = ("file_encoding_unsupported", ErrorKind.VALIDATION)
+    CSV_ENCODING_UNSUPPORTED = ("csv_encoding_unsupported", ErrorKind.VALIDATION)
+    # Security checks on the filename and the payload. VALIDATION because the
+    # user resolves them by choosing or renaming the file.
+    FILE_NAME_INVALID = ("file_name_invalid", ErrorKind.VALIDATION)
+    FILE_NAME_TOO_LONG = ("file_name_too_long", ErrorKind.VALIDATION)
+    FILE_HIDDEN_NOT_ALLOWED = ("file_hidden_not_allowed", ErrorKind.VALIDATION)
+    FILE_BINARY_NOT_ALLOWED = ("file_binary_not_allowed", ErrorKind.VALIDATION)
+    # Refusing to delete a path outside the upload directory: the user cannot
+    # correct this by editing input, so it is not VALIDATION.
+    FILE_DELETE_NOT_ALLOWED = ("file_delete_not_allowed", ErrorKind.TRANSIENT)
     # Catch-all for file operations that failed for internal reasons.
-    FILE_OPERATION_FAILED = "file_operation_failed"
+    FILE_OPERATION_FAILED = ("file_operation_failed", ErrorKind.TRANSIENT)
 
     # --- Surveys ---
-    SURVEY_NOT_FOUND = "survey_not_found"
-    SURVEY_RESULT_NOT_READY = "survey_result_not_ready"
-    SURVEY_TEMPLATE_NOT_FOUND = "survey_template_not_found"
-    SURVEY_TEMPLATE_NAME_BLANK = "survey_template_name_blank"
-    SURVEY_TEMPLATE_NO_QUESTIONS = "survey_template_no_questions"
-    SURVEY_TEMPLATE_TOO_FEW_OPTIONS = "survey_template_too_few_options"
-    SURVEY_TEMPLATE_TOO_MANY_IMAGES = "survey_template_too_many_images"
-    SURVEY_TEMPLATE_IMAGE_NAME_MISSING = "survey_template_image_name_missing"
-    SURVEY_TARGET_COUNT_TOO_LOW = "survey_target_count_too_low"
-    SURVEY_TARGET_COUNT_TOO_HIGH = "survey_target_count_too_high"
-    SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES = (
-        "survey_target_count_too_high_with_images"
+    SURVEY_NOT_FOUND = ("survey_not_found", ErrorKind.NOT_FOUND)
+    SURVEY_RESULT_NOT_READY = ("survey_result_not_ready", ErrorKind.NOT_FOUND)
+    SURVEY_TEMPLATE_NOT_FOUND = ("survey_template_not_found", ErrorKind.NOT_FOUND)
+    SURVEY_TEMPLATE_NAME_BLANK = (
+        "survey_template_name_blank",
+        ErrorKind.VALIDATION,
     )
-    SURVEY_DATASET_NOT_DOWNLOADED = "survey_dataset_not_downloaded"
+    SURVEY_TEMPLATE_NO_QUESTIONS = (
+        "survey_template_no_questions",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TEMPLATE_TOO_FEW_OPTIONS = (
+        "survey_template_too_few_options",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TEMPLATE_TOO_MANY_IMAGES = (
+        "survey_template_too_many_images",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TEMPLATE_IMAGE_NAME_MISSING = (
+        "survey_template_image_name_missing",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TARGET_COUNT_TOO_LOW = (
+        "survey_target_count_too_low",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TARGET_COUNT_TOO_HIGH = (
+        "survey_target_count_too_high",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES = (
+        "survey_target_count_too_high_with_images",
+        ErrorKind.VALIDATION,
+    )
+    # The operator must download the dataset first (settings screen).
+    SURVEY_DATASET_NOT_DOWNLOADED = (
+        "survey_dataset_not_downloaded",
+        ErrorKind.CONFIG,
+    )
     # AI-assisted template authoring.
-    SURVEY_AI_UNAVAILABLE = "survey_ai_unavailable"
-    SURVEY_AI_NO_QUESTIONS = "survey_ai_no_questions"
-    SURVEY_AI_CONVERSATION_INVALID = "survey_ai_conversation_invalid"
-    SURVEY_AI_CONVERSATION_TOO_LONG = "survey_ai_conversation_too_long"
-    SURVEY_AI_MESSAGE_TOO_LONG = "survey_ai_message_too_long"
+    SURVEY_AI_UNAVAILABLE = ("survey_ai_unavailable", ErrorKind.CONFIG)
+    # The AI produced nothing usable; retrying can succeed.
+    SURVEY_AI_NO_QUESTIONS = ("survey_ai_no_questions", ErrorKind.TRANSIENT)
+    SURVEY_AI_CONVERSATION_INVALID = (
+        "survey_ai_conversation_invalid",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_AI_CONVERSATION_TOO_LONG = (
+        "survey_ai_conversation_too_long",
+        ErrorKind.CAPACITY,
+    )
+    SURVEY_AI_MESSAGE_TOO_LONG = ("survey_ai_message_too_long", ErrorKind.CAPACITY)
     # Catch-alls for survey operations that failed for internal reasons.
-    SURVEY_OPERATION_FAILED = "survey_operation_failed"
-    SURVEY_EXECUTION_FAILED = "survey_execution_failed"
-    SURVEY_REPORT_GENERATION_FAILED = "survey_report_generation_failed"
+    SURVEY_OPERATION_FAILED = ("survey_operation_failed", ErrorKind.TRANSIENT)
+    SURVEY_EXECUTION_FAILED = ("survey_execution_failed", ErrorKind.TRANSIENT)
+    SURVEY_REPORT_GENERATION_FAILED = (
+        "survey_report_generation_failed",
+        ErrorKind.TRANSIENT,
+    )
 
     # --- Personas ---
     # Field-level validation is expressed as a validation *kind* plus a stable
     # field key in ``context["field"]``; the catalog maps that key to a label.
     # This keeps every Japanese string in the presentation layer instead of
     # spreading one code per field across the enum.
-    PERSONA_FIELD_REQUIRED = "persona_field_required"
-    PERSONA_FIELD_TOO_LONG = "persona_field_too_long"
-    PERSONA_LIST_EMPTY = "persona_list_empty"
-    PERSONA_LIST_HAS_EMPTY_ITEM = "persona_list_has_empty_item"
-    PERSONA_LIST_TOO_MANY_ITEMS = "persona_list_too_many_items"
-    PERSONA_LIST_ITEM_TOO_LONG = "persona_list_item_too_long"
-    PERSONA_AGE_OUT_OF_RANGE = "persona_age_out_of_range"
-    PERSONA_GENDER_INVALID = "persona_gender_invalid"
-    PERSONA_COUNTRY_INVALID = "persona_country_invalid"
-    PERSONA_TAG_COMMA_NOT_ALLOWED = "persona_tag_comma_not_allowed"
-    PERSONA_INVALID = "persona_invalid"
-    PERSONA_ID_INVALID = "persona_id_invalid"
-    PERSONA_NOT_FOUND = "persona_not_found"
-    PERSONA_UPDATE_FAILED = "persona_update_failed"
-    PERSONA_OPERATION_FAILED = "persona_operation_failed"
-    DATASET_COLUMN_NOT_FOUND = "dataset_column_not_found"
+    PERSONA_FIELD_REQUIRED = ("persona_field_required", ErrorKind.VALIDATION)
+    PERSONA_FIELD_TOO_LONG = ("persona_field_too_long", ErrorKind.VALIDATION)
+    PERSONA_LIST_EMPTY = ("persona_list_empty", ErrorKind.VALIDATION)
+    PERSONA_LIST_HAS_EMPTY_ITEM = (
+        "persona_list_has_empty_item",
+        ErrorKind.VALIDATION,
+    )
+    PERSONA_LIST_TOO_MANY_ITEMS = (
+        "persona_list_too_many_items",
+        ErrorKind.VALIDATION,
+    )
+    PERSONA_LIST_ITEM_TOO_LONG = ("persona_list_item_too_long", ErrorKind.VALIDATION)
+    PERSONA_AGE_OUT_OF_RANGE = ("persona_age_out_of_range", ErrorKind.VALIDATION)
+    PERSONA_GENDER_INVALID = ("persona_gender_invalid", ErrorKind.VALIDATION)
+    PERSONA_COUNTRY_INVALID = ("persona_country_invalid", ErrorKind.VALIDATION)
+    PERSONA_TAG_COMMA_NOT_ALLOWED = (
+        "persona_tag_comma_not_allowed",
+        ErrorKind.VALIDATION,
+    )
+    PERSONA_INVALID = ("persona_invalid", ErrorKind.VALIDATION)
+    PERSONA_ID_INVALID = ("persona_id_invalid", ErrorKind.VALIDATION)
+    PERSONA_NOT_FOUND = ("persona_not_found", ErrorKind.NOT_FOUND)
+    PERSONA_UPDATE_FAILED = ("persona_update_failed", ErrorKind.TRANSIENT)
+    PERSONA_OPERATION_FAILED = ("persona_operation_failed", ErrorKind.TRANSIENT)
+    # The user picked a column that is not in the dataset: correctable input.
+    DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
 
     # --- Persona long-term memory ---
-    MEMORY_TOPIC_NAME_REQUIRED = "memory_topic_name_required"
-    MEMORY_CONTENT_REQUIRED = "memory_content_required"
-    MEMORY_TOPIC_NAME_TOO_LONG = "memory_topic_name_too_long"
-    MEMORY_CONTENT_TOO_LONG = "memory_content_too_long"
-    MEMORY_FEATURE_DISABLED = "memory_feature_disabled"
-    MEMORY_STRATEGY_NOT_CONFIGURED = "memory_strategy_not_configured"
-    MEMORY_SERVICE_UNAVAILABLE = "memory_service_unavailable"
-    MEMORY_OPERATION_FAILED = "memory_operation_failed"
+    MEMORY_TOPIC_NAME_REQUIRED = ("memory_topic_name_required", ErrorKind.VALIDATION)
+    MEMORY_CONTENT_REQUIRED = ("memory_content_required", ErrorKind.VALIDATION)
+    MEMORY_TOPIC_NAME_TOO_LONG = ("memory_topic_name_too_long", ErrorKind.CAPACITY)
+    MEMORY_CONTENT_TOO_LONG = ("memory_content_too_long", ErrorKind.CAPACITY)
+    MEMORY_FEATURE_DISABLED = ("memory_feature_disabled", ErrorKind.CONFIG)
+    MEMORY_STRATEGY_NOT_CONFIGURED = (
+        "memory_strategy_not_configured",
+        ErrorKind.CONFIG,
+    )
+    MEMORY_SERVICE_UNAVAILABLE = ("memory_service_unavailable", ErrorKind.TRANSIENT)
+    MEMORY_OPERATION_FAILED = ("memory_operation_failed", ErrorKind.TRANSIENT)
 
     # --- Discussions ---
-    DISCUSSION_PERSONAS_REQUIRED = "discussion_personas_required"
-    DISCUSSION_TOO_FEW_PERSONAS = "discussion_too_few_personas"
-    DISCUSSION_TOO_MANY_PERSONAS = "discussion_too_many_personas"
-    DISCUSSION_PERSONA_INVALID = "discussion_persona_invalid"
-    DISCUSSION_PERSONA_DUPLICATED = "discussion_persona_duplicated"
-    DISCUSSION_TOPIC_REQUIRED = "discussion_topic_required"
-    DISCUSSION_TOPIC_TOO_SHORT = "discussion_topic_too_short"
-    DISCUSSION_TOPIC_TOO_LONG = "discussion_topic_too_long"
-    DISCUSSION_DOCUMENTS_TOO_LARGE = "discussion_documents_too_large"
-    DISCUSSION_NOT_FOUND = "discussion_not_found"
-    DISCUSSION_ROUNDS_TOO_FEW = "discussion_rounds_too_few"
-    DISCUSSION_ROUNDS_TOO_MANY = "discussion_rounds_too_many"
-    DISCUSSION_AGENT_SETUP_FAILED = "discussion_agent_setup_failed"
-    DISCUSSION_OPERATION_FAILED = "discussion_operation_failed"
+    DISCUSSION_PERSONAS_REQUIRED = (
+        "discussion_personas_required",
+        ErrorKind.VALIDATION,
+    )
+    DISCUSSION_TOO_FEW_PERSONAS = (
+        "discussion_too_few_personas",
+        ErrorKind.VALIDATION,
+    )
+    DISCUSSION_TOO_MANY_PERSONAS = (
+        "discussion_too_many_personas",
+        ErrorKind.VALIDATION,
+    )
+    DISCUSSION_PERSONA_INVALID = ("discussion_persona_invalid", ErrorKind.VALIDATION)
+    DISCUSSION_PERSONA_DUPLICATED = (
+        "discussion_persona_duplicated",
+        ErrorKind.VALIDATION,
+    )
+    DISCUSSION_TOPIC_REQUIRED = ("discussion_topic_required", ErrorKind.VALIDATION)
+    DISCUSSION_TOPIC_TOO_SHORT = ("discussion_topic_too_short", ErrorKind.VALIDATION)
+    DISCUSSION_TOPIC_TOO_LONG = ("discussion_topic_too_long", ErrorKind.VALIDATION)
+    DISCUSSION_DOCUMENTS_TOO_LARGE = (
+        "discussion_documents_too_large",
+        ErrorKind.CAPACITY,
+    )
+    DISCUSSION_NOT_FOUND = ("discussion_not_found", ErrorKind.NOT_FOUND)
+    DISCUSSION_ROUNDS_TOO_FEW = ("discussion_rounds_too_few", ErrorKind.VALIDATION)
+    DISCUSSION_ROUNDS_TOO_MANY = ("discussion_rounds_too_many", ErrorKind.VALIDATION)
+    DISCUSSION_AGENT_SETUP_FAILED = (
+        "discussion_agent_setup_failed",
+        ErrorKind.TRANSIENT,
+    )
+    DISCUSSION_OPERATION_FAILED = (
+        "discussion_operation_failed",
+        ErrorKind.TRANSIENT,
+    )
 
     # --- Discussion reports ---
-    REPORT_NOT_FOUND = "report_not_found"
-    REPORT_LIMIT_REACHED = "report_limit_reached"
-    REPORT_OPERATION_FAILED = "report_operation_failed"
+    REPORT_NOT_FOUND = ("report_not_found", ErrorKind.NOT_FOUND)
+    # The user resolves it by deleting an existing report, not by editing input.
+    REPORT_LIMIT_REACHED = ("report_limit_reached", ErrorKind.CAPACITY)
+    REPORT_OPERATION_FAILED = ("report_operation_failed", ErrorKind.TRANSIENT)
 
     # --- Survey persona datasets (DWH segment extraction) ---
-    SEGMENT_CONDITION_REQUIRED = "segment_condition_required"
-    SEGMENT_ROW_COUNT_TOO_LOW = "segment_row_count_too_low"
-    SEGMENT_ROW_COUNT_TOO_HIGH = "segment_row_count_too_high"
-    SEGMENT_CSV_URL_MISSING = "segment_csv_url_missing"
-    DATA_AGENT_NOT_CONFIGURED = "data_agent_not_configured"
+    SEGMENT_CONDITION_REQUIRED = ("segment_condition_required", ErrorKind.VALIDATION)
+    SEGMENT_ROW_COUNT_TOO_LOW = ("segment_row_count_too_low", ErrorKind.VALIDATION)
+    SEGMENT_ROW_COUNT_TOO_HIGH = ("segment_row_count_too_high", ErrorKind.VALIDATION)
+    # The data agent returned no CSV URL: an internal outcome, retry may work.
+    SEGMENT_CSV_URL_MISSING = ("segment_csv_url_missing", ErrorKind.TRANSIENT)
+    DATA_AGENT_NOT_CONFIGURED = ("data_agent_not_configured", ErrorKind.CONFIG)
 
 
 class CodedError(Exception):

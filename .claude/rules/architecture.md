@@ -71,7 +71,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 
 **原則:** 例外メッセージは開発者のもの、ユーザー向け文言はプレゼンテーション層のもの。
 
-- **Models (`src/models/errors.py`):** `ErrorCode` enum と `CodedError` 基底クラス。全層から参照可
+- **Models (`src/models/errors.py`):** `ErrorCode` enum（`ErrorKind` 付き）と `CodedError` 基底クラス。全層から参照可
 - **Service層:** 外部SDK例外を自ドメインの例外型 + `ErrorCode` に変換する。**メッセージは技術的事実のみ（英語可）**。`from e` を必ず付けてチェーンを維持する。ユーザー向け文言を持ってはならない
 - **Manager層:** エラーコードを決定し、文言に必要な値は `context` に載せる（**文言そのものを組み立ててはならない**）
 - **Router層:** `web/error_messages.py` の `user_message_for()` のみを参照する。**レスポンスに `str(e)` / `{e}` / `e.args` / 例外の属性を書いてはならない**
@@ -79,11 +79,28 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 ### 規約の詳細
 
 - 新規例外は `CodedError` を継承し、コードを付与して定義する
+- **新規 `ErrorCode` は `(値, ErrorKind)` のタプルで定義する**（分類を省略すると import 時に `TypeError` になる。分類漏れを構造で防ぐため）
 - 1つの例外型が複数のユーザー向け状況を表す場合（`FileUploadError` 等）は、例外クラスを増やさず `raise` 時に `code=` を指定する
 - 文言カタログは `web/error_messages.py` に集約する。`_CATALOG` を直接参照してはならない（i18n拡張時の変更を1ファイルに閉じるため）
 - `context` に載せてよいのは**ユーザーに見せて安全な値**（サイズ上限、件数上限、対応形式一覧等）のみ。ID・ファイルパス・SDK例外文はログにのみ出す
 - 内部エラーの詳細は `logger.*(..., exc_info=True)` でログに出す。`traceback.format_exc()` は使わない
 - フィールド単位のバリデーションは、フィールドごとにコードを作らず「バリデーション種別 + `context["field"]` の安定キー」で表現する（キー→表示名の写像はカタログが持つ）
+
+### エラーの分類（`ErrorKind`）
+
+`ErrorCode` は「何が起きたか」に加えて `kind`（ユーザーが次に何をすればよいか）を持つ。表示層はHTTPステータスや個別コードではなく **`kind` で分岐する**（Issue #117）。
+
+| `ErrorKind` | 意味 | 想定する表示 |
+|---|---|---|
+| `VALIDATION` | 入力を直せば解決 | フォーム内にインライン表示。**入力を保持する** |
+| `CAPACITY` | 量を減らせば解決 | フォーム近傍。上限値を明示（`context` で補間） |
+| `NOT_FOUND` | 対象が無い / 未生成 | 該当領域を置換し、復帰リンクを出す |
+| `CONFIG` | 運用者の設定が必要 | 設定画面へ誘導 |
+| `TRANSIENT` | 再試行で解決しうる | 入力を破壊せず通知（トースト等） |
+
+- 分類は**命名から機械的に決まらない**。実際の `raise` 箇所を見て「ユーザーが何をすれば解決するか」で判断する（例: `SEGMENT_CSV_URL_MISSING` は名前に `MISSING` を含むが内部要因なので `TRANSIENT`、`FILE_DELETE_NOT_ALLOWED` は入力修正で解決しないので `VALIDATION` ではない）
+- `UNKNOWN` は `TRANSIENT`。未分類の失敗が「入力を直せば解決する」ように見えてはならない
+- 表示方法の実装（テンプレート統合・インライン表示化）は Issue #117 のステップ2以降
 
 ### リクエスト検証エラー（422）
 
@@ -98,6 +115,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 - `tests/api/test_error_exposure.py` が `web/routers/` をASTで走査し、例外変数がログ・`user_message_for()` 以外から参照されていないことを機械的に検査する
 - 同ファイルの `TestRequestValidationErrorHandling` が422のグローバルハンドラの登録と挙動（文言・入力値の非転写・JSON経路の維持）を検査する
 - `tests/unit/test_error_messages.py` が全 `ErrorCode` のカタログ登録漏れを検知する
+- `tests/unit/test_error_kinds.py` が分類の一貫性（全コードが `kind` を持つ、命名と分類の矛盾、`StrEnum` 意味論の維持）を検査する
 - テストで文言をアサートしない。`tests/error_helpers.raises_code()` でエラーコードを検証する
 
 詳細な設計背景は `docs/note/exception-message-design.md` を参照。
