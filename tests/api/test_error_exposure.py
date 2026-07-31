@@ -10,9 +10,12 @@
 - `logger.*(...)` の引数（診断情報はログへ）
 - `raise ... from e`（例外チェーンの維持）
 - `user_message_for(e)`（エラーコード→文言カタログの参照）
+- `toast_response(e)` / `is_transient(e)` / `error_kind_of(e)`
+  （`web/error_messages.py` の公開API。いずれも `code` / `context` のみを読み、
+  例外メッセージをレスポンスに載せない）
 - `isinstance(e, ...)` / `type(e)`（型による分岐）
 
-ユーザー向け文言は `web/error_messages.user_message_for()` から取得すること。
+ユーザー向け文言は `web/error_messages.py` の公開API経由で取得すること。
 詳細は `docs/note/exception-message-design.md` を参照。
 
 検出結果が `_BASELINE` と完全一致することを検査するラチェット方式をとる。
@@ -21,14 +24,27 @@
 """
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
 
 _ROUTERS_DIR = Path(__file__).parent.parent.parent / "web" / "routers"
 
-# 例外変数を渡してよい関数。ログ出力と文言カタログの参照のみ。
-_ALLOWED_CALLS = frozenset({"user_message_for", "isinstance", "type"})
+# 例外変数を渡してよい関数。ログ出力・型分岐と、web/error_messages.py の
+# 公開API（例外メッセージをレスポンスに載せないことが保証されているもの）のみ。
+# ここに関数を追加する場合は、その関数が str(exc) をレスポンスへ流さないことを
+# 確認すること。
+_ALLOWED_CALLS = frozenset(
+    {
+        "user_message_for",
+        "toast_response",
+        "is_transient",
+        "error_kind_of",
+        "isinstance",
+        "type",
+    }
+)
 
 # 既知の漏出箇所（module -> 関数名の集合）。Issue #112 の移行で空になった。
 # 関数名で管理するのは、無関係な編集で baseline がずれないため。新たに漏出を
@@ -336,3 +352,80 @@ class TestRequestValidationErrorHandling:
         if response.status_code == 422:
             assert "入力内容を確認してください" in response.text
             assert "Field required" not in response.text
+
+
+class TestTransientErrorsUseToast:
+    """TRANSIENT は画面を書き換えずトーストで通知すること（#117 ステップ2）。
+
+    VALIDATION と TRANSIENT は同じ Manager 例外型で送出されるため、Router の
+    ``except`` 節は型で区別できない。`ErrorKind` による分岐が実際に効いている
+    ことを実リクエストで検証する。
+    """
+
+    _FORM = {
+        "name": "太郎",
+        "age": "30",
+        "occupation": "エンジニア",
+        "background": "背景テキスト",
+        "values": "価値観",
+        "pain_points": "課題",
+        "goals": "目標",
+    }
+
+    def test_transient_returns_empty_body_with_toast(self, client):
+        """入力フォームを消さないため本文を返さない。"""
+        from unittest.mock import patch
+
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
+                "persona update failed (DatabaseError)",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
+
+        assert response.text == ""
+        payload = json.loads(response.headers["HX-Trigger"])
+        assert "ペルソナの処理中にエラー" in payload["showToast"]["message"]
+
+    def test_validation_still_returns_partial_html(self, client):
+        """入力を直せば解決するものは従来どおり本文で返す。"""
+        from unittest.mock import patch
+
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
+                "name is blank",
+                code=ErrorCode.PERSONA_FIELD_REQUIRED,
+                context={"field": "name"},
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
+
+        assert "HX-Trigger" not in response.headers
+        assert "ペルソナ名が設定されていません" in response.text
+
+    def test_toast_does_not_leak_exception_message(self, client):
+        from unittest.mock import patch
+
+        from src.managers.persona_manager import PersonaManagerError
+        from src.models.errors import ErrorCode
+
+        secret = "arn:aws:dynamodb:ap-northeast-1:123456789012:table/internal"
+        with patch(
+            "src.managers.persona_manager.PersonaManager.update_persona",
+            side_effect=PersonaManagerError(
+                secret, code=ErrorCode.PERSONA_OPERATION_FAILED
+            ),
+        ):
+            response = client.put("/persona/p1", data=self._FORM)
+
+        assert secret not in response.headers["HX-Trigger"]
+        assert secret not in response.text
