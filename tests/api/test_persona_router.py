@@ -4,6 +4,7 @@
 ファイルアップロード、ペルソナ生成・保存・編集・削除エンドポイントをテストします。
 """
 
+import json
 from unittest.mock import Mock, patch
 from io import BytesIO
 
@@ -329,7 +330,12 @@ class TestPersonaSaveEndpoint:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_save_error(self, mock_get_manager, client):
-        """保存エラーが適切に処理されることを確認"""
+        """保存エラーがトーストで通知され、生成結果が消えないことを確認。
+
+        再試行で解決しうるエラー（TRANSIENT）は本文を返さず HX-Trigger で
+        通知する。本文でエラーパーシャルを返すと生成済みペルソナが画面から
+        消えて保存し直せなくなるため（Issue #117）。
+        """
         mock_manager = Mock()
         mock_manager.save_persona.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
@@ -349,7 +355,14 @@ class TestPersonaSaveEndpoint:
         )
 
         assert response.status_code == 500
-        assert "ペルソナの保存中にエラーが発生しました" in response.text
+        # 画面を書き換えないため本文は空
+        assert response.text == ""
+        trigger = json.loads(response.headers["HX-Trigger"])
+        assert (
+            "ペルソナの保存中にエラーが発生しました" in trigger["showToast"]["message"]
+        )
+        # 例外の内容がユーザーに漏れていないこと
+        assert "Database error" not in response.headers["HX-Trigger"]
 
 
 class TestPersonaDetailEndpoint:

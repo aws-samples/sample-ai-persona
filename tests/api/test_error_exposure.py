@@ -432,3 +432,105 @@ class TestTransientErrorsUseToast:
 
         assert secret not in response.headers["HX-Trigger"]
         assert secret not in response.text
+
+
+class TestGenericExceptionsDoNotReplaceContent:
+    """変更系の `except Exception` がエラーパーシャルを返さないこと（#117 ステップ2）。
+
+    コードを持たない未知の例外は `ErrorKind.TRANSIENT` に落ちる。これを本文で
+    返すと `hx-target`（本体コンテンツや一覧）がエラー表示に置換され、利用者の
+    入力・選択がすべて失われる。加えて htmx 1.9.10 は非2xx本文をスワップしない
+    ため、置換されないかわりに**文言そのものが画面に届かない**。どちらの結末も
+    不適切なので、変更系（POST/PUT/DELETE）の総称ハンドラは `toast_response()`
+    を使う。
+
+    AST で機械的に検査するのは、Router を追加した際に同じ失敗が再発するのを
+    防ぐため（`_ExposureVisitor` と同じ「構造で保証する」方針）。
+    """
+
+    #: 2xx で返しているものは htmx がスワップするので文言は届く。置換の是非は
+    #: 別の設計判断なので、この検査の対象は「届かない」非2xx に限る。
+    _MUTATING = frozenset({"post", "put", "delete", "patch"})
+
+    def _violations(self) -> list[str]:
+        found = []
+        for path in _router_modules():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                methods = {
+                    m
+                    for d in fn.decorator_list
+                    for m in self._MUTATING
+                    if ast.unparse(d).startswith(f"router.{m}")
+                }
+                if not methods:
+                    continue
+                for handler in ast.walk(fn):
+                    if not isinstance(handler, ast.ExceptHandler):
+                        continue
+                    if handler.type is None:
+                        caught = "bare"
+                    else:
+                        caught = ast.unparse(handler.type)
+                    if caught not in ("Exception", "bare"):
+                        continue
+                    for node in ast.walk(handler):
+                        if not isinstance(node, ast.Call):
+                            continue
+                        template = next(
+                            (
+                                a.value
+                                for a in node.args
+                                if isinstance(a, ast.Constant)
+                                and isinstance(a.value, str)
+                                and a.value.endswith(".html")
+                            ),
+                            None,
+                        )
+                        if not template or "error" not in template:
+                            continue
+                        status = next(
+                            (
+                                kw.value.value
+                                for kw in node.keywords
+                                if kw.arg == "status_code"
+                                and isinstance(kw.value, ast.Constant)
+                                and isinstance(kw.value.value, int)
+                            ),
+                            200,
+                        )
+                        if 200 <= status < 300:
+                            continue
+                        found.append(
+                            f"{path.name}:{node.lineno} {fn.name} -> {template}"
+                        )
+        return sorted(found)
+
+    def test_no_generic_handler_returns_error_partial(self):
+        violations = self._violations()
+        assert violations == [], (
+            "変更系の except Exception がエラーパーシャルを非2xxで返している。"
+            "toast_response() を使うこと（文言が画面に届かず、入力も失われる）:\n"
+            + "\n".join(violations)
+        )
+
+    def test_visitor_detects_a_reintroduced_partial(self, tmp_path):
+        """検査が実際に機能することを確認する（常に空を返していないこと）。"""
+        module = tmp_path / "leaky.py"
+        module.write_text(
+            "@router.post('/x')\n"
+            "async def handler(request):\n"
+            "    try:\n"
+            "        pass\n"
+            "    except Exception:\n"
+            "        return templates.TemplateResponse(\n"
+            "            request, 'partials/error.html',\n"
+            "            {'error': 'x'}, status_code=500)\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "tests.api.test_error_exposure._router_modules", return_value=[module]
+        ):
+            assert self._violations() != []

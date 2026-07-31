@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from src.managers.dataset_manager import DatasetManager
 from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
 from src.models.dataset import DatasetColumn
-from web.error_messages import user_message_for
+from web.error_messages import toast_response
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +71,11 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
     settings_manager = get_settings_manager()
     try:
         is_running = settings_manager.toggle_mcp(enabled)
-    except Exception:
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "MCPサーバーの切り替えに失敗しました"},
-            status_code=500,
+    except Exception as e:
+        # 再試行で解決しうるエラーは設定パネルを消さずトーストで通知する
+        logger.error("MCPサーバーの切り替えエラー", exc_info=True)
+        return toast_response(
+            e, default="MCPサーバーの切り替えに失敗しました", status_code=500
         )
 
     return templates.TemplateResponse(
@@ -211,17 +210,10 @@ async def create_dataset(
         )
 
     except Exception as e:
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
         logger.error("Dataset creation failed", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "message": user_message_for(
-                    e, default="データセット作成に失敗しました"
-                ),
-            },
-            status_code=500,
+        return toast_response(
+            e, default="データセット作成に失敗しました", status_code=500
         )
 
 
@@ -267,17 +259,10 @@ async def update_dataset(
         )
 
     except Exception as e:
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
         logger.error("Dataset update failed", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "message": user_message_for(
-                    e, default="データセット更新に失敗しました"
-                ),
-            },
-            status_code=500,
+        return toast_response(
+            e, default="データセット更新に失敗しました", status_code=500
         )
 
 
@@ -361,17 +346,10 @@ async def create_knowledge_base(
             {"request": request, "knowledge_bases": kb_list},
         )
     except Exception as e:
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
         logger.error("KB registration failed", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "message": user_message_for(
-                    e, default="ナレッジベースの登録に失敗しました"
-                ),
-            },
-            status_code=500,
+        return toast_response(
+            e, default="ナレッジベースの登録に失敗しました", status_code=500
         )
 
 

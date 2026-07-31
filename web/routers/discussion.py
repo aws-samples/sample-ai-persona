@@ -20,7 +20,7 @@ from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.models.insight_category import InsightCategory
-from web.error_messages import user_message_for
+from web.error_messages import toast_response, user_message_for
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -528,17 +528,11 @@ async def start_discussion(
             {"request": request, "discussion": discussion},
         )
     except Exception as e:
+        # 再試行で解決しうるエラーは設定フォームを消さずトーストで通知する
+        # （議論設定はペルソナ選択やトピック入力を含み、失うと再入力が重い）
         logger.error("議論開始エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": user_message_for(
-                    e, default="議論の開始中にエラーが発生しました"
-                ),
-            },
-            status_code=500,
+        return toast_response(
+            e, default="議論の開始中にエラーが発生しました", status_code=500
         )
 
 
@@ -629,16 +623,11 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             },
         )
     except Exception as e:
+        # 再試行で解決しうるエラーはインサイト表示を消さずトーストで通知する
         logger.error("インサイト再生成エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": user_message_for(
-                    e, default="インサイトの再生成中にエラーが発生しました"
-                ),
-            },
+        return toast_response(
+            e,
+            default="インサイトの再生成中にエラーが発生しました",
             status_code=500,
         )
 
@@ -670,16 +659,9 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                 status_code=400,
             )
     except Exception as e:
+        # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
         logger.error("議論削除エラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": user_message_for(e, default="議論の削除に失敗しました"),
-            },
-            status_code=500,
-        )
+        return toast_response(e, default="議論の削除に失敗しました", status_code=500)
 
 
 @router.get("/insights/{discussion_id}", response_class=HTMLResponse)

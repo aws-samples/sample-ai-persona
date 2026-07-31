@@ -155,15 +155,12 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
             {"request": request, "error": user_message_for(e)},
             status_code=400,
         )
-    except Exception:
+    except Exception as e:
+        # 再試行で解決しうるエラーはアップロード欄を消さずトーストで通知する
         logger.error("予期しないエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": "ファイルのアップロード中にエラーが発生しました",
-            },
+        return toast_response(
+            e,
+            default="ファイルのアップロード中にエラーが発生しました",
             status_code=500,
         )
 
@@ -560,12 +557,11 @@ async def save_persona(
             },
         )
     except Exception as e:
-        logger.error(f"ペルソナ保存エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの保存中にエラーが発生しました"},
-            status_code=500,
+        # 再試行で解決しうるエラーは生成結果を消さずトーストで通知する
+        # （保存し直せるよう、生成済みペルソナを画面に残す）
+        logger.error("ペルソナ保存エラー", exc_info=True)
+        return toast_response(
+            e, default="ペルソナの保存中にエラーが発生しました", status_code=500
         )
 
 
@@ -725,12 +721,10 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
                 status_code=400,
             )
     except Exception as e:
-        logger.error(f"ペルソナ削除エラー: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの削除中にエラーが発生しました"},
-            status_code=500,
+        # 再試行で解決しうるエラーは一覧を消さずトーストで通知する
+        logger.error("ペルソナ削除エラー", exc_info=True)
+        return toast_response(
+            e, default="ペルソナの削除中にエラーが発生しました", status_code=500
         )
 
 
@@ -920,14 +914,12 @@ async def delete_persona_memory(
         )
 
     except Exception as e:
-        error_msg = user_message_for(
-            e, default="予期しないエラーが発生しました。後でもう一度お試しください。"
-        )
-        logger.error(f"Error deleting memory {memory_id}: {e}", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/memory_delete_error.html",
-            {"request": request, "memory_id": memory_id, "error": error_msg},
+        # 削除に失敗した記憶はまだ存在するため、アイテムをエラー表示で
+        # 置換せずトーストで通知する（一覧の状態と実データを一致させる）
+        logger.error("Error deleting memory %s", memory_id, exc_info=True)
+        return toast_response(
+            e,
+            default="予期しないエラーが発生しました。後でもう一度お試しください。",
             status_code=500,
         )
 
@@ -1394,11 +1386,10 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
             {"request": request, "saved_count": saved_count},
         )
 
-    except Exception:
+    except Exception as e:
+        # 再試行で解決しうるエラーは候補一覧を消さずトーストで通知する
+        # （選択状態を保ったまま保存し直せるようにする）
         logger.error("ペルソナ保存で予期しないエラー", exc_info=True)
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "ペルソナの保存中にエラーが発生しました"},
-            status_code=500,
+        return toast_response(
+            e, default="ペルソナの保存中にエラーが発生しました", status_code=500
         )
