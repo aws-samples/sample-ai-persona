@@ -930,7 +930,7 @@ class TestToastIsVisibleRegardlessOfScroll:
         m = re.search(r'id="flash-messages"[^>]*', base, re.DOTALL)
         assert m, "flash-messages コンテナが無い"
         tag = m.group(0)
-        for cls in ("fixed", "z-50"):
+        for cls in ("fixed", "z-toast"):
             assert cls in tag, f"{cls} が無い（スクロールで見えなくなる）"
 
     def test_required_classes_exist_in_built_css(self):
@@ -950,7 +950,6 @@ class TestToastIsVisibleRegardlessOfScroll:
                 "fixed",
                 "top-20",
                 "right-4",
-                "z-50",
                 "max-w-sm",
                 "pointer-events-none",
                 "pointer-events-auto",
