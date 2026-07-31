@@ -15,7 +15,16 @@
         class="space-y-3"
     >
         <input type="hidden" name="strategy_type" value="semantic">
-        
+
+        {#
+          入力を直せば解決するエラーの表示先（Issue #117）。
+          追加先は memory_list.html と同じエンドポイントなので、サーバーは
+          HX-Retarget で #memory-form-error を指す。この画面でも同じIDの領域を
+          用意しておくことで、プレビューした内容を失わずにエラーを表示できる
+          （hx-target の記憶一覧を置換するとプレビューごと消える）。
+        #}
+        <div id="memory-form-error"></div>
+
         <div>
             <label for="preview_topic_name" class="block text-sm font-medium text-gray-700 mb-1">
                 トピック名 <span class="text-red-500">*</span>

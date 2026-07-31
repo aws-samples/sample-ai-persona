@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from io import BytesIO
 
 from src.managers.file_manager import FileUploadError, FileSecurityError, FileMetadata
+from src.managers.persona_manager import PersonaManagerError
 from src.models.errors import ErrorCode
 
 
@@ -606,6 +607,139 @@ class TestPersonaEditForm:
         assert response.status_code == 500
 
 
+class TestPersonaUpdateValidationPreservesInput:
+    """バリデーション失敗時に送信値が失われないこと（Issue #117 ステップ4）。
+
+    編集フォームの hx-target は詳細画面本体（#persona-detail-container）なので、
+    汎用エラーパーシャルを返すとフォームごと消えて11項目の入力がやり直しに
+    なっていた。送信値を埋め戻した編集フォームを返すことで解決する。
+    """
+
+    #: 利用者が入力した値。エラー応答にそのまま残っていることを検証する
+    _SUBMITTED = {
+        "name": "編集した名前",
+        "age": "41",
+        "occupation": "編集した職業",
+        "background": "編集した背景テキスト",
+        "values": "価値観A\n価値観B",
+        "pain_points": "課題A\n課題B",
+        "goals": "目標A\n目標B",
+        "gender": "female",
+        "country": "JP",
+        "city": "編集した都市",
+        "tags": "タグA\nタグB",
+    }
+
+    @staticmethod
+    def _manager(sample_persona, exc):
+        mgr = Mock()
+        mgr.update_persona.side_effect = exc
+        # 再描画のヘッダー部（名前・戻るリンク）に使う元データ
+        mgr.get_persona.return_value = sample_persona
+        return mgr
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_submitted_values_survive_validation_error(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        mock_get_mgr.return_value = self._manager(
+            sample_persona,
+            PersonaManagerError(
+                "occupation exceeds max length",
+                code=ErrorCode.PERSONA_FIELD_TOO_LONG,
+                context={"field": "occupation", "max_length": 100},
+            ),
+        )
+
+        response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
+
+        assert response.status_code == 400
+        # htmx が本文をDOMに反映できる印が付いていること
+        assert response.headers.get("X-Render-Response") == "true"
+        # 入力した全項目が残っていること（トーストや汎用パーシャルなら消える）
+        for field, value in self._SUBMITTED.items():
+            first_line = value.split("\n")[0]
+            assert first_line in response.text, f"{field} の入力が失われた"
+        # 該当フィールドの文言が出ていること
+        assert "職業は100文字以内で設定してください" in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_capacity_error_also_preserves_input(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        """CAPACITY（量の超過）も入力を直せば解決するので同じ扱いにする。"""
+        mock_get_mgr.return_value = self._manager(
+            sample_persona,
+            PersonaManagerError(
+                "too many tags",
+                code=ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS,
+                context={"field": "tags", "max_items": 20},
+            ),
+        )
+
+        response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
+
+        assert response.status_code == 400
+        assert "編集した背景テキスト" in response.text
+        assert "タグは20項目以内で設定してください" in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_transient_error_still_uses_toast(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        """再試行で解決するものは再描画せずトースト（入力はDOM上に残る）。"""
+        mock_get_mgr.return_value = self._manager(
+            sample_persona,
+            PersonaManagerError(
+                "dynamodb unavailable",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ),
+        )
+
+        response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
+
+        assert response.text == ""
+        assert "HX-Trigger" in response.headers
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_falls_back_to_toast_when_persona_cannot_be_refetched(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        """再描画用のペルソナが取れない場合も入力を壊さない。"""
+        mgr = Mock()
+        mgr.update_persona.side_effect = PersonaManagerError(
+            "name is blank",
+            code=ErrorCode.PERSONA_FIELD_REQUIRED,
+            context={"field": "name"},
+        )
+        mgr.get_persona.return_value = None  # 取得できない
+        mock_get_mgr.return_value = mgr
+
+        response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
+
+        # フォームを描画できないのでトーストに退避する（画面は書き換えない）
+        assert response.text == ""
+        assert "HX-Trigger" in response.headers
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_error_response_does_not_leak_exception_message(
+        self, mock_get_mgr, client, sample_persona
+    ):
+        secret = "arn:aws:dynamodb:ap-northeast-1:123456789012:table/personas"
+        mock_get_mgr.return_value = self._manager(
+            sample_persona,
+            PersonaManagerError(
+                secret,
+                code=ErrorCode.PERSONA_FIELD_TOO_LONG,
+                context={"field": "name", "max_length": 50},
+            ),
+        )
+
+        response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
+
+        assert secret not in response.text
+
+
 class TestPersonaUpdate:
     """ペルソナ更新のテスト"""
 
@@ -757,3 +891,104 @@ class TestPersonaMemories:
 
         response = client.delete("/persona/p1/memories")
         assert response.status_code == 200
+
+
+class TestAddMemoryValidationPreservesInput:
+    """知識追加のバリデーション失敗時に入力が失われないこと（#117 ステップ4）。
+
+    記憶一覧（#memory-list-container）は Alpine の `showForm: false` で
+    入力欄を折りたたんでいる。エラー時にここを置換すると入力欄が閉じたうえで
+    入力内容も失われるため、HX-Retarget でフォーム内の専用領域だけを
+    差し替える。
+    """
+
+    _FORM = {
+        "topic_name": "好きな食べ物",
+        "topic_content": "ラーメンが好き",
+        "strategy_type": "semantic",
+    }
+
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_validation_error_retargets_to_form_error_area(self, mock_get_mgr, client):
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.add_knowledge.side_effect = PersonaMemoryManagerError(
+            "topic name is blank",
+            code=ErrorCode.MEMORY_TOPIC_NAME_REQUIRED,
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.post("/persona/p1/memories", data=self._FORM)
+
+        assert response.status_code == 400
+        # 画面に届く印が付いていること
+        assert response.headers.get("X-Render-Response") == "true"
+        # 一覧ではなくフォーム内の専用領域に差し替わること
+        assert response.headers.get("HX-Retarget") == "#memory-form-error"
+        assert response.headers.get("HX-Reswap") == "innerHTML"
+        assert "トピック名を入力してください" in response.text
+
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_capacity_error_also_retargets(self, mock_get_mgr, client):
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.add_knowledge.side_effect = PersonaMemoryManagerError(
+            "content too long",
+            code=ErrorCode.MEMORY_CONTENT_TOO_LONG,
+            context={"max_length": 10000},
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.post("/persona/p1/memories", data=self._FORM)
+
+        assert response.status_code == 400
+        assert response.headers.get("HX-Retarget") == "#memory-form-error"
+        assert "内容は10000文字以内で設定してください" in response.text
+
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_transient_error_uses_toast_not_retarget(self, mock_get_mgr, client):
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        mock_mgr = Mock()
+        mock_mgr.add_knowledge.side_effect = PersonaMemoryManagerError(
+            "agentcore unavailable",
+            code=ErrorCode.MEMORY_OPERATION_FAILED,
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.post("/persona/p1/memories", data=self._FORM)
+
+        assert response.text == ""
+        assert "HX-Trigger" in response.headers
+        assert "HX-Retarget" not in response.headers
+
+
+class TestFormErrorTargetExists:
+    """HX-Retarget の指すDOM要素がテンプレート側に存在すること（#117）。
+
+    サーバーが `HX-Retarget: #memory-form-error` を返しても、その要素が
+    テンプレートに無ければ htmx は差し替え先を見つけられず文言が出ない。
+    サーバーとテンプレートの対応をテストで固定する。
+    """
+
+    def test_templates_that_post_memories_define_the_error_area(self):
+        from pathlib import Path
+
+        templates_dir = Path(__file__).parent.parent.parent / "web" / "templates"
+        posting = [
+            p
+            for p in templates_dir.rglob("*.html")
+            if "/memories" in p.read_text(encoding="utf-8")
+            and "hx-post" in p.read_text(encoding="utf-8")
+        ]
+        assert posting, "記憶追加を POST するテンプレートが見つからない"
+        missing = [
+            p.name
+            for p in posting
+            if 'id="memory-form-error"' not in p.read_text(encoding="utf-8")
+        ]
+        assert missing == [], (
+            f"HX-Retarget の差し替え先 #memory-form-error が無い: {missing}"
+        )

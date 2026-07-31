@@ -347,6 +347,31 @@ def is_transient(exc: BaseException | None) -> bool:
     return error_kind_of(exc) is ErrorKind.TRANSIENT
 
 
+def is_correctable(exc: BaseException | None) -> bool:
+    """利用者が入力を直せば解決するエラー（フォームを再描画すべきもの）か。
+
+    ``VALIDATION``（入力の誤り）と ``CAPACITY``（入力量の超過）はどちらも
+    「送信値を保持したままフォームを出し直す」のが正しい表示になる。逆に
+    ``NOT_FOUND`` / ``CONFIG`` はフォームを出し直しても解決しないため含めない。
+    """
+    return error_kind_of(exc) in (ErrorKind.VALIDATION, ErrorKind.CAPACITY)
+
+
+def field_of(exc: BaseException | None) -> str | None:
+    """バリデーション対象のフィールドキーを返す（無い場合は ``None``）。
+
+    Manager が ``context["field"]`` に安定キーを載せている場合のみ取得できる。
+    テンプレートはこれを使ってエラーを該当フィールドの横に表示する。キーから
+    表示名への変換はカタログ側（:data:`_FIELD_LABELS`）が持つので、Router や
+    テンプレートが日本語のフィールド名を知る必要はない。
+    """
+    context = getattr(exc, "context", None)
+    if not isinstance(context, dict):
+        return None
+    field = context.get("field")
+    return field if isinstance(field, str) else None
+
+
 #: 非2xx応答の本文をスワップさせるためのヘッダー。
 #:
 #: htmx 1.9.10 は ``status>=200 && status<400 && status!==204`` 以外の本文を

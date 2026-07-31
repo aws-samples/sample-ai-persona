@@ -68,7 +68,7 @@
             
             {# 手動入力タブ #}
             <div x-show="activeTab === 'manual'">
-                <form 
+                <form
                     hx-post="/persona/{{ persona_id }}/memories"
                     hx-target="#memory-list-container"
                     hx-swap="innerHTML"
@@ -76,7 +76,16 @@
                     class="bg-indigo-50 rounded-lg p-4 border border-indigo-200"
                 >
                     <input type="hidden" name="strategy_type" value="semantic">
-                    
+
+                    {#
+                      入力を直せば解決するエラーの表示先（Issue #117）。
+                      成功時は hx-target の #memory-list-container を置換するが、
+                      バリデーション失敗時はサーバーが HX-Retarget でこの領域へ
+                      差し替える。フォームごと置換すると Alpine の showForm が
+                      false に戻って入力欄が閉じ、入力内容も失われるため。
+                    #}
+                    <div id="memory-form-error"></div>
+
                     <div class="space-y-3">
                         <div>
                             <label for="topic_name" class="block text-sm font-medium text-gray-700 mb-1">

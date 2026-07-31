@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src import __version__
+from web.error_messages import mark_renderable
 from web.middleware import CSRFMiddleware
 from web.routers import persona, discussion, interview, api, settings, survey
 
@@ -98,11 +99,15 @@ async def validation_exception_handler(
         "リクエスト検証エラー: %s %s", request.method, request.url.path, exc_info=True
     )
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "error": "入力内容を確認してください"},
-            status_code=422,
+        # htmx は非2xx本文をスワップしないため、表示してよい印を付ける
+        # （付けないと文言が届かず app.js の汎用フォールバックになる / #117）
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error.html",
+                {"request": request, "error": "入力内容を確認してください"},
+                status_code=422,
+            )
         )
     # JSON APIクライアント（web/routers/api.py）向けには標準の422応答を維持する
     return await request_validation_exception_handler(request, exc)

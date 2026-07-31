@@ -25,6 +25,8 @@ from src.managers.persona_generation_manager import (  # noqa: E501
 )
 from src.models.persona import Persona
 from web.error_messages import (
+    field_of,
+    is_correctable,
     is_transient,
     mark_renderable,
     toast_response,
@@ -608,6 +610,52 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
         )
 
 
+def _render_edit_form_with_error(
+    request: Request,
+    persona_id: str,
+    *,
+    message: str,
+    error_field: str | None,
+    submitted: dict[str, Any],
+) -> Any | None:
+    """送信値を保持したまま編集フォームを再描画する（Issue #117）。
+
+    入力を直せば解決するエラーでフォームを汎用エラーパーシャルに置換すると、
+    11項目の入力がすべて失われてやり直しになる。送信値をそのまま埋め戻し、
+    エラーは該当フィールドの横に出す。
+
+    例外そのものではなく解決済みの文言とフィールドキーを受け取るのは、例外を
+    Router のヘルパーに渡すと `str(e)` 露出の検査（tests/api/test_error_exposure）
+    が効かなくなるため。文言解決は呼び出し側で `user_message_for()` に閉じる。
+
+    Returns:
+        再描画した応答。ヘッダー部に使う `persona` を取得できずフォームを
+        描画できない場合は ``None``（呼び出し側でトーストに退避する）。
+    """
+    try:
+        persona = get_persona_manager().get_persona(persona_id)
+    except Exception:
+        logger.warning("編集フォーム再描画のためのペルソナ取得に失敗", exc_info=True)
+        return None
+    if not persona:
+        return None
+
+    return mark_renderable(
+        templates.TemplateResponse(
+            request,
+            "persona/partials/edit_form.html",
+            {
+                "request": request,
+                "persona": persona,
+                "form": submitted,
+                "form_error": message,
+                "error_field": error_field,
+            },
+            status_code=400,
+        )
+    )
+
+
 @router.put("/{persona_id}", response_class=HTMLResponse)
 async def update_persona(
     request: Request,
@@ -665,17 +713,33 @@ async def update_persona(
             )
     except PersonaManagerError as e:
         logger.warning("ペルソナ更新エラー", exc_info=True)
-        if is_transient(e):
-            # 再試行で解決しうるエラーは編集フォームを消さずトーストで通知する
-            return toast_response(e)
-        return mark_renderable(
-            templates.TemplateResponse(
+        if is_correctable(e):
+            # 入力を直せば解決するエラーは、送信値を保持したまま編集フォームを
+            # 再描画する。汎用パーシャルに置換すると11項目の入力が失われる
+            rendered = _render_edit_form_with_error(
                 request,
-                "partials/error.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
+                persona_id,
+                message=user_message_for(e),
+                error_field=field_of(e),
+                submitted={
+                    "name": name,
+                    "age": age,
+                    "occupation": occupation,
+                    "background": background,
+                    "values": values,
+                    "pain_points": pain_points,
+                    "goals": goals,
+                    "gender": gender,
+                    "country": country,
+                    "city": city,
+                    "tags": tags,
+                },
             )
-        )
+            if rendered is not None:
+                return rendered
+            # フォームを描画できない場合も入力は壊さない
+        # 再試行で解決しうるエラーは編集フォームを消さずトーストで通知する
+        return toast_response(e)
     except Exception as e:
         logger.error("ペルソナ更新エラー", exc_info=True)
         return toast_response(
@@ -1073,7 +1137,10 @@ async def add_persona_memory(
         if is_transient(e):
             # 入力フォームを含む記憶一覧を置換せず、入力内容を保持する
             return toast_response(e)
-        return mark_renderable(
+        # 入力を直せば解決するエラーは、フォーム内の専用領域だけを差し替える。
+        # hx-target（記憶一覧）を置換すると Alpine の showForm が false に戻って
+        # 入力欄が閉じ、入力内容も失われる（Issue #117）
+        response = mark_renderable(
             templates.TemplateResponse(
                 request,
                 "persona/partials/memory_add_error.html",
@@ -1081,6 +1148,9 @@ async def add_persona_memory(
                 status_code=400,
             )
         )
+        response.headers["HX-Retarget"] = "#memory-form-error"
+        response.headers["HX-Reswap"] = "innerHTML"
+        return response
 
     except (ConnectionError, TimeoutError) as e:
         logger.error(

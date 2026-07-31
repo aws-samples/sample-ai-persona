@@ -44,7 +44,11 @@ _ALLOWED_CALLS = frozenset(
         "user_message_for",
         "toast_response",
         "is_transient",
+        "is_correctable",
         "error_kind_of",
+        # context["field"] の安定キーのみを返す。例外メッセージには触らない
+        # （TestFieldOfDoesNotLeak で直接検証している）。
+        "field_of",
         "isinstance",
         "type",
     }
@@ -295,6 +299,36 @@ class TestRequestValidationErrorHandling:
         assert "text/html" in response.headers["content-type"]
         assert "入力内容を確認してください" in response.text
 
+    def test_htmx_422_is_marked_renderable(self, client):
+        """422 の本文も印が無ければ htmx に破棄される（#117 ステップ3）。
+
+        文言を返していても X-Render-Response が無いと画面には届かず、
+        app.js の汎用フォールバックだけが出る。
+        """
+        response = client.put(
+            "/persona/some-id", data={"age": "30"}, headers={"HX-Request": "true"}
+        )
+
+        assert response.headers.get("X-Render-Response") == "true"
+
+    def test_json_client_response_is_not_marked(self, test_app):
+        """JSON APIクライアント向けの標準422応答には印を付けない。
+
+        印は htmx にDOM反映を許可するためのものなので、JSON経路には不要。
+        `client` フィクスチャは HX-Request を常に付けるため、ここでは付けない
+        クライアントを用意する（CSRFは X-Requested-With で通す）。
+        """
+        from fastapi.testclient import TestClient
+
+        with TestClient(
+            test_app, headers={"X-Requested-With": "XMLHttpRequest"}
+        ) as json_client:
+            response = json_client.put("/persona/some-id", data={"age": "30"})
+
+        assert response.status_code == 422
+        assert "application/json" in response.headers["content-type"]
+        assert "X-Render-Response" not in response.headers
+
     def test_htmx_response_does_not_echo_user_input(self, client):
         """`exc.errors()` の `input` に載る利用者入力を転写しないこと。
 
@@ -407,7 +441,7 @@ class TestTransientErrorsUseToast:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_validation_still_returns_partial_html(self, mock_get_manager, client):
-        """入力を直せば解決するものは従来どおり本文で返す。"""
+        """入力を直せば解決するものは本文で返す（トーストにしない）。"""
         mock_get_manager.return_value = self._manager_raising(
             PersonaManagerError(
                 "name is blank",
@@ -420,6 +454,8 @@ class TestTransientErrorsUseToast:
 
         assert "HX-Trigger" not in response.headers
         assert "ペルソナ名が設定されていません" in response.text
+        # 本文を返す以上、htmx がスワップできる印が必要
+        assert response.headers.get("X-Render-Response") == "true"
 
     @patch("web.routers.persona.get_persona_manager")
     def test_toast_does_not_leak_exception_message(self, mock_get_manager, client):
