@@ -24,6 +24,7 @@
 """
 
 import ast
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -469,6 +470,78 @@ class TestTransientErrorsUseToast:
         response = client.put("/persona/p1", data=self._FORM)
 
         assert secret not in response.headers["HX-Trigger"]
+        assert secret not in response.text
+
+    _SURVEY_FORM = {
+        "template_id": "t1",
+        "persona_count": "1000",
+        "filters_json": "{}",
+        "datasource": "nemotron",
+    }
+
+    @patch("web.routers.survey.get_execution_manager")
+    def test_survey_create_transient_returns_toast(self, mock_get_manager, client):
+        """件数取得のS3/DuckDB障害（TRANSIENT）はトーストで通知し入力を保持する。
+
+        緩めるフィルタが無い状態でインラインエラーに置換すると、再試行で直る
+        のに設定をやり直させることになる（Issue #118）。
+        """
+        from src.managers.survey_execution_manager import SurveyExecutionError
+
+        manager = Mock()
+        manager.create_survey.side_effect = SurveyExecutionError(
+            "available persona count failed (RuntimeError)",
+            code=ErrorCode.SURVEY_OPERATION_FAILED,
+        )
+        mock_get_manager.return_value = manager
+
+        response = client.post(
+            "/survey/execute", data=self._SURVEY_FORM, headers={"HX-Request": "true"}
+        )
+
+        # 本文を返さず HX-Trigger でトースト通知（画面を書き換えない）
+        assert response.text == ""
+        payload = json.loads(response.headers["HX-Trigger"])
+        assert "showToast" in payload
+
+    @patch("web.routers.survey.get_execution_manager")
+    def test_survey_create_config_error_stays_inline(self, mock_get_manager, client):
+        """CONFIG（データセット未DL等）は領域置換で案内する（トーストにしない）。"""
+        from src.managers.survey_execution_manager import (
+            SurveyExecutionManagerError,
+        )
+
+        manager = Mock()
+        manager.create_survey.side_effect = SurveyExecutionManagerError(
+            "nemotron parquet uri is not configured",
+            code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+        )
+        mock_get_manager.return_value = manager
+
+        response = client.post(
+            "/survey/execute", data=self._SURVEY_FORM, headers={"HX-Request": "true"}
+        )
+
+        assert "HX-Trigger" not in response.headers
+        assert response.headers.get("X-Render-Response") == "true"
+
+    @patch("web.routers.survey.get_execution_manager")
+    def test_survey_create_transient_does_not_leak(self, mock_get_manager, client):
+        """トースト経路でも例外文（S3パス等）を漏らさない。"""
+        from src.managers.survey_execution_manager import SurveyExecutionError
+
+        secret = "s3://prod-bucket/secret.parquet"
+        manager = Mock()
+        manager.create_survey.side_effect = SurveyExecutionError(
+            f"IO Error: {secret}", code=ErrorCode.SURVEY_OPERATION_FAILED
+        )
+        mock_get_manager.return_value = manager
+
+        response = client.post(
+            "/survey/execute", data=self._SURVEY_FORM, headers={"HX-Request": "true"}
+        )
+
+        assert secret not in response.headers.get("HX-Trigger", "")
         assert secret not in response.text
 
 
@@ -971,3 +1044,120 @@ class TestToastIsVisibleRegardlessOfScroll:
             encoding="utf-8"
         )
         assert "pointer-events-auto" in app_js
+
+
+@pytest.mark.api
+class TestPersistedFailuresDoNotLeak:
+    """永続化した失敗理由が例外文でないこと（Issue #118）。
+
+    アンケートのバッチ推論はバックグラウンドスレッドで実行されるため、失敗は
+    起点となったリクエストには返らない。理由はDBに保存され、後続のGETで別の
+    リクエストとして描画される。したがって Router の `except` を検査する
+    `test_router_does_not_reference_exception_outside_logging` では捕捉できず、
+    `str(e)` を保存すると S3 パス・ロールARN・botocore の例外文がそのまま
+    画面に出る経路になる。
+
+    ここではモデル側とテンプレート側の両方を機械的に検査する。
+    """
+
+    _ROOT = Path(__file__).parent.parent.parent
+
+    #: 例外文を保存していた（廃止した）フィールド名。
+    _LEAKY_FIELD = "error_message"
+
+    def test_survey_model_has_no_message_field(self):
+        """`Survey` が例外文の保存先を持たないこと。"""
+        from src.models.survey import Survey
+
+        fields = {f.name for f in dataclasses.fields(Survey)}
+        assert self._LEAKY_FIELD not in fields, (
+            f"Survey.{self._LEAKY_FIELD} が復活している。失敗理由は "
+            "error_code / error_context で保存し、文言は表示層で解決すること"
+        )
+        assert {"error_code", "error_context"} <= fields
+
+    def test_managers_do_not_store_exception_text(self):
+        """Manager層が例外文をモデルのフィールドへ代入していないこと。"""
+        offenders: list[str] = []
+        managers = self._ROOT / "src" / "managers"
+        for path in sorted(managers.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign):
+                    continue
+                # 右辺が str(...) / f"{e}" のように例外を文字列化しているか
+                if not _stringifies_something(node.value):
+                    continue
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and "error" in target.attr
+                        and "code" not in target.attr
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno} -> {target.attr}")
+        assert offenders == [], (
+            "例外を文字列化してモデルのエラーフィールドへ保存している。"
+            f"エラーコードを保存すること（Issue #118）: {offenders}"
+        )
+
+    def test_templates_do_not_render_stored_exception_text(self):
+        """テンプレートが `*.error_message` を描画していないこと。"""
+        offenders: list[str] = []
+        for path in sorted((self._ROOT / "web" / "templates").rglob("*.html")):
+            src = path.read_text(encoding="utf-8")
+            for lineno, line in enumerate(src.splitlines(), start=1):
+                if f".{self._LEAKY_FIELD}" in line and "{{" in line:
+                    offenders.append(f"{path.name}:{lineno}")
+        assert offenders == [], (
+            "保存された例外文を描画している。Router が "
+            f"user_message_for_code() で解決した文言を渡すこと: {offenders}"
+        )
+
+    def test_stored_code_resolves_to_catalog_wording(self):
+        """保存形式（文字列）から文言が解決できること。"""
+        from web.error_messages import FALLBACK_MESSAGE, user_message_for_code
+
+        message = user_message_for_code(
+            ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW.value,
+            {"available_count": 30, "min_count": 100},
+        )
+        assert message != FALLBACK_MESSAGE
+        assert "30" in message and "100" in message
+
+    def test_unknown_stored_code_falls_back(self):
+        """別リビジョンが書いたコードでも生テキストが出ないこと。"""
+        from web.error_messages import FALLBACK_MESSAGE, user_message_for_code
+
+        assert user_message_for_code("code_from_the_future") == FALLBACK_MESSAGE
+        assert user_message_for_code(None) == FALLBACK_MESSAGE
+
+    def test_legacy_records_discard_stored_message(self):
+        """#118 以前のレコードを読んでも例外文が復活しないこと。"""
+        from src.models.survey import Survey
+
+        survey = Survey.from_dict(
+            {
+                "id": "s1",
+                "name": "n",
+                "description": "",
+                "template_id": "t1",
+                "persona_count": 100,
+                "status": "error",
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "error_message": "Invalid S3 URI format: s3://secret-bucket/key",
+            }
+        )
+        assert survey.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
+        assert "secret-bucket" not in str(survey.to_dict())
+
+
+def _stringifies_something(node: ast.AST) -> bool:
+    """`str(...)` または f-string による文字列化か。"""
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(v, ast.FormattedValue) for v in node.values)
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "str"
+    )

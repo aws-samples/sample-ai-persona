@@ -139,6 +139,10 @@ class SurveyDatasetManager:
         df, parquet_bytes = self.batch_service.convert_csv_to_parquet(
             csv_bytes, column_mapping
         )
+        # バッチ推論の最小レコード数を下回るデータセットは、アンケート実行時に
+        # 必ず失敗する。DWH抽出経路と同じ下限をここでも適用し、使えない
+        # データセットを作らせない（Issue #118）。
+        self._validate_dataset_row_count(len(df))
 
         name = Path(filename).stem
         parquet_key = f"{CUSTOM_DATASET_PREFIX}{name}.parquet"
@@ -323,6 +327,20 @@ class SurveyDatasetManager:
                 f"row count {row_count} exceeds maximum {self.MAX_SEGMENT_ROWS}",
                 code=ErrorCode.SEGMENT_ROW_COUNT_TOO_HIGH,
                 context={"row_count": row_count, "max_rows": self.MAX_SEGMENT_ROWS},
+            )
+
+    def _validate_dataset_row_count(self, row_count: int) -> None:
+        """アップロードされたデータセットの件数バリデーション。
+
+        DWH抽出（:meth:`_validate_segment_row_count`）と下限は同じだが、
+        こちらは「フィルタでは救えない、ファイル自体が足りない」状況なので
+        別のコードで文言を分ける。
+        """
+        if row_count < self.MIN_SEGMENT_ROWS:
+            raise SurveyDatasetValidationError(
+                f"dataset row count {row_count} below minimum {self.MIN_SEGMENT_ROWS}",
+                code=ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+                context={"row_count": row_count, "min_rows": self.MIN_SEGMENT_ROWS},
             )
 
     # =========================================================================

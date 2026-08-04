@@ -71,6 +71,19 @@ class ErrorCode(StrEnum):
         """How this error should be presented."""
         return self._kind
 
+    @classmethod
+    def parse(cls, value: str | None) -> "ErrorCode | None":
+        """Look up a member by its stored value, or ``None`` if unknown.
+
+        Needed for codes that are persisted and read back later (see
+        ``Survey.error_code``). ``ErrorCode(value)`` cannot be used for that:
+        ``__new__`` takes the kind as a second argument, so a one-argument call
+        does not type-check even though it works at runtime.
+        """
+        if not value:
+            return None
+        return cls._value2member_map_.get(value)  # type: ignore[return-value]
+
     # Fallback for exceptions that carry no code yet. Treated as TRANSIENT
     # because an unclassified failure must not silently look like a validation
     # error the user can fix.
@@ -153,11 +166,43 @@ class ErrorCode(StrEnum):
         "survey_target_count_too_high_with_images",
         ErrorKind.VALIDATION,
     )
+    # The requested count passes, but the filters (or the dataset itself) yield
+    # fewer personas than Bedrock batch inference accepts. The user can fix it by
+    # loosening the filters, hence VALIDATION rather than CAPACITY.
+    SURVEY_AVAILABLE_PERSONAS_TOO_FEW = (
+        "survey_available_personas_too_few",
+        ErrorKind.VALIDATION,
+    )
+    # The uploaded dataset itself is below the batch-inference minimum, so no
+    # filter change can rescue it; a different file is needed.
+    SURVEY_DATASET_TOO_FEW_ROWS = (
+        "survey_dataset_too_few_rows",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_DATASET_CSV_UNREADABLE = (
+        "survey_dataset_csv_unreadable",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_DATASET_CSV_EMPTY = ("survey_dataset_csv_empty", ErrorKind.VALIDATION)
+    SURVEY_DATASET_NO_TEXT_COLUMN = (
+        "survey_dataset_no_text_column",
+        ErrorKind.VALIDATION,
+    )
     # The operator must download the dataset first (settings screen).
     SURVEY_DATASET_NOT_DOWNLOADED = (
         "survey_dataset_not_downloaded",
         ErrorKind.CONFIG,
     )
+    # The batch-inference IAM role is not configured. Only an operator can fix
+    # this, and the variable name itself stays out of the wording.
+    SURVEY_BATCH_ROLE_NOT_CONFIGURED = (
+        "survey_batch_role_not_configured",
+        ErrorKind.CONFIG,
+    )
+    # Bedrock reported the job as Failed/Stopped. Its own message goes to the
+    # logs only: it carries bucket names and role ARNs.
+    SURVEY_BATCH_JOB_FAILED = ("survey_batch_job_failed", ErrorKind.TRANSIENT)
+    SURVEY_BATCH_JOB_TIMED_OUT = ("survey_batch_job_timed_out", ErrorKind.TRANSIENT)
     # AI-assisted template authoring.
     SURVEY_AI_UNAVAILABLE = ("survey_ai_unavailable", ErrorKind.CONFIG)
     # The AI produced nothing usable; retrying can succeed.

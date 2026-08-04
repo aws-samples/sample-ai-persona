@@ -155,6 +155,21 @@ return mark_renderable(
 - `HX-Retarget` の差し替え先を **絶対 id にしてはならない**。同じ領域を持つフォームが複数同時にDOM上へ存在しうる（手動入力タブ / ファイルプレビュー）と id が重複し、送信元と別のフォームが選ばれてエラーが見えなくなる。`find <セレクタ>`（送信元要素からの相対解決）を使い、差し替え先は各 form の内側に置く
 - `HX-Retarget` の差し替え先が各フォーム内に存在することを `TestFormErrorTargetExists` が検査する
 
+### バックグラウンド処理の失敗（永続化する場合）
+
+バックグラウンドスレッドで起きた失敗は、起点のリクエストには返らない。理由をDBに保存し**後続のGETで別のリクエストとして描画する**ため、Router の `except` を検査する仕組みでは露出を防げない。
+
+- **モデルに保存するのは `error_code`（+ 必要なら `error_context`）で、例外文を保存してはならない。** `str(e)` を保存すると S3 パス・ロールARN・botocore の例外文が画面に出る（Issue #118 で `Survey.error_message` を廃止）
+- 文言の解決は Router が `user_message_for_code()` で行い、テンプレートには解決済みの文言を渡す
+- 保存値は `ErrorCode` の**値（文字列）**。読み出しは `ErrorCode.parse()` を使う（`ErrorCode(value)` は `__new__` が kind を要求するため型検査を通らない）
+- 旧レコードの後方互換は `from_dict()` 側で吸収し、**古い例外文は捨てる**（表示に回さない）
+- Manager の総称ハンドラでコードを丸めるときは、コード付き例外をそのまま再送出する経路を残す（実行前バリデーションが `SURVEY_EXECUTION_FAILED` に潰れないようにするため）
+- **Manager がバリデーションのために Service を呼ぶ場合も、その例外を自ドメインへ変換する。** 素通りさせると Router の `except <Manager>Error` を抜けて未処理500になり、例外文に載った S3 パスがそのまま応答に出る（`_validate_available_personas()` で踏んだ）
+- **同じ「件数不足」でも、利用者が取れる行動が違えばコードを分ける。** フィルタありなら「条件を緩める」、フィルタなしなら「データセットを変える」。行動につながらない案内は VALIDATION の意味を失わせる
+- **Router が Manager を呼ぶ際、その中に DuckDB/S3 等の同期I/Oが含まれるならスレッドへ委譲する。** バリデーションは軽いという思い込みで直接呼ぶと、S3遅延時にイベントループを占有して他リクエストまで止まる（`/survey/execute` の件数検証で1.5秒のブロックを実測）
+- **スレッドへ委譲する場合、その先で共有する接続のスレッド安全性を確認する。** シングルトンServiceがキャッシュした `DuckDBPyConnection` を複数スレッドから同時に `execute` すると、結果の混線・空結果（`IndexError`）・クラッシュが起きる。DuckDBはスレッドごとに `cursor()` を発行すれば VIEW と接続設定を継承しつつ実行が分離される。接続の取得・生成とカーソル発行はロックで直列化し、実行自体はロック外に置く（`SurveyBatchService._query_duckdb`）。委譲＝安全ではない
+- 上記は `tests/api/test_error_exposure.py` の `TestPersistedFailuresDoNotLeak` が検査する（モデルのフィールド、Manager の代入、テンプレートの描画、旧レコードの読み出し）
+
 ### エラー表示テンプレート
 
 **2種のみ。** 機能別に増やしてはならない。変数名は `error` に統一する（`message` は使わない）。

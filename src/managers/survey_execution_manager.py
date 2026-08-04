@@ -38,6 +38,11 @@ class SurveyExecutionError(SurveyExecutionManagerError):
 class SurveyExecutionManager:
     """アンケート実行制御"""
 
+    #: バッチ推論1ジョブあたりの最小レコード数（Bedrockのクォータ）。
+    #: これを下回る入力でジョブを作ると Bedrock 側の検証で Failed になるため、
+    #: 希望数だけでなく「実際に集まった件数」もこの値で検証する。
+    MIN_BATCH_RECORDS = 100
+
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
@@ -73,6 +78,7 @@ class SurveyExecutionManager:
 
         has_images = bool(template.images)
         self._validate_persona_count(persona_count, has_images)
+        self._validate_available_personas(filters, datasource)
 
         if not name or not name.strip():
             name = self.generate_default_survey_name(template.name)
@@ -130,6 +136,11 @@ class SurveyExecutionManager:
             sampled = self.batch_service.filter_and_sample_personas(
                 filters or {}, survey.persona_count, datasource=datasource
             )
+            # create_survey でも件数を検証しているが、作成から実行までの間に
+            # データセットが差し替わることがあるため、ジョブを作る直前にも
+            # 実際に集まった行数を確かめる（Bedrock 側で Failed になる前に止める）。
+            if len(sampled) < self.MIN_BATCH_RECORDS:
+                self._raise_too_few(len(sampled), filters)
 
             # extra_columns取得（カスタムデータセットの場合）
             extra_columns = None
@@ -236,15 +247,31 @@ class SurveyExecutionManager:
             logger.info(f"Survey completed: {survey.id}")
 
         except Exception as e:
-            survey.status = "error"
-            survey.error_message = str(e)
-            survey.updated_at = datetime.now()
-            self.db.update_survey(survey)
-            logger.error(f"Survey execution failed: {survey.id} - {e}")
+            # 実行はバックグラウンドスレッドで走るため、Routerの except では
+            # 受け取れない。失敗理由は「コード + 補間値」でDBに残し、後続のGETで
+            # カタログ経由で文言に解決する。str(e) を保存すると S3 パスやロール
+            # ARN、botocore の例外文がそのまま画面に出る（Issue #118）。
+            self._mark_survey_failed(survey, e)
+            logger.error("Survey execution failed: %s", survey.id, exc_info=True)
+            if isinstance(e, SurveyExecutionManagerError):
+                # 実行前バリデーション（件数不足など）はコードを保って伝える。
+                raise
             raise SurveyExecutionError(
                 f"survey execution failed ({type(e).__name__})",
                 code=ErrorCode.SURVEY_EXECUTION_FAILED,
             ) from e
+
+    def _mark_survey_failed(self, survey: Survey, exc: Exception) -> None:
+        """失敗理由をエラーコードとして記録する（例外文は保存しない）。"""
+        code = getattr(exc, "code", None)
+        if not isinstance(code, ErrorCode) or code is ErrorCode.UNKNOWN:
+            code = ErrorCode.SURVEY_EXECUTION_FAILED
+        context = getattr(exc, "context", None)
+        survey.status = "error"
+        survey.error_code = code.value
+        survey.error_context = dict(context) if isinstance(context, dict) else None
+        survey.updated_at = datetime.now()
+        self.db.update_survey(survey)
 
     def _ensure_parquet_uri(self, datasource: str) -> None:
         """nemotron使用時、batch_serviceにS3 URIをセットする。"""
@@ -583,6 +610,67 @@ class SurveyExecutionManager:
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,
                 context={"max_count": 10000},
             )
+
+    def _validate_available_personas(
+        self, filters: Optional[Dict[str, Any]], datasource: Optional[str]
+    ) -> None:
+        """フィルタ適用後に実際に集められるペルソナ数を検証する。
+
+        ``persona_count`` は「希望数」でしかなく、サンプリングSQLの ``LIMIT`` は
+        上限にすぎない。条件に合致する行が少なければそれだけしか集まらず、
+        バッチ推論の最小レコード数を下回った入力で Bedrock に投げてしまう。
+        ここで実件数を確かめ、ジョブを作る前（課金前）に弾く。
+        """
+        source = datasource or "nemotron"
+        self._ensure_parquet_uri(source)
+        try:
+            available = self.batch_service.get_filtered_count(filters, source)
+        except SurveyExecutionManagerError:
+            # _ensure_parquet_uri 由来のコード付き例外はそのまま通す。
+            raise
+        except Exception as e:
+            # Service層の例外・生の例外（DuckDB/S3障害）をここで自ドメインへ変換
+            # する。素通りさせると Router の except を抜けて未処理500になり、
+            # 例外文に載った S3 パスがそのまま応答に出る。
+            logger.error(
+                "Failed to count available personas (datasource=%s)",
+                source,
+                exc_info=True,
+            )
+            raise SurveyExecutionError(
+                f"available persona count failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_OPERATION_FAILED,
+            ) from e
+
+        if available < self.MIN_BATCH_RECORDS:
+            self._raise_too_few(available, filters)
+
+    def _raise_too_few(self, available: int, filters: Optional[Dict[str, Any]]) -> None:
+        """件数不足を、フィルタの有無に応じた案内で送出する。
+
+        フィルタありなら「条件を緩める」で解決しうるが、フィルタなしで足りない
+        のはデータセット自体が小さいということ。「条件を緩めて」と案内しても
+        緩めるフィルタが無く、利用者が次に取れる行動にならない（Issue #118）。
+        """
+        if filters:
+            raise SurveyExecutionValidationError(
+                f"only {available} personas match the filters "
+                f"(minimum {self.MIN_BATCH_RECORDS})",
+                code=ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+                context={
+                    "available_count": available,
+                    "min_count": self.MIN_BATCH_RECORDS,
+                },
+            )
+        raise SurveyExecutionValidationError(
+            f"datasource has only {available} personas "
+            f"(minimum {self.MIN_BATCH_RECORDS})",
+            code=ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+            context={
+                "row_count": available,
+                "min_rows": self.MIN_BATCH_RECORDS,
+            },
+        )
 
     @staticmethod
     def generate_default_survey_name(template_name: str) -> str:

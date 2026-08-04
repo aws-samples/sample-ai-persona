@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 
 from src.managers.survey_dataset_manager import (
     SurveyDatasetManager,
@@ -95,13 +96,38 @@ class TestUploadCustomDataset:
     ) -> None:
         import polars as pl
 
-        df = pl.DataFrame({"persona": ["a"], "uuid": ["u1"]})
+        rows = SurveyDatasetManager.MIN_SEGMENT_ROWS
+        df = pl.DataFrame(
+            {
+                "persona": [f"p{i}" for i in range(rows)],
+                "uuid": [f"u{i}" for i in range(rows)],
+            }
+        )
         mock_batch_service.convert_csv_to_parquet.return_value = (df, b"pq_bytes")
 
         result = mgr.upload_custom_dataset(b"csv_data", "test.csv", {"persona": "col1"})
         assert result["name"] == "test"
-        assert result["row_count"] == 1
+        assert result["row_count"] == rows
         mock_s3_service.upload_file.assert_called()
+
+    def test_too_few_rows_rejected(
+        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
+    ) -> None:
+        """最小レコード数を下回るデータセットは保存させない（Issue #118）。
+
+        アップロードできてしまうと、アンケート実行時に必ずバッチ推論が失敗する。
+        """
+        import polars as pl
+
+        df = pl.DataFrame({"persona": ["a"], "uuid": ["u1"]})
+        mock_batch_service.convert_csv_to_parquet.return_value = (df, b"pq_bytes")
+
+        with raises_code(
+            SurveyDatasetValidationError, ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS
+        ):
+            mgr.upload_custom_dataset(b"csv_data", "small.csv")
+
+        mock_s3_service.upload_file.assert_not_called()
 
 
 class TestDeleteCustomDataset:

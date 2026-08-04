@@ -6,9 +6,11 @@ from unittest.mock import Mock
 import polars as pl
 import pytest
 
-from src.models.errors import ErrorCode
+from src.models.errors import CodedError, ErrorCode
+from tests.error_helpers import raises_code
 
 from src.managers.survey_execution_manager import (
+    SurveyExecutionError,
     SurveyExecutionManager,
     SurveyExecutionManagerError,
     SurveyExecutionValidationError,
@@ -31,7 +33,11 @@ def mock_db() -> Mock:
 
 @pytest.fixture
 def mock_batch_service() -> Mock:
-    return Mock()
+    svc = Mock()
+    # 実件数の検証（Issue #118）を通す既定値。件数不足のケースは個別に上書きする。
+    svc.get_filtered_count.return_value = 1000
+    svc.has_parquet_uri.return_value = True
+    return svc
 
 
 @pytest.fixture
@@ -89,6 +95,73 @@ class TestCreateSurvey:
         mock_db.get_survey_template.return_value = sample_template
         with pytest.raises(SurveyExecutionValidationError):
             mgr.create_survey("tid", persona_count=50)
+
+    def test_filtered_count_too_low_suggests_loosening_filters(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        sample_template: SurveyTemplate,
+    ) -> None:
+        """フィルタありで足りない場合は「条件を緩める」案内になること。"""
+        mock_db.get_survey_template.return_value = sample_template
+        mock_batch_service.get_filtered_count.return_value = 30
+
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+            available_count=30,
+        ):
+            mgr.create_survey("tid", persona_count=1000, filters={"性別": "男性"})
+
+        mock_db.save_survey.assert_not_called()
+
+    def test_unfiltered_count_too_low_points_at_the_dataset(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        sample_template: SurveyTemplate,
+    ) -> None:
+        """フィルタ無しで足りない場合はデータセット交換を案内すること。
+
+        「フィルタ条件を緩めてください」では緩めるフィルタが無く、利用者が
+        次に取れる行動にならない。
+        """
+        mock_db.get_survey_template.return_value = sample_template
+        mock_batch_service.get_filtered_count.return_value = 30
+
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+            row_count=30,
+        ):
+            mgr.create_survey("tid", persona_count=1000, filters=None)
+
+    def test_count_query_failure_becomes_manager_error(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        sample_template: SurveyTemplate,
+    ) -> None:
+        """件数クエリの失敗が Manager 例外に変換されること。
+
+        素通りさせると Router の except を抜けて未処理500になり、例外文に
+        載った S3 パスがそのまま応答に出る（Issue #118）。
+        """
+        mock_db.get_survey_template.return_value = sample_template
+        mock_batch_service.get_filtered_count.side_effect = RuntimeError(
+            "IO Error: failed to read s3://prod-bucket/secret.parquet"
+        )
+
+        with raises_code(
+            SurveyExecutionError, ErrorCode.SURVEY_OPERATION_FAILED
+        ) as exc_info:
+            mgr.create_survey("tid", persona_count=1000)
+
+        # 例外メッセージにS3パスを載せない（ログにのみ残す）
+        assert "prod-bucket" not in str(exc_info.value)
 
     def test_default_name_generated(
         self,
@@ -630,17 +703,21 @@ class TestExecuteSurvey:
         mock_db.get_survey_template.return_value = template_with_questions
 
         mock_batch_service.has_parquet_uri.return_value = True
+        # バッチ推論の最小レコード数（100）を満たす件数にする。回答を検証するのは
+        # 先頭2件だけなので、残りは同じ属性の埋め草でよい。
+        filler = SurveyExecutionManager.MIN_BATCH_RECORDS - 2
         sampled_df = pl.DataFrame(
             {
-                "uuid": ["id1", "id2"],
-                "sex": ["男性", "女性"],
-                "age": [30, 25],
-                "occupation": ["エンジニア", "デザイナー"],
-                "country": ["JP", "JP"],
-                "region": ["東京", "大阪"],
-                "prefecture": ["東京都", "大阪府"],
-                "marital_status": ["未婚", "既婚"],
-                "persona": ["テストペルソナ1", "テストペルソナ2"],
+                "uuid": ["id1", "id2"] + [f"pad{i}" for i in range(filler)],
+                "sex": ["男性", "女性"] + ["男性"] * filler,
+                "age": [30, 25] + [40] * filler,
+                "occupation": ["エンジニア", "デザイナー"] + ["会社員"] * filler,
+                "country": ["JP", "JP"] + ["JP"] * filler,
+                "region": ["東京", "大阪"] + ["東京"] * filler,
+                "prefecture": ["東京都", "大阪府"] + ["東京都"] * filler,
+                "marital_status": ["未婚", "既婚"] + ["未婚"] * filler,
+                "persona": ["テストペルソナ1", "テストペルソナ2"]
+                + [f"埋め草{i}" for i in range(filler)],
             }
         )
         mock_batch_service.filter_and_sample_personas.return_value = sampled_df
@@ -743,7 +820,97 @@ class TestExecuteSurvey:
 
         final_update = mock_db.update_survey.call_args_list[-1][0][0]
         assert final_update.status == "error"
-        assert "Batch failed" in final_update.error_message
+        # 例外文ではなくエラーコードを保存する。str(e) を残すと後続のGETで
+        # S3パスやロールARNが画面に出る（Issue #118）。
+        assert final_update.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
+        assert "Batch failed" not in str(final_update.to_dict())
+
+    def test_coded_failure_preserves_its_code(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        template_with_questions: SurveyTemplate,
+        survey_record: Survey,
+    ) -> None:
+        """Service層のコード付き例外は、汎用コードに丸められず保持される。"""
+        mock_db.get_survey.return_value = survey_record
+        mock_db.get_survey_template.return_value = template_with_questions
+        mock_batch_service.filter_and_sample_personas.side_effect = CodedError(
+            "BEDROCK_BATCH_ROLE_ARN is not configured",
+            code=ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED,
+        )
+
+        with pytest.raises(SurveyExecutionManagerError):
+            mgr.execute_survey(survey_record.id)
+
+        final_update = mock_db.update_survey.call_args_list[-1][0][0]
+        assert (
+            final_update.error_code == ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED.value
+        )
+
+    def test_too_few_sampled_without_filters_points_at_dataset(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        template_with_questions: SurveyTemplate,
+        survey_record: Survey,
+    ) -> None:
+        """フィルタ無しで足りない場合はデータセット交換を案内し、ジョブを作らない。
+
+        ``persona_count`` は希望数でしかなく、サンプリングSQLの ``LIMIT`` は上限
+        にすぎない。ここで止めないと Bedrock 側の検証で Failed になる。
+        フィルタが無いので「条件を緩めて」ではなくデータセット用コードを保存する。
+        """
+        assert survey_record.filters is None
+        mock_db.get_survey.return_value = survey_record
+        mock_db.get_survey_template.return_value = template_with_questions
+        mock_batch_service.filter_and_sample_personas.return_value = pl.DataFrame(
+            {"uuid": ["id1", "id2"], "persona": ["p1", "p2"]}
+        )
+
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+            row_count=2,
+        ):
+            mgr.execute_survey(survey_record.id)
+
+        mock_batch_service.execute_batch_inference.assert_not_called()
+        final_update = mock_db.update_survey.call_args_list[-1][0][0]
+        assert final_update.status == "error"
+        assert final_update.error_code == ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS.value
+
+    def test_too_few_sampled_with_filters_suggests_loosening(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_db: Mock,
+        mock_batch_service: Mock,
+        template_with_questions: SurveyTemplate,
+    ) -> None:
+        """フィルタありで足りない場合は「条件を緩める」案内を保存する。"""
+        survey = Survey.create_new(
+            name="s",
+            description="",
+            template_id=template_with_questions.id,
+            persona_count=1000,
+            filters={"性別": "男性"},
+        )
+        mock_db.get_survey.return_value = survey
+        mock_db.get_survey_template.return_value = template_with_questions
+        mock_batch_service.filter_and_sample_personas.return_value = pl.DataFrame(
+            {"uuid": ["id1", "id2"], "persona": ["p1", "p2"]}
+        )
+
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+            available_count=2,
+        ):
+            mgr.execute_survey(survey.id, filters={"性別": "男性"})
+
+        mock_batch_service.execute_batch_inference.assert_not_called()
 
 
 @pytest.mark.unit

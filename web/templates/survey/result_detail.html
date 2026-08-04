@@ -65,9 +65,12 @@
         </a>
     </div>
 
+    {# 文言は Router が web/error_messages.py 経由で解決したものを受け取る。
+       例外メッセージをここに描画してはならない（S3パス・ロールARN・SDK例外文が
+       画面に出る。Issue #118）。 #}
     {% if survey.status == 'error' %}
     <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-        <p class="text-red-800">エラーが発生しました: {{ survey.error_message or '不明なエラー' }}</p>
+        <p class="text-red-800">{{ execution_error }}</p>
     </div>
     {% endif %}
 

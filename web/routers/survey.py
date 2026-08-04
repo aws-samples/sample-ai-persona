@@ -45,7 +45,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
-from web.error_messages import mark_renderable, user_message_for  # noqa: E402
+from web.error_messages import (  # noqa: E402
+    is_transient,
+    mark_renderable,
+    toast_response,
+    user_message_for,
+    user_message_for_code,
+)
 from web.sanitize import render_markdown  # noqa: E402
 
 # マークダウンフィルターを追加
@@ -368,11 +374,17 @@ async def upload_custom_step2(request: Request) -> Any:
             },
         )
     except Exception as e:
-        logger.error(f"Failed to upload custom persona data: {e}")
+        logger.error("Failed to upload custom persona data", exc_info=True)
+        # 件数不足・形式不正はカタログ文言で具体的に伝える（Issue #118）。
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "データセットのアップロードに失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(
+                    e, default="データセットのアップロードに失敗しました"
+                ),
+            },
         )
 
 
@@ -663,13 +675,15 @@ async def dwh_confirm(request: Request) -> Any:
             },
         )
     except Exception as e:
-        logger.error(f"DWH confirm failed: {e}")
+        logger.error("DWH confirm failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
-                "error": "データセットの保存に失敗しました。再度お試しください。",
+                "error": user_message_for(
+                    e, default="データセットの保存に失敗しました。再度お試しください。"
+                ),
             },
         )
 
@@ -928,13 +942,23 @@ async def preview_personas(request: Request) -> Any:
 
     try:
         manager = get_dataset_manager()
-        total = manager.get_filtered_count(None, datasource=datasource)  # type: ignore[arg-type]
-        count = (
-            manager.get_filtered_count(filters, datasource=datasource)
-            if filters
-            else total
-        )  # type: ignore[arg-type]
-        stats = manager.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
+
+        def _collect_preview() -> tuple[int, int, dict]:
+            """DuckDB/S3 への同期クエリ3本をまとめてスレッド上で実行する。"""
+            total = manager.get_filtered_count(None, datasource=datasource)
+            count = (
+                manager.get_filtered_count(filters, datasource=datasource)
+                if filters
+                else total
+            )
+            stats = manager.get_preview_stats(filters, datasource=datasource)
+            return total, count, stats
+
+        # DuckDB/httpfs 経由の S3 参照は同期処理。イベントループ上で実行すると
+        # S3 遅延時に他リクエストまで停止する（Issue #118）。
+        total, count, stats = await asyncio.get_event_loop().run_in_executor(
+            executor, _collect_preview
+        )
 
     except Exception as e:
         logger.error("Preview failed", exc_info=True)
@@ -1002,6 +1026,13 @@ async def result_detail(request: Request, survey_id: str) -> Any:
     if survey_template:
         for img in survey_template.images:
             image_preview_urls[img.id] = _get_image_preview_url(img.file_path)
+    # 実行はバックグラウンドで走るため失敗理由はコードとしてDBに残っている。
+    # 文言への解決はここ（表示層）で行う（Issue #118）。
+    execution_error = (
+        user_message_for_code(survey.error_code, survey.error_context)
+        if survey.status == "error"
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "survey/result_detail.html",
@@ -1011,6 +1042,7 @@ async def result_detail(request: Request, survey_id: str) -> Any:
             "survey": survey,
             "survey_template": survey_template,
             "image_preview_urls": image_preview_urls,
+            "execution_error": execution_error,
         },
     )
 
@@ -1290,15 +1322,21 @@ async def execute_survey(request: Request) -> Any:
 
     manager = get_execution_manager()
 
-    # 1. アンケートレコードを作成（バリデーション含む、即座に完了）
+    # 1. アンケートレコードを作成（バリデーション含む）
+    #    件数検証が DuckDB/httpfs 経由で S3 を同期参照するため、スレッドへ
+    #    委譲する。イベントループ上で実行すると、S3が遅延した際に他リクエスト
+    #    まで停止する（Issue #118）。
     try:
-        survey = manager.create_survey(
-            template_id=template_id,  # type: ignore[arg-type]
-            name=name or None,
-            description=description,
-            persona_count=persona_count,
-            filters=filters,
-            datasource=datasource,
+        survey = await asyncio.get_event_loop().run_in_executor(
+            executor,
+            lambda: manager.create_survey(
+                template_id=template_id,  # type: ignore[arg-type]
+                name=name or None,
+                description=description,
+                persona_count=persona_count,
+                filters=filters,
+                datasource=datasource,
+            ),
         )
     except SurveyExecutionValidationError as e:
         logger.warning("アンケート実行のバリデーションエラー", exc_info=True)
@@ -1315,6 +1353,13 @@ async def execute_survey(request: Request) -> Any:
         return response
     except SurveyExecutionManagerError as e:
         logger.error("アンケート作成エラー", exc_info=True)
+        # 件数取得のS3/DuckDB障害など一時的な失敗（TRANSIENT）は、画面を書き換えず
+        # トーストで通知して入力を保持する。緩めるフィルタが無い状態でインライン
+        # エラーに置換すると、再試行で直るのに入力をやり直させることになる
+        # （architecture.md「TRANSIENT の表示」）。NOT_FOUND / CONFIG は従来どおり
+        # 領域を置換して案内する。
+        if is_transient(e):
+            return toast_response(e, default="アンケート作成に失敗しました")
         response = mark_renderable(
             templates.TemplateResponse(
                 request,

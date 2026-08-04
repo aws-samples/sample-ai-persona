@@ -21,7 +21,7 @@ from typing import TypeVar
 
 from fastapi import Response
 
-from src.models.errors import ErrorCode, ErrorKind
+from src.models.errors import CodedError, ErrorCode, ErrorKind
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +113,37 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES: (
         "画像付きアンケートの場合、対象ペルソナ数は{max_count}人までです"
     ),
+    ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW: (
+        "条件に合致するペルソナが{available_count}人しかいません。"
+        "アンケートの実行には{min_count}人以上が必要です。フィルタ条件を緩めてください。"
+    ),
+    ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS: (
+        "データ件数が{row_count}件しかありません。"
+        "アンケートの実行には{min_rows}件以上のデータが必要です。"
+        "{min_rows}件以上のデータセットを選択するか、データを追加してください。"
+    ),
     ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED: (
         "Nemotronデータセットがまだダウンロードされていません。"
         "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
+    ),
+    ErrorCode.SURVEY_DATASET_CSV_UNREADABLE: (
+        "CSVファイルを読み取れませんでした。"
+        "UTF-8のカンマ区切り、ヘッダー行ありの形式で保存してください。"
+    ),
+    ErrorCode.SURVEY_DATASET_CSV_EMPTY: "CSVにデータ行がありません。",
+    ErrorCode.SURVEY_DATASET_NO_TEXT_COLUMN: (
+        "テキスト型のカラムが見つかりません。"
+        "「ペルソナ概要」にマッピングするカラムを指定してください。"
+    ),
+    ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED: (
+        "バッチ推論の実行設定が完了していません。管理者に連絡してください。"
+    ),
+    ErrorCode.SURVEY_BATCH_JOB_FAILED: (
+        "バッチ推論の実行に失敗しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.SURVEY_BATCH_JOB_TIMED_OUT: (
+        "バッチ推論が制限時間内に完了しませんでした。"
+        "対象ペルソナ数を減らして再度お試しください。"
     ),
     ErrorCode.SURVEY_AI_UNAVAILABLE: (
         "AIによる生成機能が利用できません。設定を確認してください。"
@@ -281,6 +309,33 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
         # A wording bug must not become a 500, and must not leak the message.
         logger.warning("エラー文言の補間に失敗しました (code=%s)", code, exc_info=True)
         return fallback
+
+
+def user_message_for_code(
+    code: str | None,
+    context: dict[str, object] | None = None,
+    *,
+    default: str | None = None,
+) -> str:
+    """Resolve wording from a *stored* error code rather than a live exception.
+
+    Failures that happen in a background thread cannot be turned into wording by
+    the router that started them: nothing is returned to that request. Those
+    failures persist an ``ErrorCode`` value (see ``Survey.error_code``) which a
+    later GET resolves here. Storing the exception message instead would put S3
+    paths, role ARNs and SDK text on the screen (Issue #118).
+
+    Unknown or unparsable codes fall back like :func:`user_message_for`, so a
+    record written by an older version can never surface raw text.
+    """
+    parsed = ErrorCode.parse(code)
+    if parsed is None:
+        if code:
+            # A code written by another revision. A generic message is still
+            # better than showing nothing (and far better than raw text).
+            logger.warning("未知のエラーコードです (code=%r)", code)
+        return default or FALLBACK_MESSAGE
+    return user_message_for(CodedError(code=parsed, context=context), default=default)
 
 
 def error_kind_of(exc: BaseException | None) -> ErrorKind:
