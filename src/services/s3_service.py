@@ -8,7 +8,13 @@ import logging
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
+from ..models.errors import CodedError, ErrorCode
+
 logger = logging.getLogger(__name__)
+
+
+class S3ServiceError(CodedError):
+    """S3サービス関連のエラー"""
 
 
 class S3Service:
@@ -50,13 +56,19 @@ class S3Service:
             s3_path = f"s3://{self.bucket_name}/{s3_key}"
             logger.info(f"File uploaded successfully to {s3_path}")
             return s3_path
-        except NoCredentialsError:
+        except NoCredentialsError as e:
             logger.error("AWS credentials not found")
-            raise Exception("AWS認証情報が見つかりません")
+            raise S3ServiceError(
+                "AWS credentials not found",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(f"Failed to upload file to S3: {error_code} - {str(e)}")
-            raise Exception(f"S3へのアップロードに失敗しました: {error_code}")
+            raise S3ServiceError(
+                f"s3 upload failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
 
     def download_file(self, s3_path: str) -> bytes:
         """
@@ -83,9 +95,15 @@ class S3Service:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             if error_code == "NoSuchKey":
                 logger.error(f"File not found in S3: {s3_path}")
-                raise Exception(f"ファイルが見つかりません: {s3_path}")
+                raise S3ServiceError(
+                    "s3 object not found",
+                    code=ErrorCode.S3_OBJECT_NOT_FOUND,
+                ) from e
             logger.error(f"Failed to download file from S3: {error_code} - {str(e)}")
-            raise Exception(f"S3からのダウンロードに失敗しました: {error_code}")
+            raise S3ServiceError(
+                f"s3 download failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
 
     def delete_file(self, s3_path: str) -> bool:
         """
@@ -110,7 +128,10 @@ class S3Service:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(f"Failed to delete file from S3: {error_code} - {str(e)}")
-            raise Exception(f"S3からの削除に失敗しました: {error_code}")
+            raise S3ServiceError(
+                f"s3 delete failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
 
     def _extract_key_from_path(self, s3_path: str) -> str:
         """
@@ -130,7 +151,10 @@ class S3Service:
             parts = path_without_protocol.split("/", 1)
             if len(parts) == 2:
                 return parts[1]
-        raise ValueError(f"Invalid S3 path format: {s3_path}")
+        raise S3ServiceError(
+            "invalid s3 path format",
+            code=ErrorCode.S3_OPERATION_FAILED,
+        )
 
     def generate_presigned_url(self, s3_path: str, expiration: int = 3600) -> str:
         """
@@ -158,4 +182,7 @@ class S3Service:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(f"Failed to generate presigned URL: {error_code} - {str(e)}")
-            raise Exception(f"署名付きURL生成に失敗しました: {error_code}")
+            raise S3ServiceError(
+                f"presigned url generation failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e

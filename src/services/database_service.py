@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError, NoCredentialsError, PartialCredenti
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 # Import models
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 
 if TYPE_CHECKING:
@@ -83,12 +83,16 @@ class DatabaseService:
                 "environment variables or AWS credentials file."
             )
             self.logger.error(f"Credential error: {e}")
-            raise DatabaseError(error_msg)
+            raise DatabaseError(
+                error_msg, code=ErrorCode.DATABASE_CREDENTIALS_INVALID
+            ) from e
 
         except Exception as e:
             error_msg = f"Failed to initialize DynamoDB client: {e}"
             self.logger.error(error_msg)
-            raise DatabaseError(error_msg)
+            raise DatabaseError(
+                error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+            ) from e
 
         # Initialize type serializer/deserializer for DynamoDB
         self.serializer = TypeSerializer()
@@ -183,7 +187,9 @@ class DatabaseService:
                             f"due to throttling: {e}"
                         )
                         self.logger.error(error_msg)
-                        raise DatabaseError(error_msg)
+                        raise DatabaseError(
+                            error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                        ) from e
 
                 # Handle transient service errors with fixed retry
                 elif error_code in [
@@ -205,12 +211,17 @@ class DatabaseService:
                             f"due to {error_code}: {e}"
                         )
                         self.logger.error(error_msg)
-                        raise DatabaseError(error_msg)
+                        raise DatabaseError(
+                            error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                        ) from e
 
                 # Handle conditional check failures (not retryable)
                 elif error_code == "ConditionalCheckFailedException":
                     self.logger.info(f"{operation_name} conditional check failed: {e}")
-                    raise DatabaseError(f"Conditional check failed: {e}")
+                    raise DatabaseError(
+                        f"conditional check failed for {operation_name}",
+                        code=ErrorCode.DATABASE_OPERATION_FAILED,
+                    ) from e
 
                 # Handle resource not found (not retryable)
                 elif error_code == "ResourceNotFoundException":
@@ -220,19 +231,25 @@ class DatabaseService:
                         f"Details: {e}"
                     )
                     self.logger.error(error_msg)
-                    raise DatabaseError(error_msg)
+                    raise DatabaseError(
+                        error_msg, code=ErrorCode.DATABASE_TABLES_NOT_FOUND
+                    ) from e
 
                 # Handle validation errors (not retryable)
                 elif error_code == "ValidationException":
                     error_msg = f"{operation_name} validation error: {e}"
                     self.logger.error(error_msg)
-                    raise DatabaseError(error_msg)
+                    raise DatabaseError(
+                        error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                    ) from e
 
                 # Handle other client errors (not retryable)
                 else:
                     error_msg = f"{operation_name} failed with {error_code}: {e}"
                     self.logger.error(error_msg)
-                    raise DatabaseError(error_msg)
+                    raise DatabaseError(
+                        error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                    ) from e
 
             except (ConnectionError, TimeoutError) as e:
                 last_exception = e
@@ -252,13 +269,17 @@ class DatabaseService:
                         f"due to network error: {e}"
                     )
                     self.logger.error(error_msg)
-                    raise DatabaseError(error_msg)
+                    raise DatabaseError(
+                        error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                    ) from e
 
             except Exception as e:
                 # Unexpected errors are not retried
                 error_msg = f"{operation_name} failed with unexpected error: {e}"
                 self.logger.error(error_msg)
-                raise DatabaseError(error_msg)
+                raise DatabaseError(
+                    error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED
+                ) from e
 
         # Should not reach here, but handle it just in case
         error_msg = (
@@ -266,7 +287,7 @@ class DatabaseService:
             f"Last error: {last_exception}"
         )
         self.logger.error(error_msg)
-        raise DatabaseError(error_msg)
+        raise DatabaseError(error_msg, code=ErrorCode.DATABASE_OPERATION_FAILED)
 
     def check_database_health(self) -> bool:
         """
@@ -320,15 +341,18 @@ class DatabaseService:
         try:
             if not self.check_database_health():
                 raise DatabaseError(
-                    f"Required DynamoDB tables not found. "
-                    f"Please create tables: {self.personas_table}, "
-                    f"{self.discussions_table}, {self.files_table}"
+                    f"required DynamoDB tables not found: {self.personas_table}, "
+                    f"{self.discussions_table}, {self.files_table}",
+                    code=ErrorCode.DATABASE_TABLES_NOT_FOUND,
                 )
             self.logger.info("Database initialized successfully")
         except DatabaseError:
             raise
         except Exception as e:
-            raise DatabaseError(f"Failed to initialize database: {e}")
+            raise DatabaseError(
+                f"database initialization failed ({type(e).__name__})",
+                code=ErrorCode.DATABASE_OPERATION_FAILED,
+            ) from e
 
     def get_database_info(self) -> Dict[str, Any]:
         """

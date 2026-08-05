@@ -244,6 +244,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "データ分析エージェントへの接続テストに失敗しました。"
         "時間をおいて再度お試しください。"
     ),
+    ErrorCode.DATA_AGENT_DOWNLOAD_URL_REJECTED: (
+        "データのダウンロードに失敗しました。時間をおいて再度お試しください。"
+    ),
     # --- インタビュー ---
     ErrorCode.INTERVIEW_PERSONAS_REQUIRED: (
         "インタビューには最低1つのペルソナが必要です"
@@ -333,6 +336,19 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.MEMORY_OPERATION_FAILED: (
         "記憶の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
+    # --- Service層（Manager層が必ず自ドメイン例外に変換するため到達しない） ---
+    ErrorCode.AGENT_SDK_UNAVAILABLE: "エージェントSDKが利用できません",
+    ErrorCode.AGENT_INITIALIZATION_FAILED: "エージェントの初期化に失敗しました",
+    ErrorCode.AGENT_COMMUNICATION_FAILED: "エージェントとの通信に失敗しました",
+    ErrorCode.AI_BEDROCK_UNAVAILABLE: "Bedrockサービスが利用できません",
+    ErrorCode.AI_BEDROCK_CONNECTION_FAILED: "Bedrockへの接続に失敗しました",
+    ErrorCode.AI_BEDROCK_API_FAILED: "Bedrock APIの呼び出しに失敗しました",
+    ErrorCode.AI_OPERATION_FAILED: "AI処理中にエラーが発生しました",
+    ErrorCode.DATABASE_CREDENTIALS_INVALID: "データベース認証情報が無効です",
+    ErrorCode.DATABASE_TABLES_NOT_FOUND: "データベーステーブルが見つかりません",
+    ErrorCode.DATABASE_OPERATION_FAILED: "データベース処理中にエラーが発生しました",
+    ErrorCode.S3_OPERATION_FAILED: "S3処理中にエラーが発生しました",
+    ErrorCode.S3_OBJECT_NOT_FOUND: "S3オブジェクトが見つかりません",
 }
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"

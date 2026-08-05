@@ -197,7 +197,9 @@ class PersonaAgent:
                 f"ペルソナエージェント {self.persona.name} の応答生成に失敗: {e}"
             )
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def respond_streaming(
         self,
@@ -275,7 +277,9 @@ class PersonaAgent:
         except Exception as e:
             error_msg = f"ペルソナエージェント {self.persona.name} のストリーミング応答生成に失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """AgentResultからテキストコンテンツを抽出"""
@@ -367,7 +371,9 @@ class FacilitatorAgent:
         except Exception as e:
             error_msg = f"ファシリテータ呼び出しに失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def invoke_streaming(self, prompt: str) -> Generator[str, None, None]:
         """
@@ -430,7 +436,9 @@ class FacilitatorAgent:
         except Exception as e:
             error_msg = f"ファシリテータストリーミング呼び出しに失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def dispose(self) -> None:
         """ファシリテータエージェントリソースを解放"""
@@ -450,8 +458,8 @@ class AgentService:
         # Strands SDKの利用可能性をチェック
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
-                "Strands Agent SDKがインストールされていません。"
-                "pip install strands-agents を実行してください。"
+                "strands-agents package is not installed",
+                code=ErrorCode.AGENT_SDK_UNAVAILABLE,
             )
 
         self.logger.info("Agent Serviceを初期化しました")
@@ -530,7 +538,9 @@ class AgentService:
         except Exception as e:
             error_msg = f"Bedrockモデルの作成に失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     @staticmethod
     def _build_boto_config() -> Any:
@@ -698,7 +708,9 @@ class AgentService:
         except Exception as e:
             error_msg = f"ペルソナエージェント {persona.name} の作成に失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     def create_facilitator_agent(
         self,
@@ -735,7 +747,9 @@ class AgentService:
         except Exception as e:
             error_msg = f"ファシリテータエージェントの作成に失敗: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     def get_kb_tools(
         self, persona_id: str, db_service: Any
@@ -856,7 +870,8 @@ class AgentService:
         """渡されたsystem_promptとtoolsでペルソナ生成用Agentを生成する"""
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
-                "Strands Agent SDKがインストールされていません"
+                "strands-agents package is not installed",
+                code=ErrorCode.AGENT_SDK_UNAVAILABLE,
             )
         try:
             model = self._build_generation_model()
@@ -873,7 +888,10 @@ class AgentService:
             self.logger.info("ペルソナ生成エージェントを作成")
             return agent
         except Exception as e:
-            raise AgentInitializationError(f"ペルソナ生成エージェント作成エラー: {e}")
+            raise AgentInitializationError(
+                f"generation agent creation failed ({type(e).__name__})",
+                code=ErrorCode.AGENT_INITIALIZATION_FAILED,
+            ) from e
 
     def run_persona_generation(
         self,
@@ -959,7 +977,8 @@ class AgentService:
 
         if not config.DATA_AGENT_RUNTIME_ARN:
             raise AgentServiceError(
-                "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                "DATA_AGENT_RUNTIME_ARN is not configured",
+                code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
             )
         tool = create_data_agent_tool(
             config.DATA_AGENT_RUNTIME_ARN,
@@ -1099,7 +1118,8 @@ class AgentService:
                 ) from e
             self.logger.error("レポート生成エラーが発生しました。", exc_info=True)
             raise AgentServiceError(
-                f"report generation failed ({type(e).__name__})"
+                f"report generation failed ({type(e).__name__})",
+                code=ErrorCode.AGENT_COMMUNICATION_FAILED,
             ) from e
 
     def run_segment_extraction_agent(

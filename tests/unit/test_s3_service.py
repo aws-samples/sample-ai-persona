@@ -11,7 +11,8 @@ mock_aws = moto.mock_aws
 
 import boto3  # noqa: E402
 
-from src.services.s3_service import S3Service  # noqa: E402
+from src.models.errors import ErrorCode  # noqa: E402
+from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
 
 
 @pytest.fixture
@@ -82,18 +83,18 @@ def test_delete_file(s3_service, s3_bucket_name):
     assert result is True
 
     # 削除後のダウンロードは失敗する
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(S3ServiceError) as exc_info:
         s3_service.download_file(s3_path)
-    assert "ファイルが見つかりません" in str(exc_info.value)
+    assert exc_info.value.code is ErrorCode.S3_OBJECT_NOT_FOUND
 
 
 def test_download_nonexistent_file(s3_service):
     """存在しないファイルのダウンロードテスト"""
     s3_path = f"s3://{s3_service.bucket_name}/uploads/nonexistent.txt"
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(S3ServiceError) as exc_info:
         s3_service.download_file(s3_path)
-    assert "ファイルが見つかりません" in str(exc_info.value)
+    assert exc_info.value.code is ErrorCode.S3_OBJECT_NOT_FOUND
 
 
 def test_extract_key_from_path(s3_service):
@@ -109,9 +110,9 @@ def test_extract_key_from_invalid_path(s3_service):
     """無効なS3パスからのキー抽出テスト"""
     invalid_path = "invalid/path/format"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(S3ServiceError) as exc_info:
         s3_service._extract_key_from_path(invalid_path)
-    assert "Invalid S3 path format" in str(exc_info.value)
+    assert exc_info.value.code is ErrorCode.S3_OPERATION_FAILED
 
 
 def test_upload_large_file(s3_service, s3_bucket_name):

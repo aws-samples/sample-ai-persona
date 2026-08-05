@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 
+from src.models.errors import ErrorCode
 from src.services.agent_service import (
     AgentService,
     AgentInitializationError,
@@ -15,7 +16,6 @@ from src.services.agent_service import (
     PersonaAgent,
     FacilitatorAgent,
 )
-from src.models.errors import ErrorCode
 from src.models.persona import Persona
 from src.models.message import Message
 
@@ -57,7 +57,7 @@ class TestAgentService:
         with pytest.raises(AgentInitializationError) as exc_info:
             AgentService()
 
-        assert "Strands Agent SDK" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.AGENT_SDK_UNAVAILABLE
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")

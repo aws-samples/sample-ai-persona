@@ -18,7 +18,7 @@ except ImportError:
     BotoCoreError = Exception
 
 from ..config import config
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.message import Message
 from ..models.insight_category import InsightCategory
@@ -69,7 +69,10 @@ class AIService:
     def _create_bedrock_client(self) -> Any:
         """Bedrock クライアントを作成"""
         if not boto3:
-            raise BedrockConnectionError("boto3 がインストールされていません")
+            raise BedrockConnectionError(
+                "boto3 package is not installed",
+                code=ErrorCode.AI_BEDROCK_UNAVAILABLE,
+            )
 
         try:
             from botocore.config import Config as BotoConfig
@@ -101,7 +104,10 @@ class AIService:
 
         except Exception as e:
             self.logger.error(f"Bedrock クライアントの作成に失敗: {e}")
-            raise BedrockConnectionError(f"Bedrock クライアントの作成に失敗: {e}")
+            raise BedrockConnectionError(
+                f"bedrock client creation failed ({type(e).__name__})",
+                code=ErrorCode.AI_BEDROCK_CONNECTION_FAILED,
+            ) from e
 
     def _retry_with_backoff(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """
@@ -131,7 +137,10 @@ class AIService:
             f"最大リトライ回数 ({self.max_retries}) に達しました: {last_exception}"
         )
         self.logger.error(error_msg)
-        raise BedrockAPIError(error_msg)
+        raise BedrockAPIError(
+            f"max retries ({self.max_retries}) exhausted",
+            code=ErrorCode.AI_BEDROCK_API_FAILED,
+        ) from last_exception
 
     def _is_retryable_error(self, error: Exception) -> bool:
         """リトライ可能なエラーかどうかを判定"""
@@ -162,7 +171,10 @@ class AIService:
                 and "text" in block
             ):
                 return str(block["text"])
-        raise BedrockAPIError("応答にテキストブロックが含まれていません")
+        raise BedrockAPIError(
+            "no text block in response content",
+            code=ErrorCode.AI_BEDROCK_API_FAILED,
+        )
 
     def invoke_model(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         """Bedrock モデルを呼び出し（Converse API経由）
@@ -213,14 +225,18 @@ class AIService:
                 if "content" in message and len(message["content"]) > 0:
                     return self._extract_first_converse_text_block(message["content"])
 
-            raise BedrockAPIError("Converse APIからの応答が空です")
+            raise BedrockAPIError(
+                "converse api response is empty",
+                code=ErrorCode.AI_BEDROCK_API_FAILED,
+            )
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             error_msg = e.response.get("Error", {}).get("Message", str(e))
             raise BedrockAPIError(
-                f"Converse API呼び出しエラー ({error_code}): {error_msg}"
-            )
+                f"converse api call failed ({error_code}): {error_msg}",
+                code=ErrorCode.AI_BEDROCK_API_FAILED,
+            ) from e
         except BotoCoreError:
             # 接続エラー等はそのまま re-raise して _retry_with_backoff でリトライさせる
             raise
@@ -228,8 +244,9 @@ class AIService:
             if isinstance(e, BedrockAPIError):
                 raise
             raise BedrockAPIError(
-                f"Converse API呼び出し中に予期しないエラーが発生: {e}"
-            )
+                f"converse api call failed unexpectedly ({type(e).__name__})",
+                code=ErrorCode.AI_BEDROCK_API_FAILED,
+            ) from e
 
     def _prepare_document_content(
         self, documents: List[Dict[str, Any]]
@@ -298,14 +315,18 @@ class AIService:
                 else:
                     self.logger.warning(f"サポートされていないMIMEタイプ: {mime_type}")
 
-            except FileNotFoundError:
+            except FileNotFoundError as e:
                 self.logger.error(f"ファイルが見つかりません: {file_path}")
                 raise AIServiceError(
-                    f"ドキュメントファイルが見つかりません: {file_path}"
-                )
+                    "document file not found",
+                    code=ErrorCode.AI_OPERATION_FAILED,
+                ) from e
             except Exception as e:
                 self.logger.error(f"ドキュメント処理エラー: {e}")
-                raise AIServiceError(f"ドキュメント処理中にエラーが発生: {e}")
+                raise AIServiceError(
+                    f"document processing failed ({type(e).__name__})",
+                    code=ErrorCode.AI_OPERATION_FAILED,
+                ) from e
 
         return content_list
 
@@ -497,7 +518,8 @@ class AIService:
         # すべて失敗した場合
         self.logger.error(f"JSON抽出失敗 - レスポンス全体: {response}")
         raise AIServiceError(
-            f"レスポンスから有効なJSONを抽出できませんでした。レスポンス: {response[:200]}..."
+            "could not extract valid JSON from response",
+            code=ErrorCode.AI_OPERATION_FAILED,
         )
 
     def facilitate_discussion(
@@ -538,7 +560,10 @@ class AIService:
             except Exception as e:
                 error_msg = f"ドキュメント付き議論進行中にエラーが発生: {e}"
                 self.logger.error(error_msg)
-                raise AIServiceError(error_msg)
+                raise AIServiceError(
+                    f"discussion with documents failed ({type(e).__name__})",
+                    code=ErrorCode.AI_OPERATION_FAILED,
+                ) from e
 
         # ドキュメントがない場合は従来のメソッドを使用
         prompt = self._create_discussion_prompt(personas, topic)
@@ -556,7 +581,10 @@ class AIService:
         except Exception as e:
             error_msg = f"議論進行中にエラーが発生: {e}"
             self.logger.error(error_msg)
-            raise AIServiceError(error_msg)
+            raise AIServiceError(
+                f"discussion facilitation failed ({type(e).__name__})",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
     def facilitate_discussion_streaming(
         self,
@@ -643,7 +671,10 @@ class AIService:
         except Exception as e:
             error_msg = f"ストリーミング議論中にエラーが発生: {e}"
             self.logger.error(error_msg)
-            raise AIServiceError(error_msg)
+            raise AIServiceError(
+                f"streaming discussion failed ({type(e).__name__})",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
     def extract_insights(
         self,
@@ -696,7 +727,10 @@ class AIService:
         except Exception as e:
             error_msg = f"インサイト抽出中にエラーが発生: {e}"
             self.logger.error(error_msg)
-            raise AIServiceError(error_msg)
+            raise AIServiceError(
+                f"insight extraction failed ({type(e).__name__})",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
     def _create_discussion_prompt(self, personas: List[Persona], topic: str) -> str:
         """議論進行用のプロンプトを作成"""
@@ -757,7 +791,8 @@ class AIService:
                 f"解析されたメッセージ数が少なすぎます: {len(messages)}"
             )
             raise AIServiceError(
-                "議論の解析結果が不十分です。各ペルソナから最低1つずつのメッセージが必要です。"
+                f"parsed message count {len(messages)} below minimum 2",
+                code=ErrorCode.AI_OPERATION_FAILED,
             )
 
         return messages
@@ -786,7 +821,10 @@ class AIService:
             insights_data = json.loads(json_str)
 
             if not isinstance(insights_data, list):
-                raise AIServiceError("インサイトデータはリスト形式である必要があります")
+                raise AIServiceError(
+                    "insights data is not a list",
+                    code=ErrorCode.AI_OPERATION_FAILED,
+                )
 
             # 各インサイトを検証・正規化
             validated_insights = []
@@ -801,7 +839,10 @@ class AIService:
                     continue
 
             if not validated_insights:
-                raise AIServiceError("有効なインサイトが見つかりませんでした")
+                raise AIServiceError(
+                    "no valid insights found",
+                    code=ErrorCode.AI_OPERATION_FAILED,
+                )
 
             return validated_insights
 
@@ -824,19 +865,24 @@ class AIService:
         """
         if not isinstance(insight, dict):
             raise AIServiceError(
-                f"インサイト {index + 1} は辞書形式である必要があります"
+                f"insight at index {index} is not a dict",
+                code=ErrorCode.AI_OPERATION_FAILED,
             )
 
         required_fields = ["category", "description", "confidence_score"]
         for field in required_fields:
             if field not in insight:
                 raise AIServiceError(
-                    f"インサイト {index + 1} に必須フィールド '{field}' がありません"
+                    f"insight at index {index} missing required field {field!r}",
+                    code=ErrorCode.AI_OPERATION_FAILED,
                 )
 
         description = str(insight["description"]).strip()
         if not description:
-            raise AIServiceError(f"インサイト {index + 1} の説明が空です")
+            raise AIServiceError(
+                f"insight at index {index} has empty description",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            )
 
         try:
             confidence_score = float(insight["confidence_score"])
@@ -1092,13 +1138,22 @@ class AIService:
             assistantの返答テキスト
         """
         if not messages:
-            raise AIServiceError("会話履歴が空です")
+            raise AIServiceError(
+                "conversation history is empty",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+            )
         if messages[-1].get("role") != "user":
-            raise AIServiceError("最後のメッセージは user である必要があります")
+            raise AIServiceError(
+                "last message must have role 'user'",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+            )
 
         converse_messages = self._to_converse_messages(messages)
         if not converse_messages:
-            raise AIServiceError("有効なメッセージがありません")
+            raise AIServiceError(
+                "no valid messages after conversion",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+            )
 
         prompt_text = system_prompt or self._SURVEY_CHAT_SYSTEM_PROMPT
         try:
@@ -1113,7 +1168,10 @@ class AIService:
         except AIServiceError:
             raise
         except Exception as e:
-            raise AIServiceError(f"アンケートヒアリング中にエラーが発生: {e}")
+            raise AIServiceError(
+                f"survey chat failed ({type(e).__name__})",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
     def generate_survey_questions_draft(
         self, messages: List[Dict[str, str]], system_prompt: str = ""
@@ -1128,7 +1186,10 @@ class AIService:
             {"summary": str, "questions": [ {question_type, text, options, allow_multiple, max_selections}, ... ]}
         """
         if not messages:
-            raise AIServiceError("会話履歴が空です")
+            raise AIServiceError(
+                "conversation history is empty",
+                code=ErrorCode.SURVEY_AI_CONVERSATION_INVALID,
+            )
 
         # 会話履歴 + 「ドラフト生成指示」を最後に追加
         converse_messages = self._to_converse_messages(messages)
@@ -1157,22 +1218,30 @@ class AIService:
         except AIServiceError:
             raise
         except Exception as e:
-            raise AIServiceError(f"設問ドラフト生成中にエラーが発生: {e}")
+            raise AIServiceError(
+                f"question draft generation failed ({type(e).__name__})",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
         try:
             json_str = self._extract_json_from_response(response, prefer_array=False)
             data = json.loads(json_str)
         except (AIServiceError, json.JSONDecodeError) as e:
             self.logger.error(f"ドラフトJSON解析失敗: {e} / response={response[:500]}")
-            raise AIServiceError(f"設問ドラフトのJSON解析に失敗: {e}")
+            raise AIServiceError(
+                "question draft JSON parsing failed",
+                code=ErrorCode.AI_OPERATION_FAILED,
+            ) from e
 
         if not isinstance(data, dict) or "questions" not in data:
             raise AIServiceError(
-                "設問ドラフトのJSONに 'questions' フィールドがありません"
+                "question draft JSON has no 'questions' field",
+                code=ErrorCode.SURVEY_AI_NO_QUESTIONS,
             )
         if not isinstance(data["questions"], list) or not data["questions"]:
             raise AIServiceError(
-                "設問ドラフトの 'questions' が空またはリストではありません"
+                "question draft 'questions' field is empty or not a list",
+                code=ErrorCode.SURVEY_AI_NO_QUESTIONS,
             )
 
         data["summary"] = str(data.get("summary", "") or "").strip()

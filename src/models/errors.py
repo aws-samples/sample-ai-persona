@@ -371,6 +371,12 @@ class ErrorCode(StrEnum):
         "data_agent_connection_failed",
         ErrorKind.TRANSIENT,
     )
+    # The URL a tool tries to download from failed the scheme/domain allowlist
+    # check. This is an internal safety guard, not a user input to correct.
+    DATA_AGENT_DOWNLOAD_URL_REJECTED = (
+        "data_agent_download_url_rejected",
+        ErrorKind.TRANSIENT,
+    )
 
     # --- Interviews ---
     INTERVIEW_PERSONAS_REQUIRED = (
@@ -425,6 +431,34 @@ class ErrorCode(StrEnum):
         ErrorKind.TRANSIENT,
     )
     INTERVIEW_SAVE_FAILED = ("interview_save_failed", ErrorKind.TRANSIENT)
+
+    # --- Service layer (agent/AI/database/storage infrastructure) ---
+    # These codes are for CodedError compliance in the Service layer. The
+    # Manager layer always converts Service exceptions into its own coded
+    # exception before they reach the presentation layer, so these never
+    # resolve to user-facing wording; they exist so no CodedError subclass in
+    # this codebase is raised without a code.
+    AGENT_SDK_UNAVAILABLE = ("agent_sdk_unavailable", ErrorKind.CONFIG)
+    AGENT_INITIALIZATION_FAILED = (
+        "agent_initialization_failed",
+        ErrorKind.TRANSIENT,
+    )
+    AGENT_COMMUNICATION_FAILED = ("agent_communication_failed", ErrorKind.TRANSIENT)
+    AI_BEDROCK_UNAVAILABLE = ("ai_bedrock_unavailable", ErrorKind.CONFIG)
+    AI_BEDROCK_CONNECTION_FAILED = (
+        "ai_bedrock_connection_failed",
+        ErrorKind.TRANSIENT,
+    )
+    AI_BEDROCK_API_FAILED = ("ai_bedrock_api_failed", ErrorKind.TRANSIENT)
+    AI_OPERATION_FAILED = ("ai_operation_failed", ErrorKind.TRANSIENT)
+    DATABASE_CREDENTIALS_INVALID = (
+        "database_credentials_invalid",
+        ErrorKind.CONFIG,
+    )
+    DATABASE_TABLES_NOT_FOUND = ("database_tables_not_found", ErrorKind.CONFIG)
+    DATABASE_OPERATION_FAILED = ("database_operation_failed", ErrorKind.TRANSIENT)
+    S3_OPERATION_FAILED = ("s3_operation_failed", ErrorKind.TRANSIENT)
+    S3_OBJECT_NOT_FOUND = ("s3_object_not_found", ErrorKind.NOT_FOUND)
 
 
 class CodedError(Exception):

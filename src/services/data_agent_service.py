@@ -16,7 +16,7 @@ from typing import Any
 import boto3
 from botocore.config import Config as BotoConfig
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +92,18 @@ class DataAgentService:
                         csv_urls.append(url)
                 elif evt.get("type") == "error":
                     raise DataAgentServiceError(
-                        f"DataAgent エラー: {evt.get('content', '')}"
+                        f"data agent returned an error event: {evt.get('content', '')}",
+                        code=ErrorCode.DATA_AGENT_CONNECTION_FAILED,
                     )
                 elif evt.get("type") == "done":
                     break
 
             result = "".join(chunks)
             if not result:
-                raise DataAgentServiceError("DataAgent から回答を取得できませんでした")
+                raise DataAgentServiceError(
+                    "data agent returned no result",
+                    code=ErrorCode.SEGMENT_CSV_URL_MISSING,
+                )
 
             logger.info(
                 "DataAgent 問い合わせ完了 (%d chars, %d csv_urls)",
@@ -111,7 +115,10 @@ class DataAgentService:
         except DataAgentServiceError:
             raise
         except Exception as e:
-            raise DataAgentServiceError(f"DataAgent 問い合わせ失敗: {e}") from e
+            raise DataAgentServiceError(
+                f"data agent query failed ({type(e).__name__})",
+                code=ErrorCode.DATA_AGENT_CONNECTION_FAILED,
+            ) from e
 
     @staticmethod
     def download_csv(url: str) -> bytes:
@@ -127,10 +134,14 @@ class DataAgentService:
 
         parsed = urlparse(url)
         if parsed.scheme not in ("https", "http"):
-            raise DataAgentServiceError("不正なURLスキームです")
+            raise DataAgentServiceError(
+                "invalid url scheme",
+                code=ErrorCode.DATA_AGENT_DOWNLOAD_URL_REJECTED,
+            )
         if not parsed.hostname or not parsed.hostname.endswith(".amazonaws.com"):
             raise DataAgentServiceError(
-                "許可されていないドメインからのダウンロードです"
+                "url domain is not allowlisted",
+                code=ErrorCode.DATA_AGENT_DOWNLOAD_URL_REJECTED,
             )
         try:
             with urllib.request.urlopen(url, timeout=120) as resp:
@@ -144,7 +155,10 @@ class DataAgentService:
         except DataAgentServiceError:
             raise
         except Exception as e:
-            raise DataAgentServiceError(f"CSVダウンロードに失敗しました: {e}") from e
+            raise DataAgentServiceError(
+                f"csv download failed ({type(e).__name__})",
+                code=ErrorCode.DATA_AGENT_CONNECTION_FAILED,
+            ) from e
 
 
 def create_data_agent_tool(
