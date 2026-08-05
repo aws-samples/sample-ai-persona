@@ -120,11 +120,15 @@ class DiscussionManager:
         except AIServiceError as e:
             error_msg = f"AI service error during discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error during discussion start: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
 
     def generate_insights(
         self, discussion: Discussion, categories: Optional[List[InsightCategory]] = None
@@ -143,11 +147,14 @@ class DiscussionManager:
             DiscussionManagerError: If insight generation fails
         """
         if not discussion:
-            raise DiscussionManagerError("議論オブジェクトが無効です")
+            raise DiscussionManagerError(
+                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         if not discussion.messages or len(discussion.messages) < 2:
             raise DiscussionManagerError(
-                "インサイト生成には最低2つのメッセージが必要です"
+                f"discussion has {len(discussion.messages)} messages, minimum is 2",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
             )
 
         self.logger.info(
@@ -174,11 +181,15 @@ class DiscussionManager:
         except AIServiceError as e:
             error_msg = f"AI service error during insight generation: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error during insight generation: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
+            ) from e
 
     def save_discussion(self, discussion: Discussion) -> str:
         """
@@ -194,7 +205,9 @@ class DiscussionManager:
             DiscussionManagerError: If save operation fails
         """
         if not discussion:
-            raise DiscussionManagerError("議論オブジェクトが無効です")
+            raise DiscussionManagerError(
+                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         # Validate discussion before saving
         self._validate_discussion_for_save(discussion)
@@ -209,11 +222,15 @@ class DiscussionManager:
         except DatabaseError as e:
             error_msg = f"Database error while saving discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error while saving discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
 
     def get_discussion(self, discussion_id: str) -> Optional[Discussion]:
         """
@@ -229,7 +246,9 @@ class DiscussionManager:
             DiscussionManagerError: If retrieval operation fails
         """
         if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError("議論IDが無効です")
+            raise DiscussionManagerError(
+                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
+            )
 
         try:
             discussion = self.database_service.get_discussion(discussion_id.strip())
@@ -244,11 +263,15 @@ class DiscussionManager:
         except DatabaseError as e:
             error_msg = f"Database error while retrieving discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error while retrieving discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
 
     def get_discussion_history(
         self,
@@ -287,11 +310,15 @@ class DiscussionManager:
         except DatabaseError as e:
             error_msg = f"Database error while retrieving discussion history: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error while retrieving discussion history: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
 
     def delete_discussion(self, discussion_id: str) -> bool:
         """
@@ -307,7 +334,9 @@ class DiscussionManager:
             DiscussionManagerError: If deletion operation fails
         """
         if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError("議論IDが無効です")
+            raise DiscussionManagerError(
+                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
+            )
 
         try:
             success = self.database_service.delete_discussion(discussion_id.strip())
@@ -322,11 +351,15 @@ class DiscussionManager:
         except DatabaseError as e:
             error_msg = f"Database error while deleting discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
         except Exception as e:
             error_msg = f"Unexpected error while deleting discussion: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            ) from e
 
     def regenerate_insights(
         self, discussion_id: str, categories: Optional[List[InsightCategory]] = None
@@ -352,7 +385,9 @@ class DiscussionManager:
             DiscussionManagerError: If regeneration fails or discussion not found
         """
         if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError("議論IDが無効です")
+            raise DiscussionManagerError(
+                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
+            )
 
         self.logger.info(f"Regenerating insights for discussion: {discussion_id}")
 
@@ -400,7 +435,9 @@ class DiscussionManager:
         except Exception as e:
             error_msg = f"Unexpected error during insight regeneration: {e}"
             self.logger.error(error_msg)
-            raise DiscussionManagerError(error_msg)
+            raise DiscussionManagerError(
+                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
+            ) from e
 
     def _validate_discussion_input(self, personas: List[Persona], topic: str) -> None:
         """
@@ -506,13 +543,17 @@ class DiscussionManager:
             # Get file info from database
             file_info = self.database_service.get_uploaded_file_info(doc_id)
             if not file_info:
-                raise DiscussionManagerError(f"ドキュメントが見つかりません: {doc_id}")
+                raise DiscussionManagerError(
+                    f"document not found: {doc_id}",
+                    code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
+                )
 
             # Validate file path exists
             file_path = file_info.get("file_path")
             if not file_path:
                 raise DiscussionManagerError(
-                    f"ドキュメントファイルパスが見つかりません: {doc_id}"
+                    f"document {doc_id!r} has no file_path",
+                    code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
                 )
 
             # S3パスの場合はファイル存在確認をスキップ（S3に保存されている前提）
@@ -520,7 +561,8 @@ class DiscussionManager:
                 # ローカルファイルの場合のみ存在確認
                 if not Path(file_path).exists():
                     raise DiscussionManagerError(
-                        f"ドキュメントファイルが存在しません: {doc_id}"
+                        f"document file does not exist: {doc_id}",
+                        code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
                     )
 
             # Check total size
@@ -577,13 +619,17 @@ class DiscussionManager:
             DiscussionManagerError: If validation fails
         """
         if not discussion:
-            raise DiscussionManagerError("生成された議論が無効です")
+            raise DiscussionManagerError(
+                "generated discussion is falsy",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
-        if not discussion.messages:
-            raise DiscussionManagerError("議論にメッセージが含まれていません")
-
-        if len(discussion.messages) < 2:
-            raise DiscussionManagerError("議論メッセージが少なすぎます")
+        if not discussion.messages or len(discussion.messages) < 2:
+            raise DiscussionManagerError(
+                f"generated discussion has {len(discussion.messages)} messages, "
+                "minimum is 2",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
         # Check that all personas have at least one message
         persona_message_count: dict[str, int] = {}
@@ -602,7 +648,9 @@ class DiscussionManager:
         total_content_length = sum(len(msg.content) for msg in discussion.messages)
         if total_content_length < 100:
             raise DiscussionManagerError(
-                "議論内容が短すぎます。より詳細な議論が必要です"
+                f"generated discussion content length {total_content_length} "
+                "below minimum 100",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
             )
 
     def _validate_discussion_for_save(self, discussion: Discussion) -> None:
@@ -616,31 +664,49 @@ class DiscussionManager:
             DiscussionManagerError: If validation fails
         """
         if not discussion:
-            raise DiscussionManagerError("議論オブジェクトが無効です")
+            raise DiscussionManagerError(
+                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         if not discussion.id:
-            raise DiscussionManagerError("議論IDが設定されていません")
+            raise DiscussionManagerError(
+                "discussion has no id", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         if not discussion.topic or not discussion.topic.strip():
-            raise DiscussionManagerError("議論トピックが設定されていません")
+            raise DiscussionManagerError(
+                "discussion has no topic", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         if not discussion.participants or len(discussion.participants) < 2:
-            raise DiscussionManagerError("議論参加者が不足しています")
+            raise DiscussionManagerError(
+                f"discussion has {len(discussion.participants or [])} "
+                "participants, minimum is 2",
+                code=ErrorCode.DISCUSSION_INVALID,
+            )
 
         if not discussion.created_at:
-            raise DiscussionManagerError("議論作成日時が設定されていません")
+            raise DiscussionManagerError(
+                "discussion has no created_at", code=ErrorCode.DISCUSSION_INVALID
+            )
 
         # Validate messages if present
         if discussion.messages:
             for i, message in enumerate(discussion.messages):
                 if not message.persona_id or not message.content:
-                    raise DiscussionManagerError(f"メッセージ {i + 1} が無効です")
+                    raise DiscussionManagerError(
+                        f"message at index {i} has no persona_id or content",
+                        code=ErrorCode.DISCUSSION_INVALID,
+                    )
 
         # Validate insights if present
         if discussion.insights:
             for i, insight in enumerate(discussion.insights):
                 if not insight.category or not insight.description:
-                    raise DiscussionManagerError(f"インサイト {i + 1} が無効です")
+                    raise DiscussionManagerError(
+                        f"insight at index {i} has no category or description",
+                        code=ErrorCode.DISCUSSION_INVALID,
+                    )
 
     def _parse_insights_from_structured_data(
         self, insight_data_list: List[Dict[str, Any]]
@@ -701,7 +767,10 @@ class DiscussionManager:
             DiscussionManagerError: If validation fails
         """
         if not insights:
-            raise DiscussionManagerError("インサイトが生成されませんでした")
+            raise DiscussionManagerError(
+                "no insights were generated",
+                code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
+            )
 
         if len(insights) < 3:
             self.logger.warning(
@@ -711,20 +780,29 @@ class DiscussionManager:
 
         for i, insight in enumerate(insights):
             if not insight:
-                raise DiscussionManagerError(f"インサイト {i + 1} が無効です")
+                raise DiscussionManagerError(
+                    f"insight at index {i} is falsy",
+                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
+                )
 
             if not insight.category or not insight.category.strip():
                 raise DiscussionManagerError(
-                    f"インサイト {i + 1} のカテゴリが設定されていません"
+                    f"insight at index {i} has no category",
+                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
                 )
 
             if not insight.description or not insight.description.strip():
                 raise DiscussionManagerError(
-                    f"インサイト {i + 1} の説明が設定されていません"
+                    f"insight at index {i} has no description",
+                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
                 )
 
             if len(insight.description.strip()) < 10:
-                raise DiscussionManagerError(f"インサイト {i + 1} の説明が短すぎます")
+                raise DiscussionManagerError(
+                    f"insight at index {i} description length "
+                    f"{len(insight.description.strip())} below minimum 10",
+                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
+                )
 
     def _save_categories_to_config(
         self, discussion: Discussion, categories: List[InsightCategory]

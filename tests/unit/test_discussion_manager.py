@@ -274,7 +274,7 @@ class TestDiscussionManager:
         # Test with None discussion
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.generate_insights(None)
-        assert "議論オブジェクトが無効です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
         # Test with discussion without messages
         empty_discussion = Discussion.create_new(
@@ -282,7 +282,7 @@ class TestDiscussionManager:
         )
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.generate_insights(empty_discussion)
-        assert "インサイト生成には最低2つのメッセージが必要です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_RESULT_INVALID
 
     def test_generate_insights_ai_service_error(self):
         """Test insight generation with AI service error."""
@@ -459,7 +459,7 @@ class TestDiscussionManager:
         """Test discussion save with invalid discussion."""
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.save_discussion(None)
-        assert "議論オブジェクトが無効です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_save_discussion_database_error(self):
         """Test discussion save with database error."""
@@ -499,7 +499,7 @@ class TestDiscussionManager:
         """Test discussion retrieval with invalid ID."""
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager.get_discussion("")
-        assert "議論IDが無効です" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID
 
     def test_get_discussion_database_error(self):
         """Test discussion retrieval with database error."""
@@ -638,7 +638,7 @@ class TestDiscussionManagerWithDocuments:
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager._load_documents(["invalid_id"])
 
-        assert "ドキュメントが見つかりません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
 
     def test_load_documents_file_not_exists(self):
         """Test loading document with missing file."""
@@ -652,7 +652,7 @@ class TestDiscussionManagerWithDocuments:
         with pytest.raises(DiscussionManagerError) as exc_info:
             self.discussion_manager._load_documents(["doc1"])
 
-        assert "ドキュメントファイルが存在しません" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
 
     def test_load_documents_size_limit(self):
         """Test document total size limit."""
@@ -693,8 +693,9 @@ class TestDiscussionManagerValidation:
             created_at=discussion.created_at,
             mode=discussion.mode,
         )
-        with pytest.raises(DiscussionManagerError, match="議論IDが設定されていません"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.save_discussion(discussion)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_validate_discussion_for_save_no_topic(self):
         discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
@@ -707,10 +708,9 @@ class TestDiscussionManagerValidation:
             created_at=discussion.created_at,
             mode=discussion.mode,
         )
-        with pytest.raises(
-            DiscussionManagerError, match="議論トピックが設定されていません"
-        ):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.save_discussion(discussion)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_validate_discussion_for_save_insufficient_participants(self):
         discussion = Discussion(
@@ -722,8 +722,9 @@ class TestDiscussionManagerValidation:
             created_at=datetime.now(),
             mode="classic",
         )
-        with pytest.raises(DiscussionManagerError, match="議論参加者が不足しています"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.save_discussion(discussion)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_validate_discussion_for_save_invalid_message(self):
         bad_msg = Message(
@@ -741,8 +742,9 @@ class TestDiscussionManagerValidation:
             created_at=datetime.now(),
             mode="classic",
         )
-        with pytest.raises(DiscussionManagerError, match="メッセージ.*無効"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.save_discussion(discussion)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_validate_discussion_for_save_invalid_insight(self):
         bad_insight = Insight(
@@ -760,12 +762,14 @@ class TestDiscussionManagerValidation:
             created_at=datetime.now(),
             mode="classic",
         )
-        with pytest.raises(DiscussionManagerError, match="インサイト.*無効"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.save_discussion(discussion)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
 
     def test_validate_generated_insights_empty(self):
-        with pytest.raises(DiscussionManagerError, match="生成されませんでした"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager._validate_generated_insights([])
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
 
     def test_validate_generated_insights_short_description(self):
         insights = [
@@ -776,8 +780,9 @@ class TestDiscussionManagerValidation:
                 confidence_score=0.8,
             )
         ]
-        with pytest.raises(DiscussionManagerError, match="説明が短すぎます"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager._validate_generated_insights(insights)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
 
     def test_validate_generated_insights_no_category(self):
         insights = [
@@ -788,10 +793,9 @@ class TestDiscussionManagerValidation:
                 confidence_score=0.8,
             )
         ]
-        with pytest.raises(
-            DiscussionManagerError, match="カテゴリが設定されていません"
-        ):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager._validate_generated_insights(insights)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
 
     def test_parse_insights_from_structured_data_skips_invalid(self):
         data = [
@@ -804,8 +808,9 @@ class TestDiscussionManagerValidation:
         assert result[0].category == "A"
 
     def test_delete_discussion_invalid_id(self):
-        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.delete_discussion("")
+        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID
 
     def test_get_discussion_history_database_error(self):
         self.mock_db.get_discussions.side_effect = DatabaseError("db error")
@@ -818,5 +823,6 @@ class TestDiscussionManagerValidation:
             self.manager.delete_discussion("d1")
 
     def test_regenerate_insights_invalid_id(self):
-        with pytest.raises(DiscussionManagerError, match="議論IDが無効"):
+        with pytest.raises(DiscussionManagerError) as exc_info:
             self.manager.regenerate_insights("")
+        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID

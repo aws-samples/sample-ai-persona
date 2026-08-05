@@ -329,6 +329,27 @@ class ErrorCode(StrEnum):
         "discussion_operation_failed",
         ErrorKind.TRANSIENT,
     )
+    # The caller passed a blank/missing discussion object or id -- this is a
+    # programming error at the call site, not a user-correctable form input,
+    # but VALIDATION is still the closest kind (no retry will fix it).
+    DISCUSSION_INVALID = ("discussion_invalid", ErrorKind.VALIDATION)
+    DISCUSSION_ID_INVALID = ("discussion_id_invalid", ErrorKind.VALIDATION)
+    DISCUSSION_DOCUMENT_NOT_FOUND = (
+        "discussion_document_not_found",
+        ErrorKind.NOT_FOUND,
+    )
+    # The generated discussion/insights failed a quality check (too few
+    # messages, insight missing fields, etc). Retrying the same generation
+    # call may produce a passing result.
+    DISCUSSION_RESULT_INVALID = ("discussion_result_invalid", ErrorKind.TRANSIENT)
+    DISCUSSION_INSIGHT_GENERATION_FAILED = (
+        "discussion_insight_generation_failed",
+        ErrorKind.TRANSIENT,
+    )
+    DISCUSSION_MEMORY_MODE_INVALID = (
+        "discussion_memory_mode_invalid",
+        ErrorKind.VALIDATION,
+    )
 
     # --- Discussion reports ---
     REPORT_NOT_FOUND = ("report_not_found", ErrorKind.NOT_FOUND)

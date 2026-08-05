@@ -206,6 +206,18 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DISCUSSION_OPERATION_FAILED: (
         "議論の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
+    ErrorCode.DISCUSSION_INVALID: "議論の内容が正しくありません",
+    ErrorCode.DISCUSSION_ID_INVALID: "議論IDが無効です",
+    ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND: "ドキュメントが見つかりません",
+    ErrorCode.DISCUSSION_RESULT_INVALID: (
+        "議論結果の生成に失敗しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED: (
+        "インサイトの生成に失敗しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.DISCUSSION_MEMORY_MODE_INVALID: (
+        "無効な記憶モードです。議論の設定を確認してください"
+    ),
     # --- 議論レポート ---
     ErrorCode.REPORT_NOT_FOUND: "レポートが見つかりません",
     ErrorCode.REPORT_LIMIT_REACHED: (

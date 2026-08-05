@@ -626,13 +626,17 @@ class AgentDiscussionManager:
             DiscussionFlowError: If validation fails
         """
         if not discussion:
-            raise DiscussionFlowError("生成された議論が無効です")
+            raise DiscussionFlowError(
+                "generated discussion is falsy",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
-        if not discussion.messages:
-            raise DiscussionFlowError("議論にメッセージが含まれていません")
-
-        if len(discussion.messages) < 2:
-            raise DiscussionFlowError("議論メッセージが少なすぎます")
+        if not discussion.messages or len(discussion.messages) < 2:
+            raise DiscussionFlowError(
+                f"generated discussion has {len(discussion.messages)} messages, "
+                "minimum is 2",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
         # Check that personas have messages
         persona_message_count: dict[str, int] = {}
@@ -970,14 +974,18 @@ class AgentDiscussionManager:
 
         if discussion.mode != "agent":
             raise AgentDiscussionManagerError(
-                f"Invalid discussion mode: {discussion.mode}. Expected 'agent'"
+                f"invalid discussion mode: {discussion.mode!r}, expected 'agent'",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             )
 
         # Validate messages if present
         if discussion.messages:
             for i, message in enumerate(discussion.messages):
                 if not message.persona_id or not message.content:
-                    raise AgentDiscussionManagerError(f"メッセージ {i + 1} が無効です")
+                    raise AgentDiscussionManagerError(
+                        f"message at index {i} has no persona_id or content",
+                        code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+                    )
 
     def cleanup_agents(
         self, persona_agents: List[PersonaAgent], facilitator: FacilitatorAgent
@@ -1351,7 +1359,8 @@ class AgentDiscussionManager:
         valid_modes = ["full", "retrieve_only", "disabled"]
         if memory_mode not in valid_modes:
             raise AgentDiscussionManagerError(
-                f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_modes)}"
+                f"invalid memory_mode {memory_mode!r}, expected one of {valid_modes}",
+                code=ErrorCode.DISCUSSION_MEMORY_MODE_INVALID,
             )
 
     def _attach_insights(
