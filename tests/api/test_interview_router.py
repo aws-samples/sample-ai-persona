@@ -7,6 +7,7 @@
 from unittest.mock import Mock, patch
 from datetime import datetime
 
+from src.models.errors import ErrorCode
 from src.models.message import Message
 from src.managers.interview_manager import (
     InterviewSession,
@@ -177,7 +178,9 @@ class TestSendMessageEndpoint:
         """空白のみのメッセージでエラーを返すことを確認"""
         mock_manager = Mock()
         mock_manager.send_user_message_with_files.side_effect = (
-            InterviewValidationError("メッセージが空です")
+            InterviewValidationError(
+                "message is blank", code=ErrorCode.INTERVIEW_MESSAGE_REQUIRED
+            )
         )
         mock_get_manager.return_value = mock_manager
 
@@ -213,7 +216,9 @@ class TestSendMessageEndpoint:
         """存在しないセッションでエラーを返すことを確認"""
         mock_manager = Mock()
         mock_manager.send_user_message_with_files.side_effect = (
-            InterviewSessionNotFoundError("セッションが見つかりません")
+            InterviewSessionNotFoundError(
+                "session not found", code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+            )
         )
         mock_get_manager.return_value = mock_manager
 

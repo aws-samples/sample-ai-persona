@@ -22,6 +22,7 @@ from src.managers.persona_memory_manager import (
 from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationManager,
     PersonaGenerationCapacityError,
+    PersonaGenerationManagerError,
 )
 from src.models.persona import Persona
 from web.error_messages import (
@@ -359,6 +360,16 @@ async def generate_persona(
             except PersonaGenerationCapacityError as e:
                 logger.warning("DWH ペルソナ生成の負荷超過", exc_info=True)
                 yield _sse_event("error", user_message_for(e))
+            except PersonaGenerationManagerError as e:
+                logger.warning("DWH ペルソナ生成エラー", exc_info=True)
+                yield _sse_event(
+                    "error",
+                    user_message_for(
+                        e,
+                        default="ペルソナ生成中にエラーが発生しました。"
+                        "しばらくしてから再試行してください。",
+                    ),
+                )
             except Exception:
                 logger.exception("DWH ペルソナ生成エラー")
                 yield _sse_event(
@@ -434,6 +445,16 @@ async def generate_persona(
         except PersonaGenerationCapacityError as e:
             logger.warning("ペルソナ生成の負荷超過", exc_info=True)
             yield _sse_event("error", user_message_for(e))
+        except PersonaGenerationManagerError as e:
+            logger.warning("ペルソナ生成エラー", exc_info=True)
+            yield _sse_event(
+                "error",
+                user_message_for(
+                    e,
+                    default="ペルソナ生成中にエラーが発生しました。"
+                    "時間をおいて再度お試しください。",
+                ),
+            )
         except Exception:
             # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
             logger.error("ペルソナ生成エラーが発生しました。", exc_info=True)
@@ -1415,17 +1436,31 @@ async def preview_dataset_binding(
 ) -> Any:
     """紐付けデータセットのプレビュー表示"""
     try:
-        from src.managers.dataset_manager import DatasetManager
+        from src.managers.dataset_manager import DatasetManager, DatasetManagerError
 
         manager = DatasetManager()
-        data = manager.preview_binding_data(persona_id, binding_id)
+        try:
+            data = manager.preview_binding_data(persona_id, binding_id)
+        except DatasetManagerError as e:
+            logger.warning("Dataset preview error", exc_info=True)
+            return templates.TemplateResponse(
+                request,
+                "persona/partials/dataset_preview.html",
+                {
+                    "request": request,
+                    "columns": [],
+                    "rows": [],
+                    "total_count": 0,
+                    "error": user_message_for(e, default="データの取得に失敗しました"),
+                },
+            )
         return templates.TemplateResponse(
             request,
             "persona/partials/dataset_preview.html",
             {"request": request, **data},
         )
-    except Exception as e:
-        logger.error(f"Dataset preview error: {e}")
+    except Exception:
+        logger.error("Dataset preview error", exc_info=True)
         return templates.TemplateResponse(
             request,
             "persona/partials/dataset_preview.html",

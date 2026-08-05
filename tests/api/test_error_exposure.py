@@ -52,6 +52,10 @@ _ALLOWED_CALLS = frozenset(
         "field_of",
         "isinstance",
         "type",
+        # web/routers/interview.py 限定のローカルヘルパー。isinstance と
+        # error_kind_of/is_correctable（いずれも上記で許可済み）のみで
+        # error_type 文字列を導出し、例外メッセージには触らない。
+        "_error_type_for",
     }
 )
 

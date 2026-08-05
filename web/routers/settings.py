@@ -12,9 +12,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.dataset_manager import DatasetManager
-from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
+from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.dataset import DatasetColumn
-from web.error_messages import mark_renderable, toast_response
+from web.error_messages import mark_renderable, toast_response, user_message_for
 
 logger = logging.getLogger(__name__)
 
@@ -457,9 +457,11 @@ async def test_data_agent_connection(request: Request) -> Any:
             "}"
             "</script>"
         )
-    except SettingsManagerError:
+    except SettingsManagerError as e:
+        logger.warning("データ分析エージェント接続テスト失敗", exc_info=True)
+        message = user_message_for(e, default="接続テストに失敗しました")
         return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: データ分析エージェントに接続できませんでした</div>'
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: {html.escape(message)}</div>'
         )
     except Exception:
         logger.exception("データ分析エージェント接続テストエラー")
