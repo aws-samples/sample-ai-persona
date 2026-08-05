@@ -318,9 +318,7 @@ class FileManager:
                 f"file size {len(file_content)} exceeds limit "
                 f"{self.MARKET_REPORT_MAX_SIZE}",
                 code=ErrorCode.FILE_TOO_LARGE,
-                context={
-                    "max_size_mb": self.MARKET_REPORT_MAX_SIZE / (1024 * 1024)
-                },
+                context={"max_size_mb": self.MARKET_REPORT_MAX_SIZE / (1024 * 1024)},
             )
 
         # ファイル内容が空でないかチェック
@@ -516,18 +514,14 @@ class FileManager:
                 raise FileUploadError(
                     f"extension {file_ext!r} not in survey image formats",
                     code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
-                    context={
-                        "allowed_formats": ", ".join(self.SURVEY_IMAGE_FORMATS)
-                    },
+                    context={"allowed_formats": ", ".join(self.SURVEY_IMAGE_FORMATS)},
                 )
             if len(file_content) > self.SURVEY_IMAGE_MAX_SIZE:
                 raise FileUploadError(
                     f"file size {len(file_content)} exceeds limit "
                     f"{self.SURVEY_IMAGE_MAX_SIZE}",
                     code=ErrorCode.FILE_TOO_LARGE,
-                    context={
-                        "max_size_mb": self.SURVEY_IMAGE_MAX_SIZE / (1024 * 1024)
-                    },
+                    context={"max_size_mb": self.SURVEY_IMAGE_MAX_SIZE / (1024 * 1024)},
                 )
             if len(file_content) == 0:
                 raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
@@ -749,8 +743,9 @@ class FileManager:
             return self.db_service.delete_uploaded_file_info(file_id)
         except Exception as e:
             raise DatabaseError(
-                f"ファイルメタデータ削除中にエラーが発生しました: {str(e)}"
-            )
+                f"file metadata delete failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def list_uploaded_files(self) -> List[FileMetadata]:
         """
@@ -1015,8 +1010,9 @@ class FileManager:
             )
         except Exception as e:
             raise DatabaseError(
-                f"ファイルメタデータ保存中にエラーが発生しました: {str(e)}"
-            )
+                f"file metadata save failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def _get_file_metadata_by_id(self, file_id: str) -> Optional[FileMetadata]:
         """
@@ -1052,8 +1048,9 @@ class FileManager:
             )
         except Exception as e:
             raise DatabaseError(
-                f"ファイルメタデータ取得中にエラーが発生しました: {str(e)}"
-            )
+                f"file metadata fetch failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
 
     def _get_all_file_metadata(self) -> List[FileMetadata]:
         """
@@ -1084,5 +1081,6 @@ class FileManager:
             return metadata_list
         except Exception as e:
             raise DatabaseError(
-                f"ファイルメタデータ一覧取得中にエラーが発生しました: {str(e)}"
-            )
+                f"file metadata list fetch failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
