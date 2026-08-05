@@ -15,12 +15,20 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.persona_manager import PersonaManager
-from src.managers.discussion_manager import DiscussionManager
-from src.managers.agent_discussion_manager import AgentDiscussionManager
+from src.managers.discussion_manager import DiscussionManager, DiscussionManagerError
+from src.managers.agent_discussion_manager import (
+    AgentDiscussionManager,
+    AgentDiscussionManagerError,
+)
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.models.insight_category import InsightCategory
-from web.error_messages import mark_renderable, toast_response, user_message_for
+from web.error_messages import (
+    is_correctable,
+    mark_renderable,
+    toast_response,
+    user_message_for,
+)
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -545,10 +553,33 @@ async def start_discussion(
             "discussion/partials/discussion_result.html",
             {"request": request, "discussion": discussion},
         )
-    except Exception as e:
-        # 再試行で解決しうるエラーは設定フォームを消さずトーストで通知する
-        # （議論設定はペルソナ選択やトピック入力を含み、失うと再入力が重い）
+    except (DiscussionManagerError, AgentDiscussionManagerError) as e:
         logger.error("議論開始エラー", exc_info=True)
+        if is_correctable(e):
+            # 入力を直せば解決するエラー（トピック文字数・ペルソナ数等）は
+            # #discussion-result（フォーム自身の外側の専用領域）に表示する。
+            # フォームの入力値は破棄されない。
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_inline.html",
+                    {
+                        "request": request,
+                        "error": user_message_for(
+                            e, default="議論の開始中にエラーが発生しました"
+                        ),
+                    },
+                    status_code=400,
+                )
+            )
+        # 再試行で解決しうるエラーは設定フォームを消さずトーストで通知する
+        return toast_response(
+            e, default="議論の開始中にエラーが発生しました", status_code=500
+        )
+    except Exception as e:
+        # コードを持たない未知の例外は TRANSIENT 相当。本体を置換すると入力が
+        # 失われ、かつ非2xx本文は htmx がスワップしないため、トーストで通知する。
+        logger.error("議論開始エラー（未分類）", exc_info=True)
         return toast_response(
             e, default="議論の開始中にエラーが発生しました", status_code=500
         )
@@ -640,9 +671,32 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
                 "default_categories": default_categories,
             },
         )
-    except Exception as e:
-        # 再試行で解決しうるエラーはインサイト表示を消さずトーストで通知する
+    except DiscussionManagerError as e:
         logger.error("インサイト再生成エラー", exc_info=True)
+        if is_correctable(e):
+            # 入力を直せば解決するエラーは #insights-container（再生成フォームの
+            # 外側の専用領域）に表示する。カテゴリー入力はモーダル内の別要素で残る。
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_inline.html",
+                    {
+                        "request": request,
+                        "error": user_message_for(
+                            e, default="インサイトの再生成中にエラーが発生しました"
+                        ),
+                    },
+                    status_code=400,
+                )
+            )
+        # 再試行で解決しうるエラーはインサイト表示を消さずトーストで通知する
+        return toast_response(
+            e,
+            default="インサイトの再生成中にエラーが発生しました",
+            status_code=500,
+        )
+    except Exception as e:
+        logger.error("インサイト再生成エラー（未分類）", exc_info=True)
         return toast_response(
             e,
             default="インサイトの再生成中にエラーが発生しました",
@@ -678,9 +732,28 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                     status_code=400,
                 )
             )
-    except Exception as e:
-        # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
+    except DiscussionManagerError as e:
         logger.error("議論削除エラー", exc_info=True)
+        if is_correctable(e):
+            # 削除操作自体に入力欄はないため、既存の「削除失敗」分岐と同じ
+            # error_inline を返す（success 分岐と同じ2つの hx-target を想定）。
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_inline.html",
+                    {
+                        "request": request,
+                        "error": user_message_for(
+                            e, default="議論の削除に失敗しました"
+                        ),
+                    },
+                    status_code=400,
+                )
+            )
+        # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
+        return toast_response(e, default="議論の削除に失敗しました", status_code=500)
+    except Exception as e:
+        logger.error("議論削除エラー（未分類）", exc_info=True)
         return toast_response(e, default="議論の削除に失敗しました", status_code=500)
 
 
