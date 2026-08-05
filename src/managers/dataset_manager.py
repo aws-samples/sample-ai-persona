@@ -11,9 +11,16 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from ..models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from ..models.errors import CodedError, ErrorCode
 from ..services.service_factory import service_factory
 
 logger = logging.getLogger(__name__)
+
+
+class DatasetManagerError(CodedError):
+    """Base exception for dataset manager related errors."""
+
+    pass
 
 
 class DatasetManager:
@@ -263,20 +270,32 @@ class DatasetManager:
         bindings = self.db_service.get_bindings_by_persona(persona_id)
         binding = next((b for b in bindings if b.id == binding_id), None)
         if not binding:
-            raise ValueError(f"Binding not found: {binding_id}")
+            raise DatasetManagerError(
+                f"binding not found: {binding_id}",
+                code=ErrorCode.DATASET_BINDING_NOT_FOUND,
+            )
 
         dataset = self.db_service.get_dataset(binding.dataset_id)
         if not dataset:
-            raise ValueError(f"Dataset not found: {binding.dataset_id}")
+            raise DatasetManagerError(
+                f"dataset not found: {binding.dataset_id}",
+                code=ErrorCode.DATASET_NOT_FOUND,
+            )
 
         valid_columns = {col.name for col in dataset.columns}
         where_clauses = []
         params: List[Any] = []
         for key, value in binding.binding_keys.items():
             if key not in valid_columns:
-                raise ValueError(f"Invalid column name: {key}")
+                raise DatasetManagerError(
+                    f"binding key {key!r} not in dataset columns",
+                    code=ErrorCode.DATASET_OPERATION_FAILED,
+                )
             if not re.fullmatch(r"[\w]+", key, re.UNICODE):
-                raise ValueError(f"Unsafe column name: {key}")
+                raise DatasetManagerError(
+                    f"binding key {key!r} contains unsafe characters",
+                    code=ErrorCode.DATASET_OPERATION_FAILED,
+                )
             where_clauses.append(f'"{key}" = ${len(params) + 1}')
             params.append(value)
 

@@ -4,7 +4,9 @@ import pytest
 from unittest.mock import Mock, patch
 
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
+from src.models.errors import ErrorCode
 from src.models.knowledge_base import KnowledgeBase
+from tests.error_helpers import raises_code
 
 
 @pytest.mark.unit
@@ -148,9 +150,7 @@ class TestSettingsManagerDataAgent:
         """Runtime ARN未設定時にエラーを返すこと"""
         mock_config.DATA_AGENT_RUNTIME_ARN = None
 
-        with pytest.raises(
-            SettingsManagerError, match="Runtime ARN が設定されていません"
-        ):
+        with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_NOT_CONFIGURED):
             self.manager.test_data_agent_connection()
 
     @patch("src.managers.settings_manager.service_factory")
@@ -162,10 +162,7 @@ class TestSettingsManagerDataAgent:
         )
         mock_sf.get_data_agent_service.return_value = None
 
-        with pytest.raises(
-            SettingsManagerError,
-            match="データ分析エージェントサービスを初期化できません",
-        ):
+        with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_CONNECTION_FAILED):
             self.manager.test_data_agent_connection()
 
     @patch("src.managers.settings_manager.service_factory")
@@ -199,8 +196,8 @@ class TestSettingsManagerDataAgent:
         mock_data_agent.query.side_effect = RuntimeError("接続タイムアウト")
         mock_sf.get_data_agent_service.return_value = mock_data_agent
 
-        with pytest.raises(
-            SettingsManagerError, match="データ分析エージェント接続テストに失敗しました"
+        with raises_code(
+            SettingsManagerError, ErrorCode.DATA_AGENT_CONNECTION_FAILED
         ) as exc_info:
             self.manager.test_data_agent_connection()
 

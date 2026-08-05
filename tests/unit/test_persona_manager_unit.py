@@ -45,7 +45,9 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
+        ):
             gen_manager.generate_and_cache([], "interview", 0)
 
     def test_invalid_count_over_10(self, gen_manager):
@@ -53,7 +55,9 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
+        ):
             gen_manager.generate_and_cache([], "interview", 11)
 
     def test_no_files_raises(self, gen_manager):
@@ -61,8 +65,8 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(
-            PersonaGenerationManagerError, match="ファイルが選択されていません"
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_FILES_REQUIRED
         ):
             gen_manager.generate_and_cache([], "interview", 3)
 
@@ -71,7 +75,10 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="分析の切り口"):
+        with raises_code(
+            PersonaGenerationManagerError,
+            ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED,
+        ):
             gen_manager.generate_and_cache([], "dwh", 3, data_description="")
 
     def test_capacity_error_converted(self):

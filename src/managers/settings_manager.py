@@ -7,7 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import config
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KnowledgeBase
 from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
@@ -102,13 +102,17 @@ class SettingsManager:
     def test_data_agent_connection(self) -> str:
         """データ分析エージェントへの接続テストを実行する。"""
         if not config.DATA_AGENT_RUNTIME_ARN:
-            raise SettingsManagerError("Runtime ARN が設定されていません")
+            raise SettingsManagerError(
+                "runtime ARN is not configured",
+                code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
+            )
 
         try:
             data_agent_service = service_factory.get_data_agent_service()
             if not data_agent_service:
                 raise SettingsManagerError(
-                    "データ分析エージェントサービスを初期化できません"
+                    "data agent service could not be initialized",
+                    code=ErrorCode.DATA_AGENT_CONNECTION_FAILED,
                 )
             result = data_agent_service.query("利用可能なテーブル一覧を教えてください")
             return result.text
@@ -117,5 +121,6 @@ class SettingsManager:
         except Exception as e:
             logger.error(f"データ分析エージェント接続テストエラー: {e}")
             raise SettingsManagerError(
-                "データ分析エージェント接続テストに失敗しました"
+                f"data agent connection test failed ({type(e).__name__})",
+                code=ErrorCode.DATA_AGENT_CONNECTION_FAILED,
             ) from e

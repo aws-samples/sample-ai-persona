@@ -58,6 +58,14 @@ _CATALOG: dict[ErrorCode, str] = {
         "分析対象のデータ量が大きすぎてレポートを生成しきれませんでした。"
         "対象を絞るか、議論ログを短くして再度お試しください。"
     ),
+    ErrorCode.GENERATION_PERSONA_COUNT_INVALID: (
+        "生成するペルソナ数は1〜10の範囲で指定してください"
+    ),
+    ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED: "分析の切り口を入力してください",
+    ErrorCode.GENERATION_FILES_REQUIRED: "ファイルが選択されていません",
+    ErrorCode.GENERATION_OPERATION_FAILED: (
+        "ペルソナ生成の処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
     ErrorCode.FILE_TOO_LARGE: (
         "ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
     ),
@@ -220,6 +228,10 @@ _CATALOG: dict[ErrorCode, str] = {
         "データ分析エージェントの接続設定がされていません。"
         "設定画面から Runtime ARN を設定してください"
     ),
+    ErrorCode.DATA_AGENT_CONNECTION_FAILED: (
+        "データ分析エージェントへの接続テストに失敗しました。"
+        "時間をおいて再度お試しください。"
+    ),
     # --- インタビュー ---
     ErrorCode.INTERVIEW_PERSONAS_REQUIRED: (
         "インタビューには最低1つのペルソナが必要です"
@@ -287,6 +299,11 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.DATASET_COLUMN_NOT_FOUND: (
         "カラム「{column}」はデータセットに存在しません"
+    ),
+    ErrorCode.DATASET_NOT_FOUND: "データセットが見つかりません",
+    ErrorCode.DATASET_BINDING_NOT_FOUND: "紐付け情報が見つかりません",
+    ErrorCode.DATASET_OPERATION_FAILED: (
+        "データセットの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
     # --- 長期記憶 ---
     ErrorCode.MEMORY_TOPIC_NAME_REQUIRED: "トピック名を入力してください",

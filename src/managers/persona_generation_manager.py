@@ -215,14 +215,21 @@ class PersonaGenerationManager:
     ) -> None:
         if persona_count < 1 or persona_count > 10:
             raise PersonaGenerationManagerError(
-                "ペルソナ数は1-10の範囲で指定してください"
+                f"persona_count {persona_count} out of range 1-10",
+                code=ErrorCode.GENERATION_PERSONA_COUNT_INVALID,
             )
         if data_type == "dwh":
             if not data_description or not data_description.strip():
-                raise PersonaGenerationManagerError("分析の切り口を入力してください")
+                raise PersonaGenerationManagerError(
+                    "data_description is blank for dwh generation",
+                    code=ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED,
+                )
         else:
             if not file_contents:
-                raise PersonaGenerationManagerError("ファイルが選択されていません")
+                raise PersonaGenerationManagerError(
+                    "file_contents is empty for file-based generation",
+                    code=ErrorCode.GENERATION_FILES_REQUIRED,
+                )
 
     def _generate_from_files(
         self,
@@ -268,11 +275,13 @@ class PersonaGenerationManager:
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(
                 f"agent service failed during file-based generation "
-                f"({type(e).__name__})"
+                f"({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
             ) from e
         except Exception as e:
             raise PersonaGenerationManagerError(
-                f"file-based persona generation failed ({type(e).__name__})"
+                f"file-based persona generation failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
             ) from e
         finally:
             cleanup_temp_files(csv_temp_paths)
@@ -334,11 +343,13 @@ class PersonaGenerationManager:
             ) from e
         except AgentServiceError as e:
             raise PersonaGenerationManagerError(
-                f"data agent integration failed ({type(e).__name__})"
+                f"data agent integration failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
             ) from e
         except Exception as e:
             raise PersonaGenerationManagerError(
-                f"dwh persona generation failed ({type(e).__name__})"
+                f"dwh persona generation failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
             ) from e
 
         logger.info(f"DWH ペルソナ生成完了: {len(personas)}個")
@@ -419,7 +430,8 @@ class PersonaGenerationManager:
 
             if not config.DATA_AGENT_RUNTIME_ARN:
                 raise PersonaGenerationManagerError(
-                    "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                    "DATA_AGENT_RUNTIME_ARN is not configured",
+                    code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
                 )
             data_agent_tool = create_data_agent_tool(
                 config.DATA_AGENT_RUNTIME_ARN,
@@ -481,10 +493,14 @@ class PersonaGenerationManager:
     def _validate_generated_persona(self, persona: Persona) -> None:
         """生成されたペルソナの基本バリデーション"""
         if not persona.name or not persona.name.strip():
-            raise PersonaGenerationManagerError("ペルソナ名が設定されていません")
+            raise PersonaGenerationManagerError(
+                "generated persona has no name",
+                code=ErrorCode.PERSONA_INVALID,
+            )
         if not persona.id:
             raise PersonaGenerationManagerError(
-                "生成されたペルソナにIDが設定されていません"
+                "generated persona has no id",
+                code=ErrorCode.PERSONA_INVALID,
             )
 
     # ------------------------------------------------------------------

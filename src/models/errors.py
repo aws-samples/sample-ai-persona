@@ -99,6 +99,23 @@ class ErrorCode(StrEnum):
     )
     REPORT_CAPACITY_EXCEEDED = ("report_capacity_exceeded", ErrorKind.CAPACITY)
 
+    # --- Persona generation ---
+    GENERATION_PERSONA_COUNT_INVALID = (
+        "generation_persona_count_invalid",
+        ErrorKind.VALIDATION,
+    )
+    GENERATION_DATA_DESCRIPTION_REQUIRED = (
+        "generation_data_description_required",
+        ErrorKind.VALIDATION,
+    )
+    GENERATION_FILES_REQUIRED = ("generation_files_required", ErrorKind.VALIDATION)
+    # Catch-all for generation failures that are not capacity-related (agent
+    # setup, unexpected SDK errors).
+    GENERATION_OPERATION_FAILED = (
+        "generation_operation_failed",
+        ErrorKind.TRANSIENT,
+    )
+
     # --- Files ---
     FILE_TOO_LARGE = ("file_too_large", ErrorKind.CAPACITY)
     FILE_FORMAT_NOT_ALLOWED = ("file_format_not_allowed", ErrorKind.VALIDATION)
@@ -255,6 +272,13 @@ class ErrorCode(StrEnum):
     PERSONA_OPERATION_FAILED = ("persona_operation_failed", ErrorKind.TRANSIENT)
     # The user picked a column that is not in the dataset: correctable input.
     DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
+    DATASET_NOT_FOUND = ("dataset_not_found", ErrorKind.NOT_FOUND)
+    DATASET_BINDING_NOT_FOUND = ("dataset_binding_not_found", ErrorKind.NOT_FOUND)
+    # Catch-all for dataset operations that failed for internal reasons
+    # (including a binding referencing a column that no longer passes the
+    # server-side safety check -- not something the user can fix by re-entering
+    # input on this screen).
+    DATASET_OPERATION_FAILED = ("dataset_operation_failed", ErrorKind.TRANSIENT)
 
     # --- Persona long-term memory ---
     MEMORY_TOPIC_NAME_REQUIRED = ("memory_topic_name_required", ErrorKind.VALIDATION)
@@ -319,6 +343,13 @@ class ErrorCode(StrEnum):
     # The data agent returned no CSV URL: an internal outcome, retry may work.
     SEGMENT_CSV_URL_MISSING = ("segment_csv_url_missing", ErrorKind.TRANSIENT)
     DATA_AGENT_NOT_CONFIGURED = ("data_agent_not_configured", ErrorKind.CONFIG)
+    # The runtime ARN is set, but the service failed to initialize or the
+    # connection test itself failed. Retry can succeed once the transient
+    # condition clears.
+    DATA_AGENT_CONNECTION_FAILED = (
+        "data_agent_connection_failed",
+        ErrorKind.TRANSIENT,
+    )
 
     # --- Interviews ---
     INTERVIEW_PERSONAS_REQUIRED = (
