@@ -329,8 +329,9 @@ class TestPersonaSaveEndpoint:
         assert response.status_code == 200
         assert "保存しました" in response.text
 
+    @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
-    def test_save_error(self, mock_get_manager, client):
+    def test_save_error(self, mock_get_manager, mock_get_gen_manager, client):
         """保存エラーがトーストで通知され、生成結果が消えないことを確認。
 
         再試行で解決しうるエラー（TRANSIENT）は本文を返さず HX-Trigger で
@@ -340,6 +341,10 @@ class TestPersonaSaveEndpoint:
         mock_manager = Mock()
         mock_manager.save_persona.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
+        mock_gen_manager = Mock()
+        mock_gen_manager.pop_cached_persona.return_value = None
+        mock_gen_manager.pop_cached_behavior_datasets.return_value = None
+        mock_get_gen_manager.return_value = mock_gen_manager
 
         response = client.post(
             "/persona/save",
