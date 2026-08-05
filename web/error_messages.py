@@ -220,6 +220,44 @@ _CATALOG: dict[ErrorCode, str] = {
         "データ分析エージェントの接続設定がされていません。"
         "設定画面から Runtime ARN を設定してください"
     ),
+    # --- インタビュー ---
+    ErrorCode.INTERVIEW_PERSONAS_REQUIRED: (
+        "インタビューには最低1つのペルソナが必要です"
+    ),
+    ErrorCode.INTERVIEW_TOO_MANY_PERSONAS: (
+        "インタビューには最大{max_personas}つのペルソナまで参加できます"
+    ),
+    ErrorCode.INTERVIEW_PERSONA_INVALID: (
+        "選択したペルソナの情報が不完全です。ペルソナを選び直してください"
+    ),
+    ErrorCode.INTERVIEW_USER_ID_INVALID: "有効なユーザーIDが必要です",
+    ErrorCode.INTERVIEW_MEMORY_MODE_INVALID: (
+        "無効な記憶モードです。設定を確認してください"
+    ),
+    ErrorCode.INTERVIEW_MESSAGE_REQUIRED: "メッセージを入力してください",
+    ErrorCode.INTERVIEW_MESSAGE_TOO_LONG: (
+        "メッセージが長すぎます（最大{max_length}文字）"
+    ),
+    ErrorCode.INTERVIEW_SESSION_NOT_FOUND: "インタビューセッションが見つかりません",
+    ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED: ("このセッションは既に保存されています"),
+    ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING: (
+        "セッションが見つかりません。ページを再読み込みしてください"
+    ),
+    ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET: (
+        "保存するにはユーザーとペルソナ双方のメッセージが必要です"
+    ),
+    ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED: (
+        "インタビューの処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.INTERVIEW_AGENT_SETUP_FAILED: (
+        "AIエージェントの初期化に失敗しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.INTERVIEW_AGENT_UNAVAILABLE: (
+        "AIエージェントとの通信に失敗しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.INTERVIEW_SAVE_FAILED: (
+        "セッションの保存に失敗しました。時間をおいて再度お試しください。"
+    ),
     # --- ペルソナ ---
     # {field} は _FIELD_LABELS で表示名に解決される。
     ErrorCode.PERSONA_FIELD_REQUIRED: "{field}が設定されていません",

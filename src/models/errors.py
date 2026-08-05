@@ -320,6 +320,60 @@ class ErrorCode(StrEnum):
     SEGMENT_CSV_URL_MISSING = ("segment_csv_url_missing", ErrorKind.TRANSIENT)
     DATA_AGENT_NOT_CONFIGURED = ("data_agent_not_configured", ErrorKind.CONFIG)
 
+    # --- Interviews ---
+    INTERVIEW_PERSONAS_REQUIRED = (
+        "interview_personas_required",
+        ErrorKind.VALIDATION,
+    )
+    INTERVIEW_TOO_MANY_PERSONAS = (
+        "interview_too_many_personas",
+        ErrorKind.VALIDATION,
+    )
+    INTERVIEW_PERSONA_INVALID = ("interview_persona_invalid", ErrorKind.VALIDATION)
+    INTERVIEW_USER_ID_INVALID = ("interview_user_id_invalid", ErrorKind.VALIDATION)
+    INTERVIEW_MEMORY_MODE_INVALID = (
+        "interview_memory_mode_invalid",
+        ErrorKind.VALIDATION,
+    )
+    INTERVIEW_MESSAGE_REQUIRED = ("interview_message_required", ErrorKind.VALIDATION)
+    INTERVIEW_MESSAGE_TOO_LONG = ("interview_message_too_long", ErrorKind.CAPACITY)
+    INTERVIEW_SESSION_NOT_FOUND = (
+        "interview_session_not_found",
+        ErrorKind.NOT_FOUND,
+    )
+    # The user cannot fix this by editing input; they can only start a new
+    # session, so it gets the same "replace region + link back" treatment as
+    # NOT_FOUND rather than VALIDATION.
+    INTERVIEW_SESSION_ALREADY_SAVED = (
+        "interview_session_already_saved",
+        ErrorKind.NOT_FOUND,
+    )
+    # Agents are cleaned up after save; a stale tab still pointing at the old
+    # session hits this. Reloading (which re-fetches session state) resolves it.
+    INTERVIEW_SESSION_AGENTS_MISSING = (
+        "interview_session_agents_missing",
+        ErrorKind.NOT_FOUND,
+    )
+    # Reachable by clicking "save" before exchanging any messages.
+    INTERVIEW_SAVE_PRECONDITION_NOT_MET = (
+        "interview_save_precondition_not_met",
+        ErrorKind.VALIDATION,
+    )
+    # Catch-alls for interview operations that failed for internal reasons.
+    INTERVIEW_SESSION_OPERATION_FAILED = (
+        "interview_session_operation_failed",
+        ErrorKind.TRANSIENT,
+    )
+    INTERVIEW_AGENT_SETUP_FAILED = (
+        "interview_agent_setup_failed",
+        ErrorKind.TRANSIENT,
+    )
+    INTERVIEW_AGENT_UNAVAILABLE = (
+        "interview_agent_unavailable",
+        ErrorKind.TRANSIENT,
+    )
+    INTERVIEW_SAVE_FAILED = ("interview_save_failed", ErrorKind.TRANSIENT)
+
 
 class CodedError(Exception):
     """Base class for exceptions carrying an :class:`ErrorCode`.

@@ -11,9 +11,11 @@ from src.managers.interview_manager import (
     InterviewManagerError,
     InterviewSession,
 )
+from src.models.errors import ErrorCode
 from src.models.persona import Persona
 from src.models.message import Message
 from src.services.database_service import DatabaseError
+from tests.error_helpers import raises_code
 
 
 class TestInterviewSession:
@@ -193,20 +195,20 @@ class TestInterviewManager:
 
     def test_start_interview_session_no_personas(self):
         """ペルソナなしでのインタビューセッション開始エラーテスト"""
-        with pytest.raises(InterviewManagerError) as exc_info:
+        with raises_code(InterviewManagerError, ErrorCode.INTERVIEW_PERSONAS_REQUIRED):
             self.interview_manager.start_interview_session([])
-
-        assert "最低1つのペルソナが必要" in str(exc_info.value)
 
     def test_start_interview_session_too_many_personas(self):
         """ペルソナ数過多でのインタビューセッション開始エラーテスト"""
         # 6つのペルソナを作成（上限は5つ）
         too_many_personas = [Mock(id=f"persona-{i}") for i in range(6)]
 
-        with pytest.raises(InterviewManagerError) as exc_info:
+        with raises_code(
+            InterviewManagerError,
+            ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
+            max_personas=5,
+        ):
             self.interview_manager.start_interview_session(too_many_personas)
-
-        assert "最大5つのペルソナまで" in str(exc_info.value)
 
     def test_send_user_message_success(self):
         """ユーザーメッセージ送信成功テスト"""
@@ -247,12 +249,12 @@ class TestInterviewManager:
         """存在しないセッションへのメッセージ送信エラーテスト"""
         from src.managers.interview_manager import InterviewSessionNotFoundError
 
-        with pytest.raises(InterviewSessionNotFoundError) as exc_info:
+        with raises_code(
+            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        ):
             self.interview_manager.send_user_message(
                 "nonexistent-session", "test message"
             )
-
-        assert "インタビューセッションが見つかりません" in str(exc_info.value)
 
     def test_send_user_message_empty_message(self):
         """空メッセージ送信エラーテスト"""
@@ -268,10 +270,10 @@ class TestInterviewManager:
         )
         self.interview_manager._active_sessions["test-session"] = session
 
-        with pytest.raises(InterviewValidationError) as exc_info:
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MESSAGE_REQUIRED
+        ):
             self.interview_manager.send_user_message("test-session", "")
-
-        assert "メッセージが指定されていません" in str(exc_info.value)
 
     def test_save_interview_session_success(self):
         """インタビューセッション保存成功テスト"""
@@ -309,10 +311,10 @@ class TestInterviewManager:
         """存在しないセッションの保存エラーテスト"""
         from src.managers.interview_manager import InterviewSessionNotFoundError
 
-        with pytest.raises(InterviewSessionNotFoundError) as exc_info:
+        with raises_code(
+            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        ):
             self.interview_manager.save_interview_session("nonexistent-session")
-
-        assert "インタビューセッションが見つかりません" in str(exc_info.value)
 
     def test_save_interview_session_no_messages(self):
         """メッセージなしセッションの保存エラーテスト"""
@@ -327,10 +329,10 @@ class TestInterviewManager:
 
         self.interview_manager._active_sessions["test-session"] = session
 
-        with pytest.raises(InterviewManagerError) as exc_info:
+        with raises_code(
+            InterviewManagerError, ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET
+        ):
             self.interview_manager.save_interview_session("test-session")
-
-        assert "メッセージがありません" in str(exc_info.value)
 
     def test_get_interview_session_success(self):
         """インタビューセッション取得成功テスト"""
@@ -355,10 +357,10 @@ class TestInterviewManager:
         """存在しないセッションの取得エラーテスト"""
         from src.managers.interview_manager import InterviewSessionNotFoundError
 
-        with pytest.raises(InterviewSessionNotFoundError) as exc_info:
+        with raises_code(
+            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        ):
             self.interview_manager.get_interview_session("nonexistent-session")
-
-        assert "インタビューセッションが見つかりません" in str(exc_info.value)
 
     def test_end_interview_session_success(self):
         """インタビューセッション終了成功テスト"""
@@ -391,10 +393,10 @@ class TestInterviewManager:
         """存在しないセッションの終了エラーテスト"""
         from src.managers.interview_manager import InterviewSessionNotFoundError
 
-        with pytest.raises(InterviewSessionNotFoundError) as exc_info:
+        with raises_code(
+            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        ):
             self.interview_manager.end_interview_session("nonexistent-session")
-
-        assert "インタビューセッションが見つかりません" in str(exc_info.value)
 
     def test_generate_interview_system_prompt(self):
         """インタビュー用システムプロンプト生成テスト"""
@@ -951,7 +953,9 @@ class TestInterviewManagerErrorPaths:
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
-        with pytest.raises(InterviewValidationError, match="無効なmemory_mode"):
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MEMORY_MODE_INVALID
+        ):
             self.interview_manager.start_interview_session(
                 [persona], memory_mode="invalid_mode"
             )
@@ -962,7 +966,9 @@ class TestInterviewManagerErrorPaths:
         from src.managers.interview_manager import InterviewSessionError
 
         self._create_active_session("s1", is_saved=True)
-        with pytest.raises(InterviewSessionError, match="保存済み"):
+        with raises_code(
+            InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+        ):
             self.interview_manager.send_user_message("s1", "hello")
 
     # --- send_user_message: no agents ---
@@ -972,7 +978,9 @@ class TestInterviewManagerErrorPaths:
 
         self._create_active_session("s1")
         self._add_agents("s1", [])
-        with pytest.raises(InterviewAgentError, match="エージェントが見つかりません"):
+        with raises_code(
+            InterviewAgentError, ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+        ):
             self.interview_manager.send_user_message("s1", "hello")
 
     # --- send_user_message: agent failure (all fail) ---
@@ -989,7 +997,7 @@ class TestInterviewManagerErrorPaths:
         mock_agent.set_document_contents = Mock()
         self._add_agents("s1", [mock_agent])
 
-        with pytest.raises(InterviewAgentError, match="すべてのペルソナ"):
+        with raises_code(InterviewAgentError, ErrorCode.INTERVIEW_AGENT_UNAVAILABLE):
             self.interview_manager.send_user_message("s1", "質問")
 
     # --- send_user_message: partial agent failure (some succeed) ---
@@ -1054,7 +1062,9 @@ class TestInterviewManagerErrorPaths:
         from src.managers.interview_manager import InterviewSessionError
 
         self._create_active_session("s1", is_saved=True)
-        with pytest.raises(InterviewSessionError, match="保存済み"):
+        with raises_code(
+            InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+        ):
             list(self.interview_manager.send_user_message_streaming("s1", "hello"))
 
     # --- send_user_message_streaming: all agents fail ---
@@ -1071,7 +1081,7 @@ class TestInterviewManagerErrorPaths:
         mock_agent.set_document_contents = Mock()
         self._add_agents("s1", [mock_agent])
 
-        with pytest.raises(InterviewAgentError, match="すべてのペルソナ"):
+        with raises_code(InterviewAgentError, ErrorCode.INTERVIEW_AGENT_UNAVAILABLE):
             list(self.interview_manager.send_user_message_streaming("s1", "質問"))
 
     # --- save_interview_session: DB error ---
@@ -1089,7 +1099,7 @@ class TestInterviewManagerErrorPaths:
             "DB down"
         )
 
-        with pytest.raises(InterviewPersistenceError, match="データベースエラー"):
+        with raises_code(InterviewPersistenceError, ErrorCode.INTERVIEW_SAVE_FAILED):
             self.interview_manager.save_interview_session("s1")
 
     # --- end_interview_session: agent dispose error (continues) ---

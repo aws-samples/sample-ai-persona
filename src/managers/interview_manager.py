@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 
-from ..models.errors import CodedError
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -63,6 +63,11 @@ class InterviewManager:
     """
     Manager class for handling interview operations.
     """
+
+    #: インタビュー参加ペルソナ数の上限。
+    MAX_PERSONAS = 5
+    #: 1メッセージあたりの最大文字数。
+    MAX_MESSAGE_LENGTH = 2000
 
     def __init__(
         self,
@@ -127,7 +132,9 @@ class InterviewManager:
         valid_memory_modes = ["full", "retrieve_only", "disabled"]
         if memory_mode not in valid_memory_modes:
             raise InterviewValidationError(
-                f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_memory_modes)}"
+                f"invalid memory_mode {memory_mode!r}, expected one of "
+                f"{valid_memory_modes}",
+                code=ErrorCode.INTERVIEW_MEMORY_MODE_INVALID,
             )
 
         self.logger.info(
@@ -162,7 +169,9 @@ class InterviewManager:
                     except Exception as e:
                         error_msg = f"Failed to generate system prompt for persona {persona.name}: {e}"
                         self.logger.error(error_msg)
-                        raise InterviewAgentError(error_msg)
+                        raise InterviewAgentError(
+                            error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
+                        ) from e
 
                 # Create persona agents for interview (allows single persona)
                 # Pass memory and dataset configuration
@@ -177,18 +186,20 @@ class InterviewManager:
                 )
 
             except AgentInitializationError as e:
-                error_msg = f"エージェントの初期化に失敗しました: {e}"
+                error_msg = f"agent initialization failed: {e}"
                 self.logger.error(error_msg)
-                raise InterviewAgentError(error_msg)
+                raise InterviewAgentError(
+                    error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
+                ) from e
             except InterviewAgentError:
                 # Re-raise InterviewAgentError as-is
                 raise
             except Exception as e:
-                error_msg = (
-                    f"ペルソナエージェントの作成中に予期しないエラーが発生しました: {e}"
-                )
+                error_msg = f"unexpected error creating persona agents: {e}"
                 self.logger.error(error_msg)
-                raise InterviewAgentError(error_msg)
+                raise InterviewAgentError(
+                    error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
+                ) from e
 
             # Store active session and agents
             self._active_sessions[session.id] = session
@@ -204,11 +215,11 @@ class InterviewManager:
         except Exception as e:
             # Clean up any partially created resources
             self._cleanup_failed_session(session_id, persona_agents)
-            error_msg = (
-                f"インタビューセッションの作成中に予期しないエラーが発生しました: {e}"
-            )
+            error_msg = f"unexpected error creating interview session: {e}"
             self.logger.error(error_msg)
-            raise InterviewSessionError(error_msg)
+            raise InterviewSessionError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
+            ) from e
 
     def send_user_message(
         self,
@@ -245,16 +256,23 @@ class InterviewManager:
 
         # Check if session is already saved (agents may have been cleaned up)
         if session.is_saved:
-            error_msg = f"保存済みのセッション {session_id} では新しいメッセージを送信できません"
+            error_msg = f"cannot send message to already-saved session {session_id}"
             self.logger.error(error_msg)
-            raise InterviewSessionError(error_msg)
+            raise InterviewSessionError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+            )
 
         persona_agents = self._session_agents.get(session_id, [])
 
         if not persona_agents:
-            error_msg = f"セッション {session_id} にペルソナエージェントが見つかりません（既に保存済みの可能性があります）"
+            error_msg = (
+                f"no persona agents found for session {session_id} "
+                "(may already be saved)"
+            )
             self.logger.error(error_msg)
-            raise InterviewAgentError(error_msg)
+            raise InterviewAgentError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+            )
 
         self.logger.info(
             f"Processing user message in session {session_id}: '{message[:50]}...' (documents: {len(document_contents) if document_contents else 0})"
@@ -324,21 +342,25 @@ class InterviewManager:
                     self.logger.info(f"Generated response from {agent_name}")
 
                 except AgentCommunicationError as e:
-                    error_msg = f"ペルソナ {agent_name} からの応答取得に失敗: {e}"
+                    error_msg = f"agent {agent_name} failed to respond: {e}"
                     self.logger.error(error_msg)
                     failed_agents.append(agent_name)
                     continue
                 except Exception as e:
-                    error_msg = f"ペルソナ {agent_name} の処理中に予期しないエラー: {e}"
+                    error_msg = f"unexpected error processing agent {agent_name}: {e}"
                     self.logger.error(error_msg)
                     failed_agents.append(agent_name)
                     continue
 
             # Check if we got at least some responses
             if not responses and failed_agents:
-                error_msg = f"すべてのペルソナエージェントが応答に失敗しました: {', '.join(failed_agents)}"
+                error_msg = (
+                    f"all persona agents failed to respond: {', '.join(failed_agents)}"
+                )
                 self.logger.error(error_msg)
-                raise InterviewAgentError(error_msg)
+                raise InterviewAgentError(
+                    error_msg, code=ErrorCode.INTERVIEW_AGENT_UNAVAILABLE
+                )
 
             # Update stored session
             self._active_sessions[session_id] = session
@@ -346,7 +368,7 @@ class InterviewManager:
             # Log warnings for failed agents
             if failed_agents:
                 self.logger.warning(
-                    f"一部のペルソナエージェントが失敗しました: {', '.join(failed_agents)}"
+                    f"some persona agents failed: {', '.join(failed_agents)}"
                 )
 
             self.logger.info(
@@ -362,9 +384,11 @@ class InterviewManager:
             # Re-raise specific errors as-is
             raise
         except Exception as e:
-            error_msg = f"メッセージ処理中に予期しないエラーが発生しました: {e}"
+            error_msg = f"unexpected error processing message: {e}"
             self.logger.error(error_msg)
-            raise InterviewAgentError(error_msg)
+            raise InterviewAgentError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
+            ) from e
 
     def send_user_message_streaming(
         self,
@@ -393,18 +417,20 @@ class InterviewManager:
         session = self._active_sessions[session_id]
 
         if session.is_saved:
-            error_msg = f"保存済みのセッション {session_id} では新しいメッセージを送信できません"
+            error_msg = f"cannot send message to already-saved session {session_id}"
             self.logger.error(error_msg)
-            raise InterviewSessionError(error_msg)
+            raise InterviewSessionError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+            )
 
         persona_agents = self._session_agents.get(session_id, [])
 
         if not persona_agents:
-            error_msg = (
-                f"セッション {session_id} にペルソナエージェントが見つかりません"
-            )
+            error_msg = f"no persona agents found for session {session_id}"
             self.logger.error(error_msg)
-            raise InterviewAgentError(error_msg)
+            raise InterviewAgentError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+            )
 
         # Add user message to session
         session = session.add_user_message(message.strip())
@@ -475,19 +501,20 @@ class InterviewManager:
                 response_count += 1
 
             except AgentCommunicationError as e:
-                self.logger.error(f"ペルソナ {agent_name} からの応答取得に失敗: {e}")
+                self.logger.error(f"agent {agent_name} failed to respond: {e}")
                 failed_agents.append(agent_name)
                 continue
             except Exception as e:
                 self.logger.error(
-                    f"ペルソナ {agent_name} の処理中に予期しないエラー: {e}"
+                    f"unexpected error processing agent {agent_name}: {e}"
                 )
                 failed_agents.append(agent_name)
                 continue
 
         if response_count == 0 and failed_agents:
             raise InterviewAgentError(
-                f"すべてのペルソナエージェントが応答に失敗しました: {', '.join(failed_agents)}"
+                f"all persona agents failed to respond: {', '.join(failed_agents)}",
+                code=ErrorCode.INTERVIEW_AGENT_UNAVAILABLE,
             )
 
         # Update stored session
@@ -525,8 +552,11 @@ class InterviewManager:
         except InterviewValidationError:
             raise
         except Exception as e:
-            self.logger.error(f"セッション保存の検証エラー: {e}")
-            raise InterviewValidationError("セッション保存の検証に失敗しました")
+            self.logger.error(f"session save validation error: {e}")
+            raise InterviewValidationError(
+                "unexpected error validating session for save",
+                code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
+            ) from e
 
         # Check if already saved
         if session.is_saved:
@@ -562,13 +592,17 @@ class InterviewManager:
             return discussion_id
 
         except DatabaseError as e:
-            error_msg = f"データベースエラーによりセッションの保存に失敗しました: {e}"
+            error_msg = f"database error while saving interview session: {e}"
             self.logger.error(error_msg)
-            raise InterviewPersistenceError(error_msg)
+            raise InterviewPersistenceError(
+                error_msg, code=ErrorCode.INTERVIEW_SAVE_FAILED
+            ) from e
         except Exception as e:
-            error_msg = f"セッション保存中に予期しないエラーが発生しました: {e}"
+            error_msg = f"unexpected error saving interview session: {e}"
             self.logger.error(error_msg)
-            raise InterviewPersistenceError(error_msg)
+            raise InterviewPersistenceError(
+                error_msg, code=ErrorCode.INTERVIEW_SAVE_FAILED
+            ) from e
 
     def get_interview_session(self, session_id: str) -> InterviewSession:
         """
@@ -644,9 +678,11 @@ class InterviewManager:
                 self.logger.info(f"Interview session ended successfully: {session_id}")
 
         except Exception as e:
-            error_msg = f"セッション終了中に予期しないエラーが発生しました: {e}"
+            error_msg = f"unexpected error ending interview session: {e}"
             self.logger.error(error_msg)
-            raise InterviewSessionError(error_msg)
+            raise InterviewSessionError(
+                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
+            ) from e
 
     def _create_interview_persona_agents(
         self,
@@ -680,7 +716,10 @@ class InterviewManager:
             InterviewManagerError: If agent creation fails
         """
         if not personas:
-            raise InterviewManagerError("ペルソナリストが空です")
+            raise InterviewManagerError(
+                "persona list is empty",
+                code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED,
+            )
 
         self.logger.info(
             f"Creating {len(personas)} persona agents for interview (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
@@ -737,7 +776,9 @@ class InterviewManager:
         # Check if we have at least one agent (interview allows single persona)
         if len(persona_agents) == 0:
             error_msg = f"Failed to create any persona agents. Failed: {', '.join(failed_personas)}"
-            raise InterviewManagerError(error_msg)
+            raise InterviewManagerError(
+                error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
+            )
 
         if failed_personas:
             self.logger.warning(
@@ -799,7 +840,10 @@ class InterviewManager:
             InterviewManagerError: If session not found
         """
         if session_id not in self._active_sessions:
-            raise InterviewManagerError(f"Interview session not found: {session_id}")
+            raise InterviewManagerError(
+                f"interview session not found: {session_id}",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            )
 
         session = self._active_sessions[session_id]
 
@@ -892,25 +936,35 @@ class InterviewManager:
         """
         if not personas:
             raise InterviewValidationError(
-                "インタビューには最低1つのペルソナが必要です"
+                "persona list is empty",
+                code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED,
             )
 
-        if len(personas) > 5:
+        if len(personas) > self.MAX_PERSONAS:
             raise InterviewValidationError(
-                "インタビューには最大5つのペルソナまで参加できます"
+                f"persona count {len(personas)} exceeds max {self.MAX_PERSONAS}",
+                code=ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
+                context={"max_personas": self.MAX_PERSONAS},
             )
 
         if not user_id or not isinstance(user_id, str) or not user_id.strip():
-            raise InterviewValidationError("有効なユーザーIDが必要です")
+            raise InterviewValidationError(
+                "user_id is blank or invalid",
+                code=ErrorCode.INTERVIEW_USER_ID_INVALID,
+            )
 
         # Validate each persona
         for i, persona in enumerate(personas):
             if not persona or not hasattr(persona, "id") or not persona.id:
-                raise InterviewValidationError(f"ペルソナ {i + 1} が無効です")
+                raise InterviewValidationError(
+                    f"persona at index {i} has no id",
+                    code=ErrorCode.INTERVIEW_PERSONA_INVALID,
+                )
 
             if not hasattr(persona, "name") or not persona.name:
                 raise InterviewValidationError(
-                    f"ペルソナ {i + 1} の名前が設定されていません"
+                    f"persona at index {i} has no name",
+                    code=ErrorCode.INTERVIEW_PERSONA_INVALID,
                 )
 
     def _validate_session_exists(self, session_id: str) -> None:
@@ -924,11 +978,15 @@ class InterviewManager:
             InterviewSessionNotFoundError: If session not found
         """
         if not session_id:
-            raise InterviewSessionNotFoundError("セッションIDが指定されていません")
+            raise InterviewSessionNotFoundError(
+                "session_id is blank",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            )
 
         if session_id not in self._active_sessions:
             raise InterviewSessionNotFoundError(
-                f"インタビューセッションが見つかりません: {session_id}"
+                f"interview session not found: {session_id}",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
             )
 
     def _validate_message_input(self, message: str) -> None:
@@ -941,14 +999,19 @@ class InterviewManager:
         Raises:
             InterviewValidationError: If validation fails
         """
-        if not message:
-            raise InterviewValidationError("メッセージが指定されていません")
+        if not message or not message.strip():
+            raise InterviewValidationError(
+                "message is blank",
+                code=ErrorCode.INTERVIEW_MESSAGE_REQUIRED,
+            )
 
-        if not message.strip():
-            raise InterviewValidationError("メッセージが空です")
-
-        if len(message.strip()) > 2000:
-            raise InterviewValidationError("メッセージが長すぎます（最大2000文字）")
+        if len(message.strip()) > self.MAX_MESSAGE_LENGTH:
+            raise InterviewValidationError(
+                f"message length {len(message.strip())} exceeds max "
+                f"{self.MAX_MESSAGE_LENGTH}",
+                code=ErrorCode.INTERVIEW_MESSAGE_TOO_LONG,
+                context={"max_length": self.MAX_MESSAGE_LENGTH},
+            )
 
     def _validate_session_for_save(self, session: InterviewSession) -> None:
         """
@@ -960,14 +1023,11 @@ class InterviewManager:
         Raises:
             InterviewValidationError: If validation fails
         """
-        if not session:
-            raise InterviewValidationError("セッションが無効です")
-
-        if not session.messages:
-            raise InterviewValidationError("保存するメッセージがありません")
-
-        if not session.participants:
-            raise InterviewValidationError("セッションに参加者がいません")
+        if not session or not session.messages or not session.participants:
+            raise InterviewValidationError(
+                "session is empty or has no participants",
+                code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
+            )
 
         # Validate message integrity
         user_messages = [
@@ -977,11 +1037,11 @@ class InterviewManager:
             msg for msg in session.messages if msg.message_type == "statement"
         ]
 
-        if not user_messages:
-            raise InterviewValidationError("ユーザーメッセージが含まれていません")
-
-        if not persona_messages:
-            raise InterviewValidationError("ペルソナの応答が含まれていません")
+        if not user_messages or not persona_messages:
+            raise InterviewValidationError(
+                "session has no user message or no persona response",
+                code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
+            )
 
     # Enhanced helper methods
 
@@ -1283,7 +1343,8 @@ class InterviewManager:
             # MIMEタイプバリデーション
             if not is_supported_mime_type(mime_type):
                 raise InterviewValidationError(
-                    f"ファイル '{filename}' のタイプ '{mime_type}' はサポートされていません"
+                    f"mime type {mime_type!r} not supported for file {filename!r}",
+                    code=ErrorCode.FILE_MIME_UNSUPPORTED,
                 )
 
             # サイズバリデーション
@@ -1293,9 +1354,10 @@ class InterviewManager:
                 else config.MAX_FILE_SIZE
             )
             if len(file_bytes) > size_limit:
-                limit_mb = size_limit // (1024 * 1024)
                 raise InterviewValidationError(
-                    f"ファイル '{filename}' が大きすぎます（最大{limit_mb}MB）"
+                    f"file {filename!r} size {len(file_bytes)} exceeds limit {size_limit}",
+                    code=ErrorCode.FILE_TOO_LARGE,
+                    context={"max_size_mb": size_limit / (1024 * 1024)},
                 )
 
             # ContentBlock変換
