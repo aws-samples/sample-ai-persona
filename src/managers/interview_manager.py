@@ -135,6 +135,7 @@ class InterviewManager:
                 f"invalid memory_mode {memory_mode!r}, expected one of "
                 f"{valid_memory_modes}",
                 code=ErrorCode.INTERVIEW_MEMORY_MODE_INVALID,
+                context={"field": "memory_mode"},
             )
 
         self.logger.info(
@@ -938,13 +939,14 @@ class InterviewManager:
             raise InterviewValidationError(
                 "persona list is empty",
                 code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED,
+                context={"field": "persona_ids"},
             )
 
         if len(personas) > self.MAX_PERSONAS:
             raise InterviewValidationError(
                 f"persona count {len(personas)} exceeds max {self.MAX_PERSONAS}",
                 code=ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
-                context={"max_personas": self.MAX_PERSONAS},
+                context={"max_personas": self.MAX_PERSONAS, "field": "persona_ids"},
             )
 
         if not user_id or not isinstance(user_id, str) or not user_id.strip():

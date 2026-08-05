@@ -97,42 +97,6 @@ async def create_interview_session(
 ) -> Any:
     """インタビューセッション作成エンドポイント（拡張エラーハンドリング）"""
     try:
-        # Enhanced input validation
-        if not persona_ids:
-            return JSONResponse(
-                {
-                    "error": "インタビューには最低1つのペルソナが必要です",
-                    "error_type": "validation_error",
-                    "field": "persona_ids",
-                },
-                status_code=400,
-            )
-
-        if len(persona_ids) > 5:
-            return JSONResponse(
-                {
-                    "error": "インタビューには最大5つのペルソナまで参加できます",
-                    "error_type": "validation_error",
-                    "field": "persona_ids",
-                    "max_allowed": 5,
-                    "provided": len(persona_ids),
-                },
-                status_code=400,
-            )
-
-        # memory_modeの検証
-        valid_memory_modes = ["full", "retrieve_only", "disabled"]
-        if memory_mode not in valid_memory_modes:
-            return JSONResponse(
-                {
-                    "error": f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_memory_modes)}",
-                    "error_type": "validation_error",
-                    "field": "memory_mode",
-                    "valid_values": valid_memory_modes,
-                },
-                status_code=400,
-            )
-
         # Get personas with enhanced error handling
         persona_manager = get_persona_manager()
         personas = []
