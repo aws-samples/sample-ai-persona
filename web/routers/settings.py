@@ -73,7 +73,7 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
         is_running = settings_manager.toggle_mcp(enabled)
     except Exception as e:
         # 再試行で解決しうるエラーは設定パネルを消さずトーストで通知する
-        logger.error("MCPサーバーの切り替えエラー", exc_info=True)
+        logger.error("Failed to toggle MCP server", exc_info=True)
         return toast_response(
             e, default="MCPサーバーの切り替えに失敗しました", status_code=500
         )
@@ -458,13 +458,13 @@ async def test_data_agent_connection(request: Request) -> Any:
             "</script>"
         )
     except SettingsManagerError as e:
-        logger.warning("データ分析エージェント接続テスト失敗", exc_info=True)
+        logger.warning("Data analysis agent connection test failed", exc_info=True)
         message = user_message_for(e, default="接続テストに失敗しました")
         return HTMLResponse(
             f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: {html.escape(message)}</div>'
         )
     except Exception:
-        logger.exception("データ分析エージェント接続テストエラー")
+        logger.exception("Data analysis agent connection test error")
         return HTMLResponse(
             '<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>'
         )

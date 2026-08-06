@@ -200,7 +200,7 @@ class ServiceFactory:
             session_data = sm.read_session(session_id=session_id)
             return session_data is not None
         except Exception as e:
-            self.logger.debug(f"STMセッション確認失敗: {e}")
+            self.logger.debug(f"Failed to check STM session: {e}")
             return False
 
     def get_s3_service(self) -> "S3Service":

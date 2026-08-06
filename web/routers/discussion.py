@@ -184,7 +184,7 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
         )
 
     except FileUploadError as e:
-        logger.warning("ドキュメントアップロードエラー", exc_info=True)
+        logger.warning("Document upload error", exc_info=True)
         return JSONResponse(
             {
                 "error": user_message_for(
@@ -194,7 +194,7 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
             status_code=400,
         )
     except Exception:
-        logger.error("ドキュメントアップロードエラー", exc_info=True)
+        logger.error("Document upload error", exc_info=True)
         return JSONResponse(
             {"error": "ドキュメントのアップロードに失敗しました"}, status_code=400
         )
@@ -228,7 +228,7 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
             {"request": request, "discussion": discussion},
         )
     except Exception as e:
-        logger.error(f"議論結果パーシャル取得エラー: {e}")
+        logger.error(f"Failed to get discussion result partial: {e}")
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -291,7 +291,7 @@ async def stream_discussion(
                     for c in categories_data
                 ]
             except Exception as e:
-                logger.warning(f"カテゴリー解析エラー: {e}")
+                logger.warning(f"Failed to parse category: {e}")
 
         # ドキュメントIDを解析
         doc_ids = None
@@ -337,7 +337,7 @@ async def stream_discussion(
                     for event in gen:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
                 except Exception as e:
-                    logger.error("ストリーミング処理エラー", exc_info=True)
+                    logger.error("Streaming processing error", exc_info=True)
                     message = user_message_for(
                         e, default="議論の実行中にエラーが発生しました"
                     )
@@ -368,7 +368,7 @@ async def stream_discussion(
             },
         )
     except Exception as e:
-        logger.error(f"ストリーミング議論エラー: {e}")
+        logger.error(f"Streaming discussion error: {e}")
         return StreamingResponse(
             iter(
                 [
@@ -429,7 +429,7 @@ async def discussion_results_page(
             else {}
         )
     except Exception as e:
-        logger.error(f"議論一覧取得エラー: {e}")
+        logger.error(f"Failed to get discussion list: {e}")
         discussions = []
         participant_personas = {}
         next_cursor_encoded = None
@@ -554,7 +554,7 @@ async def start_discussion(
             {"request": request, "discussion": discussion},
         )
     except (DiscussionManagerError, AgentDiscussionManagerError) as e:
-        logger.error("議論開始エラー", exc_info=True)
+        logger.error("Failed to start discussion", exc_info=True)
         if is_correctable(e):
             # 入力を直せば解決するエラー（トピック文字数・ペルソナ数等）は
             # #discussion-result（フォーム自身の外側の専用領域）に表示する。
@@ -579,7 +579,7 @@ async def start_discussion(
     except Exception as e:
         # コードを持たない未知の例外は TRANSIENT 相当。本体を置換すると入力が
         # 失われ、かつ非2xx本文は htmx がスワップしないため、トーストで通知する。
-        logger.error("議論開始エラー（未分類）", exc_info=True)
+        logger.error("Failed to start discussion (unclassified)", exc_info=True)
         return toast_response(
             e, default="議論の開始中にエラーが発生しました", status_code=500
         )
@@ -672,7 +672,7 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             },
         )
     except DiscussionManagerError as e:
-        logger.error("インサイト再生成エラー", exc_info=True)
+        logger.error("Failed to regenerate insight", exc_info=True)
         if is_correctable(e):
             # 入力を直せば解決するエラーは #insights-container（再生成フォームの
             # 外側の専用領域）に表示する。カテゴリー入力はモーダル内の別要素で残る。
@@ -696,7 +696,7 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             status_code=500,
         )
     except Exception as e:
-        logger.error("インサイト再生成エラー（未分類）", exc_info=True)
+        logger.error("Failed to regenerate insight (unclassified)", exc_info=True)
         return toast_response(
             e,
             default="インサイトの再生成中にエラーが発生しました",
@@ -733,7 +733,7 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                 )
             )
     except DiscussionManagerError as e:
-        logger.error("議論削除エラー", exc_info=True)
+        logger.error("Failed to delete discussion", exc_info=True)
         if is_correctable(e):
             # 削除操作自体に入力欄はないため、既存の「削除失敗」分岐と同じ
             # error_inline を返す（success 分岐と同じ2つの hx-target を想定）。
@@ -753,7 +753,7 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
         # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
         return toast_response(e, default="議論の削除に失敗しました", status_code=500)
     except Exception as e:
-        logger.error("議論削除エラー（未分類）", exc_info=True)
+        logger.error("Failed to delete discussion (unclassified)", exc_info=True)
         return toast_response(e, default="議論の削除に失敗しました", status_code=500)
 
 
@@ -785,7 +785,7 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
             {"request": request, "insights": discussion.insights},
         )
     except Exception as e:
-        logger.error(f"インサイト取得エラー: {e}")
+        logger.error(f"Failed to get insight: {e}")
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -875,7 +875,7 @@ async def generate_report_stream(
                     # 容量超過など種別が判る例外はカタログの文言を返す。
                     # 診断情報は exc_info でログにのみ残す。
                     exc = future.exception()
-                    logger.error("レポート生成エラー", exc_info=exc)
+                    logger.error("Failed to generate report", exc_info=exc)
                     message = user_message_for(
                         exc, default="レポートの生成に失敗しました"
                     )
@@ -897,7 +897,7 @@ async def generate_report_stream(
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error("レポート生成エラー", exc_info=True)
+            logger.error("Failed to generate report", exc_info=True)
             data = json.dumps(
                 {
                     "type": "error",
@@ -979,7 +979,7 @@ async def generate_followup_report_stream(
 
             if future.done() and future.exception():
                 exc = future.exception()
-                logger.error("フォローアップレポート生成エラー", exc_info=exc)
+                logger.error("Failed to generate follow-up report", exc_info=exc)
                 message = user_message_for(
                     exc, default="フォローアップ分析の生成に失敗しました"
                 )
@@ -988,7 +988,7 @@ async def generate_followup_report_stream(
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error("フォローアップレポート生成エラー", exc_info=True)
+            logger.error("Failed to generate follow-up report", exc_info=True)
             message = user_message_for(
                 e, default="フォローアップ分析の生成に失敗しました"
             )
@@ -1042,7 +1042,7 @@ async def save_report(
         response.headers["HX-Retarget"] = "#reports-container"
         return response
     except Exception as e:
-        logger.error("レポート保存エラー", exc_info=True)
+        logger.error("Failed to save report", exc_info=True)
         from src.models.discussion_report import DiscussionReport as DR
 
         report = DR(
@@ -1085,7 +1085,7 @@ async def update_report_content(
             '<div class="text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2 mt-2">レポートを更新しました</div>'
         )
     except Exception as e:
-        logger.error(f"レポート更新エラー: {e}")
+        logger.error(f"Failed to update report: {e}")
         return HTMLResponse(
             '<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">更新に失敗しました</div>',
             status_code=400,
@@ -1115,7 +1115,7 @@ async def get_report(
             {"request": request, "report": report, "discussion_id": discussion_id},
         )
     except Exception as e:
-        logger.error(f"レポート取得エラー: {e}")
+        logger.error(f"Failed to get report: {e}")
         return HTMLResponse(content="レポートの取得に失敗しました", status_code=500)
 
 
@@ -1156,7 +1156,7 @@ async def export_report(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as e:
-        logger.error(f"レポートエクスポートエラー: {e}")
+        logger.error(f"Failed to export report: {e}")
         return HTMLResponse(content="エクスポートに失敗しました", status_code=500)
 
 
@@ -1175,7 +1175,7 @@ async def delete_report(
         )
         return HTMLResponse(content="<div>レポートを削除しました</div>")
     except Exception as e:
-        logger.error("レポート削除エラー", exc_info=True)
+        logger.error("Failed to delete report", exc_info=True)
         from markupsafe import escape
 
         message = user_message_for(e, default="レポートの削除に失敗しました")

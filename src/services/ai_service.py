@@ -97,13 +97,11 @@ class AIService:
                 "bedrock-runtime", config=boto_config, **filtered_credentials
             )
 
-            self.logger.info(
-                f"Bedrock クライアントを作成しました (region: {config.AWS_REGION})"
-            )
+            self.logger.info(f"Bedrock client created (region: {config.AWS_REGION})")
             return client
 
         except Exception as e:
-            self.logger.error(f"Bedrock クライアントの作成に失敗: {e}")
+            self.logger.error(f"Failed to create Bedrock client: {e}")
             raise BedrockConnectionError(
                 f"bedrock client creation failed ({type(e).__name__})",
                 code=ErrorCode.AI_BEDROCK_CONNECTION_FAILED,
@@ -129,13 +127,11 @@ class AIService:
 
                 delay = min(self.base_delay * (2**attempt), self.max_delay)
                 self.logger.warning(
-                    f"API エラーが発生しました。{delay}秒後にリトライします (試行 {attempt + 1}/{self.max_retries}): {e}"
+                    f"API error occurred. Retrying in {delay}s (attempt {attempt + 1}/{self.max_retries}): {e}"
                 )
                 time.sleep(delay)
 
-        error_msg = (
-            f"最大リトライ回数 ({self.max_retries}) に達しました: {last_exception}"
-        )
+        error_msg = f"max retries ({self.max_retries}) reached: {last_exception}"
         self.logger.error(error_msg)
         raise BedrockAPIError(
             f"max retries ({self.max_retries}) exhausted",
@@ -313,16 +309,16 @@ class AIService:
                         }
                     )
                 else:
-                    self.logger.warning(f"サポートされていないMIMEタイプ: {mime_type}")
+                    self.logger.warning(f"Unsupported MIME type: {mime_type}")
 
             except FileNotFoundError as e:
-                self.logger.error(f"ファイルが見つかりません: {file_path}")
+                self.logger.error(f"File not found: {file_path}")
                 raise AIServiceError(
                     "document file not found",
                     code=ErrorCode.AI_OPERATION_FAILED,
                 ) from e
             except Exception as e:
-                self.logger.error(f"ドキュメント処理エラー: {e}")
+                self.logger.error(f"Document processing error: {e}")
                 raise AIServiceError(
                     f"document processing failed ({type(e).__name__})",
                     code=ErrorCode.AI_OPERATION_FAILED,
@@ -409,7 +405,7 @@ class AIService:
                         return json_candidate
                     except json.JSONDecodeError:
                         self.logger.warning(
-                            f"配列JSON候補が無効: {json_candidate[:100]}..."
+                            f"Array JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
             # 配列が見つからない場合はオブジェクトを探す
@@ -436,7 +432,7 @@ class AIService:
                         return json_candidate
                     except json.JSONDecodeError:
                         self.logger.warning(
-                            f"オブジェクトJSON候補が無効: {json_candidate[:100]}..."
+                            f"Object JSON candidate is invalid: {json_candidate[:100]}..."
                         )
         else:
             # オブジェクト形式を優先（ペルソナ生成用）
@@ -463,7 +459,7 @@ class AIService:
                         return json_candidate
                     except json.JSONDecodeError:
                         self.logger.warning(
-                            f"オブジェクトJSON候補が無効: {json_candidate[:100]}..."
+                            f"Object JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
             # オブジェクトが見つからない場合は配列を探す
@@ -490,7 +486,7 @@ class AIService:
                         return json_candidate
                     except json.JSONDecodeError:
                         self.logger.warning(
-                            f"配列JSON候補が無効: {json_candidate[:100]}..."
+                            f"Array JSON candidate is invalid: {json_candidate[:100]}..."
                         )
 
         # JSONブロック（```json ... ```）を探す
@@ -505,7 +501,7 @@ class AIService:
                     return json_candidate
                 except json.JSONDecodeError:
                     self.logger.warning(
-                        f"JSONブロック候補が無効: {json_candidate[:100]}..."
+                        f"JSON block candidate is invalid: {json_candidate[:100]}..."
                     )
 
         # 最後の手段：レスポンス全体がJSONかチェック
@@ -516,7 +512,7 @@ class AIService:
             pass
 
         # すべて失敗した場合
-        self.logger.error(f"JSON抽出失敗 - レスポンス全体: {response}")
+        self.logger.error(f"JSON extraction failed - full response: {response}")
         raise AIServiceError(
             "could not extract valid JSON from response",
             code=ErrorCode.AI_OPERATION_FAILED,
@@ -543,7 +539,7 @@ class AIService:
             AIServiceError: 議論進行エラー
         """
         self.logger.info(
-            f"議論を開始します (参加者: {len(personas)}人, トピック: {topic[:50]}..., ドキュメント: {len(documents) if documents else 0}件)"
+            f"Starting discussion (participants: {len(personas)}, topic: {topic[:50]}..., documents: {len(documents) if documents else 0})"
         )
 
         # ドキュメントがある場合はConverse APIを使用
@@ -552,13 +548,15 @@ class AIService:
                 messages = self._facilitate_discussion_with_documents(
                     personas, topic, documents
                 )
-                self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
+                self.logger.info(
+                    f"Discussion completed (message count: {len(messages)})"
+                )
                 return messages
 
             except AIServiceError:
                 raise
             except Exception as e:
-                error_msg = f"ドキュメント付き議論進行中にエラーが発生: {e}"
+                error_msg = f"Error during discussion with documents: {e}"
                 self.logger.error(error_msg)
                 raise AIServiceError(
                     f"discussion with documents failed ({type(e).__name__})",
@@ -572,14 +570,14 @@ class AIService:
             response = self._retry_with_backoff(self.invoke_model, prompt)
             messages = self._parse_discussion_response(response, personas)
 
-            self.logger.info(f"議論が完了しました (メッセージ数: {len(messages)})")
+            self.logger.info(f"Discussion completed (message count: {len(messages)})")
             return messages
 
         except AIServiceError:
             # AIServiceError は再発生
             raise
         except Exception as e:
-            error_msg = f"議論進行中にエラーが発生: {e}"
+            error_msg = f"Error during discussion facilitation: {e}"
             self.logger.error(error_msg)
             raise AIServiceError(
                 f"discussion facilitation failed ({type(e).__name__})",
@@ -607,7 +605,9 @@ class AIService:
         Raises:
             AIServiceError: 議論進行エラー
         """
-        self.logger.info(f"ストリーミング議論を開始します (参加者: {len(personas)}人)")
+        self.logger.info(
+            f"Starting streaming discussion (participants: {len(personas)})"
+        )
 
         prompt = self._create_discussion_prompt(personas, topic)
         persona_map = {persona.name: persona.id for persona in personas}
@@ -666,10 +666,10 @@ class AIService:
                                 except (ValueError, IndexError):
                                     continue
 
-            self.logger.info("ストリーミング議論が完了しました")
+            self.logger.info("Streaming discussion completed")
 
         except Exception as e:
-            error_msg = f"ストリーミング議論中にエラーが発生: {e}"
+            error_msg = f"Error during streaming discussion: {e}"
             self.logger.error(error_msg)
             raise AIServiceError(
                 f"streaming discussion failed ({type(e).__name__})",
@@ -705,7 +705,7 @@ class AIService:
 
         total_chars = sum(len(msg.content) for msg in discussion_messages)
         self.logger.info(
-            f"インサイト抽出を開始します (メッセージ数: {len(discussion_messages)}, 総文字数: {total_chars}, カテゴリー数: {len(categories)})"
+            f"Starting insight extraction (message count: {len(discussion_messages)}, total chars: {total_chars}, category count: {len(categories)})"
         )
 
         prompt = self._create_insight_extraction_prompt(
@@ -714,18 +714,18 @@ class AIService:
 
         try:
             response = self._retry_with_backoff(self.invoke_model, prompt)
-            self.logger.debug(f"インサイト抽出AIレスポンス: {response[:500]}...")
+            self.logger.debug(f"Insight extraction AI response: {response[:500]}...")
             insights = self._parse_structured_insights_response(response, categories)
 
             self.logger.info(
-                f"インサイト抽出が完了しました (インサイト数: {len(insights)})"
+                f"Insight extraction completed (insight count: {len(insights)})"
             )
             return insights
 
         except AIServiceError:
             raise
         except Exception as e:
-            error_msg = f"インサイト抽出中にエラーが発生: {e}"
+            error_msg = f"Error during insight extraction: {e}"
             self.logger.error(error_msg)
             raise AIServiceError(
                 f"insight extraction failed ({type(e).__name__})",
@@ -781,15 +781,13 @@ class AIService:
                 except (ValueError, IndexError):
                     # 解析に失敗した行はスキップ
                     self.logger.warning(
-                        f"議論レスポンスの解析に失敗した行をスキップ: {line}"
+                        f"Skipping line that failed to parse in discussion response: {line}"
                     )
                     continue
 
         # 最低限のメッセージ数をチェック
         if len(messages) < 2:
-            self.logger.warning(
-                f"解析されたメッセージ数が少なすぎます: {len(messages)}"
-            )
+            self.logger.warning(f"Parsed message count is too low: {len(messages)}")
             raise AIServiceError(
                 f"parsed message count {len(messages)} below minimum 2",
                 code=ErrorCode.AI_OPERATION_FAILED,
@@ -835,7 +833,7 @@ class AIService:
                     )
                     validated_insights.append(validated_insight)
                 except Exception as e:
-                    self.logger.warning(f"インサイト {i + 1} の検証に失敗: {e}")
+                    self.logger.warning(f"Failed to validate insight {i + 1}: {e}")
                     continue
 
             if not validated_insights:
@@ -847,11 +845,13 @@ class AIService:
             return validated_insights
 
         except json.JSONDecodeError as e:
-            self.logger.warning(f"JSON解析に失敗、フォールバック処理を実行: {e}")
+            self.logger.warning(
+                f"JSON parsing failed, falling back to text parsing: {e}"
+            )
             # フォールバック: 従来の文字列解析を使用
             return self._fallback_to_text_parsing(response)
         except Exception as e:
-            self.logger.error(f"構造化インサイト解析エラー: {e}")
+            self.logger.error(f"Structured insight parsing error: {e}")
             # フォールバック: 従来の文字列解析を使用
             return self._fallback_to_text_parsing(response)
 
@@ -905,9 +905,7 @@ class AIService:
         Returns:
             List[Dict[str, Any]]: 解析されたインサイトの構造化データ
         """
-        self.logger.info(
-            "フォールバック処理: テキスト解析を使用してインサイトを抽出します"
-        )
+        self.logger.info("Fallback: extracting insights using text parsing")
 
         # 従来のメソッドを使用
         text_insights = self._parse_insights_response(response)
@@ -929,7 +927,7 @@ class AIService:
             )
 
         self.logger.info(
-            f"フォールバック処理完了: {len(structured_insights)}個のインサイトを抽出"
+            f"Fallback processing completed: extracted {len(structured_insights)} insights"
         )
         return structured_insights
 
@@ -1227,7 +1225,9 @@ class AIService:
             json_str = self._extract_json_from_response(response, prefer_array=False)
             data = json.loads(json_str)
         except (AIServiceError, json.JSONDecodeError) as e:
-            self.logger.error(f"ドラフトJSON解析失敗: {e} / response={response[:500]}")
+            self.logger.error(
+                f"Draft JSON parsing failed: {e} / response={response[:500]}"
+            )
             raise AIServiceError(
                 "question draft JSON parsing failed",
                 code=ErrorCode.AI_OPERATION_FAILED,

@@ -232,7 +232,7 @@ async def list_personas(search: Optional[str] = None) -> Any:
             for p in personas
         ]
     except Exception as e:
-        logger.error(f"ペルソナ一覧取得エラー: {e}")
+        logger.error(f"Failed to fetch persona list: {e}")
         raise HTTPException(status_code=500, detail="ペルソナ一覧の取得に失敗しました")
 
 
@@ -263,7 +263,7 @@ async def get_persona(persona_id: str) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"ペルソナ取得エラー: {e}")
+        logger.error(f"Failed to fetch persona: {e}")
         raise HTTPException(status_code=500, detail="ペルソナの取得に失敗しました")
 
 
@@ -284,7 +284,7 @@ async def list_discussions() -> Any:
             for d in discussions
         ]
     except Exception as e:
-        logger.error(f"議論一覧取得エラー: {e}")
+        logger.error(f"Failed to fetch discussion list: {e}")
         raise HTTPException(status_code=500, detail="議論一覧の取得に失敗しました")
 
 
@@ -377,7 +377,7 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
         )
         return JobResponse(job_id=job_id, status="pending")
     except Exception as e:
-        logger.error(f"ペルソナ生成ジョブ投入エラー: {e}")
+        logger.error(f"Failed to submit persona generation job: {e}")
         raise HTTPException(status_code=500, detail="ペルソナ生成の開始に失敗しました")
 
 
@@ -473,7 +473,7 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"議論ジョブ投入エラー: {e}")
+        logger.error(f"Failed to submit discussion job: {e}")
         raise HTTPException(status_code=500, detail="議論の開始に失敗しました")
 
 
@@ -496,7 +496,7 @@ async def get_discussion_detail(discussion_id: str) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"議論取得エラー: {e}")
+        logger.error(f"Failed to fetch discussion: {e}")
         raise HTTPException(status_code=500, detail="議論の取得に失敗しました")
 
 
@@ -541,7 +541,7 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"インサイト生成エラー: {e}")
+        logger.error(f"Failed to generate insight: {e}")
         raise HTTPException(status_code=500, detail="インサイト生成に失敗しました")
 
 
@@ -578,7 +578,7 @@ async def run_interview(req: RunInterviewRequest) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"インタビューエラー: {e}")
+        logger.error(f"Interview error: {e}")
         raise HTTPException(status_code=500, detail="インタビューの実行に失敗しました")
 
 

@@ -66,7 +66,7 @@ class DataAgentService:
             }
         ).encode()
 
-        logger.info("DataAgent 問い合わせ開始: %s", question[:100])
+        logger.info("Starting DataAgent query: %s", question[:100])
 
         try:
             resp = self._client.invoke_agent_runtime(
@@ -106,7 +106,7 @@ class DataAgentService:
                 )
 
             logger.info(
-                "DataAgent 問い合わせ完了 (%d chars, %d csv_urls)",
+                "DataAgent query completed (%d chars, %d csv_urls)",
                 len(result),
                 len(csv_urls),
             )

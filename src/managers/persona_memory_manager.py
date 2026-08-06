@@ -114,13 +114,13 @@ class PersonaMemoryManager:
             return memory_id
 
         except MemoryServiceError as e:
-            self.logger.error("知識の追加中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to add knowledge", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory add failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
             ) from e
         except Exception as e:
-            self.logger.error("知識の追加中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to add knowledge", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory add failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
@@ -181,13 +181,13 @@ class PersonaMemoryManager:
             return (page_memories, page, total_pages)
 
         except MemoryServiceError as e:
-            self.logger.error("記憶の取得中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to retrieve memories", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory fetch failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
             ) from e
         except Exception as e:
-            self.logger.error("記憶の取得中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to retrieve memories", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory fetch failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
@@ -222,13 +222,13 @@ class PersonaMemoryManager:
                 code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE,
             ) from e
         except MemoryServiceError as e:
-            self.logger.error("記憶の削除中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to delete memory", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory delete failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
             ) from e
         except Exception as e:
-            self.logger.error("記憶の削除中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to delete memory", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory delete failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
@@ -281,13 +281,13 @@ class PersonaMemoryManager:
                 code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE,
             ) from e
         except MemoryServiceError as e:
-            self.logger.error("全記憶の削除中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to delete all memories", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory bulk delete failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,
             ) from e
         except Exception as e:
-            self.logger.error("全記憶の削除中にエラーが発生しました", exc_info=True)
+            self.logger.error("Failed to delete all memories", exc_info=True)
             raise PersonaMemoryManagerError(
                 f"memory bulk delete failed ({type(e).__name__})",
                 code=ErrorCode.MEMORY_OPERATION_FAILED,

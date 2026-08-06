@@ -544,10 +544,10 @@ async def dwh_extract(request: Request) -> Any:
             yield _survey_sse_event("done", "")
 
         except (SurveyDatasetValidationError, SurveyDatasetManagerError) as e:
-            logger.warning("DWH セグメント抽出エラー", exc_info=True)
+            logger.warning("DWH segment extraction error", exc_info=True)
             yield _survey_sse_event("error", user_message_for(e))
         except Exception:
-            logger.exception("DWH セグメント抽出エラー")
+            logger.exception("DWH segment extraction error")
             yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
 
     return StreamingResponse(
@@ -1150,7 +1150,7 @@ async def create_template(request: Request) -> Any:
     try:
         manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyTemplateValidationError as e:
-        logger.warning("テンプレートのバリデーションエラー", exc_info=True)
+        logger.warning("Template validation error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1160,7 +1160,7 @@ async def create_template(request: Request) -> Any:
             )
         )
     except SurveyTemplateManagerError as e:
-        logger.error("テンプレート保存エラー", exc_info=True)
+        logger.error("Template save error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1216,7 +1216,7 @@ async def update_template(request: Request, template_id: str) -> Any:
             images=images or None,
         )
     except SurveyTemplateValidationError as e:
-        logger.warning("テンプレートのバリデーションエラー", exc_info=True)
+        logger.warning("Template validation error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1226,7 +1226,7 @@ async def update_template(request: Request, template_id: str) -> Any:
             )
         )
     except SurveyTemplateManagerError as e:
-        logger.error("テンプレート更新エラー", exc_info=True)
+        logger.error("Template update error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1251,7 +1251,7 @@ async def delete_template(request: Request, template_id: str) -> Any:
     try:
         manager.delete_template(template_id)
     except SurveyTemplateManagerError as e:
-        logger.error("テンプレート削除エラー", exc_info=True)
+        logger.error("Template delete error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1339,7 +1339,7 @@ async def execute_survey(request: Request) -> Any:
             ),
         )
     except SurveyExecutionValidationError as e:
-        logger.warning("アンケート実行のバリデーションエラー", exc_info=True)
+        logger.warning("Survey execution validation error", exc_info=True)
         response = mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1352,7 +1352,7 @@ async def execute_survey(request: Request) -> Any:
         response.headers["HX-Reswap"] = "innerHTML"
         return response
     except SurveyExecutionManagerError as e:
-        logger.error("アンケート作成エラー", exc_info=True)
+        logger.error("Survey creation error", exc_info=True)
         # 件数取得のS3/DuckDB障害など一時的な失敗（TRANSIENT）は、画面を書き換えず
         # トーストで通知して入力を保持する。緩めるフィルタが無い状態でインライン
         # エラーに置換すると、再試行で直るのに入力をやり直させることになる
@@ -1403,7 +1403,7 @@ async def download_csv(survey_id: str) -> Any:
         presigned_url = manager.get_download_url(survey_id, expiration=300)
         return RedirectResponse(url=presigned_url)
     except SurveyExecutionManagerError as e:
-        logger.warning("CSVダウンロードURL取得エラー", exc_info=True)
+        logger.warning("CSV download URL retrieval error", exc_info=True)
         raise HTTPException(status_code=404, detail=user_message_for(e))
 
 
@@ -1414,7 +1414,7 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
     try:
         stats = manager.get_persona_statistics(survey_id)
     except SurveyAnalysisManagerError as e:
-        logger.warning("アンケート分析データ取得エラー", exc_info=True)
+        logger.warning("Survey analysis data retrieval error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1437,7 +1437,7 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     try:
         data = manager.get_visual_analysis(survey_id)
     except SurveyAnalysisManagerError as e:
-        logger.warning("アンケート分析データ取得エラー", exc_info=True)
+        logger.warning("Survey analysis data retrieval error", exc_info=True)
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -1472,7 +1472,7 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             manager.save_insight_report(survey_id, "".join(full_content))
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except SurveyAnalysisManagerError as e:
-            logger.warning("レポート生成エラー (survey_id=%s): %s", survey_id, e)
+            logger.warning("Report generation error (survey_id=%s): %s", survey_id, e)
             data = json.dumps(
                 {"type": "error", "message": "レポートの生成に失敗しました"},
                 ensure_ascii=False,
@@ -1480,7 +1480,7 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             yield f"data: {data}\n\n"
         except Exception:
             logger.exception(
-                "レポート生成中に予期しないエラーが発生しました (survey_id=%s)",
+                "Unexpected error during report generation (survey_id=%s)",
                 survey_id,
             )
             data = json.dumps(
