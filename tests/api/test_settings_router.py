@@ -56,6 +56,21 @@ class TestSettingsAPIEndpoints:
         assert resp.status_code == 200
 
 
+class TestSettingsUpdateDataset:
+    @patch("web.routers.settings.get_dataset_manager")
+    def test_update_nonexistent_dataset_returns_404(self, mock_get_dm, client):
+        mock_dm = Mock()
+        mock_dm.update_dataset.return_value = None
+        mock_get_dm.return_value = mock_dm
+        resp = client.put(
+            "/settings/datasets/nonexistent",
+            data={"name": "n", "columns_json": "[]"},
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 404
+        assert 'role="alert"' in resp.text
+
+
 class TestSettingsDeleteDataset:
     @patch("web.routers.settings.get_dataset_manager")
     def test_delete_dataset(self, mock_get_dm, client):

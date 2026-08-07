@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Form, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -270,9 +270,16 @@ async def update_dataset(
         )
 
         if not dataset:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.DATASET_NOT_FOUND),
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": user_message_for_code(ErrorCode.DATASET_NOT_FOUND),
+                    },
+                    status_code=404,
+                )
             )
 
         datasets = dataset_manager.get_datasets()
