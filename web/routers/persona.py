@@ -1040,7 +1040,9 @@ async def delete_persona_memory(
                     {
                         "request": request,
                         "memory_id": memory_id,
-                        "error": "記憶の削除に失敗しました。記憶が見つからないか、既に削除されている可能性があります。",
+                        "error": user_message_for_code(
+                            ErrorCode.MEMORY_ALREADY_DELETED
+                        ),
                     },
                     status_code=400,
                 )
@@ -1558,9 +1560,11 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
 
         if saved_count == 0:
             if cache_miss_count == len(id_list):
-                error_msg = "生成されたペルソナの一時データが期限切れです。お手数ですが再度生成してください。"
+                error_msg = user_message_for_code(
+                    ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
+                )
             else:
-                error_msg = "ペルソナの保存に失敗しました"
+                error_msg = user_message_for_code(ErrorCode.PERSONA_OPERATION_FAILED)
             return mark_renderable(
                 templates.TemplateResponse(
                     request,

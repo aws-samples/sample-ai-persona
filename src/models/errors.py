@@ -110,6 +110,14 @@ class ErrorCode(StrEnum):
         ErrorKind.VALIDATION,
     )
     GENERATION_FILES_REQUIRED = ("generation_files_required", ErrorKind.VALIDATION)
+    # Generated personas live in a TTLCache pending user confirmation to save.
+    # Once the entry ages out, retrying "save" cannot recover it and no input
+    # fixes it either; the only path is regenerating, same treatment as
+    # INTERVIEW_SESSION_AGENTS_MISSING.
+    GENERATION_PERSONA_CACHE_EXPIRED = (
+        "generation_persona_cache_expired",
+        ErrorKind.NOT_FOUND,
+    )
     # Catch-all for generation failures that are not capacity-related (agent
     # setup, unexpected SDK errors).
     GENERATION_OPERATION_FAILED = (
@@ -303,6 +311,11 @@ class ErrorCode(StrEnum):
         "memory_strategy_not_configured",
         ErrorKind.CONFIG,
     )
+    # The delete call reached the service and got ResourceNotFoundException:
+    # the record is already gone (double-click, stale tab). Retrying or
+    # editing input cannot change that; the item itself must be removed from
+    # the screen, same treatment as INTERVIEW_SESSION_ALREADY_SAVED.
+    MEMORY_ALREADY_DELETED = ("memory_already_deleted", ErrorKind.NOT_FOUND)
     MEMORY_SERVICE_UNAVAILABLE = ("memory_service_unavailable", ErrorKind.TRANSIENT)
     MEMORY_OPERATION_FAILED = ("memory_operation_failed", ErrorKind.TRANSIENT)
 

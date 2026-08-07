@@ -64,6 +64,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED: "分析の切り口を入力してください",
     ErrorCode.GENERATION_FILES_REQUIRED: "ファイルが選択されていません",
+    ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED: (
+        "生成されたペルソナの一時データが期限切れです。お手数ですが再度生成してください。"
+    ),
     ErrorCode.GENERATION_OPERATION_FAILED: (
         "ペルソナ生成の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
@@ -342,6 +345,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.MEMORY_STRATEGY_NOT_CONFIGURED: (
         "Semantic記憶戦略が設定されていません。"
         "SEMANTIC_MEMORY_STRATEGY_IDを設定してください。"
+    ),
+    ErrorCode.MEMORY_ALREADY_DELETED: (
+        "記憶が見つかりません。既に削除されている可能性があります。"
     ),
     ErrorCode.MEMORY_SERVICE_UNAVAILABLE: "記憶サービスへの接続に失敗しました。",
     ErrorCode.MEMORY_OPERATION_FAILED: (
