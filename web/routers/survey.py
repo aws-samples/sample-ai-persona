@@ -38,6 +38,7 @@ from src.managers.survey_template_manager import (
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
 )
+from src.models.errors import ErrorCode
 from src.models.survey_template import Question, TemplateImage
 
 logger = logging.getLogger(__name__)
@@ -814,7 +815,10 @@ async def template_edit(request: Request, template_id: str) -> Any:
     manager = get_template_manager()
     tmpl = manager.get_template(template_id)
     if tmpl is None:
-        raise HTTPException(status_code=404, detail="テンプレートが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.SURVEY_TEMPLATE_NOT_FOUND),
+        )
     # 既存画像にプレビューURLを付与
     images_with_urls = []
     for img in tmpl.images:
@@ -1018,7 +1022,10 @@ async def result_detail(request: Request, survey_id: str) -> Any:
     exec_mgr = get_execution_manager()
     survey = exec_mgr.get_survey(survey_id)
     if survey is None:
-        raise HTTPException(status_code=404, detail="アンケートが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.SURVEY_NOT_FOUND),
+        )
     tmpl_mgr = get_template_manager()
     # テンプレートの画像情報を取得（プレビューURL付き）
     survey_template = tmpl_mgr.get_template(survey.template_id)

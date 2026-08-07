@@ -16,7 +16,9 @@ from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.interview_manager import InterviewManager
 from src.managers.job_manager import JobManager
+from src.models.errors import ErrorCode
 from src.models.insight_category import InsightCategory
+from web.error_messages import user_message_for_code
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +246,10 @@ async def get_persona(persona_id: str) -> Any:
         persona = persona_manager.get_persona(persona_id)
 
         if not persona:
-            raise HTTPException(status_code=404, detail="ペルソナが見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
+            )
 
         return PersonaResponse(
             id=persona.id,
@@ -320,7 +325,8 @@ def _resolve_personas(persona_ids: List[str]) -> list:
         p = pm.get_persona(pid)
         if not p:
             raise HTTPException(
-                status_code=404, detail=f"ペルソナが見つかりません: {pid}"
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
             )
         personas.append(p)
     return personas
@@ -491,7 +497,10 @@ async def get_discussion_detail(discussion_id: str) -> Any:
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
         if not discussion:
-            raise HTTPException(status_code=404, detail="議論が見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+            )
         return _discussion_detail(discussion)
     except HTTPException:
         raise
@@ -515,7 +524,10 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
         if not discussion:
-            raise HTTPException(status_code=404, detail="議論が見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+            )
 
         cats = (
             [InsightCategory.from_dict(c.model_dump()) for c in req.categories]

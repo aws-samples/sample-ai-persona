@@ -22,12 +22,14 @@ from src.managers.agent_discussion_manager import (
 )
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
+from src.models.errors import ErrorCode
 from src.models.insight_category import InsightCategory
 from web.error_messages import (
     is_correctable,
     mark_renderable,
     toast_response,
     user_message_for,
+    user_message_for_code,
 )
 from ._pagination import decode_cursor, encode_cursor
 
@@ -214,7 +216,7 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
                     "partials/error_banner.html",
                     {
                         "request": request,
-                        "error": "議論が見つかりません",
+                        "error": user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
                         "back_url": "/discussion/results",
                         "back_label": "議論一覧に戻る",
                     },
@@ -593,7 +595,10 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
         discussion = discussion_manager.get_discussion(discussion_id)
 
         if not discussion:
-            raise HTTPException(status_code=404, detail="議論が見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+            )
 
         # 参加ペルソナの詳細情報を取得
         participant_personas = _get_participant_personas(discussion.participants)
@@ -771,7 +776,7 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
                     "partials/error_banner.html",
                     {
                         "request": request,
-                        "error": "議論が見つかりません",
+                        "error": user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
                         "back_url": "/discussion/results",
                         "back_label": "議論一覧に戻る",
                     },
@@ -1103,11 +1108,17 @@ async def get_report(
         report_manager = get_report_manager()
         discussion = report_manager.get_discussion(discussion_id)
         if not discussion:
-            return HTMLResponse(content="議論が見つかりません", status_code=404)
+            return HTMLResponse(
+                content=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+                status_code=404,
+            )
 
         report = next((r for r in discussion.reports if r.id == report_id), None)
         if not report:
-            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+            return HTMLResponse(
+                content=user_message_for_code(ErrorCode.REPORT_NOT_FOUND),
+                status_code=404,
+            )
 
         return templates.TemplateResponse(
             request,
@@ -1130,11 +1141,17 @@ async def export_report(
         report_manager = get_report_manager()
         discussion = report_manager.get_discussion(discussion_id)
         if not discussion:
-            return HTMLResponse(content="議論が見つかりません", status_code=404)
+            return HTMLResponse(
+                content=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+                status_code=404,
+            )
 
         report = next((r for r in discussion.reports if r.id == report_id), None)
         if not report:
-            return HTMLResponse(content="レポートが見つかりません", status_code=404)
+            return HTMLResponse(
+                content=user_message_for_code(ErrorCode.REPORT_NOT_FOUND),
+                status_code=404,
+            )
 
         content = report.content
         if format == "txt":

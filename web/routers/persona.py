@@ -24,6 +24,7 @@ from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationCapacityError,
     PersonaGenerationManagerError,
 )
+from src.models.errors import ErrorCode
 from src.models.persona import Persona
 from web.error_messages import (
     field_of,
@@ -32,6 +33,7 @@ from web.error_messages import (
     mark_renderable,
     toast_response,
     user_message_for,
+    user_message_for_code,
 )
 from ._pagination import decode_cursor, encode_cursor
 
@@ -615,7 +617,7 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
                     "partials/error_banner.html",
                     {
                         "request": request,
-                        "error": "ペルソナが見つかりません",
+                        "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
                         "back_url": "/persona/management",
                         "back_label": "ペルソナ一覧に戻る",
                     },
@@ -739,7 +741,7 @@ async def update_persona(
                     "partials/error_banner.html",
                     {
                         "request": request,
-                        "error": "ペルソナが見つかりません",
+                        "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
                         "back_url": "/persona/management",
                         "back_label": "ペルソナ一覧に戻る",
                     },
@@ -790,7 +792,10 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
         persona = persona_manager.get_persona(persona_id)
 
         if not persona:
-            raise HTTPException(status_code=404, detail="ペルソナが見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
+            )
 
         return templates.TemplateResponse(
             request,
