@@ -241,7 +241,7 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
                 "title": "インタビューチャット",
                 "session": session,
                 "participants": participants,
-                "missing_personas": missing_personas,
+                "missing_persona_count": len(missing_personas),
             },
         )
 
