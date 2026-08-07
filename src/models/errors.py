@@ -455,6 +455,18 @@ class ErrorCode(StrEnum):
         "interview_save_precondition_not_met",
         ErrorKind.VALIDATION,
     )
+    # Router-side pre-check on save, finer-grained than the manager's own
+    # INTERVIEW_SAVE_PRECONDITION_NOT_MET: which side is missing decides what
+    # the user should do next (ask a question vs. wait for/retry a response).
+    INTERVIEW_NO_MESSAGES = ("interview_no_messages", ErrorKind.VALIDATION)
+    INTERVIEW_NO_USER_MESSAGES = (
+        "interview_no_user_messages",
+        ErrorKind.VALIDATION,
+    )
+    INTERVIEW_NO_PERSONA_RESPONSES = (
+        "interview_no_persona_responses",
+        ErrorKind.VALIDATION,
+    )
     # Catch-alls for interview operations that failed for internal reasons.
     INTERVIEW_SESSION_OPERATION_FAILED = (
         "interview_session_operation_failed",

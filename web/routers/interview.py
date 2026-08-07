@@ -636,7 +636,7 @@ async def save_interview_session(
         if message_count == 0:
             return JSONResponse(
                 {
-                    "error": "保存するメッセージがありません",
+                    "error": user_message_for_code(ErrorCode.INTERVIEW_NO_MESSAGES),
                     "error_type": "validation_error",
                     "message_count": message_count,
                 },
@@ -647,7 +647,9 @@ async def save_interview_session(
         if not session_status.get("has_user_messages", False):
             return JSONResponse(
                 {
-                    "error": "ユーザーメッセージが含まれていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_NO_USER_MESSAGES
+                    ),
                     "error_type": "validation_error",
                 },
                 status_code=400,
@@ -656,7 +658,9 @@ async def save_interview_session(
         if not session_status.get("has_persona_responses", False):
             return JSONResponse(
                 {
-                    "error": "ペルソナの応答が含まれていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_NO_PERSONA_RESPONSES
+                    ),
                     "error_type": "validation_error",
                 },
                 status_code=400,

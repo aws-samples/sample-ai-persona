@@ -286,6 +286,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET: (
         "保存するにはユーザーとペルソナ双方のメッセージが必要です"
     ),
+    ErrorCode.INTERVIEW_NO_MESSAGES: "保存するメッセージがありません",
+    ErrorCode.INTERVIEW_NO_USER_MESSAGES: "ユーザーメッセージが含まれていません",
+    ErrorCode.INTERVIEW_NO_PERSONA_RESPONSES: "ペルソナの応答が含まれていません",
     ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED: (
         "インタビューの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
