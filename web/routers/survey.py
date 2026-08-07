@@ -1147,7 +1147,10 @@ async def image_preview(file_path: str) -> Any:
     if not url:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="画像が見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.S3_OBJECT_NOT_FOUND),
+        )
     return JSONResponse({"url": url})
 
 

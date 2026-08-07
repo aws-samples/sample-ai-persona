@@ -115,11 +115,12 @@ async def create_interview_session(
                 missing_personas.append(persona_id)
 
         if missing_personas:
+            logger.warning(f"Personas not found: {missing_personas}")
             return JSONResponse(
                 {
-                    "error": f"以下のペルソナが見つかりません: {', '.join(missing_personas)}",
+                    "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
                     "error_type": "persona_not_found",
-                    "missing_personas": missing_personas,
+                    "missing_persona_count": len(missing_personas),
                 },
                 status_code=404,
             )
@@ -127,7 +128,9 @@ async def create_interview_session(
         if not personas:
             return JSONResponse(
                 {
-                    "error": "有効なペルソナが見つかりません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_PERSONAS_REQUIRED
+                    ),
                     "error_type": "no_valid_personas",
                 },
                 status_code=400,
