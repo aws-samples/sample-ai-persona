@@ -18,7 +18,7 @@ from src.managers.interview_manager import InterviewManager
 from src.managers.job_manager import JobManager
 from src.models.errors import ErrorCode
 from src.models.insight_category import InsightCategory
-from web.error_messages import user_message_for_code
+from web.error_messages import user_message_for, user_message_for_code
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,10 @@ async def list_personas(search: Optional[str] = None) -> Any:
         ]
     except Exception as e:
         logger.error(f"Failed to fetch persona list: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナ一覧の取得に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナ一覧の取得に失敗しました"),
+        )
 
 
 @router.get("/personas/{persona_id}", response_model=PersonaResponse)
@@ -269,7 +272,10 @@ async def get_persona(persona_id: str) -> Any:
         raise
     except Exception as e:
         logger.error(f"Failed to fetch persona: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナの取得に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナの取得に失敗しました"),
+        )
 
 
 @router.get("/discussions")
@@ -290,7 +296,10 @@ async def list_discussions() -> Any:
         ]
     except Exception as e:
         logger.error(f"Failed to fetch discussion list: {e}")
-        raise HTTPException(status_code=500, detail="議論一覧の取得に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論一覧の取得に失敗しました"),
+        )
 
 
 @router.get("/health")
@@ -384,7 +393,10 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
         return JobResponse(job_id=job_id, status="pending")
     except Exception as e:
         logger.error(f"Failed to submit persona generation job: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナ生成の開始に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナ生成の開始に失敗しました"),
+        )
 
 
 # --- run_discussion (async job) ---
@@ -480,7 +492,10 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
         raise
     except Exception as e:
         logger.error(f"Failed to submit discussion job: {e}")
-        raise HTTPException(status_code=500, detail="議論の開始に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論の開始に失敗しました"),
+        )
 
 
 # --- get_discussion ---
@@ -506,7 +521,10 @@ async def get_discussion_detail(discussion_id: str) -> Any:
         raise
     except Exception as e:
         logger.error(f"Failed to fetch discussion: {e}")
-        raise HTTPException(status_code=500, detail="議論の取得に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論の取得に失敗しました"),
+        )
 
 
 # --- generate_insights ---
@@ -554,7 +572,10 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
         raise
     except Exception as e:
         logger.error(f"Failed to generate insight: {e}")
-        raise HTTPException(status_code=500, detail="インサイト生成に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="インサイト生成に失敗しました"),
+        )
 
 
 # --- run_interview ---
@@ -591,7 +612,10 @@ async def run_interview(req: RunInterviewRequest) -> Any:
         raise
     except Exception as e:
         logger.error(f"Interview error: {e}")
-        raise HTTPException(status_code=500, detail="インタビューの実行に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="インタビューの実行に失敗しました"),
+        )
 
 
 # --- job status ---
