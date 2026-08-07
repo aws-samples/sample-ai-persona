@@ -376,11 +376,15 @@ async def generate_persona(
                         "しばらくしてから再試行してください。",
                     ),
                 )
-            except Exception:
+            except Exception as e:
                 logger.exception("DWH persona generation error")
                 yield _sse_event(
                     "error",
-                    "ペルソナ生成中にエラーが発生しました。しばらくしてから再試行してください。",
+                    user_message_for(
+                        e,
+                        default="ペルソナ生成中にエラーが発生しました。"
+                        "しばらくしてから再試行してください。",
+                    ),
                 )
 
         return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
@@ -461,12 +465,16 @@ async def generate_persona(
                     "時間をおいて再度お試しください。",
                 ),
             )
-        except Exception:
+        except Exception as e:
             # 詳細なエラー内容はサーバーログにのみ出力し、クライアントには一般的なメッセージを返す
             logger.error("Persona generation error occurred", exc_info=True)
             yield _sse_event(
                 "error",
-                "ペルソナ生成中にエラーが発生しました。時間をおいて再度お試しください。",
+                user_message_for(
+                    e,
+                    default="ペルソナ生成中にエラーが発生しました。"
+                    "時間をおいて再度お試しください。",
+                ),
             )
 
     return StreamingResponse(

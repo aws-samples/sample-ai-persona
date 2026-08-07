@@ -819,7 +819,12 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_banner.html",
-                {"request": request, "error": "インサイトの取得に失敗しました"},
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="インサイトの取得に失敗しました"
+                    ),
+                },
                 status_code=500,
             )
         )

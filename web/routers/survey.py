@@ -253,7 +253,10 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "CSVファイルの解析に失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(e, default="CSVファイルの解析に失敗しました"),
+            },
         )
 
 
@@ -558,9 +561,12 @@ async def dwh_extract(request: Request) -> Any:
         except (SurveyDatasetValidationError, SurveyDatasetManagerError) as e:
             logger.warning("DWH segment extraction error", exc_info=True)
             yield _survey_sse_event("error", user_message_for(e))
-        except Exception:
+        except Exception as e:
             logger.exception("DWH segment extraction error")
-            yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
+            yield _survey_sse_event(
+                "error",
+                user_message_for(e, default="セグメント抽出中にエラーが発生しました。"),
+            )
 
     return StreamingResponse(
         event_generator(),
@@ -1538,13 +1544,18 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"
-        except Exception:
+        except Exception as e:
             logger.exception(
                 "Unexpected error during report generation (survey_id=%s)",
                 survey_id,
             )
             data = json.dumps(
-                {"type": "error", "message": "レポートの生成に失敗しました"},
+                {
+                    "type": "error",
+                    "message": user_message_for(
+                        e, default="レポートの生成に失敗しました"
+                    ),
+                },
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"
