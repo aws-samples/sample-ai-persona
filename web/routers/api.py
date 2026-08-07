@@ -631,7 +631,10 @@ async def get_job(job_id: str) -> Any:
     jm = get_job_manager()
     job = jm.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.JOB_NOT_FOUND),
+        )
     return JobResponse(
         job_id=job.id,
         status=job.status.value,

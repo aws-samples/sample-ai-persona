@@ -195,10 +195,15 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
             },
             status_code=400,
         )
-    except Exception:
+    except Exception as e:
         logger.error("Document upload error", exc_info=True)
         return JSONResponse(
-            {"error": "ドキュメントのアップロードに失敗しました"}, status_code=400
+            {
+                "error": user_message_for(
+                    e, default="ドキュメントのアップロードに失敗しました"
+                )
+            },
+            status_code=400,
         )
 
 
@@ -488,7 +493,9 @@ async def start_discussion(
                     "partials/error_inline.html",
                     {
                         "request": request,
-                        "error": "インタビューモードは別のエンドポイントで処理されます",
+                        "error": user_message_for_code(
+                            ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED
+                        ),
                     },
                     status_code=400,
                 )

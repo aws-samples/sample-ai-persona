@@ -663,7 +663,9 @@ async def save_interview_session(
         if not session_name or not session_name.strip():
             return JSONResponse(
                 {
-                    "error": "セッション名が指定されていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NAME_REQUIRED
+                    ),
                     "error_type": "validation_error",
                     "field": "session_name",
                 },
@@ -674,7 +676,9 @@ async def save_interview_session(
         if len(session_name) > 100:
             return JSONResponse(
                 {
-                    "error": "セッション名が長すぎます（最大100文字）",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NAME_TOO_LONG, {"max_length": 100}
+                    ),
                     "error_type": "validation_error",
                     "field": "session_name",
                     "max_length": 100,

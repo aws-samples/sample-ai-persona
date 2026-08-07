@@ -1516,7 +1516,12 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
                 templates.TemplateResponse(
                     request,
                     "partials/error_inline.html",
-                    {"request": request, "error": "保存するペルソナを選択してください"},
+                    {
+                        "request": request,
+                        "error": user_message_for_code(
+                            ErrorCode.PERSONA_SELECTION_REQUIRED
+                        ),
+                    },
                     status_code=400,
                 )
             )

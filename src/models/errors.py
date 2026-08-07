@@ -91,6 +91,7 @@ class ErrorCode(StrEnum):
 
     # --- Generic ---
     NETWORK_ERROR = ("network_error", ErrorKind.TRANSIENT)
+    JOB_NOT_FOUND = ("job_not_found", ErrorKind.NOT_FOUND)
 
     # --- Generation capacity ---
     GENERATION_CAPACITY_EXCEEDED = (
@@ -159,6 +160,10 @@ class ErrorCode(StrEnum):
         "survey_template_no_questions",
         ErrorKind.VALIDATION,
     )
+    SURVEY_TEMPLATE_QUESTIONS_INVALID = (
+        "survey_template_questions_invalid",
+        ErrorKind.VALIDATION,
+    )
     SURVEY_TEMPLATE_TOO_FEW_OPTIONS = (
         "survey_template_too_few_options",
         ErrorKind.VALIDATION,
@@ -169,6 +174,10 @@ class ErrorCode(StrEnum):
     )
     SURVEY_TEMPLATE_IMAGE_NAME_MISSING = (
         "survey_template_image_name_missing",
+        ErrorKind.VALIDATION,
+    )
+    SURVEY_PERSONA_COUNT_INVALID = (
+        "survey_persona_count_invalid",
         ErrorKind.VALIDATION,
     )
     SURVEY_TARGET_COUNT_TOO_LOW = (
@@ -249,6 +258,10 @@ class ErrorCode(StrEnum):
     PERSONA_FIELD_REQUIRED = ("persona_field_required", ErrorKind.VALIDATION)
     PERSONA_FIELD_TOO_LONG = ("persona_field_too_long", ErrorKind.VALIDATION)
     PERSONA_LIST_EMPTY = ("persona_list_empty", ErrorKind.VALIDATION)
+    PERSONA_SELECTION_REQUIRED = (
+        "persona_selection_required",
+        ErrorKind.VALIDATION,
+    )
     PERSONA_LIST_HAS_EMPTY_ITEM = (
         "persona_list_has_empty_item",
         ErrorKind.VALIDATION,
@@ -294,6 +307,10 @@ class ErrorCode(StrEnum):
     MEMORY_OPERATION_FAILED = ("memory_operation_failed", ErrorKind.TRANSIENT)
 
     # --- Discussions ---
+    DISCUSSION_INTERVIEW_MODE_UNSUPPORTED = (
+        "discussion_interview_mode_unsupported",
+        ErrorKind.VALIDATION,
+    )
     DISCUSSION_PERSONAS_REQUIRED = (
         "discussion_personas_required",
         ErrorKind.VALIDATION,
@@ -395,6 +412,14 @@ class ErrorCode(StrEnum):
     )
     INTERVIEW_MESSAGE_REQUIRED = ("interview_message_required", ErrorKind.VALIDATION)
     INTERVIEW_MESSAGE_TOO_LONG = ("interview_message_too_long", ErrorKind.CAPACITY)
+    INTERVIEW_SESSION_NAME_REQUIRED = (
+        "interview_session_name_required",
+        ErrorKind.VALIDATION,
+    )
+    INTERVIEW_SESSION_NAME_TOO_LONG = (
+        "interview_session_name_too_long",
+        ErrorKind.CAPACITY,
+    )
     INTERVIEW_SESSION_NOT_FOUND = (
         "interview_session_not_found",
         ErrorKind.NOT_FOUND,

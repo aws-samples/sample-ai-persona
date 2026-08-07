@@ -1178,7 +1178,12 @@ async def create_template(request: Request) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_inline.html",
-                {"request": request, "error": "質問データの形式が不正です"},
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_TEMPLATE_QUESTIONS_INVALID
+                    ),
+                },
                 status_code=400,
             )
         )
@@ -1239,7 +1244,12 @@ async def update_template(request: Request, template_id: str) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_inline.html",
-                {"request": request, "error": "質問データの形式が不正です"},
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_TEMPLATE_QUESTIONS_INVALID
+                    ),
+                },
                 status_code=400,
             )
         )
@@ -1351,7 +1361,12 @@ async def execute_survey(request: Request) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_inline.html",
-                {"request": request, "error": "ペルソナ数は整数で入力してください"},
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_PERSONA_COUNT_INVALID
+                    ),
+                },
                 status_code=400,
             )
         )

@@ -50,6 +50,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.NETWORK_ERROR: (
         "ネットワーク接続エラーが発生しました。接続を確認してください。"
     ),
+    ErrorCode.JOB_NOT_FOUND: "ジョブが見つかりません",
     ErrorCode.GENERATION_CAPACITY_EXCEEDED: (
         "生成するデータ量が大きすぎて処理しきれませんでした。"
         "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
@@ -109,11 +110,13 @@ _CATALOG: dict[ErrorCode, str] = {
         "テンプレート名は空白のみでは登録できません"
     ),
     ErrorCode.SURVEY_TEMPLATE_NO_QUESTIONS: "質問が1つも含まれていません",
+    ErrorCode.SURVEY_TEMPLATE_QUESTIONS_INVALID: "質問データの形式が不正です",
     ErrorCode.SURVEY_TEMPLATE_TOO_FEW_OPTIONS: (
         "選択式質問「{question_text}」には2つ以上の選択肢が必要です"
     ),
     ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES: "画像は1枚まで添付できます",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
+    ErrorCode.SURVEY_PERSONA_COUNT_INVALID: "ペルソナ数は整数で入力してください",
     ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW: (
         "対象ペルソナ数は{min_count}以上で指定してください"
     ),
@@ -174,6 +177,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "レポート生成に失敗しました。再試行してください。"
     ),
     # --- 議論 ---
+    ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED: (
+        "インタビューモードは別のエンドポイントで処理されます"
+    ),
     ErrorCode.DISCUSSION_PERSONAS_REQUIRED: "議論参加ペルソナが指定されていません",
     ErrorCode.DISCUSSION_TOO_FEW_PERSONAS: (
         "議論には最低{min_personas}つのペルソナが必要です"
@@ -265,6 +271,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.INTERVIEW_MESSAGE_TOO_LONG: (
         "メッセージが長すぎます（最大{max_length}文字）"
     ),
+    ErrorCode.INTERVIEW_SESSION_NAME_REQUIRED: "セッション名を入力してください",
+    ErrorCode.INTERVIEW_SESSION_NAME_TOO_LONG: (
+        "セッション名が長すぎます（最大{max_length}文字）"
+    ),
     ErrorCode.INTERVIEW_SESSION_NOT_FOUND: "インタビューセッションが見つかりません",
     ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED: ("このセッションは既に保存されています"),
     ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING: (
@@ -290,6 +300,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.PERSONA_FIELD_REQUIRED: "{field}が設定されていません",
     ErrorCode.PERSONA_FIELD_TOO_LONG: "{field}は{max_length}文字以内で設定してください",
     ErrorCode.PERSONA_LIST_EMPTY: "{field}が1つも設定されていません",
+    ErrorCode.PERSONA_SELECTION_REQUIRED: "保存するペルソナを選択してください",
     ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM: "{field}に空の項目があります",
     ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS: "{field}は{max_items}項目以内で設定してください",
     ErrorCode.PERSONA_LIST_ITEM_TOO_LONG: (
