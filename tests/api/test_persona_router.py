@@ -473,7 +473,7 @@ class TestPersonaDeleteEndpoint:
         response = client.delete("/persona/non-existent-id")
 
         assert response.status_code == 400
-        assert "削除に失敗しました" in response.text
+        assert 'role="alert"' in response.text
 
 
 class TestPersonaListPartialEndpoint:

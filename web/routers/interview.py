@@ -24,12 +24,13 @@ from src.managers.interview_manager import (
     InterviewAgentError,
     InterviewPersistenceError,
 )
-from src.models.errors import ErrorKind
+from src.models.errors import ErrorCode, ErrorKind
 from web.error_messages import (
     error_kind_of,
     is_correctable,
     mark_renderable,
     user_message_for,
+    user_message_for_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -605,7 +606,9 @@ async def save_interview_session(
         except InterviewSessionNotFoundError:
             return JSONResponse(
                 {
-                    "error": "インタビューセッションが見つかりません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+                    ),
                     "error_type": "session_not_found",
                     "session_id": session_id,
                 },
@@ -616,7 +619,9 @@ async def save_interview_session(
         if session_status.get("is_saved", False):
             return JSONResponse(
                 {
-                    "message": "このセッションは既に保存されています",
+                    "message": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+                    ),
                     "already_saved": True,
                     "session_status": session_status,
                     "timestamp": datetime.now().isoformat(),
@@ -887,7 +892,11 @@ async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24) -
     except Exception as e:
         logger.error(f"Error during session cleanup: {e}")
         return JSONResponse(
-            {"error": "セッションクリーンアップ中にエラーが発生しました"},
+            {
+                "error": user_message_for(
+                    e, default="セッションクリーンアップ中にエラーが発生しました"
+                )
+            },
             status_code=500,
         )
 
@@ -915,5 +924,10 @@ async def get_interview_stats(request: Request) -> Any:
     except Exception as e:
         logger.error(f"Error getting interview stats: {e}")
         return JSONResponse(
-            {"error": "統計情報の取得中にエラーが発生しました"}, status_code=500
+            {
+                "error": user_message_for(
+                    e, default="統計情報の取得中にエラーが発生しました"
+                )
+            },
+            status_code=500,
         )

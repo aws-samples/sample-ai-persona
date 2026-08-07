@@ -235,7 +235,12 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
             templates.TemplateResponse(
                 request,
                 "partials/error_banner.html",
-                {"request": request, "error": "議論結果の取得に失敗しました"},
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="議論結果の取得に失敗しました"
+                    ),
+                },
                 status_code=500,
             )
         )
@@ -263,7 +268,7 @@ async def stream_discussion(
             return StreamingResponse(
                 iter(
                     [
-                        f"data: {json.dumps({'type': 'error', 'message': '最低2体のペルソナが必要です'}, ensure_ascii=False)}\n\n"
+                        f"data: {json.dumps({'type': 'error', 'message': user_message_for_code(ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {'min_personas': 2})}, ensure_ascii=False)}\n\n"
                     ]
                 ),
                 media_type="text/event-stream",
@@ -277,7 +282,7 @@ async def stream_discussion(
             return StreamingResponse(
                 iter(
                     [
-                        f"data: {json.dumps({'type': 'error', 'message': '有効なペルソナが2体以上必要です'}, ensure_ascii=False)}\n\n"
+                        f"data: {json.dumps({'type': 'error', 'message': user_message_for_code(ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {'min_personas': 2})}, ensure_ascii=False)}\n\n"
                     ]
                 ),
                 media_type="text/event-stream",
@@ -496,7 +501,9 @@ async def start_discussion(
                     "partials/error_inline.html",
                     {
                         "request": request,
-                        "error": "議論には最低2体のペルソナが必要です",
+                        "error": user_message_for_code(
+                            ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {"min_personas": 2}
+                        ),
                     },
                     status_code=400,
                 )
@@ -511,7 +518,12 @@ async def start_discussion(
                 templates.TemplateResponse(
                     request,
                     "partials/error_inline.html",
-                    {"request": request, "error": "有効なペルソナが2体以上必要です"},
+                    {
+                        "request": request,
+                        "error": user_message_for_code(
+                            ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {"min_personas": 2}
+                        ),
+                    },
                     status_code=400,
                 )
             )
@@ -733,7 +745,12 @@ async def delete_discussion(request: Request, discussion_id: str) -> Any:
                 templates.TemplateResponse(
                     request,
                     "partials/error_inline.html",
-                    {"request": request, "error": "議論の削除に失敗しました"},
+                    {
+                        "request": request,
+                        "error": user_message_for_code(
+                            ErrorCode.DISCUSSION_OPERATION_FAILED
+                        ),
+                    },
                     status_code=400,
                 )
             )
@@ -1091,8 +1108,9 @@ async def update_report_content(
         )
     except Exception as e:
         logger.error(f"Failed to update report: {e}")
+        message = user_message_for(e, default="更新に失敗しました")
         return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">更新に失敗しました</div>',
+            f'<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">{message}</div>',
             status_code=400,
         )
 
@@ -1127,7 +1145,10 @@ async def get_report(
         )
     except Exception as e:
         logger.error(f"Failed to get report: {e}")
-        return HTMLResponse(content="レポートの取得に失敗しました", status_code=500)
+        return HTMLResponse(
+            content=user_message_for(e, default="レポートの取得に失敗しました"),
+            status_code=500,
+        )
 
 
 @router.get("/{discussion_id}/report/{report_id}/export")
@@ -1174,7 +1195,10 @@ async def export_report(
         )
     except Exception as e:
         logger.error(f"Failed to export report: {e}")
-        return HTMLResponse(content="エクスポートに失敗しました", status_code=500)
+        return HTMLResponse(
+            content=user_message_for(e, default="エクスポートに失敗しました"),
+            status_code=500,
+        )
 
 
 @router.delete("/{discussion_id}/report/{report_id}")

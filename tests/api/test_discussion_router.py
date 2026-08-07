@@ -107,7 +107,7 @@ class TestDiscussionStartEndpoint:
         )
 
         assert response.status_code == 400
-        assert "最低2体のペルソナが必要" in response.text
+        assert "error-inline" in response.text or 'role="alert"' in response.text
 
     @patch("web.routers.discussion.get_persona_manager")
     def test_start_invalid_personas(self, mock_get_manager, client):
@@ -126,7 +126,7 @@ class TestDiscussionStartEndpoint:
         )
 
         assert response.status_code == 400
-        assert "有効なペルソナが2体以上必要" in response.text
+        assert "error-inline" in response.text or 'role="alert"' in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     @patch("web.routers.discussion.get_persona_manager")
@@ -247,7 +247,7 @@ class TestDiscussionDeleteEndpoint:
         response = client.delete("/discussion/non-existent-id")
 
         assert response.status_code == 400
-        assert "削除に失敗しました" in response.text
+        assert 'role="alert"' in response.text
 
 
 class TestDiscussionInsightsEndpoint:
@@ -291,8 +291,8 @@ class TestDiscussionStreamEndpoint:
         response = client.get("/discussion/stream?topic=test&persona_ids=p1")
 
         assert response.status_code == 200  # SSEなので200を返す
-        # エラーメッセージがストリームに含まれることを確認
-        assert "最低2体のペルソナが必要" in response.text
+        # エラーイベントがストリームに含まれることを確認（文言はカタログの責務）
+        assert '"type": "error"' in response.text
 
     @patch("web.routers.discussion.get_persona_manager")
     def test_stream_invalid_personas(self, mock_get_manager, client):
@@ -306,7 +306,7 @@ class TestDiscussionStreamEndpoint:
         )
 
         assert response.status_code == 200  # SSEなので200を返す
-        assert "有効なペルソナが2体以上必要" in response.text
+        assert '"type": "error"' in response.text
 
 
 class TestDiscussionDocumentUploadEndpoint:

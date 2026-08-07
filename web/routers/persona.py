@@ -636,7 +636,12 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_banner.html",
-                {"request": request, "error": "編集フォームの取得に失敗しました"},
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="編集フォームの取得に失敗しました"
+                    ),
+                },
                 status_code=500,
             )
         )
@@ -811,7 +816,10 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
     except Exception as e:
         logger.error(f"Persona fetch error: {e}")
         raise HTTPException(
-            status_code=500, detail="ペルソナの取得中にエラーが発生しました"
+            status_code=500,
+            detail=user_message_for(
+                e, default="ペルソナの取得中にエラーが発生しました"
+            ),
         )
 
 
@@ -839,7 +847,12 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
                 templates.TemplateResponse(
                     request,
                     "partials/error_inline.html",
-                    {"request": request, "error": "ペルソナの削除に失敗しました"},
+                    {
+                        "request": request,
+                        "error": user_message_for_code(
+                            ErrorCode.PERSONA_OPERATION_FAILED
+                        ),
+                    },
                     status_code=400,
                 )
             )
@@ -910,7 +923,12 @@ async def get_persona_list_partial(
             templates.TemplateResponse(
                 request,
                 "partials/error_banner.html",
-                {"request": request, "error": "ペルソナ一覧の取得に失敗しました"},
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="ペルソナ一覧の取得に失敗しました"
+                    ),
+                },
                 status_code=500,
             )
         )
@@ -1299,7 +1317,7 @@ async def upload_knowledge_file_preview(
             {"request": request, "error": user_message_for(e)},
         )
 
-    except Exception:
+    except Exception as e:
         logger.error(
             "Unexpected error uploading knowledge file for persona %s",
             persona_id,
@@ -1310,7 +1328,9 @@ async def upload_knowledge_file_preview(
             "persona/partials/knowledge_file_error.html",
             {
                 "request": request,
-                "error": "ファイルのアップロード中にエラーが発生しました",
+                "error": user_message_for(
+                    e, default="ファイルのアップロード中にエラーが発生しました"
+                ),
             },
         )
 
@@ -1468,7 +1488,7 @@ async def preview_dataset_binding(
             "persona/partials/dataset_preview.html",
             {"request": request, **data},
         )
-    except Exception:
+    except Exception as e:
         logger.error("Dataset preview error", exc_info=True)
         return templates.TemplateResponse(
             request,
@@ -1478,7 +1498,7 @@ async def preview_dataset_binding(
                 "columns": [],
                 "rows": [],
                 "total_count": 0,
-                "error": "データの取得に失敗しました",
+                "error": user_message_for(e, default="データの取得に失敗しました"),
             },
         )
 

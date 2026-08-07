@@ -208,7 +208,12 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "CSVファイルのみアップロード可能です。"},
+            {
+                "request": request,
+                "error": user_message_for_code(
+                    ErrorCode.FILE_FORMAT_NOT_ALLOWED, {"allowed_formats": "CSV"}
+                ),
+            },
         )
     try:
         content = await file.read()
@@ -218,7 +223,9 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
                 "survey/partials/custom_upload_result.html",
                 {
                     "request": request,
-                    "error": "ファイルサイズは500MB以下にしてください。",
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_TOO_LARGE, {"max_size_mb": 500.0}
+                    ),
                 },
             )
         manager = get_dataset_manager()
@@ -303,7 +310,12 @@ async def preview_persona_prompt(request: Request) -> Any:
         return templates.TemplateResponse(
             request,
             "survey/partials/prompt_preview.html",
-            {"request": request, "error": "プロンプトのプレビュー生成に失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(
+                    e, default="プロンプトのプレビュー生成に失敗しました"
+                ),
+            },
         )
 
 
@@ -410,9 +422,8 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
         )
     except Exception as e:
         logger.error(f"Failed to load dataset detail: {e}")
-        return HTMLResponse(
-            '<div class="text-red-600 text-sm p-2">詳細の取得に失敗しました</div>'
-        )
+        message = user_message_for(e, default="詳細の取得に失敗しました")
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-2">{message}</div>')
 
 
 @router.delete("/persona-data/custom/{name}", response_class=HTMLResponse)
@@ -603,7 +614,9 @@ async def dwh_preview(request: Request) -> Any:
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
-                "error": "プレビューの生成に失敗しました。再度お試しください。",
+                "error": user_message_for(
+                    e, default="プレビューの生成に失敗しました。再度お試しください。"
+                ),
             },
         )
 
@@ -766,13 +779,22 @@ async def template_ai_chat(request: Request) -> JSONResponse:
         logger.info(f"AI chat validation error: {e}")
         return JSONResponse(
             {
-                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "入力内容が不正です。1メッセージは2000文字以内、"
+                        "会話履歴は40件までにしてください。"
+                    ),
+                )
             },
             status_code=400,
         )
     except Exception as e:
         logger.error(f"AI chat failed: {e}")
-        return JSONResponse({"error": "AIの応答生成に失敗しました"}, status_code=500)
+        return JSONResponse(
+            {"error": user_message_for(e, default="AIの応答生成に失敗しました")},
+            status_code=500,
+        )
     return JSONResponse({"assistant_message": assistant_message})
 
 
@@ -794,7 +816,13 @@ async def template_ai_generate(request: Request) -> JSONResponse:
         logger.info(f"AI draft validation error: {e}")
         return JSONResponse(
             {
-                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "入力内容が不正です。1メッセージは2000文字以内、"
+                        "会話履歴は40件までにしてください。"
+                    ),
+                )
             },
             status_code=400,
         )
@@ -802,7 +830,13 @@ async def template_ai_generate(request: Request) -> JSONResponse:
         logger.error(f"AI draft generation failed: {e}")
         return JSONResponse(
             {
-                "error": "設問ドラフトの生成に失敗しました。もう少し会話を続けてから再度お試しください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "設問ドラフトの生成に失敗しました。"
+                        "もう少し会話を続けてから再度お試しください。"
+                    ),
+                )
             },
             status_code=500,
         )
@@ -1063,7 +1097,10 @@ async def delete_survey(survey_id: str) -> Any:
         return Response(status_code=200)
     except Exception as e:
         logger.error(f"Failed to delete survey: {e}")
-        raise HTTPException(status_code=500, detail="削除に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="削除に失敗しました"),
+        )
 
 
 # =========================================================================
@@ -1092,7 +1129,8 @@ async def upload_survey_image(file: UploadFile = File(...)) -> Any:
     except Exception as e:
         logger.error(f"Survey image upload error: {e}")
         return JSONResponse(
-            {"error": "画像のアップロードに失敗しました"}, status_code=400
+            {"error": user_message_for(e, default="画像のアップロードに失敗しました")},
+            status_code=400,
         )
 
 

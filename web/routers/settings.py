@@ -14,7 +14,13 @@ from fastapi.templating import Jinja2Templates
 from src.managers.dataset_manager import DatasetManager
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.dataset import DatasetColumn
-from web.error_messages import mark_renderable, toast_response, user_message_for
+from src.models.errors import ErrorCode
+from web.error_messages import (
+    mark_renderable,
+    toast_response,
+    user_message_for,
+    user_message_for_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +139,13 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_inline.html",
-                {"request": request, "error": "CSVファイルのみアップロード可能です"},
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                        {"allowed_formats": "CSV"},
+                    ),
+                },
                 status_code=400,
             )
         )
@@ -146,7 +158,10 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
                 "partials/error_inline.html",
                 {
                     "request": request,
-                    "error": "ファイルサイズは10MB以下にしてください",
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_TOO_LARGE,
+                        {"max_size_mb": 10.0},
+                    ),
                 },
                 status_code=400,
             )
@@ -255,7 +270,10 @@ async def update_dataset(
         )
 
         if not dataset:
-            raise HTTPException(status_code=404, detail="Dataset not found")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DATASET_NOT_FOUND),
+            )
 
         datasets = dataset_manager.get_datasets()
         datasets_dict = [d.to_dict() for d in datasets]
@@ -284,7 +302,10 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
             templates.TemplateResponse(
                 request,
                 "partials/error_banner.html",
-                {"request": request, "error": "データセットの削除に失敗しました"},
+                {
+                    "request": request,
+                    "error": user_message_for_code(ErrorCode.DATASET_OPERATION_FAILED),
+                },
                 status_code=404,
             )
         )
@@ -463,8 +484,9 @@ async def test_data_agent_connection(request: Request) -> Any:
         return HTMLResponse(
             f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: {html.escape(message)}</div>'
         )
-    except Exception:
+    except Exception as e:
         logger.exception("Data analysis agent connection test error")
+        message = user_message_for(e, default="接続テスト中にエラーが発生しました")
         return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>'
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: {html.escape(message)}</div>'
         )
