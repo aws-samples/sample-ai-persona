@@ -38,6 +38,7 @@ from src.managers.survey_template_manager import (
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
 )
+from src.models.errors import ErrorCode
 from src.models.survey_template import Question, TemplateImage
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
+from web.error_messages import (  # noqa: E402
+    is_transient,
+    mark_renderable,
+    toast_response,
+    user_message_for,
+    user_message_for_code,
+)
 from web.sanitize import render_markdown  # noqa: E402
 
 # マークダウンフィルターを追加
@@ -200,7 +208,12 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "CSVファイルのみアップロード可能です。"},
+            {
+                "request": request,
+                "error": user_message_for_code(
+                    ErrorCode.FILE_FORMAT_NOT_ALLOWED, {"allowed_formats": "CSV"}
+                ),
+            },
         )
     try:
         content = await file.read()
@@ -210,7 +223,9 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
                 "survey/partials/custom_upload_result.html",
                 {
                     "request": request,
-                    "error": "ファイルサイズは500MB以下にしてください。",
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_TOO_LARGE, {"max_size_mb": 500.0}
+                    ),
                 },
             )
         manager = get_dataset_manager()
@@ -238,7 +253,10 @@ async def upload_custom_step1(request: Request, file: UploadFile = File(...)) ->
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "CSVファイルの解析に失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(e, default="CSVファイルの解析に失敗しました"),
+            },
         )
 
 
@@ -295,7 +313,12 @@ async def preview_persona_prompt(request: Request) -> Any:
         return templates.TemplateResponse(
             request,
             "survey/partials/prompt_preview.html",
-            {"request": request, "error": "プロンプトのプレビュー生成に失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(
+                    e, default="プロンプトのプレビュー生成に失敗しました"
+                ),
+            },
         )
 
 
@@ -367,11 +390,17 @@ async def upload_custom_step2(request: Request) -> Any:
             },
         )
     except Exception as e:
-        logger.error(f"Failed to upload custom persona data: {e}")
+        logger.error("Failed to upload custom persona data", exc_info=True)
+        # 件数不足・形式不正はカタログ文言で具体的に伝える（Issue #118）。
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
-            {"request": request, "error": "データセットのアップロードに失敗しました"},
+            {
+                "request": request,
+                "error": user_message_for(
+                    e, default="データセットのアップロードに失敗しました"
+                ),
+            },
         )
 
 
@@ -396,9 +425,8 @@ async def custom_dataset_detail(request: Request, name: str) -> Any:
         )
     except Exception as e:
         logger.error(f"Failed to load dataset detail: {e}")
-        return HTMLResponse(
-            '<div class="text-red-600 text-sm p-2">詳細の取得に失敗しました</div>'
-        )
+        message = user_message_for(e, default="詳細の取得に失敗しました")
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-2">{message}</div>')
 
 
 @router.delete("/persona-data/custom/{name}", response_class=HTMLResponse)
@@ -531,12 +559,14 @@ async def dwh_extract(request: Request) -> Any:
             yield _survey_sse_event("done", "")
 
         except (SurveyDatasetValidationError, SurveyDatasetManagerError) as e:
+            logger.warning("DWH segment extraction error", exc_info=True)
+            yield _survey_sse_event("error", user_message_for(e))
+        except Exception as e:
+            logger.exception("DWH segment extraction error")
             yield _survey_sse_event(
-                "error", e.args[0] if e.args else "エラーが発生しました"
+                "error",
+                user_message_for(e, default="セグメント抽出中にエラーが発生しました。"),
             )
-        except Exception:
-            logger.exception("DWH セグメント抽出エラー")
-            yield _survey_sse_event("error", "セグメント抽出中にエラーが発生しました。")
 
     return StreamingResponse(
         event_generator(),
@@ -590,7 +620,9 @@ async def dwh_preview(request: Request) -> Any:
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
-                "error": "プレビューの生成に失敗しました。再度お試しください。",
+                "error": user_message_for(
+                    e, default="プレビューの生成に失敗しました。再度お試しください。"
+                ),
             },
         )
 
@@ -663,13 +695,15 @@ async def dwh_confirm(request: Request) -> Any:
             },
         )
     except Exception as e:
-        logger.error(f"DWH confirm failed: {e}")
+        logger.error("DWH confirm failed", exc_info=True)
         return templates.TemplateResponse(
             request,
             "survey/partials/custom_upload_result.html",
             {
                 "request": request,
-                "error": "データセットの保存に失敗しました。再度お試しください。",
+                "error": user_message_for(
+                    e, default="データセットの保存に失敗しました。再度お試しください。"
+                ),
             },
         )
 
@@ -751,13 +785,22 @@ async def template_ai_chat(request: Request) -> JSONResponse:
         logger.info(f"AI chat validation error: {e}")
         return JSONResponse(
             {
-                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "入力内容が不正です。1メッセージは2000文字以内、"
+                        "会話履歴は40件までにしてください。"
+                    ),
+                )
             },
             status_code=400,
         )
     except Exception as e:
         logger.error(f"AI chat failed: {e}")
-        return JSONResponse({"error": "AIの応答生成に失敗しました"}, status_code=500)
+        return JSONResponse(
+            {"error": user_message_for(e, default="AIの応答生成に失敗しました")},
+            status_code=500,
+        )
     return JSONResponse({"assistant_message": assistant_message})
 
 
@@ -779,7 +822,13 @@ async def template_ai_generate(request: Request) -> JSONResponse:
         logger.info(f"AI draft validation error: {e}")
         return JSONResponse(
             {
-                "error": "入力内容が不正です。1メッセージは2000文字以内、会話履歴は40件までにしてください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "入力内容が不正です。1メッセージは2000文字以内、"
+                        "会話履歴は40件までにしてください。"
+                    ),
+                )
             },
             status_code=400,
         )
@@ -787,7 +836,13 @@ async def template_ai_generate(request: Request) -> JSONResponse:
         logger.error(f"AI draft generation failed: {e}")
         return JSONResponse(
             {
-                "error": "設問ドラフトの生成に失敗しました。もう少し会話を続けてから再度お試しください。"
+                "error": user_message_for(
+                    e,
+                    default=(
+                        "設問ドラフトの生成に失敗しました。"
+                        "もう少し会話を続けてから再度お試しください。"
+                    ),
+                )
             },
             status_code=500,
         )
@@ -800,7 +855,10 @@ async def template_edit(request: Request, template_id: str) -> Any:
     manager = get_template_manager()
     tmpl = manager.get_template(template_id)
     if tmpl is None:
-        raise HTTPException(status_code=404, detail="テンプレートが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.SURVEY_TEMPLATE_NOT_FOUND),
+        )
     # 既存画像にプレビューURLを付与
     images_with_urls = []
     for img in tmpl.images:
@@ -928,20 +986,33 @@ async def preview_personas(request: Request) -> Any:
 
     try:
         manager = get_dataset_manager()
-        total = manager.get_filtered_count(None, datasource=datasource)  # type: ignore[arg-type]
-        count = (
-            manager.get_filtered_count(filters, datasource=datasource)
-            if filters
-            else total
-        )  # type: ignore[arg-type]
-        stats = manager.get_preview_stats(filters, datasource=datasource)  # type: ignore[arg-type]
+
+        def _collect_preview() -> tuple[int, int, dict]:
+            """DuckDB/S3 への同期クエリ3本をまとめてスレッド上で実行する。"""
+            total = manager.get_filtered_count(None, datasource=datasource)
+            count = (
+                manager.get_filtered_count(filters, datasource=datasource)
+                if filters
+                else total
+            )
+            stats = manager.get_preview_stats(filters, datasource=datasource)
+            return total, count, stats
+
+        # DuckDB/httpfs 経由の S3 参照は同期処理。イベントループ上で実行すると
+        # S3 遅延時に他リクエストまで停止する（Issue #118）。
+        total, count, stats = await asyncio.get_event_loop().run_in_executor(
+            executor, _collect_preview
+        )
 
     except Exception as e:
-        logger.error(f"Preview failed: {e}")
+        logger.error("Preview failed", exc_info=True)
         return templates.TemplateResponse(
             request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": f"プレビューに失敗しました: {e}"},
+            "partials/error_inline.html",
+            {
+                "request": request,
+                "error": user_message_for(e, default="プレビューに失敗しました"),
+            },
         )
 
     return templates.TemplateResponse(
@@ -991,7 +1062,10 @@ async def result_detail(request: Request, survey_id: str) -> Any:
     exec_mgr = get_execution_manager()
     survey = exec_mgr.get_survey(survey_id)
     if survey is None:
-        raise HTTPException(status_code=404, detail="アンケートが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.SURVEY_NOT_FOUND),
+        )
     tmpl_mgr = get_template_manager()
     # テンプレートの画像情報を取得（プレビューURL付き）
     survey_template = tmpl_mgr.get_template(survey.template_id)
@@ -999,6 +1073,13 @@ async def result_detail(request: Request, survey_id: str) -> Any:
     if survey_template:
         for img in survey_template.images:
             image_preview_urls[img.id] = _get_image_preview_url(img.file_path)
+    # 実行はバックグラウンドで走るため失敗理由はコードとしてDBに残っている。
+    # 文言への解決はここ（表示層）で行う（Issue #118）。
+    execution_error = (
+        user_message_for_code(survey.error_code, survey.error_context)
+        if survey.status == "error"
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "survey/result_detail.html",
@@ -1008,6 +1089,7 @@ async def result_detail(request: Request, survey_id: str) -> Any:
             "survey": survey,
             "survey_template": survey_template,
             "image_preview_urls": image_preview_urls,
+            "execution_error": execution_error,
         },
     )
 
@@ -1021,7 +1103,10 @@ async def delete_survey(survey_id: str) -> Any:
         return Response(status_code=200)
     except Exception as e:
         logger.error(f"Failed to delete survey: {e}")
-        raise HTTPException(status_code=500, detail="削除に失敗しました")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="削除に失敗しました"),
+        )
 
 
 # =========================================================================
@@ -1050,7 +1135,8 @@ async def upload_survey_image(file: UploadFile = File(...)) -> Any:
     except Exception as e:
         logger.error(f"Survey image upload error: {e}")
         return JSONResponse(
-            {"error": "画像のアップロードに失敗しました"}, status_code=400
+            {"error": user_message_for(e, default="画像のアップロードに失敗しました")},
+            status_code=400,
         )
 
 
@@ -1061,7 +1147,10 @@ async def image_preview(file_path: str) -> Any:
     if not url:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="画像が見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.S3_OBJECT_NOT_FOUND),
+        )
     return JSONResponse({"url": url})
 
 
@@ -1094,11 +1183,18 @@ async def create_template(request: Request) -> Any:
     try:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "質問データの形式が不正です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_TEMPLATE_QUESTIONS_INVALID
+                    ),
+                },
+                status_code=400,
+            )
         )
 
     try:
@@ -1113,18 +1209,27 @@ async def create_template(request: Request) -> Any:
     try:
         manager.create_template(name=name, questions=questions, images=images or None)
     except SurveyTemplateValidationError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
+        logger.warning("Template validation error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     except SurveyTemplateManagerError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": f"保存に失敗しました: {e}"},
-            status_code=500,
+        logger.error("Template save error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for(e, default="保存に失敗しました"),
+                },
+                status_code=500,
+            )
         )
 
     # 成功時はテンプレート一覧にリダイレクト（htmx対応）
@@ -1144,11 +1249,18 @@ async def update_template(request: Request, template_id: str) -> Any:
     try:
         questions_data = json.loads(questions_json)  # type: ignore[arg-type]
     except json.JSONDecodeError:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "質問データの形式が不正です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_TEMPLATE_QUESTIONS_INVALID
+                    ),
+                },
+                status_code=400,
+            )
         )
 
     try:
@@ -1168,18 +1280,27 @@ async def update_template(request: Request, template_id: str) -> Any:
             images=images or None,
         )
     except SurveyTemplateValidationError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
+        logger.warning("Template validation error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     except SurveyTemplateManagerError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": f"更新に失敗しました: {e}"},
-            status_code=500,
+        logger.error("Template update error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for(e, default="更新に失敗しました"),
+                },
+                status_code=500,
+            )
         )
 
     response = HTMLResponse(content="", status_code=200)
@@ -1194,11 +1315,17 @@ async def delete_template(request: Request, template_id: str) -> Any:
     try:
         manager.delete_template(template_id)
     except SurveyTemplateManagerError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": f"削除に失敗しました: {e}"},
-            status_code=500,
+        logger.error("Template delete error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for(e, default="削除に失敗しました"),
+                },
+                status_code=500,
+            )
         )
     # 削除成功 - カードを空にする
     return HTMLResponse(content="")
@@ -1237,11 +1364,20 @@ async def execute_survey(request: Request) -> Any:
     try:
         persona_count = int(persona_count_str)
     except (ValueError, TypeError):
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": "ペルソナ数は整数で入力してください"},
-            status_code=400,
+        # HX-Retarget はスワップ判定より前に処理されるが、それだけでは非2xx本文が
+        # スワップされないため mark_renderable が必要（Issue #117）
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.SURVEY_PERSONA_COUNT_INVALID
+                    ),
+                },
+                status_code=400,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
@@ -1255,32 +1391,56 @@ async def execute_survey(request: Request) -> Any:
 
     manager = get_execution_manager()
 
-    # 1. アンケートレコードを作成（バリデーション含む、即座に完了）
+    # 1. アンケートレコードを作成（バリデーション含む）
+    #    件数検証が DuckDB/httpfs 経由で S3 を同期参照するため、スレッドへ
+    #    委譲する。イベントループ上で実行すると、S3が遅延した際に他リクエスト
+    #    まで停止する（Issue #118）。
     try:
-        survey = manager.create_survey(
-            template_id=template_id,  # type: ignore[arg-type]
-            name=name or None,
-            description=description,
-            persona_count=persona_count,
-            filters=filters,
-            datasource=datasource,
+        survey = await asyncio.get_event_loop().run_in_executor(
+            executor,
+            lambda: manager.create_survey(
+                template_id=template_id,  # type: ignore[arg-type]
+                name=name or None,
+                description=description,
+                persona_count=persona_count,
+                filters=filters,
+                datasource=datasource,
+            ),
         )
     except SurveyExecutionValidationError as e:
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
+        logger.warning("Survey execution validation error", exc_info=True)
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
         return response
     except SurveyExecutionManagerError as e:
-        response = templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": f"アンケート作成に失敗しました: {e}"},
-            status_code=500,
+        logger.error("Survey creation error", exc_info=True)
+        # 件数取得のS3/DuckDB障害など一時的な失敗（TRANSIENT）は、画面を書き換えず
+        # トーストで通知して入力を保持する。緩めるフィルタが無い状態でインライン
+        # エラーに置換すると、再試行で直るのに入力をやり直させることになる
+        # （architecture.md「TRANSIENT の表示」）。NOT_FOUND / CONFIG は従来どおり
+        # 領域を置換して案内する。
+        if is_transient(e):
+            return toast_response(e, default="アンケート作成に失敗しました")
+        response = mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="アンケート作成に失敗しました"
+                    ),
+                },
+                status_code=500,
+            )
         )
         response.headers["HX-Retarget"] = "#execute-error"
         response.headers["HX-Reswap"] = "innerHTML"
@@ -1312,7 +1472,8 @@ async def download_csv(survey_id: str) -> Any:
         presigned_url = manager.get_download_url(survey_id, expiration=300)
         return RedirectResponse(url=presigned_url)
     except SurveyExecutionManagerError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.warning("CSV download URL retrieval error", exc_info=True)
+        raise HTTPException(status_code=404, detail=user_message_for(e))
 
 
 @router.get("/results/{survey_id}/personas", response_class=HTMLResponse)
@@ -1322,11 +1483,14 @@ async def persona_statistics(request: Request, survey_id: str) -> Any:
     try:
         stats = manager.get_persona_statistics(survey_id)
     except SurveyAnalysisManagerError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
+        logger.warning("Survey analysis data retrieval error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     return templates.TemplateResponse(
         request,
@@ -1342,11 +1506,14 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     try:
         data = manager.get_visual_analysis(survey_id)
     except SurveyAnalysisManagerError as e:
-        return templates.TemplateResponse(
-            request,
-            "survey/partials/error_message.html",
-            {"request": request, "message": str(e)},
-            status_code=400,
+        logger.warning("Survey analysis data retrieval error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
         )
     return templates.TemplateResponse(
         request,
@@ -1374,19 +1541,24 @@ async def generate_report_stream(request: Request, survey_id: str) -> Any:
             manager.save_insight_report(survey_id, "".join(full_content))
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         except SurveyAnalysisManagerError as e:
-            logger.warning("レポート生成エラー (survey_id=%s): %s", survey_id, e)
+            logger.warning("Report generation error (survey_id=%s): %s", survey_id, e)
             data = json.dumps(
                 {"type": "error", "message": "レポートの生成に失敗しました"},
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"
-        except Exception:
+        except Exception as e:
             logger.exception(
-                "レポート生成中に予期しないエラーが発生しました (survey_id=%s)",
+                "Unexpected error during report generation (survey_id=%s)",
                 survey_id,
             )
             data = json.dumps(
-                {"type": "error", "message": "レポートの生成に失敗しました"},
+                {
+                    "type": "error",
+                    "message": user_message_for(
+                        e, default="レポートの生成に失敗しました"
+                    ),
+                },
                 ensure_ascii=False,
             )
             yield f"data: {data}\n\n"

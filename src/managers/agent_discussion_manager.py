@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Generator, List, Dict, Optional, Any
 
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -23,7 +24,7 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 
 
-class AgentDiscussionManagerError(Exception):
+class AgentDiscussionManagerError(CodedError):
     """Base exception for agent discussion manager related errors."""
 
     pass
@@ -93,10 +94,17 @@ class AgentDiscussionManager:
             AgentDiscussionManagerError: If agent creation fails
         """
         if not personas:
-            raise AgentDiscussionManagerError("ペルソナリストが空です")
+            raise AgentDiscussionManagerError(
+                "persona list is empty",
+                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
+            )
 
         if len(personas) < 2:
-            raise AgentDiscussionManagerError("議論には最低2つのペルソナが必要です")
+            raise AgentDiscussionManagerError(
+                f"{len(personas)} personas given, minimum is 2",
+                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
+                context={"min_personas": 2},
+            )
 
         self.logger.info(
             f"Creating {len(personas)} persona agents "
@@ -149,8 +157,14 @@ class AgentDiscussionManager:
 
         # Check if we have enough agents
         if len(persona_agents) < 2:
-            error_msg = f"Failed to create enough persona agents. Failed: {', '.join(failed_personas)}"
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error(
+                "Failed to create enough persona agents. Failed: %s",
+                ", ".join(failed_personas),
+            )
+            raise AgentDiscussionManagerError(
+                f"only {len(persona_agents)} persona agents created, minimum is 2",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
+            )
 
         if failed_personas:
             self.logger.warning(
@@ -177,10 +191,18 @@ class AgentDiscussionManager:
             AgentDiscussionManagerError: If facilitator creation fails
         """
         if rounds < 1:
-            raise AgentDiscussionManagerError("ラウンド数は1以上である必要があります")
+            raise AgentDiscussionManagerError(
+                f"rounds {rounds} below minimum 1",
+                code=ErrorCode.DISCUSSION_ROUNDS_TOO_FEW,
+                context={"min_rounds": 1},
+            )
 
         if rounds > 10:
-            raise AgentDiscussionManagerError("ラウンド数は10以下である必要があります")
+            raise AgentDiscussionManagerError(
+                f"rounds {rounds} exceeds maximum 10",
+                code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY,
+                context={"max_rounds": 10},
+            )
 
         self.logger.info(f"Creating facilitator agent with {rounds} rounds")
 
@@ -193,13 +215,19 @@ class AgentDiscussionManager:
             return facilitator
 
         except AgentInitializationError as e:
-            error_msg = f"Failed to create facilitator agent: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error("Failed to create facilitator agent", exc_info=True)
+            raise AgentDiscussionManagerError(
+                f"facilitator agent creation failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error creating facilitator agent: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error(
+                "Unexpected error creating facilitator agent", exc_info=True
+            )
+            raise AgentDiscussionManagerError(
+                f"facilitator agent creation failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
+            ) from e
 
     def start_agent_discussion(
         self,
@@ -396,17 +424,25 @@ class AgentDiscussionManager:
             return discussion
 
         except AgentCommunicationError as e:
-            error_msg = f"Agent communication error during discussion: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error(
+                "Agent communication error during discussion", exc_info=True
+            )
+            raise AgentDiscussionManagerError(
+                f"agent discussion failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
         except DiscussionFlowError as e:
-            error_msg = f"Discussion flow error: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error("Discussion flow error", exc_info=True)
+            raise AgentDiscussionManagerError(
+                f"agent discussion failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error during agent discussion: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error("Unexpected error during agent discussion", exc_info=True)
+            raise AgentDiscussionManagerError(
+                f"agent discussion failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
         finally:
             # エージェントリソースを確実に解放
             self.cleanup_agents(persona_agents, facilitator)
@@ -425,11 +461,15 @@ class AgentDiscussionManager:
             AgentDiscussionManagerError: If save operation fails
         """
         if not discussion:
-            raise AgentDiscussionManagerError("議論オブジェクトが無効です")
+            raise AgentDiscussionManagerError(
+                "discussion object is falsy",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            )
 
         if discussion.mode != "agent":
             raise AgentDiscussionManagerError(
-                f"Invalid discussion mode: {discussion.mode}. Expected 'agent'"
+                f"invalid discussion mode {discussion.mode!r}, expected 'agent'",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             )
 
         # Validate discussion before saving
@@ -443,13 +483,21 @@ class AgentDiscussionManager:
             return discussion_id
 
         except DatabaseError as e:
-            error_msg = f"Database error while saving agent discussion: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error(
+                "Database error while saving agent discussion", exc_info=True
+            )
+            raise AgentDiscussionManagerError(
+                f"agent discussion save failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
         except Exception as e:
-            error_msg = f"Unexpected error while saving agent discussion: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error(
+                "Unexpected error while saving agent discussion", exc_info=True
+            )
+            raise AgentDiscussionManagerError(
+                f"agent discussion save failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
 
     def _load_and_attach_documents(
         self,
@@ -512,40 +560,56 @@ class AgentDiscussionManager:
         """
         # Validate personas
         if not personas:
-            raise AgentDiscussionManagerError("議論参加ペルソナが指定されていません")
+            raise AgentDiscussionManagerError(
+                "persona list is empty",
+                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
+            )
 
         if len(personas) < 2:
-            raise AgentDiscussionManagerError("議論には最低2つのペルソナが必要です")
+            raise AgentDiscussionManagerError(
+                f"{len(personas)} personas given, minimum is 2",
+                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
+                context={"min_personas": 2},
+            )
 
         # Validate topic
         if not topic or not topic.strip():
-            raise AgentDiscussionManagerError("議論トピックが空です")
+            raise AgentDiscussionManagerError(
+                "topic is blank", code=ErrorCode.DISCUSSION_TOPIC_REQUIRED
+            )
 
         if len(topic.strip()) < 5:
             raise AgentDiscussionManagerError(
-                "議論トピックが短すぎます。5文字以上で入力してください"
+                f"topic length {len(topic.strip())} below minimum 5",
+                code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
+                context={"min_length": 5},
             )
 
         if len(topic.strip()) > 200:
             raise AgentDiscussionManagerError(
-                "議論トピックが長すぎます。200文字以内で入力してください"
+                f"topic length {len(topic.strip())} exceeds 200",
+                code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
+                context={"max_length": 200},
             )
 
-        # Validate persona agents
+        # Validate persona agents (内部状態: エージェント生成が先に失敗している)
         if not persona_agents:
             raise AgentDiscussionManagerError(
-                "ペルソナエージェントが作成されていません"
+                "persona agent list is empty",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
             )
 
         if len(persona_agents) < 2:
             raise AgentDiscussionManagerError(
-                "議論には最低2つのペルソナエージェントが必要です"
+                f"{len(persona_agents)} persona agents given, minimum is 2",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
             )
 
         # Validate facilitator
         if not facilitator:
             raise AgentDiscussionManagerError(
-                "ファシリテータエージェントが作成されていません"
+                "facilitator agent is not set",
+                code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
             )
 
     def _validate_discussion_results(
@@ -562,13 +626,17 @@ class AgentDiscussionManager:
             DiscussionFlowError: If validation fails
         """
         if not discussion:
-            raise DiscussionFlowError("生成された議論が無効です")
+            raise DiscussionFlowError(
+                "generated discussion is falsy",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
-        if not discussion.messages:
-            raise DiscussionFlowError("議論にメッセージが含まれていません")
-
-        if len(discussion.messages) < 2:
-            raise DiscussionFlowError("議論メッセージが少なすぎます")
+        if not discussion.messages or len(discussion.messages) < 2:
+            raise DiscussionFlowError(
+                f"generated discussion has {len(discussion.messages)} messages, "
+                "minimum is 2",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
+            )
 
         # Check that personas have messages
         persona_message_count: dict[str, int] = {}
@@ -856,9 +924,11 @@ class AgentDiscussionManager:
             yield ("complete", discussion)
 
         except Exception as e:
-            error_msg = f"Error during streaming agent discussion: {e}"
-            self.logger.error(error_msg)
-            raise AgentDiscussionManagerError(error_msg)
+            self.logger.error("Error during streaming agent discussion", exc_info=True)
+            raise AgentDiscussionManagerError(
+                f"streaming agent discussion failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ) from e
 
         finally:
             # エージェントリソースを確実に解放
@@ -875,30 +945,47 @@ class AgentDiscussionManager:
             AgentDiscussionManagerError: If validation fails
         """
         if not discussion:
-            raise AgentDiscussionManagerError("議論オブジェクトが無効です")
+            raise AgentDiscussionManagerError(
+                "discussion object is falsy",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            )
 
         if not discussion.id:
-            raise AgentDiscussionManagerError("議論IDが設定されていません")
+            raise AgentDiscussionManagerError(
+                "discussion has no id", code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            )
 
         if not discussion.topic or not discussion.topic.strip():
-            raise AgentDiscussionManagerError("議論トピックが設定されていません")
+            raise AgentDiscussionManagerError(
+                "discussion has no topic", code=ErrorCode.DISCUSSION_OPERATION_FAILED
+            )
 
         if not discussion.participants or len(discussion.participants) < 2:
-            raise AgentDiscussionManagerError("議論参加者が不足しています")
+            raise AgentDiscussionManagerError(
+                f"discussion has {len(discussion.participants or [])} participants",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            )
 
         if not discussion.created_at:
-            raise AgentDiscussionManagerError("議論作成日時が設定されていません")
+            raise AgentDiscussionManagerError(
+                "discussion has no created_at",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            )
 
         if discussion.mode != "agent":
             raise AgentDiscussionManagerError(
-                f"Invalid discussion mode: {discussion.mode}. Expected 'agent'"
+                f"invalid discussion mode: {discussion.mode!r}, expected 'agent'",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             )
 
         # Validate messages if present
         if discussion.messages:
             for i, message in enumerate(discussion.messages):
                 if not message.persona_id or not message.content:
-                    raise AgentDiscussionManagerError(f"メッセージ {i + 1} が無効です")
+                    raise AgentDiscussionManagerError(
+                        f"message at index {i} has no persona_id or content",
+                        code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+                    )
 
     def cleanup_agents(
         self, persona_agents: List[PersonaAgent], facilitator: FacilitatorAgent
@@ -1272,7 +1359,8 @@ class AgentDiscussionManager:
         valid_modes = ["full", "retrieve_only", "disabled"]
         if memory_mode not in valid_modes:
             raise AgentDiscussionManagerError(
-                f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_modes)}"
+                f"invalid memory_mode {memory_mode!r}, expected one of {valid_modes}",
+                code=ErrorCode.DISCUSSION_MEMORY_MODE_INVALID,
             )
 
     def _attach_insights(

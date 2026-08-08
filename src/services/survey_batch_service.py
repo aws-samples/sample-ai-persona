@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,10 +18,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import duckdb
 import polars as pl
 
+from ..models.errors import CodedError, ErrorCode
+
 logger = logging.getLogger(__name__)
 
 
-class SurveyBatchServiceError(Exception):
+class SurveyBatchServiceError(CodedError):
     """SurveyBatchService層の基底例外"""
 
     pass
@@ -100,6 +103,11 @@ class SurveyBatchService:
         self._filter_values_cache: Dict[
             str, Tuple[float, Dict[str, Dict[str, Any]]]
         ] = {}
+        # このサービスはシングルトンで、Routerが ThreadPoolExecutor 上から並行に
+        # クエリを投げる。キャッシュした DuckDBPyConnection を複数スレッドで
+        # 同時に execute すると結果の混線やクラッシュが起きるため、接続の取得・
+        # 生成とカーソル発行をこのロックで直列化する（Issue #118）。
+        self._conn_lock = threading.Lock()
 
     # =========================================================================
     # HuggingFace データセット
@@ -130,9 +138,10 @@ class SurveyBatchService:
 
             return parquet_bytes
         except Exception as e:
-            logger.error(f"Failed to download Nemotron dataset: {e}")
+            logger.error("Failed to download Nemotron dataset", exc_info=True)
             raise SurveyBatchServiceError(
-                f"Nemotronデータセットのダウンロードに失敗しました: {e}"
+                f"nemotron dataset download failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_OPERATION_FAILED,
             ) from e
 
     # =========================================================================
@@ -153,10 +162,16 @@ class SurveyBatchService:
         try:
             df = pl.read_csv(io.BytesIO(csv_bytes), infer_schema_length=1000)
         except Exception as e:
-            raise SurveyBatchServiceError(f"CSVの読み込みに失敗しました: {e}") from e
+            raise SurveyBatchServiceError(
+                f"csv read failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_DATASET_CSV_UNREADABLE,
+            ) from e
 
         if len(df) == 0:
-            raise SurveyBatchServiceError("CSVにデータ行がありません。")
+            raise SurveyBatchServiceError(
+                "csv has no data rows",
+                code=ErrorCode.SURVEY_DATASET_CSV_EMPTY,
+            )
 
         if column_mapping:
             rename_map = {}
@@ -170,7 +185,8 @@ class SurveyBatchService:
             text_cols = [c for c in df.columns if df[c].dtype == pl.Utf8]
             if not text_cols:
                 raise SurveyBatchServiceError(
-                    "テキスト型のカラムが見つかりません。「ペルソナ概要」にマッピングするカラムを指定してください。"
+                    "csv has no text column to use as persona summary",
+                    code=ErrorCode.SURVEY_DATASET_NO_TEXT_COLUMN,
                 )
             df = df.with_columns(
                 pl.concat_str(
@@ -225,19 +241,73 @@ class SurveyBatchService:
         else:
             if self._parquet_s3_uri is None:
                 raise SurveyBatchServiceError(
-                    "Nemotronデータセットがまだダウンロードされていません。"
-                    "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
+                    "nemotron parquet uri is not configured",
+                    code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
                 )
             s3_uri = self._parquet_s3_uri
 
         if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/　-鿿＀-￯]+", s3_uri):
-            raise SurveyBatchServiceError(f"Invalid S3 URI format: {s3_uri}")
+            # URI は診断情報。ユーザー向けには汎用文言に落とす（Issue #118）。
+            logger.error("Invalid S3 URI format: %s", s3_uri)
+            raise SurveyBatchServiceError(
+                "invalid s3 uri format",
+                code=ErrorCode.SURVEY_OPERATION_FAILED,
+            )
 
         conn = duckdb.connect(":memory:")
         conn.execute(
             "INSTALL httpfs; LOAD httpfs;"
         )  # nosemgrep: sqlalchemy-execute-raw-query
+        self._set_s3_credentials(conn)
+        conn.execute(
+            f"CREATE VIEW personas AS SELECT * FROM read_parquet('{s3_uri}');"
+        )  # nosemgrep: sqlalchemy-execute-raw-query
 
+        self._duckdb_conns[datasource] = conn
+        return conn
+
+    def _query_duckdb(
+        self, sql: str, params: Optional[List[Any]] = None, datasource: str = "nemotron"
+    ) -> pl.DataFrame:
+        """DuckDBでS3上のParquetに対してSQLクエリを実行し、Polars DataFrameで返す。
+
+        接続はdatasourceごとにキャッシュした単一の :class:`DuckDBPyConnection` を
+        共有するが、並行実行できない。スレッドごとに ``cursor()`` を発行すると、
+        VIEW と接続設定（S3認証情報等）を継承しつつ実行だけが分離される
+        （DuckDB公式の並行アクセス手法）。接続の取得・生成と ``cursor()`` 発行は
+        ロックで直列化し、クエリ実行自体はロック外で行う（Issue #118）。
+        """
+        cursor = self._acquire_cursor(datasource)
+        try:
+            return self._run(cursor, sql, params)
+        except duckdb.IOException:
+            # 接続が切れている可能性。破棄して張り直し、新しいカーソルで再試行する。
+            with self._conn_lock:
+                self._duckdb_conns.pop(datasource, None)
+            cursor = self._acquire_cursor(datasource)
+            return self._run(cursor, sql, params)
+
+    def _acquire_cursor(self, datasource: str) -> duckdb.DuckDBPyConnection:
+        """スレッド専用のカーソルを発行する（接続の生成・取得ごとロックする）。
+
+        ``cursor()`` はメイン接続のカタログ（VIEW定義など）を共有するが、
+        ``SET s3_access_key_id`` 等のセッションスコープの設定は継承しない。
+        継承されるという前提で書くと、キャッシュ済み接続から発行したカーソルは
+        認証情報を持たず、S3アクセスが常に403で失敗する。カーソルには毎回
+        明示的に設定し直す。
+        """
+        with self._conn_lock:
+            conn = self._get_duckdb_conn(datasource)
+            cursor = conn.cursor()
+            self._set_s3_credentials(cursor)
+            return cursor
+
+    def _set_s3_credentials(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """boto3のクレデンシャルチェーンからS3認証情報をDuckDB接続に設定する。
+
+        ``cursor()`` はこれを継承しないため、メイン接続の初期化時と、カーソル
+        発行時の両方で呼ぶ必要がある。
+        """
         import boto3
 
         session = boto3.Session()
@@ -257,32 +327,16 @@ class SurveyBatchService:
         conn.execute(
             "SET s3_region = $1;", [self.region_name]
         )  # nosemgrep: sqlalchemy-execute-raw-query
-        conn.execute(
-            f"CREATE VIEW personas AS SELECT * FROM read_parquet('{s3_uri}');"
-        )  # nosemgrep: sqlalchemy-execute-raw-query
 
-        self._duckdb_conns[datasource] = conn
-        return conn
-
-    def _query_duckdb(
-        self, sql: str, params: Optional[List[Any]] = None, datasource: str = "nemotron"
+    @staticmethod
+    def _run(
+        cursor: duckdb.DuckDBPyConnection,
+        sql: str,
+        params: Optional[List[Any]],
     ) -> pl.DataFrame:
-        """DuckDBでS3上のParquetに対してSQLクエリを実行し、Polars DataFrameで返す。"""
-        conn = self._get_duckdb_conn(datasource)
-        try:
-            if params:
-                result = conn.execute(sql, params)
-            else:
-                result = conn.execute(sql)
-            return result.pl()
-        except duckdb.IOException:
-            self._duckdb_conns.pop(datasource, None)
-            conn = self._get_duckdb_conn(datasource)
-            if params:
-                result = conn.execute(sql, params)
-            else:
-                result = conn.execute(sql)
-            return result.pl()
+        if params:
+            return cursor.execute(sql, params).pl()
+        return cursor.execute(sql).pl()
 
     def _build_where_clause(
         self, filters: Dict[str, Any]
@@ -498,8 +552,8 @@ class SurveyBatchService:
             role_arn = cfg.BEDROCK_BATCH_ROLE_ARN
             if not role_arn:
                 raise SurveyBatchServiceError(
-                    "BEDROCK_BATCH_ROLE_ARN が設定されていません。"
-                    "環境変数にBedrock Batch Inference用のIAMロールARNを設定してください。"
+                    "BEDROCK_BATCH_ROLE_ARN is not configured",
+                    code=ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED,
                 )
 
             bedrock_client = boto3.client("bedrock", region_name=cfg.AWS_REGION)
@@ -544,8 +598,13 @@ class SurveyBatchService:
         except SurveyBatchServiceError:
             raise
         except Exception as e:
-            logger.error(f"Batch inference failed: {e}")
-            raise SurveyBatchServiceError(f"バッチ推論の実行に失敗しました: {e}") from e
+            # 例外文には bucket 名・ロールARN・botocore の詳細が載る。ログにのみ
+            # 残し、ユーザー向け文言はコード経由で解決する（Issue #118）。
+            logger.error("Batch inference failed", exc_info=True)
+            raise SurveyBatchServiceError(
+                f"batch inference failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_BATCH_JOB_FAILED,
+            ) from e
 
     def _poll_batch_job(
         self,
@@ -564,16 +623,23 @@ class SurveyBatchService:
             if status == "Completed":
                 return None
             elif status in ("Failed", "Stopped"):
-                message = response.get("message", "Unknown error")
+                # Bedrock の message は S3 パスやロールARNを含むためログのみ。
+                logger.error(
+                    "Batch job ended as %s: %s",
+                    status,
+                    response.get("message", "no message"),
+                )
                 raise SurveyBatchServiceError(
-                    f"バッチ推論ジョブが失敗しました: {status} - {message}"
+                    f"batch job ended with status {status}",
+                    code=ErrorCode.SURVEY_BATCH_JOB_FAILED,
                 )
 
             time.sleep(poll_interval)  # nosemgrep: arbitrary-sleep
             elapsed += poll_interval
 
         raise SurveyBatchServiceError(
-            f"バッチ推論ジョブがタイムアウトしました（{max_wait}秒）"
+            f"batch job did not finish within {max_wait}s",
+            code=ErrorCode.SURVEY_BATCH_JOB_TIMED_OUT,
         )
 
     def _fetch_batch_output(
@@ -954,7 +1020,11 @@ class SurveyBatchService:
                 )  # nosemgrep: sqlalchemy-execute-raw-query
 
                 if not re.fullmatch(r"s3://[a-zA-Z0-9.\-]+/[a-zA-Z0-9.\-_/]+", s3_path):
-                    raise SurveyBatchServiceError(f"Invalid S3 URI format: {s3_path}")
+                    logger.error("Invalid S3 URI format: %s", s3_path)
+                    raise SurveyBatchServiceError(
+                        "invalid s3 uri format",
+                        code=ErrorCode.SURVEY_OPERATION_FAILED,
+                    )
 
                 read_fn = (
                     "read_parquet" if s3_path.endswith(".parquet") else "read_csv_auto"
@@ -967,8 +1037,10 @@ class SurveyBatchService:
                 if ".." in local_path or not re.fullmatch(
                     r"[a-zA-Z0-9_][a-zA-Z0-9.\-_/]*", local_path
                 ):
+                    logger.error("Invalid local path format: %s", local_path)
                     raise SurveyBatchServiceError(
-                        f"Invalid local path format: {local_path}"
+                        "invalid local path format",
+                        code=ErrorCode.SURVEY_OPERATION_FAILED,
                     )
                 read_fn = (
                     "read_parquet"

@@ -9,6 +9,7 @@ from datetime import datetime
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from src.models.errors import ErrorCode
 from src.models.survey_template import Question, SurveyTemplate
 from src.models.survey import Survey, InsightReport
 
@@ -104,7 +105,10 @@ survey_strategy = st.builds(
     insight_report=st.one_of(st.none(), insight_report_strategy),
     created_at=datetime_strategy,
     updated_at=datetime_strategy,
-    error_message=st.one_of(st.none(), st.text(min_size=1, max_size=200)),
+    error_code=st.one_of(st.none(), st.sampled_from([c.value for c in ErrorCode])),
+    error_context=st.one_of(
+        st.none(), st.fixed_dictionaries({"min_count": st.integers(0, 10000)})
+    ),
 )
 
 
@@ -137,7 +141,8 @@ def test_survey_serialization_roundtrip(survey: Survey) -> None:
     assert restored.s3_result_path == survey.s3_result_path
     assert restored.created_at == survey.created_at
     assert restored.updated_at == survey.updated_at
-    assert restored.error_message == survey.error_message
+    assert restored.error_code == survey.error_code
+    assert restored.error_context == survey.error_context
 
     if survey.insight_report is None:
         assert restored.insight_report is None

@@ -16,7 +16,9 @@ from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.interview_manager import InterviewManager
 from src.managers.job_manager import JobManager
+from src.models.errors import ErrorCode
 from src.models.insight_category import InsightCategory
+from web.error_messages import user_message_for, user_message_for_code
 
 logger = logging.getLogger(__name__)
 
@@ -232,8 +234,11 @@ async def list_personas(search: Optional[str] = None) -> Any:
             for p in personas
         ]
     except Exception as e:
-        logger.error(f"ペルソナ一覧取得エラー: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナ一覧の取得に失敗しました")
+        logger.error(f"Failed to fetch persona list: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナ一覧の取得に失敗しました"),
+        )
 
 
 @router.get("/personas/{persona_id}", response_model=PersonaResponse)
@@ -244,7 +249,10 @@ async def get_persona(persona_id: str) -> Any:
         persona = persona_manager.get_persona(persona_id)
 
         if not persona:
-            raise HTTPException(status_code=404, detail="ペルソナが見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
+            )
 
         return PersonaResponse(
             id=persona.id,
@@ -263,8 +271,11 @@ async def get_persona(persona_id: str) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"ペルソナ取得エラー: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナの取得に失敗しました")
+        logger.error(f"Failed to fetch persona: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナの取得に失敗しました"),
+        )
 
 
 @router.get("/discussions")
@@ -284,8 +295,11 @@ async def list_discussions() -> Any:
             for d in discussions
         ]
     except Exception as e:
-        logger.error(f"議論一覧取得エラー: {e}")
-        raise HTTPException(status_code=500, detail="議論一覧の取得に失敗しました")
+        logger.error(f"Failed to fetch discussion list: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論一覧の取得に失敗しました"),
+        )
 
 
 @router.get("/health")
@@ -320,7 +334,8 @@ def _resolve_personas(persona_ids: List[str]) -> list:
         p = pm.get_persona(pid)
         if not p:
             raise HTTPException(
-                status_code=404, detail=f"ペルソナが見つかりません: {pid}"
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
             )
         personas.append(p)
     return personas
@@ -377,8 +392,11 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
         )
         return JobResponse(job_id=job_id, status="pending")
     except Exception as e:
-        logger.error(f"ペルソナ生成ジョブ投入エラー: {e}")
-        raise HTTPException(status_code=500, detail="ペルソナ生成の開始に失敗しました")
+        logger.error(f"Failed to submit persona generation job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="ペルソナ生成の開始に失敗しました"),
+        )
 
 
 # --- run_discussion (async job) ---
@@ -473,8 +491,11 @@ async def run_discussion(req: RunDiscussionRequest) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"議論ジョブ投入エラー: {e}")
-        raise HTTPException(status_code=500, detail="議論の開始に失敗しました")
+        logger.error(f"Failed to submit discussion job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論の開始に失敗しました"),
+        )
 
 
 # --- get_discussion ---
@@ -491,13 +512,19 @@ async def get_discussion_detail(discussion_id: str) -> Any:
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
         if not discussion:
-            raise HTTPException(status_code=404, detail="議論が見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+            )
         return _discussion_detail(discussion)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"議論取得エラー: {e}")
-        raise HTTPException(status_code=500, detail="議論の取得に失敗しました")
+        logger.error(f"Failed to fetch discussion: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="議論の取得に失敗しました"),
+        )
 
 
 # --- generate_insights ---
@@ -515,7 +542,10 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
         if not discussion:
-            raise HTTPException(status_code=404, detail="議論が見つかりません")
+            raise HTTPException(
+                status_code=404,
+                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
+            )
 
         cats = (
             [InsightCategory.from_dict(c.model_dump()) for c in req.categories]
@@ -541,8 +571,11 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"インサイト生成エラー: {e}")
-        raise HTTPException(status_code=500, detail="インサイト生成に失敗しました")
+        logger.error(f"Failed to generate insight: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="インサイト生成に失敗しました"),
+        )
 
 
 # --- run_interview ---
@@ -578,8 +611,11 @@ async def run_interview(req: RunInterviewRequest) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"インタビューエラー: {e}")
-        raise HTTPException(status_code=500, detail="インタビューの実行に失敗しました")
+        logger.error(f"Interview error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=user_message_for(e, default="インタビューの実行に失敗しました"),
+        )
 
 
 # --- job status ---
@@ -595,7 +631,10 @@ async def get_job(job_id: str) -> Any:
     jm = get_job_manager()
     job = jm.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+        raise HTTPException(
+            status_code=404,
+            detail=user_message_for_code(ErrorCode.JOB_NOT_FOUND),
+        )
     return JobResponse(
         job_id=job.id,
         status=job.status.value,

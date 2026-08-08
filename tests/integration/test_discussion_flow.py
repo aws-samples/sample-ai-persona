@@ -6,7 +6,8 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
 
-from src.services.ai_service import AIService
+from src.models.errors import ErrorCode
+from src.services.ai_service import AIService, AIServiceError
 from src.models.persona import Persona
 
 
@@ -165,8 +166,9 @@ class TestDiscussionFlow:
         with patch.object(self.ai_service, "_retry_with_backoff") as mock_retry:
             mock_retry.side_effect = Exception("API エラー")
 
-            with pytest.raises(Exception, match="議論進行中にエラーが発生"):
+            with pytest.raises(AIServiceError) as exc_info:
                 self.ai_service.facilitate_discussion(personas, topic)
+            assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
         # 正常な議論の後、インサイト抽出でエラーが発生した場合
         discussion_response = "[田中太郎]: これは十分に長いテスト発言です。商品について詳細に議論しています。\n[佐藤花子]: 私も同様に長いメッセージで、マーケティング戦略について意見を述べています。"
@@ -182,8 +184,9 @@ class TestDiscussionFlow:
             assert len(messages) == 2
 
             # インサイト抽出は失敗
-            with pytest.raises(Exception, match="インサイト抽出中にエラーが発生"):
+            with pytest.raises(AIServiceError) as exc_info:
                 self.ai_service.extract_insights(messages)
+            assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
 
 if __name__ == "__main__":

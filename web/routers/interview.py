@@ -24,11 +24,39 @@ from src.managers.interview_manager import (
     InterviewAgentError,
     InterviewPersistenceError,
 )
+from src.models.errors import ErrorCode, ErrorKind
+from web.error_messages import (
+    error_kind_of,
+    is_correctable,
+    mark_renderable,
+    user_message_for,
+    user_message_for_code,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+
+
+def _error_type_for(exc: Exception) -> str:
+    """例外を画面表示用の error_type 文字列に変換する。
+
+    フロントエンド（chat.html の showDetailedError）はこの値でアイコン・
+    タイトル・再試行導線を切り替える。エージェント関連・永続化失敗はクラスの
+    意味がそのまま表示区分になるため型で判定し、それ以外（同じ例外型でも
+    コードによって VALIDATION と TRANSIENT の両方を取り得る InterviewSessionError
+    等）は ErrorKind で判定する。
+    """
+    if isinstance(exc, InterviewAgentError):
+        return "agent_error"
+    if isinstance(exc, InterviewPersistenceError):
+        return "persistence_error"
+    if error_kind_of(exc) is ErrorKind.NOT_FOUND:
+        return "session_not_found"
+    if is_correctable(exc):
+        return "validation_error"
+    return "internal_error"
 
 
 from web.sanitize import render_markdown  # noqa: E402
@@ -70,42 +98,6 @@ async def create_interview_session(
 ) -> Any:
     """インタビューセッション作成エンドポイント（拡張エラーハンドリング）"""
     try:
-        # Enhanced input validation
-        if not persona_ids:
-            return JSONResponse(
-                {
-                    "error": "インタビューには最低1つのペルソナが必要です",
-                    "error_type": "validation_error",
-                    "field": "persona_ids",
-                },
-                status_code=400,
-            )
-
-        if len(persona_ids) > 5:
-            return JSONResponse(
-                {
-                    "error": "インタビューには最大5つのペルソナまで参加できます",
-                    "error_type": "validation_error",
-                    "field": "persona_ids",
-                    "max_allowed": 5,
-                    "provided": len(persona_ids),
-                },
-                status_code=400,
-            )
-
-        # memory_modeの検証
-        valid_memory_modes = ["full", "retrieve_only", "disabled"]
-        if memory_mode not in valid_memory_modes:
-            return JSONResponse(
-                {
-                    "error": f"無効なmemory_modeです: {memory_mode}。有効な値: {', '.join(valid_memory_modes)}",
-                    "error_type": "validation_error",
-                    "field": "memory_mode",
-                    "valid_values": valid_memory_modes,
-                },
-                status_code=400,
-            )
-
         # Get personas with enhanced error handling
         persona_manager = get_persona_manager()
         personas = []
@@ -123,11 +115,12 @@ async def create_interview_session(
                 missing_personas.append(persona_id)
 
         if missing_personas:
+            logger.warning(f"Personas not found: {missing_personas}")
             return JSONResponse(
                 {
-                    "error": f"以下のペルソナが見つかりません: {', '.join(missing_personas)}",
+                    "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
                     "error_type": "persona_not_found",
-                    "missing_personas": missing_personas,
+                    "missing_persona_count": len(missing_personas),
                 },
                 status_code=404,
             )
@@ -135,7 +128,9 @@ async def create_interview_session(
         if not personas:
             return JSONResponse(
                 {
-                    "error": "有効なペルソナが見つかりません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_PERSONAS_REQUIRED
+                    ),
                     "error_type": "no_valid_personas",
                 },
                 status_code=400,
@@ -174,37 +169,37 @@ async def create_interview_session(
         )
 
     except InterviewValidationError as e:
-        logger.error(f"Interview validation error: {e}")
+        logger.error("Interview validation error", exc_info=True)
         return JSONResponse(
-            {
-                "error": "入力内容に問題があります。内容を確認してください。",
-                "error_type": "validation_error",
-            },
+            {"error": user_message_for(e), "error_type": _error_type_for(e)},
             status_code=400,
         )
     except InterviewAgentError as e:
-        logger.error(f"Interview agent error: {e}")
+        logger.error("Interview agent error", exc_info=True)
         return JSONResponse(
-            {
-                "error": "AIエージェントの初期化に失敗しました。しばらく待ってから再試行してください。",
-                "error_type": "agent_error",
-            },
+            {"error": user_message_for(e), "error_type": _error_type_for(e)},
             status_code=503,
         )
     except InterviewSessionError as e:
-        logger.error(f"Interview session error: {e}")
+        logger.error("Interview session error", exc_info=True)
         return JSONResponse(
             {
-                "error": "セッションの作成に失敗しました。再試行してください。",
-                "error_type": "session_error",
+                "error": user_message_for(
+                    e, default="セッションの作成に失敗しました。再試行してください。"
+                ),
+                "error_type": _error_type_for(e),
             },
             status_code=500,
         )
     except Exception as e:
-        logger.error(f"Unexpected error creating interview session: {e}")
+        logger.error("Unexpected error creating interview session", exc_info=True)
         return JSONResponse(
             {
-                "error": "予期しないエラーが発生しました。システム管理者にお問い合わせください。",
+                "error": user_message_for(
+                    e,
+                    default="予期しないエラーが発生しました。"
+                    "システム管理者にお問い合わせください。",
+                ),
                 "error_type": "internal_error",
             },
             status_code=500,
@@ -246,31 +241,43 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
                 "title": "インタビューチャット",
                 "session": session,
                 "participants": participants,
-                "missing_personas": missing_personas,
+                "missing_persona_count": len(missing_personas),
             },
         )
 
     except InterviewSessionNotFoundError as e:
-        logger.error(f"Interview session not found: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": "指定されたインタビューセッションが見つかりません。セッションが終了しているか、無効なURLの可能性があります。",
-            },
-            status_code=404,
+        logger.error("Interview session not found", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e,
+                        default="指定されたインタビューセッションが見つかりません。"
+                        "セッションが終了しているか、無効なURLの可能性があります。",
+                    ),
+                },
+                status_code=404,
+            )
         )
     except Exception as e:
-        logger.error(f"Error loading interview chat page: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {
-                "request": request,
-                "error": "ページの読み込み中にエラーが発生しました。しばらく待ってから再試行してください。",
-            },
-            status_code=500,
+        logger.error("Error loading interview chat page", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e,
+                        default="ページの読み込み中にエラーが発生しました。"
+                        "しばらく待ってから再試行してください。",
+                    ),
+                },
+                status_code=500,
+            )
         )
 
 
@@ -331,8 +338,11 @@ async def send_message_stream(
                 )
                 asyncio.run_coroutine_threadsafe(queue.put(complete_sse), loop)
             except Exception as e:
-                logger.error(f"Interview streaming error: {e}")
-                error_sse = f"data: {json.dumps({'type': 'error', 'message': '応答の生成中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
+                logger.error("Interview streaming error", exc_info=True)
+                error_message = user_message_for(
+                    e, default="応答の生成中にエラーが発生しました"
+                )
+                error_sse = f"data: {json.dumps({'type': 'error', 'message': error_message}, ensure_ascii=False)}\n\n"
                 asyncio.run_coroutine_threadsafe(queue.put(error_sse), loop)
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
@@ -361,11 +371,14 @@ async def send_message_stream(
         )
 
     except Exception as e:
-        logger.error(f"Interview stream endpoint error: {e}")
+        logger.error("Interview stream endpoint error", exc_info=True)
+        message = user_message_for(
+            e, default="ストリーミング開始中にエラーが発生しました"
+        )
         return StreamingResponse(
             iter(
                 [
-                    f"data: {json.dumps({'type': 'error', 'message': 'ストリーミング開始中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
+                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                 ]
             ),
             media_type="text/event-stream",
@@ -430,38 +443,46 @@ async def send_message(
         )
 
     except InterviewSessionNotFoundError as e:
-        logger.error(f"Session not found: {e}")
+        logger.error("Session not found", exc_info=True)
         return JSONResponse(
             {
-                "error": "インタビューセッションが見つかりません",
-                "error_type": "session_not_found",
+                "error": user_message_for(
+                    e, default="インタビューセッションが見つかりません"
+                ),
+                "error_type": _error_type_for(e),
                 "session_id": session_id,
             },
             status_code=404,
         )
     except InterviewValidationError as e:
-        logger.error(f"Validation error: {e}")
+        logger.error("Validation error", exc_info=True)
         return JSONResponse(
             {
-                "error": "入力内容に問題があります",
-                "error_type": "validation_error",
+                "error": user_message_for(e, default="入力内容に問題があります"),
+                "error_type": _error_type_for(e),
             },
             status_code=400,
         )
     except InterviewAgentError as e:
-        logger.error(f"Agent error: {e}")
+        logger.error("Agent error", exc_info=True)
         return JSONResponse(
             {
-                "error": "AIエージェントとの通信に失敗しました。しばらく待ってから再試行してください。",
-                "error_type": "agent_error",
+                "error": user_message_for(
+                    e,
+                    default="AIエージェントとの通信に失敗しました。"
+                    "しばらく待ってから再試行してください。",
+                ),
+                "error_type": _error_type_for(e),
             },
             status_code=503,
         )
     except Exception as e:
-        logger.error(f"Unexpected error in message processing: {e}")
+        logger.error("Unexpected error in message processing", exc_info=True)
         return JSONResponse(
             {
-                "error": "メッセージの送信中に予期しないエラーが発生しました",
+                "error": user_message_for(
+                    e, default="メッセージの送信中に予期しないエラーが発生しました"
+                ),
                 "error_type": "internal_error",
             },
             status_code=500,
@@ -499,14 +520,24 @@ async def get_messages(request: Request, session_id: str) -> Any:
         )
 
     except InterviewManagerError as e:
-        logger.error(f"Error getting messages: {e}")
+        logger.error("Error getting messages", exc_info=True)
         return JSONResponse(
-            {"error": "メッセージ履歴が見つかりません"}, status_code=404
+            {
+                "error": user_message_for(e, default="メッセージ履歴が見つかりません"),
+                "error_type": _error_type_for(e),
+            },
+            status_code=404,
         )
     except Exception as e:
-        logger.error(f"Unexpected error getting messages: {e}")
+        logger.error("Unexpected error getting messages", exc_info=True)
         return JSONResponse(
-            {"error": "メッセージ履歴の取得中にエラーが発生しました"}, status_code=500
+            {
+                "error": user_message_for(
+                    e, default="メッセージ履歴の取得中にエラーが発生しました"
+                ),
+                "error_type": "internal_error",
+            },
+            status_code=500,
         )
 
 
@@ -529,12 +560,24 @@ async def get_session_status(request: Request, session_id: str) -> Any:
         )
 
     except InterviewManagerError as e:
-        logger.error(f"Error getting session status: {e}")
-        return JSONResponse({"error": "セッションが見つかりません"}, status_code=404)
-    except Exception as e:
-        logger.error(f"Unexpected error getting session status: {e}")
+        logger.error("Error getting session status", exc_info=True)
         return JSONResponse(
-            {"error": "セッション状態の取得中にエラーが発生しました"}, status_code=500
+            {
+                "error": user_message_for(e, default="セッションが見つかりません"),
+                "error_type": _error_type_for(e),
+            },
+            status_code=404,
+        )
+    except Exception as e:
+        logger.error("Unexpected error getting session status", exc_info=True)
+        return JSONResponse(
+            {
+                "error": user_message_for(
+                    e, default="セッション状態の取得中にエラーが発生しました"
+                ),
+                "error_type": "internal_error",
+            },
+            status_code=500,
         )
 
 
@@ -550,10 +593,12 @@ async def save_interview_session(
         def get_session_status_sync() -> Any:
             try:
                 return interview_manager.get_session_status(session_id)
-            except InterviewSessionNotFoundError as e:
-                raise e
+            except InterviewSessionNotFoundError:
+                raise
             except Exception as e:
-                raise InterviewSessionNotFoundError(f"セッション状態の取得に失敗: {e}")
+                raise InterviewSessionNotFoundError(
+                    f"session status fetch failed ({type(e).__name__})"
+                ) from e
 
         loop = asyncio.get_event_loop()
 
@@ -564,7 +609,9 @@ async def save_interview_session(
         except InterviewSessionNotFoundError:
             return JSONResponse(
                 {
-                    "error": "インタビューセッションが見つかりません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+                    ),
                     "error_type": "session_not_found",
                     "session_id": session_id,
                 },
@@ -575,7 +622,9 @@ async def save_interview_session(
         if session_status.get("is_saved", False):
             return JSONResponse(
                 {
-                    "message": "このセッションは既に保存されています",
+                    "message": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+                    ),
                     "already_saved": True,
                     "session_status": session_status,
                     "timestamp": datetime.now().isoformat(),
@@ -587,7 +636,7 @@ async def save_interview_session(
         if message_count == 0:
             return JSONResponse(
                 {
-                    "error": "保存するメッセージがありません",
+                    "error": user_message_for_code(ErrorCode.INTERVIEW_NO_MESSAGES),
                     "error_type": "validation_error",
                     "message_count": message_count,
                 },
@@ -598,7 +647,9 @@ async def save_interview_session(
         if not session_status.get("has_user_messages", False):
             return JSONResponse(
                 {
-                    "error": "ユーザーメッセージが含まれていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_NO_USER_MESSAGES
+                    ),
                     "error_type": "validation_error",
                 },
                 status_code=400,
@@ -607,7 +658,9 @@ async def save_interview_session(
         if not session_status.get("has_persona_responses", False):
             return JSONResponse(
                 {
-                    "error": "ペルソナの応答が含まれていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_NO_PERSONA_RESPONSES
+                    ),
                     "error_type": "validation_error",
                 },
                 status_code=400,
@@ -617,7 +670,9 @@ async def save_interview_session(
         if not session_name or not session_name.strip():
             return JSONResponse(
                 {
-                    "error": "セッション名が指定されていません",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NAME_REQUIRED
+                    ),
                     "error_type": "validation_error",
                     "field": "session_name",
                 },
@@ -628,7 +683,9 @@ async def save_interview_session(
         if len(session_name) > 100:
             return JSONResponse(
                 {
-                    "error": "セッション名が長すぎます（最大100文字）",
+                    "error": user_message_for_code(
+                        ErrorCode.INTERVIEW_SESSION_NAME_TOO_LONG, {"max_length": 100}
+                    ),
                     "error_type": "validation_error",
                     "field": "session_name",
                     "max_length": 100,
@@ -661,41 +718,48 @@ async def save_interview_session(
         )
 
     except InterviewSessionNotFoundError as e:
-        logger.error(f"Session not found for save: {e}")
+        logger.error("Session not found for save", exc_info=True)
         return JSONResponse(
             {
-                "error": "インタビューセッションが見つかりません",
-                "error_type": "session_not_found",
+                "error": user_message_for(
+                    e, default="インタビューセッションが見つかりません"
+                ),
+                "error_type": _error_type_for(e),
                 "session_id": session_id,
             },
             status_code=404,
         )
     except InterviewValidationError as e:
-        logger.error(f"Validation error during save: {e}")
+        logger.error("Validation error during save", exc_info=True)
         return JSONResponse(
             {
-                "error": "保存内容に問題があります。内容を確認してください。",
-                "error_type": "validation_error",
+                "error": user_message_for(
+                    e, default="保存内容に問題があります。内容を確認してください。"
+                ),
+                "error_type": _error_type_for(e),
             },
             status_code=400,
         )
     except InterviewPersistenceError as e:
-        logger.error(f"Persistence error during save: {e}")
+        logger.error("Persistence error during save", exc_info=True)
         return JSONResponse(
             {
-                "error": "データベースへの保存に失敗しました。しばらく待ってから再試行してください。",
-                "error_type": "persistence_error",
+                "error": user_message_for(
+                    e,
+                    default="データベースへの保存に失敗しました。"
+                    "しばらく待ってから再試行してください。",
+                ),
+                "error_type": _error_type_for(e),
             },
             status_code=503,
         )
     except Exception as e:
-        logger.error(f"Unexpected error saving interview session: {e}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error("Unexpected error saving interview session", exc_info=True)
         return JSONResponse(
             {
-                "error": "セッション保存中に予期しないエラーが発生しました",
+                "error": user_message_for(
+                    e, default="セッション保存中に予期しないエラーが発生しました"
+                ),
                 "error_type": "internal_error",
             },
             status_code=500,
@@ -721,14 +785,25 @@ async def end_interview_session(request: Request, session_id: str) -> Any:
         return JSONResponse({"message": "インタビューセッションが終了されました"})
 
     except InterviewManagerError as e:
-        logger.error(f"Error ending interview session: {e}")
+        logger.error("Error ending interview session", exc_info=True)
         return JSONResponse(
-            {"error": "インタビューセッションの終了に失敗しました"}, status_code=400
+            {
+                "error": user_message_for(
+                    e, default="インタビューセッションの終了に失敗しました"
+                ),
+                "error_type": _error_type_for(e),
+            },
+            status_code=400,
         )
     except Exception as e:
-        logger.error(f"Unexpected error ending interview session: {e}")
+        logger.error("Unexpected error ending interview session", exc_info=True)
         return JSONResponse(
-            {"error": "インタビューセッションの終了中にエラーが発生しました"},
+            {
+                "error": user_message_for(
+                    e, default="インタビューセッションの終了中にエラーが発生しました"
+                ),
+                "error_type": "internal_error",
+            },
             status_code=500,
         )
 
@@ -777,21 +852,25 @@ async def stream_interview_messages(request: Request, session_id: str) -> Any:
         )
 
     except InterviewManagerError as e:
-        logger.error(f"Interview session not found for streaming: {e}")
+        logger.error("Interview session not found for streaming", exc_info=True)
+        message = user_message_for(e, default="セッションが見つかりません")
         return StreamingResponse(
             iter(
                 [
-                    f"data: {json.dumps({'type': 'error', 'message': 'セッションが見つかりません'}, ensure_ascii=False)}\n\n"
+                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                 ]
             ),
             media_type="text/event-stream",
         )
     except Exception as e:
-        logger.error(f"Error starting interview stream: {e}")
+        logger.error("Error starting interview stream", exc_info=True)
+        message = user_message_for(
+            e, default="ストリーミングの開始中にエラーが発生しました"
+        )
         return StreamingResponse(
             iter(
                 [
-                    f"data: {json.dumps({'type': 'error', 'message': 'ストリーミングの開始中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
+                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
                 ]
             ),
             media_type="text/event-stream",
@@ -824,7 +903,11 @@ async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24) -
     except Exception as e:
         logger.error(f"Error during session cleanup: {e}")
         return JSONResponse(
-            {"error": "セッションクリーンアップ中にエラーが発生しました"},
+            {
+                "error": user_message_for(
+                    e, default="セッションクリーンアップ中にエラーが発生しました"
+                )
+            },
             status_code=500,
         )
 
@@ -852,5 +935,10 @@ async def get_interview_stats(request: Request) -> Any:
     except Exception as e:
         logger.error(f"Error getting interview stats: {e}")
         return JSONResponse(
-            {"error": "統計情報の取得中にエラーが発生しました"}, status_code=500
+            {
+                "error": user_message_for(
+                    e, default="統計情報の取得中にエラーが発生しました"
+                )
+            },
+            status_code=500,
         )

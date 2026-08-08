@@ -6,6 +6,7 @@ import queue
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
+from src.models.errors import ErrorCode
 from src.services.data_agent_service import (
     DataAgentResult,
     DataAgentService,
@@ -142,8 +143,9 @@ class TestDataAgentServiceQuery:
         mock_client.invoke_agent_runtime.return_value = {"response": resp_mock}
 
         service = DataAgentService(runtime_arn="arn:aws:test", region="us-east-1")
-        with pytest.raises(DataAgentServiceError, match="SQL実行エラー"):
+        with pytest.raises(DataAgentServiceError) as exc_info:
             service.query("エラーになる質問")
+        assert exc_info.value.code is ErrorCode.DATA_AGENT_CONNECTION_FAILED
 
 
 @pytest.mark.integration

@@ -17,11 +17,12 @@ except ImportError:
     BedrockModel = None  # type: ignore[assignment,misc]
 
 from ..config import config
+from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.message import Message
 
 
-class AgentServiceError(Exception):
+class AgentServiceError(CodedError):
     """Agent Service関連のエラー"""
 
     pass
@@ -43,10 +44,18 @@ class GenerationCapacityError(AgentServiceError):
     """出力トークン上限超過・応答タイムアウト等、生成負荷に起因するエラー。
 
     ペルソナ数やファイル量が多すぎて1回の生成に収まらない場合に発生する。
-    ユーザーには件数・入力量を減らす旨を案内する。
     """
 
-    pass
+    code = ErrorCode.GENERATION_CAPACITY_EXCEEDED
+
+
+class ReportGenerationCapacityError(AgentServiceError):
+    """レポート生成が負荷に起因して完了しなかった場合のエラー。
+
+    議論ログ・分析対象が多く出力トークン上限を超過した場合に発生する。
+    """
+
+    code = ErrorCode.REPORT_CAPACITY_EXCEEDED
 
 
 def _clear_agent_history(agent: Any, label: str) -> None:
@@ -54,7 +63,7 @@ def _clear_agent_history(agent: Any, label: str) -> None:
     _logger = logging.getLogger(__name__)
     if agent and hasattr(agent, "messages"):
         agent.messages.clear()
-        _logger.info(f"{label} の会話履歴をクリアしました")
+        _logger.info(f"Cleared conversation history for {label}")
 
 
 def _dispose_agent(agent_ref: Any, label: str) -> None:
@@ -65,9 +74,9 @@ def _dispose_agent(agent_ref: Any, label: str) -> None:
             agent_ref.dispose()
         elif hasattr(agent_ref, "close"):
             agent_ref.close()
-        _logger.info(f"{label} のリソースを解放しました")
+        _logger.info(f"Disposed resources for {label}")
     except Exception as e:
-        _logger.warning(f"{label} のリソース解放中にエラー: {e}")
+        _logger.warning(f"Error disposing resources for {label}: {e}")
 
 
 def _extract_text_from_agent_result(result: Any, agent: Any = None) -> str:
@@ -101,10 +110,10 @@ def _extract_text_from_agent_result(result: Any, agent: Any = None) -> str:
         if text_parts:
             return "\n".join(text_parts)
 
-        _logger.warning("テキストブロックが見つかりません、str()でフォールバック")
+        _logger.warning("No text block found, falling back to str()")
         return str(result)
     except Exception as e:
-        _logger.warning(f"テキスト抽出に失敗、フォールバック使用: {e}")
+        _logger.warning(f"Text extraction failed, using fallback: {e}")
         return str(result)
 
 
@@ -139,7 +148,7 @@ class PersonaAgent:
         """
         self._document_contents = document_contents or []
         self.logger.info(
-            f"ペルソナ {self.persona.name} に {len(self._document_contents)} 件のドキュメントを設定しました"
+            f"Set {len(self._document_contents)} documents for persona {self.persona.name}"
         )
 
     def respond(
@@ -180,15 +189,15 @@ class PersonaAgent:
             # AgentResultからテキストコンテンツを正しく抽出
             response = self._extract_text_from_result(result, self.agent)
 
-            self.logger.info(f"ペルソナ {self.persona.name} が応答を生成しました")
+            self.logger.info(f"Persona {self.persona.name} generated a response")
             return response
 
         except Exception as e:
-            error_msg = (
-                f"ペルソナエージェント {self.persona.name} の応答生成に失敗: {e}"
-            )
+            error_msg = f"Failed to generate response for persona agent {self.persona.name}: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def respond_streaming(
         self,
@@ -258,15 +267,17 @@ class PersonaAgent:
                 raise agent_error
 
             self.logger.info(
-                f"ペルソナ {self.persona.name} がストリーミング応答を完了しました"
+                f"Persona {self.persona.name} completed streaming response"
             )
 
         except AgentCommunicationError:
             raise
         except Exception as e:
-            error_msg = f"ペルソナエージェント {self.persona.name} のストリーミング応答生成に失敗: {e}"
+            error_msg = f"Failed to generate streaming response for persona agent {self.persona.name}: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """AgentResultからテキストコンテンツを抽出"""
@@ -328,7 +339,7 @@ class FacilitatorAgent:
             f"ラウンド数: {self.rounds}"
         )
 
-        self.logger.info(f"ファシリテータが議論を開始しました: {topic}")
+        self.logger.info(f"Facilitator started discussion: {topic}")
         return start_message
 
     def clear_conversation_history(self) -> None:
@@ -356,9 +367,11 @@ class FacilitatorAgent:
             result = self.agent(prompt)
             return self._extract_text_from_result(result, self.agent)
         except Exception as e:
-            error_msg = f"ファシリテータ呼び出しに失敗: {e}"
+            error_msg = f"Facilitator invocation failed: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def invoke_streaming(self, prompt: str) -> Generator[str, None, None]:
         """
@@ -410,7 +423,7 @@ class FacilitatorAgent:
                 self.agent.callback_handler = original_handler
                 if agent_error:
                     self.logger.error(
-                        f"ファシリテータストリーミング中にエージェントエラー（クライアント切断で未送出）: {agent_error}"
+                        f"Agent error during facilitator streaming (not raised due to client disconnect): {agent_error}"
                     )
 
             if agent_error:
@@ -419,9 +432,11 @@ class FacilitatorAgent:
         except AgentCommunicationError:
             raise
         except Exception as e:
-            error_msg = f"ファシリテータストリーミング呼び出しに失敗: {e}"
+            error_msg = f"Facilitator streaming invocation failed: {e}"
             self.logger.error(error_msg)
-            raise AgentCommunicationError(error_msg)
+            raise AgentCommunicationError(
+                error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
+            ) from e
 
     def dispose(self) -> None:
         """ファシリテータエージェントリソースを解放"""
@@ -441,11 +456,11 @@ class AgentService:
         # Strands SDKの利用可能性をチェック
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
-                "Strands Agent SDKがインストールされていません。"
-                "pip install strands-agents を実行してください。"
+                "strands-agents package is not installed",
+                code=ErrorCode.AGENT_SDK_UNAVAILABLE,
             )
 
-        self.logger.info("Agent Serviceを初期化しました")
+        self.logger.info("Agent Service initialized")
 
     def _create_tool_logging_callback(self, agent_name: str) -> Any:
         """ツールコールをログするコールバックハンドラーを作成"""
@@ -458,21 +473,19 @@ class AgentService:
                 tool_name = getattr(tool, "name", str(tool))
                 input_str = str(input_data)[:500]
                 logger.info(
-                    f"[{agent_name}] ツール開始: {tool_name} | 入力: {input_str}"
+                    f"[{agent_name}] Tool started: {tool_name} | input: {input_str}"
                 )
 
             def on_tool_end(self, tool: Any, result: Any, **kwargs: Any) -> None:
                 tool_name = getattr(tool, "name", str(tool))
                 result_str = str(result)[:1000]
                 logger.info(
-                    f"[{agent_name}] ツール完了: {tool_name} | 結果: {result_str}"
+                    f"[{agent_name}] Tool completed: {tool_name} | result: {result_str}"
                 )
 
             def on_tool_error(self, tool: Any, error: Any, **kwargs: Any) -> None:
                 tool_name = getattr(tool, "name", str(tool))
-                logger.error(
-                    f"[{agent_name}] ツールエラー: {tool_name} | エラー: {error}"
-                )
+                logger.error(f"[{agent_name}] Tool error: {tool_name} | error: {error}")
 
         return ToolLoggingCallback()
 
@@ -515,13 +528,15 @@ class AgentService:
                 **filtered_credentials,
             )
 
-            self.logger.info(f"Bedrockモデルを作成しました: {config.AGENT_MODEL_ID}")
+            self.logger.info(f"Bedrock model created: {config.AGENT_MODEL_ID}")
             return model
 
         except Exception as e:
-            error_msg = f"Bedrockモデルの作成に失敗: {e}"
+            error_msg = f"Failed to create Bedrock model: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     @staticmethod
     def _build_boto_config() -> Any:
@@ -629,28 +644,28 @@ class AgentService:
                                 else "full"
                             )
                             self.logger.info(
-                                f"ペルソナ {persona.name} にセッションマネージャーを設定しました "
+                                f"Set session manager for persona {persona.name} "
                                 f"(mode={mode_label})"
                             )
                         else:
                             self.logger.warning(
-                                f"ペルソナ {persona.name}: セッションマネージャーの作成に失敗しました。"
-                                "メモリなしでエージェントを作成します。"
+                                f"Persona {persona.name}: failed to create session manager. "
+                                "Creating agent without memory."
                             )
                     else:
                         self.logger.info(
-                            f"ペルソナ {persona.name}: 長期記憶は設定で無効化されています"
+                            f"Persona {persona.name}: long-term memory is disabled by configuration"
                         )
 
                 except Exception as e:
                     self.logger.warning(
-                        f"ペルソナ {persona.name}: セッションマネージャー作成エラー: {e}. "
-                        "メモリなしでエージェントを作成します。"
+                        f"Persona {persona.name}: session manager creation error: {e}. "
+                        "Creating agent without memory."
                     )
             elif enable_memory and not session_id:
                 self.logger.warning(
-                    f"ペルソナ {persona.name}: enable_memory=Trueですが、"
-                    "session_idが指定されていません。メモリなしでエージェントを作成します。"
+                    f"Persona {persona.name}: enable_memory=True but no session_id "
+                    "was provided. Creating agent without memory."
                 )
 
             # Agentを作成
@@ -665,7 +680,7 @@ class AgentService:
             if tools:
                 agent_kwargs["tools"] = tools
                 self.logger.info(
-                    f"ペルソナ {persona.name} にツールを登録: {len(tools)}個"
+                    f"Registered {len(tools)} tools for persona {persona.name}"
                 )
 
             if session_manager:
@@ -681,15 +696,16 @@ class AgentService:
                 memory_status = effective_memory_mode
 
             self.logger.info(
-                f"ペルソナエージェントを作成しました: {persona.name} "
-                f"(memory={memory_status})"
+                f"Created persona agent: {persona.name} (memory={memory_status})"
             )
             return persona_agent
 
         except Exception as e:
-            error_msg = f"ペルソナエージェント {persona.name} の作成に失敗: {e}"
+            error_msg = f"Failed to create persona agent {persona.name}: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     def create_facilitator_agent(
         self,
@@ -718,15 +734,15 @@ class AgentService:
             agent = Agent(name="Facilitator", system_prompt=system_prompt, model=model)
             facilitator_agent = FacilitatorAgent(rounds, additional_instructions, agent)
 
-            self.logger.info(
-                f"ファシリテータエージェントを作成しました (ラウンド数: {rounds})"
-            )
+            self.logger.info(f"Created facilitator agent (rounds: {rounds})")
             return facilitator_agent
 
         except Exception as e:
-            error_msg = f"ファシリテータエージェントの作成に失敗: {e}"
+            error_msg = f"Failed to create facilitator agent: {e}"
             self.logger.error(error_msg)
-            raise AgentInitializationError(error_msg)
+            raise AgentInitializationError(
+                error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+            ) from e
 
     def get_kb_tools(
         self, persona_id: str, db_service: Any
@@ -847,7 +863,8 @@ class AgentService:
         """渡されたsystem_promptとtoolsでペルソナ生成用Agentを生成する"""
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
-                "Strands Agent SDKがインストールされていません"
+                "strands-agents package is not installed",
+                code=ErrorCode.AGENT_SDK_UNAVAILABLE,
             )
         try:
             model = self._build_generation_model()
@@ -861,10 +878,13 @@ class AgentService:
                 agent_kwargs["callback_handler"] = callback_handler
 
             agent = Agent(**agent_kwargs)
-            self.logger.info("ペルソナ生成エージェントを作成")
+            self.logger.info("Created persona generation agent")
             return agent
         except Exception as e:
-            raise AgentInitializationError(f"ペルソナ生成エージェント作成エラー: {e}")
+            raise AgentInitializationError(
+                f"generation agent creation failed ({type(e).__name__})",
+                code=ErrorCode.AGENT_INITIALIZATION_FAILED,
+            ) from e
 
     def run_persona_generation(
         self,
@@ -901,7 +921,7 @@ class AgentService:
                         raise
                     last_error = str(validation_err)
                     self.logger.warning(
-                        f"structured_output バリデーションエラー (attempt {attempt + 1}/{max_retries + 1}): {last_error}"
+                        f"structured_output validation error (attempt {attempt + 1}/{max_retries + 1}): {last_error}"
                     )
                     if attempt == max_retries:
                         raise
@@ -911,12 +931,16 @@ class AgentService:
 
         except Exception as e:
             if self._is_capacity_error(e):
-                self.logger.warning(f"生成負荷に起因するエラー: {e}")
-                raise GenerationCapacityError(
-                    "生成するデータ量が大きすぎて処理しきれませんでした。"
-                    "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
+                self.logger.warning(
+                    "Error caused by generation capacity limit", exc_info=True
                 )
-            raise AgentServiceError(f"ペルソナ生成実行エラー: {e}")
+                raise GenerationCapacityError(
+                    f"persona generation hit capacity limit ({type(e).__name__}), "
+                    f"agent_max_tokens={config.AGENT_MAX_TOKENS}"
+                ) from e
+            raise AgentServiceError(
+                f"persona generation failed ({type(e).__name__})"
+            ) from e
 
     @staticmethod
     def _is_capacity_error(error: Exception) -> bool:
@@ -948,7 +972,8 @@ class AgentService:
 
         if not config.DATA_AGENT_RUNTIME_ARN:
             raise AgentServiceError(
-                "データ分析エージェントの接続設定がされていません。設定画面から Runtime ARN を設定してください"
+                "DATA_AGENT_RUNTIME_ARN is not configured",
+                code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
             )
         tool = create_data_agent_tool(
             config.DATA_AGENT_RUNTIME_ARN,
@@ -1038,7 +1063,7 @@ class AgentService:
                     )
             except Exception as e:
                 self.logger.warning(
-                    f"レポートエージェントのセッションマネージャー作成失敗: {e}"
+                    f"Failed to create session manager for report agent: {e}"
                 )
 
         try:
@@ -1077,23 +1102,22 @@ class AgentService:
             else:
                 yield str(result)
         except Exception as e:
+            # ユーザー向け文言はプレゼンテーション層のカタログが持つ。ここでは
+            # エラー種別をコード付き例外として送出するだけに留める。呼び出し側
+            # (Router) は event_queue 経路でも future.exception() で受け取る。
             if self._is_capacity_error(e):
-                self.logger.warning(f"レポート生成の負荷超過: {e}")
-                msg = (
-                    "\n\n⚠️ 分析対象のデータ量が大きすぎてレポートを生成しきれませんでした。"
-                    "対象を絞るか、議論ログを短くして再度お試しください。"
+                self.logger.warning(
+                    "Report generation hit capacity limit", exc_info=True
                 )
-            else:
-                # 内部例外の詳細はログにのみ出力し、ユーザーには一般的なメッセージを返す
-                self.logger.error("レポート生成エラーが発生しました。", exc_info=True)
-                msg = (
-                    "\n\n⚠️ レポート生成中にエラーが発生しました。"
-                    "時間をおいて再度お試しください。"
-                )
-            if event_queue is not None:
-                event_queue.put({"type": "error", "content": msg})
-            else:
-                yield msg
+                raise ReportGenerationCapacityError(
+                    f"report generation hit capacity limit ({type(e).__name__}), "
+                    f"agent_max_tokens={config.AGENT_MAX_TOKENS}"
+                ) from e
+            self.logger.error("Report generation error occurred.", exc_info=True)
+            raise AgentServiceError(
+                f"report generation failed ({type(e).__name__})",
+                code=ErrorCode.AGENT_COMMUNICATION_FAILED,
+            ) from e
 
     def run_segment_extraction_agent(
         self,

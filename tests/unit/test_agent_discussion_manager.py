@@ -5,6 +5,8 @@ AgentDiscussionManager の単体テスト
 """
 
 import pytest
+
+from src.models.errors import ErrorCode
 from unittest.mock import Mock, patch
 
 from src.managers.agent_discussion_manager import (
@@ -198,7 +200,7 @@ class TestStartAgentDiscussion:
                 facilitator=mock_facilitator,
             )
 
-        assert "最低2つのペルソナが必要" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
 
     def test_start_discussion_empty_topic(self, sample_persona, sample_persona_2):
         """空のトピックでエラーを返すことを確認"""
@@ -222,7 +224,7 @@ class TestStartAgentDiscussion:
                 facilitator=mock_facilitator,
             )
 
-        assert "トピックが空" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_REQUIRED
 
 
 class TestSaveAgentDiscussion:
@@ -270,7 +272,7 @@ class TestSaveAgentDiscussion:
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.save_agent_discussion(None)
 
-        assert "議論オブジェクトが無効" in str(exc_info.value)
+        assert exc_info.value.code is ErrorCode.DISCUSSION_OPERATION_FAILED
 
 
 class TestDisposeAgents:

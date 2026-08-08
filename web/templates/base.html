@@ -145,11 +145,23 @@
         </div>
     </nav>
     
+    {# トースト通知の表示領域（Issue #117）。
+       画面右上に固定する。従来は main の先頭にインライン挿入していたため、
+       長いフォームを下にスクロールした状態では視認できなかった。
+       TRANSIENT / 422 はトーストが唯一の通知手段なので、スクロール位置に
+       依存せず必ず見える必要がある。
+
+       z-index はモーダル（z-50）より上に置く。モーダル内のフォーム送信が
+       失敗した場合（ナレッジベース登録など）、同じ z-50 だと後方のモーダルが
+       トーストを覆って文言が見えない。
+       pointer-events は個々のトースト（閉じるボタン）にだけ戻す。 #}
+    <div id="flash-messages"
+         class="fixed top-20 right-4 z-toast w-full max-w-sm pointer-events-none"
+         aria-live="polite"
+         aria-atomic="false"></div>
+
     <!-- メインコンテンツ -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <!-- フラッシュメッセージ -->
-        <div id="flash-messages"></div>
-        
         {% block content %}{% endblock %}
     </main>
     
@@ -163,25 +175,11 @@
     </footer>
     
     <!-- グローバルスクリプト -->
+    {# htmx のイベントハンドラは app.js に集約している。以前はここにも
+       afterSwap / beforeRequest / afterRequest を重複登録していたため、
+       fade-in が二重に適用されていた（Issue #117 ステップ5）。 #}
     <script src="/static/js/app.js"></script>
-    <script>
-        // htmxイベントハンドラ
-        document.body.addEventListener('htmx:afterSwap', function(evt) {
-            // 新しいコンテンツにフェードインアニメーションを適用
-            if (evt.detail.target) {
-                evt.detail.target.classList.add('fade-in');
-            }
-        });
-        
-        document.body.addEventListener('htmx:beforeRequest', function(evt) {
-            // リクエスト開始時の処理
-        });
-        
-        document.body.addEventListener('htmx:afterRequest', function(evt) {
-            // リクエスト完了時の処理
-        });
-    </script>
-    
+
     {% block scripts %}{% endblock %}
 </body>
 </html>

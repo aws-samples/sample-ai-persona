@@ -7,13 +7,20 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Form, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.dataset_manager import DatasetManager
-from src.managers.settings_manager import SettingsManager, SettingsManagerError  # noqa: F401
+from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.dataset import DatasetColumn
+from src.models.errors import ErrorCode
+from web.error_messages import (
+    mark_renderable,
+    toast_response,
+    user_message_for,
+    user_message_for_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +77,11 @@ async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
     settings_manager = get_settings_manager()
     try:
         is_running = settings_manager.toggle_mcp(enabled)
-    except Exception:
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "MCPサーバーの切り替えに失敗しました"},
-            status_code=500,
+    except Exception as e:
+        # 再試行で解決しうるエラーは設定パネルを消さずトーストで通知する
+        logger.error("Failed to toggle MCP server", exc_info=True)
+        return toast_response(
+            e, default="MCPサーバーの切り替えに失敗しました", status_code=500
         )
 
     return templates.TemplateResponse(
@@ -129,20 +135,36 @@ async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> An
 async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
     """CSVファイルのスキーマを解析"""
     if not file.filename.endswith(".csv"):  # type: ignore[union-attr]
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "CSVファイルのみアップロード可能です"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                        {"allowed_formats": "CSV"},
+                    ),
+                },
+                status_code=400,
+            )
         )
 
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:  # 10MB制限
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "ファイルサイズは10MB以下にしてください"},
-            status_code=400,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(
+                        ErrorCode.FILE_TOO_LARGE,
+                        {"max_size_mb": 10.0},
+                    ),
+                },
+                status_code=400,
+            )
         )
 
     dataset_manager = get_dataset_manager()
@@ -210,12 +232,10 @@ async def create_dataset(
         )
 
     except Exception as e:
-        logger.error(f"Dataset creation failed: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": f"データセット作成に失敗しました: {e}"},
-            status_code=500,
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        logger.error("Dataset creation failed", exc_info=True)
+        return toast_response(
+            e, default="データセット作成に失敗しました", status_code=500
         )
 
 
@@ -250,7 +270,17 @@ async def update_dataset(
         )
 
         if not dataset:
-            raise HTTPException(status_code=404, detail="Dataset not found")
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_banner.html",
+                    {
+                        "request": request,
+                        "error": user_message_for_code(ErrorCode.DATASET_NOT_FOUND),
+                    },
+                    status_code=404,
+                )
+            )
 
         datasets = dataset_manager.get_datasets()
         datasets_dict = [d.to_dict() for d in datasets]
@@ -261,12 +291,10 @@ async def update_dataset(
         )
 
     except Exception as e:
-        logger.error(f"Dataset update failed: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": f"データセット更新に失敗しました: {e}"},
-            status_code=500,
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        logger.error("Dataset update failed", exc_info=True)
+        return toast_response(
+            e, default="データセット更新に失敗しました", status_code=500
         )
 
 
@@ -277,11 +305,16 @@ async def delete_dataset(request: Request, dataset_id: str) -> Any:
     success = dataset_manager.delete_dataset(dataset_id)
 
     if not success:
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": "データセットの削除に失敗しました"},
-            status_code=404,
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(ErrorCode.DATASET_OPERATION_FAILED),
+                },
+                status_code=404,
+            )
         )
 
     datasets = dataset_manager.get_datasets()
@@ -350,12 +383,10 @@ async def create_knowledge_base(
             {"request": request, "knowledge_bases": kb_list},
         )
     except Exception as e:
-        logger.error(f"KB registration failed: {e}")
-        return templates.TemplateResponse(
-            request,
-            "partials/error.html",
-            {"request": request, "message": f"ナレッジベースの登録に失敗しました: {e}"},
-            status_code=500,
+        # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
+        logger.error("KB registration failed", exc_info=True)
+        return toast_response(
+            e, default="ナレッジベースの登録に失敗しました", status_code=500
         )
 
 
@@ -454,12 +485,15 @@ async def test_data_agent_connection(request: Request) -> Any:
             "}"
             "</script>"
         )
-    except SettingsManagerError:
+    except SettingsManagerError as e:
+        logger.warning("Data analysis agent connection test failed", exc_info=True)
+        message = user_message_for(e, default="接続テストに失敗しました")
         return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: データ分析エージェントに接続できませんでした</div>'
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">接続失敗: {html.escape(message)}</div>'
         )
-    except Exception:
-        logger.exception("データ分析エージェント接続テストエラー")
+    except Exception as e:
+        logger.exception("Data analysis agent connection test error")
+        message = user_message_for(e, default="接続テスト中にエラーが発生しました")
         return HTMLResponse(
-            '<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: 接続テスト中にエラーが発生しました</div>'
+            f'<div class="text-sm text-red-600 bg-red-50 rounded p-2">❌ 接続失敗: {html.escape(message)}</div>'
         )

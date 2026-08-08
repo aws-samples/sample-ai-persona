@@ -7,6 +7,7 @@
 from unittest.mock import Mock, patch
 from datetime import datetime
 
+from src.models.errors import ErrorCode
 from src.models.message import Message
 from src.managers.interview_manager import (
     InterviewSession,
@@ -63,11 +64,25 @@ class TestCreateInterviewSessionEndpoint:
         # FastAPIはForm(...)で必須パラメータがない場合422を返す
         assert response.status_code == 422
 
+    @patch("web.routers.interview.get_interview_manager")
     @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_too_many_personas(self, mock_get_manager, client):
-        """ペルソナ数過多でエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
+    def test_create_session_too_many_personas(
+        self, mock_get_persona, mock_get_interview, client, sample_persona
+    ):
+        """ペルソナ数過多でエラーを返すことを確認（Manager層のバリデーションに委譲）"""
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_interview_manager = Mock()
+        mock_interview_manager.start_interview_session.side_effect = (
+            InterviewValidationError(
+                "persona count 6 exceeds max 5",
+                code=ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
+                context={"max_personas": 5, "field": "persona_ids"},
+            )
+        )
+        mock_get_interview.return_value = mock_interview_manager
 
         response = client.post(
             "/interview/create",
@@ -77,6 +92,35 @@ class TestCreateInterviewSessionEndpoint:
         assert response.status_code == 400
         data = response.json()
         assert "最大5つのペルソナまで" in data["error"]
+
+    @patch("web.routers.interview.get_interview_manager")
+    @patch("web.routers.interview.get_persona_manager")
+    def test_create_session_invalid_memory_mode(
+        self, mock_get_persona, mock_get_interview, client, sample_persona
+    ):
+        """不正なmemory_modeでカタログ文言のエラーを返すことを確認（Manager層のバリデーションに委譲）"""
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_interview_manager = Mock()
+        mock_interview_manager.start_interview_session.side_effect = (
+            InterviewValidationError(
+                "invalid memory_mode 'bogus'",
+                code=ErrorCode.INTERVIEW_MEMORY_MODE_INVALID,
+                context={"field": "memory_mode"},
+            )
+        )
+        mock_get_interview.return_value = mock_interview_manager
+
+        response = client.post(
+            "/interview/create",
+            data={"persona_ids": [sample_persona.id], "memory_mode": "bogus"},
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "無効な記憶モードです" in data["error"]
 
     @patch("web.routers.interview.get_persona_manager")
     def test_create_session_persona_not_found(self, mock_get_manager, client):
@@ -177,7 +221,9 @@ class TestSendMessageEndpoint:
         """空白のみのメッセージでエラーを返すことを確認"""
         mock_manager = Mock()
         mock_manager.send_user_message_with_files.side_effect = (
-            InterviewValidationError("メッセージが空です")
+            InterviewValidationError(
+                "message is blank", code=ErrorCode.INTERVIEW_MESSAGE_REQUIRED
+            )
         )
         mock_get_manager.return_value = mock_manager
 
@@ -213,7 +259,9 @@ class TestSendMessageEndpoint:
         """存在しないセッションでエラーを返すことを確認"""
         mock_manager = Mock()
         mock_manager.send_user_message_with_files.side_effect = (
-            InterviewSessionNotFoundError("セッションが見つかりません")
+            InterviewSessionNotFoundError(
+                "session not found", code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+            )
         )
         mock_get_manager.return_value = mock_manager
 

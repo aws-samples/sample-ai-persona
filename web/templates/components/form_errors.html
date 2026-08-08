@@ -1,0 +1,44 @@
+{#
+  フォームのバリデーションエラー表示部品（Issue #117 ステップ4）。
+
+  入力を直せば解決するエラー（ErrorKind.VALIDATION / CAPACITY）は、フォームを
+  消さずに該当フィールドの横に表示する。文言は web/error_messages.py の
+  カタログが解決したものを `form_error` として受け取る。
+
+  提供するマクロ:
+  - form_error_summary(form_error, error_field) ... フォーム冒頭のサマリー
+  - field_border(error_field, field_name) ........ 入力欄の枠線クラス
+  - field_error(error_field, field_name, form_error) ... 各フィールド直下のエラー
+
+  `error_field` はエラー対象のフィールドキー（例: "name"）。Manager が
+  context["field"] に載せた場合のみ入る。特定できない場合はサマリーだけを出す
+  （どのフィールドか分からないまま赤枠を付けると誤誘導になるため）。
+
+  注意: この注釈内に Jinja のタグ記法を書くと、コメントであっても解析されて
+  未定義エラーになる。使用例はテンプレート側の呼び出し箇所を参照すること。
+#}
+
+{# フォーム冒頭のサマリー。フィールドが特定できない場合はここだけに出る #}
+{% macro form_error_summary(form_error, error_field) %}
+{%- if form_error and not error_field %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6" role="alert">
+    <p class="text-red-800 text-sm">{{ form_error }}</p>
+</div>
+{%- endif %}
+{% endmacro %}
+
+{# 入力欄に付ける枠線クラス。エラー時のみ赤くする #}
+{% macro field_border(error_field, field_name) %}
+{%- if error_field and error_field == field_name -%}
+border-red-400 focus:ring-red-500 focus:border-red-500
+{%- else -%}
+border-gray-300 focus:ring-blue-500 focus:border-blue-500
+{%- endif -%}
+{% endmacro %}
+
+{# 該当フィールド直下に出すインラインエラー #}
+{% macro field_error(error_field, field_name, form_error) %}
+{%- if error_field and error_field == field_name and form_error %}
+<p class="mt-1 text-sm text-red-700" role="alert">{{ form_error }}</p>
+{%- endif %}
+{% endmacro %}

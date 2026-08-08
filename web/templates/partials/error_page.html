@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_x_circle, icon_arrow_left %}
+{#
+  フルページ表示のエラー画面（Issue #117）。
+
+  `raise HTTPException(...)` をブラウザのフルページ遷移で受けたときに使う。
+  従来は FastAPI の既定ハンドラが `{"detail": "..."}` を返し、生のJSONが
+  ブラウザに表示されていた。
+
+  パーシャル（error_banner.html / error_inline.html）と違い、これは
+  base.html を継承した独立したページ。ナビゲーションが残るので利用者は
+  そこからも移動できる。
+
+  引数:
+    error       ... 表示する文言
+    status_code ... HTTPステータス（見出しの出し分けに使う）
+    back_url    ... 復帰先の一覧画面
+#}
+{% block content %}
+<div class="max-w-2xl mx-auto py-12">
+    <div class="bg-white rounded-lg shadow-md p-8 text-center" role="alert">
+        <div class="flex justify-center mb-4">
+            <span class="text-red-500">{{ icon_x_circle("w-16 h-16") }}</span>
+        </div>
+
+        <h1 class="text-2xl font-bold text-gray-900 mb-2">
+            {% if status_code == 404 %}
+            ページが見つかりません
+            {% else %}
+            エラーが発生しました
+            {% endif %}
+        </h1>
+
+        <p class="text-gray-600 mb-8">{{ error }}</p>
+
+        <div class="flex items-center justify-center gap-3">
+            <a href="{{ back_url or '/' }}"
+               class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors inline-flex items-center gap-1.5">
+                {{ icon_arrow_left("w-4 h-4") }} 一覧に戻る
+            </a>
+            <a href="/"
+               class="px-4 py-2 text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors">
+                トップへ
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

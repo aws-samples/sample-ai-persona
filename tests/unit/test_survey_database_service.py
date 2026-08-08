@@ -57,7 +57,7 @@ def _sample_survey() -> Survey:
         ),
         created_at=datetime(2025, 1, 1, 12, 0, 0),
         updated_at=datetime(2025, 1, 2, 12, 0, 0),
-        error_message=None,
+        error_code=None,
     )
 
 
@@ -234,7 +234,7 @@ class TestSurveyCRUD:
             insight_report=None,
             created_at=datetime(2025, 1, 1),
             updated_at=datetime(2025, 1, 1),
-            error_message=None,
+            error_code=None,
         )
 
         serialized = service._serialize_survey(survey)
@@ -244,5 +244,5 @@ class TestSurveyCRUD:
         assert restored.filters is None
         assert restored.s3_result_path is None
         assert restored.insight_report is None
-        assert restored.error_message is None
+        assert restored.error_code is None
         assert restored.persona_count == 10

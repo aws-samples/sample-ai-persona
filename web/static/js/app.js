@@ -18,9 +18,40 @@ document.body.addEventListener('htmx:afterRequest', function(evt) {
     console.log('htmx request completed:', evt.detail.pathInfo.requestPath);
 });
 
+// サーバーからのトースト指示（HX-Trigger: {"showToast": {...}}）。
+// 再試行で解決しうるエラー（ErrorKind.TRANSIENT）は、画面を書き換えず
+// トーストで通知する。入力内容を保持するため（Issue #117）。
+// htmx は HX-Trigger をスワップ判定より前に処理するので 4xx でも発火する。
+document.body.addEventListener('showToast', function(evt) {
+    const detail = evt.detail || {};
+    showFlashMessage(detail.message || 'エラーが発生しました。', detail.type || 'error');
+});
+
+// 非2xx応答のDOM反映（Issue #117）。
+// htmx 1.9.10 は 2xx 以外の本文をスワップしないため、4xx/5xx でエラー文言を
+// 返しても画面に届かない。サーバーが X-Render-Response: true を明示した応答
+// だけをスワップ対象にする。
+// ステータスコードで一律に許可しないのは、汎用エラーパーシャルが hx-target
+// （本体コンテンツや一覧）に流れ込んでフォームごと消える経路があるため。
+// 「表示してよい」判断はサーバー側が持つ。
+document.body.addEventListener('htmx:beforeSwap', function(evt) {
+    const xhr = evt.detail.xhr;
+    if (xhr && xhr.getResponseHeader('X-Render-Response') === 'true') {
+        evt.detail.shouldSwap = true;
+        evt.detail.isError = false;
+    }
+});
+
 document.body.addEventListener('htmx:responseError', function(evt) {
     // エラー時の処理
     console.error('htmx request error:', evt.detail);
+    // サーバーがトースト表示または本文の反映を指示している場合は、それぞれの
+    // 経路で文言が出るため、ここで汎用文言を重ねて出さない
+    const xhr = evt.detail.xhr;
+    if (xhr && (xhr.getResponseHeader('HX-Trigger') ||
+                xhr.getResponseHeader('X-Render-Response') === 'true')) {
+        return;
+    }
     showFlashMessage('エラーが発生しました。再度お試しください。', 'error');
 });
 
@@ -44,7 +75,11 @@ function showFlashMessage(message, type = 'info') {
     };
     
     const div = document.createElement('div');
-    div.className = `${colors[type]} border rounded-lg p-4 mb-4 fade-in`;
+    // コンテナは pointer-events-none（下の要素を操作できるように）なので、
+    // 閉じるボタンを押せるようトースト自身だけクリックを受け付ける。
+    // shadow-lg は本文コンテンツの上に重なるため境界を分かりやすくする。
+    div.className =
+        `${colors[type]} border rounded-lg p-4 mb-2 fade-in shadow-lg pointer-events-auto`;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'flex items-center justify-between';

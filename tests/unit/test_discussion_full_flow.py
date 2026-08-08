@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock
 
+from src.models.errors import ErrorCode
 from src.models.persona import Persona
 from src.models.discussion import Discussion
 from src.models.message import Message
@@ -120,8 +121,9 @@ class TestAgentDiscussionManagerFullFlow:
 
     def test_validate_memory_mode_invalid(self):
         """不正なmemory_modeでAgentDiscussionManagerErrorが投げられること"""
-        with pytest.raises(AgentDiscussionManagerError, match="無効なmemory_mode"):
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
             self.manager._validate_memory_mode("invalid_mode")
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MEMORY_MODE_INVALID
 
     def test_validate_memory_mode_valid(self):
         """正常なmemory_modeで例外が投げられないこと"""

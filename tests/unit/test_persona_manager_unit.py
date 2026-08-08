@@ -1,6 +1,9 @@
 """PersonaManager の単体テスト（欠落メソッド分）"""
 
 import pytest
+
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
@@ -42,7 +45,9 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
+        ):
             gen_manager.generate_and_cache([], "interview", 0)
 
     def test_invalid_count_over_10(self, gen_manager):
@@ -50,7 +55,9 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="1-10の範囲"):
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
+        ):
             gen_manager.generate_and_cache([], "interview", 11)
 
     def test_no_files_raises(self, gen_manager):
@@ -58,8 +65,8 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(
-            PersonaGenerationManagerError, match="ファイルが選択されていません"
+        with raises_code(
+            PersonaGenerationManagerError, ErrorCode.GENERATION_FILES_REQUIRED
         ):
             gen_manager.generate_and_cache([], "interview", 3)
 
@@ -68,7 +75,10 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
         )
 
-        with pytest.raises(PersonaGenerationManagerError, match="分析の切り口"):
+        with raises_code(
+            PersonaGenerationManagerError,
+            ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED,
+        ):
             gen_manager.generate_and_cache([], "dwh", 3, data_description="")
 
     def test_capacity_error_converted(self):
@@ -102,7 +112,7 @@ class TestSavePersona:
         return PersonaManager(database_service=Mock())
 
     def test_none_persona_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="無効"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_INVALID):
             manager.save_persona(None)
 
     def test_success(self, manager):
@@ -133,7 +143,7 @@ class TestSavePersona:
             goals=["g"],
         )
         manager.database_service.save_persona.side_effect = DatabaseError("DB down")
-        with pytest.raises(PersonaManagerError, match="Database error"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.save_persona(persona)
 
 
@@ -145,7 +155,7 @@ class TestGetPersona:
         return PersonaManager(database_service=Mock())
 
     def test_empty_id_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="IDが無効"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.get_persona("")
 
     def test_found(self, manager):
@@ -221,7 +231,7 @@ class TestEditPersona:
         return PersonaManager(database_service=mock_db)
 
     def test_empty_id_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="IDが無効"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.update_persona("")
 
     def test_persona_not_found(self, manager):
@@ -237,7 +247,7 @@ class TestEditPersona:
 
     def test_update_failure_raises(self, manager):
         manager.database_service.update_persona.return_value = False
-        with pytest.raises(PersonaManagerError, match="更新に失敗"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_UPDATE_FAILED):
             manager.update_persona("p1", name="新名前")
 
 
@@ -249,7 +259,7 @@ class TestDeletePersona:
         return PersonaManager(database_service=Mock())
 
     def test_empty_id_raises(self, manager):
-        with pytest.raises(PersonaManagerError, match="IDが無効"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.delete_persona("")
 
     def test_success(self, manager):
@@ -342,113 +352,150 @@ class TestValidatePersonaForSave:
 
     def test_empty_name_raises(self, manager):
         persona = _valid_persona(name="")
-        with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
+        ):
             manager.save_persona(persona)
 
     def test_whitespace_name_raises(self, manager):
         persona = _valid_persona(name="   ")
-        with pytest.raises(PersonaManagerError, match="ペルソナ名が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
+        ):
             manager.save_persona(persona)
 
     def test_age_none_raises(self, manager):
         persona = _valid_persona()
         persona.age = None
-        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
             manager.save_persona(persona)
 
     def test_age_negative_raises(self, manager):
         persona = _valid_persona(age=-1)
-        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
             manager.save_persona(persona)
 
     def test_age_over_150_raises(self, manager):
         persona = _valid_persona(age=151)
-        with pytest.raises(PersonaManagerError, match="年齢は0から150"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
             manager.save_persona(persona)
 
     def test_empty_occupation_raises(self, manager):
         persona = _valid_persona(occupation="")
-        with pytest.raises(PersonaManagerError, match="職業が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="occupation"
+        ):
             manager.save_persona(persona)
 
     def test_empty_background_raises(self, manager):
         persona = _valid_persona(background="")
-        with pytest.raises(PersonaManagerError, match="背景が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="background"
+        ):
             manager.save_persona(persona)
 
     # --- リストフィールド（空リスト）---
 
     def test_empty_values_raises(self, manager):
         persona = _valid_persona(values=[])
-        with pytest.raises(PersonaManagerError, match="価値観が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="values"
+        ):
             manager.save_persona(persona)
 
     def test_empty_pain_points_raises(self, manager):
         persona = _valid_persona(pain_points=[])
-        with pytest.raises(PersonaManagerError, match="課題・悩みが設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="pain_points"
+        ):
             manager.save_persona(persona)
 
     def test_empty_goals_raises(self, manager):
         persona = _valid_persona(goals=[])
-        with pytest.raises(PersonaManagerError, match="目標・願望が設定されていません"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="goals"
+        ):
             manager.save_persona(persona)
 
     # --- リストフィールド（空文字項目）---
 
     def test_empty_string_in_values_raises(self, manager):
         persona = _valid_persona(values=["valid", ""])
-        with pytest.raises(PersonaManagerError, match="価値観に空の項目"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="values"
+        ):
             manager.save_persona(persona)
 
     def test_empty_string_in_pain_points_raises(self, manager):
         persona = _valid_persona(pain_points=["valid", "  "])
-        with pytest.raises(PersonaManagerError, match="課題・悩みに空の項目"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM,
+            field="pain_points",
+        ):
             manager.save_persona(persona)
 
     def test_empty_string_in_goals_raises(self, manager):
         persona = _valid_persona(goals=["valid", ""])
-        with pytest.raises(PersonaManagerError, match="目標・願望に空の項目"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="goals"
+        ):
             manager.save_persona(persona)
 
     # --- 文字数上限 ---
 
     def test_name_over_100_chars_raises(self, manager):
         persona = _valid_persona(name="あ" * 101)
-        with pytest.raises(PersonaManagerError, match="100文字以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_FIELD_TOO_LONG,
+            field="name",
+            max_length=100,
+        ):
             manager.save_persona(persona)
 
     def test_occupation_over_200_chars_raises(self, manager):
         persona = _valid_persona(occupation="あ" * 201)
-        with pytest.raises(PersonaManagerError, match="200文字以内"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_TOO_LONG, max_length=200
+        ):
             manager.save_persona(persona)
 
     def test_background_over_2000_chars_raises(self, manager):
         persona = _valid_persona(background="あ" * 2001)
-        with pytest.raises(PersonaManagerError, match="2000文字以内"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_FIELD_TOO_LONG, max_length=2000
+        ):
             manager.save_persona(persona)
 
     # --- リスト項目数上限 ---
 
     def test_values_over_10_items_raises(self, manager):
         persona = _valid_persona(values=[f"v{i}" for i in range(11)])
-        with pytest.raises(PersonaManagerError, match="10項目以内"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
+        ):
             manager.save_persona(persona)
 
     def test_pain_points_over_10_items_raises(self, manager):
         persona = _valid_persona(pain_points=[f"p{i}" for i in range(11)])
-        with pytest.raises(PersonaManagerError, match="10項目以内"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
+        ):
             manager.save_persona(persona)
 
     def test_goals_over_10_items_raises(self, manager):
         persona = _valid_persona(goals=[f"g{i}" for i in range(11)])
-        with pytest.raises(PersonaManagerError, match="10項目以内"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
+        ):
             manager.save_persona(persona)
 
     # --- 性別バリデーション ---
 
     def test_invalid_gender_raises(self, manager):
         persona = _valid_persona(gender="invalid_gender")
-        with pytest.raises(PersonaManagerError, match="性別は"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_GENDER_INVALID):
             manager.save_persona(persona)
 
     def test_valid_gender_passes(self, manager):
@@ -467,7 +514,7 @@ class TestValidatePersonaForSave:
     def test_invalid_country_raises(self, mock_cs, manager):
         mock_cs.is_valid_country.return_value = False
         persona = _valid_persona(country="XX")
-        with pytest.raises(PersonaManagerError, match="ISO 3166-1 alpha-2"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_COUNTRY_INVALID):
             manager.save_persona(persona)
 
     @patch("src.managers.persona_manager.country_service")
@@ -481,29 +528,46 @@ class TestValidatePersonaForSave:
 
     def test_city_over_100_chars_raises(self, manager):
         persona = _valid_persona(city="あ" * 101)
-        with pytest.raises(PersonaManagerError, match="100文字以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_FIELD_TOO_LONG,
+            field="city",
+            max_length=100,
+        ):
             manager.save_persona(persona)
 
     # --- タグバリデーション ---
 
     def test_tags_over_20_items_raises(self, manager):
         persona = _valid_persona(tags=[f"tag{i}" for i in range(21)])
-        with pytest.raises(PersonaManagerError, match="20個以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS,
+            field="tags",
+            max_items=20,
+        ):
             manager.save_persona(persona)
 
     def test_empty_tag_raises(self, manager):
         persona = _valid_persona(tags=["valid", ""])
-        with pytest.raises(PersonaManagerError, match="タグに空の項目"):
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="tags"
+        ):
             manager.save_persona(persona)
 
     def test_tag_over_50_chars_raises(self, manager):
         persona = _valid_persona(tags=["あ" * 51])
-        with pytest.raises(PersonaManagerError, match="50文字以内"):
+        with raises_code(
+            PersonaManagerError,
+            ErrorCode.PERSONA_LIST_ITEM_TOO_LONG,
+            field="tags",
+            max_length=50,
+        ):
             manager.save_persona(persona)
 
     def test_tag_with_comma_raises(self, manager):
         persona = _valid_persona(tags=["tag,with,comma"])
-        with pytest.raises(PersonaManagerError, match="カンマ"):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED):
             manager.save_persona(persona)
 
     def test_valid_tags_passes(self, manager):
@@ -631,7 +695,7 @@ class TestCreateDatasetBinding:
         )
         manager.database_service.get_dataset.return_value = dataset
 
-        with pytest.raises(PersonaManagerError, match="データセットに存在しません"):
+        with raises_code(PersonaManagerError, ErrorCode.DATASET_COLUMN_NOT_FOUND):
             manager.create_dataset_binding(
                 "p1", "ds1", key_name="invalid_col", key_value="v1"
             )

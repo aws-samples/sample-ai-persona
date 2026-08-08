@@ -1,6 +1,9 @@
 """ReportManager のユニットテスト。"""
 
 import pytest
+
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 from unittest.mock import Mock, patch
 
 from src.managers.report_manager import ReportManager, ReportManagerError
@@ -46,7 +49,7 @@ class TestReportManagerCRUD:
         ]
         self.mock_database_service.get_discussion.return_value = self.discussion
 
-        with pytest.raises(ReportManagerError, match="最大3件"):
+        with raises_code(ReportManagerError, ErrorCode.REPORT_LIMIT_REACHED, max_reports=3):
             self.manager.save_report(
                 self.discussion.id,
                 DiscussionReport.create_new(template_type="summary", content="4th"),
@@ -56,7 +59,7 @@ class TestReportManagerCRUD:
         """議論が見つからない場合エラーになること"""
         self.mock_database_service.get_discussion.return_value = None
 
-        with pytest.raises(ReportManagerError, match="議論が見つかりません"):
+        with raises_code(ReportManagerError, ErrorCode.DISCUSSION_NOT_FOUND):
             self.manager.save_report(
                 "nonexistent",
                 DiscussionReport.create_new(template_type="summary", content="test"),
@@ -81,7 +84,7 @@ class TestReportManagerCRUD:
         """存在しないレポートの更新でエラーになること"""
         self.mock_database_service.get_discussion.return_value = self.discussion
 
-        with pytest.raises(ReportManagerError, match="レポートが見つかりません"):
+        with raises_code(ReportManagerError, ErrorCode.REPORT_NOT_FOUND):
             self.manager.update_report_content(
                 self.discussion.id, "nonexistent", "content"
             )
@@ -102,7 +105,7 @@ class TestReportManagerCRUD:
         """存在しないレポートの削除でエラーになること"""
         self.mock_database_service.get_discussion.return_value = self.discussion
 
-        with pytest.raises(ReportManagerError, match="レポートが見つかりません"):
+        with raises_code(ReportManagerError, ErrorCode.REPORT_NOT_FOUND):
             self.manager.delete_report(self.discussion.id, "nonexistent")
 
     def test_get_discussion(self):
@@ -180,7 +183,7 @@ class TestReportManagerStreaming:
         """議論が見つからない場合エラーになること"""
         self.mock_database_service.get_discussion.return_value = None
 
-        with pytest.raises(ReportManagerError, match="議論が見つかりません"):
+        with raises_code(ReportManagerError, ErrorCode.DISCUSSION_NOT_FOUND):
             list(
                 self.manager.generate_report_streaming(
                     discussion_id="bad", template_type="summary"

@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
 
+from src.models.errors import ErrorCode
 from src.services.ai_service import (
     AIService,
     AIServiceError,
@@ -72,20 +73,18 @@ class TestAIService:
     @patch("src.services.ai_service.boto3", None)
     def test_init_without_boto3(self):
         """boto3 がインストールされていない場合のテスト"""
-        with pytest.raises(
-            BedrockConnectionError, match="boto3 がインストールされていません"
-        ):
+        with pytest.raises(BedrockConnectionError) as exc_info:
             AIService()
+        assert exc_info.value.code is ErrorCode.AI_BEDROCK_UNAVAILABLE
 
     def test_create_bedrock_client_error(self):
         """Bedrock クライアント作成エラーのテスト"""
         with patch("src.services.ai_service.boto3") as mock_boto3:
             mock_boto3.client.side_effect = Exception("AWS認証エラー")
 
-            with pytest.raises(
-                BedrockConnectionError, match="Bedrock クライアントの作成に失敗"
-            ):
+            with pytest.raises(BedrockConnectionError) as exc_info:
                 AIService()
+            assert exc_info.value.code is ErrorCode.AI_BEDROCK_CONNECTION_FAILED
 
     def test_is_retryable_error(self):
         """リトライ可能エラーの判定テスト"""
@@ -146,8 +145,9 @@ class TestAIService:
         mock_response = {"output": {"message": {"content": []}}}
         self.mock_bedrock_client.converse.return_value = mock_response
 
-        with pytest.raises(BedrockAPIError, match="Converse APIからの応答が空です"):
+        with pytest.raises(BedrockAPIError) as exc_info:
             self.ai_service.invoke_model("テストプロンプト")
+        assert exc_info.value.code is ErrorCode.AI_BEDROCK_API_FAILED
 
     def test_facilitate_discussion_success(self):
         """議論進行成功のテスト"""
@@ -171,8 +171,9 @@ class TestAIService:
             mock_retry.side_effect = Exception("API エラー")
 
             personas = [self.test_persona, self.test_persona2]
-            with pytest.raises(AIServiceError, match="議論進行中にエラーが発生"):
+            with pytest.raises(AIServiceError) as exc_info:
                 self.ai_service.facilitate_discussion(personas, "テストトピック")
+            assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_facilitate_discussion_streaming_uses_retry(self):
         """ストリーミング議論がリトライ経由でストリームを取得する
@@ -356,8 +357,9 @@ class TestAIService:
                 ),
             ]
 
-            with pytest.raises(AIServiceError, match="インサイト抽出中にエラーが発生"):
+            with pytest.raises(AIServiceError) as exc_info:
                 self.ai_service.extract_insights(messages)
+            assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_parse_discussion_response(self):
         """議論レスポンス解析のテスト"""
@@ -455,8 +457,9 @@ class TestAIService:
             operation_name="InvokeModel",
         )
 
-        with pytest.raises(BedrockAPIError, match="最大リトライ回数"):
+        with pytest.raises(BedrockAPIError) as exc_info:
             self.ai_service._retry_with_backoff(mock_func)
+        assert exc_info.value.code is ErrorCode.AI_BEDROCK_API_FAILED
 
         assert mock_func.call_count == 3  # max_retries
         assert mock_sleep.call_count == 2  # max_retries - 1
@@ -536,19 +539,17 @@ class TestAIService:
         """JSONが含まれていないレスポンスのテスト"""
         response = "JSONが含まれていないレスポンス"
 
-        with pytest.raises(
-            AIServiceError, match="レスポンスから有効なJSONを抽出できませんでした"
-        ):
+        with pytest.raises(AIServiceError) as exc_info:
             self.ai_service._extract_json_from_response(response)
+        assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_extract_json_from_response_incomplete_json(self):
         """不完全なJSONのテスト"""
         response = '{"name": "田中花子", "age": 30'  # 閉じ括弧なし
 
-        with pytest.raises(
-            AIServiceError, match="レスポンスから有効なJSONを抽出できませんでした"
-        ):
+        with pytest.raises(AIServiceError) as exc_info:
             self.ai_service._extract_json_from_response(response)
+        assert exc_info.value.code is ErrorCode.AI_OPERATION_FAILED
 
     def test_invoke_converse_api_basic(self):
         """Converse API基本呼び出しテスト (Task 3)"""

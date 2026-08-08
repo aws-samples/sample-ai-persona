@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 
+from .errors import ErrorCode
+
 
 @dataclass
 class InsightReport:
@@ -84,7 +86,15 @@ class Survey:
     insight_report: Optional[InsightReport]
     created_at: datetime
     updated_at: datetime
-    error_message: Optional[str] = None
+    #: Failure reason as an ``ErrorCode`` value (not a message). Batch execution
+    #: fails in a background thread, so the reason has to survive until a later
+    #: GET renders it; storing ``str(e)`` here used to leak S3 paths, role ARNs
+    #: and botocore text to the screen. The wording is resolved at display time
+    #: by ``web/error_messages.py``.
+    error_code: Optional[str] = None
+    #: Values for interpolating the wording template. Only carries what is safe
+    #: to show a user (counts, limits) -- never IDs, paths or SDK text.
+    error_context: Optional[Dict[str, Any]] = None
     datasource: Optional[str] = None
 
     @classmethod
@@ -130,8 +140,11 @@ class Survey:
             else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
-            "error_message": self.error_message,
         }
+        if self.error_code is not None:
+            result["error_code"] = self.error_code
+        if self.error_context is not None:
+            result["error_context"] = self.error_context
         if self.datasource is not None:
             result["datasource"] = self.datasource
         return result
@@ -153,6 +166,22 @@ class Survey:
             else None,
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
-            error_message=data.get("error_message"),
+            error_code=cls._read_error_code(data),
+            error_context=data.get("error_context"),
             datasource=data.get("datasource"),
         )
+
+    @staticmethod
+    def _read_error_code(data: Dict[str, Any]) -> Optional[str]:
+        """Read the failure reason, tolerating records written before #118.
+
+        Older records hold the raw exception text in ``error_message``. That text
+        must never reach the screen, so it is discarded and only the fact of the
+        failure is kept as a generic code.
+        """
+        code = data.get("error_code")
+        if isinstance(code, str) and code:
+            return code
+        if data.get("error_message"):
+            return ErrorCode.SURVEY_EXECUTION_FAILED.value
+        return None

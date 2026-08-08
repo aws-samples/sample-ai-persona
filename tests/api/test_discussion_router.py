@@ -107,7 +107,7 @@ class TestDiscussionStartEndpoint:
         )
 
         assert response.status_code == 400
-        assert "最低2体のペルソナが必要" in response.text
+        assert "error-inline" in response.text or 'role="alert"' in response.text
 
     @patch("web.routers.discussion.get_persona_manager")
     def test_start_invalid_personas(self, mock_get_manager, client):
@@ -126,7 +126,7 @@ class TestDiscussionStartEndpoint:
         )
 
         assert response.status_code == 400
-        assert "有効なペルソナが2体以上必要" in response.text
+        assert "error-inline" in response.text or 'role="alert"' in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     @patch("web.routers.discussion.get_persona_manager")
@@ -247,7 +247,7 @@ class TestDiscussionDeleteEndpoint:
         response = client.delete("/discussion/non-existent-id")
 
         assert response.status_code == 400
-        assert "削除に失敗しました" in response.text
+        assert 'role="alert"' in response.text
 
 
 class TestDiscussionInsightsEndpoint:
@@ -291,8 +291,8 @@ class TestDiscussionStreamEndpoint:
         response = client.get("/discussion/stream?topic=test&persona_ids=p1")
 
         assert response.status_code == 200  # SSEなので200を返す
-        # エラーメッセージがストリームに含まれることを確認
-        assert "最低2体のペルソナが必要" in response.text
+        # エラーイベントがストリームに含まれることを確認（文言はカタログの責務）
+        assert '"type": "error"' in response.text
 
     @patch("web.routers.discussion.get_persona_manager")
     def test_stream_invalid_personas(self, mock_get_manager, client):
@@ -306,7 +306,7 @@ class TestDiscussionStreamEndpoint:
         )
 
         assert response.status_code == 200  # SSEなので200を返す
-        assert "有効なペルソナが2体以上必要" in response.text
+        assert '"type": "error"' in response.text
 
 
 class TestDiscussionDocumentUploadEndpoint:
@@ -383,10 +383,13 @@ class TestDiscussionDocumentUploadEndpoint:
     def test_upload_document_invalid_format(self, mock_get_manager, client):
         """無効なファイル形式でエラーを返すことを確認"""
         from src.managers.file_manager import FileUploadError
+        from src.models.errors import ErrorCode
 
         mock_manager = Mock()
         mock_manager.upload_discussion_document.side_effect = FileUploadError(
-            "許可されていないファイル形式です。対応形式: .png, .jpg, .jpeg, .pdf"
+            "extension '.txt' not in discussion document formats",
+            code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+            context={"allowed_formats": ".png, .jpg, .jpeg, .pdf"},
         )
         mock_get_manager.return_value = mock_manager
 
@@ -397,15 +400,19 @@ class TestDiscussionDocumentUploadEndpoint:
 
         assert response.status_code == 400
         assert "許可されていないファイル形式" in response.text
+        assert ".png, .jpg, .jpeg, .pdf" in response.text
 
     @patch("web.routers.discussion.get_file_manager")
     def test_upload_document_oversized(self, mock_get_manager, client):
         """サイズ超過でエラーを返すことを確認"""
         from src.managers.file_manager import FileUploadError
+        from src.models.errors import ErrorCode
 
         mock_manager = Mock()
         mock_manager.upload_discussion_document.side_effect = FileUploadError(
-            "ファイルサイズが制限を超えています。最大サイズ: 10.0MB"
+            "file size 10485761 exceeds limit 10485760",
+            code=ErrorCode.FILE_TOO_LARGE,
+            context={"max_size_mb": 10.0},
         )
         mock_get_manager.return_value = mock_manager
 
@@ -419,6 +426,32 @@ class TestDiscussionDocumentUploadEndpoint:
 
         assert response.status_code == 400
         assert "ファイルサイズが制限を超えています" in response.text
+        assert "10.0MB" in response.text
+
+    @patch("web.routers.discussion.get_file_manager")
+    def test_upload_document_does_not_expose_internal_detail(
+        self, mock_get_manager, client
+    ):
+        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
+        from src.managers.file_manager import FileUploadError
+        from src.models.errors import ErrorCode
+
+        mock_manager = Mock()
+        mock_manager.upload_discussion_document.side_effect = FileUploadError(
+            "discussion document upload failed (ClientError): "
+            "arn:aws:s3:::internal-bucket/secret-path",
+            code=ErrorCode.FILE_OPERATION_FAILED,
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            "/discussion/upload-document",
+            files={"file": ("document.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+
+        assert response.status_code == 400
+        assert "arn:aws:s3" not in response.text
+        assert "ClientError" not in response.text
 
 
 class TestDiscussionStartWithDocuments:

@@ -1,0 +1,17 @@
+{% from "components/icons.html" import icon_x_circle %}
+{#
+  フォーム近傍のインラインエラー表示（Issue #117 ステップ5）。
+
+  入力を直せば解決するエラー（VALIDATION / CAPACITY）に使う。
+  「ページを更新して再試行」の導線を持たないのが error_banner.html との違い。
+  入力ミスに対して更新を促すと、直そうとしている入力を破棄させてしまう。
+
+  引数:
+    error ... 表示する文言（web/error_messages.py が解決したもの）
+#}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4" role="alert">
+    <div class="flex items-start gap-2">
+        <span class="text-red-500 shrink-0">{{ icon_x_circle("w-5 h-5") }}</span>
+        <p class="text-red-800 text-sm">{{ error }}</p>
+    </div>
+</div>

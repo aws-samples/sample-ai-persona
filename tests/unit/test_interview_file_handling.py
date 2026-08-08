@@ -7,6 +7,8 @@ from src.managers.interview_manager import (
     InterviewManager,
     InterviewValidationError,
 )
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 
 
 @pytest.mark.unit
@@ -49,7 +51,7 @@ class TestValidateAndConvertFiles:
         """未サポートMIMEでInterviewValidationErrorが投げられること"""
         raw_files = [(b"data", "file.zip", "application/zip")]
 
-        with pytest.raises(InterviewValidationError, match="サポートされていません"):
+        with raises_code(InterviewValidationError, ErrorCode.FILE_MIME_UNSUPPORTED):
             self.manager._validate_and_convert_files(raw_files)
 
     def test_oversized_image_raises(self):
@@ -57,7 +59,7 @@ class TestValidateAndConvertFiles:
         large_bytes = b"\x89PNG" * (6 * 1024 * 1024)  # >5MB
         raw_files = [(large_bytes, "big.png", "image/png")]
 
-        with pytest.raises(InterviewValidationError, match="大きすぎます"):
+        with raises_code(InterviewValidationError, ErrorCode.FILE_TOO_LARGE):
             self.manager._validate_and_convert_files(raw_files)
 
     def test_oversized_document_raises(self):
@@ -65,7 +67,7 @@ class TestValidateAndConvertFiles:
         large_bytes = b"%PDF" * (11 * 1024 * 1024)  # >10MB
         raw_files = [(large_bytes, "big.pdf", "application/pdf")]
 
-        with pytest.raises(InterviewValidationError, match="大きすぎます"):
+        with raises_code(InterviewValidationError, ErrorCode.FILE_TOO_LARGE):
             self.manager._validate_and_convert_files(raw_files)
 
     def test_empty_file_skipped(self):

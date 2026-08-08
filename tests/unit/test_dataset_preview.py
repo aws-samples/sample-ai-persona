@@ -6,7 +6,10 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
 
+from src.managers.dataset_manager import DatasetManagerError
 from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 
 
 class TestPreviewBindingData:
@@ -57,29 +60,29 @@ class TestPreviewBindingData:
         )
 
     def test_binding_not_found(self, dataset_manager):
-        """存在しないbinding_idでValueError"""
+        """存在しないbinding_idでDatasetManagerError"""
         dataset_manager._mock_db.get_bindings_by_persona.return_value = []
 
-        with pytest.raises(ValueError, match="Binding not found"):
+        with raises_code(DatasetManagerError, ErrorCode.DATASET_BINDING_NOT_FOUND):
             dataset_manager.preview_binding_data("persona-001", "nonexistent")
 
     def test_dataset_not_found(self, dataset_manager, sample_binding):
-        """データセットが見つからない場合ValueError"""
+        """データセットが見つからない場合DatasetManagerError"""
         dataset_manager._mock_db.get_bindings_by_persona.return_value = [sample_binding]
         dataset_manager._mock_db.get_dataset.return_value = None
 
-        with pytest.raises(ValueError, match="Dataset not found"):
+        with raises_code(DatasetManagerError, ErrorCode.DATASET_NOT_FOUND):
             dataset_manager.preview_binding_data("persona-001", "bind-001")
 
     def test_invalid_column_in_binding_keys(
         self, dataset_manager, sample_binding, sample_dataset
     ):
-        """binding_keysに無効なカラム名がある場合ValueError"""
+        """binding_keysに無効なカラム名がある場合DatasetManagerError"""
         sample_binding.binding_keys = {"invalid_col": "value"}
         dataset_manager._mock_db.get_bindings_by_persona.return_value = [sample_binding]
         dataset_manager._mock_db.get_dataset.return_value = sample_dataset
 
-        with pytest.raises(ValueError, match="Invalid column name"):
+        with raises_code(DatasetManagerError, ErrorCode.DATASET_OPERATION_FAILED):
             dataset_manager.preview_binding_data("persona-001", "bind-001")
 
     def test_unsafe_column_name_rejected(
@@ -93,7 +96,7 @@ class TestPreviewBindingData:
         dataset_manager._mock_db.get_bindings_by_persona.return_value = [sample_binding]
         dataset_manager._mock_db.get_dataset.return_value = sample_dataset
 
-        with pytest.raises(ValueError, match="Unsafe column name"):
+        with raises_code(DatasetManagerError, ErrorCode.DATASET_OPERATION_FAILED):
             dataset_manager.preview_binding_data("persona-001", "bind-001")
 
     def test_successful_preview(self, dataset_manager, sample_binding, sample_dataset):

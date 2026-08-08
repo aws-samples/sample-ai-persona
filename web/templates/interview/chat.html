@@ -217,14 +217,14 @@
     <div id="error-container" class="hidden mb-6"></div>
     
     <!-- 警告表示（見つからないペルソナがある場合） -->
-    {% if missing_personas %}
+    {% if missing_persona_count %}
     <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
         <div class="flex items-start">
             <span class="text-yellow-600 mr-3">⚠️</span>
             <div>
                 <h3 class="font-semibold text-yellow-900">一部のペルソナが見つかりません</h3>
                 <p class="text-yellow-800 text-sm mt-1">
-                    以下のペルソナが見つかりませんでした: {{ missing_personas|join(', ') }}
+                    {{ missing_persona_count }}件のペルソナが見つかりませんでした。
                 </p>
                 <p class="text-yellow-700 text-xs mt-2">
                     インタビューは利用可能なペルソナで続行できますが、一部の応答が得られない可能性があります。
@@ -587,6 +587,7 @@ async function sendMessage(message) {
                 } else if (data.type === 'complete') {
                     // ストリーミング完了
                 } else if (data.type === 'error') {
+                    receivedResponse = true;
                     showDetailedError(data.message, 'agent_error');
                 }
             }
@@ -953,14 +954,21 @@ async function saveInterviewSession() {
             body: formData,
             headers: {'X-Requested-With': 'XMLHttpRequest'}
         });
-        
-        if (!response.ok) {
+
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        
-        const data = await response.json();
-        
-        if (data.error) {
+
+        if (!response.ok) {
+            if (data.error) {
+                showDetailedError(data.error, data.error_type, data.technical_details);
+            } else {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+        } else if (data.error) {
             showDetailedError(data.error, data.error_type, data.technical_details);
         } else if (data.already_saved) {
             showSuccessMessage('このセッションは既に保存されています');
