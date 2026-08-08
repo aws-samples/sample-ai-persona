@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from src.config import config
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.managers.persona_memory_manager import (
@@ -107,7 +108,13 @@ async def persona_generation_page(request: Request) -> Any:
     return templates.TemplateResponse(
         request,
         "persona/generation.html",
-        {"request": request, "title": "AIペルソナ生成"},
+        {
+            "request": request,
+            "title": "AIペルソナ生成",
+            # アップロード制限をカタログの単一ソース（config）から表示に渡す
+            "max_file_size_mb": config.PERSONA_SOURCE_MAX_BYTES // (1024 * 1024),
+            "max_source_chars": config.PERSONA_SOURCE_MAX_CHARS,
+        },
     )
 
 
