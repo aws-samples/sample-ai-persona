@@ -2498,12 +2498,6 @@ class TestUploadedFileCRUDOperations:
         result = service.get_uploaded_file_info("nonexistent")
         assert result is None
 
-    def test_delete_uploaded_file_info(self):
-        service, mock_client = self._make_service()
-        mock_client.delete_item.return_value = {}
-        result = service.delete_uploaded_file_info("f1")
-        assert result is True
-
 
 # =========================================================================
 # Jobs CRUD Tests

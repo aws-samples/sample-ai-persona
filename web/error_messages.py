@@ -78,7 +78,6 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.FILE_MIME_UNSUPPORTED: "サポートされていないファイル種別です。",
     ErrorCode.FILE_EMPTY: "ファイルが空です。",
-    ErrorCode.FILE_NOT_FOUND: "指定されたファイルが見つかりません。",
     ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT: (
         "ファイル内容が短すぎます。"
         "インタビューなどの内容を含むテキストファイルをアップロードしてください。"
@@ -92,7 +91,6 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.FILE_NAME_TOO_LONG: "ファイル名が長すぎます。",
     ErrorCode.FILE_HIDDEN_NOT_ALLOWED: "隠しファイルはアップロードできません。",
     ErrorCode.FILE_BINARY_NOT_ALLOWED: "バイナリファイルはアップロードできません。",
-    ErrorCode.FILE_DELETE_NOT_ALLOWED: "指定されたファイルは削除できません。",
     ErrorCode.FILE_OPERATION_FAILED: (
         "ファイルの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
