@@ -132,18 +132,12 @@ class ErrorCode(StrEnum):
     FILE_EMPTY = ("file_empty", ErrorKind.VALIDATION)
     FILE_NOT_FOUND = ("file_not_found", ErrorKind.NOT_FOUND)
     # Text-bearing uploads: too little content to work with, or undecodable.
-    # The two "too short" codes are separate because the guidance differs by
-    # upload purpose, and the guidance wording belongs in the catalog.
+    # The guidance wording belongs in the catalog.
     INTERVIEW_FILE_CONTENT_TOO_SHORT = (
         "interview_file_content_too_short",
         ErrorKind.VALIDATION,
     )
-    MARKET_REPORT_CONTENT_TOO_SHORT = (
-        "market_report_content_too_short",
-        ErrorKind.VALIDATION,
-    )
     FILE_ENCODING_UNSUPPORTED = ("file_encoding_unsupported", ErrorKind.VALIDATION)
-    CSV_ENCODING_UNSUPPORTED = ("csv_encoding_unsupported", ErrorKind.VALIDATION)
     # Security checks on the filename and the payload. VALIDATION because the
     # user resolves them by choosing or renaming the file.
     FILE_NAME_INVALID = ("file_name_invalid", ErrorKind.VALIDATION)

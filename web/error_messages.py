@@ -83,18 +83,10 @@ _CATALOG: dict[ErrorCode, str] = {
         "ファイル内容が短すぎます。"
         "インタビューなどの内容を含むテキストファイルをアップロードしてください。"
     ),
-    ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT: (
-        "ファイル内容が短すぎます。"
-        "市場調査レポートなどの詳細な内容を含むファイルをアップロードしてください。"
-    ),
     ErrorCode.FILE_ENCODING_UNSUPPORTED: (
         "テキストファイルとして読み取れません。"
         "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
         "テキストファイルをアップロードしてください。"
-    ),
-    ErrorCode.CSV_ENCODING_UNSUPPORTED: (
-        "CSVファイルとして読み取れません。"
-        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードしてください。"
     ),
     ErrorCode.FILE_NAME_INVALID: "ファイル名に不正な文字が含まれています。",
     ErrorCode.FILE_NAME_TOO_LONG: "ファイル名が長すぎます。",

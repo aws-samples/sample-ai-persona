@@ -86,10 +86,6 @@ class FileManager:
     KNOWLEDGE_FILE_FORMATS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md"}
     KNOWLEDGE_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
-    # 市場調査レポートの許可形式
-    MARKET_REPORT_FORMATS = {".pdf", ".docx", ".doc", ".txt", ".md", ".csv"}
-    MARKET_REPORT_MAX_SIZE = 10 * 1024 * 1024  # 10MB
-
     # ペルソナ生成ソースの許可形式（バイナリ形式を含むため validate_file_format は流用不可）
     PERSONA_SOURCE_FORMATS = {".txt", ".md", ".pdf", ".docx", ".doc", ".csv"}
 
@@ -317,104 +313,6 @@ class FileManager:
         except Exception as e:
             raise FileUploadError(
                 f"markdown conversion failed ({type(e).__name__})",
-                code=ErrorCode.FILE_OPERATION_FAILED,
-            ) from e
-
-    def extract_text_from_file(self, file_content: bytes, filename: str) -> str:
-        """
-        市場調査レポートファイルからテキストを抽出する
-
-        PDF/Word/テキストファイルから統一的にテキストを抽出します。
-        markitdownライブラリを使用してPDF/Wordをマークダウンに変換し、
-        テキストファイルは直接デコードします。
-
-        Args:
-            file_content: ファイル内容（バイト）
-            filename: ファイル名
-
-        Returns:
-            str: 抽出されたテキスト
-
-        Raises:
-            FileUploadError: ファイル形式が無効、またはテキスト抽出に失敗した場合
-        """
-        from markitdown import MarkItDown
-        import io
-
-        # ファイル拡張子チェック
-        file_ext = Path(filename).suffix.lower()
-        if file_ext not in self.MARKET_REPORT_FORMATS:
-            raise FileUploadError(
-                f"extension {file_ext!r} not in market report formats",
-                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
-                context={"allowed_formats": ", ".join(self.MARKET_REPORT_FORMATS)},
-            )
-
-        # ファイルサイズチェック
-        if len(file_content) > self.MARKET_REPORT_MAX_SIZE:
-            raise FileUploadError(
-                f"file size {len(file_content)} exceeds limit "
-                f"{self.MARKET_REPORT_MAX_SIZE}",
-                code=ErrorCode.FILE_TOO_LARGE,
-                context={"max_size_mb": self.MARKET_REPORT_MAX_SIZE / (1024 * 1024)},
-            )
-
-        # ファイル内容が空でないかチェック
-        if len(file_content) == 0:
-            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
-
-        try:
-            # テキストファイルの場合は直接デコード
-            if file_ext in {".txt", ".md"}:
-                try:
-                    text = file_content.decode("utf-8")
-                except UnicodeDecodeError:
-                    try:
-                        text = file_content.decode("shift_jis")
-                    except UnicodeDecodeError:
-                        try:
-                            text = file_content.decode("euc-jp")
-                        except UnicodeDecodeError:
-                            raise FileUploadError(
-                                "content is not decodable as utf-8, shift_jis "
-                                "or euc-jp",
-                                code=ErrorCode.FILE_ENCODING_UNSUPPORTED,
-                            )
-            elif file_ext == ".csv":
-                # CSVファイルはテキストとして読み込み
-                for encoding in ("utf-8", "shift_jis", "euc-jp"):
-                    try:
-                        text = file_content.decode(encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    raise FileUploadError(
-                        "csv content is not decodable as utf-8, shift_jis or euc-jp",
-                        code=ErrorCode.CSV_ENCODING_UNSUPPORTED,
-                    )
-            else:
-                # PDF/Wordの場合はmarkitdownで変換
-                md = MarkItDown()
-                file_stream = io.BytesIO(file_content)
-                file_stream.name = filename
-                result = md.convert_stream(file_stream)
-                text = result.text_content
-
-            # 最小限の内容チェック（100文字以上）
-            if len(text.strip()) < 100:
-                raise FileUploadError(
-                    f"extracted text length {len(text.strip())} below minimum",
-                    code=ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT,
-                )
-
-            return text
-
-        except FileUploadError:
-            raise
-        except Exception as e:
-            raise FileUploadError(
-                f"text extraction failed ({type(e).__name__})",
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
