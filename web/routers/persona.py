@@ -390,12 +390,20 @@ async def generate_persona(
         return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
 
     # ファイル読み込み（既存フロー）
+    # 形式・サイズ・空は生バイト時点で判定できる粗ガードとしてここで検証する。
+    # 内容不足・合計文字数は抽出後にしか判定できないため Manager 層で行う。
     file_contents: list[tuple[bytes, str]] = []
-    if files:
-        for f in files:
-            content = await f.read()
-            if content and f.filename:
-                file_contents.append((content, f.filename))
+    file_manager = get_file_manager()
+    try:
+        if files:
+            for f in files:
+                content = await f.read()
+                if content and f.filename:
+                    file_manager.validate_persona_source_file(f.filename, content)
+                    file_contents.append((content, f.filename))
+    except FileUploadError as e:
+        logger.warning("Persona source file validation failed", exc_info=True)
+        return _sse_error(user_message_for(e))
 
     if not file_contents:
         return _sse_error("ファイルをアップロードしてください")

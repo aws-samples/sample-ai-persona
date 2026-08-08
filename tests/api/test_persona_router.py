@@ -181,6 +181,31 @@ class TestPersonaGenerateEndpoint:
         assert "text/event-stream" in response.headers.get("content-type", "")
         assert "event: result" in response.text
 
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_rejects_unsupported_extension(self, mock_get_gen_manager, client):
+        """非対応拡張子(.exe)は抽出前に弾かれ、生成マネージャは呼ばれない（SSE）"""
+        mock_manager = Mock()
+        mock_get_gen_manager.return_value = mock_manager
+
+        files = [
+            ("files", ("malware.exe", BytesIO(b"anything at all here"), "text/plain")),
+        ]
+
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "interview",
+                "persona_count": 1,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
+        mock_manager.generate_and_cache.assert_not_called()
+
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_empty_text(self, mock_get_manager, client):
         """空のファイルでエラーを返すことを確認（SSE）"""

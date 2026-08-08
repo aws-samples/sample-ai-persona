@@ -171,6 +171,41 @@ class TestFileManager:
         result = self.file_manager.validate_file_format(filename, content)
         assert result is True
 
+    def test_validate_persona_source_file_txt_ok(self):
+        """ペルソナ生成ソース: 対応拡張子のテキストは通過する"""
+        self.file_manager.validate_persona_source_file(
+            "interview.txt", "十分な長さのインタビュー内容です。".encode("utf-8")
+        )
+
+    def test_validate_persona_source_file_pdf_not_rejected(self):
+        """ペルソナ生成ソース: PDF(バイナリ)は形式・空でない限り通過する（デグレ防止）"""
+        # validate_file_format と違い、デコード不可のバイナリでも弾かれてはならない。
+        self.file_manager.validate_persona_source_file(
+            "report.pdf", b"%PDF-1.4 binary payload not decodable as text"
+        )
+
+    def test_validate_persona_source_file_invalid_extension(self):
+        """ペルソナ生成ソース: 非対応拡張子(.exe)は許可リストで弾く"""
+        with pytest.raises(FileUploadError) as exc_info:
+            self.file_manager.validate_persona_source_file(
+                "malware.exe", b"anything at all here"
+            )
+        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
+
+    def test_validate_persona_source_file_empty(self):
+        """ペルソナ生成ソース: 空ファイルは弾く"""
+        with pytest.raises(FileUploadError) as exc_info:
+            self.file_manager.validate_persona_source_file("empty.txt", b"")
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
+
+    def test_validate_persona_source_file_too_large(self):
+        """ペルソナ生成ソース: 生バイト上限超過は弾く"""
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.PERSONA_SOURCE_MAX_BYTES = 100
+            with pytest.raises(FileUploadError) as exc_info:
+                self.file_manager.validate_persona_source_file("big.txt", b"a" * 101)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
+
     def test_upload_interview_file_success(self):
         """正常なファイルアップロードのテスト"""
         filename = "interview.txt"

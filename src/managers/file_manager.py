@@ -90,6 +90,9 @@ class FileManager:
     MARKET_REPORT_FORMATS = {".pdf", ".docx", ".doc", ".txt", ".md", ".csv"}
     MARKET_REPORT_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
+    # ペルソナ生成ソースの許可形式（バイナリ形式を含むため validate_file_format は流用不可）
+    PERSONA_SOURCE_FORMATS = {".txt", ".md", ".pdf", ".docx", ".doc", ".csv"}
+
     # アンケート画像の許可形式
     SURVEY_IMAGE_FORMATS = {".png", ".jpg", ".jpeg"}
     # 画像1枚の上限はClaude(Bedrock)モデルの制約。configを single source of truth とする
@@ -124,6 +127,41 @@ class FileManager:
             self.discussion_doc_dir.mkdir(parents=True, exist_ok=True)
             self.knowledge_files_dir.mkdir(parents=True, exist_ok=True)
             self.survey_images_dir.mkdir(parents=True, exist_ok=True)
+
+    def validate_persona_source_file(self, filename: str, file_content: bytes) -> None:
+        """Validate a persona-generation source file before text extraction.
+
+        Binary formats (PDF/DOCX) are accepted here, so validate_file_format
+        cannot be reused (it requires the payload to be text-decodable). Content
+        sufficiency and total size are enforced after extraction in
+        PersonaGenerationManager, since byte length says nothing about the text
+        yielded by a binary document.
+
+        Raises:
+            FileUploadError: format / size / empty violations.
+        """
+        ext = Path(filename).suffix.lower()
+        if ext not in self.PERSONA_SOURCE_FORMATS:
+            raise FileUploadError(
+                f"extension of {filename!r} not in persona source formats",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={
+                    "allowed_formats": ", ".join(sorted(self.PERSONA_SOURCE_FORMATS))
+                },
+            )
+
+        if len(file_content) > config.PERSONA_SOURCE_MAX_BYTES:
+            raise FileUploadError(
+                f"file size {len(file_content)} exceeds limit "
+                f"{config.PERSONA_SOURCE_MAX_BYTES}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={
+                    "max_size_mb": config.PERSONA_SOURCE_MAX_BYTES / (1024 * 1024)
+                },
+            )
+
+        if len(file_content) == 0:
+            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
     def validate_file_format(self, filename: str, file_content: bytes) -> bool:
         """

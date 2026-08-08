@@ -30,6 +30,16 @@ class Config:
         32 * 1024 * 1024
     )  # 32MB (Claude(Bedrock)のリクエストペイロード全体上限。議論ドキュメント合計に適用)
     ALLOWED_FILE_EXTENSIONS: tuple = (".txt", ".md")
+    # ペルソナ生成ソース: 1ファイルあたりの生バイト粗ガード。
+    # 生バイトはBedrockに届かない（テキスト抽出後にプロンプト連結される）ため、
+    # この上限の役割はmarkitdownが巨大バイナリでOOM/長時間化するのを防ぐ粗ガードに限る。
+    # 真の上限はPERSONA_SOURCE_MAX_CHARS（抽出後の文字数）が担う。
+    PERSONA_SOURCE_MAX_BYTES: int = 10 * 1024 * 1024  # 10MB/file
+    # ペルソナ生成ソース: 抽出後テキストの合計文字数（真の上限）。
+    # Sonnet 5 on Bedrockの既定context window 200Kトークンから逆算した安全値。
+    # 日本語実文(≈2 chars/token)で20万字 ≈ 10万トークン。超過時はBedrock呼び出し前に
+    # CAPACITYエラーで穏当に失敗させ、無駄なAPIコストを防ぐ。
+    PERSONA_SOURCE_MAX_CHARS: int = 200_000
     S3_BUCKET_NAME: Optional[str] = None  # .envで設定、未設定時はローカルストレージ
 
     # AWS Bedrock設定
