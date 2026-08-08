@@ -4,15 +4,15 @@
 
 Router層 → Manager層 → Service層。Models は全層から参照可。逆方向禁止。
 
-- Models (src/models/): 標準ライブラリのみインポート可。Service/Manager/Routerをインポートしてはならない
+- Models層 (src/models/): 標準ライブラリのみインポート可。Service/Manager/Routerをインポートしてはならない
 - Service層 (src/services/): Manager層・Router層をインポートしてはならない。他のServiceをインポートしてはならない（Service間のオーケストレーションはManager層が担う。service_factory.pyは例外）
 - Manager層 (src/managers/): Router層をインポートしてはならない。他のManagerをインポートしてはならない
-- Shared (src/managers/shared/): Manager層の共有ユーティリティ。Service層・Router層からのインポート禁止。他のManagerからインポート可
+- Shared層 (src/managers/shared/): Manager層の共有ユーティリティ。Service層・Router層からのインポート禁止。他のManagerからインポート可
 - Router層 (web/routers/): Service層を直接使ってはならない（Manager経由で操作する）
 
 ## 各層の責務と関心の分離
 
-### Models (src/models/)
+### Models層 (src/models/)
 **責務:** データ構造の定義と変換のみ
 
 - selfを変更するメソッドを定義してはならない（更新は新インスタンスを返す）
@@ -43,7 +43,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 - HTTP通信・ファイルI/O・データフレーム操作・boto3直接呼び出しを書いてはならない（Service層に委譲）
 - 他のManagerをインポートしてはならない（共有ロジックは`shared/`に配置）
 
-### Shared (src/managers/shared/)
+### Shared層 (src/managers/shared/)
 **責務:** 複数のManagerが共通で使うユーティリティ関数
 
 - ビジネスルール判定を含まない純粋なヘルパー（ドキュメント読み込み、ContentBlock構築等）
