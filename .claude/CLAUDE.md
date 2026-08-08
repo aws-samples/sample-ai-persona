@@ -31,6 +31,7 @@ cd cdk && npx cdk deploy --all   # CDKデプロイ
 - 本番リソースの削除（DynamoDB, S3, Cognito, CDKスタック）
 - `git push --force` / `git reset --hard`
 - `/pre-push-review` を実行せずに `git push` すること
+- **main ブランチで直接作業すること。** 修正・追加を行う前に必ず新規ブランチを切る（例: `git checkout -b <type>/<topic>`）。YOU MUST NOT commit on main.
 
 ## 規約
 
