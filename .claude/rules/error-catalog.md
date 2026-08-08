@@ -124,42 +124,24 @@ flowchart TD
 
 ---
 
-## htmx の制約と対処
+## htmx の制約とエラーパーシャル
 
-htmx 1.9.10 は `status>=200 && status<400 && status!==204` **以外の本文をスワップしない**。
-この制約を理解しないと「文言は生成されているのに画面に届かない」状態になる。
+htmx 1.9.10 のスワップ契約（4xx/5xx 本文を差し替えない）とヘッダー処理順、`mark_renderable()` /
+`X-Render-Response` の仕組み、`HX-Retarget` の相対解決は `.claude/rules/frontend.md` を参照。
+ここではエラー表示への**適用**だけを示す。
 
-ヘッダーの処理順（`htmx.min.js` の `Mr(l,u)` を実測）:
+- 非2xx でエラーパーシャルを返すときは `mark_renderable()` で印を付ける。付けないと文言は
+  生成されているのに画面へ届かず、`app.js` の汎用フォールバックだけが出る。
 
-```
-htmx:beforeOnLoad → HX-Trigger → HX-Location → HX-Refresh → HX-Redirect
-→ HX-Retarget → shouldSwap算出 → htmx:beforeSwap → if(shouldSwap) スワップ
-                 ↑                ↑
-        ここまでは4xxでも動く    ここで4xxは false になる
-```
-
-得られる帰結:
-
-| 機構 | 4xxでの挙動 | 対処 |
-|---|---|---|
-| `HX-Trigger`（トースト） | **動く**（スワップ判定より前） | そのまま使える |
-| `HX-Retarget` | **単独では効かない**（`shouldSwap` は false のまま） | `mark_renderable()` を併用する |
-| 本文のスワップ | しない | `mark_renderable()` で印を付ける |
-
-### `mark_renderable()`
-
-```python
-return mark_renderable(
-    templates.TemplateResponse(
-        request, "partials/error_inline.html",
-        {"request": request, "error": user_message_for(e)},
-        status_code=400,
-    )
-)
-```
-
-サーバーが `X-Render-Response: true` を付けた応答だけを、`app.js` の `htmx:beforeSwap` が
-スワップ許可する。
+  ```python
+  return mark_renderable(
+      templates.TemplateResponse(
+          request, "partials/error_inline.html",
+          {"request": request, "error": user_message_for(e)},
+          status_code=400,
+      )
+  )
+  ```
 
 - **ステータスコードで一律に許可してはならない。** 汎用パーシャルが `hx-target`（本体コンテンツや一覧）に
   流れ込むとフォームごと消える経路がある。「表示してよい」判断はサーバー側が持つ
@@ -280,8 +262,8 @@ except PersonaManagerError as e:
   見た目だけ `components/error_body.html` のマクロで揃える
   （`memory_delete_error.html` / `knowledge_file_error.html`）
 - フルページ表示用の `partials/error_page.html` は `base.html` を継承した別物（下記`HTTPException`参照）
-- htmx のイベントハンドラは `web/static/js/app.js` に集約する。`base.html` に登録してはならない
-  （二重登録で `fade-in` が重複適用される）
+- htmx イベントハンドラの集約（`app.js` に置く / `base.html` に登録しない）は
+  `.claude/rules/frontend.md` を参照
 - 上記は `TestErrorTemplatesAreConsolidated` / `TestHtmxHandlersAreNotDuplicated` が検査する
 
 ---
@@ -321,16 +303,11 @@ FastAPI が Router を呼ぶ**前**に検出する失敗は、Router内の `exce
 ## トースト通知の表示
 
 TRANSIENT と 422 はトーストが**唯一の通知手段**なので、スクロール位置に依存せず見える必要がある。
+トーストの固定配置・z-index 階層・`pointer-events`・Tailwind ビルドの注意は
+`.claude/rules/frontend.md`（z-index 階層 / Tailwind CSS）を参照。
 
-- `#flash-messages` は `<main>` の外に置き、`fixed top-20 right-4 z-toast` で画面右上に固定する。
-  `<main>` 内にインライン挿入すると、長いフォームを下にスクロールした状態で視認できない
-- `z-index` はモーダル（`z-50`）より上に置く（`z-toast` = 60）。モーダル内のフォーム送信が失敗した際、
-  同じ `z-50` だとモーダルがトーストを覆って文言が見えない
-- コンテナは `pointer-events-none`（下の要素を操作できるように）。トースト自身に `pointer-events-auto` を
-  付けて閉じるボタンを押せるようにする（`app.js` の `showFlashMessage`）
-- **`web/static/css/tailwind.css` はビルド成果物をコミットしている。** テンプレートやJSでクラスを足したら
-  `./scripts/build-css.sh --minify` を実行する。忘れるとクラスが存在せず無効になる
-  （`TestToastIsVisibleRegardlessOfScroll` が検査する）
+- クライアント側は `app.js` の `showToast` リスナーが `showFlashMessage()` に委譲する
+- `TestToastIsVisibleRegardlessOfScroll` が固定配置とビルド済み CSS のクラス存在を検査する
 
 ---
 
