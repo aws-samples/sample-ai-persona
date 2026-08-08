@@ -8,6 +8,8 @@ import json
 from unittest.mock import Mock, patch
 from io import BytesIO
 
+import pytest
+
 from src.managers.file_manager import FileUploadError, FileSecurityError, FileMetadata
 from src.managers.persona_manager import PersonaManagerError
 from src.models.errors import ErrorCode
@@ -149,6 +151,19 @@ class TestFileUploadEndpoint:
 class TestPersonaGenerateEndpoint:
     """ペルソナ生成エンドポイントのテスト"""
 
+    @pytest.fixture(autouse=True)
+    def mock_file_manager(self):
+        """generate_persona は get_file_manager() で FileManager を生成し、その
+        コンストラクタが実 DynamoDB 接続を試みる。認証情報のない CI で失敗するため、
+        FileManager をモックに差し替える。既定の validate_persona_source_file は
+        None を返す（＝検証パス）ので、正常系はそのまま通る。拒否系テストは
+        返り値の mock に side_effect を仕込んで使う。"""
+        with patch("web.routers.persona.get_file_manager") as mock_get_fm:
+            mock_fm = Mock()
+            mock_fm.validate_persona_source_file.return_value = None
+            mock_get_fm.return_value = mock_fm
+            yield mock_fm
+
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_success(self, mock_get_gen_manager, client, sample_persona):
         """ペルソナ生成が成功することを確認（SSE）"""
@@ -182,10 +197,16 @@ class TestPersonaGenerateEndpoint:
         assert "event: result" in response.text
 
     @patch("web.routers.persona.get_persona_generation_manager")
-    def test_generate_rejects_unsupported_extension(self, mock_get_gen_manager, client):
+    def test_generate_rejects_unsupported_extension(
+        self, mock_get_gen_manager, client, mock_file_manager
+    ):
         """非対応拡張子(.exe)は抽出前に弾かれ、生成マネージャは呼ばれない（SSE）"""
         mock_manager = Mock()
         mock_get_gen_manager.return_value = mock_manager
+        # Router が呼ぶ検証で FileUploadError を送出させ、拒否経路を再現する
+        mock_file_manager.validate_persona_source_file.side_effect = FileUploadError(
+            "extension not allowed", code=ErrorCode.FILE_FORMAT_NOT_ALLOWED
+        )
 
         files = [
             ("files", ("malware.exe", BytesIO(b"anything at all here"), "text/plain")),
