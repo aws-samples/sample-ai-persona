@@ -1,3 +1,17 @@
+---
+paths:
+  - "src/models/errors.py"
+  - "src/services/**/*.py"
+  - "src/managers/**/*.py"
+  - "web/routers/**/*.py"
+  - "web/error_messages.py"
+  - "web/main.py"
+  - "web/templates/**/*.html"
+  - "tests/api/test_error_exposure.py"
+  - "tests/unit/test_error_messages.py"
+  - "tests/unit/test_error_kinds.py"
+---
+
 # エラーカタログ設計
 
 例外の送出から画面表示までの規約。`.claude/rules/architecture.md`（層の依存方向・責務）から分離したのは、

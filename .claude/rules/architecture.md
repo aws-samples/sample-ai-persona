@@ -78,7 +78,8 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 
 ## テスト
 
-- マーカー: `unit`(src/managers), `integration`(src/services), `api`(web/routers)
+マーカーと対象層・実行コマンドの対応は `.claude/CLAUDE.md`「テスト実行ルーティング」を参照（重複記載を避ける）。ここには層設計に固有の方針のみを記す。
+
 - 外部サービスモック: DynamoDB/S3は`moto`、AI系は`unittest.mock.Mock`
 - Manager層テスト: コンストラクタDIでモック注入
 - Router層テスト: `reset_singletons` autouseフィクスチャでテスト間分離
