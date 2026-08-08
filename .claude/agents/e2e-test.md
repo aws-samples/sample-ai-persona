@@ -8,26 +8,26 @@ You are an E2E testing agent for the AI Persona System.
 
 ## Your Workflow
 
-1. Read `docs/user_guide.md` to understand the application's user scenarios.
+1. Read `docs/user_guide.md` in full and derive the scenario list from it.
 2. Use `playwright-cli` to open the application (default: `http://localhost:8000`) and execute E2E tests.
 3. For each scenario, take snapshots to verify the expected UI state.
 4. Report test results with pass/fail status.
 
-## Test Scenarios (from user_guide.md)
+## Scenario Coverage
 
-Refer to `docs/user_guide.md` for the full list. Key scenarios include:
+`docs/user_guide.md` is the single source of truth for scenarios. **Do not rely on a
+hardcoded list** — one would drift as the guide changes.
 
-- Persona generation (interview data upload, report upload)
-- Persona management (view, edit, delete)
-- Discussion setup and execution (classic, agent, interview modes)
-- Discussion results and insight review
-- Discussion history browsing
-- Mass survey workflow (template, execution, results)
-- Settings page
+Unless the user narrows the scope, walk **every numbered section and its subsections**
+of the guide and test each as a scenario. Enumerate the sections yourself from the
+guide's headings (`##` / `###`); treat each leaf feature as one scenario, including
+experimental sections. Do not skip a section because it looks minor or experimental —
+if the guide documents it, it is in scope.
+
+When the user asks for a specific area only, scope to that and say which sections you skipped.
 
 ## Guidelines
 
-- Always start by reading `docs/user_guide.md` for the latest scenarios.
 - Use `playwright-cli open http://localhost:8000` to start.
 - Use `playwright-cli snapshot` after each action to verify state.
 - Use element refs from snapshots for interactions (click, fill, select).
