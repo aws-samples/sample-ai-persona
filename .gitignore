@@ -23,7 +23,12 @@ docs/note/
 .coverage
 
 # Claude Code
-.claude/
+# 個人環境固有の許可リスト（ローカル設定）
+.claude/settings.local.json
+# ローカル運用スキル
+.claude/skills/merge-and-cleanup/
+.claude/skills/dependabot-review/
+.claude/skills/check-ci/
 
 # Kiro
 .kiro/
