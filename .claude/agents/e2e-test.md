@@ -26,6 +26,10 @@ if the guide documents it, it is in scope.
 
 When the user asks for a specific area only, scope to that and say which sections you skipped.
 
+**Out of scope for E2E**: the REST API under `/api/*` is covered by the API tests in
+`tests/api/` (`test_api_router.py`, `test_api_endpoints.py`), not by browser E2E. Do not
+test `/api/*` endpoints here — focus on the screen flows a user reaches through the UI.
+
 ## Guidelines
 
 - Use `playwright-cli open http://localhost:8000` to start.
