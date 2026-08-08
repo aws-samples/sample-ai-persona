@@ -128,64 +128,6 @@ async def persona_management_page(request: Request) -> Any:
     )
 
 
-@router.post("/upload", response_class=HTMLResponse)
-async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
-    """ファイルアップロード処理（htmx対応）"""
-    try:
-        file_content = await file.read()
-        file_manager = get_file_manager()
-
-        saved_path, file_text, metadata = file_manager.upload_interview_file(
-            file_content,
-            file.filename or "uploaded_file",
-            allow_duplicates=False,
-        )
-
-        # アップロード成功時のパーシャルHTMLを返す
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/upload_success.html",
-            {
-                "request": request,
-                "file_name": file.filename,
-                "file_size": len(file_content),
-                "file_text": file_text,
-                "file_id": metadata.file_id,
-                "char_count": len(file_text),
-                "word_count": len(file_text.split()),
-                "line_count": len(file_text.splitlines()),
-            },
-        )
-    except FileSecurityError as e:
-        logger.warning("File security error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
-        )
-    except FileUploadError as e:
-        logger.warning("File upload error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
-        )
-    except Exception as e:
-        # 再試行で解決しうるエラーはアップロード欄を消さずトーストで通知する
-        logger.error("Unexpected error", exc_info=True)
-        return toast_response(
-            e,
-            default="ファイルのアップロード中にエラーが発生しました",
-            status_code=500,
-        )
-
-
 def _generate_personas_sync(
     file_contents: list[tuple[bytes, str]],
     data_type: str,
