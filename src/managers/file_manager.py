@@ -86,7 +86,7 @@ class FileManager:
     KNOWLEDGE_FILE_FORMATS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md"}
     KNOWLEDGE_FILE_MAX_SIZE = 10 * 1024 * 1024  # 10MB
 
-    # ペルソナ生成ソースの許可形式（バイナリ形式を含むため validate_file_format は流用不可）
+    # ペルソナ生成ソースの許可形式（PDF/DOCX 等のバイナリ形式を含む）
     PERSONA_SOURCE_FORMATS = {".txt", ".md", ".pdf", ".docx", ".doc", ".csv"}
 
     # アンケート画像の許可形式
@@ -125,11 +125,10 @@ class FileManager:
     def validate_persona_source_file(self, filename: str, file_content: bytes) -> None:
         """Validate a persona-generation source file before text extraction.
 
-        Binary formats (PDF/DOCX) are accepted here, so validate_file_format
-        cannot be reused (it requires the payload to be text-decodable). Content
-        sufficiency and total size are enforced after extraction in
-        PersonaGenerationManager, since byte length says nothing about the text
-        yielded by a binary document.
+        Only format / size / empty are checked here, since binary formats
+        (PDF/DOCX) are accepted and byte length says nothing about the text a
+        binary document yields. Content sufficiency and total character count
+        are enforced after extraction in PersonaGenerationManager.
 
         Raises:
             FileUploadError: format / size / empty violations.

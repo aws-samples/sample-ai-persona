@@ -29,7 +29,6 @@ class Config:
     MAX_REQUEST_PAYLOAD_SIZE: int = (
         32 * 1024 * 1024
     )  # 32MB (Claude(Bedrock)のリクエストペイロード全体上限。議論ドキュメント合計に適用)
-    ALLOWED_FILE_EXTENSIONS: tuple = (".txt", ".md")
     # ペルソナ生成ソース: 1ファイルあたりの生バイト粗ガード。
     # 生バイトはBedrockに届かない（テキスト抽出後にプロンプト連結される）ため、
     # この上限の役割はmarkitdownが巨大バイナリでOOM/長時間化するのを防ぐ粗ガードに限る。
@@ -159,12 +158,6 @@ class Config:
     def upload_dir(self) -> Path:
         """アップロードディレクトリのPathオブジェクトを返す"""
         return Path(self.UPLOAD_DIR)
-
-    def is_allowed_file_extension(self, filename: str) -> bool:
-        """ファイル拡張子が許可されているかチェック"""
-        return any(
-            filename.lower().endswith(ext) for ext in self.ALLOWED_FILE_EXTENSIONS
-        )
 
     def get_aws_credentials(self) -> dict:
         """AWS認証情報を環境変数から取得"""

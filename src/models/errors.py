@@ -136,7 +136,6 @@ class ErrorCode(StrEnum):
         "interview_file_content_too_short",
         ErrorKind.VALIDATION,
     )
-    FILE_ENCODING_UNSUPPORTED = ("file_encoding_unsupported", ErrorKind.VALIDATION)
     # Security checks on the filename and the payload. VALIDATION because the
     # user resolves them by choosing or renaming the file.
     FILE_NAME_INVALID = ("file_name_invalid", ErrorKind.VALIDATION)

@@ -82,11 +82,6 @@ _CATALOG: dict[ErrorCode, str] = {
         "ファイル内容が短すぎます。"
         "インタビューなどの内容を含むテキストファイルをアップロードしてください。"
     ),
-    ErrorCode.FILE_ENCODING_UNSUPPORTED: (
-        "テキストファイルとして読み取れません。"
-        "UTF-8、Shift_JIS、EUC-JPのいずれかでエンコードされた"
-        "テキストファイルをアップロードしてください。"
-    ),
     ErrorCode.FILE_NAME_INVALID: "ファイル名に不正な文字が含まれています。",
     ErrorCode.FILE_NAME_TOO_LONG: "ファイル名が長すぎます。",
     ErrorCode.FILE_HIDDEN_NOT_ALLOWED: "隠しファイルはアップロードできません。",
