@@ -3,7 +3,6 @@
 """
 
 import tempfile
-import uuid
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock
@@ -13,7 +12,6 @@ from src.managers.file_manager import (
     FileManager,
     FileUploadError,
     FileSecurityError,
-    FileMetadata,
 )
 from src.models.errors import ErrorCode
 
@@ -96,255 +94,40 @@ class TestFileManager:
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_validate_file_format_success(self):
-        """正常なファイル形式の検証テスト"""
-        filename = "test.txt"
-        content = (
-            "これはテストファイルです。N1インタビューの内容を含んでいます。".encode(
-                "utf-8"
-            )
+    def test_validate_persona_source_file_txt_ok(self):
+        """ペルソナ生成ソース: 対応拡張子のテキストは通過する"""
+        self.file_manager.validate_persona_source_file(
+            "interview.txt", "十分な長さのインタビュー内容です。".encode("utf-8")
         )
 
-        result = self.file_manager.validate_file_format(filename, content)
-        assert result is True
+    def test_validate_persona_source_file_pdf_not_rejected(self):
+        """ペルソナ生成ソース: PDF(バイナリ)は形式・空でない限り通過する（デグレ防止）"""
+        # validate_file_format と違い、デコード不可のバイナリでも弾かれてはならない。
+        self.file_manager.validate_persona_source_file(
+            "report.pdf", b"%PDF-1.4 binary payload not decodable as text"
+        )
 
-    def test_validate_file_format_invalid_extension(self):
-        """無効なファイル拡張子のテスト"""
-        filename = "test.pdf"
-        content = "テスト内容".encode("utf-8")
-
+    def test_validate_persona_source_file_invalid_extension(self):
+        """ペルソナ生成ソース: 非対応拡張子(.exe)は許可リストで弾く"""
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.validate_file_format(filename, content)
-
+            self.file_manager.validate_persona_source_file(
+                "malware.exe", b"anything at all here"
+            )
         assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
-    def test_validate_file_format_file_too_large(self):
-        """ファイルサイズ制限超過のテスト"""
-        filename = "test.txt"
-        # 制限サイズを超える内容を作成
-        content = "a" * (self.file_manager.max_file_size + 1)
-        content = content.encode("utf-8")
-
+    def test_validate_persona_source_file_empty(self):
+        """ペルソナ生成ソース: 空ファイルは弾く"""
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.validate_file_format(filename, content)
-
-        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
-
-    def test_validate_file_format_empty_file(self):
-        """空ファイルのテスト"""
-        filename = "test.txt"
-        content = b""
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.validate_file_format(filename, content)
-
+            self.file_manager.validate_persona_source_file("empty.txt", b"")
         assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
-    def test_validate_file_format_content_too_short(self):
-        """内容が短すぎるファイルのテスト"""
-        filename = "test.txt"
-        content = "短い".encode("utf-8")
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.validate_file_format(filename, content)
-
-        assert exc_info.value.code is ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT
-
-    def test_validate_file_format_invalid_encoding(self):
-        """無効なエンコーディングのテスト"""
-        filename = "test.txt"
-        # バイナリデータ（テキストではない）
-        content = b"\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.validate_file_format(filename, content)
-
-        assert exc_info.value.code is ErrorCode.FILE_ENCODING_UNSUPPORTED
-
-    def test_validate_file_format_shift_jis_encoding(self):
-        """Shift_JISエンコーディングのテスト"""
-        filename = "test.txt"
-        content = "これはShift_JISでエンコードされたテストファイルです。".encode(
-            "shift_jis"
-        )
-
-        result = self.file_manager.validate_file_format(filename, content)
-        assert result is True
-
-    def test_upload_interview_file_success(self):
-        """正常なファイルアップロードのテスト"""
-        filename = "interview.txt"
-        content = (
-            "これはN1インタビューの内容です。詳細な顧客の声が含まれています。".encode(
-                "utf-8"
-            )
-        )
-
-        saved_path, file_text, metadata = self.file_manager.upload_interview_file(
-            content, filename
-        )
-
-        # ファイルが保存されていることを確認
-        assert Path(saved_path).exists()
-        assert "これはN1インタビューの内容です" in file_text
-
-        # メタデータの確認
-        assert isinstance(metadata, FileMetadata)
-        assert metadata.original_filename == filename
-        assert metadata.file_size == len(content)
-        assert metadata.file_hash is not None
-
-        # 保存されたファイル名にUUIDが含まれていることを確認
-        saved_filename = Path(saved_path).name
-        assert filename in saved_filename
-        assert len(saved_filename) > len(filename)  # UUIDが追加されている
-
-    def test_upload_interview_file_duplicate_prevention(self):
-        """重複ファイルアップロード防止のテスト"""
-        content = "これは重複チェック用のN1インタビューテスト内容です。詳細な顧客の声が含まれています。".encode(
-            "utf-8"
-        )
-        filename = "duplicate_test.txt"
-
-        # 初回アップロード
-        saved_path1, file_text1, metadata1 = self.file_manager.upload_interview_file(
-            content, filename, allow_duplicates=False
-        )
-
-        # 同じファイルを再度アップロード（重複チェック有効）
-        saved_path2, file_text2, metadata2 = self.file_manager.upload_interview_file(
-            content, filename, allow_duplicates=False
-        )
-
-        # 同じファイルが返されることを確認
-        assert metadata1.file_id == metadata2.file_id
-        assert saved_path1 == saved_path2
-        assert file_text1 == file_text2
-
-        # データベース内のファイル数が1つであることを確認
-        all_files = self.file_manager.list_uploaded_files()
-        duplicate_files = [f for f in all_files if f.original_filename == filename]
-        assert len(duplicate_files) == 1
-
-    def test_upload_interview_file_allow_duplicates(self):
-        """重複ファイル許可のテスト"""
-        content = "これは重複許可用のN1インタビューテスト内容です。詳細な顧客の声が含まれています。".encode(
-            "utf-8"
-        )
-        filename = "allow_duplicate_test.txt"
-
-        # 初回アップロード
-        saved_path1, file_text1, metadata1 = self.file_manager.upload_interview_file(
-            content, filename, allow_duplicates=True
-        )
-
-        # 同じファイルを再度アップロード（重複許可）
-        saved_path2, file_text2, metadata2 = self.file_manager.upload_interview_file(
-            content, filename, allow_duplicates=True
-        )
-
-        # 異なるファイルIDが生成されることを確認
-        assert metadata1.file_id != metadata2.file_id
-        assert saved_path1 != saved_path2
-        assert file_text1 == file_text2  # 内容は同じ
-
-        # データベース内に2つのファイルが存在することを確認
-        all_files = self.file_manager.list_uploaded_files()
-        duplicate_files = [f for f in all_files if f.original_filename == filename]
-        assert len(duplicate_files) == 2
-
-    def test_upload_interview_file_invalid_format(self):
-        """無効な形式のファイルアップロードテスト"""
-        filename = "interview.pdf"
-        content = "テスト内容".encode("utf-8")
-
-        with pytest.raises(FileUploadError):
-            self.file_manager.upload_interview_file(content, filename)
-
-    def test_get_uploaded_file_content_file_not_found(self):
-        """存在しないファイルの内容取得テスト"""
-        non_existent_path = "/path/to/non/existent/file.txt"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.get_uploaded_file_content(non_existent_path)
-
-        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
-
-    def test_delete_uploaded_file_success(self):
-        """ファイル削除の成功テスト"""
-        filename = "test_file.txt"
-        content = "テストファイルの内容です。十分な長さのテキストです。".encode("utf-8")
-
-        # ファイルをアップロード（メタデータ付きで）
-        saved_path, file_text, metadata = self.file_manager.upload_interview_file(
-            content, filename
-        )
-        assert Path(saved_path).exists()
-
-        # ファイルを削除（IDで）
-        result = self.file_manager.delete_uploaded_file(metadata.file_id)
-
-        assert result is True
-        assert not Path(saved_path).exists()
-
-    def test_delete_uploaded_file_not_exists(self):
-        """存在しないファイルの削除テスト"""
-        non_existent_id = str(uuid.uuid4())
-
-        result = self.file_manager.delete_uploaded_file(non_existent_id)
-        assert result is False
-
-    def test_list_uploaded_files_success(self):
-        """アップロードファイル一覧取得の成功テスト"""
-        # 複数のファイルを作成
-        files_data = [
-            ("file1.txt", "ファイル1の内容です。十分な長さのテキストです。"),
-            ("file2.txt", "ファイル2の内容です。十分な長さのテキストです。"),
-        ]
-
-        for filename, content in files_data:
-            content_bytes = content.encode("utf-8")
-            self.file_manager.upload_interview_file(content_bytes, filename)
-
-        # ファイル一覧を取得
-        file_list = self.file_manager.list_uploaded_files()
-
-        assert len(file_list) == 2
-
-        # 各ファイル情報を確認
-        for metadata in file_list:
-            assert isinstance(metadata, FileMetadata)
-            assert metadata.file_size > 0
-            assert metadata.original_filename in ["file1.txt", "file2.txt"]
-
-    def test_list_uploaded_files_empty_directory(self):
-        """空のディレクトリでのファイル一覧取得テスト"""
-        file_list = self.file_manager.list_uploaded_files()
-        assert file_list == []
-
-    def test_decode_file_content_utf8(self):
-        """UTF-8エンコーディングのデコードテスト"""
-        content = "UTF-8でエンコードされたテキスト".encode("utf-8")
-
-        decoded = self.file_manager._decode_file_content(content)
-        assert decoded == "UTF-8でエンコードされたテキスト"
-
-    def test_decode_file_content_shift_jis(self):
-        """Shift_JISエンコーディングのデコードテスト"""
-        content = "Shift_JISでエンコードされたテキスト".encode("shift_jis")
-
-        decoded = self.file_manager._decode_file_content(content)
-        assert decoded == "Shift_JISでエンコードされたテキスト"
-
-    def test_decode_file_content_invalid(self):
-        """無効なエンコーディングのデコードテスト"""
-        # バイナリデータ
-        content = b"\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager._decode_file_content(content)
-
-        assert exc_info.value.code is ErrorCode.FILE_ENCODING_UNSUPPORTED
+    def test_validate_persona_source_file_too_large(self):
+        """ペルソナ生成ソース: 生バイト上限超過は弾く"""
+        with patch("src.managers.file_manager.config") as mock_config:
+            mock_config.PERSONA_SOURCE_MAX_BYTES = 100
+            with pytest.raises(FileUploadError) as exc_info:
+                self.file_manager.validate_persona_source_file("big.txt", b"a" * 101)
+        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
 
     def test_security_check_success(self):
         """セキュリティチェック成功テスト"""
@@ -383,28 +166,6 @@ class TestFileManager:
             self.file_manager._security_check(filename, content)
 
         assert exc_info.value.code is ErrorCode.FILE_BINARY_NOT_ALLOWED
-
-    def test_get_file_metadata_success(self):
-        """ファイルメタデータ取得成功テスト"""
-        filename = "metadata_test.txt"
-        content = (
-            "メタデータテスト用のファイル内容です。十分な長さのテキストです。".encode(
-                "utf-8"
-            )
-        )
-
-        # ファイルをアップロード
-        saved_path, file_text, metadata = self.file_manager.upload_interview_file(
-            content, filename
-        )
-
-        # メタデータを取得
-        retrieved_metadata = self.file_manager.get_file_metadata(metadata.file_id)
-
-        assert retrieved_metadata is not None
-        assert retrieved_metadata.file_id == metadata.file_id
-        assert retrieved_metadata.original_filename == filename
-        assert retrieved_metadata.file_size == len(content)
 
     def test_upload_discussion_document_png(self):
         """議論用ドキュメント（PNG）アップロードテスト (Task 2)"""
@@ -452,144 +213,6 @@ class TestFileManager:
 
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 5.0
-
-
-class TestMarketReportTextExtraction:
-    """市場調査レポートテキスト抽出のテストクラス"""
-
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化処理"""
-        import sys
-
-        self.temp_dir = tempfile.mkdtemp()
-        self.mock_db_service = Mock()
-
-        # markitdownモジュールをモック
-        self.mock_markitdown_module = MagicMock()
-        self.mock_md_instance = MagicMock()
-        self.mock_markitdown_module.MarkItDown.return_value = self.mock_md_instance
-        sys.modules["markitdown"] = self.mock_markitdown_module
-
-        with patch("src.managers.file_manager.config") as mock_config:
-            mock_config.upload_dir = Path(self.temp_dir)
-            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
-            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
-            mock_config.is_allowed_file_extension = lambda filename: any(
-                filename.lower().endswith(ext)
-                for ext in mock_config.ALLOWED_FILE_EXTENSIONS
-            )
-            self.file_manager = FileManager(self.mock_db_service)
-
-    def teardown_method(self):
-        """各テストメソッドの後に実行されるクリーンアップ処理"""
-        import sys
-        import shutil
-
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-        # モジュールモックをクリーンアップ
-        if "markitdown" in sys.modules:
-            del sys.modules["markitdown"]
-
-    def test_extract_text_from_txt_file(self):
-        """テキストファイルからのテキスト抽出テスト"""
-        content = ("これは市場調査レポートのテストです。" * 10).encode("utf-8")
-        filename = "report.txt"
-
-        result = self.file_manager.extract_text_from_file(content, filename)
-
-        assert "市場調査レポート" in result
-        assert len(result) >= 100
-
-    def test_extract_text_from_md_file(self):
-        """マークダウンファイルからのテキスト抽出テスト"""
-        content = ("# 市場調査レポート\n\nこれはテスト内容です。" * 10).encode("utf-8")
-        filename = "report.md"
-
-        result = self.file_manager.extract_text_from_file(content, filename)
-
-        assert "市場調査レポート" in result
-
-    def test_extract_text_invalid_format(self):
-        """無効なファイル形式でエラーを返すテスト"""
-        content = b"test content"
-        filename = "report.xlsx"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.extract_text_from_file(content, filename)
-
-        assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
-
-    def test_extract_text_file_too_large(self):
-        """ファイルサイズ制限超過テスト"""
-        content = b"a" * (11 * 1024 * 1024)  # 11MB
-        filename = "large_report.txt"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.extract_text_from_file(content, filename)
-
-        assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
-
-    def test_extract_text_empty_file(self):
-        """空ファイルでエラーを返すテスト"""
-        content = b""
-        filename = "empty.txt"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.extract_text_from_file(content, filename)
-
-        assert exc_info.value.code is ErrorCode.FILE_EMPTY
-
-    def test_extract_text_content_too_short(self):
-        """内容が短すぎるファイルでエラーを返すテスト"""
-        content = "短い".encode("utf-8")
-        filename = "short.txt"
-
-        with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.extract_text_from_file(content, filename)
-
-        assert exc_info.value.code is ErrorCode.MARKET_REPORT_CONTENT_TOO_SHORT
-
-    def test_extract_text_shift_jis_encoding(self):
-        """Shift_JISエンコーディングのテキスト抽出テスト"""
-        content = (
-            "これはShift_JISでエンコードされた市場調査レポートです。" * 10
-        ).encode("shift_jis")
-        filename = "report_sjis.txt"
-
-        result = self.file_manager.extract_text_from_file(content, filename)
-
-        assert "市場調査レポート" in result
-
-    def test_extract_text_from_pdf(self):
-        """PDFファイルからのテキスト抽出テスト（markitdownモック）"""
-        mock_result = MagicMock()
-        mock_result.text_content = (
-            "これはPDFから抽出された市場調査レポートの内容です。" * 10
-        )
-        self.mock_md_instance.convert_stream.return_value = mock_result
-
-        content = b"%PDF-1.4\nfake pdf content"
-        filename = "report.pdf"
-
-        result = self.file_manager.extract_text_from_file(content, filename)
-
-        assert "市場調査レポート" in result
-        self.mock_md_instance.convert_stream.assert_called_once()
-
-    def test_extract_text_from_docx(self):
-        """Wordファイルからのテキスト抽出テスト（markitdownモック）"""
-        mock_result = MagicMock()
-        mock_result.text_content = (
-            "これはWordから抽出された市場調査レポートの内容です。" * 10
-        )
-        self.mock_md_instance.convert_stream.return_value = mock_result
-
-        content = b"PK\x03\x04fake docx content"
-        filename = "report.docx"
-
-        result = self.file_manager.extract_text_from_file(content, filename)
-
-        assert "市場調査レポート" in result
 
 
 class TestFileManagerSurveyImage:

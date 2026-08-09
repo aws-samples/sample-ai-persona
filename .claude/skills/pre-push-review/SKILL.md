@@ -1,11 +1,11 @@
 ---
 name: pre-push-review
-description: This skill should be used when the user asks to "review before push", "pre-push check", "is this ready to push", or mentions push readiness. Runs code quality, security, test coverage, AWS safety, and documentation checks.
+description: This skill should be used when the user asks to "review before push", "pre-push check", "is this ready to push", or mentions push readiness. Runs code quality, security, test coverage, dead-code, AWS safety, and documentation checks.
 ---
 
 # Pre-Push Review
 
-Compound review gate covering quality, security, coverage, AWS safety, and documentation consistency.
+Compound review gate covering quality, security, coverage, dead code, AWS safety, and documentation consistency.
 
 ## Workflow
 
@@ -38,18 +38,26 @@ Compound review gate covering quality, security, coverage, AWS safety, and docum
 8. **Documentation consistency:**
    - Check if code changes require doc updates per `/update-docs` criteria.
 
-9. **Adversarial code review** (for substantive diffs — new Router/Manager, auth/IAM, external input, or anything the steps above flagged):
+9. **Dead code check** (advisory, **WARN** — never auto-delete):
+   - `ruff` (F401 unused import, F841 unused local) is already run in step 2 and catches the trivial cases. It does **not** catch a module-level symbol (function / method / class / constant) that is only referenced by tests, because tests are real references. That gap is what this step covers by hand.
+   - For each **public symbol added, renamed, or left behind by a refactor** in the diff (functions, methods, class attributes, `ErrorCode` members, catalog entries), count non-definition references in **production code only** (`src/`, `web/`), excluding the file that defines it:
+     `rg -n "\.<symbol>\(|<SYMBOL>" src web -g '!<defining-file>'`
+   - **WARN** when a symbol has **zero production references and is reachable only from `tests/`** — that is the dead-code signature (a refactor moved the caller to a new module but left the old callee and its tests behind). Also trace symbols the *removed* lines used to reference, so a deletion does not leave orphaned constants, error-code enum members, or message-catalog entries the deleted code was the sole user of.
+   - Before concluding dead, confirm there is no dynamic access (`getattr`, template globals, string-dispatch, `__all__`) and check `git log -S "<symbol>"` to see whether the caller was dropped by an earlier refactor.
+   - Report findings as advisory only. **Deletion is a separate, human-approved step** — a review gate must not perform destructive edits. If removing, delete the symbol, its tests, and any now-orphaned constants / error codes / catalog entries together, then re-run steps 2 and 5.
+
+10. **Adversarial code review** (for substantive diffs — new Router/Manager, auth/IAM, external input, or anything the steps above flagged):
    - Run `/code-review` for a general independent pass over the subjective checks (responsibility placement step 3, docs step 8, general bugs). Security specifically is already covered by `/security-review` in step 4 — this is the broader review.
    - Note: `/code-review` operates on a pull request (`gh pr`), so it fits *after* a PR exists. When running strictly pre-push with no PR yet, rely on step 4 (`/security-review`, which works on the branch) and defer `/code-review` to PR time.
    - Skip only for trivial diffs (typos, comments, single-line mechanical edits).
 
-10. **Version consistency:**
+11. **Version consistency:**
    - The version has a single source: `pyproject.toml` (see `/bump-version`). `src/__init__.py`, `web/main.py`, and `web/templates/base.html` read it at runtime.
    - Flag if changed code introduces a hardcoded version literal outside `pyproject.toml` (it would drift from the single source).
 
-11. **Summary** — report deterministic results and advisory findings separately so they are not conflated:
+12. **Summary** — report deterministic results and advisory findings separately so they are not conflated:
    - **Machine checks** (steps 2, 3-dependency, 5, 6-cdk-diff, error-exposure tests): each is PASS or **FAIL** with a reproducible command. A FAIL blocks push.
-   - **Advisory findings** (steps 3-responsibility, 4, 8, 9): **WARN** with rationale; reviewer decides. Never present these as FAIL, and never present a passing advisory step as a guarantee.
+   - **Advisory findings** (steps 3-responsibility, 4, 8, 9-dead-code, 10): **WARN** with rationale; reviewer decides. Never present these as FAIL, and never present a passing advisory step as a guarantee.
    - Overall: **FAIL** if any machine check failed; otherwise PASS with any WARNs listed.
 
 ## Additional Resources

@@ -454,19 +454,45 @@ class PersonaGenerationManager:
         texts: list[str] = []
         csv_temp_paths: list[str] = []
 
-        for content, filename in file_contents:
-            if filename.lower().endswith(".csv"):
-                csv_path = save_temp_csv(content)
-                csv_temp_paths.append(csv_path)
-                preview = get_csv_preview(content, max_lines=20)
-                texts.append(
-                    f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n{preview}"
-                )
-            else:
-                text = extract_text_from_bytes(content, filename)
-                texts.append(f"--- {filename} ---\n{text}")
+        # 検証で raise する場合、ここで作成した一時CSVは呼び出し側の finally に
+        # 到達しないため、送出前に自前でクリーンアップする。
+        try:
+            for content, filename in file_contents:
+                if filename.lower().endswith(".csv"):
+                    csv_path = save_temp_csv(content)
+                    csv_temp_paths.append(csv_path)
+                    preview = get_csv_preview(content, max_lines=20)
+                    texts.append(
+                        f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n"
+                        f"{preview}"
+                    )
+                else:
+                    # 内容不足は抽出後にしか判定できない（PDF/DOCXはバイト列時点で
+                    # 文字数が分からないため）。CSVはプレビュー20行のみを保持し全データは
+                    # DuckDBツール経由なので、この判定の対象外とする。
+                    text = extract_text_from_bytes(content, filename)
+                    if len(text.strip()) < 10:
+                        raise PersonaGenerationManagerError(
+                            f"extracted content of {filename!r} below minimum 10 chars",
+                            code=ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT,
+                        )
+                    texts.append(f"--- {filename} ---\n{text}")
 
-        return "\n\n".join(texts), csv_temp_paths
+            combined_text = "\n\n".join(texts)
+
+            # 合計文字数 = 抽出後テキスト長 = 入力トークン予算が真の上限。
+            # 複数ファイル・PDF/Word経由の合計もここで自然にカバーする。
+            if len(combined_text) > config.PERSONA_SOURCE_MAX_CHARS:
+                raise PersonaGenerationCapacityError(
+                    f"combined source text {len(combined_text)} chars exceeds "
+                    f"{config.PERSONA_SOURCE_MAX_CHARS}",
+                    context={"max_chars": config.PERSONA_SOURCE_MAX_CHARS},
+                )
+        except PersonaGenerationManagerError:
+            cleanup_temp_files(csv_temp_paths)
+            raise
+
+        return combined_text, csv_temp_paths
 
     def _build_generation_context(
         self,

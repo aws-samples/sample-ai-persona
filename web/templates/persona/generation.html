@@ -103,7 +103,7 @@
 
             <div class="mb-3 p-3 bg-gray-50 rounded-md ml-9">
                 <p class="text-xs text-gray-500">
-                    <strong>対応形式:</strong> .txt, .md, .pdf, .docx, .doc, .csv　｜　<strong>最大:</strong> 10MB/ファイル
+                    <strong>対応形式:</strong> .txt, .md, .pdf, .docx, .doc, .csv　｜　<strong>最大:</strong> {{ max_file_size_mb }}MB/ファイル　｜　<strong>合計:</strong> {{ (max_source_chars / 10000) | int }}万文字まで
                 </p>
             </div>
 
@@ -114,12 +114,13 @@
                        accept=".txt,.md,.pdf,.docx,.doc,.csv"
                        multiple
                        class="hidden"
-                       onchange="updateFileList(this)">
+                       onchange="addSelectedFiles(this)">
                 <label for="file-input" class="cursor-pointer">
                     <div class="flex justify-center mb-2 text-gray-400">{{ icon_upload("w-10 h-10") }}</div>
                     <p class="text-gray-600 text-sm">クリックしてファイルを選択、またはドラッグ＆ドロップ</p>
+                    <p class="text-gray-400 text-xs mt-1">複数回選択するとファイルを追加できます</p>
                 </label>
-                <div id="file-list" class="mt-3 text-sm text-blue-600 font-medium"></div>
+                <div id="file-list" class="mt-3 space-y-1 text-left"></div>
             </div>
         </div>
 
@@ -217,17 +218,90 @@ function updateBehaviorDatasetSelection() {
     }
 }
 
-function updateFileList(input) {
+// 選択済みファイルを input.files に蓄積する（同名+同サイズは重複とみなし追加しない）。
+// onchange 発火時点で input.files は新規選択分に差し替わっているため、確定済みの
+// 一覧は window._personaFiles に保持し、それと新規選択分をマージして input へ戻す。
+// input.files は読み取り専用なので DataTransfer 経由で組み替える。
+function addSelectedFiles(input) {
+    const dt = new DataTransfer();
+    const seen = new Set();
+    const existing = window._personaFiles || [];
+    existing.concat(Array.from(input.files)).forEach(f => {
+        const key = f.name + '::' + f.size;
+        if (!seen.has(key)) { seen.add(key); dt.items.add(f); }
+    });
+    input.files = dt.files;
+    window._personaFiles = Array.from(dt.files);
+    renderFileList();
+}
+
+// リストから1件削除する
+function removeSelectedFile(index) {
+    const input = document.getElementById('file-input');
+    const dt = new DataTransfer();
+    Array.from(input.files).forEach((f, i) => {
+        if (i !== index) dt.items.add(f);
+    });
+    input.files = dt.files;
+    window._personaFiles = Array.from(dt.files);
+    renderFileList();
+}
+
+function renderFileList() {
+    const input = document.getElementById('file-input');
     const fileList = document.getElementById('file-list');
     fileList.innerHTML = '';
-    if (input.files.length === 0) return;
-    Array.from(input.files).forEach(f => {
-        const span = document.createElement('span');
-        span.className = 'inline-block bg-blue-50 px-2 py-1 rounded mr-1 mb-1';
-        span.textContent = f.name;
-        fileList.appendChild(span);
+    const files = Array.from(input.files);
+    if (files.length === 0) return;
+    files.forEach((f, i) => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between bg-blue-50 px-3 py-1.5 rounded text-sm';
+        const name = document.createElement('span');
+        name.className = 'text-blue-700 font-medium truncate mr-2';
+        name.textContent = f.name;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'text-gray-400 hover:text-red-500 flex-shrink-0';
+        remove.setAttribute('aria-label', 'ファイルを削除');
+        remove.innerHTML = '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>';
+        remove.addEventListener('click', () => removeSelectedFile(i));
+        row.appendChild(name);
+        row.appendChild(remove);
+        fileList.appendChild(row);
     });
 }
+
+// ドラッグ&ドロップ対応
+document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('drop-zone');
+    const input = document.getElementById('file-input');
+    if (!dropZone || !input) return;
+    ['dragenter', 'dragover'].forEach(ev => {
+        dropZone.addEventListener(ev, (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-blue-400', 'bg-blue-50');
+        });
+    });
+    ['dragleave', 'drop'].forEach(ev => {
+        dropZone.addEventListener(ev, (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+        });
+    });
+    dropZone.addEventListener('drop', (e) => {
+        const dropped = Array.from(e.dataTransfer.files);
+        if (dropped.length === 0) return;
+        const dt = new DataTransfer();
+        const seen = new Set();
+        Array.from(input.files).concat(dropped).forEach(f => {
+            const key = f.name + '::' + f.size;
+            if (!seen.has(key)) { seen.add(key); dt.items.add(f); }
+        });
+        input.files = dt.files;
+        window._personaFiles = Array.from(dt.files);
+        renderFileList();
+    });
+});
 
 function startGeneration() {
     const form = document.getElementById('generate-form');
@@ -343,6 +417,11 @@ function startGeneration() {
                 } catch(e) {}
             } else if (eventType === 'result') {
                 progress.classList.add('hidden');
+                // 生成成功: 選択済みファイルをクリアし、続けて別データで生成できるようにする
+                const fileInput = document.getElementById('file-input');
+                if (fileInput) fileInput.files = new DataTransfer().files;
+                window._personaFiles = [];
+                renderFileList();
                 result.innerHTML = data;
                 if (window.htmx) htmx.process(result);
                 if (window.Alpine) Alpine.initTree(result);

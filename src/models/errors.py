@@ -130,29 +130,18 @@ class ErrorCode(StrEnum):
     FILE_FORMAT_NOT_ALLOWED = ("file_format_not_allowed", ErrorKind.VALIDATION)
     FILE_MIME_UNSUPPORTED = ("file_mime_unsupported", ErrorKind.VALIDATION)
     FILE_EMPTY = ("file_empty", ErrorKind.VALIDATION)
-    FILE_NOT_FOUND = ("file_not_found", ErrorKind.NOT_FOUND)
     # Text-bearing uploads: too little content to work with, or undecodable.
-    # The two "too short" codes are separate because the guidance differs by
-    # upload purpose, and the guidance wording belongs in the catalog.
+    # The guidance wording belongs in the catalog.
     INTERVIEW_FILE_CONTENT_TOO_SHORT = (
         "interview_file_content_too_short",
         ErrorKind.VALIDATION,
     )
-    MARKET_REPORT_CONTENT_TOO_SHORT = (
-        "market_report_content_too_short",
-        ErrorKind.VALIDATION,
-    )
-    FILE_ENCODING_UNSUPPORTED = ("file_encoding_unsupported", ErrorKind.VALIDATION)
-    CSV_ENCODING_UNSUPPORTED = ("csv_encoding_unsupported", ErrorKind.VALIDATION)
     # Security checks on the filename and the payload. VALIDATION because the
     # user resolves them by choosing or renaming the file.
     FILE_NAME_INVALID = ("file_name_invalid", ErrorKind.VALIDATION)
     FILE_NAME_TOO_LONG = ("file_name_too_long", ErrorKind.VALIDATION)
     FILE_HIDDEN_NOT_ALLOWED = ("file_hidden_not_allowed", ErrorKind.VALIDATION)
     FILE_BINARY_NOT_ALLOWED = ("file_binary_not_allowed", ErrorKind.VALIDATION)
-    # Refusing to delete a path outside the upload directory: the user cannot
-    # correct this by editing input, so it is not VALIDATION.
-    FILE_DELETE_NOT_ALLOWED = ("file_delete_not_allowed", ErrorKind.TRANSIENT)
     # Catch-all for file operations that failed for internal reasons.
     FILE_OPERATION_FAILED = ("file_operation_failed", ErrorKind.TRANSIENT)
 

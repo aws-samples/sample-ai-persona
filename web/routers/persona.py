@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from src.config import config
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.managers.persona_memory_manager import (
@@ -107,7 +108,13 @@ async def persona_generation_page(request: Request) -> Any:
     return templates.TemplateResponse(
         request,
         "persona/generation.html",
-        {"request": request, "title": "AIペルソナ生成"},
+        {
+            "request": request,
+            "title": "AIペルソナ生成",
+            # アップロード制限をカタログの単一ソース（config）から表示に渡す
+            "max_file_size_mb": config.PERSONA_SOURCE_MAX_BYTES // (1024 * 1024),
+            "max_source_chars": config.PERSONA_SOURCE_MAX_CHARS,
+        },
     )
 
 
@@ -119,64 +126,6 @@ async def persona_management_page(request: Request) -> Any:
         "persona/management.html",
         {"request": request, "title": "ペルソナ管理"},
     )
-
-
-@router.post("/upload", response_class=HTMLResponse)
-async def upload_file(request: Request, file: UploadFile = File(...)) -> Any:
-    """ファイルアップロード処理（htmx対応）"""
-    try:
-        file_content = await file.read()
-        file_manager = get_file_manager()
-
-        saved_path, file_text, metadata = file_manager.upload_interview_file(
-            file_content,
-            file.filename or "uploaded_file",
-            allow_duplicates=False,
-        )
-
-        # アップロード成功時のパーシャルHTMLを返す
-        return templates.TemplateResponse(
-            request,
-            "persona/partials/upload_success.html",
-            {
-                "request": request,
-                "file_name": file.filename,
-                "file_size": len(file_content),
-                "file_text": file_text,
-                "file_id": metadata.file_id,
-                "char_count": len(file_text),
-                "word_count": len(file_text.split()),
-                "line_count": len(file_text.splitlines()),
-            },
-        )
-    except FileSecurityError as e:
-        logger.warning("File security error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
-        )
-    except FileUploadError as e:
-        logger.warning("File upload error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
-        )
-    except Exception as e:
-        # 再試行で解決しうるエラーはアップロード欄を消さずトーストで通知する
-        logger.error("Unexpected error", exc_info=True)
-        return toast_response(
-            e,
-            default="ファイルのアップロード中にエラーが発生しました",
-            status_code=500,
-        )
 
 
 def _generate_personas_sync(
@@ -390,12 +339,20 @@ async def generate_persona(
         return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
 
     # ファイル読み込み（既存フロー）
+    # 形式・サイズ・空は生バイト時点で判定できる粗ガードとしてここで検証する。
+    # 内容不足・合計文字数は抽出後にしか判定できないため Manager 層で行う。
     file_contents: list[tuple[bytes, str]] = []
-    if files:
-        for f in files:
-            content = await f.read()
-            if content and f.filename:
-                file_contents.append((content, f.filename))
+    file_manager = get_file_manager()
+    try:
+        if files:
+            for f in files:
+                content = await f.read()
+                if content and f.filename:
+                    file_manager.validate_persona_source_file(f.filename, content)
+                    file_contents.append((content, f.filename))
+    except FileUploadError as e:
+        logger.warning("Persona source file validation failed", exc_info=True)
+        return _sse_error(user_message_for(e))
 
     if not file_contents:
         return _sse_error("ファイルをアップロードしてください")

@@ -104,6 +104,50 @@ class TestGeneratePersonas:
             )
 
 
+class TestExtractFileTexts:
+    """PersonaGenerationManager._extract_file_texts の抽出後バリデーション"""
+
+    @pytest.fixture
+    def gen_manager(self):
+        from src.managers.persona_generation_manager import PersonaGenerationManager
+
+        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+
+    def test_content_too_short_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        with raises_code(
+            PersonaGenerationManagerError,
+            ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT,
+        ):
+            gen_manager._extract_file_texts([("短い".encode("utf-8"), "tiny.txt")])
+
+    def test_total_chars_exceeded_raises(self, gen_manager):
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationCapacityError,
+        )
+
+        with patch("src.managers.persona_generation_manager.config") as mock_config:
+            mock_config.PERSONA_SOURCE_MAX_CHARS = 100
+            with raises_code(
+                PersonaGenerationCapacityError,
+                ErrorCode.GENERATION_CAPACITY_EXCEEDED,
+                max_chars=100,
+            ):
+                gen_manager._extract_file_texts(
+                    [("あ".encode("utf-8") * 200, "big.txt")]
+                )
+
+    def test_valid_content_passes(self, gen_manager):
+        combined, csv_paths = gen_manager._extract_file_texts(
+            [("十分な長さのインタビュー内容です。".encode("utf-8"), "ok.txt")]
+        )
+        assert "ok.txt" in combined
+        assert csv_paths == []
+
+
 class TestSavePersona:
     """save_persona のテスト"""
 

@@ -31,8 +31,6 @@ class TestConfigDefaults:
         assert config.MAX_FILE_SIZE == 10 * 1024 * 1024  # 10MB
         assert config.MAX_IMAGE_SIZE == 5 * 1024 * 1024  # 5MB
         assert config.MAX_REQUEST_PAYLOAD_SIZE == 32 * 1024 * 1024  # 32MB
-        assert ".txt" in config.ALLOWED_FILE_EXTENSIONS
-        assert ".md" in config.ALLOWED_FILE_EXTENSIONS
 
     def test_size_limits_are_single_source_of_truth(self):
         """サイズ上限がconfigを single source of truth として参照されることを確認
@@ -130,36 +128,6 @@ class TestConfigProperties:
             str(config.upload_dir) == expected
             or str(config.upload_dir) == config.UPLOAD_DIR
         )
-
-
-class TestConfigFileExtensionValidation:
-    """ファイル拡張子検証のテスト"""
-
-    def test_allowed_txt_extension(self):
-        """txtファイルが許可されることを確認"""
-        from src.config import Config
-
-        config = Config()
-        assert config.is_allowed_file_extension("interview.txt") is True
-        assert config.is_allowed_file_extension("INTERVIEW.TXT") is True
-
-    def test_allowed_md_extension(self):
-        """mdファイルが許可されることを確認"""
-        from src.config import Config
-
-        config = Config()
-        assert config.is_allowed_file_extension("document.md") is True
-        assert config.is_allowed_file_extension("DOCUMENT.MD") is True
-
-    def test_disallowed_extensions(self):
-        """許可されていない拡張子が拒否されることを確認"""
-        from src.config import Config
-
-        config = Config()
-        assert config.is_allowed_file_extension("file.pdf") is False
-        assert config.is_allowed_file_extension("file.exe") is False
-        assert config.is_allowed_file_extension("file.py") is False
-        assert config.is_allowed_file_extension("file.html") is False
 
 
 class TestConfigAWSCredentials:

@@ -8,7 +8,9 @@ import json
 from unittest.mock import Mock, patch
 from io import BytesIO
 
-from src.managers.file_manager import FileUploadError, FileSecurityError, FileMetadata
+import pytest
+
+from src.managers.file_manager import FileUploadError
 from src.managers.persona_manager import PersonaManagerError
 from src.models.errors import ErrorCode
 
@@ -53,101 +55,21 @@ class TestPersonaManagementPage:
         assert "hx-get" in response.text
 
 
-class TestFileUploadEndpoint:
-    """ファイルアップロードエンドポイントのテスト"""
-
-    @patch("web.routers.persona.get_file_manager")
-    def test_upload_success(self, mock_get_manager, client):
-        """ファイルアップロードが成功することを確認"""
-        mock_manager = Mock()
-        mock_metadata = FileMetadata(
-            file_id="test-file-id",
-            original_filename="interview.txt",
-            saved_filename="uuid_interview.txt",
-            file_path="/uploads/uuid_interview.txt",
-            file_size=1024,
-            file_hash="abc123",
-            mime_type="text/plain",
-            uploaded_at=None,
-        )
-        mock_manager.upload_interview_file.return_value = (
-            "/uploads/uuid_interview.txt",
-            "インタビュー内容のテキスト",
-            mock_metadata,
-        )
-        mock_get_manager.return_value = mock_manager
-
-        file_content = "これはテスト用のインタビューファイルです。十分な長さのテキストを含んでいます。"
-        files = {
-            "file": (
-                "interview.txt",
-                BytesIO(file_content.encode("utf-8")),
-                "text/plain",
-            )
-        }
-
-        response = client.post("/persona/upload", files=files)
-
-        assert response.status_code == 200
-
-    @patch("web.routers.persona.get_file_manager")
-    def test_upload_invalid_extension(self, mock_get_manager, client):
-        """無効なファイル拡張子でエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.upload_interview_file.side_effect = FileUploadError(
-            "extension of 'interview.pdf' not in allowed extensions",
-            code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
-            context={"allowed_formats": ".txt, .md"},
-        )
-        mock_get_manager.return_value = mock_manager
-
-        files = {"file": ("interview.pdf", BytesIO(b"test content"), "application/pdf")}
-
-        response = client.post("/persona/upload", files=files)
-
-        assert response.status_code == 400
-        assert "許可されていないファイル形式" in response.text
-        assert ".txt, .md" in response.text
-
-    @patch("web.routers.persona.get_file_manager")
-    def test_upload_security_error(self, mock_get_manager, client):
-        """セキュリティエラーが適切に処理されることを確認"""
-        mock_manager = Mock()
-        mock_manager.upload_interview_file.side_effect = FileSecurityError(
-            "filename contains a path traversal or invalid character",
-            code=ErrorCode.FILE_NAME_INVALID,
-        )
-        mock_get_manager.return_value = mock_manager
-
-        files = {"file": ("../../../etc/passwd", BytesIO(b"test"), "text/plain")}
-
-        response = client.post("/persona/upload", files=files)
-
-        assert response.status_code == 400
-        assert "ファイル名に不正な文字が含まれています" in response.text
-
-    @patch("web.routers.persona.get_file_manager")
-    def test_upload_does_not_expose_internal_detail(self, mock_get_manager, client):
-        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
-        mock_manager = Mock()
-        mock_manager.upload_interview_file.side_effect = FileUploadError(
-            "interview file upload failed (ClientError): "
-            "arn:aws:s3:::internal-bucket/secret",
-            code=ErrorCode.FILE_OPERATION_FAILED,
-        )
-        mock_get_manager.return_value = mock_manager
-
-        files = {"file": ("interview.txt", BytesIO(b"test content"), "text/plain")}
-
-        response = client.post("/persona/upload", files=files)
-
-        assert response.status_code == 400
-        assert "arn:aws:s3" not in response.text
-        assert "ClientError" not in response.text
-
-
 class TestPersonaGenerateEndpoint:
     """ペルソナ生成エンドポイントのテスト"""
+
+    @pytest.fixture(autouse=True)
+    def mock_file_manager(self):
+        """generate_persona は get_file_manager() で FileManager を生成し、その
+        コンストラクタが実 DynamoDB 接続を試みる。認証情報のない CI で失敗するため、
+        FileManager をモックに差し替える。既定の validate_persona_source_file は
+        None を返す（＝検証パス）ので、正常系はそのまま通る。拒否系テストは
+        返り値の mock に side_effect を仕込んで使う。"""
+        with patch("web.routers.persona.get_file_manager") as mock_get_fm:
+            mock_fm = Mock()
+            mock_fm.validate_persona_source_file.return_value = None
+            mock_get_fm.return_value = mock_fm
+            yield mock_fm
 
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_success(self, mock_get_gen_manager, client, sample_persona):
@@ -180,6 +102,37 @@ class TestPersonaGenerateEndpoint:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
         assert "event: result" in response.text
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_rejects_unsupported_extension(
+        self, mock_get_gen_manager, client, mock_file_manager
+    ):
+        """非対応拡張子(.exe)は抽出前に弾かれ、生成マネージャは呼ばれない（SSE）"""
+        mock_manager = Mock()
+        mock_get_gen_manager.return_value = mock_manager
+        # Router が呼ぶ検証で FileUploadError を送出させ、拒否経路を再現する
+        mock_file_manager.validate_persona_source_file.side_effect = FileUploadError(
+            "extension not allowed", code=ErrorCode.FILE_FORMAT_NOT_ALLOWED
+        )
+
+        files = [
+            ("files", ("malware.exe", BytesIO(b"anything at all here"), "text/plain")),
+        ]
+
+        response = client.post(
+            "/persona/generate",
+            files=files,
+            data={
+                "data_type": "interview",
+                "persona_count": 1,
+                "data_description": "",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
+        mock_manager.generate_and_cache.assert_not_called()
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_empty_text(self, mock_get_manager, client):
