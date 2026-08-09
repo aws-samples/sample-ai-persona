@@ -58,6 +58,12 @@ class Config:
     MIN_ROUNDS: int = 1
     MAX_ROUNDS: int = 10
 
+    # ペルソナ議論・インタビューでの非Anthropicモデル選択（Bedrock Mantle経由）。
+    # SigV4認証情報から短期Bearerトークンを都度生成する方式のため長期APIキーは不要だが、
+    # 既定は無効（graceful degradation）。有効化にはbedrock-mantle:CreateInference/
+    # CallWithBearerTokenのIAM権限が必要。
+    ENABLE_MANTLE_MODELS: bool = False
+
     # AgentCore Memory設定
     AGENTCORE_MEMORY_ID: Optional[str] = None
     AGENTCORE_MEMORY_REGION: str = "us-east-1"
@@ -83,9 +89,16 @@ class Config:
         # 環境変数から設定を上書き
         self.AWS_REGION = os.getenv("AWS_REGION", self.AWS_REGION)
         self.BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", self.BEDROCK_MODEL_ID)
+        self.AGENT_MODEL_ID = os.getenv("AGENT_MODEL_ID", self.AGENT_MODEL_ID)
         agent_max_tokens = os.getenv("AGENT_MAX_TOKENS")
         if agent_max_tokens:
             self.AGENT_MAX_TOKENS = int(agent_max_tokens)
+
+        enable_mantle = os.getenv("ENABLE_MANTLE_MODELS", "").lower()
+        if enable_mantle in ("true", "1", "yes"):
+            self.ENABLE_MANTLE_MODELS = True
+        elif enable_mantle in ("false", "0", "no"):
+            self.ENABLE_MANTLE_MODELS = False
 
         # DynamoDB設定を環境変数から上書き
         self.DYNAMODB_TABLE_PREFIX = os.getenv(

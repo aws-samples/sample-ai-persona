@@ -18,6 +18,7 @@ export interface ExpressServiceProps {
   awsRegion: string;
   bedrockModelId: string;
   agentModelId: string;
+  enableMantleModels?: boolean;
   agentCoreMemoryId?: string;
   summaryMemoryStrategyId?: string;
   semanticMemoryStrategyId?: string;
@@ -44,7 +45,7 @@ export class ExpressService extends Construct {
     const {
       vpc, ecrRepository, envName, containerCpu, containerMemory,
       dynamoDbTables, dynamoDbTablePrefix, awsRegion,
-      bedrockModelId, agentModelId,
+      bedrockModelId, agentModelId, enableMantleModels = false,
       agentCoreMemoryId, summaryMemoryStrategyId, semanticMemoryStrategyId,
       uploadBucket, bedrockBatchRoleArn, batchInferenceModelId,
       surveyS3Prefix = 'survey-results/',
@@ -109,6 +110,14 @@ export class ExpressService extends Construct {
         resources: [props.dataAgentRuntimeArn, `${props.dataAgentRuntimeArn}/*`],
       }));
     }
+    if (enableMantleModels) {
+      // 非Anthropicモデル（GPT-5.6 Terra/Luna、Gemma 4 31B）をBedrock Mantle経由で呼ぶための権限。
+      // SigV4認証情報から短期Bearerトークンを都度生成する方式のため、Get*/List*は不要。
+      taskRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:CallWithBearerToken'],
+        resources: ['*'],
+      }));
+    }
 
     // Infrastructure Role
     const infrastructureRole = new iam.Role(this, 'InfrastructureRole', {
@@ -126,6 +135,7 @@ export class ExpressService extends Construct {
       { name: 'DYNAMODB_REGION', value: awsRegion },
       { name: 'BEDROCK_MODEL_ID', value: bedrockModelId },
       { name: 'AGENT_MODEL_ID', value: agentModelId },
+      { name: 'ENABLE_MANTLE_MODELS', value: String(enableMantleModels) },
       { name: 'ENABLE_LONG_TERM_MEMORY', value: agentCoreMemoryId ? 'true' : 'false' },
       { name: 'S3_BUCKET_NAME', value: uploadBucket.bucketName },
       { name: 'BEDROCK_BATCH_ROLE_ARN', value: bedrockBatchRoleArn },

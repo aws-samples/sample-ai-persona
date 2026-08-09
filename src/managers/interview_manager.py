@@ -5,11 +5,13 @@ Handles interview session setup, execution, and persistence.
 
 import logging
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Mapping, Any, Optional
 from datetime import datetime
 
 
+from ..config import config
 from ..models.errors import CodedError, ErrorCode
+from ..models.model_registry import get_model_spec, is_supported
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -17,6 +19,7 @@ from ..models.interview_session import InterviewSession
 from ..services.agent_service import (
     AgentService,
     PersonaAgent,
+    AgentConfigurationError,
     AgentInitializationError,
     AgentCommunicationError,
 )
@@ -103,6 +106,7 @@ class InterviewManager:
         memory_mode: str = "full",
         enable_dataset: bool = False,
         enable_kb: bool = False,
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> InterviewSession:
         """
         Start a new interview session with selected personas.
@@ -116,6 +120,7 @@ class InterviewManager:
                 - "retrieve_only": 検索のみ（保存しない）
                 - "disabled": メモリ機能無効
             enable_dataset: Whether to enable external dataset access (default: False)
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
             InterviewSession: Created interview session
@@ -138,6 +143,8 @@ class InterviewManager:
                 context={"field": "memory_mode"},
             )
 
+        self._validate_model_selection(persona_models)
+
         self.logger.info(
             f"Starting interview session with {len(personas)} personas for user: {user_id} (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
         )
@@ -156,6 +163,7 @@ class InterviewManager:
                 enable_memory=enable_memory,
                 memory_mode=memory_mode,
                 enable_dataset=enable_dataset,
+                persona_models=persona_models,
             )
             session_id = session.id
 
@@ -184,8 +192,17 @@ class InterviewManager:
                     memory_mode=memory_mode,
                     enable_dataset=enable_dataset,
                     enable_kb=enable_kb,
+                    persona_models=persona_models,
                 )
 
+            except AgentConfigurationError as e:
+                # Mantle無効等の設定不足はINTERVIEW_AGENT_SETUP_FAILEDに丸めず
+                # 自ドメインのCONFIGコードへ変換する
+                error_msg = f"model configuration error: {e}"
+                self.logger.error(error_msg)
+                raise InterviewAgentError(
+                    error_msg, code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED
+                ) from e
             except AgentInitializationError as e:
                 error_msg = f"agent initialization failed: {e}"
                 self.logger.error(error_msg)
@@ -221,6 +238,30 @@ class InterviewManager:
             raise InterviewSessionError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
             ) from e
+
+    def _validate_model_selection(
+        self, model_ids: Optional[Mapping[str, Optional[str]]]
+    ) -> None:
+        """選択されたmodel_idが利用可能か検証する。
+
+        未対応のmodel_idはVALIDATION、Mantle系だがENABLE_MANTLE_MODELS無効時はCONFIG。
+        """
+        if not model_ids:
+            return
+        for persona_id, model_id in model_ids.items():
+            if model_id is None:
+                continue
+            if not is_supported(model_id):
+                raise InterviewValidationError(
+                    f"unsupported model_id {model_id!r} for persona {persona_id!r}",
+                    code=ErrorCode.INTERVIEW_MODEL_UNSUPPORTED,
+                )
+            spec = get_model_spec(model_id)
+            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+                raise InterviewValidationError(
+                    f"model {model_id!r} requires Mantle but ENABLE_MANTLE_MODELS is disabled",
+                    code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED,
+                )
 
     def send_user_message(
         self,
@@ -694,6 +735,7 @@ class InterviewManager:
         memory_mode: str = "full",
         enable_dataset: bool = False,
         enable_kb: bool = False,
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> List[PersonaAgent]:
         """
         Create persona agents for interview (allows single persona unlike discussion mode).
@@ -709,6 +751,7 @@ class InterviewManager:
                 - "disabled": メモリ機能無効
             enable_dataset: Whether to enable external dataset access (default: False)
             enable_kb: Whether to enable knowledge base access (default: False)
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
             List[PersonaAgent]: Created persona agents
@@ -758,11 +801,25 @@ class InterviewManager:
                     memory_mode=memory_mode,
                     enable_dataset=enable_dataset,
                     enable_kb=enable_kb,
+                    model_id=(persona_models or {}).get(persona.id),
                 )
                 persona_agents.append(persona_agent)
 
                 self.logger.info(f"Created persona agent for interview: {persona.name}")
 
+            except AgentConfigurationError as e:
+                # Mantle無効等の設定不足は個別ペルソナの失敗として握り潰さず、
+                # INTERVIEW_MODEL_MANTLE_DISABLED（CONFIG）として即時通知する。
+                # InterviewAgentErrorを使う（呼び出し元のexcept InterviewAgentError: raise
+                # で素通りさせ、except Exceptionによる再ラップでコードが潰れないようにする）
+                self.logger.error(
+                    f"Configuration error creating agent for persona {persona.name}: {e}"
+                )
+                raise InterviewAgentError(
+                    f"model configuration error for persona {persona.name} "
+                    f"({type(e).__name__})",
+                    code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED,
+                ) from e
             except AgentInitializationError as e:
                 error_msg = f"Failed to create agent for persona {persona.name}: {e}"
                 self.logger.error(error_msg)
@@ -800,6 +857,7 @@ class InterviewManager:
         memory_mode: str,
         enable_dataset: bool,
         enable_kb: bool,
+        model_id: Optional[str] = None,
     ) -> Any:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
         from .shared.agent_integration import prepare_integration_tools_and_prompt
@@ -819,6 +877,7 @@ class InterviewManager:
             session_id=session_id,
             additional_tools=additional_tools,
             memory_mode=memory_mode,
+            model_id=model_id,
         )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
@@ -1217,6 +1276,7 @@ class InterviewManager:
             participants=session.participants,
             mode="interview",
             documents=session.documents,  # Include attached documents metadata
+            agent_config={"persona_models": session.persona_models},
         )
 
         # Preserve original creation time from session
@@ -1328,7 +1388,6 @@ class InterviewManager:
         Raises:
             InterviewValidationError: サイズ超過、未サポートMIMEタイプ
         """
-        from ..config import config
         from .shared.document_loader import (
             build_content_block,
             is_supported_mime_type,

@@ -34,6 +34,17 @@ class AgentInitializationError(AgentServiceError):
     pass
 
 
+class AgentConfigurationError(AgentServiceError):
+    """運用者の設定変更が必要なエラー（例: Mantle系モデル選択時にENABLE_MANTLE_MODELSが無効）。
+
+    create_persona_agent/create_facilitator_agentのexcept節はこの型のCodedErrorを
+    AGENT_INITIALIZATION_FAILEDに丸めず素通しする（error-catalog.md「コード付き例外を
+    そのまま再送出する経路を残す」）。
+    """
+
+    pass
+
+
 class AgentCommunicationError(AgentServiceError):
     """エージェント通信関連のエラー"""
 
@@ -489,46 +500,104 @@ class AgentService:
 
         return ToolLoggingCallback()
 
-    def _create_bedrock_model(self) -> Any:
+    def _create_bedrock_model_instance(self, model_id: str, region: str) -> Any:
+        """指定model_id/regionでBedrockModel（Converse/SigV4）インスタンスを作成する。"""
+        from botocore.config import Config as BotoConfig
+
+        # AWS認証情報を取得
+        credentials = config.get_aws_credentials()
+
+        # None の値を除去
+        filtered_credentials = {
+            k: v for k, v in credentials.items() if v is not None and k != "region_name"
+        }
+
+        # 一過性の接続エラー（ストリーミング開始時のConnection closed等）対策。
+        # ai_serviceと異なり自前のバックオフ機構を持たないため、boto3標準リトライに委ねる
+        boto_config = BotoConfig(
+            connect_timeout=30,
+            read_timeout=300,
+            retries={"max_attempts": 3, "mode": "adaptive"},
+        )
+
+        return BedrockModel(
+            model_id=model_id,
+            region_name=region,
+            boto_client_config=boto_config,
+            **filtered_credentials,
+        )
+
+    def _create_openai_responses_model_instance(
+        self, model_id: str, region: str
+    ) -> Any:
+        """指定model_id/regionでOpenAIResponsesModel（Bedrock Mantle）インスタンスを作成する。
+
+        base_url・短期Bearerトークン・path（/openai/v1 or /v1）はbedrock_mantle_configが
+        リクエスト毎に解決するため自前で組まない（トークン失効・モデル誤経路を回避する設計判断）。
         """
-        Bedrock モデルインスタンスを作成
+        from strands.models.openai_responses import OpenAIResponsesModel
+
+        return OpenAIResponsesModel(
+            model_id=model_id,
+            bedrock_mantle_config={"region": region},
+            params={"max_output_tokens": config.AGENT_MAX_TOKENS},
+        )
+
+    def _create_model(self, model_id: Optional[str] = None) -> Any:
+        """
+        モデルインスタンスを作成（プロバイダ分岐 factory）
+
+        model_registryのModelSpec.providerに応じてBedrockModel（Converse/SigV4）または
+        OpenAIResponsesModel（Bedrock Mantle）を生成する。
+
+        Args:
+            model_id: 選択されたモデルID。Noneの場合は既定モデル（従来の挙動）。
 
         Returns:
-            BedrockModel: Bedrockモデルインスタンス
+            BedrockModel または OpenAIResponsesModel インスタンス
 
         Raises:
+            AgentConfigurationError: Mantle系モデルがENABLE_MANTLE_MODELS無効時に選択された場合、
+                または依存パッケージ未導入等の設定不足（kind=CONFIG。設定画面へ誘導するため
+                AGENT_INITIALIZATION_FAILEDに丸めず素通しする）
             AgentInitializationError: モデル作成エラー
         """
+        from ..models.model_registry import ModelProvider, get_model_spec
+
+        spec = get_model_spec(model_id)
+
+        if spec.provider == ModelProvider.OPENAI_RESPONSES:
+            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+                raise AgentConfigurationError(
+                    f"Mantle model {spec.model_id!r} selected but ENABLE_MANTLE_MODELS is disabled",
+                    code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED,
+                )
+            try:
+                model = self._create_openai_responses_model_instance(
+                    spec.model_id, spec.region
+                )
+                self.logger.info(
+                    f"OpenAIResponses (Mantle) model created: {spec.model_id}"
+                )
+                return model
+            except ImportError as e:
+                error_msg = f"strands-agents[openai] extra is not installed: {e}"
+                self.logger.error(error_msg)
+                raise AgentConfigurationError(
+                    error_msg, code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+                ) from e
+            except Exception as e:
+                error_msg = (
+                    f"Failed to create OpenAIResponses model {spec.model_id!r}: {e}"
+                )
+                self.logger.error(error_msg)
+                raise AgentInitializationError(
+                    error_msg, code=ErrorCode.AGENT_INITIALIZATION_FAILED
+                ) from e
+
         try:
-            from botocore.config import Config as BotoConfig
-
-            # AWS認証情報を取得
-            credentials = config.get_aws_credentials()
-
-            # None の値を除去
-            filtered_credentials = {
-                k: v
-                for k, v in credentials.items()
-                if v is not None and k != "region_name"
-            }
-
-            # 一過性の接続エラー（ストリーミング開始時のConnection closed等）対策。
-            # ai_serviceと異なり自前のバックオフ機構を持たないため、boto3標準リトライに委ねる
-            boto_config = BotoConfig(
-                connect_timeout=30,
-                read_timeout=300,
-                retries={"max_attempts": 3, "mode": "adaptive"},
-            )
-
-            # Bedrockモデルを作成
-            model = BedrockModel(
-                model_id=config.AGENT_MODEL_ID,
-                region_name=config.AWS_REGION,
-                boto_client_config=boto_config,
-                **filtered_credentials,
-            )
-
-            self.logger.info(f"Bedrock model created: {config.AGENT_MODEL_ID}")
+            model = self._create_bedrock_model_instance(spec.model_id, spec.region)
+            self.logger.info(f"Bedrock model created: {spec.model_id}")
             return model
 
         except Exception as e:
@@ -583,6 +652,7 @@ class AgentService:
         memory_mode: str = "full",
         # 後方互換性のため残すが使用しない
         memory_service: Optional[Any] = None,
+        model_id: Optional[str] = None,
     ) -> PersonaAgent:
         """
         ペルソナエージェントを作成
@@ -601,11 +671,13 @@ class AgentService:
                 - "retrieve_only": 検索のみ（保存しない）
                 - "disabled": メモリ機能無効
             memory_service: 非推奨（後方互換性のため残す、使用しない）
+            model_id: 使用するモデルID（Noneの場合は既定モデル。後方互換）
 
         Returns:
             PersonaAgent: 作成されたペルソナエージェント
 
         Raises:
+            AgentConfigurationError: Mantle系モデル選択時に設定が不足している場合（kind=CONFIG）
             AgentInitializationError: エージェント作成エラー
         """
         try:
@@ -616,8 +688,8 @@ class AgentService:
             if additional_tools:
                 tools.extend([t for t in additional_tools if t is not None])
 
-            # Bedrockモデルを作成
-            model = self._create_bedrock_model()
+            # モデルを作成（プロバイダ分岐）
+            model = self._create_model(model_id)
 
             # セッションマネージャーを準備（メモリが有効な場合）
             session_manager = None
@@ -700,6 +772,10 @@ class AgentService:
             )
             return persona_agent
 
+        except CodedError:
+            # _create_modelが投げるコード付き例外（例: Mantle無効のCONFIG）は
+            # AGENT_INITIALIZATION_FAILEDに丸めず素通しする
+            raise
         except Exception as e:
             error_msg = f"Failed to create persona agent {persona.name}: {e}"
             self.logger.error(error_msg)
@@ -712,6 +788,7 @@ class AgentService:
         rounds: int,
         additional_instructions: str = "",
         system_prompt: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> FacilitatorAgent:
         """ファシリテータエージェントを作成。
 
@@ -719,6 +796,11 @@ class AgentService:
             rounds: ラウンド数
             additional_instructions: 追加の指示
             system_prompt: 構築済みシステムプロンプト（指定時はrounds/additional_instructionsからの自動生成をスキップ）
+            model_id: 使用するモデルID（Noneの場合は既定モデル。後方互換）
+
+        Raises:
+            AgentConfigurationError: Mantle系モデル選択時に設定が不足している場合（kind=CONFIG）
+            AgentInitializationError: エージェント作成エラー
         """
         try:
             if system_prompt is None:
@@ -730,13 +812,17 @@ class AgentService:
                     rounds, additional_instructions
                 )
 
-            model = self._create_bedrock_model()
+            model = self._create_model(model_id)
             agent = Agent(name="Facilitator", system_prompt=system_prompt, model=model)
             facilitator_agent = FacilitatorAgent(rounds, additional_instructions, agent)
 
             self.logger.info(f"Created facilitator agent (rounds: {rounds})")
             return facilitator_agent
 
+        except CodedError:
+            # _create_modelが投げるコード付き例外（例: Mantle無効のCONFIG）は
+            # AGENT_INITIALIZATION_FAILEDに丸めず素通しする
+            raise
         except Exception as e:
             error_msg = f"Failed to create facilitator agent: {e}"
             self.logger.error(error_msg)

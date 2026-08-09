@@ -369,6 +369,23 @@ class ErrorCode(StrEnum):
         "discussion_memory_mode_invalid",
         ErrorKind.VALIDATION,
     )
+    # 選択された model_id が model_registry に未登録（フォーム改竄・古いUI等）。
+    DISCUSSION_MODEL_UNSUPPORTED = (
+        "discussion_model_unsupported",
+        ErrorKind.VALIDATION,
+    )
+    # 非Anthropicモデル（Bedrock Mantle経由）が選択されたが、運用者が
+    # ENABLE_MANTLE_MODELS を有効化していない。設定画面での対応を要する。
+    DISCUSSION_MODEL_MANTLE_DISABLED = (
+        "discussion_model_mantle_disabled",
+        ErrorKind.CONFIG,
+    )
+    # ドキュメント（画像含む）合計サイズが選択モデルの上限（Gemma4=3.5MB等）を超過。
+    # モデルを変えるか添付を減らせば解決するため CAPACITY。
+    DISCUSSION_MODEL_INPUT_TOO_LARGE = (
+        "discussion_model_input_too_large",
+        ErrorKind.CAPACITY,
+    )
 
     # --- Discussion reports ---
     REPORT_NOT_FOUND = ("report_not_found", ErrorKind.NOT_FOUND)
@@ -470,6 +487,17 @@ class ErrorCode(StrEnum):
         ErrorKind.TRANSIENT,
     )
     INTERVIEW_SAVE_FAILED = ("interview_save_failed", ErrorKind.TRANSIENT)
+    # 選択された model_id が model_registry に未登録（フォーム改竄・古いUI等）。
+    INTERVIEW_MODEL_UNSUPPORTED = (
+        "interview_model_unsupported",
+        ErrorKind.VALIDATION,
+    )
+    # 非Anthropicモデル（Bedrock Mantle経由）が選択されたが、運用者が
+    # ENABLE_MANTLE_MODELS を有効化していない。設定画面での対応を要する。
+    INTERVIEW_MODEL_MANTLE_DISABLED = (
+        "interview_model_mantle_disabled",
+        ErrorKind.CONFIG,
+    )
 
     # --- Service layer (agent/AI/database/storage infrastructure) ---
     # These codes are for CodedError compliance in the Service layer. The
@@ -478,6 +506,9 @@ class ErrorCode(StrEnum):
     # resolve to user-facing wording; they exist so no CodedError subclass in
     # this codebase is raised without a code.
     AGENT_SDK_UNAVAILABLE = ("agent_sdk_unavailable", ErrorKind.CONFIG)
+    # Mantle系モデルがENABLE_MANTLE_MODELS無効時に選択された場合。Managerが
+    # DISCUSSION_MODEL_MANTLE_DISABLED / INTERVIEW_MODEL_MANTLE_DISABLED に変換する。
+    AGENT_MODEL_MANTLE_DISABLED = ("agent_model_mantle_disabled", ErrorKind.CONFIG)
     AGENT_INITIALIZATION_FAILED = (
         "agent_initialization_failed",
         ErrorKind.TRANSIENT,

@@ -57,6 +57,10 @@
                 <span class="text-gray-700 ml-2">{{ discussion.agent_config.additional_instructions }}</span>
             </div>
             {% endif %}
+            <div class="flex items-center gap-2">
+                <span class="text-purple-600 font-medium">ファシリテータ:</span>
+                <span class="text-gray-700">{{ model_display_name(discussion.agent_config.facilitator_model) }}</span>
+            </div>
         </div>
     </div>
     {% endif %}
@@ -84,6 +88,13 @@
                     <a href="/persona/{{ persona.id }}" class="text-xs text-gray-500 hover:text-blue-600 flex-shrink-0">詳細</a>
                 </div>
                 <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ persona.background[:100] }}{% if persona.background|length > 100 %}...{% endif %}</p>
+                {% if discussion.mode in ('agent', 'interview') %}
+                <div class="mt-2">
+                    <span class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">
+                        {{ model_display_name((discussion.agent_config or {}).get('persona_models', {}).get(participant_id)) }}
+                    </span>
+                </div>
+                {% endif %}
                 <div class="mt-2 flex flex-wrap gap-1">
                     {% for value in persona.values[:2] %}
                     <span class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{{ value[:15] }}{% if value|length > 15 %}...{% endif %}</span>

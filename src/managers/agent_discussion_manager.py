@@ -5,9 +5,11 @@ Handles AI agent mode discussion setup, execution, and persistence.
 
 import json
 import logging
-from typing import Generator, List, Dict, Optional, Any
+from typing import Generator, List, Dict, Mapping, Optional, Any
 
+from ..config import config
 from ..models.errors import CodedError, ErrorCode
+from ..models.model_registry import get_model_spec, is_supported
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -17,6 +19,7 @@ from ..services.agent_service import (
     AgentService,
     PersonaAgent,
     FacilitatorAgent,
+    AgentConfigurationError,
     AgentInitializationError,
     AgentCommunicationError,
 )
@@ -71,6 +74,7 @@ class AgentDiscussionManager:
         memory_mode: str = "full",
         enable_dataset: bool = False,
         enable_kb: bool = False,
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> List[PersonaAgent]:
         """
         Create persona agents from personas and system prompts.
@@ -86,6 +90,7 @@ class AgentDiscussionManager:
                 - "disabled": メモリ機能無効
             enable_dataset: Whether to enable external dataset access (default: False)
             enable_kb: Whether to enable knowledge base access (default: False)
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
             List[PersonaAgent]: Created persona agents
@@ -105,6 +110,8 @@ class AgentDiscussionManager:
                 code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
                 context={"min_personas": 2},
             )
+
+        self._validate_model_selection(persona_models)
 
         self.logger.info(
             f"Creating {len(personas)} persona agents "
@@ -139,11 +146,23 @@ class AgentDiscussionManager:
                     memory_mode=memory_mode,
                     enable_dataset=enable_dataset,
                     enable_kb=enable_kb,
+                    model_id=(persona_models or {}).get(persona.id),
                 )
                 persona_agents.append(persona_agent)
 
                 self.logger.info(f"Created persona agent: {persona.name}")
 
+            except AgentConfigurationError as e:
+                # Mantle無効等の設定不足は個別ペルソナの失敗として握り潰さず、
+                # DISCUSSION_MODEL_MANTLE_DISABLED（CONFIG）として即時通知する
+                self.logger.error(
+                    f"Configuration error creating agent for persona {persona.name}: {e}"
+                )
+                raise AgentDiscussionManagerError(
+                    f"model configuration error for persona {persona.name} "
+                    f"({type(e).__name__})",
+                    code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+                ) from e
             except AgentInitializationError as e:
                 error_msg = f"Failed to create agent for persona {persona.name}: {e}"
                 self.logger.error(error_msg)
@@ -175,7 +194,10 @@ class AgentDiscussionManager:
         return persona_agents
 
     def create_facilitator_agent(
-        self, rounds: int, additional_instructions: str = ""
+        self,
+        rounds: int,
+        additional_instructions: str = "",
+        facilitator_model: Optional[str] = None,
     ) -> FacilitatorAgent:
         """
         Create facilitator agent for discussion management.
@@ -183,6 +205,7 @@ class AgentDiscussionManager:
         Args:
             rounds: Number of discussion rounds
             additional_instructions: Additional instructions for facilitator
+            facilitator_model: 使用するモデルID（省略時は既定モデル）
 
         Returns:
             FacilitatorAgent: Created facilitator agent
@@ -204,16 +227,28 @@ class AgentDiscussionManager:
                 context={"max_rounds": 10},
             )
 
+        self._validate_model_selection(
+            {"facilitator": facilitator_model} if facilitator_model else None
+        )
+
         self.logger.info(f"Creating facilitator agent with {rounds} rounds")
 
         try:
             facilitator = self.agent_service.create_facilitator_agent(
-                rounds, additional_instructions
+                rounds, additional_instructions, model_id=facilitator_model
             )
 
             self.logger.info("Successfully created facilitator agent")
             return facilitator
 
+        except AgentConfigurationError as e:
+            # _create_modelが投げるコード付き例外（例: Mantle無効のCONFIG）は
+            # DISCUSSION_AGENT_SETUP_FAILEDに丸めず自ドメインのCONFIGコードへ変換する
+            self.logger.error("Facilitator model configuration error", exc_info=True)
+            raise AgentDiscussionManagerError(
+                f"facilitator model configuration error ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+            ) from e
         except AgentInitializationError as e:
             self.logger.error("Failed to create facilitator agent", exc_info=True)
             raise AgentDiscussionManagerError(
@@ -229,6 +264,33 @@ class AgentDiscussionManager:
                 code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
             ) from e
 
+    def _validate_model_selection(
+        self, model_ids: Optional[Mapping[str, Optional[str]]]
+    ) -> None:
+        """選択されたmodel_idが利用可能か検証する。
+
+        未対応のmodel_idはVALIDATION、Mantle系だがENABLE_MANTLE_MODELS無効時はCONFIG。
+
+        Args:
+            model_ids: 検証対象の {識別子: model_id} マップ（Noneは既定モデルとしてスキップ）
+        """
+        if not model_ids:
+            return
+        for identifier, model_id in model_ids.items():
+            if model_id is None:
+                continue
+            if not is_supported(model_id):
+                raise AgentDiscussionManagerError(
+                    f"unsupported model_id {model_id!r} for {identifier!r}",
+                    code=ErrorCode.DISCUSSION_MODEL_UNSUPPORTED,
+                )
+            spec = get_model_spec(model_id)
+            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+                raise AgentDiscussionManagerError(
+                    f"model {model_id!r} requires Mantle but ENABLE_MANTLE_MODELS is disabled",
+                    code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+                )
+
     def start_agent_discussion(
         self,
         personas: List[Persona],
@@ -237,6 +299,8 @@ class AgentDiscussionManager:
         facilitator: FacilitatorAgent,
         enable_memory: bool = False,
         document_ids: Optional[List[str]] = None,
+        persona_models: Optional[Dict[str, str]] = None,
+        facilitator_model: Optional[str] = None,
     ) -> Discussion:
         """
         Start and execute an AI agent mode discussion.
@@ -248,6 +312,8 @@ class AgentDiscussionManager:
             facilitator: Facilitator agent
             enable_memory: Whether long-term memory is enabled for this discussion
             document_ids: Optional list of document IDs to include in discussion
+            persona_models: persona_id -> model_id のマップ（agent_config保存・入力サイズ検証用）
+            facilitator_model: facilitatorのmodel_id（agent_config保存用）
 
         Returns:
             Discussion: Discussion object with generated messages
@@ -263,7 +329,9 @@ class AgentDiscussionManager:
 
         # Load documents if provided
         documents_metadata, document_context, document_contents = (
-            self._load_and_attach_documents(document_ids, persona_agents)
+            self._load_and_attach_documents(
+                document_ids, persona_agents, persona_models
+            )
         )
 
         self.logger.info(
@@ -277,6 +345,8 @@ class AgentDiscussionManager:
                 "rounds": facilitator.rounds,
                 "additional_instructions": facilitator.additional_instructions,
                 "enable_memory": enable_memory,
+                "persona_models": persona_models,
+                "facilitator_model": facilitator_model,
             }
 
             # Create new discussion instance with documents
@@ -503,6 +573,7 @@ class AgentDiscussionManager:
         self,
         document_ids: Optional[List[str]],
         persona_agents: List[PersonaAgent],
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> tuple:
         """ドキュメントを読み込みエージェントに添付する。"""
         documents_metadata = None
@@ -521,6 +592,10 @@ class AgentDiscussionManager:
             )
 
             if documents_metadata:
+                self._validate_document_size_for_models(
+                    documents_metadata, persona_models
+                )
+
                 document_context = build_document_context(documents_metadata)
                 self.logger.info(
                     f"Loaded {len(documents_metadata)} documents for discussion"
@@ -538,6 +613,35 @@ class AgentDiscussionManager:
                         agent.set_document_contents(document_contents.copy())
 
         return documents_metadata, document_context, document_contents
+
+    def _validate_document_size_for_models(
+        self,
+        documents_metadata: List[Dict[str, Any]],
+        persona_models: Optional[Dict[str, str]],
+    ) -> None:
+        """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
+
+        base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
+        """
+        if not persona_models:
+            return
+
+        total_size = sum(doc.get("file_size", 0) for doc in documents_metadata)
+        if total_size == 0:
+            return
+
+        for model_id in set(persona_models.values()):
+            spec = get_model_spec(model_id)
+            if spec.max_request_bytes is None:
+                continue
+            effective_max = int(spec.max_request_bytes * 3 / 4)
+            if total_size > effective_max:
+                raise AgentDiscussionManagerError(
+                    f"document total size {total_size} exceeds model {model_id!r} "
+                    f"limit (effective max {effective_max})",
+                    code=ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
+                    context={"max_size_mb": spec.max_request_bytes / (1024 * 1024)},
+                )
 
     def _validate_discussion_input(
         self,
@@ -661,6 +765,7 @@ class AgentDiscussionManager:
         memory_mode: str,
         enable_dataset: bool,
         enable_kb: bool,
+        model_id: Optional[str] = None,
     ) -> PersonaAgent:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
         from .shared.agent_integration import prepare_integration_tools_and_prompt
@@ -680,6 +785,7 @@ class AgentDiscussionManager:
             session_id=session_id,
             additional_tools=additional_tools,
             memory_mode=memory_mode,
+            model_id=model_id,
         )
 
     def start_agent_discussion_streaming(
@@ -690,6 +796,8 @@ class AgentDiscussionManager:
         facilitator: FacilitatorAgent,
         enable_memory: bool = False,
         document_ids: Optional[List[str]] = None,
+        persona_models: Optional[Dict[str, str]] = None,
+        facilitator_model: Optional[str] = None,
     ) -> Any:
         """
         Start and execute an AI agent mode discussion with streaming.
@@ -702,6 +810,8 @@ class AgentDiscussionManager:
             facilitator: Facilitator agent
             enable_memory: Whether long-term memory is enabled for this discussion
             document_ids: Optional list of document IDs to include in discussion
+            persona_models: persona_id -> model_id のマップ（agent_config保存・入力サイズ検証用）
+            facilitator_model: facilitatorのmodel_id（agent_config保存用）
 
         Yields:
             tuple: (message_type, message_or_discussion)
@@ -719,7 +829,9 @@ class AgentDiscussionManager:
 
         # Load documents if provided
         documents_metadata, document_context, document_contents = (
-            self._load_and_attach_documents(document_ids, persona_agents)
+            self._load_and_attach_documents(
+                document_ids, persona_agents, persona_models
+            )
         )
 
         self.logger.info(
@@ -733,6 +845,8 @@ class AgentDiscussionManager:
                 "rounds": facilitator.rounds,
                 "additional_instructions": facilitator.additional_instructions,
                 "enable_memory": enable_memory,
+                "persona_models": persona_models,
+                "facilitator_model": facilitator_model,
             }
 
             # Create new discussion instance with documents
@@ -1224,6 +1338,8 @@ class AgentDiscussionManager:
         enable_kb: bool = False,
         categories: Optional[List[InsightCategory]] = None,
         document_ids: Optional[List[str]] = None,
+        persona_models: Optional[Dict[str, str]] = None,
+        facilitator_model: Optional[str] = None,
     ) -> Generator[str, None, None]:
         """agentモード議論のフルフロー（ストリーミング）。
 
@@ -1235,6 +1351,10 @@ class AgentDiscussionManager:
         6. カテゴリー保存
         7. DB保存
         8. 完了イベントをyield
+
+        Args:
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+            facilitator_model: facilitatorのmodel_id（省略時は既定モデル）
 
         Yields:
             str: SSE data行（"data: {...}\\n\\n" 形式）
@@ -1257,9 +1377,12 @@ class AgentDiscussionManager:
             memory_mode=memory_mode,
             enable_dataset=enable_dataset,
             enable_kb=enable_kb,
+            persona_models=persona_models,
         )
 
-        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+        facilitator = self.create_facilitator_agent(
+            rounds, additional_instructions, facilitator_model=facilitator_model
+        )
 
         discussion = None
         message_count = 0
@@ -1271,6 +1394,8 @@ class AgentDiscussionManager:
             facilitator=facilitator,
             enable_memory=enable_memory,
             document_ids=document_ids,
+            persona_models=persona_models,
+            facilitator_model=facilitator_model,
         ):
             if event_type == "message_start":
                 yield f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
@@ -1313,8 +1438,14 @@ class AgentDiscussionManager:
         enable_kb: bool = False,
         categories: Optional[List[InsightCategory]] = None,
         document_ids: Optional[List[str]] = None,
+        persona_models: Optional[Dict[str, str]] = None,
+        facilitator_model: Optional[str] = None,
     ) -> Discussion:
         """agentモード議論のフルフロー（非ストリーミング）。
+
+        Args:
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+            facilitator_model: facilitatorのmodel_id（省略時は既定モデル）
 
         Returns:
             Discussion: インサイト付き保存済み議論オブジェクト
@@ -1337,9 +1468,12 @@ class AgentDiscussionManager:
             memory_mode=memory_mode,
             enable_dataset=enable_dataset,
             enable_kb=enable_kb,
+            persona_models=persona_models,
         )
 
-        facilitator = self.create_facilitator_agent(rounds, additional_instructions)
+        facilitator = self.create_facilitator_agent(
+            rounds, additional_instructions, facilitator_model=facilitator_model
+        )
 
         discussion = self.start_agent_discussion(
             personas=personas,
@@ -1348,6 +1482,8 @@ class AgentDiscussionManager:
             facilitator=facilitator,
             enable_memory=enable_memory,
             document_ids=document_ids,
+            persona_models=persona_models,
+            facilitator_model=facilitator_model,
         )
 
         discussion = self._attach_insights(discussion, categories)

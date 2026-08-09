@@ -114,6 +114,45 @@ class TestInterviewSession:
         new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
         assert new_session.enable_memory is True
 
+    def test_add_user_message_preserves_persona_models(self):
+        """ユーザーメッセージ追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_user_message("テストメッセージ")
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+
+    def test_add_persona_response_preserves_persona_models(self):
+        """ペルソナ応答追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+
+    def test_add_document_preserves_persona_models(self):
+        """ドキュメント追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_document({"filename": "test.pdf"})
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+
 
 class TestInterviewManager:
     """InterviewManager のテストクラス"""
@@ -453,6 +492,68 @@ class TestInterviewManager:
         assert "田中太郎" in prompt
         assert "会話" in prompt
         assert "最初の質問" in prompt or "最初の回答" in prompt
+
+
+class TestInterviewManagerModelSelectionValidation:
+    """persona_models のバリデーションテスト"""
+
+    def setup_method(self):
+        self.test_personas = [
+            Persona(
+                id="persona-1",
+                name="田中太郎",
+                age=35,
+                occupation="会社員",
+                background="IT企業で働く中堅社員",
+                values=["効率性", "品質"],
+                pain_points=["時間不足"],
+                goals=["キャリアアップ"],
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ]
+        self.mock_agent_service = Mock()
+        self.mock_database_service = Mock()
+        self.interview_manager = InterviewManager(
+            self.mock_agent_service, self.mock_database_service
+        )
+
+    def test_start_interview_session_unsupported_model_raises_validation(self):
+        with pytest.raises(InterviewManagerError) as exc_info:
+            self.interview_manager.start_interview_session(
+                self.test_personas,
+                persona_models={"persona-1": "unknown.model-id"},
+            )
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_UNSUPPORTED
+
+    @patch("src.managers.interview_manager.config")
+    def test_start_interview_session_mantle_disabled_raises_config(self, mock_config):
+        mock_config.ENABLE_MANTLE_MODELS = False
+        with pytest.raises(InterviewManagerError) as exc_info:
+            self.interview_manager.start_interview_session(
+                self.test_personas,
+                persona_models={"persona-1": "openai.gpt-5.6-terra"},
+            )
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED
+
+    @patch("src.managers.interview_manager.uuid.uuid4")
+    def test_start_interview_session_stores_persona_models(self, mock_uuid):
+        mock_uuid.return_value = "test-session-id"
+        mock_persona_agents = [
+            Mock(get_persona_id=Mock(return_value="persona-1")),
+        ]
+        self.interview_manager._create_interview_persona_agents = Mock(
+            return_value=mock_persona_agents
+        )
+
+        session = self.interview_manager.start_interview_session(
+            self.test_personas,
+            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
+        )
+
+        assert session.persona_models == {
+            "persona-1": "global.anthropic.claude-sonnet-5"
+        }
 
 
 class TestInterviewManagerMultimodal:

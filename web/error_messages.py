@@ -212,6 +212,16 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DISCUSSION_MEMORY_MODE_INVALID: (
         "無効な記憶モードです。議論の設定を確認してください"
     ),
+    ErrorCode.DISCUSSION_MODEL_UNSUPPORTED: (
+        "選択されたモデルは利用できません。設定を確認してください"
+    ),
+    ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED: (
+        "選択されたモデルは現在無効化されています。管理者に設定の有効化を依頼してください"
+    ),
+    ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE: (
+        "選択したモデルの入力サイズ上限（最大{max_size_mb:.1f}MB）を超えています。"
+        "モデルを変更するか、添付ドキュメントを減らしてください"
+    ),
     # --- 議論レポート ---
     ErrorCode.REPORT_NOT_FOUND: "レポートが見つかりません",
     ErrorCode.REPORT_LIMIT_REACHED: (
@@ -286,6 +296,13 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.INTERVIEW_SAVE_FAILED: (
         "セッションの保存に失敗しました。時間をおいて再度お試しください。"
     ),
+    ErrorCode.INTERVIEW_MODEL_UNSUPPORTED: (
+        "選択されたモデルはインタビューで利用できません。設定を確認してください"
+    ),
+    ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED: (
+        "選択されたモデルは現在無効化されています。"
+        "管理者にインタビュー用モデル設定の有効化を依頼してください"
+    ),
     # --- ペルソナ ---
     # {field} は _FIELD_LABELS で表示名に解決される。
     ErrorCode.PERSONA_FIELD_REQUIRED: "{field}が設定されていません",
@@ -343,6 +360,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     # --- Service層（Manager層が必ず自ドメイン例外に変換するため到達しない） ---
     ErrorCode.AGENT_SDK_UNAVAILABLE: "エージェントSDKが利用できません",
+    ErrorCode.AGENT_MODEL_MANTLE_DISABLED: "選択されたモデルは現在無効化されています",
     ErrorCode.AGENT_INITIALIZATION_FAILED: "エージェントの初期化に失敗しました",
     ErrorCode.AGENT_COMMUNICATION_FAILED: "エージェントとの通信に失敗しました",
     ErrorCode.AI_BEDROCK_UNAVAILABLE: "Bedrockサービスが利用できません",

@@ -9,6 +9,7 @@ from datetime import datetime
 from src.models.errors import ErrorCode
 from src.services.agent_service import (
     AgentService,
+    AgentConfigurationError,
     AgentInitializationError,
     AgentServiceError,
     GenerationCapacityError,
@@ -61,9 +62,7 @@ class TestAgentService:
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")
-    def test_create_bedrock_model_sets_retry_config(
-        self, mock_bedrock_model, mock_agent
-    ):
+    def test_create_model_sets_retry_config(self, mock_bedrock_model, mock_agent):
         """BedrockModelに一過性エラー対策のリトライ設定が渡されることを検証する
 
         ストリーミング開始時のConnection closedエラー対策として、
@@ -72,12 +71,83 @@ class TestAgentService:
         agent_service = AgentService()
         mock_bedrock_model.reset_mock()
 
-        agent_service._create_bedrock_model()
+        agent_service._create_model()
 
         mock_bedrock_model.assert_called_once()
         boto_config = mock_bedrock_model.call_args.kwargs["boto_client_config"]
         assert boto_config.retries["max_attempts"] == 3
         assert boto_config.retries["mode"] == "adaptive"
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_create_model_defaults_to_default_model_id(
+        self, mock_bedrock_model, mock_agent
+    ):
+        """model_id未指定時は既定モデル（DEFAULT_MODEL_ID）が使われる（後方互換）。"""
+        from src.models.model_registry import DEFAULT_MODEL_ID
+
+        agent_service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        agent_service._create_model()
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == DEFAULT_MODEL_ID
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_create_model_unknown_id_falls_back_to_default(
+        self, mock_bedrock_model, mock_agent
+    ):
+        """未知のmodel_idは既定モデルに丸められる（get_model_specの丸め動作）。"""
+        from src.models.model_registry import DEFAULT_MODEL_ID
+
+        agent_service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        agent_service._create_model("unknown.model-id")
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == DEFAULT_MODEL_ID
+
+    @patch("src.services.agent_service.config")
+    def test_create_model_mantle_disabled_raises_config_error(self, mock_config):
+        """ENABLE_MANTLE_MODELS無効時にMantle系モデルを選択するとCONFIGエラーになる。"""
+        mock_config.ENABLE_MANTLE_MODELS = False
+
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with pytest.raises(AgentConfigurationError) as exc_info:
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+        assert exc_info.value.code is ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+
+    def test_create_model_mantle_enabled_uses_bedrock_mantle_config(self):
+        """Mantle有効時はOpenAIResponsesModelにbedrock_mantle_configとmax_output_tokensを渡す。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_MANTLE_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+            mock_openai_model.assert_called_once()
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["model_id"] == "openai.gpt-5.6-terra"
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-east-1"}
+            assert call_kwargs["params"] == {"max_output_tokens": 32000}
 
     def test_build_persona_system_prompt(self):
         """ペルソナシステムプロンプト生成テスト（src/prompts/に移動済み）"""

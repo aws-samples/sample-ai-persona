@@ -35,6 +35,36 @@ class TestDiscussionSetupPage:
 
         assert response.status_code == 200
 
+    @patch("web.routers.discussion.list_selectable_models")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_setup_page_passes_selectable_models_to_template(
+        self, mock_get_manager, mock_list_selectable_models, client
+    ):
+        """discussion_setup_pageがlist_selectable_models(config.ENABLE_MANTLE_MODELS)の
+        結果をテンプレートコンテキストに渡すことを確認（Issue #107 R8）"""
+        from src.models.model_registry import DEFAULT_MODEL_ID, SUPPORTED_MODELS
+
+        mock_get_manager.return_value = Mock()
+        mock_list_selectable_models.return_value = [SUPPORTED_MODELS[DEFAULT_MODEL_ID]]
+
+        response = client.get("/discussion/setup")
+
+        assert response.status_code == 200
+        mock_list_selectable_models.assert_called_once()
+
+    @patch("web.routers.discussion.config")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_setup_page_uses_enable_mantle_models_config(
+        self, mock_get_manager, mock_config, client
+    ):
+        """discussion_setup_pageがconfig.ENABLE_MANTLE_MODELSをlist_selectable_modelsに渡すこと"""
+        mock_get_manager.return_value = Mock()
+        mock_config.ENABLE_MANTLE_MODELS = True
+
+        response = client.get("/discussion/setup")
+
+        assert response.status_code == 200
+
 
 class TestDiscussionResultsPage:
     """議論結果一覧ページのテスト"""
@@ -181,6 +211,49 @@ class TestDiscussionStartEndpoint:
         assert response.status_code == 400
         assert "インタビューモードは別のエンドポイント" in response.text
 
+    @patch("web.routers.discussion.get_agent_discussion_manager")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_start_agent_mode_passes_persona_models_and_facilitator_model(
+        self,
+        mock_get_persona,
+        mock_get_agent_manager,
+        client,
+        sample_persona,
+        sample_persona_2,
+        sample_discussion,
+    ):
+        """agentモードでpersona_models[id]・facilitator_modelがManagerに渡ることを確認"""
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.side_effect = [
+            sample_persona,
+            sample_persona_2,
+        ]
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_agent_manager = Mock()
+        mock_agent_manager.run_agent_discussion_full.return_value = sample_discussion
+        mock_get_agent_manager.return_value = mock_agent_manager
+
+        response = client.post(
+            "/discussion/start",
+            data={
+                "topic": "テストトピック",
+                "persona_ids": [sample_persona.id, sample_persona_2.id],
+                "mode": "agent",
+                "rounds": 3,
+                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
+                "facilitator_model": "global.anthropic.claude-sonnet-5",
+            },
+        )
+
+        assert response.status_code == 200
+        mock_agent_manager.run_agent_discussion_full.assert_called_once()
+        call_kwargs = mock_agent_manager.run_agent_discussion_full.call_args.kwargs
+        assert call_kwargs["persona_models"] == {
+            sample_persona.id: "openai.gpt-5.6-terra"
+        }
+        assert call_kwargs["facilitator_model"] == "global.anthropic.claude-sonnet-5"
+
 
 class TestDiscussionDetailEndpoint:
     """議論詳細エンドポイントのテスト"""
@@ -209,6 +282,87 @@ class TestDiscussionDetailEndpoint:
         response = client.get(f"/discussion/{sample_discussion.id}")
 
         assert response.status_code == 200
+
+    @patch("web.routers.discussion.get_persona_manager")
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_get_detail_shows_persona_models_and_facilitator_model(
+        self,
+        mock_get_discussion,
+        mock_get_persona,
+        client,
+        sample_persona,
+        sample_persona_2,
+    ):
+        """agent_config.persona_models / facilitator_modelがモデル表示名で表示されることを確認"""
+        from src.models.discussion import Discussion
+
+        discussion = Discussion.create_new(
+            topic="モデル選択のテスト",
+            participants=[sample_persona.id, sample_persona_2.id],
+            mode="agent",
+            agent_config={
+                "rounds": 3,
+                "persona_models": {sample_persona.id: "openai.gpt-5.6-terra"},
+                "facilitator_model": "global.anthropic.claude-sonnet-5",
+            },
+        )
+
+        mock_discussion_manager = Mock()
+        mock_discussion_manager.get_discussion.return_value = discussion
+        mock_discussion_manager.get_default_categories.return_value = []
+        mock_discussion_manager.get_document_presigned_urls.return_value = {}
+        mock_get_discussion.return_value = mock_discussion_manager
+
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.side_effect = [
+            sample_persona,
+            sample_persona_2,
+        ]
+        mock_get_persona.return_value = mock_persona_manager
+
+        response = client.get(f"/discussion/{discussion.id}")
+
+        assert response.status_code == 200
+        assert "GPT-5.6 Terra" in response.text
+        assert "Claude Sonnet 5" in response.text
+
+    @patch("web.routers.discussion.get_persona_manager")
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_get_detail_legacy_discussion_falls_back_to_default_model(
+        self,
+        mock_get_discussion,
+        mock_get_persona,
+        client,
+        sample_persona,
+        sample_persona_2,
+    ):
+        """persona_models無しの旧agent議論はデフォルトモデル表示にフォールバックすることを確認"""
+        from src.models.discussion import Discussion
+
+        legacy_discussion = Discussion.create_new(
+            topic="旧議論（persona_models無し）",
+            participants=[sample_persona.id, sample_persona_2.id],
+            mode="agent",
+            agent_config={"rounds": 3},
+        )
+
+        mock_discussion_manager = Mock()
+        mock_discussion_manager.get_discussion.return_value = legacy_discussion
+        mock_discussion_manager.get_default_categories.return_value = []
+        mock_discussion_manager.get_document_presigned_urls.return_value = {}
+        mock_get_discussion.return_value = mock_discussion_manager
+
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.side_effect = [
+            sample_persona,
+            sample_persona_2,
+        ]
+        mock_get_persona.return_value = mock_persona_manager
+
+        response = client.get(f"/discussion/{legacy_discussion.id}")
+
+        assert response.status_code == 200
+        assert "Claude Haiku 4.5（既定）" in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_get_detail_not_found(self, mock_get_manager, client):
@@ -307,6 +461,53 @@ class TestDiscussionStreamEndpoint:
 
         assert response.status_code == 200  # SSEなので200を返す
         assert '"type": "error"' in response.text
+
+    @patch("web.routers.discussion.get_agent_discussion_manager")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_stream_agent_mode_passes_persona_models_json(
+        self,
+        mock_get_persona,
+        mock_get_agent_manager,
+        client,
+        sample_persona,
+        sample_persona_2,
+    ):
+        """persona_models_json（URLエンコードしたJSON文字列）がManagerに辞書として渡ることを確認"""
+        import json as json_module
+
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.side_effect = [
+            sample_persona,
+            sample_persona_2,
+        ]
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_agent_manager = Mock()
+        mock_agent_manager.run_agent_discussion_streaming.return_value = iter([])
+        mock_get_agent_manager.return_value = mock_agent_manager
+
+        persona_models_json = json_module.dumps(
+            {sample_persona.id: "openai.gpt-5.6-terra"}
+        )
+
+        response = client.get(
+            "/discussion/stream",
+            params={
+                "topic": "test",
+                "persona_ids": f"{sample_persona.id},{sample_persona_2.id}",
+                "mode": "agent",
+                "persona_models_json": persona_models_json,
+                "facilitator_model": "global.anthropic.claude-sonnet-5",
+            },
+        )
+
+        assert response.status_code == 200
+        mock_agent_manager.run_agent_discussion_streaming.assert_called_once()
+        call_kwargs = mock_agent_manager.run_agent_discussion_streaming.call_args.kwargs
+        assert call_kwargs["persona_models"] == {
+            sample_persona.id: "openai.gpt-5.6-terra"
+        }
+        assert call_kwargs["facilitator_model"] == "global.anthropic.claude-sonnet-5"
 
 
 class TestDiscussionDocumentUploadEndpoint:

@@ -14,7 +14,11 @@ from src.managers.agent_discussion_manager import (
     AgentDiscussionManagerError,
 )
 from src.models.discussion import Discussion
-from src.services.agent_service import PersonaAgent, FacilitatorAgent
+from src.services.agent_service import (
+    AgentConfigurationError,
+    PersonaAgent,
+    FacilitatorAgent,
+)
 
 
 class TestAgentDiscussionManagerInitialization:
@@ -105,6 +109,123 @@ class TestCreatePersonaAgents:
         assert manager._create_agent_with_integrations.call_count == 2
 
 
+class TestModelSelectionValidation:
+    """persona_models / facilitator_model のバリデーションテスト"""
+
+    def _make_manager(self):
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+        return AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        ), mock_agent_service
+
+    def test_create_persona_agents_unsupported_model_raises_validation(
+        self, sample_persona, sample_persona_2
+    ):
+        manager, _ = self._make_manager()
+        manager._create_agent_with_integrations = Mock()
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.create_persona_agents(
+                [sample_persona, sample_persona_2],
+                {},
+                persona_models={sample_persona.id: "unknown.model-id"},
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_UNSUPPORTED
+
+    @patch("src.managers.agent_discussion_manager.config")
+    def test_create_persona_agents_mantle_disabled_raises_config(
+        self, mock_config, sample_persona, sample_persona_2
+    ):
+        mock_config.ENABLE_MANTLE_MODELS = False
+        manager, _ = self._make_manager()
+        manager._create_agent_with_integrations = Mock()
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.create_persona_agents(
+                [sample_persona, sample_persona_2],
+                {},
+                persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED
+
+    def test_create_facilitator_agent_unsupported_model_raises_validation(self):
+        manager, _ = self._make_manager()
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.create_facilitator_agent(
+                rounds=3, facilitator_model="unknown.model-id"
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_UNSUPPORTED
+
+    def test_create_persona_agents_config_error_not_squashed(
+        self, sample_persona, sample_persona_2
+    ):
+        """_create_agent_with_integrationsがAgentConfigurationErrorを投げた場合、
+        個別ペルソナ失敗として握り潰さずCONFIGコードのまま伝播する。"""
+        manager, _ = self._make_manager()
+        manager._create_agent_with_integrations = Mock(
+            side_effect=AgentConfigurationError(
+                "mantle disabled", code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+            )
+        )
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED
+
+
+class TestValidateDocumentSizeForModels:
+    """Gemma4等のmax_request_bytesに対するドキュメント合計サイズ検証のテスト"""
+
+    def _make_manager(self):
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+        return AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+    def test_gemma4_over_limit_raises_capacity_error(self):
+        manager = self._make_manager()
+        documents_metadata = [{"file_size": 4 * 1024 * 1024}]  # 4MB > 3.5MB上限
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager._validate_document_size_for_models(
+                documents_metadata, {"persona-1": "google.gemma-4-31b"}
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE
+
+    def test_gemma4_under_limit_passes(self):
+        manager = self._make_manager()
+        documents_metadata = [{"file_size": 1 * 1024 * 1024}]  # 1MB < 3.5MB上限
+
+        manager._validate_document_size_for_models(
+            documents_metadata, {"persona-1": "google.gemma-4-31b"}
+        )  # 例外が発生しないことを確認
+
+    def test_no_persona_models_skips_validation(self):
+        manager = self._make_manager()
+        documents_metadata = [{"file_size": 100 * 1024 * 1024}]  # 100MB
+
+        manager._validate_document_size_for_models(documents_metadata, None)
+
+    def test_claude_model_has_no_limit(self):
+        manager = self._make_manager()
+        documents_metadata = [{"file_size": 100 * 1024 * 1024}]  # 100MB
+
+        manager._validate_document_size_for_models(
+            documents_metadata,
+            {"persona-1": "global.anthropic.claude-haiku-4-5-20251001-v1:0"},
+        )
+
+
 class TestCreateFacilitatorAgent:
     """ファシリテーターエージェント作成のテスト"""
 
@@ -127,7 +248,7 @@ class TestCreateFacilitatorAgent:
 
         assert facilitator is not None
         mock_agent_service.create_facilitator_agent.assert_called_once_with(
-            3, "テスト指示"
+            3, "テスト指示", model_id=None
         )
 
 
