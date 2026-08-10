@@ -85,6 +85,7 @@ AIPersonaEcr → (Docker Push) → AIPersonaCognito → AIPersonaMemory (手動�
 | agentCoreMemoryEventExpiryDays | イベント保持期間（日数、デフォルト: dev=30 / prod=90） |
 | bedrockModelId | Bedrock AIモデルID |
 | agentModelId | Agent用モデルID |
+| enableAdditionalPersonaModels | 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。Bedrock Mantle経由）の選択を有効化（デフォルト: false） |
 | batchInferenceModelId | マスアンケート用バッチ推論モデルID |
 | surveyS3Prefix | アンケート結果CSV保存先S3プレフィックス |
 | batchInferenceS3Prefix | バッチ推論入出力S3プレフィックス |
@@ -142,6 +143,9 @@ chmod +x deploy.sh
 
 # データ分析エージェントのリージョンが異なる場合
 ./deploy.sh --data-agent-arn "arn:aws:..." --data-agent-region ap-northeast-1
+
+# 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。Bedrock Mantle経由）を有効化
+./deploy.sh --enable-additional-persona-models
 
 # 両方スキップ
 ./deploy.sh --skip-memory --skip-cognito
