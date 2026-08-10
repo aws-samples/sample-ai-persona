@@ -512,6 +512,12 @@ class ErrorCode(StrEnum):
         "interview_model_document_unsupported",
         ErrorKind.CAPACITY,
     )
+    # ドキュメント（画像含む）合計サイズが選択モデルの上限（Gemma4=3.5MB等）を超過。
+    # モデルを変えるか添付を減らせば解決するため CAPACITY。
+    INTERVIEW_MODEL_INPUT_TOO_LARGE = (
+        "interview_model_input_too_large",
+        ErrorKind.CAPACITY,
+    )
 
     # --- Service layer (agent/AI/database/storage infrastructure) ---
     # These codes are for CodedError compliance in the Service layer. The

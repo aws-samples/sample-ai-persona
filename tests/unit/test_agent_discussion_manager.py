@@ -16,6 +16,7 @@ from src.managers.agent_discussion_manager import (
 from src.models.discussion import Discussion
 from src.services.agent_service import (
     AgentConfigurationError,
+    AgentInitializationError,
     PersonaAgent,
     FacilitatorAgent,
 )
@@ -183,6 +184,123 @@ class TestModelSelectionValidation:
             exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
         )
 
+    def test_create_persona_agents_partial_failure_disposes_created_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        """1体目作成成功後、2体目が設定エラーで失敗した場合も1体目を解放すること。
+
+        Issue #107再レビュー: raise前にcleanup_agentsを呼ばないと、既に作成済みの
+        persona_agentがどこにも渡らずリークしていた。
+        """
+        manager, _ = self._make_manager()
+        mock_agent_1 = Mock(spec=PersonaAgent)
+
+        manager._create_agent_with_integrations = Mock(
+            side_effect=[
+                mock_agent_1,
+                AgentConfigurationError(
+                    "mantle disabled",
+                    code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED,
+                ),
+            ]
+        )
+
+        with pytest.raises(AgentDiscussionManagerError):
+            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+
+        mock_agent_1.dispose.assert_called_once()
+
+    def test_create_persona_agents_below_minimum_disposes_created_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        """作成できたエージェントが最低数(2)未満の場合も、作成済みのagentを解放すること。"""
+        manager, _ = self._make_manager()
+        mock_agent_1 = Mock(spec=PersonaAgent)
+
+        manager._create_agent_with_integrations = Mock(
+            side_effect=[
+                mock_agent_1,
+                AgentInitializationError("boom"),
+            ]
+        )
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_AGENT_SETUP_FAILED
+        mock_agent_1.dispose.assert_called_once()
+
+
+class TestRunAgentDiscussionFacilitatorFailureCleanup:
+    """facilitator作成失敗時にpersona_agentsが解放されることのテスト
+
+    Issue #107再レビュー: create_persona_agents成功後にcreate_facilitator_agentが
+    失敗すると、start_agent_discussion(_streaming)のfinallyに到達せず
+    persona_agentsがリークしていた。
+    """
+
+    def _make_manager(self):
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+        return AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+    def test_run_agent_discussion_full_disposes_personas_on_facilitator_failure(
+        self, sample_persona, sample_persona_2
+    ):
+        manager = self._make_manager()
+        mock_persona_agent_1 = Mock(spec=PersonaAgent)
+        mock_persona_agent_2 = Mock(spec=PersonaAgent)
+        manager.create_persona_agents = Mock(
+            return_value=[mock_persona_agent_1, mock_persona_agent_2]
+        )
+        manager.create_facilitator_agent = Mock(
+            side_effect=AgentDiscussionManagerError(
+                "rounds too many", code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
+            )
+        )
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.run_agent_discussion_full(
+                personas=[sample_persona, sample_persona_2],
+                topic="テストトピック",
+                rounds=99,
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
+        mock_persona_agent_1.dispose.assert_called_once()
+        mock_persona_agent_2.dispose.assert_called_once()
+
+    def test_run_agent_discussion_streaming_disposes_personas_on_facilitator_failure(
+        self, sample_persona, sample_persona_2
+    ):
+        manager = self._make_manager()
+        mock_persona_agent_1 = Mock(spec=PersonaAgent)
+        mock_persona_agent_2 = Mock(spec=PersonaAgent)
+        manager.create_persona_agents = Mock(
+            return_value=[mock_persona_agent_1, mock_persona_agent_2]
+        )
+        manager.create_facilitator_agent = Mock(
+            side_effect=AgentDiscussionManagerError(
+                "rounds too many", code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
+            )
+        )
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            list(
+                manager.run_agent_discussion_streaming(
+                    personas=[sample_persona, sample_persona_2],
+                    topic="テストトピック",
+                    rounds=99,
+                )
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
+        mock_persona_agent_1.dispose.assert_called_once()
+        mock_persona_agent_2.dispose.assert_called_once()
+
 
 class TestValidateDocumentSupportForModels:
     """Mantle経由モデル（GPT/Gemma）のドキュメント種別対応検証のテスト
@@ -260,6 +378,63 @@ class TestValidateDocumentSupportForModels:
         documents_metadata = [{"mime_type": "application/pdf"}]
 
         manager._validate_document_support_for_models(documents_metadata, None)
+
+
+class TestResolveEffectivePersonaModels:
+    """未選択ペルソナへのconfig.AGENT_MODEL_ID補完のテスト
+
+    Issue #107再レビュー: config.AGENT_MODEL_IDが環境でGemma4等に設定されうるため、
+    persona_models未選択（None扱い）のペルソナも実際に呼び出されるモデルとして
+    検証対象に含める必要がある。
+    """
+
+    def _make_manager(self):
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+        return AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+    def test_unselected_persona_falls_back_to_agent_model_id(self):
+        manager = self._make_manager()
+        agent1 = Mock(spec=PersonaAgent)
+        agent1.get_persona_id.return_value = "persona-1"
+
+        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
+            resolved = manager._resolve_effective_persona_models([agent1], None)
+
+        assert resolved == {"persona-1": "google.gemma-4-31b"}
+
+    def test_selected_persona_keeps_explicit_choice(self):
+        manager = self._make_manager()
+        agent1 = Mock(spec=PersonaAgent)
+        agent1.get_persona_id.return_value = "persona-1"
+
+        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
+            resolved = manager._resolve_effective_persona_models(
+                [agent1], {"persona-1": "openai.gpt-5.6-terra"}
+            )
+
+        assert resolved == {"persona-1": "openai.gpt-5.6-terra"}
+
+    def test_gemma4_as_env_default_still_enforces_size_limit(self):
+        """config.AGENT_MODEL_IDがGemma4の場合、persona_models未選択でも上限が効くこと。"""
+        manager = self._make_manager()
+        agent1 = Mock(spec=PersonaAgent)
+        agent1.get_persona_id.return_value = "persona-1"
+        documents_metadata = [{"file_size": 4 * 1024 * 1024}]  # 4MB > 3.5MB上限
+
+        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
+            effective = manager._resolve_effective_persona_models([agent1], None)
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager._validate_document_size_for_models(documents_metadata, effective)
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE
 
 
 class TestValidateDocumentSizeForModels:
@@ -405,6 +580,52 @@ class TestStartAgentDiscussion:
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
 
+    def test_start_discussion_document_validation_failure_disposes_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        """Mantle系モデル+PDF添付でドキュメント検証が失敗した場合もagentが解放されること。
+
+        Issue #107レビュー: ドキュメント読み込みがtryブロックの外にあったため、
+        検証失敗時にfinally節のcleanup_agentsが実行されずリソースがリークしていた。
+        """
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_db_service.get_uploaded_file_info.return_value = {
+            "id": "doc-1",
+            "filename": "test.pdf",
+            "file_path": "path/to/test.pdf",
+            "file_size": 100,
+            "mime_type": "application/pdf",
+            "uploaded_at": None,
+        }
+
+        mock_agent_service = Mock()
+
+        manager = AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+        mock_persona_agent_1 = Mock(spec=PersonaAgent)
+        mock_persona_agent_2 = Mock(spec=PersonaAgent)
+        persona_agents = [mock_persona_agent_1, mock_persona_agent_2]
+
+        mock_facilitator = Mock(spec=FacilitatorAgent)
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.start_agent_discussion(
+                personas=[sample_persona, sample_persona_2],
+                topic="テストトピック",
+                persona_agents=persona_agents,
+                facilitator=mock_facilitator,
+                document_ids=["doc-1"],
+                persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
+        mock_persona_agent_1.dispose.assert_called_once()
+        mock_persona_agent_2.dispose.assert_called_once()
+        mock_facilitator.dispose.assert_called_once()
+
     def test_start_discussion_empty_topic(self, sample_persona, sample_persona_2):
         """空のトピックでエラーを返すことを確認"""
         mock_db_service = Mock()
@@ -428,6 +649,73 @@ class TestStartAgentDiscussion:
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_REQUIRED
+
+    def test_start_discussion_topic_too_short_disposes_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        """トピックが短すぎる（入力検証失敗）場合もagentが解放されること。
+
+        Issue #107再レビュー: _validate_discussion_inputがtry/finallyの外にあり、
+        トピック長等の通常の入力検証エラーではcleanup_agentsが実行されずagentが
+        リークしていた。
+        """
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+
+        mock_agent_service = Mock()
+
+        manager = AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+        mock_persona_agent_1 = Mock(spec=PersonaAgent)
+        mock_persona_agent_2 = Mock(spec=PersonaAgent)
+        mock_facilitator = Mock(spec=FacilitatorAgent)
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager.start_agent_discussion(
+                personas=[sample_persona, sample_persona_2],
+                topic="短い",  # 5文字未満
+                persona_agents=[mock_persona_agent_1, mock_persona_agent_2],
+                facilitator=mock_facilitator,
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
+        mock_persona_agent_1.dispose.assert_called_once()
+        mock_persona_agent_2.dispose.assert_called_once()
+        mock_facilitator.dispose.assert_called_once()
+
+    def test_start_discussion_streaming_topic_too_short_disposes_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        """ストリーミング版でも入力検証失敗時にagentが解放されること。"""
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+
+        mock_agent_service = Mock()
+
+        manager = AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+        mock_persona_agent_1 = Mock(spec=PersonaAgent)
+        mock_persona_agent_2 = Mock(spec=PersonaAgent)
+        mock_facilitator = Mock(spec=FacilitatorAgent)
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            list(
+                manager.start_agent_discussion_streaming(
+                    personas=[sample_persona, sample_persona_2],
+                    topic="短い",
+                    persona_agents=[mock_persona_agent_1, mock_persona_agent_2],
+                    facilitator=mock_facilitator,
+                )
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
+        mock_persona_agent_1.dispose.assert_called_once()
+        mock_persona_agent_2.dispose.assert_called_once()
+        mock_facilitator.dispose.assert_called_once()
 
 
 class TestSaveAgentDiscussion:

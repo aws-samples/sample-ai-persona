@@ -743,11 +743,16 @@ class TestDatabaseServiceSerialization:
         assert deserialized.mode == original.mode
         assert deserialized.agent_config == original.agent_config
 
-    def test_agent_config_nested_dict_round_trip(self):
+    @patch("boto3.client")
+    def test_agent_config_nested_dict_round_trip(self, mock_boto3_client):
         """agent_config内の入れ子dict（persona_models/facilitator_model）が
         TypeSerializer/TypeDeserializerを介して正しく往復することを確認する。
         Issue #107: ペルソナ毎モデル選択の永続化。
         """
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
         service = DatabaseService()
 
         original = Discussion(
@@ -777,8 +782,15 @@ class TestDatabaseServiceSerialization:
             "persona-2": "google.gemma-4-31b",
         }
 
-    def test_agent_config_without_persona_models_backward_compatible(self):
+    @patch("boto3.client")
+    def test_agent_config_without_persona_models_backward_compatible(
+        self, mock_boto3_client
+    ):
         """persona_modelsを持たない旧レコードのagent_configがNoneにならず往復すること。"""
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
         service = DatabaseService()
 
         original = Discussion(

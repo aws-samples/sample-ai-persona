@@ -4,7 +4,7 @@ get_model_spec（丸める）/ is_supported（厳密）/ display_name_for（例�
 list_selectable_models（Mantle出し分け）の関心分離を検証する。
 """
 
-from src.config import config
+from src.config import Config
 from src.models.model_registry import (
     DEFAULT_MODEL_ID,
     MANTLE_FALLBACK_REGION,
@@ -19,9 +19,14 @@ from src.models.model_registry import (
 
 
 class TestDefaultModelConsistency:
-    def test_default_model_id_matches_config_agent_model_id(self):
-        """未指定時の挙動を不変に保つための一致検査。"""
-        assert DEFAULT_MODEL_ID == config.AGENT_MODEL_ID
+    def test_default_model_id_matches_config_agent_model_id_default(self):
+        """未指定時の挙動を不変に保つための一致検査。
+
+        config.AGENT_MODEL_IDは環境変数ENV AGENT_MODEL_IDで実行時に上書きされうるため、
+        グローバルconfigインスタンスではなくConfigクラスのデフォルト値と比較する
+        （環境変数を設定した状態でテストを実行しても失敗しないようにするため）。
+        """
+        assert DEFAULT_MODEL_ID == Config.AGENT_MODEL_ID
 
     def test_default_model_id_is_registered(self):
         assert DEFAULT_MODEL_ID in SUPPORTED_MODELS

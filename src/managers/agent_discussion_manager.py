@@ -154,10 +154,12 @@ class AgentDiscussionManager:
 
             except AgentConfigurationError as e:
                 # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
-                # 握り潰さず、DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する
+                # 握り潰さず、DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する。
+                # ここまでに作成済みのpersona_agentsはこの後どこにも渡らないため、raise前に解放する。
                 self.logger.error(
                     f"Configuration error creating agent for persona {persona.name}: {e}"
                 )
+                self.cleanup_agents(persona_agents)
                 raise AgentDiscussionManagerError(
                     f"model configuration error for persona {persona.name} "
                     f"({type(e).__name__})",
@@ -180,6 +182,8 @@ class AgentDiscussionManager:
                 "Failed to create enough persona agents. Failed: %s",
                 ", ".join(failed_personas),
             )
+            # 最低数に満たない場合、作成済みのpersona_agentsはこの後どこにも渡らないため解放する
+            self.cleanup_agents(persona_agents)
             raise AgentDiscussionManagerError(
                 f"only {len(persona_agents)} persona agents created, minimum is 2",
                 code=ErrorCode.DISCUSSION_AGENT_SETUP_FAILED,
@@ -326,22 +330,24 @@ class AgentDiscussionManager:
         Requirements:
             - 6.3: Pass memory configuration through discussion flow
         """
-        # Validate input
-        self._validate_discussion_input(personas, topic, persona_agents, facilitator)
-
-        # Load documents if provided
-        documents_metadata, document_context, document_contents = (
-            self._load_and_attach_documents(
-                document_ids, persona_agents, persona_models
-            )
-        )
-
-        self.logger.info(
-            f"Starting agent discussion with {len(persona_agents)} agents on topic: '{topic[:50]}...' "
-            f"(enable_memory={enable_memory}, documents={len(documents_metadata) if documents_metadata else 0})"
-        )
-
         try:
+            # Validate input（トピック長等の検証失敗時もfinallyでagentを解放するためtry内で行う）
+            self._validate_discussion_input(
+                personas, topic, persona_agents, facilitator
+            )
+
+            # Load documents if provided
+            documents_metadata, document_context, document_contents = (
+                self._load_and_attach_documents(
+                    document_ids, persona_agents, persona_models
+                )
+            )
+
+            self.logger.info(
+                f"Starting agent discussion with {len(persona_agents)} agents on topic: '{topic[:50]}...' "
+                f"(enable_memory={enable_memory}, documents={len(documents_metadata) if documents_metadata else 0})"
+            )
+
             # Create agent_config with facilitator settings and memory configuration
             agent_config = {
                 "rounds": facilitator.rounds,
@@ -509,6 +515,11 @@ class AgentDiscussionManager:
                 f"agent discussion failed ({type(e).__name__})",
                 code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             ) from e
+        except AgentDiscussionManagerError:
+            # 入力検証・ドキュメント検証（VALIDATION/CAPACITY等）が投げたコード付き例外は
+            # そのまま再送出する（DISCUSSION_OPERATION_FAILEDに丸めるとユーザーが取れる
+            # 行動の情報が失われる）
+            raise
         except Exception as e:
             self.logger.error("Unexpected error during agent discussion", exc_info=True)
             raise AgentDiscussionManagerError(
@@ -571,6 +582,25 @@ class AgentDiscussionManager:
                 code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             ) from e
 
+    def _resolve_effective_persona_models(
+        self,
+        persona_agents: List[PersonaAgent],
+        persona_models: Optional[Dict[str, str]],
+    ) -> Dict[str, str]:
+        """未選択のペルソナにはconfig.AGENT_MODEL_ID（環境既定モデル）を補完する。
+
+        環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
+        添付種別・サイズ検証は「フォームで明示的に選ばれたモデル」だけでなく実際に呼び出される
+        モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
+        Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
+        """
+        resolved = dict(persona_models or {})
+        for agent in persona_agents:
+            persona_id = agent.get_persona_id()
+            if not resolved.get(persona_id):
+                resolved[persona_id] = config.AGENT_MODEL_ID
+        return resolved
+
     def _load_and_attach_documents(
         self,
         document_ids: Optional[List[str]],
@@ -594,11 +624,14 @@ class AgentDiscussionManager:
             )
 
             if documents_metadata:
+                effective_persona_models = self._resolve_effective_persona_models(
+                    persona_agents, persona_models
+                )
                 self._validate_document_support_for_models(
-                    documents_metadata, persona_models
+                    documents_metadata, effective_persona_models
                 )
                 self._validate_document_size_for_models(
-                    documents_metadata, persona_models
+                    documents_metadata, effective_persona_models
                 )
 
                 document_context = build_document_context(documents_metadata)
@@ -865,22 +898,24 @@ class AgentDiscussionManager:
         Requirements:
             - 6.3: Pass memory configuration through discussion flow
         """
-        # Validate input
-        self._validate_discussion_input(personas, topic, persona_agents, facilitator)
-
-        # Load documents if provided
-        documents_metadata, document_context, document_contents = (
-            self._load_and_attach_documents(
-                document_ids, persona_agents, persona_models
-            )
-        )
-
-        self.logger.info(
-            f"Starting streaming agent discussion with {len(persona_agents)} agents "
-            f"(enable_memory={enable_memory}, documents={len(documents_metadata) if documents_metadata else 0})"
-        )
-
         try:
+            # Validate input（トピック長等の検証失敗時もfinallyでagentを解放するためtry内で行う）
+            self._validate_discussion_input(
+                personas, topic, persona_agents, facilitator
+            )
+
+            # Load documents if provided
+            documents_metadata, document_context, document_contents = (
+                self._load_and_attach_documents(
+                    document_ids, persona_agents, persona_models
+                )
+            )
+
+            self.logger.info(
+                f"Starting streaming agent discussion with {len(persona_agents)} agents "
+                f"(enable_memory={enable_memory}, documents={len(documents_metadata) if documents_metadata else 0})"
+            )
+
             # Create agent_config with facilitator settings and memory configuration
             agent_config = {
                 "rounds": facilitator.rounds,
@@ -1078,6 +1113,11 @@ class AgentDiscussionManager:
             # Yield the complete discussion
             yield ("complete", discussion)
 
+        except AgentDiscussionManagerError:
+            # 入力検証・ドキュメント検証（VALIDATION/CAPACITY等）が投げたコード付き例外は
+            # そのまま再送出する（DISCUSSION_OPERATION_FAILEDに丸めるとユーザーが取れる
+            # 行動の情報が失われる）
+            raise
         except Exception as e:
             self.logger.error("Error during streaming agent discussion", exc_info=True)
             raise AgentDiscussionManagerError(
@@ -1143,14 +1183,17 @@ class AgentDiscussionManager:
                     )
 
     def cleanup_agents(
-        self, persona_agents: List[PersonaAgent], facilitator: FacilitatorAgent
+        self,
+        persona_agents: List[PersonaAgent],
+        facilitator: Optional[FacilitatorAgent] = None,
     ) -> None:
         """
         エージェントリソースを解放してメモリリークを防ぐ
 
         Args:
             persona_agents: ペルソナエージェントリスト
-            facilitator: ファシリテータエージェント
+            facilitator: ファシリテータエージェント（未作成の場合はNone。
+                create_persona_agents内の失敗時はfacilitatorがまだ存在しないため）
         """
         try:
             # ペルソナエージェントのリソース解放
@@ -1161,10 +1204,13 @@ class AgentDiscussionManager:
                     self.logger.warning(f"ペルソナエージェントの解放中にエラー: {e}")
 
             # ファシリテータエージェントのリソース解放
-            try:
-                facilitator.dispose()
-            except Exception as e:
-                self.logger.warning(f"ファシリテータエージェントの解放中にエラー: {e}")
+            if facilitator is not None:
+                try:
+                    facilitator.dispose()
+                except Exception as e:
+                    self.logger.warning(
+                        f"ファシリテータエージェントの解放中にエラー: {e}"
+                    )
 
             self.logger.info("全エージェントのリソース解放が完了しました")
 
@@ -1421,9 +1467,15 @@ class AgentDiscussionManager:
             persona_models=persona_models,
         )
 
-        facilitator = self.create_facilitator_agent(
-            rounds, additional_instructions, facilitator_model=facilitator_model
-        )
+        try:
+            facilitator = self.create_facilitator_agent(
+                rounds, additional_instructions, facilitator_model=facilitator_model
+            )
+        except Exception:
+            # facilitator作成失敗時、start_agent_discussion_streamingのfinallyに
+            # 到達しないため、作成済みのpersona_agentsをここで解放する
+            self.cleanup_agents(persona_agents)
+            raise
 
         discussion = None
         message_count = 0
@@ -1512,9 +1564,15 @@ class AgentDiscussionManager:
             persona_models=persona_models,
         )
 
-        facilitator = self.create_facilitator_agent(
-            rounds, additional_instructions, facilitator_model=facilitator_model
-        )
+        try:
+            facilitator = self.create_facilitator_agent(
+                rounds, additional_instructions, facilitator_model=facilitator_model
+            )
+        except Exception:
+            # facilitator作成失敗時、start_agent_discussionのfinallyに
+            # 到達しないため、作成済みのpersona_agentsをここで解放する
+            self.cleanup_agents(persona_agents)
+            raise
 
         discussion = self.start_agent_discussion(
             personas=personas,

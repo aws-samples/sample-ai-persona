@@ -183,6 +183,7 @@ async def discussion_setup_page(request: Request) -> Any:
             "title": "議論設定",
             "selectable_models": selectable_models,
             "enable_additional_models": config.ENABLE_ADDITIONAL_PERSONA_MODELS,
+            "default_model_id": config.AGENT_MODEL_ID,
         },
     )
 

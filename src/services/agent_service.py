@@ -569,7 +569,10 @@ class AgentService:
             resolve_call_region,
         )
 
-        spec = get_model_spec(model_id)
+        # model_id省略時はconfig.AGENT_MODEL_ID（CDK/環境変数で上書き可能）を既定として使う。
+        # model_registry.DEFAULT_MODEL_IDはstdlibのみのModels層にありconfigを参照できないため、
+        # 「未指定→実際に使う既定モデル」の解決はここで行う。
+        spec = get_model_spec(model_id or config.AGENT_MODEL_ID)
         region = resolve_call_region(spec, config.AWS_REGION)
 
         if spec.provider == ModelProvider.OPENAI_RESPONSES:

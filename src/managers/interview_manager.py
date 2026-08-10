@@ -266,6 +266,24 @@ class InterviewManager:
                     code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 )
 
+    def _resolve_effective_persona_models(
+        self,
+        participants: List[str],
+        persona_models: Optional[Mapping[str, Optional[str]]],
+    ) -> Dict[str, str]:
+        """未選択のペルソナにはconfig.AGENT_MODEL_ID（環境既定モデル）を補完する。
+
+        環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
+        添付種別・サイズ検証は「セッションで明示的に選ばれたモデル」だけでなく実際に呼び出される
+        モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
+        Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
+        """
+        resolved: Dict[str, str] = {}
+        for persona_id in participants:
+            model_id = (persona_models or {}).get(persona_id)
+            resolved[persona_id] = model_id or config.AGENT_MODEL_ID
+        return resolved
+
     def _validate_document_support_for_models(
         self,
         document_contents: List[Dict[str, Any]],
@@ -297,6 +315,43 @@ class InterviewManager:
                     "document attachments are not supported by Mantle-routed "
                     "models (image is supported, other document types are not)",
                     code=ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED,
+                )
+
+    def _validate_document_size_for_models(
+        self,
+        new_document_metadata: List[Dict[str, Any]],
+        existing_document_metadata: Optional[List[Dict[str, Any]]],
+        persona_models: Optional[Mapping[str, Optional[str]]],
+    ) -> None:
+        """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
+
+        インタビューはターンを跨いでドキュメントを蓄積するため、セッションに既に
+        添付済みのドキュメント（existing_document_metadata）も合計に含める。
+        base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
+        """
+        if not persona_models:
+            return
+
+        total_size = sum(
+            doc.get("file_size", 0)
+            for doc in (existing_document_metadata or []) + new_document_metadata
+        )
+        if total_size == 0:
+            return
+
+        for model_id in set(persona_models.values()):
+            if model_id is None:
+                continue
+            spec = get_model_spec(model_id)
+            if spec.max_request_bytes is None:
+                continue
+            effective_max = int(spec.max_request_bytes * 3 / 4)
+            if total_size > effective_max:
+                raise InterviewValidationError(
+                    f"document total size {total_size} exceeds model {model_id!r} "
+                    f"limit (effective max {effective_max})",
+                    code=ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
+                    context={"max_size_mb": spec.max_request_bytes / (1024 * 1024)},
                 )
 
     def send_user_message(
@@ -352,9 +407,16 @@ class InterviewManager:
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
 
+        effective_persona_models = self._resolve_effective_persona_models(
+            session.participants, session.persona_models
+        )
         if document_contents:
             self._validate_document_support_for_models(
-                document_contents, session.persona_models
+                document_contents, effective_persona_models
+            )
+        if document_metadata:
+            self._validate_document_size_for_models(
+                document_metadata, session.documents, effective_persona_models
             )
 
         self.logger.info(
@@ -515,9 +577,16 @@ class InterviewManager:
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
 
+        effective_persona_models = self._resolve_effective_persona_models(
+            session.participants, session.persona_models
+        )
         if document_contents:
             self._validate_document_support_for_models(
-                document_contents, session.persona_models
+                document_contents, effective_persona_models
+            )
+        if document_metadata:
+            self._validate_document_size_for_models(
+                document_metadata, session.documents, effective_persona_models
             )
 
         # Add user message to session

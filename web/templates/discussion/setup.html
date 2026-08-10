@@ -28,8 +28,9 @@
               memoryMode: 'full',
               enableDataset: false,
               enableKB: false,
+              defaultModelId: '{{ default_model_id }}',
               personaModels: {},
-              facilitatorModel: '',
+              facilitatorModel: '{{ default_model_id }}',
               streamingMode: true,
               customizeCategories: false,
               uploadedDocuments: [],
@@ -938,6 +939,7 @@
                             <span class="text-xs text-blue-500" x-text="'(' + p.occupation + ')'"></span>
                             <!-- しっかり議論・インタビューモードのみ: ペルソナ毎のモデル選択（既定=Haiku） -->
                             <select x-show="mode === 'agent' || mode === 'interview'"
+                                    x-init="personaModels[p.id] = personaModels[p.id] || defaultModelId"
                                     x-model="personaModels[p.id]"
                                     :name="'persona_models[' + p.id + ']'"
                                     class="text-xs border border-blue-200 rounded px-1 py-0.5 bg-blue-50 text-blue-800">

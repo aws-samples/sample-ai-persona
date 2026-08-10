@@ -59,7 +59,7 @@
             {% endif %}
             <div class="flex items-center gap-2">
                 <span class="text-purple-600 font-medium">ファシリテータ:</span>
-                <span class="text-gray-700">{{ model_display_name(discussion.agent_config.facilitator_model) }}</span>
+                <span class="text-gray-700">{{ model_display_name(discussion.agent_config.get('facilitator_model')) }}</span>
             </div>
         </div>
     </div>
@@ -91,7 +91,7 @@
                 {% if discussion.mode in ('agent', 'interview') %}
                 <div class="mt-2">
                     <span class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">
-                        {{ model_display_name((discussion.agent_config or {}).get('persona_models', {}).get(participant_id)) }}
+                        {{ model_display_name(((discussion.agent_config or {}).get('persona_models') or {}).get(participant_id)) }}
                     </span>
                 </div>
                 {% endif %}
