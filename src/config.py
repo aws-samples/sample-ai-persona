@@ -58,11 +58,7 @@ class Config:
     MIN_ROUNDS: int = 1
     MAX_ROUNDS: int = 10
 
-    # ペルソナ議論・インタビューでの追加ペルソナベースモデル（非Anthropicモデル。
-    # Bedrock Mantle経由で呼び出す）の選択を許可するか。
-    # SigV4認証情報から短期Bearerトークンを都度生成する方式のため長期APIキーは不要だが、
-    # 既定は無効（graceful degradation）。有効化にはbedrock-mantle:CreateInference/
-    # CallWithBearerTokenのIAM権限が必要。
+    # ペルソナ議論・インタビューでの追加ペルソナベースモデル(GPT5.6・Gemma4)
     ENABLE_ADDITIONAL_PERSONA_MODELS: bool = False
 
     # AgentCore Memory設定
