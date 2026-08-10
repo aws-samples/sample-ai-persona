@@ -872,30 +872,6 @@
                 <span x-show="mode !== 'interview'">議論に参加させるペルソナを選択してください（最低2体、最大5体推奨）</span>
             </p>
             
-            <!-- 選択中ペルソナのチップエリア -->
-            <template x-if="$store.discussionSetup.selectedPersonas.length > 0">
-                <div class="flex flex-wrap gap-2 mb-4 p-3 bg-blue-50 rounded-md border border-blue-200">
-                    <template x-for="p in $store.discussionSetup.selectedPersonas" :key="p.id">
-                        <span class="inline-flex items-center gap-1 px-3 py-1 bg-white text-blue-800 text-sm rounded-full shadow-sm border border-blue-200">
-                            <span x-text="p.name" class="font-medium"></span>
-                            <span class="text-xs text-blue-500" x-text="'(' + p.occupation + ')'"></span>
-                            <!-- しっかり議論・インタビューモードのみ: ペルソナ毎のモデル選択（既定=Haiku） -->
-                            <select x-show="mode === 'agent' || mode === 'interview'"
-                                    x-model="personaModels[p.id]"
-                                    :name="'persona_models[' + p.id + ']'"
-                                    class="text-xs border border-blue-200 rounded px-1 py-0.5 bg-blue-50 text-blue-800">
-                                {% for spec in selectable_models %}
-                                <option value="{{ spec.model_id }}">{{ spec.display_name }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="button"
-                                    @click="$store.discussionSetup.remove(p.id)"
-                                    class="ml-1 text-blue-400 hover:text-blue-700 font-bold">×</button>
-                        </span>
-                    </template>
-                </div>
-            </template>
-
             <!-- 簡易フィルタ（クライアントサイド） -->
             <div class="flex flex-wrap gap-3 mb-4 p-3 bg-gray-50 rounded-md">
                 <div>
@@ -952,6 +928,30 @@
                  class="max-h-96 overflow-y-auto">
                 <p class="text-center text-gray-400 py-8">読み込み中...</p>
             </div>
+
+            <!-- 選択中ペルソナのチップエリア -->
+            <template x-if="$store.discussionSetup.selectedPersonas.length > 0">
+                <div class="flex flex-wrap gap-2 mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+                    <template x-for="p in $store.discussionSetup.selectedPersonas" :key="p.id">
+                        <span class="inline-flex items-center gap-1 px-3 py-1 bg-white text-blue-800 text-sm rounded-full shadow-sm border border-blue-200">
+                            <span x-text="p.name" class="font-medium"></span>
+                            <span class="text-xs text-blue-500" x-text="'(' + p.occupation + ')'"></span>
+                            <!-- しっかり議論・インタビューモードのみ: ペルソナ毎のモデル選択（既定=Haiku） -->
+                            <select x-show="mode === 'agent' || mode === 'interview'"
+                                    x-model="personaModels[p.id]"
+                                    :name="'persona_models[' + p.id + ']'"
+                                    class="text-xs border border-blue-200 rounded px-1 py-0.5 bg-blue-50 text-blue-800">
+                                {% for spec in selectable_models %}
+                                <option value="{{ spec.model_id }}">{{ spec.display_name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="button"
+                                    @click="$store.discussionSetup.remove(p.id)"
+                                    class="ml-1 text-blue-400 hover:text-blue-700 font-bold">×</button>
+                        </span>
+                    </template>
+                </div>
+            </template>
 
             <!-- フォーム送信用: 選択中ペルソナ ID を hidden input として動的生成 -->
             <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'hidden-' + p.id">
