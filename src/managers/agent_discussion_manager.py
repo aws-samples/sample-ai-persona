@@ -594,6 +594,7 @@ class AgentDiscussionManager:
             )
 
             if documents_metadata:
+                self._validate_document_support_for_models(persona_models)
                 self._validate_document_size_for_models(
                     documents_metadata, persona_models
                 )
@@ -615,6 +616,28 @@ class AgentDiscussionManager:
                         agent.set_document_contents(document_contents.copy())
 
         return documents_metadata, document_context, document_contents
+
+    def _validate_document_support_for_models(
+        self,
+        persona_models: Optional[Dict[str, str]],
+    ) -> None:
+        """追加ペルソナベースモデル（Mantle経由）がドキュメント添付付きで選択されていないか検証する。
+
+        Strands SDK 1.51.0のOpenAIResponsesModel（Mantle経由）はinput_file/input_image
+        構築時にfilenameを送信せず、Mantle側のファイル種別判定が失敗して
+        "Unsupported file type: 'unknown'"エラーになる既知の制約がある
+        （PDF・画像とも再現。上流SDK修正待ち）。修正されるまで事前に弾く。
+        """
+        if not persona_models:
+            return
+
+        for model_id in set(persona_models.values()):
+            spec = get_model_spec(model_id)
+            if spec.requires_mantle:
+                raise AgentDiscussionManagerError(
+                    f"model {model_id!r} does not support document attachments",
+                    code=ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED,
+                )
 
     def _validate_document_size_for_models(
         self,

@@ -150,7 +150,9 @@ class TestModelSelectionValidation:
                 persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
+        assert (
+            exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
+        )
 
     def test_create_facilitator_agent_unsupported_model_raises_validation(self):
         manager, _ = self._make_manager()
@@ -177,7 +179,53 @@ class TestModelSelectionValidation:
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.create_persona_agents([sample_persona, sample_persona_2], {})
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
+        assert (
+            exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
+        )
+
+
+class TestValidateDocumentSupportForModels:
+    """Mantle経由モデル（GPT/Gemma）のドキュメント添付非対応検証のテスト"""
+
+    def _make_manager(self):
+        mock_db_service = Mock()
+        mock_db_service.initialize_database.return_value = None
+        mock_agent_service = Mock()
+        return AgentDiscussionManager(
+            agent_service=mock_agent_service, database_service=mock_db_service
+        )
+
+    def test_mantle_model_with_document_raises_capacity_error(self):
+        manager = self._make_manager()
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager._validate_document_support_for_models(
+                {"persona-1": "openai.gpt-5.6-terra"}
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
+
+    def test_gemma4_with_document_raises_capacity_error(self):
+        manager = self._make_manager()
+
+        with pytest.raises(AgentDiscussionManagerError) as exc_info:
+            manager._validate_document_support_for_models(
+                {"persona-1": "google.gemma-4-31b"}
+            )
+
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
+
+    def test_claude_model_with_document_passes(self):
+        manager = self._make_manager()
+
+        manager._validate_document_support_for_models(
+            {"persona-1": "global.anthropic.claude-haiku-4-5-20251001-v1:0"}
+        )  # 例外が発生しないことを確認
+
+    def test_no_persona_models_skips_validation(self):
+        manager = self._make_manager()
+
+        manager._validate_document_support_for_models(None)
 
 
 class TestValidateDocumentSizeForModels:

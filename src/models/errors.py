@@ -386,6 +386,13 @@ class ErrorCode(StrEnum):
         "discussion_model_input_too_large",
         ErrorKind.CAPACITY,
     )
+    # 追加ペルソナベースモデル（Bedrock Mantle経由。requires_mantle=True）は
+    # 現状ドキュメント添付（画像・PDF等）に対応していない（Strands SDK側の既知の制約）。
+    # モデルを変えるか添付を外せば解決するため CAPACITY。
+    DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED = (
+        "discussion_model_document_unsupported",
+        ErrorKind.CAPACITY,
+    )
 
     # --- Discussion reports ---
     REPORT_NOT_FOUND = ("report_not_found", ErrorKind.NOT_FOUND)
@@ -497,6 +504,13 @@ class ErrorCode(StrEnum):
     INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED = (
         "interview_model_additional_models_disabled",
         ErrorKind.CONFIG,
+    )
+    # 追加ペルソナベースモデル（Bedrock Mantle経由。requires_mantle=True）は
+    # 現状ドキュメント添付（画像・PDF等）に対応していない（Strands SDK側の既知の制約）。
+    # モデルを変えるか添付を外せば解決するため CAPACITY。
+    INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED = (
+        "interview_model_document_unsupported",
+        ErrorKind.CAPACITY,
     )
 
     # --- Service layer (agent/AI/database/storage infrastructure) ---

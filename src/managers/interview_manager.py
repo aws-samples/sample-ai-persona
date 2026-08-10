@@ -266,6 +266,30 @@ class InterviewManager:
                     code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 )
 
+    def _validate_document_support_for_models(
+        self,
+        persona_models: Optional[Mapping[str, Optional[str]]],
+    ) -> None:
+        """追加ペルソナベースモデル（Mantle経由）がドキュメント添付付きで選択されていないか検証する。
+
+        Strands SDK 1.51.0のOpenAIResponsesModel（Mantle経由）はinput_file/input_image
+        構築時にfilenameを送信せず、Mantle側のファイル種別判定が失敗して
+        "Unsupported file type: 'unknown'"エラーになる既知の制約がある
+        （PDF・画像とも再現。上流SDK修正待ち）。修正されるまで事前に弾く。
+        """
+        if not persona_models:
+            return
+
+        for model_id in set(persona_models.values()):
+            if model_id is None:
+                continue
+            spec = get_model_spec(model_id)
+            if spec.requires_mantle:
+                raise InterviewValidationError(
+                    f"model {model_id!r} does not support document attachments",
+                    code=ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED,
+                )
+
     def send_user_message(
         self,
         session_id: str,
@@ -318,6 +342,9 @@ class InterviewManager:
             raise InterviewAgentError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
+
+        if document_contents:
+            self._validate_document_support_for_models(session.persona_models)
 
         self.logger.info(
             f"Processing user message in session {session_id}: '{message[:50]}...' (documents: {len(document_contents) if document_contents else 0})"
@@ -476,6 +503,9 @@ class InterviewManager:
             raise InterviewAgentError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
+
+        if document_contents:
+            self._validate_document_support_for_models(session.persona_models)
 
         # Add user message to session
         session = session.add_user_message(message.strip())

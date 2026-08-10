@@ -10,6 +10,7 @@ from src.managers.interview_manager import (
     InterviewManager,
     InterviewManagerError,
     InterviewSession,
+    InterviewValidationError,
 )
 from src.models.errors import ErrorCode
 from src.models.persona import Persona
@@ -534,7 +535,9 @@ class TestInterviewManagerModelSelectionValidation:
                 self.test_personas,
                 persona_models={"persona-1": "openai.gpt-5.6-terra"},
             )
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED
+        assert (
+            exc_info.value.code is ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED
+        )
 
     @patch("src.managers.interview_manager.uuid.uuid4")
     def test_start_interview_session_stores_persona_models(self, mock_uuid):
@@ -713,6 +716,71 @@ class TestInterviewManagerMultimodal:
 
         # 両方から応答が返されたことを確認
         assert len(responses) == 2
+
+    def test_send_user_message_with_documents_mantle_model_raises_capacity_error(self):
+        """Mantle系モデル（GPT/Gemma）選択時にドキュメント添付するとCAPACITYエラーになる。"""
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        with pytest.raises(InterviewValidationError) as exc_info:
+            self.interview_manager.send_user_message(
+                "test-session",
+                "この画像について教えてください",
+                document_contents=document_contents,
+            )
+
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
+        mock_persona_agent.set_document_contents.assert_not_called()
+
+    def test_send_user_message_with_documents_claude_model_passes(self):
+        """Claude系モデル選択時はドキュメント添付が通ることを確認。"""
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.get_persona_name.return_value = "田中太郎"
+        mock_persona_agent.respond.return_value = "画像を見て回答します"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        responses = self.interview_manager.send_user_message(
+            "test-session",
+            "この画像について教えてください",
+            document_contents=document_contents,
+        )
+
+        mock_persona_agent.set_document_contents.assert_called_once()
+        assert len(responses) == 1
 
 
 class TestInterviewSessionDocuments:
@@ -1023,13 +1091,16 @@ class TestInterviewManagerErrorPaths:
             self.mock_agent_service, self.mock_database_service
         )
 
-    def _create_active_session(self, session_id="s1", is_saved=False):
+    def _create_active_session(
+        self, session_id="s1", is_saved=False, persona_models=None
+    ):
         session = InterviewSession(
             id=session_id,
             participants=["p1"],
             messages=[],
             created_at=datetime.now(),
             is_saved=is_saved,
+            persona_models=persona_models,
         )
         self.interview_manager._active_sessions[session_id] = session
         return session
@@ -1167,6 +1238,35 @@ class TestInterviewManagerErrorPaths:
             InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
         ):
             list(self.interview_manager.send_user_message_streaming("s1", "hello"))
+
+    # --- send_user_message_streaming: mantle model + documents ---
+
+    def test_streaming_mantle_model_with_documents_raises_capacity_error(self):
+        from src.managers.interview_manager import InterviewValidationError
+
+        self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
+        ):
+            list(
+                self.interview_manager.send_user_message_streaming(
+                    "s1",
+                    "この画像について教えてください",
+                    document_contents=document_contents,
+                )
+            )
+
+        mock_agent.set_document_contents.assert_not_called()
 
     # --- send_user_message_streaming: all agents fail ---
 
