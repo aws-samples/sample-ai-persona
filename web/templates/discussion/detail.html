@@ -51,15 +51,14 @@
                     {% endif %}
                 </span>
             </div>
-            {% if discussion.agent_config.additional_instructions %}
             <div class="md:col-span-3">
-                <span class="text-purple-600 font-medium">追加指示:</span>
-                <span class="text-gray-700 ml-2">{{ discussion.agent_config.additional_instructions }}</span>
-            </div>
-            {% endif %}
-            <div class="flex items-center gap-2">
                 <span class="text-purple-600 font-medium">ファシリテータ:</span>
-                <span class="text-gray-700">{{ model_display_name(discussion.agent_config.get('facilitator_model')) }}</span>
+                <ul class="list-disc list-inside text-gray-700 mt-1 ml-2 space-y-1">
+                    <li>ベースモデル: {{ model_display_name(discussion.agent_config.get('facilitator_model')) }}</li>
+                    {% if discussion.agent_config.additional_instructions %}
+                    <li>追加指示: {{ discussion.agent_config.additional_instructions }}</li>
+                    {% endif %}
+                </ul>
             </div>
         </div>
     </div>
