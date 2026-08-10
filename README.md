@@ -66,7 +66,23 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 | インフラ | AWS CDK (TypeScript), ECS Express Mode, CloudFront, Lambda@Edge, WAF, ECR, Cognito |
 
 
-## 他ソリューションとの連携オプション
+## オプション
+
+### ペルソナベースモデルの追加
+
+しっかり議論・インタビューモードでは、デフォルトのClaude Haiku 4.5 / Claude Sonnet 5に加えて、以下モデルをペルソナ・ファシリテータ毎に選択ができます。
+- GPT-5.6 Terra
+- GPT-5.6 Luna
+- Gemma 4 31B
+
+
+オプションの有効化（デフォルトは表示されず、以下の方法で有効化した場合のみ画面上でモデル選択に表示されます。）
+- CDKデプロイ時: `parameters.ts` で `enableAdditionalPersonaModels: true` を設定
+- CloudShellスクリプトデプロイ時: `./deploy.sh --enable-additional-persona-models`
+
+詳細は [CDKデプロイガイド](cdk/README.md#パラメータ) と [ユーザーガイド](docs/user_guide.md#技術的な質問) を参照してください。
+
+### 他ソリューションとの連携
 
 AI ペルソナシステムは、他の AWS ソリューションと連携することで機能を拡張できます。
 
