@@ -576,22 +576,6 @@ class AgentDiscussionManager:
                 code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             ) from e
 
-    def _resolve_effective_persona_models(
-        self,
-        persona_agents: List[PersonaAgent],
-        persona_models: Optional[Dict[str, str]],
-    ) -> Dict[str, str]:
-        """未選択のペルソナにはconfig.AGENT_MODEL_ID（環境既定モデル）を補完する。
-
-        環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
-        添付種別・サイズ検証は「フォームで明示的に選ばれたモデル」だけでなく実際に呼び出される
-        モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
-        Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
-        """
-        return resolve_effective_persona_models(
-            (agent.get_persona_id() for agent in persona_agents), persona_models
-        )
-
     def _load_and_attach_documents(
         self,
         document_ids: Optional[List[str]],
@@ -615,14 +599,23 @@ class AgentDiscussionManager:
             )
 
             if documents_metadata:
-                effective_persona_models = self._resolve_effective_persona_models(
-                    persona_agents, persona_models
+                # 環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
+                # 添付種別・サイズ検証は「フォームで明示的に選ばれたモデル」だけでなく実際に呼び出される
+                # モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
+                # Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
+                effective_persona_models = resolve_effective_persona_models(
+                    (agent.get_persona_id() for agent in persona_agents),
+                    persona_models,
                 )
                 self._validate_document_support_for_models(
                     documents_metadata, effective_persona_models
                 )
-                self._validate_document_size_for_models(
-                    documents_metadata, effective_persona_models
+                total_size = sum(doc.get("file_size", 0) for doc in documents_metadata)
+                validate_document_size_for_models(
+                    total_size,
+                    effective_persona_models,
+                    AgentDiscussionManagerError,
+                    ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
                 )
 
                 document_context = build_document_context(documents_metadata)
@@ -672,23 +665,6 @@ class AgentDiscussionManager:
                     "types are not)",
                     code=ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED,
                 )
-
-    def _validate_document_size_for_models(
-        self,
-        documents_metadata: List[Dict[str, Any]],
-        persona_models: Optional[Dict[str, str]],
-    ) -> None:
-        """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
-
-        base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
-        """
-        total_size = sum(doc.get("file_size", 0) for doc in documents_metadata)
-        validate_document_size_for_models(
-            total_size,
-            persona_models,
-            AgentDiscussionManagerError,
-            ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
-        )
 
     def _validate_discussion_input(
         self,

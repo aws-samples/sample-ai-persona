@@ -266,20 +266,6 @@ class InterviewManager:
             ),
         )
 
-    def _resolve_effective_persona_models(
-        self,
-        participants: List[str],
-        persona_models: Optional[Mapping[str, Optional[str]]],
-    ) -> Dict[str, str]:
-        """未選択のペルソナにはconfig.AGENT_MODEL_ID（環境既定モデル）を補完する。
-
-        環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
-        添付種別・サイズ検証は「セッションで明示的に選ばれたモデル」だけでなく実際に呼び出される
-        モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
-        Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
-        """
-        return resolve_effective_persona_models(participants, persona_models)
-
     def _validate_document_support_for_models(
         self,
         document_contents: List[Dict[str, Any]],
@@ -382,7 +368,7 @@ class InterviewManager:
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
 
-        effective_persona_models = self._resolve_effective_persona_models(
+        effective_persona_models = resolve_effective_persona_models(
             session.participants, session.persona_models
         )
         if document_contents:
@@ -552,7 +538,7 @@ class InterviewManager:
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
             )
 
-        effective_persona_models = self._resolve_effective_persona_models(
+        effective_persona_models = resolve_effective_persona_models(
             session.participants, session.persona_models
         )
         if document_contents:
