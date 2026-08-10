@@ -527,7 +527,7 @@ class TestInterviewManagerModelSelectionValidation:
             )
         assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_UNSUPPORTED
 
-    @patch("src.managers.interview_manager.config")
+    @patch("src.managers.shared.model_validation.config")
     def test_start_interview_session_mantle_disabled_raises_config(self, mock_config):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
         with pytest.raises(InterviewManagerError) as exc_info:
@@ -959,7 +959,7 @@ class TestInterviewManagerMultimodal:
             }
         ]
 
-        with patch("src.managers.interview_manager.config") as mock_config:
+        with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
             mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
 
@@ -1546,7 +1546,7 @@ class TestInterviewManagerErrorPaths:
             }
         ]
 
-        with patch("src.managers.interview_manager.config") as mock_config:
+        with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
             mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
 

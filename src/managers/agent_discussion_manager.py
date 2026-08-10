@@ -7,9 +7,7 @@ import json
 import logging
 from typing import Generator, List, Dict, Mapping, Optional, Any
 
-from ..config import config
 from ..models.errors import CodedError, ErrorCode
-from ..models.model_registry import get_model_spec, is_supported
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -25,6 +23,13 @@ from ..services.agent_service import (
 )
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+from .shared.agent_cleanup import dispose_agents
+from .shared.model_validation import (
+    any_model_requires_mantle,
+    resolve_effective_persona_models,
+    validate_document_size_for_models,
+    validate_model_selection,
+)
 
 
 class AgentDiscussionManagerError(CodedError):
@@ -279,23 +284,12 @@ class AgentDiscussionManager:
         Args:
             model_ids: 検証対象の {識別子: model_id} マップ（Noneは既定モデルとしてスキップ）
         """
-        if not model_ids:
-            return
-        for identifier, model_id in model_ids.items():
-            if model_id is None:
-                continue
-            if not is_supported(model_id):
-                raise AgentDiscussionManagerError(
-                    f"unsupported model_id {model_id!r} for {identifier!r}",
-                    code=ErrorCode.DISCUSSION_MODEL_UNSUPPORTED,
-                )
-            spec = get_model_spec(model_id)
-            if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
-                raise AgentDiscussionManagerError(
-                    f"model {model_id!r} requires Mantle but "
-                    "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
-                    code=ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
-                )
+        validate_model_selection(
+            model_ids,
+            AgentDiscussionManagerError,
+            ErrorCode.DISCUSSION_MODEL_UNSUPPORTED,
+            ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
+        )
 
     def start_agent_discussion(
         self,
@@ -594,12 +588,9 @@ class AgentDiscussionManager:
         モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
         Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
         """
-        resolved = dict(persona_models or {})
-        for agent in persona_agents:
-            persona_id = agent.get_persona_id()
-            if not resolved.get(persona_id):
-                resolved[persona_id] = config.AGENT_MODEL_ID
-        return resolved
+        return resolve_effective_persona_models(
+            (agent.get_persona_id() for agent in persona_agents), persona_models
+        )
 
     def _load_and_attach_documents(
         self,
@@ -667,13 +658,7 @@ class AgentDiscussionManager:
         現行実装のままMantle側も問題なく受理する（同検証で確認済み）。
         そのためdocument系（PDF等）のみを拒否し、imageは許可する。
         """
-        if not persona_models:
-            return
-        uses_mantle = any(
-            get_model_spec(model_id).requires_mantle
-            for model_id in set(persona_models.values())
-        )
-        if not uses_mantle:
+        if not any_model_requires_mantle(persona_models):
             return
 
         from .shared.document_loader import is_image_type
@@ -697,25 +682,13 @@ class AgentDiscussionManager:
 
         base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
         """
-        if not persona_models:
-            return
-
         total_size = sum(doc.get("file_size", 0) for doc in documents_metadata)
-        if total_size == 0:
-            return
-
-        for model_id in set(persona_models.values()):
-            spec = get_model_spec(model_id)
-            if spec.max_request_bytes is None:
-                continue
-            effective_max = int(spec.max_request_bytes * 3 / 4)
-            if total_size > effective_max:
-                raise AgentDiscussionManagerError(
-                    f"document total size {total_size} exceeds model {model_id!r} "
-                    f"limit (effective max {effective_max})",
-                    code=ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
-                    context={"max_size_mb": spec.max_request_bytes / (1024 * 1024)},
-                )
+        validate_document_size_for_models(
+            total_size,
+            persona_models,
+            AgentDiscussionManagerError,
+            ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE,
+        )
 
     def _validate_discussion_input(
         self,
@@ -1197,20 +1170,22 @@ class AgentDiscussionManager:
         """
         try:
             # ペルソナエージェントのリソース解放
-            for agent in persona_agents:
-                try:
-                    agent.dispose()
-                except Exception as e:
-                    self.logger.warning(f"ペルソナエージェントの解放中にエラー: {e}")
+            dispose_agents(
+                persona_agents,
+                self.logger,
+                error_message=lambda _agent,
+                e: f"ペルソナエージェントの解放中にエラー: {e}",
+            )
 
             # ファシリテータエージェントのリソース解放
             if facilitator is not None:
-                try:
-                    facilitator.dispose()
-                except Exception as e:
-                    self.logger.warning(
+                dispose_agents(
+                    [facilitator],
+                    self.logger,
+                    error_message=lambda _agent, e: (
                         f"ファシリテータエージェントの解放中にエラー: {e}"
-                    )
+                    ),
+                )
 
             self.logger.info("全エージェントのリソース解放が完了しました")
 

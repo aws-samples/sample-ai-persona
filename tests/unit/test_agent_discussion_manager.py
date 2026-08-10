@@ -136,7 +136,7 @@ class TestModelSelectionValidation:
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_UNSUPPORTED
 
-    @patch("src.managers.agent_discussion_manager.config")
+    @patch("src.managers.shared.model_validation.config")
     def test_create_persona_agents_mantle_disabled_raises_config(
         self, mock_config, sample_persona, sample_persona_2
     ):
@@ -401,7 +401,7 @@ class TestResolveEffectivePersonaModels:
         agent1 = Mock(spec=PersonaAgent)
         agent1.get_persona_id.return_value = "persona-1"
 
-        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+        with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
             resolved = manager._resolve_effective_persona_models([agent1], None)
 
@@ -412,7 +412,7 @@ class TestResolveEffectivePersonaModels:
         agent1 = Mock(spec=PersonaAgent)
         agent1.get_persona_id.return_value = "persona-1"
 
-        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+        with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
             resolved = manager._resolve_effective_persona_models(
                 [agent1], {"persona-1": "openai.gpt-5.6-terra"}
@@ -427,7 +427,7 @@ class TestResolveEffectivePersonaModels:
         agent1.get_persona_id.return_value = "persona-1"
         documents_metadata = [{"file_size": 4 * 1024 * 1024}]  # 4MB > 3.5MB上限
 
-        with patch("src.managers.agent_discussion_manager.config") as mock_config:
+        with patch("src.managers.shared.model_validation.config") as mock_config:
             mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
             effective = manager._resolve_effective_persona_models([agent1], None)
 

@@ -11,7 +11,6 @@ from datetime import datetime
 
 from ..config import config
 from ..models.errors import CodedError, ErrorCode
-from ..models.model_registry import get_model_spec, is_supported
 from ..models.persona import Persona
 from ..models.discussion import Discussion
 from ..models.message import Message
@@ -24,6 +23,13 @@ from ..services.agent_service import (
     AgentCommunicationError,
 )
 from ..services.database_service import DatabaseService, DatabaseError
+from .shared.agent_cleanup import dispose_agents
+from .shared.model_validation import (
+    any_model_requires_mantle,
+    resolve_effective_persona_models,
+    validate_document_size_for_models,
+    validate_model_selection,
+)
 
 
 class InterviewManagerError(CodedError):
@@ -248,23 +254,17 @@ class InterviewManager:
         未対応のmodel_idはVALIDATION、追加ペルソナベースモデルだが
         ENABLE_ADDITIONAL_PERSONA_MODELS無効時はCONFIG。
         """
-        if not model_ids:
-            return
-        for persona_id, model_id in model_ids.items():
-            if model_id is None:
-                continue
-            if not is_supported(model_id):
-                raise InterviewValidationError(
-                    f"unsupported model_id {model_id!r} for persona {persona_id!r}",
-                    code=ErrorCode.INTERVIEW_MODEL_UNSUPPORTED,
+        validate_model_selection(
+            model_ids,
+            InterviewValidationError,
+            ErrorCode.INTERVIEW_MODEL_UNSUPPORTED,
+            ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+            unsupported_message=(
+                lambda persona_id, model_id: (
+                    f"unsupported model_id {model_id!r} for persona {persona_id!r}"
                 )
-            spec = get_model_spec(model_id)
-            if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
-                raise InterviewValidationError(
-                    f"model {model_id!r} requires Mantle but "
-                    "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
-                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
-                )
+            ),
+        )
 
     def _resolve_effective_persona_models(
         self,
@@ -278,11 +278,7 @@ class InterviewManager:
         モデルを対象にする必要がある（persona_models=Noneのまま検証をスキップすると、環境既定を
         Mantle系にした運用でサイズ・種別制限を回避できてしまう）。
         """
-        resolved: Dict[str, str] = {}
-        for persona_id in participants:
-            model_id = (persona_models or {}).get(persona_id)
-            resolved[persona_id] = model_id or config.AGENT_MODEL_ID
-        return resolved
+        return resolve_effective_persona_models(participants, persona_models)
 
     def _validate_document_support_for_models(
         self,
@@ -299,14 +295,7 @@ class InterviewManager:
         現行実装のままMantle側も問題なく受理する（同検証で確認済み）。
         そのためdocument系（PDF等）のみを拒否し、imageは許可する。
         """
-        if not persona_models:
-            return
-        uses_mantle = any(
-            get_model_spec(model_id).requires_mantle
-            for model_id in set(persona_models.values())
-            if model_id is not None
-        )
-        if not uses_mantle:
+        if not any_model_requires_mantle(persona_models):
             return
 
         for content in document_contents:
@@ -329,30 +318,16 @@ class InterviewManager:
         添付済みのドキュメント（existing_document_metadata）も合計に含める。
         base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
         """
-        if not persona_models:
-            return
-
         total_size = sum(
             doc.get("file_size", 0)
             for doc in (existing_document_metadata or []) + new_document_metadata
         )
-        if total_size == 0:
-            return
-
-        for model_id in set(persona_models.values()):
-            if model_id is None:
-                continue
-            spec = get_model_spec(model_id)
-            if spec.max_request_bytes is None:
-                continue
-            effective_max = int(spec.max_request_bytes * 3 / 4)
-            if total_size > effective_max:
-                raise InterviewValidationError(
-                    f"document total size {total_size} exceeds model {model_id!r} "
-                    f"limit (effective max {effective_max})",
-                    code=ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
-                    context={"max_size_mb": spec.max_request_bytes / (1024 * 1024)},
-                )
+        validate_document_size_for_models(
+            total_size,
+            persona_models,
+            InterviewValidationError,
+            ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
+        )
 
     def send_user_message(
         self,
@@ -797,19 +772,27 @@ class InterviewManager:
         try:
             # Clean up persona agents with detailed error tracking
             persona_agents = self._session_agents.get(session_id, [])
-            for i, agent in enumerate(persona_agents):
-                try:
-                    agent_name = (
-                        agent.get_persona_name()
-                        if hasattr(agent, "get_persona_name")
-                        else f"Agent-{i}"
-                    )
-                    agent.dispose()
-                    self.logger.debug(f"Successfully disposed agent: {agent_name}")
-                except Exception as e:
-                    error_msg = f"Error disposing agent {agent_name}: {e}"
-                    self.logger.warning(error_msg)
-                    cleanup_errors.append(error_msg)
+
+            def _agent_label(agent: Any) -> str:
+                return (
+                    agent.get_persona_name()
+                    if hasattr(agent, "get_persona_name")
+                    else repr(agent)
+                )
+
+            def _record_dispose_error(agent: Any, e: Exception) -> str:
+                error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
+                cleanup_errors.append(error_msg)
+                return error_msg
+
+            dispose_agents(
+                persona_agents,
+                self.logger,
+                error_message=_record_dispose_error,
+                success_message=lambda agent: (
+                    f"Successfully disposed agent: {_agent_label(agent)}"
+                ),
+            )
 
             # Remove from active sessions
             try:
@@ -1239,19 +1222,26 @@ class InterviewManager:
             f"Cleaning up {len(persona_agents)} persona agents for session: {session_id}"
         )
 
-        for i, agent in enumerate(persona_agents):
-            try:
-                agent_name = (
-                    agent.get_persona_name()
-                    if hasattr(agent, "get_persona_name")
-                    else f"Agent-{i}"
-                )
-                agent.dispose()
-                self.logger.debug(f"Successfully disposed agent: {agent_name}")
-            except Exception as e:
-                error_msg = f"Error disposing agent {agent_name}: {e}"
-                self.logger.warning(error_msg)
-                cleanup_errors.append(error_msg)
+        def _agent_label(agent: Any) -> str:
+            return (
+                agent.get_persona_name()
+                if hasattr(agent, "get_persona_name")
+                else repr(agent)
+            )
+
+        def _record_dispose_error(agent: Any, e: Exception) -> str:
+            error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
+            cleanup_errors.append(error_msg)
+            return error_msg
+
+        dispose_agents(
+            persona_agents,
+            self.logger,
+            error_message=_record_dispose_error,
+            success_message=lambda agent: (
+                f"Successfully disposed agent: {_agent_label(agent)}"
+            ),
+        )
 
         # Remove agents from tracking
         try:
@@ -1281,11 +1271,12 @@ class InterviewManager:
         """
         try:
             # Clean up agents
-            for agent in persona_agents:
-                try:
-                    agent.dispose()
-                except Exception as e:
-                    self.logger.warning(f"Error disposing agent during cleanup: {e}")
+            dispose_agents(
+                persona_agents,
+                self.logger,
+                error_message=lambda _agent,
+                e: f"Error disposing agent during cleanup: {e}",
+            )
 
             # Clean up session if it was created
             if session_id and session_id in self._active_sessions:
