@@ -387,8 +387,8 @@ class ErrorCode(StrEnum):
         ErrorKind.CAPACITY,
     )
     # 追加ペルソナベースモデル（Bedrock Mantle経由。requires_mantle=True）は
-    # 現状ドキュメント添付（画像・PDF等）に対応していない（Strands SDK側の既知の制約）。
-    # モデルを変えるか添付を外せば解決するため CAPACITY。
+    # 現状PDF等のdocument添付に対応していない（Strands SDK側がfilenameを送信しない
+    # 実装漏れが原因。画像は対応済み）。モデルを変えるか添付を外せば解決するため CAPACITY。
     DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED = (
         "discussion_model_document_unsupported",
         ErrorKind.CAPACITY,
@@ -506,8 +506,8 @@ class ErrorCode(StrEnum):
         ErrorKind.CONFIG,
     )
     # 追加ペルソナベースモデル（Bedrock Mantle経由。requires_mantle=True）は
-    # 現状ドキュメント添付（画像・PDF等）に対応していない（Strands SDK側の既知の制約）。
-    # モデルを変えるか添付を外せば解決するため CAPACITY。
+    # 現状PDF等のdocument添付に対応していない（Strands SDK側がfilenameを送信しない
+    # 実装漏れが原因。画像は対応済み）。モデルを変えるか添付を外せば解決するため CAPACITY。
     INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED = (
         "interview_model_document_unsupported",
         ErrorKind.CAPACITY,

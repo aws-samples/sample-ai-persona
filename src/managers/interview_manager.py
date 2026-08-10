@@ -268,25 +268,34 @@ class InterviewManager:
 
     def _validate_document_support_for_models(
         self,
+        document_contents: List[Dict[str, Any]],
         persona_models: Optional[Mapping[str, Optional[str]]],
     ) -> None:
-        """追加ペルソナベースモデル（Mantle経由）がドキュメント添付付きで選択されていないか検証する。
+        """追加ペルソナベースモデル（Mantle経由）に非対応のドキュメントが添付されていないか検証する。
 
-        Strands SDK 1.51.0のOpenAIResponsesModel（Mantle経由）はinput_file/input_image
-        構築時にfilenameを送信せず、Mantle側のファイル種別判定が失敗して
-        "Unsupported file type: 'unknown'"エラーになる既知の制約がある
-        （PDF・画像とも再現。上流SDK修正待ち）。修正されるまで事前に弾く。
+        Strands SDK（1.51.0時点）のOpenAIResponsesModel（Mantle経由）は、document
+        （PDF等。input_file）構築時にfilenameを送信せずMantle側のファイル種別判定が失敗する
+        既知の実装漏れがある（Mantleエンドポイント自体はfilename付きの正しい形式なら受理する。
+        AWS実機での直接検証で確認済み。上流SDK修正待ち: strands-agents #3576 / #3674）。
+        image（input_image）はfilenameという概念自体を持たないパラメータ形式のため、
+        現行実装のままMantle側も問題なく受理する（同検証で確認済み）。
+        そのためdocument系（PDF等）のみを拒否し、imageは許可する。
         """
         if not persona_models:
             return
+        uses_mantle = any(
+            get_model_spec(model_id).requires_mantle
+            for model_id in set(persona_models.values())
+            if model_id is not None
+        )
+        if not uses_mantle:
+            return
 
-        for model_id in set(persona_models.values()):
-            if model_id is None:
-                continue
-            spec = get_model_spec(model_id)
-            if spec.requires_mantle:
+        for content in document_contents:
+            if "document" in content:
                 raise InterviewValidationError(
-                    f"model {model_id!r} does not support document attachments",
+                    "document attachments are not supported by Mantle-routed "
+                    "models (image is supported, other document types are not)",
                     code=ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED,
                 )
 
@@ -344,7 +353,9 @@ class InterviewManager:
             )
 
         if document_contents:
-            self._validate_document_support_for_models(session.persona_models)
+            self._validate_document_support_for_models(
+                document_contents, session.persona_models
+            )
 
         self.logger.info(
             f"Processing user message in session {session_id}: '{message[:50]}...' (documents: {len(document_contents) if document_contents else 0})"
@@ -505,7 +516,9 @@ class InterviewManager:
             )
 
         if document_contents:
-            self._validate_document_support_for_models(session.persona_models)
+            self._validate_document_support_for_models(
+                document_contents, session.persona_models
+            )
 
         # Add user message to session
         session = session.add_user_message(message.strip())
