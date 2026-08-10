@@ -32,6 +32,7 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
+from ._form_parsing import parse_persona_models
 
 logger = logging.getLogger(__name__)
 
@@ -87,25 +88,6 @@ def get_interview_manager() -> InterviewManager:
     return _interview_manager
 
 
-def _parse_persona_models(form_data) -> Optional[dict[str, str]]:  # type: ignore[no-untyped-def]
-    """フォームデータから persona_models[<persona_id>]=<model_id> を解析する。
-
-    FastAPIはこの形式のキーを自動でdict化できないため、Request.form()の生キーを
-    web/routers/discussion.py の同名ヘルパーと同型でパースする。
-    """
-    prefix = "persona_models["
-    persona_models: dict[str, str] = {}
-    for key in form_data.keys():
-        if not key.startswith(prefix) or not key.endswith("]"):
-            continue
-        persona_id = key[len(prefix) : -1]
-        model_id = form_data.get(key, "").strip()
-        if persona_id and model_id:
-            persona_models[persona_id] = model_id
-
-    return persona_models if persona_models else None
-
-
 @router.post("/create", response_class=JSONResponse)
 async def create_interview_session(
     request: Request,
@@ -157,7 +139,7 @@ async def create_interview_session(
 
         # Create session with enhanced error handling
         form_data = await request.form()
-        persona_models = _parse_persona_models(form_data)
+        persona_models = parse_persona_models(form_data)
 
         loop = asyncio.get_event_loop()
         interview_manager = get_interview_manager()

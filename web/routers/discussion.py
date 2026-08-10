@@ -33,6 +33,7 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
+from ._form_parsing import parse_persona_models
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -150,25 +151,6 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 
     # カテゴリーが見つからない場合はNone（デフォルトを使用）
     return categories if categories else None
-
-
-def _parse_persona_models(form_data) -> Optional[dict[str, str]]:  # type: ignore[no-untyped-def]
-    """フォームデータから persona_models[<persona_id>]=<model_id> を解析する。
-
-    FastAPIはこの形式のキーを自動でdict化できないため、Request.form()の生キーを
-    _parse_categories_from_form と同型でパースする。
-    """
-    prefix = "persona_models["
-    persona_models: dict[str, str] = {}
-    for key in form_data.keys():
-        if not key.startswith(prefix) or not key.endswith("]"):
-            continue
-        persona_id = key[len(prefix) : -1]
-        model_id = form_data.get(key, "").strip()
-        if persona_id and model_id:
-            persona_models[persona_id] = model_id
-
-    return persona_models if persona_models else None
 
 
 @router.get("/setup", response_class=HTMLResponse)
@@ -580,7 +562,7 @@ async def start_discussion(
 
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
-        persona_models = _parse_persona_models(form_data)
+        persona_models = parse_persona_models(form_data)
         facilitator_model_raw = form_data.get("facilitator_model", "")
         facilitator_model = (
             facilitator_model_raw.strip()
