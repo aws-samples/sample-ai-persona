@@ -70,7 +70,7 @@ export class AIPersonaStack extends Stack {
       awsRegion: this.region,
       bedrockModelId: parameter.bedrockModelId,
       agentModelId: parameter.agentModelId,
-      enableMantleModels: parameter.enableMantleModels ?? false,
+      enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels ?? false,
       agentCoreMemoryId,
       summaryMemoryStrategyId,
       semanticMemoryStrategyId,

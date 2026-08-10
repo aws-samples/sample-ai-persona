@@ -215,7 +215,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DISCUSSION_MODEL_UNSUPPORTED: (
         "選択されたモデルは利用できません。設定を確認してください"
     ),
-    ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED: (
+    ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED: (
         "選択されたモデルは現在無効化されています。管理者に設定の有効化を依頼してください"
     ),
     ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE: (
@@ -299,7 +299,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.INTERVIEW_MODEL_UNSUPPORTED: (
         "選択されたモデルはインタビューで利用できません。設定を確認してください"
     ),
-    ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED: (
+    ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED: (
         "選択されたモデルは現在無効化されています。"
         "管理者にインタビュー用モデル設定の有効化を依頼してください"
     ),
@@ -360,7 +360,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     # --- Service層（Manager層が必ず自ドメイン例外に変換するため到達しない） ---
     ErrorCode.AGENT_SDK_UNAVAILABLE: "エージェントSDKが利用できません",
-    ErrorCode.AGENT_MODEL_MANTLE_DISABLED: "選択されたモデルは現在無効化されています",
+    ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED: "選択されたモデルは現在無効化されています",
     ErrorCode.AGENT_INITIALIZATION_FAILED: "エージェントの初期化に失敗しました",
     ErrorCode.AGENT_COMMUNICATION_FAILED: "エージェントとの通信に失敗しました",
     ErrorCode.AI_BEDROCK_UNAVAILABLE: "Bedrockサービスが利用できません",

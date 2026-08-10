@@ -7,12 +7,14 @@ list_selectable_models（Mantle出し分け）の関心分離を検証する。
 from src.config import config
 from src.models.model_registry import (
     DEFAULT_MODEL_ID,
+    MANTLE_FALLBACK_REGION,
     SUPPORTED_MODELS,
     ModelProvider,
     display_name_for,
     get_model_spec,
     is_supported,
     list_selectable_models,
+    resolve_call_region,
 )
 
 
@@ -61,13 +63,13 @@ class TestDisplayNameFor:
 
 
 class TestListSelectableModels:
-    def test_mantle_disabled_excludes_requires_mantle_models(self):
-        models = list_selectable_models(enable_mantle=False)
+    def test_disabled_excludes_requires_mantle_models(self):
+        models = list_selectable_models(enable_additional_models=False)
         assert all(not spec.requires_mantle for spec in models)
         assert any(spec.model_id == DEFAULT_MODEL_ID for spec in models)
 
-    def test_mantle_enabled_includes_all_models(self):
-        models = list_selectable_models(enable_mantle=True)
+    def test_enabled_includes_all_models(self):
+        models = list_selectable_models(enable_additional_models=True)
         model_ids = {spec.model_id for spec in models}
         assert model_ids == set(SUPPORTED_MODELS.keys())
 
@@ -82,3 +84,26 @@ class TestGemma4RequestSizeLimit:
             if model_id == "google.gemma-4-31b":
                 continue
             assert spec.max_request_bytes is None
+
+
+class TestResolveCallRegion:
+    def test_bedrock_model_follows_deploy_region(self):
+        """Claude系(BEDROCK)はMantle制約がないためデプロイ先にそのまま追従する。"""
+        spec = SUPPORTED_MODELS[DEFAULT_MODEL_ID]
+        assert resolve_call_region(spec, "ap-northeast-1") == "ap-northeast-1"
+
+    def test_mantle_model_follows_deploy_region_when_supported(self):
+        """デプロイ先がMantle対応リージョン(us-west-2)ならそのまま使う。"""
+        spec = SUPPORTED_MODELS["openai.gpt-5.6-terra"]
+        assert resolve_call_region(spec, "us-west-2") == "us-west-2"
+
+    def test_mantle_model_falls_back_when_deploy_region_unsupported(self):
+        """デプロイ先がMantle非対応リージョン(東京)ならフォールバックする。"""
+        spec = SUPPORTED_MODELS["google.gemma-4-31b"]
+        assert resolve_call_region(spec, "ap-northeast-1") == MANTLE_FALLBACK_REGION
+
+    def test_mantle_fallback_region_is_itself_supported(self):
+        """フォールバック先がMantle対応リージョンでなければ無限に非対応になる。"""
+        from src.models.model_registry import MANTLE_SUPPORTED_REGIONS
+
+        assert MANTLE_FALLBACK_REGION in MANTLE_SUPPORTED_REGIONS

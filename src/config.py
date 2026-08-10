@@ -58,11 +58,12 @@ class Config:
     MIN_ROUNDS: int = 1
     MAX_ROUNDS: int = 10
 
-    # ペルソナ議論・インタビューでの非Anthropicモデル選択（Bedrock Mantle経由）。
+    # ペルソナ議論・インタビューでの追加ペルソナベースモデル（非Anthropicモデル。
+    # Bedrock Mantle経由で呼び出す）の選択を許可するか。
     # SigV4認証情報から短期Bearerトークンを都度生成する方式のため長期APIキーは不要だが、
     # 既定は無効（graceful degradation）。有効化にはbedrock-mantle:CreateInference/
     # CallWithBearerTokenのIAM権限が必要。
-    ENABLE_MANTLE_MODELS: bool = False
+    ENABLE_ADDITIONAL_PERSONA_MODELS: bool = False
 
     # AgentCore Memory設定
     AGENTCORE_MEMORY_ID: Optional[str] = None
@@ -94,11 +95,13 @@ class Config:
         if agent_max_tokens:
             self.AGENT_MAX_TOKENS = int(agent_max_tokens)
 
-        enable_mantle = os.getenv("ENABLE_MANTLE_MODELS", "").lower()
-        if enable_mantle in ("true", "1", "yes"):
-            self.ENABLE_MANTLE_MODELS = True
-        elif enable_mantle in ("false", "0", "no"):
-            self.ENABLE_MANTLE_MODELS = False
+        enable_additional_persona_models = os.getenv(
+            "ENABLE_ADDITIONAL_PERSONA_MODELS", ""
+        ).lower()
+        if enable_additional_persona_models in ("true", "1", "yes"):
+            self.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+        elif enable_additional_persona_models in ("false", "0", "no"):
+            self.ENABLE_ADDITIONAL_PERSONA_MODELS = False
 
         # DynamoDB設定を環境変数から上書き
         self.DYNAMODB_TABLE_PREFIX = os.getenv(

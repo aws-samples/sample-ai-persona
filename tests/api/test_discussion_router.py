@@ -40,7 +40,7 @@ class TestDiscussionSetupPage:
     def test_setup_page_passes_selectable_models_to_template(
         self, mock_get_manager, mock_list_selectable_models, client
     ):
-        """discussion_setup_pageがlist_selectable_models(config.ENABLE_MANTLE_MODELS)の
+        """discussion_setup_pageがlist_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS)の
         結果をテンプレートコンテキストに渡すことを確認（Issue #107 R8）"""
         from src.models.model_registry import DEFAULT_MODEL_ID, SUPPORTED_MODELS
 
@@ -54,12 +54,12 @@ class TestDiscussionSetupPage:
 
     @patch("web.routers.discussion.config")
     @patch("web.routers.discussion.get_persona_manager")
-    def test_setup_page_uses_enable_mantle_models_config(
+    def test_setup_page_uses_enable_additional_persona_models_config(
         self, mock_get_manager, mock_config, client
     ):
-        """discussion_setup_pageがconfig.ENABLE_MANTLE_MODELSをlist_selectable_modelsに渡すこと"""
+        """discussion_setup_pageがconfig.ENABLE_ADDITIONAL_PERSONA_MODELSをlist_selectable_modelsに渡すこと"""
         mock_get_manager.return_value = Mock()
-        mock_config.ENABLE_MANTLE_MODELS = True
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
 
         response = client.get("/discussion/setup")
 
@@ -362,7 +362,7 @@ class TestDiscussionDetailEndpoint:
         response = client.get(f"/discussion/{legacy_discussion.id}")
 
         assert response.status_code == 200
-        assert "Claude Haiku 4.5（既定）" in response.text
+        assert "Claude Haiku 4.5" in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_get_detail_not_found(self, mock_get_manager, client):

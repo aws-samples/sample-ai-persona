@@ -153,15 +153,15 @@ class AgentDiscussionManager:
                 self.logger.info(f"Created persona agent: {persona.name}")
 
             except AgentConfigurationError as e:
-                # Mantle無効等の設定不足は個別ペルソナの失敗として握り潰さず、
-                # DISCUSSION_MODEL_MANTLE_DISABLED（CONFIG）として即時通知する
+                # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
+                # 握り潰さず、DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する
                 self.logger.error(
                     f"Configuration error creating agent for persona {persona.name}: {e}"
                 )
                 raise AgentDiscussionManagerError(
                     f"model configuration error for persona {persona.name} "
                     f"({type(e).__name__})",
-                    code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+                    code=ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
                 ) from e
             except AgentInitializationError as e:
                 error_msg = f"Failed to create agent for persona {persona.name}: {e}"
@@ -242,12 +242,12 @@ class AgentDiscussionManager:
             return facilitator
 
         except AgentConfigurationError as e:
-            # _create_modelが投げるコード付き例外（例: Mantle無効のCONFIG）は
+            # _create_modelが投げるコード付き例外（例: 追加ペルソナベースモデル無効のCONFIG）は
             # DISCUSSION_AGENT_SETUP_FAILEDに丸めず自ドメインのCONFIGコードへ変換する
             self.logger.error("Facilitator model configuration error", exc_info=True)
             raise AgentDiscussionManagerError(
                 f"facilitator model configuration error ({type(e).__name__})",
-                code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+                code=ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
             ) from e
         except AgentInitializationError as e:
             self.logger.error("Failed to create facilitator agent", exc_info=True)
@@ -269,7 +269,8 @@ class AgentDiscussionManager:
     ) -> None:
         """選択されたmodel_idが利用可能か検証する。
 
-        未対応のmodel_idはVALIDATION、Mantle系だがENABLE_MANTLE_MODELS無効時はCONFIG。
+        未対応のmodel_idはVALIDATION、追加ペルソナベースモデルだが
+        ENABLE_ADDITIONAL_PERSONA_MODELS無効時はCONFIG。
 
         Args:
             model_ids: 検証対象の {識別子: model_id} マップ（Noneは既定モデルとしてスキップ）
@@ -285,10 +286,11 @@ class AgentDiscussionManager:
                     code=ErrorCode.DISCUSSION_MODEL_UNSUPPORTED,
                 )
             spec = get_model_spec(model_id)
-            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+            if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
                 raise AgentDiscussionManagerError(
-                    f"model {model_id!r} requires Mantle but ENABLE_MANTLE_MODELS is disabled",
-                    code=ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED,
+                    f"model {model_id!r} requires Mantle but "
+                    "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
+                    code=ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED,
                 )
 
     def start_agent_discussion(

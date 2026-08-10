@@ -35,7 +35,8 @@ class AgentInitializationError(AgentServiceError):
 
 
 class AgentConfigurationError(AgentServiceError):
-    """運用者の設定変更が必要なエラー（例: Mantle系モデル選択時にENABLE_MANTLE_MODELSが無効）。
+    """運用者の設定変更が必要なエラー（例: 追加ペルソナベースモデル選択時に
+    ENABLE_ADDITIONAL_PERSONA_MODELSが無効）。
 
     create_persona_agent/create_facilitator_agentのexcept節はこの型のCodedErrorを
     AGENT_INITIALIZATION_FAILEDに丸めず素通しする（error-catalog.md「コード付き例外を
@@ -557,34 +558,40 @@ class AgentService:
             BedrockModel または OpenAIResponsesModel インスタンス
 
         Raises:
-            AgentConfigurationError: Mantle系モデルがENABLE_MANTLE_MODELS無効時に選択された場合、
-                または依存パッケージ未導入等の設定不足（kind=CONFIG。設定画面へ誘導するため
-                AGENT_INITIALIZATION_FAILEDに丸めず素通しする）
+            AgentConfigurationError: 追加ペルソナベースモデルがENABLE_ADDITIONAL_PERSONA_MODELS
+                無効時に選択された場合、または依存パッケージ未導入等の設定不足
+                （kind=CONFIG。設定画面へ誘導するためAGENT_INITIALIZATION_FAILEDに丸めず素通しする）
             AgentInitializationError: モデル作成エラー
         """
-        from ..models.model_registry import ModelProvider, get_model_spec
+        from ..models.model_registry import (
+            ModelProvider,
+            get_model_spec,
+            resolve_call_region,
+        )
 
         spec = get_model_spec(model_id)
+        region = resolve_call_region(spec, config.AWS_REGION)
 
         if spec.provider == ModelProvider.OPENAI_RESPONSES:
-            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+            if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
                 raise AgentConfigurationError(
-                    f"Mantle model {spec.model_id!r} selected but ENABLE_MANTLE_MODELS is disabled",
-                    code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED,
+                    f"Model {spec.model_id!r} requires Mantle but "
+                    "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
+                    code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED,
                 )
             try:
                 model = self._create_openai_responses_model_instance(
-                    spec.model_id, spec.region
+                    spec.model_id, region
                 )
                 self.logger.info(
-                    f"OpenAIResponses (Mantle) model created: {spec.model_id}"
+                    f"OpenAIResponses (Mantle) model created: {spec.model_id} (region={region})"
                 )
                 return model
             except ImportError as e:
                 error_msg = f"strands-agents[openai] extra is not installed: {e}"
                 self.logger.error(error_msg)
                 raise AgentConfigurationError(
-                    error_msg, code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+                    error_msg, code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
                 ) from e
             except Exception as e:
                 error_msg = (
@@ -596,8 +603,10 @@ class AgentService:
                 ) from e
 
         try:
-            model = self._create_bedrock_model_instance(spec.model_id, spec.region)
-            self.logger.info(f"Bedrock model created: {spec.model_id}")
+            model = self._create_bedrock_model_instance(spec.model_id, region)
+            self.logger.info(
+                f"Bedrock model created: {spec.model_id} (region={region})"
+            )
             return model
 
         except Exception as e:

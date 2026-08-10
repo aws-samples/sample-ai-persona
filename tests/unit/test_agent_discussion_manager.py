@@ -139,7 +139,7 @@ class TestModelSelectionValidation:
     def test_create_persona_agents_mantle_disabled_raises_config(
         self, mock_config, sample_persona, sample_persona_2
     ):
-        mock_config.ENABLE_MANTLE_MODELS = False
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
         manager, _ = self._make_manager()
         manager._create_agent_with_integrations = Mock()
 
@@ -150,7 +150,7 @@ class TestModelSelectionValidation:
                 persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
 
     def test_create_facilitator_agent_unsupported_model_raises_validation(self):
         manager, _ = self._make_manager()
@@ -170,14 +170,14 @@ class TestModelSelectionValidation:
         manager, _ = self._make_manager()
         manager._create_agent_with_integrations = Mock(
             side_effect=AgentConfigurationError(
-                "mantle disabled", code=ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+                "mantle disabled", code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
             )
         )
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.create_persona_agents([sample_persona, sample_persona_2], {})
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_MANTLE_DISABLED
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
 
 
 class TestValidateDocumentSizeForModels:

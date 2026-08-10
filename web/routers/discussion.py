@@ -174,7 +174,7 @@ def _parse_persona_models(form_data) -> Optional[dict[str, str]]:  # type: ignor
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
     """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
-    selectable_models = list_selectable_models(config.ENABLE_MANTLE_MODELS)
+    selectable_models = list_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS)
     return templates.TemplateResponse(
         request,
         "discussion/setup.html",
@@ -182,7 +182,7 @@ async def discussion_setup_page(request: Request) -> Any:
             "request": request,
             "title": "議論設定",
             "selectable_models": selectable_models,
-            "enable_mantle": config.ENABLE_MANTLE_MODELS,
+            "enable_additional_models": config.ENABLE_ADDITIONAL_PERSONA_MODELS,
         },
     )
 

@@ -528,13 +528,13 @@ class TestInterviewManagerModelSelectionValidation:
 
     @patch("src.managers.interview_manager.config")
     def test_start_interview_session_mantle_disabled_raises_config(self, mock_config):
-        mock_config.ENABLE_MANTLE_MODELS = False
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
         with pytest.raises(InterviewManagerError) as exc_info:
             self.interview_manager.start_interview_session(
                 self.test_personas,
                 persona_models={"persona-1": "openai.gpt-5.6-terra"},
             )
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED
 
     @patch("src.managers.interview_manager.uuid.uuid4")
     def test_start_interview_session_stores_persona_models(self, mock_uuid):

@@ -110,8 +110,8 @@ class TestAgentService:
 
     @patch("src.services.agent_service.config")
     def test_create_model_mantle_disabled_raises_config_error(self, mock_config):
-        """ENABLE_MANTLE_MODELS無効時にMantle系モデルを選択するとCONFIGエラーになる。"""
-        mock_config.ENABLE_MANTLE_MODELS = False
+        """ENABLE_ADDITIONAL_PERSONA_MODELS無効時にMantle系モデルを選択するとCONFIGエラーになる。"""
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
 
         with (
             patch("src.services.agent_service.Agent"),
@@ -122,7 +122,7 @@ class TestAgentService:
         with pytest.raises(AgentConfigurationError) as exc_info:
             agent_service._create_model("openai.gpt-5.6-terra")
 
-        assert exc_info.value.code is ErrorCode.AGENT_MODEL_MANTLE_DISABLED
+        assert exc_info.value.code is ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
 
     def test_create_model_mantle_enabled_uses_bedrock_mantle_config(self):
         """Mantle有効時はOpenAIResponsesModelにbedrock_mantle_configとmax_output_tokensを渡す。"""
@@ -138,8 +138,9 @@ class TestAgentService:
                 "strands.models.openai_responses.OpenAIResponsesModel"
             ) as mock_openai_model,
         ):
-            mock_config.ENABLE_MANTLE_MODELS = True
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
             mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "us-east-1"
 
             agent_service._create_model("openai.gpt-5.6-terra")
 
@@ -148,6 +149,72 @@ class TestAgentService:
             assert call_kwargs["model_id"] == "openai.gpt-5.6-terra"
             assert call_kwargs["bedrock_mantle_config"] == {"region": "us-east-1"}
             assert call_kwargs["params"] == {"max_output_tokens": 32000}
+
+    def test_create_model_mantle_enabled_follows_deploy_region_when_supported(self):
+        """デプロイ先がMantle対応リージョン(us-west-2)ならそのリージョンを使う。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "us-west-2"
+
+            agent_service._create_model("google.gemma-4-31b")
+
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-west-2"}
+
+    def test_create_model_mantle_enabled_falls_back_when_deploy_region_unsupported(
+        self,
+    ):
+        """デプロイ先がMantle非対応リージョン(東京)ならus-east-1へフォールバックする。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "ap-northeast-1"
+
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-east-1"}
+
+    def test_create_model_bedrock_follows_deploy_region(self):
+        """Claude系(BEDROCK)モデルはMantle制約を受けずデプロイ先リージョンに追従する。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
+            patch("src.services.agent_service.config") as mock_config,
+        ):
+            mock_config.AWS_REGION = "ap-northeast-1"
+            mock_config.get_aws_credentials.return_value = {}
+            agent_service = AgentService()
+            mock_bedrock_model.reset_mock()
+
+            agent_service._create_model()
+
+            assert (
+                mock_bedrock_model.call_args.kwargs["region_name"] == "ap-northeast-1"
+            )
 
     def test_build_persona_system_prompt(self):
         """ペルソナシステムプロンプト生成テスト（src/prompts/に移動済み）"""

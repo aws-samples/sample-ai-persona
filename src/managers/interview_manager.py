@@ -196,12 +196,13 @@ class InterviewManager:
                 )
 
             except AgentConfigurationError as e:
-                # Mantle無効等の設定不足はINTERVIEW_AGENT_SETUP_FAILEDに丸めず
-                # 自ドメインのCONFIGコードへ変換する
+                # 追加ペルソナベースモデル無効等の設定不足はINTERVIEW_AGENT_SETUP_FAILEDに
+                # 丸めず自ドメインのCONFIGコードへ変換する
                 error_msg = f"model configuration error: {e}"
                 self.logger.error(error_msg)
                 raise InterviewAgentError(
-                    error_msg, code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED
+                    error_msg,
+                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 ) from e
             except AgentInitializationError as e:
                 error_msg = f"agent initialization failed: {e}"
@@ -244,7 +245,8 @@ class InterviewManager:
     ) -> None:
         """選択されたmodel_idが利用可能か検証する。
 
-        未対応のmodel_idはVALIDATION、Mantle系だがENABLE_MANTLE_MODELS無効時はCONFIG。
+        未対応のmodel_idはVALIDATION、追加ペルソナベースモデルだが
+        ENABLE_ADDITIONAL_PERSONA_MODELS無効時はCONFIG。
         """
         if not model_ids:
             return
@@ -257,10 +259,11 @@ class InterviewManager:
                     code=ErrorCode.INTERVIEW_MODEL_UNSUPPORTED,
                 )
             spec = get_model_spec(model_id)
-            if spec.requires_mantle and not config.ENABLE_MANTLE_MODELS:
+            if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
                 raise InterviewValidationError(
-                    f"model {model_id!r} requires Mantle but ENABLE_MANTLE_MODELS is disabled",
-                    code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED,
+                    f"model {model_id!r} requires Mantle but "
+                    "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
+                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 )
 
     def send_user_message(
@@ -808,8 +811,8 @@ class InterviewManager:
                 self.logger.info(f"Created persona agent for interview: {persona.name}")
 
             except AgentConfigurationError as e:
-                # Mantle無効等の設定不足は個別ペルソナの失敗として握り潰さず、
-                # INTERVIEW_MODEL_MANTLE_DISABLED（CONFIG）として即時通知する。
+                # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
+                # 握り潰さず、INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する。
                 # InterviewAgentErrorを使う（呼び出し元のexcept InterviewAgentError: raise
                 # で素通りさせ、except Exceptionによる再ラップでコードが潰れないようにする）
                 self.logger.error(
@@ -818,7 +821,7 @@ class InterviewManager:
                 raise InterviewAgentError(
                     f"model configuration error for persona {persona.name} "
                     f"({type(e).__name__})",
-                    code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED,
+                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 ) from e
             except AgentInitializationError as e:
                 error_msg = f"Failed to create agent for persona {persona.name}: {e}"

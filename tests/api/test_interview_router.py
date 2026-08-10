@@ -227,8 +227,8 @@ class TestCreateInterviewSessionEndpoint:
         mock_interview_manager.start_interview_session.side_effect = (
             InterviewValidationError(
                 "model 'openai.gpt-5.6-terra' requires Mantle but "
-                "ENABLE_MANTLE_MODELS is disabled",
-                code=ErrorCode.INTERVIEW_MODEL_MANTLE_DISABLED,
+                "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
+                code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
             )
         )
         mock_get_interview.return_value = mock_interview_manager
