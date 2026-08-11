@@ -30,6 +30,22 @@ When the user asks for a specific area only, scope to that and say which section
 `tests/api/` (`test_api_router.py`, `test_api_endpoints.py`), not by browser E2E. Do not
 test `/api/*` endpoints here — focus on the screen flows a user reaches through the UI.
 
+## Test Data
+
+When a scenario needs an upload file (persona generation source, dataset upload,
+survey custom persona data, etc.), check `sample_data/` first and reuse a matching
+file instead of authoring one from scratch:
+
+- `sample_custom_personas_500.csv` — マスアンケートのカスタムペルソナデータ（§6.1 CSVアップロード）
+- `sample_product_reviews.csv` — ペルソナ生成のデータソース「レビューデータ」（§1）
+- `sample_purchase_history.csv` — ペルソナ生成のデータソース「購買データ」（§1）、または外部データセット連携のデータセット（§7）
+
+These are small, realistic, already-valid files — good for exercising the happy
+path without spending time crafting content. They are unsuitable for boundary/error-path
+testing (file size limits, character count limits, unsupported extensions): for those,
+generate a purpose-built file (e.g. a file just over a size limit) as instructed by the
+specific scenario.
+
 ## Guidelines
 
 - Use `playwright-cli open http://localhost:8000` to start.
