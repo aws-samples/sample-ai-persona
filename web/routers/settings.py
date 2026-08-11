@@ -118,16 +118,27 @@ async def list_datasets(request: Request) -> Any:
 
 @router.get("/datasets/form", response_class=HTMLResponse)
 async def dataset_form(request: Request, dataset_id: Optional[str] = None) -> Any:
-    """データセットフォーム（新規/編集）"""
-    dataset = None
-    if dataset_id:
-        dataset_manager = get_dataset_manager()
-        dataset = dataset_manager.get_dataset(dataset_id)
+    """データセット編集フォーム"""
+    dataset_manager = get_dataset_manager()
+    dataset = dataset_manager.get_dataset(dataset_id) if dataset_id else None
+
+    if dataset_id and not dataset:
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(ErrorCode.DATASET_NOT_FOUND),
+                },
+                status_code=404,
+            )
+        )
 
     return templates.TemplateResponse(
         request,
         "settings/partials/dataset_form.html",
-        {"request": request, "dataset": dataset},
+        {"request": request, "dataset": dataset.to_dict() if dataset else None},
     )
 
 
