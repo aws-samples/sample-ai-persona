@@ -68,10 +68,10 @@ subagent per group concurrently, instead of one agent walking every scenario ser
      (e.g. `-s=persona`, `-s=discussion`, `-s=survey`, `-s=dataset`, `-s=settings`).
    - **A unique scratch upload dir** under the repo root, e.g.
      `tmp/e2e_<batch-name>/`, to be created before use and deleted when the batch finishes.
-   - **Reuse `sample_data/` for happy-path upload files** (persona sources, dataset
-     CSVs, survey custom persona data — see `e2e-test`'s own Test Data section for the
-     mapping). It's read-only and shared safely across concurrent batches, so no need to
-     copy it into the batch's scratch dir. Only files crafted for boundary/error-path
+   - **Reuse `sample_data/` and `tests/test_file/` for happy-path upload files**
+     (CSV sources, PDF, JPEG — see `e2e-test`'s own Test Data section for the mapping).
+     Both are read-only and shared safely across concurrent batches, so no need to
+     copy them into the batch's scratch dir. Only files crafted for boundary/error-path
      tests (oversized files, bad extensions, etc.) go in the scratch dir.
    - **The exact section numbers this batch owns**, and an explicit instruction not to
      touch sections owned by other batches (avoids duplicate/conflicting work and

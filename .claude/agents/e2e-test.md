@@ -40,6 +40,16 @@ file instead of authoring one from scratch:
 - `sample_product_reviews.csv` — ペルソナ生成のデータソース「レビューデータ」（§1）
 - `sample_purchase_history.csv` — ペルソナ生成のデータソース「購買データ」（§1）、または外部データセット連携のデータセット（§7）
 
+For a PDF or image, check `tests/test_file/` first:
+
+- `tests/test_file/pdf_test.pdf` — 2-page PDF; use for §1 ペルソナ生成（PDF形式）、§2 知識ファイル追加、
+  §3.1 議論/インタビューのドキュメント添付
+- `tests/test_file/test_image.jpeg` — real JPEG photo; use for §3.1 議論/インタビューの画像添付、
+  §6.2 マスアンケートの画像添付、§7章のマルチモーダル関連シナリオ
+
+There are no sample Word/PowerPoint/Excel files yet (§2 knowledge file upload also
+accepts these) — author one ad hoc if a scenario specifically needs that format.
+
 These are small, realistic, already-valid files — good for exercising the happy
 path without spending time crafting content. They are unsuitable for boundary/error-path
 testing (file size limits, character count limits, unsupported extensions): for those,
