@@ -126,11 +126,17 @@ chmod +x deploy.sh
 #### オプション
 
 ```bash
-# 長期記憶機能をスキップ（紹介以降や長期記憶機能をOFFにしたい場合）
+# 環境名・リージョンを指定（デフォルト環境：dev、デフォルトリージョン：us-east-1）
+./destroy.sh --env prod --region us-west-2
+
+# 長期記憶機能をスキップ（長期記憶機能をスキップしたい場合）
 ./deploy.sh --skip-memory
 
-# Cognito認証をスキップ（初回以降）
+# Cognito認証をスキップ（初回以降は必須）
 ./deploy.sh --skip-cognito
+
+# 両方スキップ（初回デプロイ以降の更新）
+./deploy.sh --skip-memory --skip-cognito
 
 # セルフサインアップを有効化
 ./deploy.sh --self-signup
@@ -138,20 +144,17 @@ chmod +x deploy.sh
 # WAF IP制限（カンマ区切りCIDR、WAFは自動有効化）
 ./deploy.sh --allowed-ips "203.0.113.0/24,198.51.100.1/32"
 
+# 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。Bedrock Mantle経由）を有効化
+./deploy.sh --enable-additional-persona-models
+
 # データ分析エージェント連携を有効化（AgentCore Runtime ARNを指定）
 ./deploy.sh --data-agent-arn "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxx"
 
 # データ分析エージェントのリージョンが異なる場合
 ./deploy.sh --data-agent-arn "arn:aws:..." --data-agent-region ap-northeast-1
 
-# 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。Bedrock Mantle経由）を有効化
-./deploy.sh --enable-additional-persona-models
-
-# 両方スキップ
-./deploy.sh --skip-memory --skip-cognito
-
-# 環境名・リージョンを指定
-./destroy.sh --env prod --region us-west-2
+# 外部公開用の MCP Server 有効化 
+./deploy.sh --enable-mcp
 ```
 
 #### 更新時の再デプロイ
