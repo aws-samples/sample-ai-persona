@@ -39,6 +39,10 @@ export interface AppParameter {
   // Bedrock設定
   bedrockModelId: string;
   agentModelId: string;
+  // 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。いずれもBedrock Mantle
+  // 経由で呼び出す非Anthropicモデル）を選択可能にするか（既定false）。
+  // 有効時はtaskRoleにbedrock-mantle権限を付与する
+  enableAdditionalPersonaModels?: boolean;
   
   // マスアンケート機能設定
   batchInferenceModelId: string;
@@ -92,7 +96,8 @@ export const devParameter: AppParameter = {
 
   bedrockModelId: 'global.anthropic.claude-sonnet-5',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-  
+  enableAdditionalPersonaModels: false,
+
   // マスアンケート機能設定
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
@@ -135,7 +140,8 @@ export const prodParameter: AppParameter = {
 
   bedrockModelId: 'global.anthropic.claude-sonnet-5',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-  
+  enableAdditionalPersonaModels: false,
+
   // マスアンケート機能設定
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',

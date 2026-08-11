@@ -20,6 +20,8 @@
 #   --region REGION  リージョンを指定（デフォルト: us-east-1）
 #   --data-agent-arn ARN  データ分析エージェントのRuntime ARN
 #   --enable-mcp     MCP Gateway（AgentCore Gateway）を有効化
+#   --enable-additional-persona-models  追加ペルソナベースモデル（GPT-5.6 Terra/Luna、
+#                    Gemma 4 31B。Bedrock Mantle経由）の選択を有効化
 ###############################################################################
 set -euo pipefail
 
@@ -33,6 +35,7 @@ ALLOWED_IPS=""
 DATA_AGENT_ARN=""
 DATA_AGENT_REGION=""
 ENABLE_MCP=false
+ENABLE_ADDITIONAL_PERSONA_MODELS=false
 
 # カラー出力
 RED='\033[0;31m'
@@ -58,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --data-agent-arn)    DATA_AGENT_ARN="$2"; shift 2 ;;
     --data-agent-region) DATA_AGENT_REGION="$2"; shift 2 ;;
     --enable-mcp)        ENABLE_MCP=true; shift ;;
+    --enable-additional-persona-models) ENABLE_ADDITIONAL_PERSONA_MODELS=true; shift ;;
     -h|--help)
       echo "使い方: ./deploy.sh [オプション]"
       echo "  --skip-memory    長期記憶機能をスキップ"
@@ -69,6 +73,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --data-agent-arn ARN  データ分析エージェントのRuntime ARN"
       echo "  --data-agent-region REGION  データ分析エージェントのリージョン（省略時は--regionと同じ）"
       echo "  --enable-mcp   MCP Gateway（AgentCore Gateway）を有効化"
+      echo "  --enable-additional-persona-models  追加ペルソナベースモデル（GPT-5.6 Terra/Luna、"
+      echo "                   Gemma 4 31B。Bedrock Mantle経由）の選択を有効化"
       exit 0 ;;
     *) log_error "不明なオプション: $1"; exit 1 ;;
   esac
@@ -81,6 +87,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 log_info "AWSアカウント: ${ACCOUNT_ID}"
 log_info "リージョン: ${REGION}"
 log_info "環境名: ${ENV_NAME}"
+log_info "追加ペルソナベースモデル: ${ENABLE_ADDITIONAL_PERSONA_MODELS}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "${SCRIPT_DIR}/cdk/bin/app.ts" ]]; then
@@ -148,6 +155,7 @@ export interface AppParameter {
   agentCoreMemoryEventExpiryDays?: number;
   bedrockModelId: string;
   agentModelId: string;
+  enableAdditionalPersonaModels?: boolean;
   batchInferenceModelId: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
@@ -178,6 +186,7 @@ export const devParameter: AppParameter = {
   agentCoreMemoryEventExpiryDays: 30,
   bedrockModelId: 'global.anthropic.claude-sonnet-5',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  enableAdditionalPersonaModels: ${ENABLE_ADDITIONAL_PERSONA_MODELS},
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',

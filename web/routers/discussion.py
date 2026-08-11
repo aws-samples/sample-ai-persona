@@ -22,8 +22,10 @@ from src.managers.agent_discussion_manager import (
 )
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
+from src.config import config
 from src.models.errors import ErrorCode
 from src.models.insight_category import InsightCategory
+from src.models.model_registry import display_name_for, list_selectable_models
 from web.error_messages import (
     is_correctable,
     mark_renderable,
@@ -31,6 +33,7 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
+from ._form_parsing import parse_persona_models
 from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
@@ -53,6 +56,7 @@ templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
 templates.env.globals["gender_label"] = gender_label
 templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+templates.env.globals["model_display_name"] = display_name_for
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
@@ -152,10 +156,17 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
     """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
+    selectable_models = list_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS)
     return templates.TemplateResponse(
         request,
         "discussion/setup.html",
-        {"request": request, "title": "議論設定"},
+        {
+            "request": request,
+            "title": "議論設定",
+            "selectable_models": selectable_models,
+            "enable_additional_models": config.ENABLE_ADDITIONAL_PERSONA_MODELS,
+            "default_model_id": config.AGENT_MODEL_ID,
+        },
     )
 
 
@@ -265,6 +276,8 @@ async def stream_discussion(
     enable_kb: bool = False,
     categories_json: str = "",
     document_ids: str = "",
+    persona_models_json: str = "",
+    facilitator_model: str = "",
 ) -> Any:
     """議論ストリーミングエンドポイント（SSE）- 簡易モード・エージェントモード両対応"""
     try:
@@ -310,6 +323,16 @@ async def stream_discussion(
         if document_ids:
             doc_ids = [did.strip() for did in document_ids.split(",") if did.strip()]
 
+        # per-persona モデル選択を解析（URLエンコードしたJSON文字列1個で受ける）
+        persona_models = None
+        if persona_models_json:
+            try:
+                persona_models = json.loads(persona_models_json) or None
+            except Exception as e:
+                logger.warning(f"Failed to parse persona_models_json: {e}")
+
+        facilitator_model_id = facilitator_model.strip() or None
+
         # 参加者情報を最初に送信
         participants_data = {
             "type": "participants",
@@ -337,6 +360,8 @@ async def stream_discussion(
                             enable_kb=enable_kb,
                             categories=categories,
                             document_ids=doc_ids,
+                            persona_models=persona_models,
+                            facilitator_model=facilitator_model_id,
                         )
                     else:
                         dm = get_discussion_manager()
@@ -537,6 +562,13 @@ async def start_discussion(
 
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
+        persona_models = parse_persona_models(form_data)
+        facilitator_model_raw = form_data.get("facilitator_model", "")
+        facilitator_model = (
+            facilitator_model_raw.strip()
+            if isinstance(facilitator_model_raw, str)
+            else ""
+        ) or None
 
         loop = asyncio.get_event_loop()
 
@@ -553,6 +585,8 @@ async def start_discussion(
                     memory_mode=memory_mode,
                     categories=categories,
                     document_ids=document_ids,
+                    persona_models=persona_models,
+                    facilitator_model=facilitator_model,
                 )
 
             discussion = await loop.run_in_executor(executor, _run_agent)

@@ -32,6 +32,7 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
+from ._form_parsing import parse_persona_models
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,9 @@ async def create_interview_session(
             )
 
         # Create session with enhanced error handling
+        form_data = await request.form()
+        persona_models = parse_persona_models(form_data)
+
         loop = asyncio.get_event_loop()
         interview_manager = get_interview_manager()
 
@@ -147,6 +151,7 @@ async def create_interview_session(
                 memory_mode=memory_mode,
                 enable_dataset=enable_dataset,
                 enable_kb=enable_kb,
+                persona_models=persona_models,
             )
 
         session = await loop.run_in_executor(executor, create_session_sync)

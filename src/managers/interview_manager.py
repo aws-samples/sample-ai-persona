@@ -5,10 +5,11 @@ Handles interview session setup, execution, and persistence.
 
 import logging
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Mapping, Any, Optional
 from datetime import datetime
 
 
+from ..config import config
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
@@ -17,10 +18,18 @@ from ..models.interview_session import InterviewSession
 from ..services.agent_service import (
     AgentService,
     PersonaAgent,
+    AgentConfigurationError,
     AgentInitializationError,
     AgentCommunicationError,
 )
 from ..services.database_service import DatabaseService, DatabaseError
+from .shared.agent_cleanup import dispose_agents
+from .shared.model_validation import (
+    any_model_requires_mantle,
+    resolve_effective_persona_models,
+    validate_document_size_for_models,
+    validate_model_selection,
+)
 
 
 class InterviewManagerError(CodedError):
@@ -103,6 +112,7 @@ class InterviewManager:
         memory_mode: str = "full",
         enable_dataset: bool = False,
         enable_kb: bool = False,
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> InterviewSession:
         """
         Start a new interview session with selected personas.
@@ -116,6 +126,7 @@ class InterviewManager:
                 - "retrieve_only": 検索のみ（保存しない）
                 - "disabled": メモリ機能無効
             enable_dataset: Whether to enable external dataset access (default: False)
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
             InterviewSession: Created interview session
@@ -138,6 +149,8 @@ class InterviewManager:
                 context={"field": "memory_mode"},
             )
 
+        self._validate_model_selection(persona_models)
+
         self.logger.info(
             f"Starting interview session with {len(personas)} personas for user: {user_id} (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
         )
@@ -156,6 +169,7 @@ class InterviewManager:
                 enable_memory=enable_memory,
                 memory_mode=memory_mode,
                 enable_dataset=enable_dataset,
+                persona_models=persona_models,
             )
             session_id = session.id
 
@@ -184,8 +198,18 @@ class InterviewManager:
                     memory_mode=memory_mode,
                     enable_dataset=enable_dataset,
                     enable_kb=enable_kb,
+                    persona_models=persona_models,
                 )
 
+            except AgentConfigurationError as e:
+                # 追加ペルソナベースモデル無効等の設定不足はINTERVIEW_AGENT_SETUP_FAILEDに
+                # 丸めず自ドメインのCONFIGコードへ変換する
+                error_msg = f"model configuration error: {e}"
+                self.logger.error(error_msg)
+                raise InterviewAgentError(
+                    error_msg,
+                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+                ) from e
             except AgentInitializationError as e:
                 error_msg = f"agent initialization failed: {e}"
                 self.logger.error(error_msg)
@@ -221,6 +245,75 @@ class InterviewManager:
             raise InterviewSessionError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
             ) from e
+
+    def _validate_model_selection(
+        self, model_ids: Optional[Mapping[str, Optional[str]]]
+    ) -> None:
+        """選択されたmodel_idが利用可能か検証する。
+
+        未対応のmodel_idはVALIDATION、追加ペルソナベースモデルだが
+        ENABLE_ADDITIONAL_PERSONA_MODELS無効時はCONFIG。
+        """
+        validate_model_selection(
+            model_ids,
+            InterviewValidationError,
+            ErrorCode.INTERVIEW_MODEL_UNSUPPORTED,
+            ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+            unsupported_message=(
+                lambda persona_id, model_id: (
+                    f"unsupported model_id {model_id!r} for persona {persona_id!r}"
+                )
+            ),
+        )
+
+    def _validate_document_support_for_models(
+        self,
+        document_contents: List[Dict[str, Any]],
+        persona_models: Optional[Mapping[str, Optional[str]]],
+    ) -> None:
+        """追加ペルソナベースモデル（Mantle経由）に非対応のドキュメントが添付されていないか検証する。
+
+        Strands SDK（1.51.0時点）のOpenAIResponsesModel（Mantle経由）は、document
+        （PDF等。input_file）構築時にfilenameを送信せずMantle側のファイル種別判定が失敗する
+        既知の実装漏れがある（Mantleエンドポイント自体はfilename付きの正しい形式なら受理する。
+        AWS実機での直接検証で確認済み。上流SDK修正待ち: strands-agents #3576 / #3674）。
+        image（input_image）はfilenameという概念自体を持たないパラメータ形式のため、
+        現行実装のままMantle側も問題なく受理する（同検証で確認済み）。
+        そのためdocument系（PDF等）のみを拒否し、imageは許可する。
+        """
+        if not any_model_requires_mantle(persona_models):
+            return
+
+        for content in document_contents:
+            if "document" in content:
+                raise InterviewValidationError(
+                    "document attachments are not supported by Mantle-routed "
+                    "models (image is supported, other document types are not)",
+                    code=ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED,
+                )
+
+    def _validate_document_size_for_models(
+        self,
+        new_document_metadata: List[Dict[str, Any]],
+        existing_document_metadata: Optional[List[Dict[str, Any]]],
+        persona_models: Optional[Mapping[str, Optional[str]]],
+    ) -> None:
+        """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
+
+        インタビューはターンを跨いでドキュメントを蓄積するため、セッションに既に
+        添付済みのドキュメント（existing_document_metadata）も合計に含める。
+        base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
+        """
+        total_size = sum(
+            doc.get("file_size", 0)
+            for doc in (existing_document_metadata or []) + new_document_metadata
+        )
+        validate_document_size_for_models(
+            total_size,
+            persona_models,
+            InterviewValidationError,
+            ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
+        )
 
     def send_user_message(
         self,
@@ -273,6 +366,18 @@ class InterviewManager:
             self.logger.error(error_msg)
             raise InterviewAgentError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+            )
+
+        effective_persona_models = resolve_effective_persona_models(
+            session.participants, session.persona_models
+        )
+        if document_contents:
+            self._validate_document_support_for_models(
+                document_contents, effective_persona_models
+            )
+        if document_metadata:
+            self._validate_document_size_for_models(
+                document_metadata, session.documents, effective_persona_models
             )
 
         self.logger.info(
@@ -431,6 +536,18 @@ class InterviewManager:
             self.logger.error(error_msg)
             raise InterviewAgentError(
                 error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+            )
+
+        effective_persona_models = resolve_effective_persona_models(
+            session.participants, session.persona_models
+        )
+        if document_contents:
+            self._validate_document_support_for_models(
+                document_contents, effective_persona_models
+            )
+        if document_metadata:
+            self._validate_document_size_for_models(
+                document_metadata, session.documents, effective_persona_models
             )
 
         # Add user message to session
@@ -641,19 +758,27 @@ class InterviewManager:
         try:
             # Clean up persona agents with detailed error tracking
             persona_agents = self._session_agents.get(session_id, [])
-            for i, agent in enumerate(persona_agents):
-                try:
-                    agent_name = (
-                        agent.get_persona_name()
-                        if hasattr(agent, "get_persona_name")
-                        else f"Agent-{i}"
-                    )
-                    agent.dispose()
-                    self.logger.debug(f"Successfully disposed agent: {agent_name}")
-                except Exception as e:
-                    error_msg = f"Error disposing agent {agent_name}: {e}"
-                    self.logger.warning(error_msg)
-                    cleanup_errors.append(error_msg)
+
+            def _agent_label(agent: Any) -> str:
+                return (
+                    agent.get_persona_name()
+                    if hasattr(agent, "get_persona_name")
+                    else repr(agent)
+                )
+
+            def _record_dispose_error(agent: Any, e: Exception) -> str:
+                error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
+                cleanup_errors.append(error_msg)
+                return error_msg
+
+            dispose_agents(
+                persona_agents,
+                self.logger,
+                error_message=_record_dispose_error,
+                success_message=lambda agent: (
+                    f"Successfully disposed agent: {_agent_label(agent)}"
+                ),
+            )
 
             # Remove from active sessions
             try:
@@ -694,6 +819,7 @@ class InterviewManager:
         memory_mode: str = "full",
         enable_dataset: bool = False,
         enable_kb: bool = False,
+        persona_models: Optional[Dict[str, str]] = None,
     ) -> List[PersonaAgent]:
         """
         Create persona agents for interview (allows single persona unlike discussion mode).
@@ -709,6 +835,7 @@ class InterviewManager:
                 - "disabled": メモリ機能無効
             enable_dataset: Whether to enable external dataset access (default: False)
             enable_kb: Whether to enable knowledge base access (default: False)
+            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
             List[PersonaAgent]: Created persona agents
@@ -758,11 +885,25 @@ class InterviewManager:
                     memory_mode=memory_mode,
                     enable_dataset=enable_dataset,
                     enable_kb=enable_kb,
+                    model_id=(persona_models or {}).get(persona.id),
                 )
                 persona_agents.append(persona_agent)
 
                 self.logger.info(f"Created persona agent for interview: {persona.name}")
 
+            except AgentConfigurationError as e:
+                # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
+                # 握り潰さず、INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する。
+                # InterviewAgentErrorを使う（呼び出し元のexcept InterviewAgentError: raise
+                # で素通りさせ、except Exceptionによる再ラップでコードが潰れないようにする）
+                self.logger.error(
+                    f"Configuration error creating agent for persona {persona.name}: {e}"
+                )
+                raise InterviewAgentError(
+                    f"model configuration error for persona {persona.name} "
+                    f"({type(e).__name__})",
+                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+                ) from e
             except AgentInitializationError as e:
                 error_msg = f"Failed to create agent for persona {persona.name}: {e}"
                 self.logger.error(error_msg)
@@ -800,6 +941,7 @@ class InterviewManager:
         memory_mode: str,
         enable_dataset: bool,
         enable_kb: bool,
+        model_id: Optional[str] = None,
     ) -> Any:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
         from .shared.agent_integration import prepare_integration_tools_and_prompt
@@ -819,6 +961,7 @@ class InterviewManager:
             session_id=session_id,
             additional_tools=additional_tools,
             memory_mode=memory_mode,
+            model_id=model_id,
         )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
@@ -1065,19 +1208,26 @@ class InterviewManager:
             f"Cleaning up {len(persona_agents)} persona agents for session: {session_id}"
         )
 
-        for i, agent in enumerate(persona_agents):
-            try:
-                agent_name = (
-                    agent.get_persona_name()
-                    if hasattr(agent, "get_persona_name")
-                    else f"Agent-{i}"
-                )
-                agent.dispose()
-                self.logger.debug(f"Successfully disposed agent: {agent_name}")
-            except Exception as e:
-                error_msg = f"Error disposing agent {agent_name}: {e}"
-                self.logger.warning(error_msg)
-                cleanup_errors.append(error_msg)
+        def _agent_label(agent: Any) -> str:
+            return (
+                agent.get_persona_name()
+                if hasattr(agent, "get_persona_name")
+                else repr(agent)
+            )
+
+        def _record_dispose_error(agent: Any, e: Exception) -> str:
+            error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
+            cleanup_errors.append(error_msg)
+            return error_msg
+
+        dispose_agents(
+            persona_agents,
+            self.logger,
+            error_message=_record_dispose_error,
+            success_message=lambda agent: (
+                f"Successfully disposed agent: {_agent_label(agent)}"
+            ),
+        )
 
         # Remove agents from tracking
         try:
@@ -1107,11 +1257,12 @@ class InterviewManager:
         """
         try:
             # Clean up agents
-            for agent in persona_agents:
-                try:
-                    agent.dispose()
-                except Exception as e:
-                    self.logger.warning(f"Error disposing agent during cleanup: {e}")
+            dispose_agents(
+                persona_agents,
+                self.logger,
+                error_message=lambda _agent,
+                e: f"Error disposing agent during cleanup: {e}",
+            )
 
             # Clean up session if it was created
             if session_id and session_id in self._active_sessions:
@@ -1217,6 +1368,7 @@ class InterviewManager:
             participants=session.participants,
             mode="interview",
             documents=session.documents,  # Include attached documents metadata
+            agent_config={"persona_models": session.persona_models},
         )
 
         # Preserve original creation time from session
@@ -1328,7 +1480,6 @@ class InterviewManager:
         Raises:
             InterviewValidationError: サイズ超過、未サポートMIMEタイプ
         """
-        from ..config import config
         from .shared.document_loader import (
             build_content_block,
             is_supported_mime_type,

@@ -177,6 +177,74 @@ class TestCreateInterviewSessionEndpoint:
         call_kwargs = mock_interview_manager.start_interview_session.call_args
         assert call_kwargs.kwargs.get("enable_memory") is True
 
+    @patch("web.routers.interview.get_interview_manager")
+    @patch("web.routers.interview.get_persona_manager")
+    def test_create_session_passes_persona_models(
+        self, mock_get_persona, mock_get_interview, client, sample_persona
+    ):
+        """persona_models[<persona_id>]がManagerに辞書として渡ることを確認（Issue #107 R8）"""
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_session = InterviewSession(
+            id="test-session-id",
+            participants=[sample_persona.id],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+        )
+        mock_interview_manager = Mock()
+        mock_interview_manager.start_interview_session.return_value = mock_session
+        mock_get_interview.return_value = mock_interview_manager
+
+        response = client.post(
+            "/interview/create",
+            data={
+                "persona_ids": [sample_persona.id],
+                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
+            },
+        )
+
+        assert response.status_code == 200
+        mock_interview_manager.start_interview_session.assert_called_once()
+        call_kwargs = mock_interview_manager.start_interview_session.call_args.kwargs
+        assert call_kwargs["persona_models"] == {
+            sample_persona.id: "openai.gpt-5.6-terra"
+        }
+
+    @patch("web.routers.interview.get_interview_manager")
+    @patch("web.routers.interview.get_persona_manager")
+    def test_create_session_mantle_disabled_returns_config_error(
+        self, mock_get_persona, mock_get_interview, client, sample_persona
+    ):
+        """Mantle無効時のMantle系モデル選択がCONFIGエラー(400)を返すことを確認"""
+        mock_persona_manager = Mock()
+        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_get_persona.return_value = mock_persona_manager
+
+        mock_interview_manager = Mock()
+        mock_interview_manager.start_interview_session.side_effect = (
+            InterviewValidationError(
+                "model 'openai.gpt-5.6-terra' requires Mantle but "
+                "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
+                code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+            )
+        )
+        mock_get_interview.return_value = mock_interview_manager
+
+        response = client.post(
+            "/interview/create",
+            data={
+                "persona_ids": [sample_persona.id],
+                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
+            },
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "無効化されています" in data["error"]
+
 
 class TestSendMessageEndpoint:
     """メッセージ送信エンドポイントのテスト"""

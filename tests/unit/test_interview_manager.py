@@ -10,6 +10,7 @@ from src.managers.interview_manager import (
     InterviewManager,
     InterviewManagerError,
     InterviewSession,
+    InterviewValidationError,
 )
 from src.models.errors import ErrorCode
 from src.models.persona import Persona
@@ -113,6 +114,45 @@ class TestInterviewSession:
         )
         new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
         assert new_session.enable_memory is True
+
+    def test_add_user_message_preserves_persona_models(self):
+        """ユーザーメッセージ追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_user_message("テストメッセージ")
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+
+    def test_add_persona_response_preserves_persona_models(self):
+        """ペルソナ応答追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+
+    def test_add_document_preserves_persona_models(self):
+        """ドキュメント追加時にpersona_modelsが保持されることを確認"""
+        session = InterviewSession(
+            id="test-session-models",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+        new_session = session.add_document({"filename": "test.pdf"})
+        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
 
 
 class TestInterviewManager:
@@ -455,6 +495,70 @@ class TestInterviewManager:
         assert "最初の質問" in prompt or "最初の回答" in prompt
 
 
+class TestInterviewManagerModelSelectionValidation:
+    """persona_models のバリデーションテスト"""
+
+    def setup_method(self):
+        self.test_personas = [
+            Persona(
+                id="persona-1",
+                name="田中太郎",
+                age=35,
+                occupation="会社員",
+                background="IT企業で働く中堅社員",
+                values=["効率性", "品質"],
+                pain_points=["時間不足"],
+                goals=["キャリアアップ"],
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ]
+        self.mock_agent_service = Mock()
+        self.mock_database_service = Mock()
+        self.interview_manager = InterviewManager(
+            self.mock_agent_service, self.mock_database_service
+        )
+
+    def test_start_interview_session_unsupported_model_raises_validation(self):
+        with pytest.raises(InterviewManagerError) as exc_info:
+            self.interview_manager.start_interview_session(
+                self.test_personas,
+                persona_models={"persona-1": "unknown.model-id"},
+            )
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_UNSUPPORTED
+
+    @patch("src.managers.shared.model_validation.config")
+    def test_start_interview_session_mantle_disabled_raises_config(self, mock_config):
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+        with pytest.raises(InterviewManagerError) as exc_info:
+            self.interview_manager.start_interview_session(
+                self.test_personas,
+                persona_models={"persona-1": "openai.gpt-5.6-terra"},
+            )
+        assert (
+            exc_info.value.code is ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED
+        )
+
+    @patch("src.managers.interview_manager.uuid.uuid4")
+    def test_start_interview_session_stores_persona_models(self, mock_uuid):
+        mock_uuid.return_value = "test-session-id"
+        mock_persona_agents = [
+            Mock(get_persona_id=Mock(return_value="persona-1")),
+        ]
+        self.interview_manager._create_interview_persona_agents = Mock(
+            return_value=mock_persona_agents
+        )
+
+        session = self.interview_manager.start_interview_session(
+            self.test_personas,
+            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
+        )
+
+        assert session.persona_models == {
+            "persona-1": "global.anthropic.claude-sonnet-5"
+        }
+
+
 class TestInterviewManagerMultimodal:
     """InterviewManagerのマルチモーダル機能テストクラス"""
 
@@ -558,7 +662,12 @@ class TestInterviewManagerMultimodal:
         assert responses[0].content == "通常の回答です"
 
     def test_send_user_message_with_multiple_documents(self):
-        """複数ドキュメント付きメッセージ送信テスト"""
+        """複数ドキュメント付きメッセージ送信テスト（Claude系モデル選択時）
+
+        実環境のAGENT_MODEL_ID環境変数がMantle系モデルに設定されている場合、
+        persona_models未指定だと環境既定モデルが適用されPDF添付が拒否されるため、
+        Claude系モデルを明示指定して環境変数から独立させる。
+        """
         # セッションを準備
         session = InterviewSession(
             id="test-session",
@@ -566,6 +675,10 @@ class TestInterviewManagerMultimodal:
             messages=[],
             created_at=datetime.now(),
             is_saved=False,
+            persona_models={
+                "persona-1": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "persona-2": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
         )
 
         # モックペルソナエージェント（2人）
@@ -612,6 +725,254 @@ class TestInterviewManagerMultimodal:
 
         # 両方から応答が返されたことを確認
         assert len(responses) == 2
+
+    def test_send_user_message_with_pdf_mantle_model_raises_capacity_error(self):
+        """Mantle系モデル（GPT/Gemma）選択時にPDF添付するとCAPACITYエラーになる。
+
+        Strands SDKがfilenameを送信しない実装漏れによりMantle側で
+        "Unsupported file type"エラーとなるため事前に拒否する（AWS実機検証で確認済み）。
+        """
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {
+                "document": {
+                    "name": "test.pdf",
+                    "format": "pdf",
+                    "source": {"bytes": b"fake_pdf_data"},
+                }
+            }
+        ]
+
+        with pytest.raises(InterviewValidationError) as exc_info:
+            self.interview_manager.send_user_message(
+                "test-session",
+                "このPDFについて教えてください",
+                document_contents=document_contents,
+            )
+
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
+        mock_persona_agent.set_document_contents.assert_not_called()
+
+    def test_send_user_message_with_image_mantle_model_passes(self):
+        """Mantle系モデル選択時でも画像添付は許可される。
+
+        画像（input_image）はfilenameという概念自体を持たないパラメータ形式のため、
+        Mantle側も問題なく受理する（AWS実機検証で確認済み）。
+        """
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "openai.gpt-5.6-terra"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.get_persona_name.return_value = "田中太郎"
+        mock_persona_agent.respond.return_value = "画像を見て回答します"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        responses = self.interview_manager.send_user_message(
+            "test-session",
+            "この画像について教えてください",
+            document_contents=document_contents,
+        )
+
+        mock_persona_agent.set_document_contents.assert_called_once()
+        assert len(responses) == 1
+
+    def test_send_user_message_with_documents_claude_model_passes(self):
+        """Claude系モデル選択時はドキュメント添付が通ることを確認。"""
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.get_persona_name.return_value = "田中太郎"
+        mock_persona_agent.respond.return_value = "画像を見て回答します"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        responses = self.interview_manager.send_user_message(
+            "test-session",
+            "この画像について教えてください",
+            document_contents=document_contents,
+        )
+
+        mock_persona_agent.set_document_contents.assert_called_once()
+        assert len(responses) == 1
+
+    def test_send_user_message_with_oversized_image_gemma4_raises_capacity_error(
+        self,
+    ):
+        """Gemma4選択時、画像がリクエスト全体の上限(3.5MB)を超えるとCAPACITYエラーになる。
+
+        画像自体はMantle経由で許可されるが、Gemma4はリクエストボディ合計3.5MBという
+        別次元の上限を持つ（AWS公式モデルカード実測）。アップロード検証（5MB/枚）は
+        通過してもGemma4選択時はより厳しい上限で拒否される必要がある。
+        """
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "google.gemma-4-31b"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
+        ]
+        document_metadata = [
+            {
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "file_size": 4 * 1024 * 1024,  # 4MB > Gemma4の実効上限(3.5MB*3/4)
+            }
+        ]
+
+        with pytest.raises(InterviewValidationError) as exc_info:
+            self.interview_manager.send_user_message(
+                "test-session",
+                "この画像について教えてください",
+                document_contents=document_contents,
+                document_metadata=document_metadata,
+            )
+
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
+        mock_persona_agent.set_document_contents.assert_not_called()
+
+    def test_send_user_message_with_small_image_gemma4_passes(self):
+        """Gemma4選択時でも上限内の画像は通ることを確認。"""
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models={"persona-1": "google.gemma-4-31b"},
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.get_persona_name.return_value = "田中太郎"
+        mock_persona_agent.respond.return_value = "画像を見て回答します"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
+        ]
+        document_metadata = [
+            {
+                "filename": "small.png",
+                "mime_type": "image/png",
+                "file_size": 1 * 1024 * 1024,  # 1MB < Gemma4の実効上限
+            }
+        ]
+
+        responses = self.interview_manager.send_user_message(
+            "test-session",
+            "この画像について教えてください",
+            document_contents=document_contents,
+            document_metadata=document_metadata,
+        )
+
+        mock_persona_agent.set_document_contents.assert_called_once()
+        assert len(responses) == 1
+
+    def test_send_user_message_unselected_persona_uses_env_default_gemma4(self):
+        """persona_models未選択（config.AGENT_MODEL_IDがGemma4）でもサイズ制限が効くこと。
+
+        Issue #107再レビュー: persona_models=Noneの場合に検証を丸ごとスキップしていたため、
+        環境既定モデル（config.AGENT_MODEL_ID）をGemma4にした運用でサイズ制限を回避できた。
+        """
+        session = InterviewSession(
+            id="test-session",
+            participants=["persona-1"],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+            persona_models=None,  # モデル未選択（フォームでモデルを選ばなかった場合）
+        )
+
+        mock_persona_agent = Mock()
+        mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.set_document_contents = Mock()
+
+        self.interview_manager._active_sessions["test-session"] = session
+        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
+        ]
+        document_metadata = [
+            {
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "file_size": 4 * 1024 * 1024,  # 4MB > Gemma4の実効上限
+            }
+        ]
+
+        with patch("src.managers.shared.model_validation.config") as mock_config:
+            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+
+            with pytest.raises(InterviewValidationError) as exc_info:
+                self.interview_manager.send_user_message(
+                    "test-session",
+                    "この画像について教えてください",
+                    document_contents=document_contents,
+                    document_metadata=document_metadata,
+                )
+
+        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
+        mock_persona_agent.set_document_contents.assert_not_called()
 
 
 class TestInterviewSessionDocuments:
@@ -922,13 +1283,16 @@ class TestInterviewManagerErrorPaths:
             self.mock_agent_service, self.mock_database_service
         )
 
-    def _create_active_session(self, session_id="s1", is_saved=False):
+    def _create_active_session(
+        self, session_id="s1", is_saved=False, persona_models=None
+    ):
         session = InterviewSession(
             id=session_id,
             participants=["p1"],
             messages=[],
             created_at=datetime.now(),
             is_saved=is_saved,
+            persona_models=persona_models,
         )
         self.interview_manager._active_sessions[session_id] = session
         return session
@@ -1066,6 +1430,139 @@ class TestInterviewManagerErrorPaths:
             InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
         ):
             list(self.interview_manager.send_user_message_streaming("s1", "hello"))
+
+    # --- send_user_message_streaming: mantle model + documents ---
+
+    def test_streaming_mantle_model_with_pdf_raises_capacity_error(self):
+        from src.managers.interview_manager import InterviewValidationError
+
+        self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        document_contents = [
+            {
+                "document": {
+                    "name": "test.pdf",
+                    "format": "pdf",
+                    "source": {"bytes": b"fake_pdf_data"},
+                }
+            }
+        ]
+
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
+        ):
+            list(
+                self.interview_manager.send_user_message_streaming(
+                    "s1",
+                    "このPDFについて教えてください",
+                    document_contents=document_contents,
+                )
+            )
+
+        mock_agent.set_document_contents.assert_not_called()
+
+    def test_streaming_mantle_model_with_image_passes(self):
+        self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.respond_streaming.return_value = iter(["赤色", "です"])
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
+        ]
+
+        events = list(
+            self.interview_manager.send_user_message_streaming(
+                "s1",
+                "この画像について教えてください",
+                document_contents=document_contents,
+            )
+        )
+
+        mock_agent.set_document_contents.assert_called_once()
+        assert any(e[0] == "message_end" for e in events)
+
+    def test_streaming_gemma4_oversized_image_raises_capacity_error(self):
+        """ストリーミング送信でもGemma4の実効サイズ上限超過はCAPACITYエラーになる。"""
+        from src.managers.interview_manager import InterviewValidationError
+
+        self._create_active_session("s1", persona_models={"p1": "google.gemma-4-31b"})
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
+        ]
+        document_metadata = [
+            {
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "file_size": 4 * 1024 * 1024,
+            }
+        ]
+
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
+        ):
+            list(
+                self.interview_manager.send_user_message_streaming(
+                    "s1",
+                    "この画像について教えてください",
+                    document_contents=document_contents,
+                    document_metadata=document_metadata,
+                )
+            )
+
+        mock_agent.set_document_contents.assert_not_called()
+
+    def test_streaming_unselected_persona_uses_env_default_gemma4(self):
+        """ストリーミング送信でもpersona_models未選択時に環境既定(Gemma4)が適用されること。"""
+        from src.managers.interview_manager import InterviewValidationError
+
+        self._create_active_session("s1", persona_models=None)
+        mock_agent = Mock()
+        mock_agent.get_persona_id.return_value = "p1"
+        mock_agent.set_document_contents = Mock()
+        self._add_agents("s1", [mock_agent])
+
+        document_contents = [
+            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
+        ]
+        document_metadata = [
+            {
+                "filename": "large.png",
+                "mime_type": "image/png",
+                "file_size": 4 * 1024 * 1024,
+            }
+        ]
+
+        with patch("src.managers.shared.model_validation.config") as mock_config:
+            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+
+            with raises_code(
+                InterviewValidationError, ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
+            ):
+                list(
+                    self.interview_manager.send_user_message_streaming(
+                        "s1",
+                        "この画像について教えてください",
+                        document_contents=document_contents,
+                        document_metadata=document_metadata,
+                    )
+                )
+
+        mock_agent.set_document_contents.assert_not_called()
 
     # --- send_user_message_streaming: all agents fail ---
 

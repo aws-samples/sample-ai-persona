@@ -20,6 +20,7 @@ class InterviewSession:
     documents: Optional[List[Dict[str, Any]]] = None  # Attached documents metadata
     memory_mode: str = "full"  # "full", "retrieve_only", or "disabled"
     enable_dataset: bool = False  # Whether external dataset access is enabled
+    persona_models: Optional[Dict[str, str]] = None  # persona_id -> model_id
 
     def add_user_message(self, content: str) -> "InterviewSession":
         """
@@ -49,6 +50,7 @@ class InterviewSession:
             documents=self.documents,
             memory_mode=self.memory_mode,
             enable_dataset=self.enable_dataset,
+            persona_models=self.persona_models,
         )
 
     def add_persona_response(
@@ -83,6 +85,7 @@ class InterviewSession:
             documents=self.documents,
             memory_mode=self.memory_mode,
             enable_dataset=self.enable_dataset,
+            persona_models=self.persona_models,
         )
 
     def add_document(self, document_metadata: Dict[str, Any]) -> "InterviewSession":
@@ -107,4 +110,5 @@ class InterviewSession:
             documents=new_documents,
             memory_mode=self.memory_mode,
             enable_dataset=self.enable_dataset,
+            persona_models=self.persona_models,
         )

@@ -743,6 +743,73 @@ class TestDatabaseServiceSerialization:
         assert deserialized.mode == original.mode
         assert deserialized.agent_config == original.agent_config
 
+    @patch("boto3.client")
+    def test_agent_config_nested_dict_round_trip(self, mock_boto3_client):
+        """agent_config内の入れ子dict（persona_models/facilitator_model）が
+        TypeSerializer/TypeDeserializerを介して正しく往復することを確認する。
+        Issue #107: ペルソナ毎モデル選択の永続化。
+        """
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        original = Discussion(
+            id="discussion-id",
+            topic="Test Topic",
+            participants=["persona-1", "persona-2"],
+            messages=[],
+            insights=[],
+            created_at=datetime(2024, 1, 1, 12, 0, 0),
+            mode="agent",
+            agent_config={
+                "rounds": 3,
+                "persona_models": {
+                    "persona-1": "openai.gpt-5.6-terra",
+                    "persona-2": "google.gemma-4-31b",
+                },
+                "facilitator_model": "global.anthropic.claude-sonnet-5",
+            },
+        )
+
+        serialized = service._serialize_discussion(original)
+        deserialized = service._deserialize_discussion(serialized)
+
+        assert deserialized.agent_config == original.agent_config
+        assert deserialized.agent_config["persona_models"] == {
+            "persona-1": "openai.gpt-5.6-terra",
+            "persona-2": "google.gemma-4-31b",
+        }
+
+    @patch("boto3.client")
+    def test_agent_config_without_persona_models_backward_compatible(
+        self, mock_boto3_client
+    ):
+        """persona_modelsを持たない旧レコードのagent_configがNoneにならず往復すること。"""
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        original = Discussion(
+            id="discussion-id",
+            topic="Test Topic",
+            participants=["persona-1", "persona-2"],
+            messages=[],
+            insights=[],
+            created_at=datetime(2024, 1, 1, 12, 0, 0),
+            mode="agent",
+            agent_config={"rounds": 3, "additional_instructions": ""},
+        )
+
+        serialized = service._serialize_discussion(original)
+        deserialized = service._deserialize_discussion(serialized)
+
+        assert deserialized.agent_config == {"rounds": 3, "additional_instructions": ""}
+        assert "persona_models" not in deserialized.agent_config
+
 
 # Define strategies outside the class to avoid circular reference issues
 def _message_strategy():

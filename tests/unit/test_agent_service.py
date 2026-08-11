@@ -9,6 +9,7 @@ from datetime import datetime
 from src.models.errors import ErrorCode
 from src.services.agent_service import (
     AgentService,
+    AgentConfigurationError,
     AgentInitializationError,
     AgentServiceError,
     GenerationCapacityError,
@@ -59,25 +60,182 @@ class TestAgentService:
 
         assert exc_info.value.code is ErrorCode.AGENT_SDK_UNAVAILABLE
 
-    @patch("src.services.agent_service.Agent")
-    @patch("src.services.agent_service.BedrockModel")
-    def test_create_bedrock_model_sets_retry_config(
-        self, mock_bedrock_model, mock_agent
-    ):
+    def test_create_model_sets_retry_config(self):
         """BedrockModelに一過性エラー対策のリトライ設定が渡されることを検証する
 
         ストリーミング開始時のConnection closedエラー対策として、
         boto_client_config（retries付き）が指定されていることを確認する。
+
+        実環境のAGENT_MODEL_ID環境変数がMantle系モデルに設定されていると
+        model_id未指定でもMantle経路になりBedrockModelが呼ばれないため、
+        configを明示的にモックしてBedrock系モデルに固定する。
         """
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
+            patch("src.services.agent_service.config") as mock_config,
+        ):
+            mock_config.AWS_REGION = "us-east-1"
+            mock_config.AGENT_MODEL_ID = (
+                "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+            )
+            mock_config.get_aws_credentials.return_value = {}
+            agent_service = AgentService()
+            mock_bedrock_model.reset_mock()
+
+            agent_service._create_model()
+
+            mock_bedrock_model.assert_called_once()
+            boto_config = mock_bedrock_model.call_args.kwargs["boto_client_config"]
+            assert boto_config.retries["max_attempts"] == 3
+            assert boto_config.retries["mode"] == "adaptive"
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_create_model_unknown_id_falls_back_to_default(
+        self, mock_bedrock_model, mock_agent
+    ):
+        """未知のmodel_idは既定モデルに丸められる（get_model_specの丸め動作）。"""
+        from src.models.model_registry import DEFAULT_MODEL_ID
+
         agent_service = AgentService()
         mock_bedrock_model.reset_mock()
 
-        agent_service._create_bedrock_model()
+        agent_service._create_model("unknown.model-id")
 
-        mock_bedrock_model.assert_called_once()
-        boto_config = mock_bedrock_model.call_args.kwargs["boto_client_config"]
-        assert boto_config.retries["max_attempts"] == 3
-        assert boto_config.retries["mode"] == "adaptive"
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == DEFAULT_MODEL_ID
+
+    @patch("src.services.agent_service.config")
+    def test_create_model_mantle_disabled_raises_config_error(self, mock_config):
+        """ENABLE_ADDITIONAL_PERSONA_MODELS無効時にMantle系モデルを選択するとCONFIGエラーになる。"""
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with pytest.raises(AgentConfigurationError) as exc_info:
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+        assert exc_info.value.code is ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
+
+    def test_create_model_mantle_enabled_uses_bedrock_mantle_config(self):
+        """Mantle有効時はOpenAIResponsesModelにbedrock_mantle_configとmax_output_tokensを渡す。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "us-east-1"
+
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+            mock_openai_model.assert_called_once()
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["model_id"] == "openai.gpt-5.6-terra"
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-east-1"}
+            assert call_kwargs["params"] == {"max_output_tokens": 32000}
+
+    def test_create_model_mantle_enabled_follows_deploy_region_when_supported(self):
+        """デプロイ先がMantle対応リージョン(us-west-2)ならそのリージョンを使う。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "us-west-2"
+
+            agent_service._create_model("google.gemma-4-31b")
+
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-west-2"}
+
+    def test_create_model_mantle_enabled_falls_back_when_deploy_region_unsupported(
+        self,
+    ):
+        """デプロイ先がMantle非対応リージョン(東京)ならus-east-1へフォールバックする。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel"),
+        ):
+            agent_service = AgentService()
+
+        with (
+            patch("src.services.agent_service.config") as mock_config,
+            patch(
+                "strands.models.openai_responses.OpenAIResponsesModel"
+            ) as mock_openai_model,
+        ):
+            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+            mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.AWS_REGION = "ap-northeast-1"
+
+            agent_service._create_model("openai.gpt-5.6-terra")
+
+            call_kwargs = mock_openai_model.call_args.kwargs
+            assert call_kwargs["bedrock_mantle_config"] == {"region": "us-east-1"}
+
+    def test_create_model_bedrock_follows_deploy_region(self):
+        """Claude系(BEDROCK)モデルはMantle制約を受けずデプロイ先リージョンに追従する。"""
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
+            patch("src.services.agent_service.config") as mock_config,
+        ):
+            mock_config.AWS_REGION = "ap-northeast-1"
+            mock_config.get_aws_credentials.return_value = {}
+            agent_service = AgentService()
+            mock_bedrock_model.reset_mock()
+
+            agent_service._create_model()
+
+            assert (
+                mock_bedrock_model.call_args.kwargs["region_name"] == "ap-northeast-1"
+            )
+
+    def test_create_model_honors_configured_agent_model_id_when_unspecified(self):
+        """model_id省略時はconfig.AGENT_MODEL_ID（CDK/env上書き）を既定として使う。
+
+        Issue #107レビュー: 未指定選択がmodel_registry.DEFAULT_MODEL_IDへ丸め込まれ、
+        config.AGENT_MODEL_IDをSonnet等へ設定しても既定エージェントに反映されない不具合の回帰防止。
+        """
+        with (
+            patch("src.services.agent_service.Agent"),
+            patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
+            patch("src.services.agent_service.config") as mock_config,
+        ):
+            mock_config.AWS_REGION = "us-east-1"
+            mock_config.AGENT_MODEL_ID = "global.anthropic.claude-sonnet-5"
+            mock_config.get_aws_credentials.return_value = {}
+            agent_service = AgentService()
+            mock_bedrock_model.reset_mock()
+
+            agent_service._create_model()
+
+            assert (
+                mock_bedrock_model.call_args.kwargs["model_id"]
+                == "global.anthropic.claude-sonnet-5"
+            )
 
     def test_build_persona_system_prompt(self):
         """ペルソナシステムプロンプト生成テスト（src/prompts/に移動済み）"""
@@ -101,8 +259,18 @@ class TestAgentService:
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")
-    def test_create_persona_agent(self, mock_bedrock_model, mock_agent):
-        """ペルソナエージェント作成テスト"""
+    @patch("src.services.agent_service.config")
+    def test_create_persona_agent(self, mock_config, mock_bedrock_model, mock_agent):
+        """ペルソナエージェント作成テスト
+
+        実環境のAGENT_MODEL_ID環境変数がMantle系モデルに設定されていると
+        model_id未指定でもMantle経路になりBedrockModelが呼ばれないため、
+        configを明示的にモックしてBedrock系モデルに固定する。
+        """
+        mock_config.AWS_REGION = "us-east-1"
+        mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_config.get_aws_credentials.return_value = {}
+
         # モックの設定
         mock_model_instance = Mock()
         mock_bedrock_model.return_value = mock_model_instance
@@ -136,8 +304,20 @@ class TestAgentService:
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")
-    def test_create_facilitator_agent(self, mock_bedrock_model, mock_agent):
-        """ファシリテータエージェント作成テスト"""
+    @patch("src.services.agent_service.config")
+    def test_create_facilitator_agent(
+        self, mock_config, mock_bedrock_model, mock_agent
+    ):
+        """ファシリテータエージェント作成テスト
+
+        実環境のAGENT_MODEL_ID環境変数がMantle系モデルに設定されていると
+        model_id未指定でもMantle経路になりBedrockModelが呼ばれないため、
+        configを明示的にモックしてBedrock系モデルに固定する。
+        """
+        mock_config.AWS_REGION = "us-east-1"
+        mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_config.get_aws_credentials.return_value = {}
+
         # モックの設定
         mock_model_instance = Mock()
         mock_bedrock_model.return_value = mock_model_instance
