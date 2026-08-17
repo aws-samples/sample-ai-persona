@@ -16,6 +16,7 @@ from src.services.agent_service import (
     ReportGenerationCapacityError,
     PersonaAgent,
     FacilitatorAgent,
+    _documents_with_mantle_filenames,
 )
 from src.models.persona import Persona
 from src.models.message import Message
@@ -613,6 +614,122 @@ class TestPersonaAgentMultimodal:
 
         # ドキュメントコンテンツは保持されていることを確認
         assert len(self.persona_agent._document_contents) == 1
+
+    def test_mantle_agent_appends_extension_to_document_name(self):
+        """Mantle経由モデルではdocumentのnameに拡張子を補ってエージェントへ渡す。
+
+        Bedrock MantleはfilenameからファイルタイプをdocumentのnameでStrandsが
+        拡張子なしで送るため、requires_mantle=True時にここで補う（Issue #122の追加修正）。
+        """
+        mantle_agent = PersonaAgent(
+            self.test_persona,
+            self.system_prompt,
+            self.mock_agent,
+            requires_mantle=True,
+        )
+        self.mock_agent.return_value = "PDFを読みました"
+
+        mantle_agent.set_document_contents(
+            [
+                {
+                    "document": {
+                        "name": "report_2027",
+                        "format": "pdf",
+                        "source": {"bytes": b"fake_pdf"},
+                    }
+                }
+            ]
+        )
+        mantle_agent.respond("この資料について")
+
+        call_args = self.mock_agent.call_args[0][0]
+        assert call_args[1]["document"]["name"] == "report_2027.pdf"
+
+    def test_non_mantle_agent_keeps_document_name_without_extension(self):
+        """Claude系（Converse）はnameにドットを許さないため拡張子を付けない。"""
+        self.mock_agent.return_value = "PDFを読みました"
+
+        self.persona_agent.set_document_contents(
+            [
+                {
+                    "document": {
+                        "name": "report_2027",
+                        "format": "pdf",
+                        "source": {"bytes": b"fake_pdf"},
+                    }
+                }
+            ]
+        )
+        self.persona_agent.respond("この資料について")
+
+        call_args = self.mock_agent.call_args[0][0]
+        assert call_args[1]["document"]["name"] == "report_2027"
+
+    def test_mantle_agent_appends_extension_in_streaming(self):
+        """ストリーミング経路（respond_streaming）でも拡張子を補って渡す。
+
+        realtime議論・インタビューはrespond_streamingを通るため、非ストリーミングと
+        同じfilename補完が効くことを確認する（Issue #122の追加修正）。
+        """
+        mantle_agent = PersonaAgent(
+            self.test_persona,
+            self.system_prompt,
+            self.mock_agent,
+            requires_mantle=True,
+        )
+        mantle_agent.set_document_contents(
+            [
+                {
+                    "document": {
+                        "name": "report_2027",
+                        "format": "pdf",
+                        "source": {"bytes": b"fake_pdf"},
+                    }
+                }
+            ]
+        )
+        # ジェネレータを最後まで消費してエージェント呼び出しを確定させる
+        list(mantle_agent.respond_streaming("この資料について"))
+
+        call_args = self.mock_agent.call_args[0][0]
+        assert isinstance(call_args, list)
+        assert call_args[1]["document"]["name"] == "report_2027.pdf"
+
+
+class TestDocumentsWithMantleFilenames:
+    """_documents_with_mantle_filenames ヘルパーのテスト"""
+
+    def test_appends_extension_from_format(self):
+        result = _documents_with_mantle_filenames(
+            [{"document": {"name": "doc", "format": "pdf", "source": {"bytes": b""}}}]
+        )
+        assert result[0]["document"]["name"] == "doc.pdf"
+
+    def test_does_not_double_append(self):
+        result = _documents_with_mantle_filenames(
+            [
+                {
+                    "document": {
+                        "name": "doc.pdf",
+                        "format": "pdf",
+                        "source": {"bytes": b""},
+                    }
+                }
+            ]
+        )
+        assert result[0]["document"]["name"] == "doc.pdf"
+
+    def test_leaves_image_blocks_untouched(self):
+        block = {"image": {"format": "png", "source": {"bytes": b""}}}
+        result = _documents_with_mantle_filenames([block])
+        assert result[0] == block
+
+    def test_does_not_mutate_input(self):
+        original = {
+            "document": {"name": "doc", "format": "csv", "source": {"bytes": b""}}
+        }
+        _documents_with_mantle_filenames([original])
+        assert original["document"]["name"] == "doc"
 
 
 class TestStructuredOutputRetry:

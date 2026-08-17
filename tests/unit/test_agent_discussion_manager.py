@@ -302,84 +302,6 @@ class TestRunAgentDiscussionFacilitatorFailureCleanup:
         mock_persona_agent_2.dispose.assert_called_once()
 
 
-class TestValidateDocumentSupportForModels:
-    """Mantle経由モデル（GPT/Gemma）のドキュメント種別対応検証のテスト
-
-    画像（input_image）はfilenameという概念を持たずMantle側も問題なく受理するため許可、
-    document（PDF等。input_file）はStrands SDKがfilenameを送信しない実装漏れにより
-    Mantle側で"Unsupported file type"エラーとなるため拒否する（AWS実機検証で確認済み）。
-    """
-
-    def _make_manager(self):
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-        mock_agent_service = Mock()
-        return AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-    def test_mantle_model_with_pdf_raises_capacity_error(self):
-        manager = self._make_manager()
-        documents_metadata = [{"mime_type": "application/pdf"}]
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager._validate_document_support_for_models(
-                documents_metadata, {"persona-1": "openai.gpt-5.6-terra"}
-            )
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
-
-    def test_gemma4_with_pdf_raises_capacity_error(self):
-        manager = self._make_manager()
-        documents_metadata = [{"mime_type": "application/pdf"}]
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager._validate_document_support_for_models(
-                documents_metadata, {"persona-1": "google.gemma-4-31b"}
-            )
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
-
-    def test_mantle_model_with_image_passes(self):
-        """画像はfilenameを持たないパラメータ形式のためMantle経由でも許可される。"""
-        manager = self._make_manager()
-        documents_metadata = [{"mime_type": "image/png"}]
-
-        manager._validate_document_support_for_models(
-            documents_metadata, {"persona-1": "openai.gpt-5.6-terra"}
-        )  # 例外が発生しないことを確認
-
-    def test_mantle_model_with_image_and_pdf_raises_capacity_error(self):
-        """画像とPDFが混在する場合はPDFが原因で拒否される。"""
-        manager = self._make_manager()
-        documents_metadata = [
-            {"mime_type": "image/png"},
-            {"mime_type": "application/pdf"},
-        ]
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager._validate_document_support_for_models(
-                documents_metadata, {"persona-1": "openai.gpt-5.6-terra"}
-            )
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
-
-    def test_claude_model_with_pdf_passes(self):
-        manager = self._make_manager()
-        documents_metadata = [{"mime_type": "application/pdf"}]
-
-        manager._validate_document_support_for_models(
-            documents_metadata,
-            {"persona-1": "global.anthropic.claude-haiku-4-5-20251001-v1:0"},
-        )  # 例外が発生しないことを確認
-
-    def test_no_persona_models_skips_validation(self):
-        manager = self._make_manager()
-        documents_metadata = [{"mime_type": "application/pdf"}]
-
-        manager._validate_document_support_for_models(documents_metadata, None)
-
-
 class TestCreateFacilitatorAgent:
     """ファシリテーターエージェント作成のテスト"""
 
@@ -480,10 +402,12 @@ class TestStartAgentDiscussion:
     def test_start_discussion_document_validation_failure_disposes_agents(
         self, sample_persona, sample_persona_2
     ):
-        """Mantle系モデル+PDF添付でドキュメント検証が失敗した場合もagentが解放されること。
+        """ドキュメント検証が失敗した場合もagentが解放されること。
 
         Issue #107レビュー: ドキュメント読み込みがtryブロックの外にあったため、
         検証失敗時にfinally節のcleanup_agentsが実行されずリソースがリークしていた。
+        Gemma4（3.5MB上限）に上限超過のPDFを添付してサイズ検証を失敗させ、
+        finally節でのcleanupを確認する。
         """
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
@@ -491,7 +415,7 @@ class TestStartAgentDiscussion:
             "id": "doc-1",
             "filename": "test.pdf",
             "file_path": "path/to/test.pdf",
-            "file_size": 100,
+            "file_size": 5 * 1024 * 1024,
             "mime_type": "application/pdf",
             "uploaded_at": None,
         }
@@ -515,10 +439,10 @@ class TestStartAgentDiscussion:
                 persona_agents=persona_agents,
                 facilitator=mock_facilitator,
                 document_ids=["doc-1"],
-                persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
+                persona_models={sample_persona.id: "google.gemma-4-31b"},
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED
+        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE
         mock_persona_agent_1.dispose.assert_called_once()
         mock_persona_agent_2.dispose.assert_called_once()
         mock_facilitator.dispose.assert_called_once()

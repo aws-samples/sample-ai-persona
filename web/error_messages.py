@@ -222,10 +222,6 @@ _CATALOG: dict[ErrorCode, str] = {
         "選択したモデルの入力サイズ上限（最大{max_size_mb:.1f}MB）を超えています。"
         "モデルを変更するか、添付ドキュメントを減らしてください"
     ),
-    ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED: (
-        "選択したモデルは現在PDF等のドキュメント添付に対応していません（画像は対応済み）。"
-        "Claude系モデルに変更するか、添付を外してください"
-    ),
     # --- 議論レポート ---
     ErrorCode.REPORT_NOT_FOUND: "レポートが見つかりません",
     ErrorCode.REPORT_LIMIT_REACHED: (
@@ -306,10 +302,6 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED: (
         "選択されたモデルは現在無効化されています。"
         "管理者にインタビュー用モデル設定の有効化を依頼してください"
-    ),
-    ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED: (
-        "選択したモデルは現在インタビューでのPDF等のドキュメント添付に対応していません"
-        "（画像は対応済み）。Claude系モデルに変更するか、添付を外してください"
     ),
     ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE: (
         "選択したモデルのインタビューでの入力サイズ上限（最大{max_size_mb:.1f}MB）を"

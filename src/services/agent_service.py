@@ -129,12 +129,42 @@ def _extract_text_from_agent_result(result: Any, agent: Any = None) -> str:
         return str(result)
 
 
+def _documents_with_mantle_filenames(
+    blocks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Append the format extension to document names for Mantle-routed models.
+
+    Bedrock Mantle infers the file type from the filename extension, but Strands'
+    OpenAIResponsesModel message-content path sends ``document["name"]`` verbatim
+    without appending the extension, so Mantle rejects it as "Unsupported file
+    type". The Converse (BedrockModel) path forbids dots in the document name, so
+    the canonical block keeps the name extension-less; the extension is appended
+    only here, at the Mantle boundary. Image/text blocks are returned unchanged.
+    """
+    adapted: List[Dict[str, Any]] = []
+    for block in blocks:
+        doc = block.get("document")
+        if doc and doc.get("format"):
+            name = doc.get("name", "document")
+            suffix = f".{doc['format']}"
+            if not name.endswith(suffix):
+                block = {**block, "document": {**doc, "name": f"{name}{suffix}"}}
+        adapted.append(block)
+    return adapted
+
+
 class PersonaAgent:
     """
     個別のペルソナを表現するAIエージェント
     """
 
-    def __init__(self, persona: Persona, system_prompt: str, agent: Any):
+    def __init__(
+        self,
+        persona: Persona,
+        system_prompt: str,
+        agent: Any,
+        requires_mantle: bool = False,
+    ):
         """
         Initialize persona agent
 
@@ -142,10 +172,13 @@ class PersonaAgent:
             persona: ペルソナオブジェクト
             system_prompt: システムプロンプト
             agent: Strands Agentインスタンス
+            requires_mantle: モデルがBedrock Mantle経由（OpenAIResponsesModel）か。
+                Trueの場合、document添付のfilenameに拡張子を補って送信する。
         """
         self.persona = persona
         self.system_prompt = system_prompt
         self.agent = agent
+        self.requires_mantle = requires_mantle
         self.logger = logging.getLogger(__name__)
         self._document_contents: List[Dict[str, Any]] = []
 
@@ -190,7 +223,12 @@ class PersonaAgent:
             # マルチモーダルコンテンツがある場合はContentBlockリストとして渡す
             if include_documents and self._document_contents:
                 # テキストとドキュメントを組み合わせたContentBlockリストを作成
-                content_blocks = [{"text": full_prompt}] + self._document_contents
+                documents = (
+                    _documents_with_mantle_filenames(self._document_contents)
+                    if self.requires_mantle
+                    else self._document_contents
+                )
+                content_blocks = [{"text": full_prompt}] + documents
                 result = self.agent(content_blocks)
                 # ドキュメントは最初の呼び出しでのみ渡す（会話履歴に残るため）
                 self._document_contents = []
@@ -250,9 +288,12 @@ class PersonaAgent:
                 nonlocal agent_error
                 try:
                     if include_documents and self._document_contents:
-                        content_blocks = [
-                            {"text": full_prompt}
-                        ] + self._document_contents
+                        documents = (
+                            _documents_with_mantle_filenames(self._document_contents)
+                            if self.requires_mantle
+                            else self._document_contents
+                        )
+                        content_blocks = [{"text": full_prompt}] + documents
                         self.agent(content_blocks)
                         self._document_contents = []
                     else:
@@ -544,6 +585,17 @@ class AgentService:
             params={"max_output_tokens": config.AGENT_MAX_TOKENS},
         )
 
+    @staticmethod
+    def _resolve_effective_spec(model_id: Optional[str]) -> Any:
+        """model_id省略時はconfig.AGENT_MODEL_ID（CDK/環境変数で上書き可能）を既定として使う。
+
+        model_registry.DEFAULT_MODEL_IDはstdlibのみのModels層にありconfigを参照できないため、
+        「未指定→実際に使う既定モデル」の解決はここ（Service層）で行う。
+        """
+        from ..models.model_registry import get_model_spec
+
+        return get_model_spec(model_id or config.AGENT_MODEL_ID)
+
     def _create_model(self, model_id: Optional[str] = None) -> Any:
         """
         モデルインスタンスを作成（プロバイダ分岐 factory）
@@ -565,14 +617,10 @@ class AgentService:
         """
         from ..models.model_registry import (
             ModelProvider,
-            get_model_spec,
             resolve_call_region,
         )
 
-        # model_id省略時はconfig.AGENT_MODEL_ID（CDK/環境変数で上書き可能）を既定として使う。
-        # model_registry.DEFAULT_MODEL_IDはstdlibのみのModels層にありconfigを参照できないため、
-        # 「未指定→実際に使う既定モデル」の解決はここで行う。
-        spec = get_model_spec(model_id or config.AGENT_MODEL_ID)
+        spec = self._resolve_effective_spec(model_id)
         region = resolve_call_region(spec, config.AWS_REGION)
 
         if spec.provider == ModelProvider.OPENAI_RESPONSES:
@@ -702,6 +750,7 @@ class AgentService:
 
             # モデルを作成（プロバイダ分岐）
             model = self._create_model(model_id)
+            requires_mantle = self._resolve_effective_spec(model_id).requires_mantle
 
             # セッションマネージャーを準備（メモリが有効な場合）
             session_manager = None
@@ -773,7 +822,9 @@ class AgentService:
             agent = Agent(**agent_kwargs)
 
             # PersonaAgentを作成
-            persona_agent = PersonaAgent(persona, system_prompt, agent)
+            persona_agent = PersonaAgent(
+                persona, system_prompt, agent, requires_mantle=requires_mantle
+            )
 
             memory_status = "disabled"
             if session_manager:

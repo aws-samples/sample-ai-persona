@@ -25,7 +25,6 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
-    any_model_requires_mantle,
     resolve_effective_persona_models,
     validate_document_size_for_models,
     validate_model_selection,
@@ -607,9 +606,6 @@ class AgentDiscussionManager:
                     (agent.get_persona_id() for agent in persona_agents),
                     persona_models,
                 )
-                self._validate_document_support_for_models(
-                    documents_metadata, effective_persona_models
-                )
                 total_size = sum(doc.get("file_size", 0) for doc in documents_metadata)
                 validate_document_size_for_models(
                     total_size,
@@ -635,36 +631,6 @@ class AgentDiscussionManager:
                         agent.set_document_contents(document_contents.copy())
 
         return documents_metadata, document_context, document_contents
-
-    def _validate_document_support_for_models(
-        self,
-        documents_metadata: List[Dict[str, Any]],
-        persona_models: Optional[Dict[str, str]],
-    ) -> None:
-        """追加ペルソナベースモデル（Mantle経由）に非対応のドキュメントが添付されていないか検証する。
-
-        Strands SDK（1.51.0時点）のOpenAIResponsesModel（Mantle経由）は、document
-        （PDF等。input_file）構築時にfilenameを送信せずMantle側のファイル種別判定が失敗する
-        既知の実装漏れがある（Mantleエンドポイント自体はfilename付きの正しい形式なら受理する。
-        AWS実機での直接検証で確認済み。上流SDK修正待ち: strands-agents #3576 / #3674）。
-        image（input_image）はfilenameという概念自体を持たないパラメータ形式のため、
-        現行実装のままMantle側も問題なく受理する（同検証で確認済み）。
-        そのためdocument系（PDF等）のみを拒否し、imageは許可する。
-        """
-        if not any_model_requires_mantle(persona_models):
-            return
-
-        from .shared.document_loader import is_image_type
-
-        for doc in documents_metadata:
-            mime_type = doc.get("mime_type", "")
-            if not is_image_type(mime_type):
-                raise AgentDiscussionManagerError(
-                    f"document mime_type {mime_type!r} is not supported by "
-                    "Mantle-routed models (image is supported, other document "
-                    "types are not)",
-                    code=ErrorCode.DISCUSSION_MODEL_DOCUMENT_UNSUPPORTED,
-                )
 
     def _validate_discussion_input(
         self,
