@@ -726,11 +726,11 @@ class TestInterviewManagerMultimodal:
         # 両方から応答が返されたことを確認
         assert len(responses) == 2
 
-    def test_send_user_message_with_pdf_mantle_model_raises_capacity_error(self):
-        """Mantle系モデル（GPT/Gemma）選択時にPDF添付するとCAPACITYエラーになる。
+    def test_send_user_message_with_pdf_mantle_model_passes(self):
+        """Mantle系モデル（GPT/Gemma）選択時でもPDF添付が許可される。
 
-        Strands SDKがfilenameを送信しない実装漏れによりMantle側で
-        "Unsupported file type"エラーとなるため事前に拒否する（AWS実機検証で確認済み）。
+        Strands SDK 1.52.0でOpenAIResponsesModelがfilename付きでdocumentを送信する
+        よう修正され、Mantle側もPDFを正しく受理するようになった（Issue #122）。
         """
         session = InterviewSession(
             id="test-session",
@@ -743,6 +743,8 @@ class TestInterviewManagerMultimodal:
 
         mock_persona_agent = Mock()
         mock_persona_agent.get_persona_id.return_value = "persona-1"
+        mock_persona_agent.get_persona_name.return_value = "田中太郎"
+        mock_persona_agent.respond.return_value = "PDFを読んで回答します"
         mock_persona_agent.set_document_contents = Mock()
 
         self.interview_manager._active_sessions["test-session"] = session
@@ -758,22 +760,17 @@ class TestInterviewManagerMultimodal:
             }
         ]
 
-        with pytest.raises(InterviewValidationError) as exc_info:
-            self.interview_manager.send_user_message(
-                "test-session",
-                "このPDFについて教えてください",
-                document_contents=document_contents,
-            )
+        responses = self.interview_manager.send_user_message(
+            "test-session",
+            "このPDFについて教えてください",
+            document_contents=document_contents,
+        )
 
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
-        mock_persona_agent.set_document_contents.assert_not_called()
+        mock_persona_agent.set_document_contents.assert_called_once()
+        assert len(responses) == 1
 
     def test_send_user_message_with_image_mantle_model_passes(self):
-        """Mantle系モデル選択時でも画像添付は許可される。
-
-        画像（input_image）はfilenameという概念自体を持たないパラメータ形式のため、
-        Mantle側も問題なく受理する（AWS実機検証で確認済み）。
-        """
+        """Mantle系モデル選択時でも画像添付は許可される。"""
         session = InterviewSession(
             id="test-session",
             participants=["persona-1"],
@@ -1433,13 +1430,13 @@ class TestInterviewManagerErrorPaths:
 
     # --- send_user_message_streaming: mantle model + documents ---
 
-    def test_streaming_mantle_model_with_pdf_raises_capacity_error(self):
-        from src.managers.interview_manager import InterviewValidationError
-
+    def test_streaming_mantle_model_with_pdf_passes(self):
+        """ストリーミング送信でもMantle系モデルでPDF添付が許可される（Issue #122）。"""
         self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
         mock_agent = Mock()
         mock_agent.get_persona_id.return_value = "p1"
         mock_agent.get_persona_name.return_value = "田中"
+        mock_agent.respond_streaming.return_value = iter(["PDF", "を読みました"])
         mock_agent.set_document_contents = Mock()
         self._add_agents("s1", [mock_agent])
 
@@ -1453,18 +1450,16 @@ class TestInterviewManagerErrorPaths:
             }
         ]
 
-        with raises_code(
-            InterviewValidationError, ErrorCode.INTERVIEW_MODEL_DOCUMENT_UNSUPPORTED
-        ):
-            list(
-                self.interview_manager.send_user_message_streaming(
-                    "s1",
-                    "このPDFについて教えてください",
-                    document_contents=document_contents,
-                )
+        events = list(
+            self.interview_manager.send_user_message_streaming(
+                "s1",
+                "このPDFについて教えてください",
+                document_contents=document_contents,
             )
+        )
 
-        mock_agent.set_document_contents.assert_not_called()
+        mock_agent.set_document_contents.assert_called_once()
+        assert any(e[0] == "message_end" for e in events)
 
     def test_streaming_mantle_model_with_image_passes(self):
         self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})

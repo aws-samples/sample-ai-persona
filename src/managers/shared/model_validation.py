@@ -58,19 +58,6 @@ def validate_model_selection(
             )
 
 
-def any_model_requires_mantle(
-    persona_models: Optional[Mapping[str, Optional[str]]],
-) -> bool:
-    """persona_modelsの中にMantle経由（requires_mantle=True）のモデルが1つでもあるか判定する。"""
-    if not persona_models:
-        return False
-    return any(
-        get_model_spec(model_id).requires_mantle
-        for model_id in set(persona_models.values())
-        if model_id is not None
-    )
-
-
 def resolve_effective_persona_models(
     persona_ids: Iterable[str],
     persona_models: Optional[Mapping[str, Optional[str]]],
