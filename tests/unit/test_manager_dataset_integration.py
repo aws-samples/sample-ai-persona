@@ -9,13 +9,17 @@ from unittest.mock import Mock
 import pytest
 
 from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
-from src.managers.interview_manager import InterviewManager
-from src.managers.agent_discussion_manager import AgentDiscussionManager
+from src.managers import agent_discussion_manager, interview_manager
 
 pytestmark = pytest.mark.unit
 
 # 両 Manager で同一ロジックのため parametrize で網羅する。
-MANAGER_CLASSES = [InterviewManager, AgentDiscussionManager]
+# モジュール経由で参照し、import 形式を from ... import に統一する
+# （同一モジュールの import / import from 混在を避ける）。
+MANAGER_CLASSES = [
+    interview_manager.InterviewManager,
+    agent_discussion_manager.AgentDiscussionManager,
+]
 
 
 def _binding(persona_id, dataset_id, keys=None):
@@ -59,7 +63,7 @@ class TestResolveDatasetBindings:
             _binding("p1", "ds-dup", {"user_id": "U2"}),  # 同 dataset に2 binding
             _binding("p1", "ds-ok", {"user_id": "U9"}),
         ]
-        db.get_dataset.side_effect = lambda did: _dataset(did)
+        db.get_dataset.side_effect = _dataset
         mgr = _make(cls, db, Mock())
 
         accepted, datasets = mgr._resolve_dataset_bindings("p1")
@@ -72,7 +76,7 @@ class TestResolveDatasetBindings:
     def test_unique_empty_binding_keys_allowed(self, cls):
         db = Mock()
         db.get_bindings_by_persona.return_value = [_binding("p1", "ds-all", {})]
-        db.get_dataset.side_effect = lambda did: _dataset(did)
+        db.get_dataset.side_effect = _dataset
         mgr = _make(cls, db, Mock())
 
         accepted, datasets = mgr._resolve_dataset_bindings("p1")
@@ -92,15 +96,12 @@ class TestKillSwitchAndGate:
         db.get_bindings_by_persona.return_value = [
             _binding("p1", "ds-ok", {"user_id": "U1"})
         ]
-        db.get_dataset.side_effect = lambda did: _dataset(did)
+        db.get_dataset.side_effect = _dataset
         return db
 
     def test_enabled_both_flags_builds_tools_and_prompt(self, cls, monkeypatch):
-        import src.managers.interview_manager as im
-        import src.managers.agent_discussion_manager as dm
-
-        monkeypatch.setattr(im.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(dm.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
         ds_service.build_binding_tools.return_value = (
@@ -125,11 +126,8 @@ class TestKillSwitchAndGate:
         assert any(g for g in tool_groups)
 
     def test_global_flag_off_skips_everything(self, cls, monkeypatch):
-        import src.managers.interview_manager as im
-        import src.managers.agent_discussion_manager as dm
-
-        monkeypatch.setattr(im.config, "ENABLE_DATASET_ANALYSIS", False)
-        monkeypatch.setattr(dm.config, "ENABLE_DATASET_ANALYSIS", False)
+        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", False)
+        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", False)
 
         ds_service = Mock()
         mgr = _make(cls, self._db_with_binding(), ds_service)
@@ -141,11 +139,8 @@ class TestKillSwitchAndGate:
         assert sections == [] and all(not g for g in tool_groups)
 
     def test_session_flag_off_skips_everything(self, cls, monkeypatch):
-        import src.managers.interview_manager as im
-        import src.managers.agent_discussion_manager as dm
-
-        monkeypatch.setattr(im.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(dm.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
         mgr = _make(cls, self._db_with_binding(), ds_service)
@@ -159,11 +154,8 @@ class TestKillSwitchAndGate:
     def test_excluded_dataset_absent_from_tools_and_prompt(self, cls, monkeypatch):
         # build_binding_tools が ([], []) を返せば tool もプロンプトも出ない
         # （同一 accepted_descriptors から両方生成する一貫性）。
-        import src.managers.interview_manager as im
-        import src.managers.agent_discussion_manager as dm
-
-        monkeypatch.setattr(im.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(dm.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
         ds_service.build_binding_tools.return_value = ([], [])
