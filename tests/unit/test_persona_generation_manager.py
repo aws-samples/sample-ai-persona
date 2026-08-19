@@ -5,20 +5,18 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.managers.persona_generation_manager import (
-    PersonaGenerationManager,
-    PersonaGenerationManagerError,
-    _PersonaListOutput,
-    _PersonaOutput,
-)
+# モジュール経由で参照し import 形式を from ... import に統一する
+# （同一モジュールの import / import from 混在を避ける。config / save_temp_csv 等の
+#  monkeypatch もこのハンドル経由で行う）。
+from src.managers import persona_generation_manager as mod
 
 pytestmark = pytest.mark.unit
 
 
 def _valid_result():
-    return _PersonaListOutput(
+    return mod._PersonaListOutput(
         personas=[
-            _PersonaOutput(
+            mod._PersonaOutput(
                 name="田中太郎",
                 age=35,
                 gender="male",
@@ -44,7 +42,7 @@ def _manager(dataset_service=None, run_side_effect=None):
     ds = dataset_service or Mock()
     if dataset_service is None:
         ds.build_source_tools.return_value = [Mock()]
-    return PersonaGenerationManager(
+    return mod.PersonaGenerationManager(
         agent_service=agent_service,
         database_service=Mock(),
         dataset_analysis_service=ds,
@@ -115,8 +113,6 @@ class TestExtractFileTexts:
 class TestTempCleanup:
     def _capture_paths(self, mgr, monkeypatch):
         created: list[str] = []
-        import src.managers.persona_generation_manager as mod
-
         orig = mod.save_temp_csv
 
         def spy(content):
@@ -142,7 +138,6 @@ class TestTempCleanup:
         # temp CSV は残らない（_extract_file_texts の except が広いこと）。
         mgr = _manager()
         created = self._capture_paths(mgr, monkeypatch)
-        import src.managers.persona_generation_manager as mod
 
         def boom(_content):
             raise ValueError("field larger than field limit")
@@ -175,7 +170,7 @@ class TestTempCleanup:
         mgr = _manager(dataset_service=ds)
         created = self._capture_paths(mgr, monkeypatch)
 
-        with pytest.raises(PersonaGenerationManagerError):
+        with pytest.raises(mod.PersonaGenerationManagerError):
             mgr.generate_and_cache(
                 file_contents=[(b"region,amount\neast,10\n", "d.csv")],
                 data_type="purchase",
@@ -186,8 +181,6 @@ class TestTempCleanup:
 
 class TestEffectiveFlag:
     def test_disabled_global_flag_skips_dataset_tools(self, monkeypatch):
-        import src.managers.persona_generation_manager as mod
-
         monkeypatch.setattr(mod.config, "ENABLE_DATASET_ANALYSIS", False)
         ds = Mock()
         mgr = _manager(dataset_service=ds)
@@ -199,8 +192,6 @@ class TestEffectiveFlag:
         ds.build_source_tools.assert_not_called()
 
     def test_enabled_flag_builds_source_tools(self, monkeypatch):
-        import src.managers.persona_generation_manager as mod
-
         monkeypatch.setattr(mod.config, "ENABLE_DATASET_ANALYSIS", True)
         ds = Mock()
         ds.build_source_tools.return_value = [Mock()]
@@ -219,7 +210,7 @@ class TestEffectiveFlag:
 class TestConstructorDI:
     def test_accepts_dataset_analysis_service(self):
         ds = Mock()
-        mgr = PersonaGenerationManager(
+        mgr = mod.PersonaGenerationManager(
             agent_service=Mock(),
             database_service=Mock(),
             dataset_analysis_service=ds,

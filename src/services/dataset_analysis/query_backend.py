@@ -62,7 +62,7 @@ class DatasetQueryBackend(Protocol):
 
         timeout 超過時は ``DatasetQueryTimeout`` を送出する。
         """
-        ...
+        raise NotImplementedError
 
 
 class DuckDBQueryBackend:
