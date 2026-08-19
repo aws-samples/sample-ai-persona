@@ -88,7 +88,15 @@ def build_analyze_query(
         elif op == "contains":
             if not isinstance(value, str):
                 raise SqlBuildError("operator 'contains' requires a string value")
-            where.append(f"{quoted} LIKE {add_param('%' + value + '%')}")
+            # LIKE メタ文字（% _ \）をエスケープして部分一致に限定する。値は
+            # パラメータ化済み（注入不可）だが、未エスケープだと % / _ が
+            # ワイルドカードとして働き意図しない行にマッチする。ESCAPE は定数。
+            escaped_value = (
+                value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            where.append(
+                f"{quoted} LIKE {add_param('%' + escaped_value + '%')} ESCAPE '\\'"
+            )
         elif op in _COMPARISON_OPERATORS:
             if isinstance(value, list):
                 raise SqlBuildError(f"operator {op!r} does not accept a list value")

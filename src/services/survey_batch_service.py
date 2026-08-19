@@ -269,7 +269,8 @@ class SurveyBatchService:
 
         conn = duckdb.connect(":memory:")
         # httpfs はコンテナビルド時に組込済み。実行時ダウンロードを避けるため
-        # autoinstall/autoload を無効化して LOAD する（未組込環境のみ INSTALL）。
+        # autoinstall/autoload を無効化し LOAD のみ行う（INSTALL はしない。
+        # 未組込環境では LOAD で即失敗させる）。
         _load_httpfs(conn)
         self._set_s3_credentials(conn)
         conn.execute(
@@ -1008,8 +1009,8 @@ class SurveyBatchService:
         conn = duckdb.connect(":memory:")
         try:
             if s3_path.startswith("s3://"):
-                # httpfs はビルド時組込。実行時ダウンロードを避け LOAD する
-                # （未組込環境のみ INSTALL フォールバック）。
+                # httpfs はビルド時組込。実行時ダウンロードを避け LOAD のみ行う
+                # （INSTALL はしない。未組込環境では LOAD で即失敗させる）。
                 _load_httpfs(conn)
 
                 import boto3

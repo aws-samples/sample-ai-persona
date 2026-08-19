@@ -101,6 +101,24 @@ class TestLocalExecution:
         )
         assert rows == [[10]]
 
+    def test_numeric_first_row_treated_as_header(self, tmp_path):
+        """header=true 固定で、全数値の先頭行もヘッダー扱いになること。
+
+        header 未指定だと DuckBD はヘッダー無しと誤判定し column0.. を割り当てて
+        スキーマ解析（csv.reader）由来の allowlist 列名と乖離する（#3）。
+        """
+        csv = tmp_path / "data.csv"
+        csv.write_text("1001,100,5\n1002,200,6\n")
+        backend = DuckDBQueryBackend(
+            bucket_name="b", allowed_local_roots=[str(tmp_path)]
+        )
+        # csv.reader が採る列名（先頭行）で SELECT できる＝両者の列名が一致する。
+        columns, rows = backend.execute(
+            f"local://{csv}", 'SELECT "1001" FROM dataset', [], timeout=10.0
+        )
+        assert columns == ["1001"]
+        assert rows == [[1002]]
+
 
 class _FakeConn:
     """execute が block し、interrupt で解放される擬似 DuckDB 接続。"""
@@ -190,3 +208,29 @@ class TestSoftTimeout:
                     backend._sem.release()
                     break
             assert acquired is True
+
+    def test_semaphore_released_when_thread_start_fails(self, tmp_path):
+        """thread.start() が失敗しても Semaphore スロットをリークしないこと。
+
+        acquired_by_worker を start() より前に立てると、worker の finally が走らず
+        外側 finally も解放をスキップしてスロットが永久に失われる（回帰防止）。
+        """
+        csv = tmp_path / "d.csv"
+        csv.write_text("c\n1\n")
+        backend = DuckDBQueryBackend(
+            bucket_name="b",
+            allowed_local_roots=[str(tmp_path)],
+            max_concurrent_queries=1,
+        )
+        with patch.object(
+            threading.Thread,
+            "start",
+            side_effect=RuntimeError("can't start new thread"),
+        ):
+            with pytest.raises(RuntimeError):
+                backend.execute(
+                    f"local://{csv}", "SELECT * FROM dataset", [], timeout=1.0
+                )
+        # スロットが解放され、後続の acquire が即成功すること。
+        assert backend._sem.acquire(timeout=0.1) is True
+        backend._sem.release()

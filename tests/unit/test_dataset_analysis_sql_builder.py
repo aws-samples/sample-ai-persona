@@ -94,6 +94,14 @@ class TestFilters:
         assert "LIKE $1" in sql
         assert params == ["%as%"]
 
+    def test_contains_escapes_like_metacharacters(self):
+        # % _ \ をエスケープし ESCAPE 句を付ける（ワイルドカード誤マッチ防止）。
+        sql, params, _ = _build(
+            filters=[{"column": "region", "operator": "contains", "value": "50%_x\\"}]
+        )
+        assert "ESCAPE '\\'" in sql
+        assert params == ["%50\\%\\_x\\\\%"]
+
     def test_injection_string_is_parameterized_not_inlined(self):
         malicious = "'; DROP TABLE dataset; --"
         sql, params, _ = _build(

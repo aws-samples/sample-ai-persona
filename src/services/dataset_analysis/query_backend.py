@@ -180,9 +180,12 @@ class DuckDBQueryBackend:
                     self._sem.release()
                     done.set()
 
-            acquired_by_worker = True
             thread = threading.Thread(target=worker, daemon=True)
             thread.start()
+            # start() 成功後は worker の finally が唯一の解放者。start() が
+            # 例外で失敗した場合は False のままなので外側 finally が解放する
+            # （True を start() 前に立てるとスロットが永久リークする）。
+            acquired_by_worker = True
 
             if not done.wait(timeout=remaining):
                 # watchdog: timeout。実行中の query を中断する。
@@ -217,12 +220,16 @@ class DuckDBQueryBackend:
             # ローカルの事前 INSTALL 手順は docs/local_development.md を参照。
             conn.execute("LOAD httpfs;")  # nosemgrep: sqlalchemy-execute-raw-query
             self._set_s3_credentials(conn)
-        read_fn = (
-            "read_parquet" if view_spec.path.endswith(".parquet") else "read_csv_auto"
-        )
         escaped = view_spec.path.replace("'", "''")
+        if view_spec.path.endswith(".parquet"):
+            source = f"read_parquet('{escaped}')"
+        else:
+            # header=true で 1 行目を常にヘッダー扱いにする（全数値の先頭行を
+            # DuckDB がデータと誤判定し column0.. を割り当てて、スキーマ解析
+            # （csv.reader）由来の allowlist 列名と乖離するのを防ぐ）。
+            source = f"read_csv_auto('{escaped}', header=true)"
         conn.execute(  # nosemgrep: sqlalchemy-execute-raw-query
-            f"CREATE VIEW dataset AS SELECT * FROM {read_fn}('{escaped}');"
+            f"CREATE VIEW dataset AS SELECT * FROM {source};"
         )
 
     def _set_s3_credentials(self, conn: Any) -> None:

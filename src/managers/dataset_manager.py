@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any
 from ..models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
 from ..models.errors import CodedError, ErrorCode
 from ..services.service_factory import service_factory
+from .shared.file_utils import normalize_csv_headers
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,14 @@ class DatasetManager:
         headers = next(reader, [])
         if not headers:
             return [], 0
+        # ヘッダー名を正規化・検証（空/重複は DuckDB read_csv_auto がリネームして
+        # クエリ列名と乖離するため、アップロード時点で明確に弾く）。
+        try:
+            headers = normalize_csv_headers(headers)
+        except ValueError as e:
+            raise DatasetManagerError(
+                str(e), code=ErrorCode.FILE_CSV_HEADER_INVALID
+            ) from e
 
         # サンプル行を読み取って型推定
         rows = []

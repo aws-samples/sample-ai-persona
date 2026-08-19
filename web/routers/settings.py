@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from src.managers.dataset_manager import DatasetManager
+from src.managers.dataset_manager import DatasetManager, DatasetManagerError
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.dataset import DatasetColumn
 from src.models.errors import ErrorCode
@@ -146,7 +146,20 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
         )
 
     dataset_manager = get_dataset_manager()
-    columns, row_count = dataset_manager.analyze_schema(content)
+    try:
+        columns, row_count = dataset_manager.analyze_schema(content)
+    except DatasetManagerError as e:
+        # 空/重複ヘッダ等でクエリ列名と乖離するCSVは、汎用500ではなく
+        # フォーム近傍にインラインで理由を表示する（他バリデーションと同様）。
+        logger.warning("CSV schema analysis rejected", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
+        )
 
     # DatasetColumnをdictに変換
     columns_dict = [

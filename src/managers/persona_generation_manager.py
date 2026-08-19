@@ -509,7 +509,14 @@ class PersonaGenerationManager:
                     # 列推論は UTF-8 正規化済みの temp から行う（Shift_JIS/EUC-JP 対応）。
                     with open(csv_path, "rb") as f:
                         utf8_bytes = f.read()
-                    columns, _ = analyze_csv_schema(utf8_bytes)
+                    try:
+                        columns, _ = analyze_csv_schema(utf8_bytes)
+                    except ValueError as e:
+                        # 空/重複ヘッダは analyze_dataset のクエリ列と乖離するため弾く。
+                        raise PersonaGenerationManagerError(
+                            f"invalid CSV header in {filename!r}: {e}",
+                            code=ErrorCode.FILE_CSV_HEADER_INVALID,
+                        ) from e
                     source_descriptors.append(
                         {
                             "alias": alias,

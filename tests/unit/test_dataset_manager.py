@@ -8,6 +8,8 @@ from datetime import datetime
 from dataclasses import asdict
 
 from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from src.models.errors import ErrorCode
+from tests.error_helpers import raises_code
 
 
 class TestDatasetModels:
@@ -334,6 +336,28 @@ class TestDatasetManagerSchemaAnalysis:
         """空値のみの場合はstring"""
         result = dataset_manager._infer_type(["", "  ", ""])
         assert result == "string"
+
+    def test_analyze_schema_rejects_empty_header(self, dataset_manager):
+        """空ヘッダー列は FILE_CSV_HEADER_INVALID で弾く（DuckDBが列名を全リネームする）。"""
+        from src.managers.dataset_manager import DatasetManagerError
+
+        csv_content = b"user_id,,category\nU001,100,food\n"
+        with raises_code(DatasetManagerError, ErrorCode.FILE_CSV_HEADER_INVALID):
+            dataset_manager.analyze_schema(csv_content)
+
+    def test_analyze_schema_rejects_duplicate_header(self, dataset_manager):
+        """重複ヘッダーは FILE_CSV_HEADER_INVALID で弾く（DuckDBが name_1 にリネーム）。"""
+        from src.managers.dataset_manager import DatasetManagerError
+
+        csv_content = b"user_id,amount,amount\nU001,100,10\n"
+        with raises_code(DatasetManagerError, ErrorCode.FILE_CSV_HEADER_INVALID):
+            dataset_manager.analyze_schema(csv_content)
+
+    def test_analyze_schema_strips_whitespace_headers(self, dataset_manager):
+        """前後空白ヘッダーは正規化して受け入れる（DuckDBのtrimと揃える）。"""
+        csv_content = b"user id, amount ,category\nU001,100,food\n"
+        columns, _ = dataset_manager.analyze_schema(csv_content)
+        assert [c.name for c in columns] == ["user id", "amount", "category"]
 
 
 class TestDatasetManagerCRUD:
