@@ -56,7 +56,6 @@ _BASELINE: dict[str, set[str]] = {
     "src/services/agent_service.py": {
         "src.services.data_agent_service",
         "src.services.knowledge_base.kb_tools",
-        "src.services.mcp_server_manager",
         "src.services.memory.session_manager_factory",
     },
 }

@@ -5,7 +5,7 @@ Handles interview session setup, execution, and persistence.
 
 import logging
 import uuid
-from typing import List, Dict, Mapping, Any, Optional
+from typing import List, Dict, Mapping, Any, Optional, TYPE_CHECKING
 from datetime import datetime
 
 
@@ -29,6 +29,9 @@ from .shared.model_validation import (
     validate_document_size_for_models,
     validate_model_selection,
 )
+
+if TYPE_CHECKING:
+    from ..services.dataset_analysis.service import DatasetAnalysisService
 
 
 class InterviewManagerError(CodedError):
@@ -81,6 +84,7 @@ class InterviewManager:
         self,
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
+        dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
     ):
         """
         Initialize interview manager.
@@ -88,6 +92,7 @@ class InterviewManager:
         Args:
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            dataset_analysis_service: Dataset analysis service for analyze_dataset tools (optional, uses singleton if not provided)
         """
         from ..services.service_factory import service_factory
 
@@ -95,6 +100,9 @@ class InterviewManager:
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
+        )
+        self.dataset_analysis_service = (
+            dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
 
         # Active interview sessions (temporary storage)
@@ -909,15 +917,13 @@ class InterviewManager:
         model_id: Optional[str] = None,
     ) -> Any:
         """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        from .shared.agent_integration import prepare_integration_tools_and_prompt
+        from .shared.agent_integration import combine_integration
 
-        enhanced_prompt, additional_tools = prepare_integration_tools_and_prompt(
-            agent_service=self.agent_service,
-            database_service=self.database_service,
-            persona_id=persona.id,
-            base_prompt=system_prompt,
-            enable_kb=enable_kb,
-            enable_dataset=enable_dataset,
+        sections, tool_groups = self._build_integration_sections(
+            persona.id, enable_kb=enable_kb, enable_dataset=enable_dataset
+        )
+        enhanced_prompt, additional_tools = combine_integration(
+            system_prompt, sections, tool_groups
         )
         return self.agent_service.create_persona_agent(
             persona=persona,
@@ -928,6 +934,72 @@ class InterviewManager:
             memory_mode=memory_mode,
             model_id=model_id,
         )
+
+    def _build_integration_sections(
+        self, persona_id: str, *, enable_kb: bool, enable_dataset: bool
+    ) -> tuple[list[str], list[list[Any]]]:
+        """KB / データセット統合の prompt section と tool group を Manager 層で組み立てる。
+
+        有効判定・DB 解決・重複除外・build を Manager が担う（shared は純粋 combiner）。
+        """
+        from ..prompts.discussion_interview_prompts import (
+            build_dataset_prompt_section,
+            build_kb_prompt_section,
+        )
+
+        sections: list[str] = []
+        tool_groups: list[list[Any]] = []
+
+        if enable_kb:
+            kb_tools, kb_info = self.agent_service.get_kb_tools(
+                persona_id, self.database_service
+            )
+            tool_groups.append(kb_tools)
+            if kb_info:
+                sections.append(build_kb_prompt_section(**kb_info))
+
+        # global kill switch と session フラグの AND。
+        if enable_dataset and config.ENABLE_DATASET_ANALYSIS:
+            accepted_bindings, datasets = self._resolve_dataset_bindings(persona_id)
+            ds_tools, descriptors = self.dataset_analysis_service.build_binding_tools(
+                accepted_bindings, datasets
+            )
+            tool_groups.append(ds_tools)
+            if descriptors:
+                sections.append(build_dataset_prompt_section(descriptors))
+
+        return sections, tool_groups
+
+    def _resolve_dataset_bindings(
+        self, persona_id: str
+    ) -> tuple[list[dict[str, Any]], list[Any]]:
+        """ペルソナの binding を解決し、重複 dataset を丸ごと除外して返す。
+
+        persona×dataset に複数 binding が存在する dataset はどれを使うか一意に定まらない
+        ため、その dataset を丸ごと除外する（fail-closed）。一意な空 binding_keys は
+        従来どおり全行アクセスとして許可する。
+        """
+        bindings = self.database_service.get_bindings_by_persona(persona_id)
+        if not bindings:
+            return [], []
+
+        counts: dict[str, int] = {}
+        for b in bindings:
+            counts[b.dataset_id] = counts.get(b.dataset_id, 0) + 1
+
+        accepted = [b for b in bindings if counts[b.dataset_id] == 1]
+        if not accepted:
+            return [], []
+
+        dataset_ids = list({b.dataset_id for b in accepted})
+        datasets = [self.database_service.get_dataset(did) for did in dataset_ids]
+        datasets = [d for d in datasets if d is not None]
+
+        accepted_bindings = [
+            {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
+            for b in accepted
+        ]
+        return accepted_bindings, datasets
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
         """インタビュー用システムプロンプトを生成する。"""

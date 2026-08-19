@@ -4,7 +4,7 @@ SettingsManager
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from ..config import config
 from ..models.errors import CodedError, ErrorCode
@@ -46,34 +46,6 @@ class SettingsManager:
     def delete_knowledge_base(self, kb_id: str) -> None:
         self.db.delete_knowledge_base(kb_id)
         logger.info(f"Knowledge base deleted: {kb_id}")
-
-    # --- MCP管理 ---
-
-    def is_mcp_running(self) -> bool:
-        from ..services.mcp_server_manager import get_mcp_manager
-
-        return get_mcp_manager().is_running()
-
-    def toggle_mcp(self, enabled: bool) -> bool:
-        from ..services.mcp_server_manager import get_mcp_manager
-
-        mcp_manager = get_mcp_manager()
-        if enabled:
-            mcp_manager.start()
-        else:
-            mcp_manager.stop()
-        return mcp_manager.is_running()
-
-    def get_mcp_status(self) -> Dict[str, Any]:
-        from ..services.mcp_server_manager import get_mcp_manager
-
-        mcp_manager = get_mcp_manager()
-        return {
-            "enabled": mcp_manager.is_running(),
-            "servers": mcp_manager.get_server_status()
-            if hasattr(mcp_manager, "get_server_status")
-            else [],
-        }
 
     # --- データ分析エージェント設定 ---
 

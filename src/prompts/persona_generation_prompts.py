@@ -123,13 +123,14 @@ USER_PROMPT_TEMPLATE = """以下のデータを分析し、**{persona_count}個*
 
 CSV_ANALYSIS_INSTRUCTIONS = """
 # CSVデータの分析指示
-以下のCSVファイルにアクセスできます。queryツールを使ってSQLで分析してください。
+以下のデータセットに analyze_dataset ツールでアクセスできます。SQLは書けません。
+dataset_id と構造化された引数（filters / group_by / metrics / order_by / limit）で分析してください。
 
 {csv_info}
 
 ## 分析手順
-1. まず `SELECT * FROM read_csv('パス') LIMIT 5` でデータ構造を確認
-2. 集計・分析クエリでデータの傾向を把握（例: 属性分布、購買パターン、レビュー傾向）
+1. まず metrics も group_by も指定せずに数行取得し、データ構造を確認
+2. metrics（count / sum / avg / min / max）と group_by で傾向を集計（例: 属性分布、購買パターン、レビュー傾向）
 3. 分析結果に基づいてペルソナを生成
 """
 

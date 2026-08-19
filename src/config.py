@@ -78,6 +78,11 @@ class Config:
     DATA_AGENT_REGION: str = "ap-northeast-1"
     ENABLE_DATA_AGENT: bool = False
 
+    # データセット構造化分析ツール(analyze_dataset)のグローバルkill switch。
+    # process起動ではなくtool登録・プロンプト付与をこのフラグで制御する。
+    # セッション単位のenable_datasetフラグとANDで評価される。
+    ENABLE_DATASET_ANALYSIS: bool = True
+
     # ペルソナ生成キャッシュ設定
     PERSONA_CACHE_TTL_SECONDS: int = 14400  # 4 hours
 
@@ -148,6 +153,12 @@ class Config:
             self.ENABLE_DATA_AGENT = True
         elif enable_val in ("false", "0", "no"):
             self.ENABLE_DATA_AGENT = False
+
+        enable_dataset_analysis = os.getenv("ENABLE_DATASET_ANALYSIS", "").lower()
+        if enable_dataset_analysis in ("true", "1", "yes"):
+            self.ENABLE_DATASET_ANALYSIS = True
+        elif enable_dataset_analysis in ("false", "0", "no"):
+            self.ENABLE_DATASET_ANALYSIS = False
 
         # ペルソナ生成キャッシュ設定を環境変数から上書き
         persona_cache_ttl = os.getenv("PERSONA_CACHE_TTL_SECONDS")

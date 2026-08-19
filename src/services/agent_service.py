@@ -924,35 +924,6 @@ class AgentService:
 
         return tools, None
 
-    def get_dataset_tools(
-        self, persona_id: str, db_service: Any
-    ) -> tuple[list[Any], List[Dict], List[Any]]:
-        """データセット連携ツールとバインディング/データセット情報を返す。
-
-        Returns:
-            (tools, bindings_dict, datasets)
-            バインディング未設定時は ([], [], [])
-        """
-        tools: list[Any] = []
-
-        bindings = db_service.get_bindings_by_persona(persona_id)
-        if not bindings:
-            return tools, [], []
-
-        dataset_ids = list(set(b.dataset_id for b in bindings))
-        datasets = [db_service.get_dataset(did) for did in dataset_ids]
-        datasets = [d for d in datasets if d is not None]
-        bindings_dict = [
-            {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
-            for b in bindings
-        ]
-
-        mcp_tools = self.get_mcp_tools()
-        if mcp_tools:
-            tools.extend(mcp_tools)
-
-        return tools, bindings_dict, datasets
-
     # --- Flexible Persona Generation ---
     #
     # ADR: ペルソナ生成エージェントをクラス化しない理由
@@ -1130,19 +1101,6 @@ class AgentService:
             event_queue=event_queue,
         )
         return [tool]
-
-    def get_mcp_tools(self) -> list[Any]:
-        """MCP（MotherDuck）ツールリストを取得する"""
-        from .mcp_server_manager import get_mcp_manager
-
-        mcp_manager = get_mcp_manager()
-        if not mcp_manager.is_running():
-            mcp_manager.start()
-        if mcp_manager.is_running():
-            mcp_tools = mcp_manager.get_tools()
-            if mcp_tools:
-                return list(mcp_tools)
-        return []
 
     # =========================================================================
 

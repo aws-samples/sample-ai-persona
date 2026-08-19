@@ -14,6 +14,7 @@ from ..config import config
 
 if TYPE_CHECKING:
     from .data_agent_service import DataAgentService
+    from .dataset_analysis.service import DatasetAnalysisService
     from .memory.memory_service import MemoryService
     from .s3_service import S3Service
     from .survey_batch_service import SurveyBatchService
@@ -49,6 +50,7 @@ class ServiceFactory:
         self._memory_service_attempted: bool = False
         self._s3_service: Optional["S3Service"] = None
         self._survey_batch_service: Optional["SurveyBatchService"] = None
+        self._dataset_analysis_service: Optional["DatasetAnalysisService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -237,6 +239,23 @@ class ServiceFactory:
                         region_name=config.AWS_REGION,
                     )
         return self._survey_batch_service
+
+    def get_dataset_analysis_service(self) -> "DatasetAnalysisService":
+        """DatasetAnalysisServiceのシングルトンインスタンスを取得。
+
+        analyze_dataset ツール（DuckDB backend）の組み立てを担う。
+        """
+        if self._dataset_analysis_service is None:
+            with self._lock:
+                if self._dataset_analysis_service is None:
+                    from .dataset_analysis.service import DatasetAnalysisService
+
+                    self.logger.info("Creating new DatasetAnalysisService instance")
+                    self._dataset_analysis_service = DatasetAnalysisService(
+                        bucket_name=config.S3_BUCKET_NAME or "",
+                        region_name=config.AWS_REGION,
+                    )
+        return self._dataset_analysis_service
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """

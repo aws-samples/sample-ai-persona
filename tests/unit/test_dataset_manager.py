@@ -187,57 +187,6 @@ class TestPersonaDatasetBinding:
         assert binding.binding_keys["member_id"] == "M999"
 
 
-class TestMCPServerManager:
-    """MCPサーバーマネージャーテスト"""
-
-    def test_mcp_manager_singleton(self):
-        """MCPマネージャーシングルトンテスト"""
-        from src.services.mcp_server_manager import get_mcp_manager
-
-        manager1 = get_mcp_manager()
-        manager2 = get_mcp_manager()
-
-        assert manager1 is manager2
-
-    def test_mcp_manager_initial_state(self):
-        """MCPマネージャー初期状態テスト"""
-        from src.services.mcp_server_manager import MCPServerManager
-
-        manager = MCPServerManager()
-
-        assert manager.is_running() is False
-        assert manager.enabled is False
-        assert manager.get_mcp_client() is None
-
-    def test_mcp_manager_stop_when_not_running(self):
-        """MCPマネージャー停止（未起動時）テスト"""
-        from src.services.mcp_server_manager import MCPServerManager
-
-        manager = MCPServerManager()
-        result = manager.stop()
-
-        assert result is True  # 未起動時はTrueを返す
-
-    def test_mcp_manager_toggle_off(self):
-        """MCPマネージャートグルOFFテスト"""
-        from src.services.mcp_server_manager import MCPServerManager
-
-        manager = MCPServerManager()
-        result = manager.toggle(False)
-
-        assert result is True
-        assert manager.is_running() is False
-
-    def test_mcp_manager_get_tools_when_not_running(self):
-        """MCPマネージャーツール取得（未起動時）テスト"""
-        from src.services.mcp_server_manager import MCPServerManager
-
-        manager = MCPServerManager()
-        tools = manager.get_tools()
-
-        assert tools == []
-
-
 class TestInterviewManagerDataset:
     """InterviewManagerデータセット連携テスト"""
 
@@ -422,6 +371,28 @@ class TestDatasetManagerCRUD:
         assert len(result.columns) == 2
         manager._mock_s3.upload_file.assert_called_once()
         manager._mock_db.save_dataset.assert_called_once()
+
+    def test_upload_csv_key_is_ascii_normalized(self, manager):
+        """日本語/空白ファイル名でも S3 key は ASCII（id.csv）に正規化される。
+
+        表示名は Dataset.name が保持する。
+        """
+        manager._mock_s3.upload_file.return_value = "s3://bucket/datasets/x.csv"
+        csv_content = b"id,name\n1,Alice"
+
+        manager.upload_csv(
+            file_content=csv_content,
+            filename="購買 データ 2024.csv",
+            name="購買データ",
+        )
+
+        s3_key = manager._mock_s3.upload_file.call_args[0][1]
+        assert s3_key.startswith("datasets/")
+        assert s3_key.endswith(".csv")
+        # 元ファイル名（日本語・空白）が key に含まれない
+        assert "購買" not in s3_key
+        assert " " not in s3_key
+        s3_key.encode("ascii")  # ASCII であること（例外にならない）
 
     def test_upload_csv_with_custom_columns(self, manager):
         """カスタムカラム指定でのアップロード"""

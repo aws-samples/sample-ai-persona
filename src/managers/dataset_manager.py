@@ -134,9 +134,11 @@ class DatasetManager:
         else:
             _, row_count = self.analyze_schema(file_content)
 
-        # S3にアップロード
+        # S3にアップロード。key は dataset id ベースの ASCII に正規化する
+        # （元ファイル名は日本語・空白を含みうるため key に埋めない。表示名は
+        # Dataset.name / metadata が保持する）。
         file_id = str(uuid.uuid4())
-        s3_key = f"datasets/{file_id}_{filename}"
+        s3_key = f"datasets/{file_id}.csv"
 
         if self.s3_service:
             s3_path = self.s3_service.upload_file(file_content, s3_key)
@@ -146,7 +148,7 @@ class DatasetManager:
 
             local_dir = Path("datasets")
             local_dir.mkdir(exist_ok=True)
-            local_path = local_dir / f"{file_id}_{filename}"
+            local_path = local_dir / f"{file_id}.csv"
             local_path.write_bytes(file_content)
             s3_path = f"local://{local_path}"
 

@@ -7,10 +7,12 @@
     <!-- データ連携機能 + データセット管理（1つのカード） -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-lg font-semibold text-gray-700 mb-4">データ連携機能</h2>
-        <div id="mcp-status" hx-get="/settings/mcp/status" hx-trigger="load">
-            {% include "settings/partials/mcp_status.html" %}
-        </div>
-        
+        <p class="text-sm text-gray-500 mb-2">
+            登録したデータセットをペルソナに紐付けると、インタビュー・議論・ペルソナ生成で
+            ペルソナが <code class="bg-gray-100 px-1 rounded">analyze_dataset</code> ツールを使い、
+            自身のデータを集計・参照できます（SQLや外部サーバーの設定は不要です）。
+        </p>
+
         <!-- データセット管理（同カード内） -->
         <div class="border-t border-gray-200 mt-6 pt-6">
             <div class="flex justify-between items-center mb-4">
