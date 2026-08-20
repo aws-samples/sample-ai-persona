@@ -182,8 +182,11 @@ chmod +x destroy.sh
 ./destroy.sh --region <AWS_REGION>
 ```
 
-スタックの依存関係に基づき、正しい順序（Cognito → Main → Memory → ECR）で自動削除されます。
+スタックの依存関係に基づき、正しい順序（MCP → Cognito → Main → WAF → Memory → ECR）で自動削除されます。
+MCP Gateway（`--enable-mcp` でデプロイした場合）はメインスタックの export を参照しているため、メインスタックより先に削除されます。
 dev環境ではS3バケットの中身は `autoDeleteObjects` により自動削除されます。
+
+デプロイ先リージョンが us-east-1 以外の場合、Lambda@Edge の関数は us-east-1 に自動生成されるサポートスタック（`edge-lambda-stack-*`）に配置されます。`destroy.sh` はこれを検出し、メインスタック削除後に us-east-1 で削除します。ただし CloudFront のレプリカ削除には数時間かかるため、初回は削除に失敗することがあります。その場合は時間を置いて再度 `./destroy.sh` を実行してください。
 
 #### オプション
 
@@ -394,9 +397,19 @@ CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
   --output text)
 
+# Cognito User Pool ID / Client ID も CognitoStack の出力から取得できる
+USER_POOL_ID=$(aws cloudformation describe-stacks \
+  --stack-name AIPersonaCognito-dev --region <AWS_REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+  --output text)
+CLIENT_ID=$(aws cloudformation describe-stacks \
+  --stack-name AIPersonaCognito-dev --region <AWS_REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+  --output text)
+
 aws cognito-idp update-user-pool-client \
-  --user-pool-id <USER_POOL_ID> \
-  --client-id <CLIENT_ID> \
+  --user-pool-id "${USER_POOL_ID}" \
+  --client-id "${CLIENT_ID}" \
   --region <AWS_REGION> \
   --callback-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
   --logout-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
@@ -413,26 +426,40 @@ aws cognito-idp update-user-pool-client \
 ```bash
 cd cdk
 
-# 1. Cognito Stack
+# 1. MCP Gateway Stack（--enable-mcp でデプロイした場合のみ。メインスタックの
+#    export を import しているため、メインスタックより先に削除する）
+npx cdk destroy AIPersonaMcp-dev
+
+# 2. Cognito Stack
 npx cdk destroy AIPersonaCognito-dev
 
-# 2. Main Stack（S3バケットを先に空にする）
+# 3. Main Stack（S3バケットを先に空にする）
 aws s3 rm s3://<BUCKET_NAME> --recursive
 npx cdk destroy AIPersona-dev
 
-# 3. WAF Stack（使用している場合、us-east-1にデプロイされている）
+# 4. WAF Stack（使用している場合、us-east-1にデプロイされている）
 npx cdk destroy AIPersonaWaf-dev
 
-# 4. Memory Stack
+# 5. Memory Stack
 npx cdk destroy AIPersonaMemory-dev
 
-# 5. ECR Stack（イメージを先に削除）
+# 6. ECR Stack（イメージを先に削除）
 aws ecr batch-delete-image --repository-name ai-persona-dev \
   --image-ids "$(aws ecr list-images --repository-name ai-persona-dev --query 'imageIds[*]' --output json)"
 npx cdk destroy AIPersonaEcr-dev
+
+# 7. Lambda@Edge サポートスタック（デプロイ先が us-east-1 以外の場合のみ）
+#    us-east-1 に edge-lambda-stack-<hash> という名前で自動生成されている。
+#    レプリカ削除の遅延で数時間は削除に失敗するため、時間を置いてから実行する。
+aws cloudformation list-stacks --region us-east-1 \
+  --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE DELETE_FAILED \
+  --query "StackSummaries[?starts_with(StackName, 'edge-lambda-stack')].StackName" --output text
+aws cloudformation delete-stack --stack-name <EDGE_STACK_NAME> --region us-east-1
 ```
 
 > **注意**: S3バケットやECRリポジトリに中身が残っていると削除に失敗します。必ず事前にクリーンアップしてください。
+>
+> **注意**: `--enable-mcp` でデプロイした環境で MCP Gateway スタックを残したままメインスタックを削除しようとすると、export 参照エラーで失敗します。必ず MCP Gateway スタックを先に削除してください。
 
 ## 出力値
 
@@ -482,12 +509,26 @@ CloudFront Lambda@Edge + [cognito-at-edge](https://github.com/awslabs/cognito-at
 ### callbackUrlの手動更新（必要な場合）
 
 ```bash
+# User Pool ID / Client ID / CloudFront ドメインは各スタックの出力から取得できる
+USER_POOL_ID=$(aws cloudformation describe-stacks \
+  --stack-name AIPersonaCognito-dev --region <REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+  --output text)
+CLIENT_ID=$(aws cloudformation describe-stacks \
+  --stack-name AIPersonaCognito-dev --region <REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+  --output text)
+CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+  --stack-name AIPersona-dev --region <REGION> \
+  --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
+  --output text)
+
 aws cognito-idp update-user-pool-client \
-  --user-pool-id <USER_POOL_ID> \
-  --client-id <CLIENT_ID> \
+  --user-pool-id "${USER_POOL_ID}" \
+  --client-id "${CLIENT_ID}" \
   --region <REGION> \
-  --callback-urls "https://<CLOUDFRONT_DOMAIN>" "https://<CLOUDFRONT_DOMAIN>/" \
-  --logout-urls "https://<CLOUDFRONT_DOMAIN>" "https://<CLOUDFRONT_DOMAIN>/" \
+  --callback-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
+  --logout-urls "https://${CLOUDFRONT_DOMAIN}" "https://${CLOUDFRONT_DOMAIN}/" \
   --allowed-o-auth-flows code \
   --allowed-o-auth-scopes openid email profile \
   --allowed-o-auth-flows-user-pool-client \
