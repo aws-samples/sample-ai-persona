@@ -208,6 +208,16 @@ npx cdk bootstrap "aws://${ACCOUNT_ID}/${REGION}" --region "${REGION}" 2>&1 || {
   log_warn "Bootstrap済みの可能性があります。続行します。"
 }
 
+# Lambda@Edge（cloudfront.experimental.EdgeFunction）とWAF WebACLはus-east-1に作成される。
+# EdgeFunctionのサポートスタックはLambdaコードをアセットとして含むため、
+# ${REGION}がus-east-1以外の場合はus-east-1もbootstrapしないとメインスタックのデプロイが失敗する。
+if [[ "${REGION}" != "us-east-1" ]]; then
+  log_info "Lambda@Edge/WAF用にus-east-1もbootstrapします"
+  npx cdk bootstrap "aws://${ACCOUNT_ID}/us-east-1" --region "us-east-1" 2>&1 || {
+    log_warn "us-east-1はBootstrap済みの可能性があります。続行します。"
+  }
+fi
+
 # ===== ECR Stack デプロイ =====
 log_step "Step 4: ECRリポジトリの作成"
 
