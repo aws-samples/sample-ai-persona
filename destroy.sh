@@ -64,11 +64,15 @@ fi
 PROJECT_ROOT="${SCRIPT_DIR}"
 
 # スタック名定義
+MCP_STACK="AIPersonaMcp-${ENV_NAME}"
 COGNITO_STACK="AIPersonaCognito-${ENV_NAME}"
 MAIN_STACK="AIPersona-${ENV_NAME}"
 WAF_STACK="AIPersonaWaf-${ENV_NAME}"
 MEMORY_STACK="AIPersonaMemory-${ENV_NAME}"
 ECR_STACK="AIPersonaEcr-${ENV_NAME}"
+# Lambda@Edge サポートスタック（REGIONがus-east-1以外の場合にus-east-1へ自動生成される。
+# 名前は edge-lambda-stack-<hash> と動的なため、検出時に特定する）
+EDGE_STACK=""
 
 # ===== 削除対象の確認 =====
 log_step "削除対象スタックの確認"
@@ -77,8 +81,27 @@ stack_exists() {
   aws cloudformation describe-stacks --stack-name "$1" --region "${REGION}" > /dev/null 2>&1
 }
 
+# us-east-1 の edge-lambda-stack-* から本プロジェクト（この環境名）のLambda@Edge
+# サポートスタックを特定する。関数名 ai-persona-auth-edge-${ENV_NAME} を含むものを探す。
+find_edge_stack() {
+  local candidates s
+  candidates=$(aws cloudformation list-stacks --region us-east-1 \
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE IMPORT_COMPLETE DELETE_FAILED \
+    --query "StackSummaries[?starts_with(StackName, 'edge-lambda-stack')].StackName" \
+    --output text 2>/dev/null || echo "")
+  for s in ${candidates}; do
+    if aws cloudformation describe-stack-resources --stack-name "${s}" --region us-east-1 \
+        --query "StackResources[?ResourceType=='AWS::Lambda::Function'].PhysicalResourceId" \
+        --output text 2>/dev/null | grep -q "ai-persona-auth-edge-${ENV_NAME}"; then
+      echo "${s}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
 STACKS_TO_DELETE=()
-for stack in "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
+for stack in "${MCP_STACK}" "${COGNITO_STACK}" "${MAIN_STACK}" "${MEMORY_STACK}" "${ECR_STACK}"; do
   if stack_exists "${stack}"; then
     log_info "  存在: ${stack}"
     STACKS_TO_DELETE+=("${stack}")
@@ -92,6 +115,16 @@ if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-ea
   STACKS_TO_DELETE+=("${WAF_STACK}")
 else
   log_info "  なし: ${WAF_STACK} (スキップ)"
+fi
+# Lambda@Edge サポートスタック（REGIONがus-east-1以外の場合のみ、us-east-1を検索）
+if [[ "${REGION}" != "us-east-1" ]]; then
+  EDGE_STACK=$(find_edge_stack)
+  if [[ -n "${EDGE_STACK}" ]]; then
+    log_info "  存在: ${EDGE_STACK} (us-east-1 / Lambda@Edge)"
+    STACKS_TO_DELETE+=("${EDGE_STACK}")
+  else
+    log_info "  なし: Lambda@Edge サポートスタック (us-east-1) (スキップ)"
+  fi
 fi
 
 if [[ ${#STACKS_TO_DELETE[@]} -eq 0 ]]; then
@@ -137,17 +170,25 @@ delete_stack() {
 
 # ===== 削除実行（依存関係の逆順） =====
 
-# 1. Cognito Stack
-if stack_exists "${COGNITO_STACK}"; then
-  log_step "Step 1: Cognito Stackの削除"
-  delete_stack "${COGNITO_STACK}" "${REGION}"
+# 1. MCP Gateway Stack（メインスタックの export を import しているため最初に削除）
+if stack_exists "${MCP_STACK}"; then
+  log_step "Step 1: MCP Gateway Stackの削除"
+  delete_stack "${MCP_STACK}" "${REGION}"
 else
-  log_info "Step 1: ${COGNITO_STACK} はスキップ"
+  log_info "Step 1: ${MCP_STACK} はスキップ"
 fi
 
-# 2. Main Stack
+# 2. Cognito Stack
+if stack_exists "${COGNITO_STACK}"; then
+  log_step "Step 2: Cognito Stackの削除"
+  delete_stack "${COGNITO_STACK}" "${REGION}"
+else
+  log_info "Step 2: ${COGNITO_STACK} はスキップ"
+fi
+
+# 3. Main Stack
 if stack_exists "${MAIN_STACK}"; then
-  log_step "Step 2: メインスタックの削除"
+  log_step "Step 3: メインスタックの削除"
 
   if [[ "${ENV_NAME}" == "prod" ]]; then
     log_warn "prod環境のため、S3バケットとDynamoDBテーブルはスタック削除後も残ります"
@@ -156,28 +197,28 @@ if stack_exists "${MAIN_STACK}"; then
 
   delete_stack "${MAIN_STACK}" "${REGION}"
 else
-  log_info "Step 2: ${MAIN_STACK} はスキップ"
+  log_info "Step 3: ${MAIN_STACK} はスキップ"
 fi
 
-# 3. WAF Stack (us-east-1)
+# 4. WAF Stack (us-east-1)
 if aws cloudformation describe-stacks --stack-name "${WAF_STACK}" --region us-east-1 > /dev/null 2>&1; then
-  log_step "Step 3: WAF Stackの削除 (us-east-1)"
+  log_step "Step 4: WAF Stackの削除 (us-east-1)"
   delete_stack "${WAF_STACK}" "us-east-1"
 else
-  log_info "Step 3: ${WAF_STACK} はスキップ"
+  log_info "Step 4: ${WAF_STACK} はスキップ"
 fi
 
-# 4. Memory Stack
+# 5. Memory Stack
 if stack_exists "${MEMORY_STACK}"; then
-  log_step "Step 4: AgentCore Memory Stackの削除"
+  log_step "Step 5: AgentCore Memory Stackの削除"
   delete_stack "${MEMORY_STACK}" "${REGION}"
 else
-  log_info "Step 4: ${MEMORY_STACK} はスキップ"
+  log_info "Step 5: ${MEMORY_STACK} はスキップ"
 fi
 
-# 5. ECR Stack
+# 6. ECR Stack
 if stack_exists "${ECR_STACK}"; then
-  log_step "Step 5: ECR Stackの削除"
+  log_step "Step 6: ECR Stackの削除"
 
   ECR_REPO=$(aws cloudformation describe-stack-resources \
     --stack-name "${ECR_STACK}" --region "${REGION}" \
@@ -195,7 +236,21 @@ if stack_exists "${ECR_STACK}"; then
 
   delete_stack "${ECR_STACK}" "${REGION}"
 else
-  log_info "Step 5: ${ECR_STACK} はスキップ"
+  log_info "Step 6: ${ECR_STACK} はスキップ"
+fi
+
+# 7. Lambda@Edge サポートスタック (us-east-1)
+# メインスタック（CloudFront）削除後に削除する。レプリカ削除の遅延で初回は失敗し得るため
+# ベストエフォート（失敗してもスクリプト全体は止めない）。
+if [[ -n "${EDGE_STACK}" ]]; then
+  if aws cloudformation describe-stacks --stack-name "${EDGE_STACK}" --region us-east-1 > /dev/null 2>&1; then
+    log_step "Step 7: Lambda@Edge サポートスタックの削除 (us-east-1)"
+    delete_stack "${EDGE_STACK}" "us-east-1" || {
+      log_warn "Lambda@Edge サポートスタック(${EDGE_STACK})は数時間後に再度 ./destroy.sh を実行して削除してください"
+    }
+  else
+    log_info "Step 7: ${EDGE_STACK} はスキップ"
+  fi
 fi
 
 # ===== 完了 =====
