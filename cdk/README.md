@@ -229,6 +229,14 @@ cognitoDomainPrefix: 'ai-persona-dev-abc123xyz',
 npx cdk bootstrap aws://<ACCOUNT_ID>/<AWS_REGION>
 ```
 
+**重要: `<AWS_REGION>` が us-east-1 以外の場合**
+
+Lambda@Edge（`cloudfront.experimental.EdgeFunction`）と WAF WebACL は us-east-1 に作成されます。特に Lambda@Edge のサポートスタックは Lambda コードをアセットとして含むため、デプロイ先リージョンが us-east-1 以外の場合は us-east-1 も bootstrap しないとメインスタックのデプロイが失敗します。
+
+```bash
+npx cdk bootstrap aws://<ACCOUNT_ID>/us-east-1
+```
+
 ### 4. ECR Stackのデプロイ
 
 ```bash
