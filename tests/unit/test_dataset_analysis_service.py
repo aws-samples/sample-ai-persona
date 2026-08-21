@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 from src.models.dataset import Dataset, DatasetColumn
+from src.services.dataset_analysis.query_backend import DuckDBQueryBackend
 from src.services.dataset_analysis.service import DatasetAnalysisService
 
 pytestmark = pytest.mark.unit
@@ -148,3 +149,23 @@ class TestBuildSourceTools:
 
     def test_empty_returns_no_tools(self):
         assert _service().build_source_tools([]) == []
+
+
+class TestConcurrencyWiring:
+    def test_max_concurrent_queries_reaches_default_backend(self):
+        # 明示 backend を渡さない経路で、設定値が DuckDB backend の semaphore
+        # 上限（_value）へ伝播することを確認する。
+        svc = DatasetAnalysisService(max_concurrent_queries=7)
+        assert isinstance(svc.backend, DuckDBQueryBackend)
+        assert svc.backend._sem._value == 7
+
+    def test_default_is_four(self):
+        svc = DatasetAnalysisService()
+        assert isinstance(svc.backend, DuckDBQueryBackend)
+        assert svc.backend._sem._value == 4
+
+    def test_injected_backend_ignores_max_concurrent(self):
+        # backend 注入時は注入側の設定を尊重し、引数で上書きしない。
+        backend = RecordingBackend()
+        svc = DatasetAnalysisService(backend=backend, max_concurrent_queries=7)
+        assert svc.backend is backend

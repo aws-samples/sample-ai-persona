@@ -254,6 +254,9 @@ class ServiceFactory:
                     self._dataset_analysis_service = DatasetAnalysisService(
                         bucket_name=config.S3_BUCKET_NAME or "",
                         region_name=config.AWS_REGION,
+                        max_concurrent_queries=(
+                            config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES
+                        ),
                     )
         return self._dataset_analysis_service
 

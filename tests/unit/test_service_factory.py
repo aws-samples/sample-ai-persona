@@ -426,6 +426,7 @@ class TestServiceFactoryDatasetAnalysisService:
 
         mock_config.S3_BUCKET_NAME = "test-bucket"
         mock_config.AWS_REGION = "us-east-1"
+        mock_config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES = 4
 
         factory = ServiceFactory()
         service = factory.get_dataset_analysis_service()
@@ -437,6 +438,7 @@ class TestServiceFactoryDatasetAnalysisService:
 
         mock_config.S3_BUCKET_NAME = "test-bucket"
         mock_config.AWS_REGION = "us-east-1"
+        mock_config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES = 4
 
         factory = ServiceFactory()
         s1 = factory.get_dataset_analysis_service()

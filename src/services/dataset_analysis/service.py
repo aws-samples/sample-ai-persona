@@ -52,9 +52,14 @@ class DatasetAnalysisService:
         region_name: str = "us-east-1",
         backend: Optional[DatasetQueryBackend] = None,
         limits: Optional[ToolLimits] = None,
+        max_concurrent_queries: int = 4,
     ) -> None:
+        # backend を注入された場合はその同時実行設定を尊重し、ここでは上書きしない
+        # （max_concurrent_queries は既定 DuckDB backend を生成する経路にのみ効く）。
         self.backend: DatasetQueryBackend = backend or DuckDBQueryBackend(
-            bucket_name=bucket_name, region_name=region_name
+            bucket_name=bucket_name,
+            region_name=region_name,
+            max_concurrent_queries=max_concurrent_queries,
         )
         self.limits = limits or ToolLimits()
 
