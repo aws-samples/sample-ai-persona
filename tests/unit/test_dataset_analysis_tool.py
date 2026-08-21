@@ -45,7 +45,6 @@ def _rd(alias="dataset_1", path="local://datasets/x.csv", columns=None, forced=N
         backend_path=path,
         columns=columns or ["region", "amount", "user_id"],
         forced_filter=forced,
-        display={"name": "sales"},
     )
 
 

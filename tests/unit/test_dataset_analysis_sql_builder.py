@@ -91,7 +91,9 @@ class TestFilters:
         sql, params, _ = _build(
             filters=[{"column": "region", "operator": "contains", "value": "as"}]
         )
-        assert "LIKE $1" in sql
+        # 大文字小文字を無視するため ILIKE を使う（case-sensitive な LIKE ではない）。
+        assert "ILIKE $1" in sql
+        assert "LIKE $1" not in sql.replace("ILIKE", "")
         assert params == ["%as%"]
 
     def test_contains_escapes_like_metacharacters(self):

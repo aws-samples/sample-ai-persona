@@ -100,18 +100,12 @@ class DatasetAnalysisService:
                 for c in dataset.columns
             ]
             forced_filter = dict(binding.get("binding_keys") or {})
-            display = {
-                "name": dataset.name,
-                "description": dataset.description,
-                "row_count": dataset.row_count,
-            }
             resolved.append(
                 ResolvedDataset(
                     alias=alias,
                     backend_path=dataset.s3_path,
                     columns=column_names,
                     forced_filter=forced_filter or None,
-                    display=display,
                 )
             )
             descriptors.append(
@@ -156,7 +150,6 @@ class DatasetAnalysisService:
                     backend_path=descriptor["path"],
                     columns=list(descriptor["columns"]),
                     forced_filter=None,
-                    display={"name": alias},
                 )
             )
 

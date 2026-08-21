@@ -60,15 +60,15 @@ class OrderBy(TypedDict):
 class ResolvedDataset:
     """tool クロージャが alias でキーに保持する immutable な dataset 記述子。
 
-    LLM へは ``alias``（不透明 dataset_id）と ``display`` のみ露出する。
-    ``backend_path`` / ``forced_filter`` は closure 内部にのみ存在し露出しない。
+    LLM へは ``alias``（不透明 dataset_id）のみ露出する。``backend_path`` /
+    ``forced_filter`` は closure 内部にのみ存在し露出しない。プロンプト表示用の
+    メタデータは Manager が別途 descriptors として構築する（ここには持たない）。
     """
 
     alias: str
     backend_path: str
     columns: List[str]
     forced_filter: Optional[Dict[str, Any]]
-    display: Dict[str, Any]
 
 
 @dataclass(frozen=True)
