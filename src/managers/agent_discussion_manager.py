@@ -23,6 +23,7 @@ from ..services.agent_service import (
 )
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+from .components import discussion_validation
 from .components.persona_agent_integration import PersonaAgentIntegration
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
@@ -665,39 +666,10 @@ class AgentDiscussionManager:
         Raises:
             AgentDiscussionManagerError: If validation fails
         """
-        # Validate personas
-        if not personas:
-            raise AgentDiscussionManagerError(
-                "persona list is empty",
-                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
-            )
-
-        if len(personas) < 2:
-            raise AgentDiscussionManagerError(
-                f"{len(personas)} personas given, minimum is 2",
-                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
-                context={"min_personas": 2},
-            )
-
-        # Validate topic
-        if not topic or not topic.strip():
-            raise AgentDiscussionManagerError(
-                "topic is blank", code=ErrorCode.DISCUSSION_TOPIC_REQUIRED
-            )
-
-        if len(topic.strip()) < 5:
-            raise AgentDiscussionManagerError(
-                f"topic length {len(topic.strip())} below minimum 5",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
-                context={"min_length": 5},
-            )
-
-        if len(topic.strip()) > 200:
-            raise AgentDiscussionManagerError(
-                f"topic length {len(topic.strip())} exceeds 200",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
-                context={"max_length": 200},
-            )
+        # ペルソナ集合・topic は両モード共通の検証（上限5・個別・重複を含む）。
+        discussion_validation.validate_personas_and_topic(
+            personas, topic, error_cls=AgentDiscussionManagerError
+        )
 
         # Validate persona agents (内部状態: エージェント生成が先に失敗している)
         if not persona_agents:
@@ -732,32 +704,15 @@ class AgentDiscussionManager:
         Raises:
             DiscussionFlowError: If validation fails
         """
-        if not discussion:
-            raise DiscussionFlowError(
-                "generated discussion is falsy",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        if not discussion.messages or len(discussion.messages) < 2:
-            raise DiscussionFlowError(
-                f"generated discussion has {len(discussion.messages)} messages, "
-                "minimum is 2",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        # Check that personas have messages
-        persona_message_count: dict[str, int] = {}
-        for message in discussion.messages:
-            if message.message_type == "statement":
-                persona_message_count[message.persona_id] = (
-                    persona_message_count.get(message.persona_id, 0) + 1
-                )
-
-        for persona in original_personas:
-            if persona_message_count.get(persona.id, 0) == 0:
-                self.logger.warning(
-                    f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                )
+        # エージェント議論は content<100 ゲートを持たない（現状維持）。ペルソナ別
+        # カウントは statement 限定（summary 等を除外して発言有無を判定）。
+        discussion_validation.validate_results(
+            discussion,
+            original_personas,
+            error_cls=DiscussionFlowError,
+            require_min_content=False,
+            count_statements_only=True,
+        )
 
     def start_agent_discussion_streaming(
         self,
@@ -1036,48 +991,12 @@ class AgentDiscussionManager:
         Raises:
             AgentDiscussionManagerError: If validation fails
         """
-        if not discussion:
-            raise AgentDiscussionManagerError(
-                "discussion object is falsy",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if not discussion.id:
-            raise AgentDiscussionManagerError(
-                "discussion has no id", code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            )
-
-        if not discussion.topic or not discussion.topic.strip():
-            raise AgentDiscussionManagerError(
-                "discussion has no topic", code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            )
-
-        if not discussion.participants or len(discussion.participants) < 2:
-            raise AgentDiscussionManagerError(
-                f"discussion has {len(discussion.participants or [])} participants",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if not discussion.created_at:
-            raise AgentDiscussionManagerError(
-                "discussion has no created_at",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if discussion.mode != "agent":
-            raise AgentDiscussionManagerError(
-                f"invalid discussion mode: {discussion.mode!r}, expected 'agent'",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        # Validate messages if present
-        if discussion.messages:
-            for i, message in enumerate(discussion.messages):
-                if not message.persona_id or not message.content:
-                    raise AgentDiscussionManagerError(
-                        f"message at index {i} has no persona_id or content",
-                        code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-                    )
+        discussion_validation.validate_for_save(
+            discussion,
+            error_cls=AgentDiscussionManagerError,
+            code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            require_mode="agent",
+        )
 
     def cleanup_agents(
         self,

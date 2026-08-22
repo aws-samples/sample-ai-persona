@@ -14,12 +14,59 @@ from src.managers.agent_discussion_manager import (
     AgentDiscussionManagerError,
 )
 from src.models.discussion import Discussion
+from src.models.persona import Persona
 from src.services.agent_service import (
     AgentConfigurationError,
     AgentInitializationError,
     PersonaAgent,
     FacilitatorAgent,
 )
+from tests.error_helpers import raises_code
+
+
+def _persona(name="p"):
+    return Persona.create_new(
+        name=name,
+        age=30,
+        occupation="x",
+        background="y",
+        values=["a"],
+        pain_points=["b"],
+        goals=["c"],
+    )
+
+
+class TestAgentInputValidationUnifiedWithClassic:
+    """エージェント議論も非エージェントと同じ入力ルール（上限5・重複）を課すことの回帰。
+
+    以前はエージェント側にペルソナ上限・重複検証が無く drift していた（#3）。
+    DiscussionValidation Component への集約で両モード統一されたことを保証する。
+    """
+
+    def _manager(self):
+        return AgentDiscussionManager(
+            agent_service=Mock(),
+            database_service=Mock(),
+            dataset_analysis_service=Mock(),
+        )
+
+    def test_rejects_more_than_5_personas(self):
+        mgr = self._manager()
+        personas = [_persona(f"p{i}") for i in range(6)]
+        with raises_code(
+            AgentDiscussionManagerError,
+            ErrorCode.DISCUSSION_TOO_MANY_PERSONAS,
+            max_personas=5,
+        ):
+            mgr._validate_discussion_input(personas, "有効なトピック", [Mock()], Mock())
+
+    def test_rejects_duplicate_personas(self):
+        mgr = self._manager()
+        p = _persona()
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_PERSONA_DUPLICATED
+        ):
+            mgr._validate_discussion_input([p, p], "有効なトピック", [Mock()], Mock())
 
 
 class TestAgentDiscussionManagerInitialization:

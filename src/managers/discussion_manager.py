@@ -18,6 +18,7 @@ from ..models.insight_category import InsightCategory
 from ..services.ai_service import AIService, AIServiceError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+from .components import discussion_validation
 
 
 class DiscussionManagerError(CodedError):
@@ -450,68 +451,9 @@ class DiscussionManager:
         Raises:
             DiscussionManagerError: If validation fails
         """
-        # Validate personas
-        if not personas:
-            raise DiscussionManagerError(
-                "persona list is empty",
-                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
-            )
-
-        if len(personas) < 2:
-            raise DiscussionManagerError(
-                f"{len(personas)} personas given, minimum is 2",
-                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
-                context={"min_personas": 2},
-            )
-
-        if len(personas) > 5:
-            raise DiscussionManagerError(
-                f"{len(personas)} personas given, maximum is 5",
-                code=ErrorCode.DISCUSSION_TOO_MANY_PERSONAS,
-                context={"max_personas": 5},
-            )
-
-        # Validate each persona
-        for i, persona in enumerate(personas):
-            if not persona:
-                raise DiscussionManagerError(
-                    f"persona at index {i} is falsy",
-                    code=ErrorCode.DISCUSSION_PERSONA_INVALID,
-                )
-
-            if not persona.id or not persona.name:
-                raise DiscussionManagerError(
-                    f"persona at index {i} has no id or name",
-                    code=ErrorCode.DISCUSSION_PERSONA_INVALID,
-                )
-
-        # Check for duplicate personas
-        persona_ids = [persona.id for persona in personas]
-        if len(set(persona_ids)) != len(persona_ids):
-            raise DiscussionManagerError(
-                "persona list contains duplicate ids",
-                code=ErrorCode.DISCUSSION_PERSONA_DUPLICATED,
-            )
-
-        # Validate topic
-        if not topic or not topic.strip():
-            raise DiscussionManagerError(
-                "topic is blank", code=ErrorCode.DISCUSSION_TOPIC_REQUIRED
-            )
-
-        if len(topic.strip()) < 5:
-            raise DiscussionManagerError(
-                f"topic length {len(topic.strip())} below minimum 5",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
-                context={"min_length": 5},
-            )
-
-        if len(topic.strip()) > 200:
-            raise DiscussionManagerError(
-                f"topic length {len(topic.strip())} exceeds 200",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
-                context={"max_length": 200},
-            )
+        discussion_validation.validate_personas_and_topic(
+            personas, topic, error_cls=DiscussionManagerError
+        )
 
     def _load_documents(
         self, document_ids: List[str]
@@ -618,40 +560,13 @@ class DiscussionManager:
         Raises:
             DiscussionManagerError: If validation fails
         """
-        if not discussion:
-            raise DiscussionManagerError(
-                "generated discussion is falsy",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        if not discussion.messages or len(discussion.messages) < 2:
-            raise DiscussionManagerError(
-                f"generated discussion has {len(discussion.messages)} messages, "
-                "minimum is 2",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        # Check that all personas have at least one message
-        persona_message_count: dict[str, int] = {}
-        for message in discussion.messages:
-            persona_message_count[message.persona_id] = (
-                persona_message_count.get(message.persona_id, 0) + 1
-            )
-
-        for persona in original_personas:
-            if persona_message_count.get(persona.id, 0) == 0:
-                self.logger.warning(
-                    f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                )
-
-        # Validate message content quality
-        total_content_length = sum(len(msg.content) for msg in discussion.messages)
-        if total_content_length < 100:
-            raise DiscussionManagerError(
-                f"generated discussion content length {total_content_length} "
-                "below minimum 100",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
+        discussion_validation.validate_results(
+            discussion,
+            original_personas,
+            error_cls=DiscussionManagerError,
+            require_min_content=True,
+            count_statements_only=False,
+        )
 
     def _validate_discussion_for_save(self, discussion: Discussion) -> None:
         """
@@ -663,43 +578,13 @@ class DiscussionManager:
         Raises:
             DiscussionManagerError: If validation fails
         """
-        if not discussion:
-            raise DiscussionManagerError(
-                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
-            )
+        discussion_validation.validate_for_save(
+            discussion,
+            error_cls=DiscussionManagerError,
+            code=ErrorCode.DISCUSSION_INVALID,
+        )
 
-        if not discussion.id:
-            raise DiscussionManagerError(
-                "discussion has no id", code=ErrorCode.DISCUSSION_INVALID
-            )
-
-        if not discussion.topic or not discussion.topic.strip():
-            raise DiscussionManagerError(
-                "discussion has no topic", code=ErrorCode.DISCUSSION_INVALID
-            )
-
-        if not discussion.participants or len(discussion.participants) < 2:
-            raise DiscussionManagerError(
-                f"discussion has {len(discussion.participants or [])} "
-                "participants, minimum is 2",
-                code=ErrorCode.DISCUSSION_INVALID,
-            )
-
-        if not discussion.created_at:
-            raise DiscussionManagerError(
-                "discussion has no created_at", code=ErrorCode.DISCUSSION_INVALID
-            )
-
-        # Validate messages if present
-        if discussion.messages:
-            for i, message in enumerate(discussion.messages):
-                if not message.persona_id or not message.content:
-                    raise DiscussionManagerError(
-                        f"message at index {i} has no persona_id or content",
-                        code=ErrorCode.DISCUSSION_INVALID,
-                    )
-
-        # Validate insights if present
+        # Validate insights if present (discussion モード固有: エージェント議論には無い)
         if discussion.insights:
             for i, insight in enumerate(discussion.insights):
                 if not insight.category or not insight.description:
