@@ -14,12 +14,59 @@ from src.managers.agent_discussion_manager import (
     AgentDiscussionManagerError,
 )
 from src.models.discussion import Discussion
+from src.models.persona import Persona
 from src.services.agent_service import (
     AgentConfigurationError,
     AgentInitializationError,
     PersonaAgent,
     FacilitatorAgent,
 )
+from tests.error_helpers import raises_code
+
+
+def _persona(name="p"):
+    return Persona.create_new(
+        name=name,
+        age=30,
+        occupation="x",
+        background="y",
+        values=["a"],
+        pain_points=["b"],
+        goals=["c"],
+    )
+
+
+class TestAgentInputValidationUnifiedWithClassic:
+    """エージェント議論も非エージェントと同じ入力ルール（上限5・重複）を課すことの回帰。
+
+    以前はエージェント側にペルソナ上限・重複検証が無く drift していた（#3）。
+    DiscussionValidation Component への集約で両モード統一されたことを保証する。
+    """
+
+    def _manager(self):
+        return AgentDiscussionManager(
+            agent_service=Mock(),
+            database_service=Mock(),
+            dataset_analysis_service=Mock(),
+        )
+
+    def test_rejects_more_than_5_personas(self):
+        mgr = self._manager()
+        personas = [_persona(f"p{i}") for i in range(6)]
+        with raises_code(
+            AgentDiscussionManagerError,
+            ErrorCode.DISCUSSION_TOO_MANY_PERSONAS,
+            max_personas=5,
+        ):
+            mgr._validate_discussion_input(personas, "有効なトピック", [Mock()], Mock())
+
+    def test_rejects_duplicate_personas(self):
+        mgr = self._manager()
+        p = _persona()
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_PERSONA_DUPLICATED
+        ):
+            mgr._validate_discussion_input([p, p], "有効なトピック", [Mock()], Mock())
 
 
 class TestAgentDiscussionManagerInitialization:
@@ -71,8 +118,8 @@ class TestCreatePersonaAgents:
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service, database_service=mock_db_service
         )
-        # _create_agent_with_integrations 内で service_factory を直接インポートするためモック
-        manager._create_agent_with_integrations = Mock(return_value=mock_persona_agent)
+        # agent 生成は Component (_agent_integration.create_agent) に委譲するためモック
+        manager._agent_integration.create_agent = Mock(return_value=mock_persona_agent)
 
         personas = [sample_persona, sample_persona_2]
         system_prompts = {}
@@ -80,7 +127,7 @@ class TestCreatePersonaAgents:
         agents = manager.create_persona_agents(personas, system_prompts)
 
         assert len(agents) == 2
-        assert manager._create_agent_with_integrations.call_count == 2
+        assert manager._agent_integration.create_agent.call_count == 2
 
     def test_create_persona_agents_with_custom_prompts(
         self, sample_persona, sample_persona_2
@@ -96,7 +143,7 @@ class TestCreatePersonaAgents:
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service, database_service=mock_db_service
         )
-        manager._create_agent_with_integrations = Mock(return_value=mock_persona_agent)
+        manager._agent_integration.create_agent = Mock(return_value=mock_persona_agent)
 
         custom_prompt = "カスタムシステムプロンプト"
         system_prompts = {sample_persona.id: custom_prompt}
@@ -107,7 +154,7 @@ class TestCreatePersonaAgents:
         )
 
         # エージェント作成が2回呼ばれたことを確認
-        assert manager._create_agent_with_integrations.call_count == 2
+        assert manager._agent_integration.create_agent.call_count == 2
 
 
 class TestModelSelectionValidation:
@@ -125,7 +172,7 @@ class TestModelSelectionValidation:
         self, sample_persona, sample_persona_2
     ):
         manager, _ = self._make_manager()
-        manager._create_agent_with_integrations = Mock()
+        manager._agent_integration.create_agent = Mock()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.create_persona_agents(
@@ -142,7 +189,7 @@ class TestModelSelectionValidation:
     ):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
         manager, _ = self._make_manager()
-        manager._create_agent_with_integrations = Mock()
+        manager._agent_integration.create_agent = Mock()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.create_persona_agents(
@@ -171,7 +218,7 @@ class TestModelSelectionValidation:
         """_create_agent_with_integrationsがAgentConfigurationErrorを投げた場合、
         個別ペルソナ失敗として握り潰さずCONFIGコードのまま伝播する。"""
         manager, _ = self._make_manager()
-        manager._create_agent_with_integrations = Mock(
+        manager._agent_integration.create_agent = Mock(
             side_effect=AgentConfigurationError(
                 "mantle disabled", code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
             )
@@ -195,7 +242,7 @@ class TestModelSelectionValidation:
         manager, _ = self._make_manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
 
-        manager._create_agent_with_integrations = Mock(
+        manager._agent_integration.create_agent = Mock(
             side_effect=[
                 mock_agent_1,
                 AgentConfigurationError(
@@ -217,7 +264,7 @@ class TestModelSelectionValidation:
         manager, _ = self._make_manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
 
-        manager._create_agent_with_integrations = Mock(
+        manager._agent_integration.create_agent = Mock(
             side_effect=[
                 mock_agent_1,
                 AgentInitializationError("boom"),

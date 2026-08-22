@@ -23,6 +23,19 @@ from ..models.errors import CodedError, ErrorCode
 logger = logging.getLogger(__name__)
 
 
+def _load_httpfs(conn: duckdb.DuckDBPyConnection) -> None:
+    """httpfs を LOAD する（実行時ダウンロードはしない）。
+
+    autoinstall/autoload を無効化したうえで LOAD のみ行う。httpfs はコンテナ
+    ／ローカルとも事前 INSTALL 済みが前提（コンテナはビルド時、ローカルは
+    docs/local_development.md のセットアップ手順）。閉域では欠落時に LOAD で
+    即失敗させ、実行時ダウンロードで隠蔽しない。
+    """
+    conn.execute("SET autoinstall_known_extensions=false;")
+    conn.execute("SET autoload_known_extensions=false;")
+    conn.execute("LOAD httpfs;")  # nosemgrep: sqlalchemy-execute-raw-query
+
+
 class SurveyBatchServiceError(CodedError):
     """SurveyBatchService層の基底例外"""
 
@@ -255,9 +268,10 @@ class SurveyBatchService:
             )
 
         conn = duckdb.connect(":memory:")
-        conn.execute(
-            "INSTALL httpfs; LOAD httpfs;"
-        )  # nosemgrep: sqlalchemy-execute-raw-query
+        # httpfs はコンテナビルド時に組込済み。実行時ダウンロードを避けるため
+        # autoinstall/autoload を無効化し LOAD のみ行う（INSTALL はしない。
+        # 未組込環境では LOAD で即失敗させる）。
+        _load_httpfs(conn)
         self._set_s3_credentials(conn)
         conn.execute(
             f"CREATE VIEW personas AS SELECT * FROM read_parquet('{s3_uri}');"
@@ -995,9 +1009,9 @@ class SurveyBatchService:
         conn = duckdb.connect(":memory:")
         try:
             if s3_path.startswith("s3://"):
-                conn.execute(
-                    "INSTALL httpfs; LOAD httpfs;"
-                )  # nosemgrep: sqlalchemy-execute-raw-query
+                # httpfs はビルド時組込。実行時ダウンロードを避け LOAD のみ行う
+                # （INSTALL はしない。未組込環境では LOAD で即失敗させる）。
+                _load_httpfs(conn)
 
                 import boto3
 

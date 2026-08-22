@@ -5,7 +5,7 @@ Handles AI agent mode discussion setup, execution, and persistence.
 
 import json
 import logging
-from typing import Generator, List, Dict, Mapping, Optional, Any
+from typing import Generator, List, Dict, Mapping, Optional, Any, TYPE_CHECKING
 
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
@@ -23,12 +23,17 @@ from ..services.agent_service import (
 )
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+from .components import discussion_validation
+from .components.persona_agent_integration import PersonaAgentIntegration
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
     resolve_effective_persona_models,
     validate_document_size_for_models,
     validate_model_selection,
 )
+
+if TYPE_CHECKING:
+    from ..services.dataset_analysis.service import DatasetAnalysisService
 
 
 class AgentDiscussionManagerError(CodedError):
@@ -53,6 +58,7 @@ class AgentDiscussionManager:
         self,
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
+        dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
     ):
         """
         Initialize agent discussion manager.
@@ -60,6 +66,7 @@ class AgentDiscussionManager:
         Args:
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            dataset_analysis_service: Dataset analysis service for analyze_dataset tools (optional, uses singleton if not provided)
         """
         self.logger = logging.getLogger(__name__)
 
@@ -67,6 +74,14 @@ class AgentDiscussionManager:
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
+        )
+        self.dataset_analysis_service = (
+            dataset_analysis_service or service_factory.get_dataset_analysis_service()
+        )
+        self._agent_integration = PersonaAgentIntegration(
+            database_service=self.database_service,
+            agent_service=self.agent_service,
+            dataset_analysis_service=self.dataset_analysis_service,
         )
 
     def create_persona_agents(
@@ -142,9 +157,9 @@ class AgentDiscussionManager:
                 )
 
                 # Create persona agent with memory and dataset/KB configuration
-                persona_agent = self._create_agent_with_integrations(
-                    persona=persona,
-                    system_prompt=system_prompt,
+                persona_agent = self._agent_integration.create_agent(
+                    persona,
+                    system_prompt,
                     enable_memory=enable_memory,
                     session_id=session_id,
                     memory_mode=memory_mode,
@@ -651,39 +666,10 @@ class AgentDiscussionManager:
         Raises:
             AgentDiscussionManagerError: If validation fails
         """
-        # Validate personas
-        if not personas:
-            raise AgentDiscussionManagerError(
-                "persona list is empty",
-                code=ErrorCode.DISCUSSION_PERSONAS_REQUIRED,
-            )
-
-        if len(personas) < 2:
-            raise AgentDiscussionManagerError(
-                f"{len(personas)} personas given, minimum is 2",
-                code=ErrorCode.DISCUSSION_TOO_FEW_PERSONAS,
-                context={"min_personas": 2},
-            )
-
-        # Validate topic
-        if not topic or not topic.strip():
-            raise AgentDiscussionManagerError(
-                "topic is blank", code=ErrorCode.DISCUSSION_TOPIC_REQUIRED
-            )
-
-        if len(topic.strip()) < 5:
-            raise AgentDiscussionManagerError(
-                f"topic length {len(topic.strip())} below minimum 5",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_SHORT,
-                context={"min_length": 5},
-            )
-
-        if len(topic.strip()) > 200:
-            raise AgentDiscussionManagerError(
-                f"topic length {len(topic.strip())} exceeds 200",
-                code=ErrorCode.DISCUSSION_TOPIC_TOO_LONG,
-                context={"max_length": 200},
-            )
+        # ペルソナ集合・topic は両モード共通の検証（上限5・個別・重複を含む）。
+        discussion_validation.validate_personas_and_topic(
+            personas, topic, error_cls=AgentDiscussionManagerError
+        )
 
         # Validate persona agents (内部状態: エージェント生成が先に失敗している)
         if not persona_agents:
@@ -718,63 +704,14 @@ class AgentDiscussionManager:
         Raises:
             DiscussionFlowError: If validation fails
         """
-        if not discussion:
-            raise DiscussionFlowError(
-                "generated discussion is falsy",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        if not discussion.messages or len(discussion.messages) < 2:
-            raise DiscussionFlowError(
-                f"generated discussion has {len(discussion.messages)} messages, "
-                "minimum is 2",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        # Check that personas have messages
-        persona_message_count: dict[str, int] = {}
-        for message in discussion.messages:
-            if message.message_type == "statement":
-                persona_message_count[message.persona_id] = (
-                    persona_message_count.get(message.persona_id, 0) + 1
-                )
-
-        for persona in original_personas:
-            if persona_message_count.get(persona.id, 0) == 0:
-                self.logger.warning(
-                    f"ペルソナ {persona.name} の発言が見つかりませんでした"
-                )
-
-    def _create_agent_with_integrations(
-        self,
-        persona: Persona,
-        system_prompt: str,
-        enable_memory: bool,
-        session_id: Optional[str],
-        memory_mode: str,
-        enable_dataset: bool,
-        enable_kb: bool,
-        model_id: Optional[str] = None,
-    ) -> PersonaAgent:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        from .shared.agent_integration import prepare_integration_tools_and_prompt
-
-        enhanced_prompt, additional_tools = prepare_integration_tools_and_prompt(
-            agent_service=self.agent_service,
-            database_service=self.database_service,
-            persona_id=persona.id,
-            base_prompt=system_prompt,
-            enable_kb=enable_kb,
-            enable_dataset=enable_dataset,
-        )
-        return self.agent_service.create_persona_agent(
-            persona=persona,
-            system_prompt=enhanced_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            additional_tools=additional_tools,
-            memory_mode=memory_mode,
-            model_id=model_id,
+        # エージェント議論は content<100 ゲートを持たない（現状維持）。ペルソナ別
+        # カウントは statement 限定（summary 等を除外して発言有無を判定）。
+        discussion_validation.validate_results(
+            discussion,
+            original_personas,
+            error_cls=DiscussionFlowError,
+            require_min_content=False,
+            count_statements_only=True,
         )
 
     def start_agent_discussion_streaming(
@@ -1054,48 +991,12 @@ class AgentDiscussionManager:
         Raises:
             AgentDiscussionManagerError: If validation fails
         """
-        if not discussion:
-            raise AgentDiscussionManagerError(
-                "discussion object is falsy",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if not discussion.id:
-            raise AgentDiscussionManagerError(
-                "discussion has no id", code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            )
-
-        if not discussion.topic or not discussion.topic.strip():
-            raise AgentDiscussionManagerError(
-                "discussion has no topic", code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            )
-
-        if not discussion.participants or len(discussion.participants) < 2:
-            raise AgentDiscussionManagerError(
-                f"discussion has {len(discussion.participants or [])} participants",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if not discussion.created_at:
-            raise AgentDiscussionManagerError(
-                "discussion has no created_at",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        if discussion.mode != "agent":
-            raise AgentDiscussionManagerError(
-                f"invalid discussion mode: {discussion.mode!r}, expected 'agent'",
-                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-            )
-
-        # Validate messages if present
-        if discussion.messages:
-            for i, message in enumerate(discussion.messages):
-                if not message.persona_id or not message.content:
-                    raise AgentDiscussionManagerError(
-                        f"message at index {i} has no persona_id or content",
-                        code=ErrorCode.DISCUSSION_OPERATION_FAILED,
-                    )
+        discussion_validation.validate_for_save(
+            discussion,
+            error_cls=AgentDiscussionManagerError,
+            code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            require_mode="agent",
+        )
 
     def cleanup_agents(
         self,

@@ -5,7 +5,7 @@ Handles interview session setup, execution, and persistence.
 
 import logging
 import uuid
-from typing import List, Dict, Mapping, Any, Optional
+from typing import List, Dict, Mapping, Any, Optional, TYPE_CHECKING
 from datetime import datetime
 
 
@@ -23,12 +23,16 @@ from ..services.agent_service import (
     AgentCommunicationError,
 )
 from ..services.database_service import DatabaseService, DatabaseError
+from .components.persona_agent_integration import PersonaAgentIntegration
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
     resolve_effective_persona_models,
     validate_document_size_for_models,
     validate_model_selection,
 )
+
+if TYPE_CHECKING:
+    from ..services.dataset_analysis.service import DatasetAnalysisService
 
 
 class InterviewManagerError(CodedError):
@@ -81,6 +85,7 @@ class InterviewManager:
         self,
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
+        dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
     ):
         """
         Initialize interview manager.
@@ -88,6 +93,7 @@ class InterviewManager:
         Args:
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            dataset_analysis_service: Dataset analysis service for analyze_dataset tools (optional, uses singleton if not provided)
         """
         from ..services.service_factory import service_factory
 
@@ -95,6 +101,14 @@ class InterviewManager:
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
+        )
+        self.dataset_analysis_service = (
+            dataset_analysis_service or service_factory.get_dataset_analysis_service()
+        )
+        self._agent_integration = PersonaAgentIntegration(
+            database_service=self.database_service,
+            agent_service=self.agent_service,
+            dataset_analysis_service=self.dataset_analysis_service,
         )
 
         # Active interview sessions (temporary storage)
@@ -842,9 +856,9 @@ class InterviewManager:
                 )
 
                 # Create persona agent with memory, dataset, and KB configuration
-                persona_agent = self._create_agent_with_integrations(
-                    persona=persona,
-                    system_prompt=system_prompt,
+                persona_agent = self._agent_integration.create_agent(
+                    persona,
+                    system_prompt,
                     enable_memory=enable_memory,
                     session_id=session_id,
                     memory_mode=memory_mode,
@@ -896,38 +910,6 @@ class InterviewManager:
             f"Successfully created {len(persona_agents)} persona agents for interview"
         )
         return persona_agents
-
-    def _create_agent_with_integrations(
-        self,
-        persona: Any,
-        system_prompt: str,
-        enable_memory: bool,
-        session_id: Any,
-        memory_mode: str,
-        enable_dataset: bool,
-        enable_kb: bool,
-        model_id: Optional[str] = None,
-    ) -> Any:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        from .shared.agent_integration import prepare_integration_tools_and_prompt
-
-        enhanced_prompt, additional_tools = prepare_integration_tools_and_prompt(
-            agent_service=self.agent_service,
-            database_service=self.database_service,
-            persona_id=persona.id,
-            base_prompt=system_prompt,
-            enable_kb=enable_kb,
-            enable_dataset=enable_dataset,
-        )
-        return self.agent_service.create_persona_agent(
-            persona=persona,
-            system_prompt=enhanced_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            additional_tools=additional_tools,
-            memory_mode=memory_mode,
-            model_id=model_id,
-        )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
         """インタビュー用システムプロンプトを生成する。"""

@@ -29,6 +29,10 @@ jobs:
         working-directory: cdk
         run: npx tsc --noEmit
 
+      - name: Jest tests
+        working-directory: cdk
+        run: npm test
+
       - name: CDK synth
         working-directory: cdk
         run: npx cdk synth --no-staging

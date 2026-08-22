@@ -99,97 +99,6 @@ class TestDatasetIntegrationFlow:
         assert restored.binding_keys == sample_binding.binding_keys
 
 
-class TestAgentServiceDatasetIntegration:
-    """AgentServiceデータセット連携統合テスト"""
-
-    @pytest.fixture
-    def sample_persona(self):
-        """サンプルペルソナ"""
-        return Persona.create_new(
-            name="佐藤花子",
-            age=28,
-            occupation="マーケター",
-            background="広告代理店勤務",
-            values=["創造性", "データドリブン"],
-            pain_points=["データ分析の時間"],
-            goals=["効果的なキャンペーン"],
-        )
-
-    @pytest.fixture
-    def sample_dataset(self):
-        """サンプルデータセット"""
-        now = datetime.now()
-        return Dataset(
-            id="dataset-agent-001",
-            name="キャンペーン効果データ",
-            description="過去のキャンペーン効果測定データ",
-            s3_path="s3://test-bucket/campaign_data.csv",
-            columns=[
-                DatasetColumn(
-                    name="campaign_id", data_type="string", description="キャンペーンID"
-                ),
-                DatasetColumn(
-                    name="impressions",
-                    data_type="integer",
-                    description="インプレッション数",
-                ),
-                DatasetColumn(
-                    name="clicks", data_type="integer", description="クリック数"
-                ),
-                DatasetColumn(
-                    name="conversions",
-                    data_type="integer",
-                    description="コンバージョン数",
-                ),
-            ],
-            row_count=500,
-            created_at=now,
-            updated_at=now,
-        )
-
-    @pytest.mark.skipif(True, reason="Strands SDK not installed in test environment")
-    def test_enhance_prompt_with_dataset_info(self, sample_persona, sample_dataset):
-        """システムプロンプトへのデータセット情報追加テスト"""
-        from src.services.agent_service import AgentService
-
-        agent_service = AgentService()
-
-        bindings = [
-            {"dataset_id": sample_dataset.id, "binding_keys": {"campaign_id": "C001"}}
-        ]
-        datasets = [sample_dataset]
-
-        base_prompt = "あなたはマーケターです。"
-        enhanced = agent_service.enhance_prompt_with_dataset_info(
-            base_prompt, bindings, datasets
-        )
-
-        # データセット情報が追加されていることを確認
-        assert sample_dataset.name in enhanced
-        assert sample_dataset.s3_path in enhanced
-        assert "campaign_id" in enhanced
-
-
-class TestMCPServerAutoStart:
-    """MCPサーバー自動起動テスト"""
-
-    def test_mcp_auto_start_on_dataset_agent_creation(self):
-        """データセット連携エージェント作成時のMCP自動起動テスト"""
-        from src.services.mcp_server_manager import MCPServerManager
-
-        # 新しいマネージャーインスタンスを作成（テスト用）
-        manager = MCPServerManager()
-
-        # 初期状態は停止
-        assert manager.is_running() is False
-
-        # start()が呼ばれた場合の動作確認（実際のMCP起動はモック）
-        with patch.object(manager, "start", return_value=True) as mock_start:
-            if not manager.is_running():
-                manager.start()
-            mock_start.assert_called_once()
-
-
 class TestInterviewDatasetIntegration:
     """インタビューモードデータセット連携統合テスト"""
 
@@ -236,7 +145,6 @@ class TestInterviewDatasetIntegration:
     def test_interview_session_status_includes_dataset(self, sample_personas):
         """セッションステータスにenable_datasetが含まれるテスト"""
         from src.managers.interview_manager import InterviewManager, InterviewSession
-        from unittest.mock import patch
 
         # InterviewManagerのモック
         with patch.object(

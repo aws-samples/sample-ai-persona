@@ -75,14 +75,6 @@ INTERVIEW_INSTRUCTIONS_TEMPLATE = """
 - 回答の長さは質問の深さに合わせてください（単純な質問は短く、経験や理由を問う質問には具体的に）
 - 状況によって判断が変わる場合は、その条件を示してください（「普段は○○だけど、△△の場合は□□」）
 
-# ツール使用について
-- あなたにはデータ参照用のツール（execute_query）が提供されている場合があります
-- 購買履歴、過去の経験、具体的な商品名について質問された場合は、回答の前にツールでデータを確認してください
-- 上記に該当しない一般的な質問（意見・感想・仮定の話）ではツールを使う必要はありません
-- 初回は認証設定とデータ取得を1回にまとめて実行してください: `CREATE SECRET IF NOT EXISTS aws_secret (TYPE S3, PROVIDER CREDENTIAL_CHAIN); SELECT ...`
-- 2回目以降はSELECT文だけでOKです
-- 認証エラー（403）が出た場合はCREATE SECRET文を含めて再実行してください
-
 # 重要な注意事項
 - あなたは{persona_name}として一貫した人格を維持してください
 - 不適切な質問には丁寧に回答を控える旨を伝えてください
@@ -223,49 +215,46 @@ def build_kb_prompt_section(
 """
 
 
+def _format_column(col: Dict[str, Any]) -> str:
+    """列の表示メタデータを `name (type): description` 形式に整形する。"""
+    name = col.get("name", "")
+    data_type = col.get("data_type")
+    description = col.get("description")
+    text = str(name)
+    if data_type:
+        text += f" ({data_type})"
+    if description:
+        text += f": {description}"
+    return text
+
+
 def build_dataset_prompt_section(
-    bindings: List[Dict[str, Any]],
-    datasets: List[Any],
+    datasets: List[Dict[str, Any]],
 ) -> str:
-    """データセット連携用プロンプトセクションを構築する。"""
-    if not bindings or not datasets:
+    """データセット連携用プロンプトセクションを構築する。
+
+    Args:
+        datasets: 表示用記述子のリスト。各要素は
+            {"alias", "name", "description", "row_count", "columns"}。
+            SQL・S3 パス・binding フィルタ値は含めない（LLM へ露出しない）。
+    """
+    if not datasets:
         return ""
 
-    dataset_map = {d.id: d for d in datasets}
-
     dataset_info_parts = []
-    for binding in bindings:
-        dataset = dataset_map.get(binding.get("dataset_id"))
-        if not dataset:
-            continue
-
-        binding_keys = binding.get("binding_keys", {})
-        columns_str = ", ".join(c.name for c in dataset.columns)
-
-        if binding_keys:
-            keys_str = ", ".join(f"{k}='{v}'" for k, v in binding_keys.items())
-            filter_condition = " AND ".join(
-                f"{k} = '{v}'" for k, v in binding_keys.items()
-            )
-            query_example = (
-                f"SELECT * FROM read_csv('{dataset.s3_path}') WHERE {filter_condition};"
-            )
+    for dataset in datasets:
+        columns = dataset.get("columns", [])
+        # 列は {name, data_type, description} の dict、または名前文字列の両方を許容する。
+        if columns and isinstance(columns[0], dict):
+            col_lines = "\n".join(f"  - {_format_column(c)}" for c in columns)
+            columns_block = f"- 利用可能な列:\n{col_lines}"
         else:
-            keys_str = "（全行がこのペルソナのデータ）"
-            query_example = f"SELECT * FROM read_csv('{dataset.s3_path}');"
-
+            columns_block = "- 利用可能な列: " + ", ".join(str(c) for c in columns)
         dataset_info_parts.append(f"""
-### データセット: {dataset.name}
-- 説明: {dataset.description}
-- あなたの識別キー: {keys_str}
-- S3パス: {dataset.s3_path}
-- カラム: {columns_str}
-- 行数: {dataset.row_count}行
-
-あなたのデータを取得するクエリ:
-```sql
-{query_example}
-```
+### データセット: {dataset["name"]}（dataset_id: {dataset["alias"]}）
+- 説明: {dataset.get("description", "")}
+{columns_block}
+- 行数: {dataset.get("row_count", 0)}行
 """)
 
     if not dataset_info_parts:
@@ -275,40 +264,30 @@ def build_dataset_prompt_section(
         """
 # 外部データセットへのアクセス
 
-あなたには外部データセットにアクセスするためのツール（execute_query）が提供されています。
-このツールを使って、あなた自身の購買履歴や経験に関する具体的なデータを取得できます。
+あなたには外部データセットを分析するツール（analyze_dataset）が提供されています。
+このツールで、あなた自身の購買履歴や経験に関する具体的なデータを取得できます。
+データはすでにあなた自身の記録に絞り込まれています。SQLは書けません。dataset_id と
+構造化された引数（filters / group_by / metrics / order_by / limit）で指定してください。
 
 ## データ参照のルール
 
-1. 購買履歴、過去の経験、具体的な商品名について話す場合は、最初にデータセットを参照してください
-2. データセットを参照していない場合、購買履歴や具体的な経験を語らず、その旨を伝えてください
+1. 購買履歴、過去の経験、具体的な商品名について話す場合は、最初に analyze_dataset で確認してください
+2. データを参照していない場合、購買履歴や具体的な経験を語らず、その旨を伝えてください
 
-## データの取得方法
+## ツールの使い方
 
-**初回のみ**: 認証設定とデータ取得を1回のクエリにまとめて実行してください：
-```sql
-CREATE SECRET IF NOT EXISTS aws_secret (TYPE S3, PROVIDER CREDENTIAL_CHAIN);
-SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
-```
-
-**2回目以降**: 認証は設定済みなのでSELECT文だけでOKです：
-```sql
-SELECT * FROM read_csv('s3://バケット/パス.csv') WHERE 条件;
-```
+- 生データ確認: metrics と group_by を指定せず、必要なら select_columns で列を絞る
+  （具体的な商品名・日付・金額の確認に使う）
+- 集計: metrics（count / sum / avg / min / max）を指定し、必要なら group_by でグループ化する
 
 ## 利用可能なデータセット
 """
         + "".join(dataset_info_parts)
         + """
 
-## ツール使用時の注意事項
-
-- **認証エラー（403 Forbidden）が出た場合**: CREATE SECRET文を含めて再実行してください
-- **データが見つからない場合**: 条件を確認し、正しい識別キーを使用しているか確認してください
-
 ## 回答の仕方
 
-1. ユーザーから購買履歴や経験について質問されたら、まずツールでデータを取得
+1. ユーザーから購買履歴や経験について質問されたら、まず analyze_dataset でデータを取得
 2. 取得したデータに基づいて、具体的な商品名、日付、金額を含めて回答
 3. データがない場合のみ、「データを確認しましたが、該当する記録がありませんでした」と正直に伝える
 

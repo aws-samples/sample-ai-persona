@@ -130,6 +130,11 @@ class ErrorCode(StrEnum):
     FILE_FORMAT_NOT_ALLOWED = ("file_format_not_allowed", ErrorKind.VALIDATION)
     FILE_MIME_UNSUPPORTED = ("file_mime_unsupported", ErrorKind.VALIDATION)
     FILE_EMPTY = ("file_empty", ErrorKind.VALIDATION)
+    # CSV header row cannot be mapped 1:1 to queryable columns (empty/whitespace
+    # header names or duplicates). DuckDB read_csv_auto would rename such columns
+    # (column1 / name_1), diverging from the allowlist shown to the model and
+    # silently breaking analyze_dataset. VALIDATION: the user fixes the CSV header.
+    FILE_CSV_HEADER_INVALID = ("file_csv_header_invalid", ErrorKind.VALIDATION)
     # Text-bearing uploads: too little content to work with, or undecodable.
     # The guidance wording belongs in the catalog.
     INTERVIEW_FILE_CONTENT_TOO_SHORT = (

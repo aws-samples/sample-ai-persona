@@ -22,7 +22,7 @@ cd cdk && npx cdk deploy --all   # CDKデプロイ
 | src/managers/ | `uv run pytest tests/unit/ -q` |
 | src/services/ | `uv run pytest tests/integration/ -q` |
 | web/routers/ | `uv run pytest tests/api/ -q` |
-| cdk/ | `cd cdk && npx tsc --noEmit && npx cdk synth --no-staging` |
+| cdk/ | `cd cdk && npx tsc --noEmit && npm test && npx cdk synth --no-staging` |
 
 ## 禁止事項
 

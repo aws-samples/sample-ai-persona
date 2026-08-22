@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from src.managers.dataset_manager import DatasetManager
+from src.managers.dataset_manager import DatasetManager, DatasetManagerError
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.dataset import DatasetColumn
 from src.models.errors import ErrorCode
@@ -54,7 +54,6 @@ async def settings_page(request: Request) -> Any:
 
     datasets = dataset_manager.get_datasets()
     datasets_dict = [d.to_dict() for d in datasets]
-    mcp_enabled = settings_manager.is_mcp_running()
     knowledge_bases = settings_manager.get_all_knowledge_bases()
     kb_list = [kb.to_dict() for kb in knowledge_bases]
 
@@ -65,40 +64,8 @@ async def settings_page(request: Request) -> Any:
             "request": request,
             "title": "システム設定",
             "datasets": datasets_dict,
-            "mcp_enabled": mcp_enabled,
             "knowledge_bases": kb_list,
         },
-    )
-
-
-@router.post("/mcp/toggle", response_class=HTMLResponse)
-async def toggle_mcp(request: Request, enabled: bool = Form(...)) -> Any:
-    """MCP有効/無効切り替え"""
-    settings_manager = get_settings_manager()
-    try:
-        is_running = settings_manager.toggle_mcp(enabled)
-    except Exception as e:
-        # 再試行で解決しうるエラーは設定パネルを消さずトーストで通知する
-        logger.error("Failed to toggle MCP server", exc_info=True)
-        return toast_response(
-            e, default="MCPサーバーの切り替えに失敗しました", status_code=500
-        )
-
-    return templates.TemplateResponse(
-        request,
-        "settings/partials/mcp_status.html",
-        {"request": request, "mcp_enabled": is_running},
-    )
-
-
-@router.get("/mcp/status", response_class=HTMLResponse)
-async def mcp_status(request: Request) -> Any:
-    """MCP状態取得"""
-    settings_manager = get_settings_manager()
-    return templates.TemplateResponse(
-        request,
-        "settings/partials/mcp_status.html",
-        {"request": request, "mcp_enabled": settings_manager.is_mcp_running()},
     )
 
 
@@ -179,7 +146,20 @@ async def analyze_csv(request: Request, file: UploadFile = File(...)) -> Any:
         )
 
     dataset_manager = get_dataset_manager()
-    columns, row_count = dataset_manager.analyze_schema(content)
+    try:
+        columns, row_count = dataset_manager.analyze_schema(content)
+    except DatasetManagerError as e:
+        # 空/重複ヘッダ等でクエリ列名と乖離するCSVは、汎用500ではなく
+        # フォーム近傍にインラインで理由を表示する（他バリデーションと同様）。
+        logger.warning("CSV schema analysis rejected", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {"request": request, "error": user_message_for(e)},
+                status_code=400,
+            )
+        )
 
     # DatasetColumnをdictに変換
     columns_dict = [
@@ -344,13 +324,6 @@ async def api_list_datasets() -> Any:
     dataset_manager = get_dataset_manager()
     datasets = dataset_manager.get_datasets()
     return [d.to_dict() for d in datasets]
-
-
-@router.get("/api/mcp/status")
-async def api_mcp_status() -> Any:
-    """MCP状態API"""
-    settings_manager = get_settings_manager()
-    return {"enabled": settings_manager.is_mcp_running()}
 
 
 # ==================== ナレッジベース管理 ====================
