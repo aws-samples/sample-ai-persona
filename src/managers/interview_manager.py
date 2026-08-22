@@ -856,9 +856,9 @@ class InterviewManager:
                 )
 
                 # Create persona agent with memory, dataset, and KB configuration
-                persona_agent = self._create_agent_with_integrations(
-                    persona=persona,
-                    system_prompt=system_prompt,
+                persona_agent = self._agent_integration.create_agent(
+                    persona,
+                    system_prompt,
                     enable_memory=enable_memory,
                     session_id=session_id,
                     memory_mode=memory_mode,
@@ -910,34 +910,6 @@ class InterviewManager:
             f"Successfully created {len(persona_agents)} persona agents for interview"
         )
         return persona_agents
-
-    def _create_agent_with_integrations(
-        self,
-        persona: Any,
-        system_prompt: str,
-        enable_memory: bool,
-        session_id: Any,
-        memory_mode: str,
-        enable_dataset: bool,
-        enable_kb: bool,
-        model_id: Optional[str] = None,
-    ) -> Any:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        bundle = self._agent_integration.prepare(
-            persona.id,
-            system_prompt,
-            enable_kb=enable_kb,
-            enable_dataset=enable_dataset,
-        )
-        return self.agent_service.create_persona_agent(
-            persona=persona,
-            system_prompt=bundle.enhanced_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            additional_tools=bundle.additional_tools,
-            memory_mode=memory_mode,
-            model_id=model_id,
-        )
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
         """インタビュー用システムプロンプトを生成する。"""

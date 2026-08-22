@@ -156,9 +156,9 @@ class AgentDiscussionManager:
                 )
 
                 # Create persona agent with memory and dataset/KB configuration
-                persona_agent = self._create_agent_with_integrations(
-                    persona=persona,
-                    system_prompt=system_prompt,
+                persona_agent = self._agent_integration.create_agent(
+                    persona,
+                    system_prompt,
                     enable_memory=enable_memory,
                     session_id=session_id,
                     memory_mode=memory_mode,
@@ -758,34 +758,6 @@ class AgentDiscussionManager:
                 self.logger.warning(
                     f"ペルソナ {persona.name} の発言が見つかりませんでした"
                 )
-
-    def _create_agent_with_integrations(
-        self,
-        persona: Persona,
-        system_prompt: str,
-        enable_memory: bool,
-        session_id: Optional[str],
-        memory_mode: str,
-        enable_dataset: bool,
-        enable_kb: bool,
-        model_id: Optional[str] = None,
-    ) -> PersonaAgent:
-        """統合機能（KB、データセット）付きペルソナエージェントを作成。"""
-        bundle = self._agent_integration.prepare(
-            persona.id,
-            system_prompt,
-            enable_kb=enable_kb,
-            enable_dataset=enable_dataset,
-        )
-        return self.agent_service.create_persona_agent(
-            persona=persona,
-            system_prompt=bundle.enhanced_prompt,
-            enable_memory=enable_memory,
-            session_id=session_id,
-            additional_tools=bundle.additional_tools,
-            memory_mode=memory_mode,
-            model_id=model_id,
-        )
 
     def start_agent_discussion_streaming(
         self,

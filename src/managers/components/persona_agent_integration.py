@@ -66,6 +66,39 @@ class PersonaAgentIntegration:
             enhanced_prompt=enhanced_prompt, additional_tools=additional_tools
         )
 
+    def create_agent(
+        self,
+        persona: Any,
+        system_prompt: str,
+        *,
+        enable_memory: bool,
+        session_id: Optional[str],
+        memory_mode: str,
+        enable_dataset: bool,
+        enable_kb: bool,
+        model_id: Optional[str] = None,
+    ) -> Any:
+        """統合機能（KB / データセット）を組み立ててペルソナエージェントを生成する。
+
+        discussion / interview Manager で共通の agent 生成手順。統合の組み立ては
+        :meth:`prepare` に委ね、生成は注入された agent_service に委譲する。
+        """
+        bundle = self.prepare(
+            persona.id,
+            system_prompt,
+            enable_kb=enable_kb,
+            enable_dataset=enable_dataset,
+        )
+        return self._agent_service.create_persona_agent(
+            persona=persona,
+            system_prompt=bundle.enhanced_prompt,
+            enable_memory=enable_memory,
+            session_id=session_id,
+            additional_tools=bundle.additional_tools,
+            memory_mode=memory_mode,
+            model_id=model_id,
+        )
+
     def _build_sections(
         self, persona_id: str, *, enable_kb: bool, enable_dataset: bool
     ) -> tuple[list[str], list[list[Any]]]:
