@@ -1,6 +1,9 @@
-"""discussion / interview Manager のデータセット統合（gate・dedup・build）テスト。
+"""PersonaAgentIntegration（データセット統合の gate・dedup・build）テスト。
 
-dedup（重複 binding の丸ごと除外）は Manager の責務であることを検証する。
+dedup（重複 binding の丸ごと除外）と kill-switch/gate 判定は Component の責務。
+以前は両 Manager に同一メソッドがコピーされていたが、単一ソース化したため
+Component を直接テストする。両 Manager が Component を配線していることは末尾の
+委譲スモークテストで確認する。
 """
 
 from datetime import datetime
@@ -8,18 +11,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
 from src.managers import agent_discussion_manager, interview_manager
+from src.managers.components import persona_agent_integration as pai_module
+from src.managers.components.persona_agent_integration import PersonaAgentIntegration
+from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
 
 pytestmark = pytest.mark.unit
-
-# 両 Manager で同一ロジックのため parametrize で網羅する。
-# モジュール経由で参照し、import 形式を from ... import に統一する
-# （同一モジュールの import / import from 混在を避ける）。
-MANAGER_CLASSES = [
-    interview_manager.InterviewManager,
-    agent_discussion_manager.AgentDiscussionManager,
-]
 
 
 def _binding(persona_id, dataset_id, keys=None):
@@ -46,17 +43,16 @@ def _dataset(dataset_id):
     )
 
 
-def _make(cls, db, ds_service):
-    return cls(
-        agent_service=Mock(),
+def _component(db, ds_service, agent_service=None):
+    return PersonaAgentIntegration(
         database_service=db,
+        agent_service=agent_service or Mock(),
         dataset_analysis_service=ds_service,
     )
 
 
-@pytest.mark.parametrize("cls", MANAGER_CLASSES)
 class TestResolveDatasetBindings:
-    def test_duplicate_dataset_excluded_wholesale(self, cls):
+    def test_duplicate_dataset_excluded_wholesale(self):
         db = Mock()
         db.get_bindings_by_persona.return_value = [
             _binding("p1", "ds-dup", {"user_id": "U1"}),
@@ -64,32 +60,31 @@ class TestResolveDatasetBindings:
             _binding("p1", "ds-ok", {"user_id": "U9"}),
         ]
         db.get_dataset.side_effect = _dataset
-        mgr = _make(cls, db, Mock())
+        comp = _component(db, Mock())
 
-        accepted, datasets = mgr._resolve_dataset_bindings("p1")
+        accepted, datasets = comp._resolve_dataset_bindings("p1")
 
         accepted_ids = {b["dataset_id"] for b in accepted}
         assert "ds-dup" not in accepted_ids  # 丸ごと除外
         assert "ds-ok" in accepted_ids
         assert {d.id for d in datasets} == {"ds-ok"}
 
-    def test_unique_empty_binding_keys_allowed(self, cls):
+    def test_unique_empty_binding_keys_allowed(self):
         db = Mock()
         db.get_bindings_by_persona.return_value = [_binding("p1", "ds-all", {})]
         db.get_dataset.side_effect = _dataset
-        mgr = _make(cls, db, Mock())
+        comp = _component(db, Mock())
 
-        accepted, datasets = mgr._resolve_dataset_bindings("p1")
+        accepted, _ = comp._resolve_dataset_bindings("p1")
         assert accepted == [{"dataset_id": "ds-all", "binding_keys": {}}]
 
-    def test_no_bindings_returns_empty(self, cls):
+    def test_no_bindings_returns_empty(self):
         db = Mock()
         db.get_bindings_by_persona.return_value = []
-        mgr = _make(cls, db, Mock())
-        assert mgr._resolve_dataset_bindings("p1") == ([], [])
+        comp = _component(db, Mock())
+        assert comp._resolve_dataset_bindings("p1") == ([], [])
 
 
-@pytest.mark.parametrize("cls", MANAGER_CLASSES)
 class TestKillSwitchAndGate:
     def _db_with_binding(self):
         db = Mock()
@@ -99,9 +94,8 @@ class TestKillSwitchAndGate:
         db.get_dataset.side_effect = _dataset
         return db
 
-    def test_enabled_both_flags_builds_tools_and_prompt(self, cls, monkeypatch):
-        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+    def test_enabled_both_flags_builds_tools_and_prompt(self, monkeypatch):
+        monkeypatch.setattr(pai_module.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
         ds_service.build_binding_tools.return_value = (
@@ -116,56 +110,53 @@ class TestKillSwitchAndGate:
                 }
             ],
         )
-        mgr = _make(cls, self._db_with_binding(), ds_service)
+        comp = _component(self._db_with_binding(), ds_service)
 
-        sections, tool_groups = mgr._build_integration_sections(
-            "p1", enable_kb=False, enable_dataset=True
-        )
+        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
         ds_service.build_binding_tools.assert_called_once()
-        assert any("analyze_dataset" in s for s in sections)
-        assert any(g for g in tool_groups)
+        assert "analyze_dataset" in bundle.enhanced_prompt
+        assert bundle.additional_tools
 
-    def test_global_flag_off_skips_everything(self, cls, monkeypatch):
-        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", False)
-        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", False)
-
-        ds_service = Mock()
-        mgr = _make(cls, self._db_with_binding(), ds_service)
-
-        sections, tool_groups = mgr._build_integration_sections(
-            "p1", enable_kb=False, enable_dataset=True
-        )
-        ds_service.build_binding_tools.assert_not_called()
-        assert sections == [] and all(not g for g in tool_groups)
-
-    def test_session_flag_off_skips_everything(self, cls, monkeypatch):
-        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+    def test_global_flag_off_skips_everything(self, monkeypatch):
+        monkeypatch.setattr(pai_module.config, "ENABLE_DATASET_ANALYSIS", False)
 
         ds_service = Mock()
-        mgr = _make(cls, self._db_with_binding(), ds_service)
+        comp = _component(self._db_with_binding(), ds_service)
 
-        sections, tool_groups = mgr._build_integration_sections(
-            "p1", enable_kb=False, enable_dataset=False
-        )
+        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
         ds_service.build_binding_tools.assert_not_called()
-        assert sections == []
+        assert bundle.enhanced_prompt == "BASE"
+        assert bundle.additional_tools is None
 
-    def test_excluded_dataset_absent_from_tools_and_prompt(self, cls, monkeypatch):
+    def test_session_flag_off_skips_everything(self, monkeypatch):
+        monkeypatch.setattr(pai_module.config, "ENABLE_DATASET_ANALYSIS", True)
+
+        ds_service = Mock()
+        comp = _component(self._db_with_binding(), ds_service)
+
+        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=False)
+        ds_service.build_binding_tools.assert_not_called()
+        assert bundle.enhanced_prompt == "BASE"
+
+    def test_excluded_dataset_absent_from_tools_and_prompt(self, monkeypatch):
         # build_binding_tools が ([], []) を返せば tool もプロンプトも出ない
         # （同一 accepted_descriptors から両方生成する一貫性）。
-        monkeypatch.setattr(interview_manager.config, "ENABLE_DATASET_ANALYSIS", True)
-        monkeypatch.setattr(agent_discussion_manager.config, "ENABLE_DATASET_ANALYSIS", True)
+        monkeypatch.setattr(pai_module.config, "ENABLE_DATASET_ANALYSIS", True)
 
         ds_service = Mock()
         ds_service.build_binding_tools.return_value = ([], [])
-        mgr = _make(cls, self._db_with_binding(), ds_service)
+        comp = _component(self._db_with_binding(), ds_service)
 
-        sections, tool_groups = mgr._build_integration_sections(
-            "p1", enable_kb=False, enable_dataset=True
-        )
-        assert not any("analyze_dataset" in s for s in sections)
-        assert all(not g for g in tool_groups)
+        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
+        assert "analyze_dataset" not in bundle.enhanced_prompt
+        assert bundle.additional_tools is None
+
+
+# 両 Manager が Component を正しく配線していることの委譲スモークテスト。
+MANAGER_CLASSES = [
+    interview_manager.InterviewManager,
+    agent_discussion_manager.AgentDiscussionManager,
+]
 
 
 @pytest.mark.parametrize("cls", MANAGER_CLASSES)
@@ -175,3 +166,15 @@ def test_constructor_accepts_dataset_analysis_service(cls):
         agent_service=Mock(), database_service=Mock(), dataset_analysis_service=ds
     )
     assert mgr.dataset_analysis_service is ds
+
+
+@pytest.mark.parametrize("cls", MANAGER_CLASSES)
+def test_manager_wires_agent_integration_component(cls):
+    db, agent_svc, ds = Mock(), Mock(), Mock()
+    mgr = cls(agent_service=agent_svc, database_service=db, dataset_analysis_service=ds)
+    comp = mgr._agent_integration
+    assert isinstance(comp, PersonaAgentIntegration)
+    # Manager の各 Service が Component に注入されていること。
+    assert comp._database_service is db
+    assert comp._agent_service is agent_svc
+    assert comp._dataset_analysis_service is ds
