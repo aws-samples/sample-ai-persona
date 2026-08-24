@@ -185,6 +185,93 @@ class TestModes:
         assert 'GROUP BY "region"' in sql
 
 
+class TestMedianAndCountDistinct:
+    def test_median_requires_column(self):
+        with pytest.raises(SqlBuildError):
+            _build(metrics=[{"func": "median"}])
+
+    def test_median_aggregate(self):
+        sql, _, labels = _build(
+            metrics=[{"func": "median", "column": "amount"}], group_by=["region"]
+        )
+        assert 'median("amount") AS m0' in sql
+        assert labels["m0"] == "median(amount)"
+
+    def test_count_distinct_requires_column(self):
+        with pytest.raises(SqlBuildError):
+            _build(metrics=[{"func": "count_distinct"}])
+
+    def test_count_distinct_uses_distinct_keyword(self):
+        sql, _, labels = _build(
+            metrics=[{"func": "count_distinct", "column": "region"}],
+            group_by=["user_id"],
+        )
+        assert 'count(DISTINCT "region") AS m0' in sql
+        assert labels["m0"] == "count(distinct region)"
+
+    def test_count_distinct_column_still_allowlisted(self):
+        with pytest.raises(SqlBuildError):
+            _build(metrics=[{"func": "count_distinct", "column": "ssn"}])
+
+
+class TestDateTruncGroupBy:
+    def test_bucket_uses_date_trunc_and_alias(self):
+        sql, _, labels = _build(
+            metrics=[{"func": "sum", "column": "amount"}],
+            group_by=[{"column": "region", "date_trunc": "month"}],
+        )
+        assert "date_trunc('month', \"region\") AS g0" in sql
+        assert "GROUP BY date_trunc('month', \"region\")" in sql
+        assert labels["g0"] == "month(region)"
+
+    def test_plain_and_bucket_columns_combined(self):
+        sql, _, _ = _build(
+            metrics=[{"func": "count"}],
+            group_by=["user_id", {"column": "region", "date_trunc": "week"}],
+        )
+        assert 'SELECT "user_id", date_trunc(\'week\', "region") AS g1' in sql
+        assert 'GROUP BY "user_id", date_trunc(\'week\', "region")' in sql
+
+    def test_order_by_bucket_column_uses_alias(self):
+        sql, _, _ = _build(
+            metrics=[{"func": "sum", "column": "amount"}],
+            group_by=[{"column": "region", "date_trunc": "day"}],
+            order_by=[{"column": "region", "direction": "asc"}],
+        )
+        assert "ORDER BY g0 ASC" in sql
+
+    def test_unknown_date_trunc_unit_rejected(self):
+        with pytest.raises(SqlBuildError):
+            _build(
+                metrics=[{"func": "count"}],
+                group_by=[{"column": "region", "date_trunc": "decade"}],
+            )
+
+    def test_non_string_date_trunc_normalized_to_sqlbuilderror(self):
+        # 非文字列（非ハッシュ値）でも TypeError ではなく SqlBuildError に落ちる。
+        with pytest.raises(SqlBuildError):
+            _build(
+                metrics=[{"func": "count"}],
+                group_by=[{"column": "region", "date_trunc": ["month"]}],
+            )
+
+    def test_bucket_column_still_allowlisted(self):
+        with pytest.raises(SqlBuildError):
+            _build(
+                metrics=[{"func": "count"}],
+                group_by=[{"column": "ssn", "date_trunc": "month"}],
+            )
+
+    def test_date_trunc_unit_is_not_parameterized(self):
+        # 単位は allowlist 済み定数を inline する（$N ではない）。誤って
+        # パラメータ化されていないこと＝値パラメータに混ざらないことを確認。
+        _, params, _ = _build(
+            metrics=[{"func": "count"}],
+            group_by=[{"column": "region", "date_trunc": "month"}],
+        )
+        assert params == []
+
+
 class TestOrderBy:
     def test_column_and_metric_index_mutually_exclusive(self):
         with pytest.raises(SqlBuildError):

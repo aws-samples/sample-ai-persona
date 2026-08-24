@@ -42,10 +42,24 @@ class Filter(TypedDict):
 
 
 class Metric(TypedDict):
-    """集計指標。``count`` は column 省略可、``sum/avg/min/max`` は column 必須。"""
+    """集計指標。``count`` は column 省略可、それ以外は column 必須。
 
-    func: Literal["count", "sum", "avg", "min", "max"]
+    ``count_distinct`` は指定列のユニーク値数、``median`` は中央値（外れ値に強い）。
+    """
+
+    func: Literal["count", "count_distinct", "sum", "avg", "min", "max", "median"]
     column: NotRequired[str]
+
+
+class GroupBy(TypedDict):
+    """グループ化列。``date_trunc`` を付けると日付/時刻列を期間バケットへ丸める。
+
+    例: ``{"column": "purchase_date", "date_trunc": "month"}`` は月単位で集計する
+    （指定しないと日付が生の値で散らばり、月次・週次の傾向が取れない）。
+    """
+
+    column: str
+    date_trunc: NotRequired[Literal["day", "week", "month", "quarter", "year"]]
 
 
 class OrderBy(TypedDict):
@@ -116,7 +130,7 @@ def create_analyze_dataset_tool(
         dataset_id: str,
         select_columns: Optional[List[str]] = None,
         filters: Optional[List[Filter]] = None,
-        group_by: Optional[List[str]] = None,
+        group_by: Optional[List[Union[str, GroupBy]]] = None,
         metrics: Optional[List[Metric]] = None,
         order_by: Optional[List[OrderBy]] = None,
         limit: Optional[int] = None,
@@ -136,9 +150,13 @@ def create_analyze_dataset_tool(
             filters: 絞り込み条件のリスト。各要素は column / operator / value。
                 operator は eq, ne, gt, gte, lt, lte, in, contains のいずれか。
                 in は value にリスト、contains は文字列部分一致。
-            group_by: 集計のグループ化列（集計モードのみ）。
-            metrics: 集計指標のリスト。func は count, sum, avg, min, max。
-                sum/avg/min/max は column 必須、count は column 省略で全件数。
+            group_by: 集計のグループ化列（集計モードのみ）。各要素は列名の文字列、
+                または {"column": 列名, "date_trunc": 単位}（単位は day/week/month/
+                quarter/year）。後者は日付/時刻列を期間バケットへ丸めて集計します
+                （月次・週次の傾向を出すときに使用）。
+            metrics: 集計指標のリスト。func は count, count_distinct, sum, avg,
+                min, max, median。count は column 省略で全件数、それ以外は column 必須。
+                count_distinct はユニーク値数、median は中央値（外れ値に強い）。
             order_by: 並び順。column（列名）か metric_index（metrics の 0 始まり位置）の
                 いずれか一方と direction（asc / desc）を指定します。
             limit: 取得する最大行数。
@@ -160,7 +178,11 @@ def create_analyze_dataset_tool(
                 allowed_columns=descriptor.columns,
                 select_columns=select_columns,
                 filters=[dict(f) for f in filters] if filters else None,
-                group_by=group_by,
+                group_by=(
+                    [g if isinstance(g, str) else dict(g) for g in group_by]
+                    if group_by
+                    else None
+                ),
                 metrics=[dict(m) for m in metrics] if metrics else None,
                 order_by=[dict(o) for o in order_by] if order_by else None,
                 limit=limit,

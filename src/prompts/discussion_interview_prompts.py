@@ -278,7 +278,9 @@ def build_dataset_prompt_section(
 
 - 生データ確認: metrics と group_by を指定せず、必要なら select_columns で列を絞る
   （具体的な商品名・日付・金額の確認に使う）
-- 集計: metrics（count / sum / avg / min / max）を指定し、必要なら group_by でグループ化する
+- 集計: metrics（count / count_distinct / sum / avg / min / max / median）を指定し、必要なら
+  group_by でグループ化する。日付の月次・週次傾向は group_by に
+  {"column": 列名, "date_trunc": "month"} 等を指定する（生の日付だと1日単位に散る）
 
 ## 利用可能なデータセット
 """

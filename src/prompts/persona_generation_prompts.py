@@ -130,7 +130,7 @@ dataset_id と構造化された引数（filters / group_by / metrics / order_by
 
 ## 分析手順
 1. まず metrics も group_by も指定せずに数行取得し、データ構造を確認
-2. metrics（count / sum / avg / min / max）と group_by で傾向を集計（例: 属性分布、購買パターン、レビュー傾向）
+2. metrics（count / count_distinct / sum / avg / min / max / median）と group_by で傾向を集計（例: 属性分布、購買パターン、レビュー傾向）。日付の月次・週次傾向は group_by に {{"column": 列名, "date_trunc": "month"}} 等を指定する
 3. 分析結果に基づいてペルソナを生成
 """
 

@@ -81,15 +81,26 @@ class TestToolContract:
         ]
         assert defs["Metric"]["properties"]["func"]["enum"] == [
             "count",
+            "count_distinct",
             "sum",
             "avg",
             "min",
             "max",
+            "median",
         ]
         assert defs["OrderBy"]["properties"]["direction"]["enum"] == ["asc", "desc"]
         # Metric.column は optional（required に含まれない）
         assert "column" not in defs["Metric"].get("required", [])
         assert defs["Metric"]["required"] == ["func"]
+        # GroupBy: column 必須、date_trunc は optional の単位 Literal。
+        assert defs["GroupBy"]["properties"]["date_trunc"]["enum"] == [
+            "day",
+            "week",
+            "month",
+            "quarter",
+            "year",
+        ]
+        assert defs["GroupBy"]["required"] == ["column"]
 
 
 class TestToolBehavior:
