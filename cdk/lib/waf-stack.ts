@@ -53,7 +53,13 @@ export class WafStack extends Stack {
           priority: 1,
           overrideAction: { none: {} },
           statement: {
-            managedRuleGroupStatement: { vendorName: 'AWS', name: 'AWSManagedRulesCommonRuleSet' },
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+              // SizeRestrictions_BODY（ボディ8KB制限）はファイルアップロード（10MB/ファイル）と
+              // 両立しないためCountに落とす。サイズ検証はアプリ側で実施
+              ruleActionOverrides: [{ name: 'SizeRestrictions_BODY', actionToUse: { count: {} } }],
+            },
           },
           visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'AWSManagedRulesCommonRuleSet', sampledRequestsEnabled: true },
         },
