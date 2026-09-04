@@ -50,12 +50,13 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "\n${BLUE}========================================${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}========================================${NC}"; }
 
 # sedのインプレース編集（GNU sed / BSD sed 両対応）
-# macOSのBSD sedでは -i にバックアップ拡張子の引数が必須なため、OSによって呼び分ける
+# BSD sed（macOS、FreeBSD等）では -i にバックアップ拡張子の引数が必須なため、
+# OSではなくsedの実装を判定して呼び分ける（--versionはGNU sedのみ成功する）
 sed_inplace() {
-  if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' "$@"
-  else
+  if sed --version > /dev/null 2>&1; then
     sed -i "$@"
+  else
+    sed -i '' "$@"
   fi
 }
 
