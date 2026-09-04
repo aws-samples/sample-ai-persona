@@ -378,6 +378,8 @@ WAFスタックはCloudFront用のためus-east-1にデプロイされます：
 npx cdk deploy AIPersonaWaf-dev
 ```
 
+> **注意**: CommonRuleSet の `SizeRestrictions_BODY`（ボディ8KB制限）はファイルアップロードと両立しないため、`lib/waf-stack.ts` でCountに落としています。
+
 ### 9. Main Stackのデプロイ
 
 ```bash
