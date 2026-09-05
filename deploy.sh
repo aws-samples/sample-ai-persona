@@ -49,6 +49,17 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "\n${BLUE}========================================${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}========================================${NC}"; }
 
+# sedのインプレース編集（GNU sed / BSD sed 両対応）
+# BSD sed（macOS、FreeBSD等）では -i にバックアップ拡張子の引数が必須なため、
+# OSではなくsedの実装を判定して呼び分ける（--versionはGNU sedのみ成功する）
+sed_inplace() {
+  if sed --version > /dev/null 2>&1; then
+    sed -i "$@"
+  else
+    sed -i '' "$@"
+  fi
+}
+
 # ===== 引数パース =====
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -289,9 +300,9 @@ if [[ "${SKIP_MEMORY}" == "false" ]]; then
     log_info "Summary Strategy ID: ${SUMMARY_STRATEGY_ID}"
     log_info "Semantic Strategy ID: ${SEMANTIC_STRATEGY_ID}"
 
-    sed -i "s/agentCoreMemoryId: ''/agentCoreMemoryId: '${MEMORY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-    sed -i "s/summaryMemoryStrategyId: ''/summaryMemoryStrategyId: '${SUMMARY_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-    sed -i "s/semanticMemoryStrategyId: ''/semanticMemoryStrategyId: '${SEMANTIC_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/agentCoreMemoryId: ''/agentCoreMemoryId: '${MEMORY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/summaryMemoryStrategyId: ''/summaryMemoryStrategyId: '${SUMMARY_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/semanticMemoryStrategyId: ''/semanticMemoryStrategyId: '${SEMANTIC_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
     log_info "parameters.ts を更新しました"
   fi
 else
@@ -315,9 +326,9 @@ else
         --query 'memory.strategies[?type==`SEMANTIC`].strategyId' \
         --output text 2>/dev/null || echo "")
 
-      sed -i "s/agentCoreMemoryId: ''/agentCoreMemoryId: '${MEMORY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-      sed -i "s/summaryMemoryStrategyId: ''/summaryMemoryStrategyId: '${SUMMARY_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-      sed -i "s/semanticMemoryStrategyId: ''/semanticMemoryStrategyId: '${SEMANTIC_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      sed_inplace "s/agentCoreMemoryId: ''/agentCoreMemoryId: '${MEMORY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      sed_inplace "s/summaryMemoryStrategyId: ''/summaryMemoryStrategyId: '${SUMMARY_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+      sed_inplace "s/semanticMemoryStrategyId: ''/semanticMemoryStrategyId: '${SEMANTIC_STRATEGY_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
       log_info "既存のMemory設定をparameters.tsに反映しました"
     fi
   fi
@@ -350,9 +361,9 @@ if [[ "${SKIP_COGNITO}" == "false" ]]; then
   log_info "Cognito Client ID: ${COGNITO_CLIENT_ID}"
   log_info "Cognito Domain: ${COGNITO_DOMAIN}"
 
-  sed -i "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-  sed -i "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-  sed -i "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  sed_inplace "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  sed_inplace "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+  sed_inplace "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
   log_info "parameters.ts にCognito設定を反映しました"
 else
   log_info "Cognito認証をスキップします"
@@ -376,9 +387,9 @@ else
       --query "Stacks[0].Outputs[?OutputKey=='UserPoolDomainName'].OutputValue" \
       --output text)
 
-    sed -i "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-    sed -i "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
-    sed -i "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/cognitoUserPoolId: ''/cognitoUserPoolId: '${COGNITO_USER_POOL_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/cognitoUserPoolAppId: ''/cognitoUserPoolAppId: '${COGNITO_CLIENT_ID}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s/cognitoUserPoolDomain: ''/cognitoUserPoolDomain: '${COGNITO_DOMAIN}'/" "${PROJECT_ROOT}/cdk/parameters.ts"
     log_info "既存のCognito設定をparameters.tsに反映しました"
   fi
 fi
@@ -394,7 +405,7 @@ if [[ -z "${DATA_AGENT_ARN}" ]]; then
   if [[ -n "${EXISTING_ARN}" && "${EXISTING_ARN}" != "None" ]]; then
     DATA_AGENT_ARN="${EXISTING_ARN}"
     log_info "既存スタックからデータ分析エージェント設定を引き継ぎ: ${DATA_AGENT_ARN}"
-    sed -i "s|dataAgentRuntimeArn: ''|dataAgentRuntimeArn: '${DATA_AGENT_ARN}'|" "${PROJECT_ROOT}/cdk/parameters.ts"
+    sed_inplace "s|dataAgentRuntimeArn: ''|dataAgentRuntimeArn: '${DATA_AGENT_ARN}'|" "${PROJECT_ROOT}/cdk/parameters.ts"
   fi
 fi
 
