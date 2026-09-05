@@ -412,6 +412,40 @@ class TestServiceFactorySurveyBatchService:
         assert service.bucket_name == "test-bucket"
 
 
+class TestServiceFactoryDatasetAnalysisService:
+    """DatasetAnalysisServiceの取得テスト"""
+
+    def setup_method(self):
+        from src.services.service_factory import ServiceFactory
+
+        ServiceFactory._instance = None
+
+    @patch("src.services.service_factory.config")
+    def test_get_dataset_analysis_service_creates_instance(self, mock_config):
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.S3_BUCKET_NAME = "test-bucket"
+        mock_config.AWS_REGION = "us-east-1"
+        mock_config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES = 4
+
+        factory = ServiceFactory()
+        service = factory.get_dataset_analysis_service()
+        assert service is not None
+
+    @patch("src.services.service_factory.config")
+    def test_get_dataset_analysis_service_singleton(self, mock_config):
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.S3_BUCKET_NAME = "test-bucket"
+        mock_config.AWS_REGION = "us-east-1"
+        mock_config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES = 4
+
+        factory = ServiceFactory()
+        s1 = factory.get_dataset_analysis_service()
+        s2 = factory.get_dataset_analysis_service()
+        assert s1 is s2
+
+
 class TestServiceFactoryResetServices:
     """reset_servicesのテスト"""
 

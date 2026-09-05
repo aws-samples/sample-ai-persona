@@ -22,6 +22,7 @@
 #   --enable-mcp     MCP Gateway（AgentCore Gateway）を有効化
 #   --enable-additional-persona-models  追加ペルソナベースモデル（GPT-5.6 Terra/Luna、
 #                    Gemma 4 31B。Bedrock Mantle経由）の選択を有効化
+#   --disable-dataset-analysis  データセット構造化分析ツール(analyze_dataset)を無効化（既定: 有効）
 ###############################################################################
 set -euo pipefail
 
@@ -36,6 +37,8 @@ DATA_AGENT_ARN=""
 DATA_AGENT_REGION=""
 ENABLE_MCP=false
 ENABLE_ADDITIONAL_PERSONA_MODELS=false
+# データセット構造化分析ツール(analyze_dataset)は既定で有効。--disable-dataset-analysis で無効化。
+ENABLE_DATASET_ANALYSIS=true
 
 # カラー出力
 RED='\033[0;31m'
@@ -73,6 +76,7 @@ while [[ $# -gt 0 ]]; do
     --data-agent-region) DATA_AGENT_REGION="$2"; shift 2 ;;
     --enable-mcp)        ENABLE_MCP=true; shift ;;
     --enable-additional-persona-models) ENABLE_ADDITIONAL_PERSONA_MODELS=true; shift ;;
+    --disable-dataset-analysis) ENABLE_DATASET_ANALYSIS=false; shift ;;
     -h|--help)
       echo "使い方: ./deploy.sh [オプション]"
       echo "  --skip-memory    長期記憶機能をスキップ"
@@ -86,6 +90,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --enable-mcp   MCP Gateway（AgentCore Gateway）を有効化"
       echo "  --enable-additional-persona-models  追加ペルソナベースモデル（GPT-5.6 Terra/Luna、"
       echo "                   Gemma 4 31B。Bedrock Mantle経由）の選択を有効化"
+      echo "  --disable-dataset-analysis  データセット構造化分析ツール(analyze_dataset)を無効化（既定: 有効）"
       exit 0 ;;
     *) log_error "不明なオプション: $1"; exit 1 ;;
   esac
@@ -99,6 +104,7 @@ log_info "AWSアカウント: ${ACCOUNT_ID}"
 log_info "リージョン: ${REGION}"
 log_info "環境名: ${ENV_NAME}"
 log_info "追加ペルソナベースモデル: ${ENABLE_ADDITIONAL_PERSONA_MODELS}"
+log_info "データセット構造化分析ツール: ${ENABLE_DATASET_ANALYSIS}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "${SCRIPT_DIR}/cdk/bin/app.ts" ]]; then
@@ -167,6 +173,7 @@ export interface AppParameter {
   bedrockModelId: string;
   agentModelId: string;
   enableAdditionalPersonaModels?: boolean;
+  enableDatasetAnalysis?: boolean;
   batchInferenceModelId: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
@@ -198,6 +205,7 @@ export const devParameter: AppParameter = {
   bedrockModelId: 'global.anthropic.claude-sonnet-5',
   agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   enableAdditionalPersonaModels: ${ENABLE_ADDITIONAL_PERSONA_MODELS},
+  enableDatasetAnalysis: ${ENABLE_DATASET_ANALYSIS},
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',

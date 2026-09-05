@@ -3,7 +3,6 @@ build_kb_prompt_section / build_dataset_prompt_section 単体テスト
 """
 
 import pytest
-from unittest.mock import Mock
 
 from src.prompts.discussion_interview_prompts import (
     build_kb_prompt_section,
@@ -53,76 +52,85 @@ class TestBuildKbPromptSection:
 
 @pytest.mark.unit
 class TestBuildDatasetPromptSection:
-    """build_dataset_prompt_section のテスト"""
+    """build_dataset_prompt_section のテスト（表示用記述子を受け取る新契約）"""
 
     @pytest.fixture
-    def mock_dataset(self):
-        ds = Mock()
-        ds.id = "ds-001"
-        ds.name = "購買データ"
-        ds.description = "購買履歴データ"
-        ds.s3_path = "s3://bucket/purchases.csv"
-        col1 = Mock()
-        col1.name = "user_id"
-        col2 = Mock()
-        col2.name = "amount"
-        ds.columns = [col1, col2]
-        ds.row_count = 500
-        return ds
+    def descriptor(self):
+        return {
+            "alias": "dataset_1",
+            "name": "購買データ",
+            "description": "購買履歴データ",
+            "row_count": 500,
+            "columns": [
+                {"name": "user_id", "data_type": "string", "description": "顧客ID"},
+                {"name": "amount", "data_type": "integer", "description": "税込金額"},
+            ],
+        }
 
-    def test_basic_dataset_section(self, mock_dataset):
-        """データセット情報がプロンプトに含まれる"""
-        bindings = [{"dataset_id": "ds-001", "binding_keys": {"user_id": "U123"}}]
-        result = build_dataset_prompt_section(bindings, [mock_dataset])
+    def test_basic_dataset_section(self, descriptor):
+        """表示メタデータ（名前・説明・別名・列・行数）がプロンプトに含まれる"""
+        result = build_dataset_prompt_section([descriptor])
 
         assert "購買データ" in result
-        assert "s3://bucket/purchases.csv" in result
-        assert "user_id" in result
-        assert "U123" in result
-        assert "データセットを参照" in result
+        assert "購買履歴データ" in result
+        assert "dataset_1" in result
+        assert "amount" in result
+        assert "analyze_dataset" in result
 
-    def test_empty_binding_keys(self, mock_dataset):
-        """binding_keys空の場合、全行表記"""
-        bindings = [{"dataset_id": "ds-001", "binding_keys": {}}]
-        result = build_dataset_prompt_section(bindings, [mock_dataset])
+    def test_column_type_and_description_shown(self, descriptor):
+        """列の型と説明文がプロンプトに含まれる"""
+        result = build_dataset_prompt_section([descriptor])
+        assert "(integer)" in result
+        assert "税込金額" in result
+        assert "(string)" in result
+        assert "顧客ID" in result
 
-        assert "全行がこのペルソナのデータ" in result
+    def test_string_columns_still_supported(self):
+        """列が名前文字列のリストでも描画できる（後方互換）"""
+        descriptor = {
+            "alias": "dataset_1",
+            "name": "d",
+            "description": "",
+            "row_count": 1,
+            "columns": ["a", "b"],
+        }
+        result = build_dataset_prompt_section([descriptor])
+        assert "a" in result and "b" in result
 
-    def test_empty_bindings_returns_empty(self):
-        """bindingsが空の場合、空文字を返す"""
-        result = build_dataset_prompt_section([], [])
-        assert result == ""
+    def test_does_not_leak_backend_path(self, descriptor):
+        """backend_path（s3_path）はプロンプトへ露出しない"""
+        result = build_dataset_prompt_section([descriptor])
+        assert "s3://" not in result
+        assert "read_csv" not in result
+        assert "CREATE SECRET" not in result
 
-    def test_none_bindings_returns_empty(self):
-        """bindingsがNone相当の空リストで空文字"""
-        result = build_dataset_prompt_section([], [Mock()])
-        assert result == ""
+    def test_does_not_leak_forced_filter_value(self, descriptor):
+        """binding フィルタ値（例: U123）はプロンプトへ露出しない。
 
-    def test_dataset_not_found_in_map(self):
-        """bindingsのdataset_idに対応するデータセットがない場合"""
-        bindings = [{"dataset_id": "nonexistent", "binding_keys": {}}]
-        mock_ds = Mock()
-        mock_ds.id = "other-id"
-        result = build_dataset_prompt_section(bindings, [mock_ds])
-        assert result == ""
+        記述子には forced_filter 値が含まれないため、生成物にも出ない。
+        """
+        result = build_dataset_prompt_section([descriptor])
+        assert "U123" not in result
+        # SQL 断片も無いこと
+        assert "SELECT" not in result
+        assert "WHERE" not in result
 
-    def test_multiple_datasets(self, mock_dataset):
-        """複数データセットが含まれる"""
-        ds2 = Mock()
-        ds2.id = "ds-002"
-        ds2.name = "行動ログ"
-        ds2.description = "行動データ"
-        ds2.s3_path = "s3://bucket/actions.parquet"
-        col = Mock()
-        col.name = "action"
-        ds2.columns = [col]
-        ds2.row_count = 1000
+    def test_empty_datasets_returns_empty(self):
+        """記述子が空の場合、空文字を返す"""
+        assert build_dataset_prompt_section([]) == ""
 
-        bindings = [
-            {"dataset_id": "ds-001", "binding_keys": {"user_id": "U1"}},
-            {"dataset_id": "ds-002", "binding_keys": {"action": "click"}},
-        ]
-        result = build_dataset_prompt_section(bindings, [mock_dataset, ds2])
+    def test_multiple_datasets(self, descriptor):
+        """複数データセットが別名で含まれる"""
+        ds2 = {
+            "alias": "dataset_2",
+            "name": "行動ログ",
+            "description": "行動データ",
+            "row_count": 1000,
+            "columns": ["action"],
+        }
+        result = build_dataset_prompt_section([descriptor, ds2])
 
         assert "購買データ" in result
         assert "行動ログ" in result
+        assert "dataset_1" in result
+        assert "dataset_2" in result

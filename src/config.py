@@ -78,6 +78,16 @@ class Config:
     DATA_AGENT_REGION: str = "ap-northeast-1"
     ENABLE_DATA_AGENT: bool = False
 
+    # データセット構造化分析ツール(analyze_dataset)のグローバルkill switch。
+    # process起動ではなくtool登録・プロンプト付与をこのフラグで制御する。
+    # セッション単位のenable_datasetフラグとANDで評価される。
+    ENABLE_DATASET_ANALYSIS: bool = True
+
+    # analyze_dataset の DuckDB backend が同時実行を許すクエリ数（BoundedSemaphore）。
+    # 各クエリは in-memory DB にデータセットを丸ごと展開するため、ピークメモリは
+    # 同時実行数×データセットサイズに比例する。デプロイ先のメモリに応じて調整する。
+    DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES: int = 4
+
     # ペルソナ生成キャッシュ設定
     PERSONA_CACHE_TTL_SECONDS: int = 14400  # 4 hours
 
@@ -148,6 +158,23 @@ class Config:
             self.ENABLE_DATA_AGENT = True
         elif enable_val in ("false", "0", "no"):
             self.ENABLE_DATA_AGENT = False
+
+        enable_dataset_analysis = os.getenv("ENABLE_DATASET_ANALYSIS", "").lower()
+        if enable_dataset_analysis in ("true", "1", "yes"):
+            self.ENABLE_DATASET_ANALYSIS = True
+        elif enable_dataset_analysis in ("false", "0", "no"):
+            self.ENABLE_DATASET_ANALYSIS = False
+
+        max_concurrent = os.getenv("DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES")
+        if max_concurrent:
+            # 不正値は既定にフォールバックせず即失敗させる（BoundedSemaphore は
+            # 0/負値で ValueError になるため、誤設定を起動時に顕在化させる）。
+            value = int(max_concurrent)
+            if value < 1:
+                raise ValueError(
+                    f"DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES must be >= 1, got {value}"
+                )
+            self.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES = value
 
         # ペルソナ生成キャッシュ設定を環境変数から上書き
         persona_cache_ttl = os.getenv("PERSONA_CACHE_TTL_SECONDS")

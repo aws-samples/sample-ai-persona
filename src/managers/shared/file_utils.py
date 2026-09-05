@@ -79,16 +79,44 @@ def cleanup_temp_files(paths: list[str]) -> None:
             continue  # ベストエフォート削除: ファイル不存在・権限不足は無視
 
 
+def normalize_csv_headers(headers: list[str]) -> list[str]:
+    """CSVヘッダー名を正規化し、クエリ不能な列名なら ValueError を送出する。
+
+    Strips surrounding whitespace to match DuckDB ``read_csv_auto`` (which trims
+    header names). Raises ``ValueError`` when a name is empty/whitespace-only or
+    duplicated after stripping: DuckDB renames such columns (``column1`` /
+    ``name_1``), so the allowlisted / model-facing name would no longer exist in
+    the queryable view and ``analyze_dataset`` would silently fail for that CSV.
+    Callers convert this to a coded ``FILE_CSV_HEADER_INVALID`` error.
+    """
+    normalized = [h.strip() for h in headers]
+    if any(not h for h in normalized):
+        raise ValueError("CSV header contains an empty column name")
+    seen: set[str] = set()
+    dups: list[str] = []
+    for h in normalized:
+        if h in seen and h not in dups:
+            dups.append(h)
+        seen.add(h)
+    if dups:
+        raise ValueError(f"CSV header contains duplicate column names: {dups}")
+    return normalized
+
+
 def analyze_csv_schema(
     csv_bytes: bytes, sample_rows: int = 100
 ) -> tuple[list[DatasetColumn], int]:
-    """CSVバイト列からスキーマ（カラム情報）と行数を解析する。"""
+    """CSVバイト列からスキーマ（カラム情報）と行数を解析する。
+
+    ヘッダー名は正規化（前後空白除去）し、空・重複がある場合は ValueError を送出する。
+    """
     text = csv_bytes.decode("utf-8-sig")
     reader = csv.reader(io.StringIO(text))
 
     headers = next(reader, [])
     if not headers:
         return [], 0
+    headers = normalize_csv_headers(headers)
 
     rows: list[list[str]] = []
     for i, row in enumerate(reader):

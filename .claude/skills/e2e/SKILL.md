@@ -63,11 +63,28 @@ subagent per group concurrently, instead of one agent walking every scenario ser
 
    - **Target env + credentials** (from step 1).
    - **Pin the working directory**: "必ずプロジェクトルート `<absolute-path>` で作業してください（cdで移動しない）".
-   - **A unique playwright-cli session name** so concurrent browsers don't collide:
-     every `playwright-cli` invocation in that agent must use `-s=<batch-name>`
-     (e.g. `-s=persona`, `-s=discussion`, `-s=survey`, `-s=dataset`, `-s=settings`).
-   - **A unique scratch upload dir** under the repo root, e.g.
-     `tmp/e2e_<batch-name>/`, to be created before use and deleted when the batch finishes.
+   - **Full session + output isolation** so concurrent browsers don't collide. A unique
+     `-s=<batch-name>` alone is **not enough**: `playwright-cli` shares one browser-server
+     process and one output directory (`.playwright-cli/`) across the workspace, so a single
+     command that omits the session drops onto the shared *default* session (→ mid-run
+     `about:blank` / forced re-login, one batch's page bleeding into another), and every
+     batch's snapshots/screenshots pile into the same directory where `ls -t` grabs a
+     sibling's file. Instruct each agent to prefix **every** `playwright-cli` invocation
+     (including `open`/`close`/`list`/`snapshot`/`screenshot`/`console`) with, verbatim
+     (the harness resets env between Bash calls, so it must be inline on each call):
+     ```bash
+     PLAYWRIGHT_CLI_SESSION=<batch-name> \
+     PLAYWRIGHT_MCP_OUTPUT_DIR="$PWD/tmp/e2e_<batch-name>/pw-out" \
+     PLAYWRIGHT_MCP_USER_DATA_DIR="$PWD/tmp/e2e_<batch-name>/profile" \
+     playwright-cli <command> ...
+     ```
+     Pick a distinct `<batch-name>` per batch (e.g. `persona`, `discussion`, `survey`,
+     `dataset`, `settings`). Also tell the agent to (a) run `playwright-cli list` after the
+     first `open` and confirm only its own session is present, and (b) reference the exact
+     file path each `snapshot`/`screenshot` prints — **never** `ls -t` a shared dir.
+   - **A unique scratch dir** under the repo root, `tmp/e2e_<batch-name>/`, holding both
+     the per-batch playwright output (`pw-out/`) and browser profile (`profile/`) above,
+     plus any crafted upload files. Create before use and delete when the batch finishes.
    - **Reuse `sample_data/` and `tests/test_file/` for happy-path upload files**
      (CSV sources, PDF, JPEG — see `e2e-test`'s own Test Data section for the mapping).
      Both are read-only and shared safely across concurrent batches, so no need to
