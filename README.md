@@ -100,6 +100,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | 開発者向け | [ローカル開発ガイド](docs/local_development.md) |
 | 共通 | [データ分析エージェント連携ガイド](docs/data_agent_integration.md) |
 | 共通 | [AI ペルソナ MCP Server 設定ガイド](docs/remote_mcp_setup.md) |
+| 共通 | [AWS コスト試算例](docs/cost_estimation.md) |
 
 ## トラブルシューティング
 
