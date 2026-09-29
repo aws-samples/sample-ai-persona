@@ -9,7 +9,9 @@ pre-push-review の「アーキテクチャ違反チェック」は元々LLMが 
 - Router → Manager → Service。Models は全層から参照可。逆方向禁止。
 - Models   : services / managers / routers を import しない
 - Service  : managers / routers を import しない。他の service も不可（`service_factory` は例外）
-- Manager  : routers を import しない。他の manager も不可（`shared/` は可）
+- Manager  : routers を import しない。他の manager も不可（`shared/`・`components/` は可）
+- Component : `src/managers/components/`。複数 Manager が使う共有ワークフロー部品。
+             Manager → Component は可、Component → Manager / Router は不可
 - Shared   : services / routers を import しない
 - Router   : services を直接 import しない
              （例外: テンプレート表示ヘルパー。architecture.md 31行。`_DISPLAY_HELPER_ALLOW`）
@@ -56,7 +58,6 @@ _BASELINE: dict[str, set[str]] = {
     "src/services/agent_service.py": {
         "src.services.data_agent_service",
         "src.services.knowledge_base.kb_tools",
-        "src.services.mcp_server_manager",
         "src.services.memory.session_manager_factory",
     },
 }
@@ -257,9 +258,12 @@ def _violations_for(module_file: Path, layer_dir: Path) -> set[str]:
             if target_pkg == ("web", "routers"):
                 found.add(dotted)
             elif target_pkg == ("src", "managers"):
-                # 他の manager は禁止。shared/ と自ユニットは可。
+                # 他の manager は禁止。shared/・components/ と自ユニットは可。
+                # components/ は複数 Manager が使う共有ワークフロー部品。Manager →
+                # Component の順方向のみ許す。Component → Manager は self_unit=
+                # "components" のため下の判定で依然 flag される（順方向を保つ）。
                 unit = _target_unit(seg, 2)
-                if unit and unit not in {self_unit, "shared"}:
+                if unit and unit not in {self_unit, "shared", "components"}:
                     found.add(dotted)
 
         elif layer_dir == _SHARED_DIR:
@@ -369,6 +373,25 @@ class TestCheckerItself:
             "from .shared.file_utils import compress_image\n",
         )
         assert not _violations_for(f, _MANAGERS_DIR)
+
+    def test_manager_importing_component_is_allowed(self, tmp_path: Path) -> None:
+        # Manager → Component は順方向。合法。
+        f = self._write(
+            tmp_path,
+            "src/managers/foo.py",
+            "from .components.persona_agent_integration import PersonaAgentIntegration\n",
+        )
+        assert not _violations_for(f, _MANAGERS_DIR)
+
+    def test_component_importing_manager_is_flagged(self, tmp_path: Path) -> None:
+        # Component → Manager は逆方向。components/ 配下は managers 層に分類され
+        # self_unit="components" なので、他 manager ユニットへの import は flag される。
+        f = self._write(
+            tmp_path,
+            "src/managers/components/foo.py",
+            "from ..persona_manager import PersonaManager\n",
+        )
+        assert _violations_for(f, _MANAGERS_DIR)
 
     def test_manager_importing_service_is_allowed(self, tmp_path: Path) -> None:
         # manager → service は順方向。合法。

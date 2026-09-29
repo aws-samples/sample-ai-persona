@@ -79,6 +79,7 @@ export class AIPersonaStack extends Stack {
       batchInferenceModelId: parameter.batchInferenceModelId,
       surveyS3Prefix: parameter.surveyS3Prefix,
       batchInferenceS3Prefix: parameter.batchInferenceS3Prefix,
+      enableDatasetAnalysis: parameter.enableDatasetAnalysis ?? true,
       dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
       dataAgentRegion: parameter.dataAgentRegion,
       imageTag,

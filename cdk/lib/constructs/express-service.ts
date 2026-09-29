@@ -28,6 +28,7 @@ export interface ExpressServiceProps {
   imageTag?: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
+  enableDatasetAnalysis?: boolean;
   dataAgentRuntimeArn?: string;
   dataAgentRegion?: string;
 }
@@ -50,6 +51,9 @@ export class ExpressService extends Construct {
       uploadBucket, bedrockBatchRoleArn, batchInferenceModelId,
       surveyS3Prefix = 'survey-results/',
       batchInferenceS3Prefix = 'batch-inference/',
+      // optional のため未指定時は既定 true。String(undefined) で "undefined" が
+      // ECS に渡るのを防ぐため、ここで boolean に確定させる。
+      enableDatasetAnalysis = true,
     } = props;
 
     // Task Execution Role
@@ -137,6 +141,7 @@ export class ExpressService extends Construct {
       { name: 'BEDROCK_MODEL_ID', value: bedrockModelId },
       { name: 'AGENT_MODEL_ID', value: agentModelId },
       { name: 'ENABLE_ADDITIONAL_PERSONA_MODELS', value: String(enableAdditionalPersonaModels) },
+      { name: 'ENABLE_DATASET_ANALYSIS', value: String(enableDatasetAnalysis) },
       { name: 'ENABLE_LONG_TERM_MEMORY', value: agentCoreMemoryId ? 'true' : 'false' },
       { name: 'S3_BUCKET_NAME', value: uploadBucket.bucketName },
       { name: 'BEDROCK_BATCH_ROLE_ARN', value: bedrockBatchRoleArn },

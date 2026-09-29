@@ -14,18 +14,29 @@
 # 1. 依存関係のインストール
 uv sync
 
-# 2. 環境変数を設定（.env.exampleを参考に実際の値を記入）
+# 2. DuckDB httpfs 拡張の事前インストール（S3 上のデータを扱う場合のみ必須）
+#    アプリは実行時に拡張をダウンロードしない（閉域対応の前提）。コンテナは
+#    ビルド時に組込済みだが、ローカルでは以下を一度だけ実行して事前導入する。
+uv run python -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL httpfs'); c.close()"
+
+# 3. 環境変数を設定（.env.exampleを参考に実際の値を記入）
 cp .env.example .env
 # .env を編集してAWSリソース名等を設定
 
-# 3. Tailwind CSSビルド
+# 4. Tailwind CSSビルド
 ./scripts/build-css.sh --minify
 
-# 4. アプリケーション起動
+# 5. アプリケーション起動
 uv run python run_htmx.py
 ```
 
 ブラウザで http://localhost:8000 にアクセス
+
+> **httpfs について:** マスアンケート（S3 上の Parquet）や S3 データセットの
+> `analyze_dataset` は DuckDB の httpfs 拡張を使います。手順 2 を実行していないと
+> 起動後の S3 アクセス時に `LOAD httpfs` が失敗します。ローカルの CSV 分析だけを
+> 試す場合は httpfs は不要です（S3 パスのときだけ LOAD します）。拡張は
+> `~/.duckdb/extensions/` に保存され、一度導入すれば再実行は不要です。
 
 ## テスト
 

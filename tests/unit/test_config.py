@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest  # noqa: F401 - used by test_invalid_value_raises
+
 
 class TestConfigDefaults:
     """Config デフォルト値のテスト"""
@@ -277,6 +279,31 @@ class TestConfigMemorySettings:
         with patch.dict(os.environ, {"MEMORY_MAX_RESULTS": "10"}):
             config = Config()
             assert config.MEMORY_MAX_RESULTS == 10
+
+
+class TestDatasetAnalysisConcurrency:
+    """analyze_dataset の同時実行数設定のテスト"""
+
+    def test_default_is_four(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {}, clear=True):
+            config = Config()
+            assert config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES == 4
+
+    def test_from_env(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES": "8"}):
+            config = Config()
+            assert config.DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES == 8
+
+    def test_invalid_value_raises(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES": "0"}):
+            with pytest.raises(ValueError):
+                Config()
 
 
 class TestGlobalConfigInstance:

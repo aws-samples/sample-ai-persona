@@ -6,7 +6,8 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 
 - Models層 (src/models/): 標準ライブラリのみインポート可。Service/Manager/Routerをインポートしてはならない
 - Service層 (src/services/): Manager層・Router層をインポートしてはならない。他のServiceをインポートしてはならない（Service間のオーケストレーションはManager層が担う。service_factory.pyは例外）
-- Manager層 (src/managers/): Router層をインポートしてはならない。他のManagerをインポートしてはならない
+- Manager層 (src/managers/): Router層をインポートしてはならない。他のManagerをインポートしてはならない（共有ロジックは`shared/`または`components/`に配置）
+- Component層 (src/managers/components/): 複数Managerが共有するビジネスワークフローの部品。Manager → Component は可。Router・Managerをインポートしてはならない（Component → Managerは逆方向）。Service・Shared・Models・Prompts・configは参照可
 - Shared層 (src/managers/shared/): Manager層の共有ユーティリティ。Service層・Router層からのインポート禁止。他のManagerからインポート可
 - Router層 (web/routers/): Service層を直接使ってはならない（Manager経由で操作する）
 
@@ -41,7 +42,17 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
   - 状態遷移判定（ステータス変更可否、continue/stop判定）
   - データ集約・変換（複数Serviceの結果を組み合わせた応答構築）
 - HTTP通信・ファイルI/O・データフレーム操作・boto3直接呼び出しを書いてはならない（Service層に委譲）
-- 他のManagerをインポートしてはならない（共有ロジックは`shared/`に配置）
+- 他のManagerをインポートしてはならない（共有ロジックは`shared/`または`components/`に配置）
+
+### Component層 (src/managers/components/)
+**責務:** 複数のManagerが共有する**ビジネスワークフロー**の部品
+
+- shared/（純粋ヘルパー）と異なり、判断ロジック（有効判定・fail-closed除外・ワークフロー制御）を持ってよい
+- なぜshared/でなくcomponents/か: 共有対象がビジネスルールを含むためshared/には置けず、かつManager同士はインポート禁止。そこでManager → Component → Serviceの順方向を持つManager層の部品として切り出す
+- Serviceはコンストラクタ注入で受け取る（`service_factory`を直接参照しない。テスト時はモック注入）
+- Router・他Managerをインポートしてはならない（Component → Managerは逆方向）。Service・Shared・Models・Prompts・configは参照可
+- 使いどころ: 同一のビジネスワークフローが2つ以上のManagerにコピーされる場合のみ。単一Managerでしか使わないロジックはそのManagerに置く
+- 例: `PersonaAgentIntegration`（KB/データセット分析ツールとpromptセクションの組み立てを discussion / interview Manager で共有）
 
 ### Shared層 (src/managers/shared/)
 **責務:** 複数のManagerが共通で使うユーティリティ関数

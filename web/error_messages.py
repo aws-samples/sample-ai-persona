@@ -78,6 +78,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.FILE_MIME_UNSUPPORTED: "サポートされていないファイル種別です。",
     ErrorCode.FILE_EMPTY: "ファイルが空です。",
+    ErrorCode.FILE_CSV_HEADER_INVALID: (
+        "CSVのヘッダー行に問題があります。列名が空、または重複しています。"
+        "各列に一意で空でない名前を付けてください。"
+    ),
     ErrorCode.INTERVIEW_FILE_CONTENT_TOO_SHORT: (
         "ファイル内容が短すぎます。"
         "インタビューなどの内容を含むテキストファイルをアップロードしてください。"

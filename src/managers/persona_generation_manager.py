@@ -4,7 +4,7 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from cachetools import TTLCache  # type: ignore[import-untyped]
 
@@ -38,6 +38,9 @@ from .shared.file_utils import (
     infer_behavior_data_type,
     save_temp_csv,
 )
+
+if TYPE_CHECKING:
+    from ..services.dataset_analysis.service import DatasetAnalysisService
 
 
 logger = logging.getLogger(__name__)
@@ -91,10 +94,14 @@ class PersonaGenerationManager:
         self,
         agent_service: AgentService | None = None,
         database_service: DatabaseService | None = None,
+        dataset_analysis_service: "DatasetAnalysisService | None" = None,
     ):
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
+        )
+        self.dataset_analysis_service = (
+            dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
         self._personas_cache: TTLCache = TTLCache(
             maxsize=1000, ttl=config.PERSONA_CACHE_TTL_SECONDS
@@ -244,18 +251,30 @@ class PersonaGenerationManager:
             f"ファイルベースペルソナ生成開始 (data_type={data_type}, count={persona_count}, files={len(file_contents)})"
         )
 
-        combined_text, csv_temp_paths = self._extract_file_texts(file_contents)
-        use_mcp = len(csv_temp_paths) > 0
+        # 抽出は自前の finally で temp を掃除する（失敗時に呼び出し側 finally へ到達
+        # しないため）。抽出成功後は下の try/finally が temp の唯一の所有者になる。
+        combined_text, source_descriptors = self._extract_file_texts(file_contents)
+        csv_temp_paths = [d["path"] for d in source_descriptors]
 
-        system_prompt = self._build_system_prompt(
-            data_type, data_description, custom_prompt
-        )
-        tools = self._determine_tools(data_type, use_mcp, event_queue=None)
-        user_prompt = self._build_user_prompt(
-            combined_text, persona_count, csv_temp_paths
-        )
-
+        # tool 構築（build_source_tools）が失敗しても temp を残さないため、抽出直後から
+        # 全処理を try/finally で囲む（round 11）。
         try:
+            # global kill switch と CSV の有無の AND で有効判定する。
+            enable_dataset_analysis = (
+                bool(source_descriptors) and config.ENABLE_DATASET_ANALYSIS
+            )
+            active_descriptors = source_descriptors if enable_dataset_analysis else []
+
+            system_prompt = self._build_system_prompt(
+                data_type, data_description, custom_prompt
+            )
+            tools = self._determine_tools(
+                data_type, active_descriptors, event_queue=None
+            )
+            user_prompt = self._build_user_prompt(
+                combined_text, persona_count, active_descriptors or None
+            )
+
             agent = self.agent_service.create_generation_agent(
                 system_prompt=system_prompt,
                 tools=tools if tools else None,
@@ -278,6 +297,8 @@ class PersonaGenerationManager:
                 f"({type(e).__name__})",
                 code=ErrorCode.GENERATION_OPERATION_FAILED,
             ) from e
+        except PersonaGenerationManagerError:
+            raise
         except Exception as e:
             raise PersonaGenerationManagerError(
                 f"file-based persona generation failed ({type(e).__name__})",
@@ -320,7 +341,7 @@ class PersonaGenerationManager:
             data_text += DWH_AUTO_LINK_INSTRUCTIONS
 
         system_prompt = self._build_system_prompt("dwh", analysis_angle, custom_prompt)
-        tools = self._determine_tools("dwh", False, event_queue=event_queue)
+        tools = self._determine_tools("dwh", [], event_queue=event_queue)
         user_prompt = self._build_user_prompt(data_text, persona_count)
 
         try:
@@ -401,25 +422,40 @@ class PersonaGenerationManager:
         self,
         data_text: str,
         persona_count: int,
-        csv_paths: list[str] | None = None,
+        source_descriptors: list[dict[str, Any]] | None = None,
     ) -> str:
         """ユーザー向けプロンプト構築"""
         prompt = USER_PROMPT_TEMPLATE.format(
             persona_count=persona_count, data_text=data_text
         )
 
-        if csv_paths:
+        if source_descriptors:
+            # LLM へは別名（dataset_id）と列名＋推定型のみ提示する（path・SQLは出さない）。
             csv_info = "\n".join(
-                f"- `{p}` （queryツールで `SELECT * FROM read_csv('{p}')` で参照可能）"
-                for p in csv_paths
+                f'- dataset_id "{d["alias"]}"（列: {self._format_source_columns(d)}）'
+                for d in source_descriptors
             )
             prompt += CSV_ANALYSIS_INSTRUCTIONS.format(csv_info=csv_info)
 
         prompt += f"\n{persona_count}個のペルソナを生成してください。"
         return prompt
 
+    @staticmethod
+    def _format_source_columns(descriptor: dict[str, Any]) -> str:
+        """source 記述子の列を `name (type)` 形式で列挙する（型が無ければ名前のみ）。"""
+        detail = descriptor.get("columns_detail")
+        if detail:
+            return ", ".join(
+                f"{c['name']} ({c['data_type']})" if c.get("data_type") else c["name"]
+                for c in detail
+            )
+        return ", ".join(descriptor.get("columns", []))
+
     def _determine_tools(
-        self, data_type: str, use_mcp: bool, event_queue: Any
+        self,
+        data_type: str,
+        source_descriptors: list[dict[str, Any]],
+        event_queue: Any,
     ) -> list[Any]:
         """生成に使用するツールリストを決定する"""
 
@@ -440,31 +476,67 @@ class PersonaGenerationManager:
             )
             tools.append(data_agent_tool)
 
-        if use_mcp:
-            mcp_tools = self.agent_service.get_mcp_tools()
-            if mcp_tools:
-                tools.extend(mcp_tools)
+        if source_descriptors:
+            tools.extend(
+                self.dataset_analysis_service.build_source_tools(source_descriptors)
+            )
 
         return tools
 
     def _extract_file_texts(
         self, file_contents: list[tuple[bytes, str]]
-    ) -> tuple[str, list[str]]:
-        """ファイルからテキスト抽出。Returns: (combined_text, csv_temp_paths)"""
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """ファイルからテキスト抽出。Returns: (combined_text, source_descriptors)
+
+        source_descriptors は CSV ごとの {"alias", "path", "columns"}。alias は
+        Manager がここで採番し（source_1, source_2, ...）、Service へ渡す唯一の識別子
+        とする（元ファイル名・path は LLM へ出さない）。
+        """
         texts: list[str] = []
         csv_temp_paths: list[str] = []
+        source_descriptors: list[dict[str, Any]] = []
 
         # 検証で raise する場合、ここで作成した一時CSVは呼び出し側の finally に
         # 到達しないため、送出前に自前でクリーンアップする。
         try:
+            source_index = 0
             for content, filename in file_contents:
                 if filename.lower().endswith(".csv"):
+                    source_index += 1
+                    alias = f"source_{source_index}"
                     csv_path = save_temp_csv(content)
                     csv_temp_paths.append(csv_path)
+                    # 列推論は UTF-8 正規化済みの temp から行う（Shift_JIS/EUC-JP 対応）。
+                    with open(csv_path, "rb") as f:
+                        utf8_bytes = f.read()
+                    try:
+                        columns, _ = analyze_csv_schema(utf8_bytes)
+                    except ValueError as e:
+                        # 空/重複ヘッダは analyze_dataset のクエリ列と乖離するため弾く。
+                        raise PersonaGenerationManagerError(
+                            f"invalid CSV header in {filename!r}: {e}",
+                            code=ErrorCode.FILE_CSV_HEADER_INVALID,
+                        ) from e
+                    source_descriptors.append(
+                        {
+                            "alias": alias,
+                            "path": csv_path,
+                            # allowlist 用は列名のみ（build_source_tools が使う）。
+                            "columns": [c.name for c in columns],
+                            # プロンプト表示用は名前＋推定型（CSVには説明文が無いため型のみ）。
+                            "columns_detail": [
+                                {"name": c.name, "data_type": c.data_type}
+                                for c in columns
+                            ],
+                        }
+                    )
                     preview = get_csv_preview(content, max_lines=20)
+                    # 見出しは「先頭20行プレビュー」に留める。全データへの
+                    # analyze_dataset アクセス可否は有効判定に同期する
+                    # CSV_ANALYSIS_INSTRUCTIONS（_build_user_prompt）でのみ主張し、
+                    # 無効時に存在しないツールを示唆しない。
                     texts.append(
-                        f"--- {filename} (CSV, 全データは分析ツールで参照可能) ---\n"
-                        f"{preview}"
+                        f"--- {alias} (CSV, 先頭20行プレビュー) ---\n{preview}"
                     )
                 else:
                     # 内容不足は抽出後にしか判定できない（PDF/DOCXはバイト列時点で
@@ -488,11 +560,15 @@ class PersonaGenerationManager:
                     f"{config.PERSONA_SOURCE_MAX_CHARS}",
                     context={"max_chars": config.PERSONA_SOURCE_MAX_CHARS},
                 )
-        except PersonaGenerationManagerError:
+        except Exception:
+            # PersonaGenerationManagerError に加え、analyze_csv_schema /
+            # get_csv_preview が投げる _csv.Error・UnicodeDecodeError 等の
+            # 想定外例外でも temp CSV を残さない（呼び出し側 finally は
+            # 戻り値未確定のため到達しない）。
             cleanup_temp_files(csv_temp_paths)
             raise
 
-        return combined_text, csv_temp_paths
+        return combined_text, source_descriptors
 
     def _build_generation_context(
         self,

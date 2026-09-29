@@ -11,7 +11,6 @@ class TestSettingsPage:
         mock_dm.get_datasets.return_value = []
         mock_get_dm.return_value = mock_dm
         mock_sm = Mock()
-        mock_sm.is_mcp_running.return_value = False
         mock_sm.get_all_knowledge_bases.return_value = []
         mock_get_sm.return_value = mock_sm
         resp = client.get("/settings/")
