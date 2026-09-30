@@ -10,7 +10,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from src.config import config
@@ -25,9 +30,10 @@ from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationCapacityError,
     PersonaGenerationManagerError,
 )
-from src.models.errors import ErrorCode
+from src.models.errors import ErrorCode, ErrorKind
 from src.models.persona import Persona
 from web.error_messages import (
+    error_kind_of,
     field_of,
     is_correctable,
     is_transient,
@@ -54,11 +60,13 @@ templates.env.filters["markdown"] = render_markdown
 # （アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
 from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
+from ._persona_avatar import persona_avatar_url  # noqa: E402
 
 templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
 templates.env.globals["gender_label"] = gender_label
 templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+templates.env.globals["persona_avatar_url"] = persona_avatar_url
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
@@ -774,6 +782,7 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
                 "request": request,
                 "title": f"ペルソナ: {persona.name}",
                 "persona": persona,
+                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
             },
         )
     except HTTPException:
@@ -827,6 +836,104 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
         return toast_response(
             e, default="ペルソナの削除中にエラーが発生しました", status_code=500
         )
+
+
+# =========================================================================
+# アイコン画像
+# =========================================================================
+
+
+def _render_avatar_editor(
+    request: Request, persona: Persona, message: str | None = None
+) -> Any:
+    """アイコン編集パーシャルを返す。message があれば成功トーストも出す。"""
+    headers = (
+        {
+            "HX-Trigger": json.dumps(
+                {"showToast": {"message": message, "type": "success"}}
+            )
+        }
+        if message
+        else None
+    )
+    return templates.TemplateResponse(
+        request,
+        "persona/partials/avatar_editor.html",
+        {
+            "request": request,
+            "persona": persona,
+            "avatar_upload_enabled": get_persona_manager().avatar_upload_enabled(),
+        },
+        headers=headers,
+    )
+
+
+@router.post("/{persona_id}/avatar", response_class=HTMLResponse)
+async def upload_persona_avatar(
+    request: Request, persona_id: str, file: UploadFile = File(...)
+) -> Any:
+    """アイコン画像をアップロードして差し替える（htmx対応）"""
+    try:
+        content = await file.read()
+        loop = asyncio.get_running_loop()
+        persona = await loop.run_in_executor(
+            executor, get_persona_manager().set_avatar, persona_id, content
+        )
+        return _render_avatar_editor(request, persona, "アイコン画像を変更しました")
+    except PersonaManagerError as e:
+        logger.warning("Persona avatar upload rejected", exc_info=True)
+        if is_correctable(e):
+            # 入力を直せば解決するエラーはフォーム内の専用領域だけ差し替える
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_inline.html",
+                    {"request": request, "error": user_message_for(e)},
+                    status_code=400,
+                    headers={"HX-Retarget": "find .avatar-form-error"},
+                )
+            )
+        return toast_response(e)
+    except Exception as e:
+        logger.error("Persona avatar upload error", exc_info=True)
+        return toast_response(
+            e, default="アイコン画像の変更中にエラーが発生しました", status_code=500
+        )
+
+
+@router.delete("/{persona_id}/avatar", response_class=HTMLResponse)
+async def delete_persona_avatar(request: Request, persona_id: str) -> Any:
+    """アイコン画像を削除して自動生成アバターに戻す（htmx対応）"""
+    try:
+        loop = asyncio.get_running_loop()
+        persona = await loop.run_in_executor(
+            executor, get_persona_manager().delete_avatar, persona_id
+        )
+        return _render_avatar_editor(request, persona, "自動アバターに戻しました")
+    except Exception as e:
+        logger.error("Persona avatar delete error", exc_info=True)
+        return toast_response(
+            e, default="アイコン画像の削除中にエラーが発生しました", status_code=500
+        )
+
+
+@router.get("/{persona_id}/avatar")
+async def get_persona_avatar(persona_id: str) -> Any:
+    """アイコン画像の署名付きURLへリダイレクトする"""
+    try:
+        loop = asyncio.get_running_loop()
+        url = await loop.run_in_executor(
+            executor, get_persona_manager().get_avatar_url, persona_id
+        )
+    except Exception as e:
+        if error_kind_of(e) is ErrorKind.NOT_FOUND:
+            return Response(status_code=404)
+        logger.error("Persona avatar url error", exc_info=True)
+        return Response(status_code=500)
+    # 署名付きURLの有効期限より十分短くキャッシュさせる（期限切れURLへの誘導を防ぐ）
+    return RedirectResponse(
+        url, status_code=302, headers={"Cache-Control": "private, max-age=300"}
+    )
 
 
 @router.get("/list/partial", response_class=HTMLResponse)

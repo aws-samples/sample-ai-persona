@@ -1,0 +1,41 @@
+{% from "components/icons.html" import icon_photo %}
+{#
+  ペルソナ詳細ヘッダーのアイコン表示と差し替えUI。
+  .persona-avatar-editor-slot の中身として描画し、アップロード・削除の応答で丸ごと差し替える。
+
+  引数:
+    persona ... 対象ペルソナ
+    avatar_upload_enabled ... 画像の保存先（S3）が設定されているか
+#}
+<div class="flex flex-col items-center gap-1">
+    <div class="persona-detail-avatar shadow-md"
+         data-avatar-seed="{{ persona.id }}"
+         data-avatar-url="{{ persona_avatar_url(persona) }}"
+         data-avatar-name="{{ persona.name }}"
+         data-avatar-size="64"
+         data-avatar-eager></div>
+    {% if avatar_upload_enabled %}
+    <form hx-post="/persona/{{ persona.id }}/avatar"
+          hx-encoding="multipart/form-data"
+          hx-trigger="change"
+          hx-target="closest .persona-avatar-editor-slot"
+          hx-swap="innerHTML"
+          class="flex flex-col items-center gap-0.5">
+        <label class="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 cursor-pointer">
+            {{ icon_photo("w-3.5 h-3.5") }} 画像を変更
+            <input type="file" name="file" accept="image/png,image/jpeg,image/webp" class="sr-only">
+        </label>
+        {% if persona.avatar_path %}
+        <button type="button"
+                hx-delete="/persona/{{ persona.id }}/avatar"
+                hx-confirm="アップロードした画像を削除し、自動アバターに戻しますか？"
+                hx-target="closest .persona-avatar-editor-slot"
+                hx-swap="innerHTML"
+                class="text-xs text-gray-500 hover:text-gray-700 underline">
+            自動アバターに戻す
+        </button>
+        {% endif %}
+        <div class="avatar-form-error w-64 text-left"></div>
+    </form>
+    {% endif %}
+</div>

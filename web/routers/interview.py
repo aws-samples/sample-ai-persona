@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
+# 表示ヘルパー（ビジネスロジックを含まない純粋なURL組み立て）
+from ._persona_avatar import persona_avatar_url  # noqa: E402
+
+templates.env.globals["persona_avatar_url"] = persona_avatar_url
+
 
 def _error_type_for(exc: Exception) -> str:
     """例外を画面表示用の error_type 文字列に変換する。

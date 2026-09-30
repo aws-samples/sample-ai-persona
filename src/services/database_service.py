@@ -446,6 +446,8 @@ class DatabaseService:
             persona_dict["generation_log"] = persona.generation_log
         if persona.generation_context is not None:
             persona_dict["generation_context"] = persona.generation_context
+        if persona.avatar_path is not None:
+            persona_dict["avatar_path"] = persona.avatar_path
 
         # Use boto3 TypeSerializer to convert to DynamoDB format
         serialized = {}
@@ -618,6 +620,7 @@ class DatabaseService:
             tags=deserialized.get("tags", []),
             generation_log=deserialized.get("generation_log"),
             generation_context=deserialized.get("generation_context"),
+            avatar_path=deserialized.get("avatar_path"),
         )
 
     def _deserialize_discussion(self, item: Dict[str, Any]) -> Discussion:

@@ -257,7 +257,7 @@
 
                   // アバター円の中身を生成（DiceBear SVG、無ければ頭文字にフォールバック）
                   function avatarInner(seed, name, color) {
-                      const svg = window.personaAvatarSvg ? window.personaAvatarSvg(seed, 56) : null;
+                      const svg = window.personaAvatarInner ? window.personaAvatarInner(seed, 56) : null;
                       if (svg) {
                           return `<div class='stage-avatar-circle persona-avatar-img'>${svg}</div>`;
                       }
@@ -324,7 +324,7 @@
                       } else {
                           const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
                           const color = personaColors[pInfo.colorIndex % personaColors.length];
-                          const svg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 64) : null;
+                          const svg = window.personaAvatarInner ? window.personaAvatarInner(info.persona_id, 64) : null;
                           avatarHtml = svg
                               ? `<div class='stage-active-avatar persona-avatar-img'>${svg}</div>`
                               : `<div class='stage-active-avatar persona-avatar-${color}'>${safeName[0] || ''}</div>`;
@@ -427,7 +427,7 @@
                       } else {
                           const pInfo = participantMap[info.persona_id] || { name: info.persona_name, colorIndex: 0 };
                           const color = personaColors[pInfo.colorIndex % personaColors.length];
-                          const logAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(info.persona_id, 48) : null;
+                          const logAvatarSvg = window.personaAvatarInner ? window.personaAvatarInner(info.persona_id, 48) : null;
                           const logAvatar = logAvatarSvg
                               ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${logAvatarSvg}</div>`
                               : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;
@@ -519,6 +519,7 @@
                       } else if (data.type === 'participants') {
                           data.personas.forEach((p, idx) => {
                               participantMap[p.id] = { name: p.name, colorIndex: idx };
+                              if (window.registerPersonaAvatarUrl) window.registerPersonaAvatarUrl(p.id, p.avatar_url || '');
                           });
                           // ステージ上部にアバター列を描画
                           renderStageAvatars(data.personas);
@@ -602,7 +603,7 @@
                           } else {
                               const info = participantMap[data.persona_id] || { name: data.persona_name, colorIndex: 0 };
                               const color = personaColors[info.colorIndex % personaColors.length];
-                              const msgAvatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(data.persona_id, 48) : null;
+                              const msgAvatarSvg = window.personaAvatarInner ? window.personaAvatarInner(data.persona_id, 48) : null;
                               const msgAvatar = msgAvatarSvg
                                   ? `<div class='w-12 h-12 rounded-full persona-avatar-img shadow-md'>${msgAvatarSvg}</div>`
                                   : `<div class='w-12 h-12 rounded-full persona-avatar-${color} flex items-center justify-center shadow-md'><span class='text-white font-bold text-lg'>${safeName[0] || ''}</span></div>`;

@@ -67,12 +67,14 @@ function showFlashMessage(message, type = 'info') {
         info: 'bg-blue-50 border-blue-200 text-blue-800'
     };
     
+    // components/icons.html と同じ Heroicons（outline）のパス。成功・エラー表示パーシャルと見た目を揃える
     const icons = {
-        success: '✅',
-        error: '❌',
-        warning: '⚠️',
-        info: 'ℹ️'
+        success: { color: 'text-green-600', d: 'M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+        error: { color: 'text-red-500', d: 'm9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z' },
+        warning: { color: 'text-yellow-600', d: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z' },
+        info: { color: 'text-blue-600', d: 'm11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z' }
     };
+    const icon = icons[type] || icons.info;
     
     const div = document.createElement('div');
     // コンテナは pointer-events-none（下の要素を操作できるように）なので、
@@ -82,17 +84,37 @@ function showFlashMessage(message, type = 'info') {
         `${colors[type]} border rounded-lg p-4 mb-2 fade-in shadow-lg pointer-events-auto`;
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'flex items-center justify-between';
+    wrapper.className = 'flex items-center justify-between gap-3';
+
+    const body = document.createElement('div');
+    body.className = 'flex items-center gap-2';
+
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', `w-5 h-5 shrink-0 ${icon.color}`);
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('d', icon.d);
+    svg.appendChild(path);
 
     const span = document.createElement('span');
-    span.textContent = `${icons[type]} ${message}`;
+    span.textContent = message;
+
+    body.appendChild(svg);
+    body.appendChild(span);
 
     const btn = document.createElement('button');
     btn.className = 'text-gray-500 hover:text-gray-700';
     btn.textContent = '×';
     btn.addEventListener('click', () => div.remove());
 
-    wrapper.appendChild(span);
+    wrapper.appendChild(body);
     wrapper.appendChild(btn);
     div.appendChild(wrapper);
     
@@ -233,9 +255,67 @@ function personaAvatarSvg(seed, size) {
 }
 window.personaAvatarSvg = personaAvatarSvg;
 
+// アップロード済みアイコン画像の URL（ペルソナID → URL）。
+// サーバーが data-avatar-url を出力した要素から集める。メッセージ行など
+// ペルソナ情報を持たない要素も、同じページで登録された URL を引ける。
+const _personaAvatarUrls = {};
+
 /**
- * 単一アバター枠を描画する。DiceBear が使えれば SVG、無ければ頭文字+カラー円。
- * el: data-avatar-seed / data-avatar-name / data-avatar-color を持つ要素。
+ * ペルソナのアイコン画像 URL を登録する。空文字は「画像なし（自動アバター）」として登録を消す。
+ * 同一オリジンの相対パスのみ受け付ける（サーバー生成の /persona/{id}/avatar を想定）。
+ */
+function registerPersonaAvatarUrl(seed, url) {
+    const key = String(seed || '');
+    if (!key) return;
+    if (url && url.charAt(0) === '/' && url.charAt(1) !== '/') {
+        _personaAvatarUrls[key] = url;
+    } else {
+        delete _personaAvatarUrls[key];
+    }
+}
+window.registerPersonaAvatarUrl = registerPersonaAvatarUrl;
+
+function _escapeAttr(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * アバター枠の中身（HTML文字列）を返す。
+ * アイコン画像が登録されていれば <img>、無ければ DiceBear SVG、どちらも無ければ null。
+ * <img> の読み込み失敗時は下の error リスナーが DiceBear に差し戻す。
+ */
+function personaAvatarInner(seed, size) {
+    const url = _personaAvatarUrls[String(seed || '')];
+    if (url) {
+        return `<img src="${_escapeAttr(url)}" alt="" loading="lazy" decoding="async"`
+            + ` class="persona-avatar-photo" data-avatar-fallback-seed="${_escapeAttr(seed)}"`
+            + ` data-avatar-fallback-size="${_escapeAttr(size || 64)}">`;
+    }
+    return personaAvatarSvg(seed, size);
+}
+window.personaAvatarInner = personaAvatarInner;
+
+// アイコン画像の読み込み失敗（削除済み・期限切れ等）は DiceBear に差し戻す。
+// error はバブリングしないためキャプチャで受ける。
+document.addEventListener('error', function(evt) {
+    const img = evt.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains('persona-avatar-photo')) return;
+    const seed = img.dataset.avatarFallbackSeed || '';
+    const size = parseInt(img.dataset.avatarFallbackSize || '64', 10);
+    registerPersonaAvatarUrl(seed, '');
+    const svg = personaAvatarSvg(seed, size);
+    if (svg) {
+        img.outerHTML = svg; // personaAvatarSvg 内で DOMPurify 済み
+    } else {
+        img.remove();
+    }
+}, true);
+
+/**
+ * 単一アバター枠を描画する。アイコン画像があれば画像、無ければ DiceBear SVG、
+ * どちらも使えなければ頭文字+カラー円。
+ * el: data-avatar-seed / data-avatar-name / data-avatar-color（任意で data-avatar-url）を持つ要素。
  */
 function fillPersonaAvatar(el) {
     if (!el || el.dataset.avatarFilled) return;
@@ -243,9 +323,9 @@ function fillPersonaAvatar(el) {
     const size = parseInt(el.dataset.avatarSize || '48', 10);
     // 装飾画像。名前は隣のテキストで読み上げられるため、スクリーンリーダーからは隠す
     el.setAttribute('aria-hidden', 'true');
-    const svg = personaAvatarSvg(seed, size);
-    if (svg) {
-        el.innerHTML = svg; // personaAvatarSvg 内で DOMPurify 済み
+    const inner = personaAvatarInner(seed, size);
+    if (inner) {
+        el.innerHTML = inner; // <img> は属性をエスケープ済み、SVG は DOMPurify 済み
         el.classList.add('persona-avatar-img');
     } else {
         // フォールバック: 頭文字 + 既存カラークラス
@@ -281,6 +361,9 @@ function getAvatarObserver() {
  */
 function renderPersonaAvatars(root) {
     const scope = root || document;
+    // 描画より先に、スコープ内の画像 URL を登録する（同じペルソナのメッセージ行等で引けるように）
+    const withUrl = scope.querySelectorAll ? scope.querySelectorAll('[data-avatar-seed][data-avatar-url]') : [];
+    withUrl.forEach(el => registerPersonaAvatarUrl(el.dataset.avatarSeed, el.dataset.avatarUrl));
     const els = scope.querySelectorAll('[data-avatar-seed]:not([data-avatar-filled])');
     const obs = getAvatarObserver();
     els.forEach(el => {

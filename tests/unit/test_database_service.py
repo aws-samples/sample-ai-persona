@@ -654,6 +654,52 @@ class TestDatabaseServiceSerialization:
         assert deserialized.tags == ["premium", "early-adopter"]
 
     @patch("boto3.client")
+    def test_round_trip_preserves_every_persona_field(self, mock_boto3_client):
+        """Persona の全フィールドが DynamoDB 往復で失われないこと。
+
+        シリアライズはフィールドを明示列挙しているため、モデルに項目を足しても
+        ここを更新し忘れると保存されない（avatar_path で発生）。全項目に値を
+        入れた dataclass の等価比較で、列挙漏れを検出する。
+        """
+        from dataclasses import fields
+
+        from src.models.persona import Persona
+
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        original = Persona(
+            id="p1",
+            name="n",
+            age=40,
+            occupation="o",
+            background="b",
+            values=["v"],
+            pain_points=["p"],
+            goals=["g"],
+            created_at=datetime(2024, 1, 1, 12, 0, 0),
+            updated_at=datetime(2024, 1, 2, 12, 0, 0),
+            gender="female",
+            country="JP",
+            city="Tokyo",
+            tags=["t"],
+            generation_log=[{"type": "text", "content": "c"}],
+            generation_context={"source": "file"},
+            avatar_path="s3://bucket/persona_avatars/p1/x.webp",
+        )
+        unset = [
+            f.name for f in fields(Persona) if getattr(original, f.name) in (None, [])
+        ]
+        assert unset == [], f"テストデータに値が無いフィールド: {unset}"
+
+        restored = service._deserialize_persona(service._serialize_persona(original))
+
+        assert restored == original
+
+    @patch("boto3.client")
     def test_deserialize_persona_without_demographics(self, mock_boto3_client):
         """新フィールドを持たないDynamoDB itemを後方互換でデシリアライズできる"""
         from boto3.dynamodb.types import TypeSerializer

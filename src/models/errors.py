@@ -285,6 +285,14 @@ class ErrorCode(StrEnum):
     PERSONA_NOT_FOUND = ("persona_not_found", ErrorKind.NOT_FOUND)
     PERSONA_UPDATE_FAILED = ("persona_update_failed", ErrorKind.TRANSIENT)
     PERSONA_OPERATION_FAILED = ("persona_operation_failed", ErrorKind.TRANSIENT)
+    # The uploaded file could not be decoded as an allowed image format.
+    PERSONA_AVATAR_INVALID_IMAGE = (
+        "persona_avatar_invalid_image",
+        ErrorKind.VALIDATION,
+    )
+    PERSONA_AVATAR_NOT_FOUND = ("persona_avatar_not_found", ErrorKind.NOT_FOUND)
+    # Avatar images live in S3 only; the feature is off without a bucket.
+    PERSONA_AVATAR_UNAVAILABLE = ("persona_avatar_unavailable", ErrorKind.CONFIG)
     # The user picked a column that is not in the dataset: correctable input.
     DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
     DATASET_NOT_FOUND = ("dataset_not_found", ErrorKind.NOT_FOUND)
