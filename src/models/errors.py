@@ -290,6 +290,11 @@ class ErrorCode(StrEnum):
         "persona_avatar_invalid_image",
         ErrorKind.VALIDATION,
     )
+    # Decodable but too many pixels: the user can fix it by resizing the image.
+    PERSONA_AVATAR_TOO_MANY_PIXELS = (
+        "persona_avatar_too_many_pixels",
+        ErrorKind.CAPACITY,
+    )
     PERSONA_AVATAR_NOT_FOUND = ("persona_avatar_not_found", ErrorKind.NOT_FOUND)
     # Avatar images live in S3 only; the feature is off without a bucket.
     PERSONA_AVATAR_UNAVAILABLE = ("persona_avatar_unavailable", ErrorKind.CONFIG)

@@ -18,6 +18,7 @@ from .shared.image_normalize import (
     AVATAR_FILE_EXTENSION,
     AVATAR_MIME_TYPE,
     AvatarImageError,
+    AvatarImageTooLargeError,
     normalize_avatar_image,
 )
 
@@ -376,6 +377,14 @@ class PersonaManager:
 
         try:
             normalized = normalize_avatar_image(content)
+        except AvatarImageTooLargeError as e:
+            self.logger.info(f"Rejected avatar image for {persona.id}: {e}")
+            raise PersonaManagerError(
+                "avatar image exceeds the pixel limit",
+                code=ErrorCode.PERSONA_AVATAR_TOO_MANY_PIXELS,
+                # 万画素単位の表示値（例: "1,600"）
+                context={"max_pixels_10k": f"{e.max_pixels // 10_000:,}"},
+            ) from e
         except AvatarImageError as e:
             self.logger.info(f"Rejected avatar image for {persona.id}: {e}")
             raise PersonaManagerError(

@@ -250,3 +250,33 @@ class TestAvatarStorageUnavailable:
         assert manager_without_s3.avatar_upload_enabled() is False
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_UNAVAILABLE):
             manager_without_s3.set_avatar("p1", _png())
+
+
+class TestAvatarPixelLimit:
+    def test_too_many_pixels_is_capacity_error(self, manager, db, s3, monkeypatch):
+        from src.managers.shared import image_normalize
+
+        monkeypatch.setattr(image_normalize, "MAX_AVATAR_SOURCE_PIXELS", 100)
+        db.get_persona.return_value = _persona()
+
+        with raises_code(
+            PersonaManagerError, ErrorCode.PERSONA_AVATAR_TOO_MANY_PIXELS
+        ) as exc_info:
+            manager.set_avatar("p1", _png())
+
+        assert exc_info.value.context["max_pixels_10k"] == "0"
+        s3.upload_file.assert_not_called()
+
+    def test_message_shows_limit(self):
+        from src.managers.persona_manager import PersonaManagerError as Err
+        from web.error_messages import user_message_for
+
+        message = user_message_for(
+            Err(
+                "too big",
+                code=ErrorCode.PERSONA_AVATAR_TOO_MANY_PIXELS,
+                context={"max_pixels_10k": "1,600"},
+            )
+        )
+
+        assert "1,600万画素" in message
