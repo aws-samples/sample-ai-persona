@@ -296,6 +296,8 @@ class ErrorCode(StrEnum):
         ErrorKind.CAPACITY,
     )
     PERSONA_AVATAR_NOT_FOUND = ("persona_avatar_not_found", ErrorKind.NOT_FOUND)
+    # Another upload/revert changed the avatar first: retrying resolves it.
+    PERSONA_AVATAR_CONFLICT = ("persona_avatar_conflict", ErrorKind.TRANSIENT)
     # Avatar images live in S3 only; the feature is off without a bucket.
     PERSONA_AVATAR_UNAVAILABLE = ("persona_avatar_unavailable", ErrorKind.CONFIG)
     # The user picked a column that is not in the dataset: correctable input.

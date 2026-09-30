@@ -224,12 +224,16 @@ class PersonaManager:
             )
 
         try:
-            existing = self.database_service.get_persona(persona_id.strip())
-            success = self.database_service.delete_persona(persona_id.strip())
-            if success:
+            # 削除と同時に削除直前のレコードを受け取り、その時点の画像を消す
+            # （事前に読み取ると、削除までの間に差し替えられた画像が残る）
+            deleted = self.database_service.delete_persona_returning_old(
+                persona_id.strip()
+            )
+            success = deleted is not None
+            if deleted is not None:
                 self.logger.info(f"Persona deleted successfully: {persona_id}")
-                if existing and existing.avatar_path:
-                    self._delete_avatar_object(existing.avatar_path)
+                if deleted.avatar_path:
+                    self._delete_avatar_object(deleted.avatar_path)
             else:
                 self.logger.warning(f"Persona not found for deletion: {persona_id}")
             return success
@@ -350,8 +354,9 @@ class PersonaManager:
         """
         Normalize an uploaded image and set it as the persona's avatar.
 
-        The previous avatar object is deleted after the new one is saved.
-        If the database update fails, the newly uploaded object is removed.
+        The path is written with a compare-and-set condition (see
+        ``_compare_and_set_avatar``). The previous avatar object is deleted only
+        after that write succeeds; if it fails, the newly uploaded object is removed.
 
         Args:
             persona_id: ID of the persona
@@ -408,20 +413,10 @@ class PersonaManager:
 
         updated = persona.with_avatar(new_path)
         try:
-            success = self.database_service.update_persona(updated)
-        except Exception as e:
-            self.logger.error("Failed to save avatar path", exc_info=True)
+            self._compare_and_set_avatar(persona, updated)
+        except PersonaManagerError:
             self._delete_avatar_object(new_path)
-            raise PersonaManagerError(
-                f"avatar path save failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_UPDATE_FAILED,
-            ) from e
-        if not success:
-            self._delete_avatar_object(new_path)
-            raise PersonaManagerError(
-                "database reported update failure",
-                code=ErrorCode.PERSONA_UPDATE_FAILED,
-            )
+            raise
 
         if persona.avatar_path:
             self._delete_avatar_object(persona.avatar_path)
@@ -447,19 +442,7 @@ class PersonaManager:
             return persona
 
         updated = persona.with_avatar(None)
-        try:
-            success = self.database_service.update_persona(updated)
-        except Exception as e:
-            self.logger.error("Failed to clear avatar path", exc_info=True)
-            raise PersonaManagerError(
-                f"avatar path clear failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_UPDATE_FAILED,
-            ) from e
-        if not success:
-            raise PersonaManagerError(
-                "database reported update failure",
-                code=ErrorCode.PERSONA_UPDATE_FAILED,
-            )
+        self._compare_and_set_avatar(persona, updated)
 
         self._delete_avatar_object(persona.avatar_path)
         self.logger.info(f"Avatar removed for persona {persona.id}")
@@ -490,6 +473,49 @@ class PersonaManager:
                 f"avatar url generation failed ({type(e).__name__})",
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             ) from e
+
+    def _compare_and_set_avatar(self, current: Persona, updated: Persona) -> None:
+        """
+        Write ``updated.avatar_path`` only if the persona still exists and its
+        avatar path is still ``current.avatar_path``.
+
+        Image processing takes seconds between reading the persona and writing
+        the path, so a full-record overwrite here would resurrect a persona
+        deleted in the meantime, drop concurrent edits, or orphan the image of
+        a concurrent upload.
+
+        Raises:
+            PersonaManagerError: PERSONA_NOT_FOUND if the persona was deleted,
+                PERSONA_AVATAR_CONFLICT if the avatar changed concurrently,
+                PERSONA_UPDATE_FAILED if the write itself failed
+        """
+        try:
+            written = self.database_service.update_persona_avatar(
+                current.id,
+                new_path=updated.avatar_path,
+                expected_path=current.avatar_path,
+                updated_at=updated.updated_at,
+            )
+        except Exception as e:
+            self.logger.error("Failed to write avatar path", exc_info=True)
+            raise PersonaManagerError(
+                f"avatar path write failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_UPDATE_FAILED,
+            ) from e
+        if written:
+            return
+
+        if self.get_persona(current.id) is None:
+            self.logger.info(f"Persona {current.id} was deleted during avatar update")
+            raise PersonaManagerError(
+                "persona deleted during avatar update",
+                code=ErrorCode.PERSONA_NOT_FOUND,
+            )
+        self.logger.info(f"Avatar of persona {current.id} changed concurrently")
+        raise PersonaManagerError(
+            "avatar path changed concurrently",
+            code=ErrorCode.PERSONA_AVATAR_CONFLICT,
+        )
 
     def _require_avatar_storage(self) -> "S3Service":
         """Return the S3 service, or raise if avatar storage is not configured."""

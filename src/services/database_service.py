@@ -789,35 +789,99 @@ class DatabaseService:
             _update, operation_name=f"update_persona({persona.id})"
         )
 
-    def delete_persona(self, persona_id: str) -> bool:
+    def update_persona_avatar(
+        self,
+        persona_id: str,
+        new_path: Optional[str],
+        expected_path: Optional[str],
+        updated_at: datetime,
+    ) -> bool:
         """
-        Delete a persona from DynamoDB.
+        Set or remove a persona's avatar path with a compare-and-set condition.
+
+        Only ``avatar_path`` and ``updated_at`` are written, so fields changed by
+        other operations are not overwritten. The write succeeds only if the
+        persona still exists and its ``avatar_path`` still equals
+        ``expected_path`` (absent when None).
+
+        Args:
+            persona_id: ID of the persona
+            new_path: Avatar path to set, or None to remove it
+            expected_path: Avatar path read before the change (None if absent)
+            updated_at: New ``updated_at`` value
+
+        Returns:
+            True if written, False if the persona is gone or the path changed
+
+        Raises:
+            DatabaseError: If the operation fails for another reason
+        """
+
+        def _update() -> bool:
+            values: Dict[str, Any] = {
+                ":updated_at": self.serializer.serialize(updated_at.isoformat())
+            }
+            if new_path is None:
+                update_expression = "SET updated_at = :updated_at REMOVE avatar_path"
+            else:
+                update_expression = (
+                    "SET avatar_path = :new_path, updated_at = :updated_at"
+                )
+                values[":new_path"] = self.serializer.serialize(new_path)
+            if expected_path is None:
+                condition = "attribute_exists(id) AND attribute_not_exists(avatar_path)"
+            else:
+                condition = "attribute_exists(id) AND avatar_path = :expected_path"
+                values[":expected_path"] = self.serializer.serialize(expected_path)
+            try:
+                self.dynamodb_client.update_item(
+                    TableName=self.personas_table,
+                    Key={"id": self.serializer.serialize(persona_id)},
+                    UpdateExpression=update_expression,
+                    ConditionExpression=condition,
+                    ExpressionAttributeValues=values,
+                )
+                return True
+            except ClientError as e:
+                if (
+                    e.response.get("Error", {}).get("Code")
+                    == "ConditionalCheckFailedException"
+                ):
+                    return False
+                raise
+
+        return self._execute_with_retry(
+            _update, operation_name=f"update_persona_avatar({persona_id})"
+        )
+
+    def delete_persona_returning_old(self, persona_id: str) -> Optional[Persona]:
+        """
+        Delete a persona and return the item as it was at deletion time.
+
+        The returned item comes from the same atomic write, so its
+        ``avatar_path`` is the one actually removed (no read-then-delete gap).
 
         Args:
             persona_id: ID of persona to delete
 
         Returns:
-            True if deletion was successful, False if persona didn't exist
+            The deleted Persona, or None if it did not exist
 
         Raises:
             DatabaseError: If delete operation fails
         """
 
-        def _delete() -> bool:
-            try:
-                self.dynamodb_client.delete_item(
-                    TableName=self.personas_table,
-                    Key={"id": self.serializer.serialize(persona_id)},
-                )
-                # DynamoDB delete_item succeeds even if item doesn't exist
-                return True
-
-            except ClientError:
-                # Re-raise to be handled by retry logic
-                raise
+        def _delete() -> Optional[Persona]:
+            response = self.dynamodb_client.delete_item(
+                TableName=self.personas_table,
+                Key={"id": self.serializer.serialize(persona_id)},
+                ReturnValues="ALL_OLD",
+            )
+            attributes = response.get("Attributes")
+            return self._deserialize_persona(attributes) if attributes else None
 
         return self._execute_with_retry(
-            _delete, operation_name=f"delete_persona({persona_id})"
+            _delete, operation_name=f"delete_persona_returning_old({persona_id})"
         )
 
     def get_persona(self, persona_id: str) -> Optional[Persona]:

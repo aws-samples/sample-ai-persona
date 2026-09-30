@@ -346,6 +346,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "画像のサイズが大きすぎます。{max_pixels_10k}万画素以下の画像を選択してください"
     ),
     ErrorCode.PERSONA_AVATAR_NOT_FOUND: "アイコン画像が設定されていません",
+    ErrorCode.PERSONA_AVATAR_CONFLICT: (
+        "他の操作と重なったため、アイコン画像を更新できませんでした。もう一度お試しください"
+    ),
     ErrorCode.PERSONA_AVATAR_UNAVAILABLE: (
         "アイコン画像の保存先（S3）が設定されていないため、この機能は利用できません"
     ),
