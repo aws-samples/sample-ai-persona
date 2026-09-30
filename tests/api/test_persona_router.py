@@ -5,6 +5,7 @@
 """
 
 import json
+from dataclasses import replace
 from unittest.mock import Mock, patch
 from io import BytesIO
 
@@ -377,6 +378,53 @@ class TestPersonaUpdateEndpoint:
         )
 
         assert response.status_code == 200
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_update_response_keeps_detail_header(
+        self, mock_get_manager, client, sample_persona
+    ):
+        """保存後にスワップされるヘッダーが詳細ページと同じ内容であること。
+
+        以前は detail_swap.html が独自の古いヘッダーを持っており、保存直後に
+        アイコン画像・アイコン編集UI・生成ログボタンが消えていた。
+        """
+        updated_persona = sample_persona.update(name="更新された名前").with_avatar(
+            "s3://bucket/persona_avatars/p1/abcd-1234.webp"
+        )
+        updated_persona = replace(
+            updated_persona,
+            generation_context={
+                "data_type": "interview",
+                "data_description": "",
+                "custom_prompt": "",
+                "persona_count": 1,
+                "source_files": ["interview.txt"],
+                "generated_at": "2026-09-30T12:00:00",
+            },
+        )
+        mock_manager = Mock()
+        mock_manager.update_persona.return_value = updated_persona
+        mock_manager.avatar_upload_enabled.return_value = True
+        mock_get_manager.return_value = mock_manager
+
+        response = client.put(
+            f"/persona/{sample_persona.id}",
+            data={
+                "name": "更新された名前",
+                "age": 36,
+                "occupation": "シニアマーケター",
+                "background": "更新された背景",
+                "values": "新しい価値観",
+                "pain_points": "新しい課題",
+                "goals": "新しい目標",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "persona-avatar-editor-slot" in response.text
+        assert f"/persona/{sample_persona.id}/avatar?v=abcd-1234" in response.text
+        assert "自動アバターに戻す" in response.text
+        assert "生成ログ・評価" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_update_not_found(self, mock_get_manager, client):

@@ -650,7 +650,10 @@
                           fetch(`/discussion/result-partial/${data.discussion_id}`)
                               .then(response => response.text())
                               .then(html => {
-                                  document.getElementById('discussion-result').innerHTML = html;
+                                  const resultEl = document.getElementById('discussion-result');
+                                  resultEl.innerHTML = html;
+                                  // htmx を介さない挿入のため afterSwap が発火しない。アバターは明示的に描画する
+                                  if (window.renderPersonaAvatars) window.renderPersonaAvatars(resultEl);
                               })
                               .catch(err => {
                                   loading.innerHTML = `

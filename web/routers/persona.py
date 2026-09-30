@@ -710,6 +710,7 @@ async def update_persona(
                     "request": request,
                     "persona": updated_persona,
                     "message": "ペルソナを更新しました",
+                    "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
                 },
             )
         else:
