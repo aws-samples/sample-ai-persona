@@ -803,34 +803,25 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
     """ペルソナ削除処理（htmx対応）"""
     try:
         persona_manager = get_persona_manager()
-        success = persona_manager.delete_persona(persona_id)
+        deleted = persona_manager.delete_persona(persona_id)
 
-        if success:
-            referer = request.headers.get("hx-current-url", "")
-            if f"/persona/{persona_id}" in referer:
-                return HTMLResponse(
-                    content="",
-                    headers={"HX-Redirect": "/persona/management"},
-                )
-            return templates.TemplateResponse(
-                request,
-                "partials/success.html",
-                {"request": request, "message": "ペルソナを削除しました"},
+        # 別タブ等で既に削除済み(False)でも利用者の目的は達成済みなので、成功と同じ遷移にする
+        referer = request.headers.get("hx-current-url", "")
+        if f"/persona/{persona_id}" in referer:
+            return HTMLResponse(
+                content="",
+                headers={"HX-Redirect": "/persona/management"},
             )
-        else:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(
-                            ErrorCode.PERSONA_OPERATION_FAILED
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
+        return templates.TemplateResponse(
+            request,
+            "partials/success.html",
+            {
+                "request": request,
+                "message": "ペルソナを削除しました"
+                if deleted
+                else "このペルソナは既に削除されています",
+            },
+        )
     except Exception as e:
         # 再試行で解決しうるエラーは一覧を消さずトーストで通知する
         logger.error("Persona delete error", exc_info=True)

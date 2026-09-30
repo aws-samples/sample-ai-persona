@@ -465,16 +465,43 @@ class TestPersonaDeleteEndpoint:
         assert "削除しました" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_delete_failure(self, mock_get_manager, client):
-        """削除失敗時にエラーを返すことを確認"""
+    def test_delete_already_deleted_from_list(self, mock_get_manager, client):
+        """一覧から削除済みペルソナを削除しても成功扱いになることを確認（別タブで削除済み等）"""
         mock_manager = Mock()
         mock_manager.delete_persona.return_value = False
         mock_get_manager.return_value = mock_manager
 
-        response = client.delete("/persona/non-existent-id")
+        response = client.delete(
+            "/persona/non-existent-id",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/management",
+            },
+        )
 
-        assert response.status_code == 400
-        assert 'role="alert"' in response.text
+        assert response.status_code == 200
+        assert "HX-Redirect" not in response.headers
+        assert 'role="alert"' not in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_delete_already_deleted_from_detail_redirects(
+        self, mock_get_manager, client
+    ):
+        """詳細画面から削除済みペルソナを削除すると一覧へ遷移することを確認"""
+        mock_manager = Mock()
+        mock_manager.delete_persona.return_value = False
+        mock_get_manager.return_value = mock_manager
+
+        response = client.delete(
+            "/persona/non-existent-id",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/non-existent-id",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["HX-Redirect"] == "/persona/management"
 
 
 class TestPersonaListPartialEndpoint:
