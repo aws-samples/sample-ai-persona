@@ -307,17 +307,29 @@ class TestDeletePersona:
             manager.delete_persona("")
 
     def test_success(self, manager):
-        manager.database_service.delete_persona.return_value = True
+        manager.database_service.delete_persona_returning_old.return_value = (
+            Persona.create_new(
+                name="n",
+                age=30,
+                occupation="o",
+                background="b",
+                values=["v"],
+                pain_points=["p"],
+                goals=["g"],
+            )
+        )
         assert manager.delete_persona("p1") is True
 
     def test_not_found(self, manager):
-        manager.database_service.delete_persona.return_value = False
+        manager.database_service.delete_persona_returning_old.return_value = None
         assert manager.delete_persona("p1") is False
 
     def test_db_error(self, manager):
         from src.services.database_service import DatabaseError
 
-        manager.database_service.delete_persona.side_effect = DatabaseError("fail")
+        manager.database_service.delete_persona_returning_old.side_effect = (
+            DatabaseError("fail")
+        )
         with pytest.raises(PersonaManagerError):
             manager.delete_persona("p1")
 

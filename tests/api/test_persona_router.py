@@ -5,6 +5,7 @@
 """
 
 import json
+from dataclasses import replace
 from unittest.mock import Mock, patch
 from io import BytesIO
 
@@ -379,6 +380,53 @@ class TestPersonaUpdateEndpoint:
         assert response.status_code == 200
 
     @patch("web.routers.persona.get_persona_manager")
+    def test_update_response_keeps_detail_header(
+        self, mock_get_manager, client, sample_persona
+    ):
+        """保存後にスワップされるヘッダーが詳細ページと同じ内容であること。
+
+        以前は detail_swap.html が独自の古いヘッダーを持っており、保存直後に
+        アイコン画像・アイコン編集UI・生成ログボタンが消えていた。
+        """
+        updated_persona = sample_persona.update(name="更新された名前").with_avatar(
+            "s3://bucket/persona_avatars/p1/abcd-1234.webp"
+        )
+        updated_persona = replace(
+            updated_persona,
+            generation_context={
+                "data_type": "interview",
+                "data_description": "",
+                "custom_prompt": "",
+                "persona_count": 1,
+                "source_files": ["interview.txt"],
+                "generated_at": "2026-09-30T12:00:00",
+            },
+        )
+        mock_manager = Mock()
+        mock_manager.update_persona.return_value = updated_persona
+        mock_manager.avatar_upload_enabled.return_value = True
+        mock_get_manager.return_value = mock_manager
+
+        response = client.put(
+            f"/persona/{sample_persona.id}",
+            data={
+                "name": "更新された名前",
+                "age": 36,
+                "occupation": "シニアマーケター",
+                "background": "更新された背景",
+                "values": "新しい価値観",
+                "pain_points": "新しい課題",
+                "goals": "新しい目標",
+            },
+        )
+
+        assert response.status_code == 200
+        assert "persona-avatar-editor-slot" in response.text
+        assert f"/persona/{sample_persona.id}/avatar?v=abcd-1234" in response.text
+        assert "自動アバターに戻す" in response.text
+        assert "生成ログ・評価" in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
     def test_update_not_found(self, mock_get_manager, client):
         """存在しないペルソナの更新で400エラーを返すことを確認"""
         mock_manager = Mock()
@@ -417,16 +465,43 @@ class TestPersonaDeleteEndpoint:
         assert "削除しました" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_delete_failure(self, mock_get_manager, client):
-        """削除失敗時にエラーを返すことを確認"""
+    def test_delete_already_deleted_from_list(self, mock_get_manager, client):
+        """一覧から削除済みペルソナを削除しても成功扱いになることを確認（別タブで削除済み等）"""
         mock_manager = Mock()
         mock_manager.delete_persona.return_value = False
         mock_get_manager.return_value = mock_manager
 
-        response = client.delete("/persona/non-existent-id")
+        response = client.delete(
+            "/persona/non-existent-id",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/management",
+            },
+        )
 
-        assert response.status_code == 400
-        assert 'role="alert"' in response.text
+        assert response.status_code == 200
+        assert "HX-Redirect" not in response.headers
+        assert 'role="alert"' not in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_delete_already_deleted_from_detail_redirects(
+        self, mock_get_manager, client
+    ):
+        """詳細画面から削除済みペルソナを削除すると一覧へ遷移することを確認"""
+        mock_manager = Mock()
+        mock_manager.delete_persona.return_value = False
+        mock_get_manager.return_value = mock_manager
+
+        response = client.delete(
+            "/persona/non-existent-id",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/non-existent-id",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["HX-Redirect"] == "/persona/management"
 
 
 class TestPersonaListPartialEndpoint:
@@ -990,3 +1065,141 @@ class TestFormErrorTargetExists:
             "記憶追加フォーム内に .memory-form-error が無い"
             f"（find 相対セレクタが解決できない）: {offenders}"
         )
+
+    def test_avatar_upload_form_contains_the_error_area(self):
+        import re
+        from pathlib import Path
+
+        templates_dir = Path(__file__).parent.parent.parent / "web" / "templates"
+        forms = [
+            form
+            for path in templates_dir.rglob("*.html")
+            for form in re.findall(
+                r"<form\b.*?</form>", path.read_text(encoding="utf-8"), re.DOTALL
+            )
+            if "/avatar" in form and "hx-post=" in form
+        ]
+        assert forms, "アイコン画像アップロードフォームが見つからない"
+        assert all("avatar-form-error" in form for form in forms), (
+            "アイコン画像フォーム内に .avatar-form-error が無い"
+        )
+
+
+class TestPersonaAvatarEndpoints:
+    """アイコン画像のアップロード・削除・リダイレクト"""
+
+    AVATAR_PATH = "s3://bucket/persona_avatars/p1/abcd-1234.webp"
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_upload_success_returns_editor_with_toast(
+        self, mock_get_manager, client, sample_persona
+    ):
+        updated = sample_persona.with_avatar(self.AVATAR_PATH)
+        mock_manager = Mock()
+        mock_manager.set_avatar.return_value = updated
+        mock_manager.avatar_upload_enabled.return_value = True
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            f"/persona/{sample_persona.id}/avatar",
+            files={"file": ("a.png", BytesIO(b"png-bytes"), "image/png")},
+        )
+
+        assert response.status_code == 200
+        mock_manager.set_avatar.assert_called_once_with(sample_persona.id, b"png-bytes")
+        assert f"/persona/{sample_persona.id}/avatar?v=abcd-1234" in response.text
+        assert "自動アバターに戻す" in response.text
+        trigger = json.loads(response.headers["HX-Trigger"])
+        assert trigger["showToast"]["type"] == "success"
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_upload_invalid_image_retargets_form_error(
+        self, mock_get_manager, client, sample_persona
+    ):
+        mock_manager = Mock()
+        mock_manager.set_avatar.side_effect = PersonaManagerError(
+            "bad image", code=ErrorCode.PERSONA_AVATAR_INVALID_IMAGE
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            f"/persona/{sample_persona.id}/avatar",
+            files={"file": ("a.png", BytesIO(b"x"), "image/png")},
+        )
+
+        assert response.status_code == 400
+        assert response.headers["HX-Retarget"] == "find .avatar-form-error"
+        assert response.headers["X-Render-Response"] == "true"
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_upload_transient_failure_is_toast(
+        self, mock_get_manager, client, sample_persona
+    ):
+        mock_manager = Mock()
+        mock_manager.set_avatar.side_effect = PersonaManagerError(
+            "s3 down", code=ErrorCode.PERSONA_OPERATION_FAILED
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.post(
+            f"/persona/{sample_persona.id}/avatar",
+            files={"file": ("a.png", BytesIO(b"x"), "image/png")},
+        )
+
+        assert response.text == ""
+        assert "showToast" in response.headers["HX-Trigger"]
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_delete_reverts_to_generated_avatar(
+        self, mock_get_manager, client, sample_persona
+    ):
+        mock_manager = Mock()
+        mock_manager.delete_avatar.return_value = sample_persona
+        mock_manager.avatar_upload_enabled.return_value = True
+        mock_get_manager.return_value = mock_manager
+
+        response = client.delete(f"/persona/{sample_persona.id}/avatar")
+
+        assert response.status_code == 200
+        mock_manager.delete_avatar.assert_called_once_with(sample_persona.id)
+        assert "自動アバターに戻す" not in response.text
+        assert "画像を変更" in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_get_redirects_to_presigned_url(self, mock_get_manager, client):
+        mock_manager = Mock()
+        mock_manager.get_avatar_url.return_value = "https://signed.example/a.webp"
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/persona/p1/avatar", follow_redirects=False)
+
+        assert response.status_code == 302
+        assert response.headers["Location"] == "https://signed.example/a.webp"
+        assert response.headers["Cache-Control"] == "private, max-age=300"
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_get_without_avatar_is_404(self, mock_get_manager, client):
+        mock_manager = Mock()
+        mock_manager.get_avatar_url.side_effect = PersonaManagerError(
+            "no avatar", code=ErrorCode.PERSONA_AVATAR_NOT_FOUND
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/persona/p1/avatar", follow_redirects=False)
+
+        assert response.status_code == 404
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_detail_hides_editor_without_storage(
+        self, mock_get_manager, client, sample_persona
+    ):
+        mock_manager = Mock()
+        mock_manager.get_persona.return_value = sample_persona
+        mock_manager.avatar_upload_enabled.return_value = False
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get(f"/persona/{sample_persona.id}")
+
+        assert response.status_code == 200
+        assert "persona-avatar-editor-slot" in response.text
+        assert "画像を変更" not in response.text

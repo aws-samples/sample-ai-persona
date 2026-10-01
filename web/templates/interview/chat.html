@@ -48,6 +48,7 @@
                     <div class="flex items-center gap-3 min-w-0">
                         <div class="persona-list-avatar"
                              data-avatar-seed="{{ participant.id }}"
+                             data-avatar-url="{{ persona_avatar_url(participant) }}"
                              data-avatar-name="{{ participant.name }}"
                              data-avatar-size="48"></div>
                         <div class="min-w-0">
@@ -641,7 +642,7 @@ function createStreamingBubble(personaName, personaId) {
     const colorClass = getPersonaColor(personaId);
     const timeStr = new Date().toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
     // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
-    const avatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(personaId, 48) : null;
+    const avatarSvg = window.personaAvatarInner ? window.personaAvatarInner(personaId, 48) : null;
     const avatarHtml = avatarSvg
         ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
         : `<div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white"><span class="text-white font-bold text-sm">${escapeHtml(personaName)[0] || ''}</span></div>`;
@@ -748,7 +749,7 @@ function addPersonaMessage(personaName, content, timestamp, personaId, contentHt
     // ペルソナIDから一貫した色を取得（DiceBear未読込時のフォールバック用）
     const colorClass = getPersonaColor(personaId);
     // DiceBear アバター（ペルソナIDをseedに一貫生成）。未読込なら頭文字円にフォールバック
-    const avatarSvg = window.personaAvatarSvg ? window.personaAvatarSvg(personaId, 48) : null;
+    const avatarSvg = window.personaAvatarInner ? window.personaAvatarInner(personaId, 48) : null;
     const avatarHtml = avatarSvg
         ? `<div class="persona-list-avatar ring-2 ring-white">${avatarSvg}</div>`
         : `<div class="w-12 h-12 rounded-full ${colorClass} flex items-center justify-center shadow-md ring-2 ring-white"><span class="text-white font-bold text-sm">${personaName[0] || ''}</span></div>`;

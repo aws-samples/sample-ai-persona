@@ -51,11 +51,13 @@ templates.env.filters["markdown"] = render_markdown
 # Router から直接利用する（アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
 from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
+from ._persona_avatar import persona_avatar_url  # noqa: E402
 
 templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
 templates.env.globals["gender_label"] = gender_label
 templates.env.globals["GENDER_LABELS"] = GENDER_LABELS
+templates.env.globals["persona_avatar_url"] = persona_avatar_url
 templates.env.globals["model_display_name"] = display_name_for
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
@@ -336,7 +338,10 @@ async def stream_discussion(
         # 参加者情報を最初に送信
         participants_data = {
             "type": "participants",
-            "personas": [{"id": p.id, "name": p.name} for p in personas],  # type: ignore[union-attr]
+            "personas": [
+                {"id": p.id, "name": p.name, "avatar_url": persona_avatar_url(p)}  # type: ignore[union-attr]
+                for p in personas
+            ],
             "mode": mode,
         }
 

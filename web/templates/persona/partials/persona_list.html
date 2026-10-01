@@ -31,6 +31,7 @@
                 <div class="flex items-center gap-3 min-w-0">
                     <div class="persona-list-avatar"
                          data-avatar-seed="{{ persona.id }}"
+                         data-avatar-url="{{ persona_avatar_url(persona) }}"
                          data-avatar-name="{{ persona.name }}"
                          data-avatar-size="40"></div>
                     <div class="min-w-0">
@@ -83,6 +84,7 @@
             <div class="flex items-center gap-3 min-w-0">
                 <div class="persona-list-avatar"
                      data-avatar-seed="{{ persona.id }}"
+                     data-avatar-url="{{ persona_avatar_url(persona) }}"
                      data-avatar-name="{{ persona.name }}"
                      data-avatar-size="48"></div>
                 <div class="min-w-0">

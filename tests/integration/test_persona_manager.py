@@ -41,11 +41,8 @@ class TestPersonaManagerIntegration:
                 return True
             return False
 
-        def mock_delete_persona(persona_id):
-            if persona_id in personas_storage:
-                del personas_storage[persona_id]
-                return True
-            return False
+        def mock_delete_persona_returning_old(persona_id):
+            return personas_storage.pop(persona_id, None)
 
         def mock_persona_exists(persona_id):
             return persona_id in personas_storage
@@ -71,7 +68,9 @@ class TestPersonaManagerIntegration:
         mock_db.get_persona.side_effect = mock_get_persona
         mock_db.get_all_personas.side_effect = mock_get_all_personas
         mock_db.update_persona.side_effect = mock_update_persona
-        mock_db.delete_persona.side_effect = mock_delete_persona
+        mock_db.delete_persona_returning_old.side_effect = (
+            mock_delete_persona_returning_old
+        )
         mock_db.persona_exists.side_effect = mock_persona_exists
         mock_db.get_persona_count.side_effect = mock_get_persona_count
         mock_db.get_personas_by_name.side_effect = mock_get_personas_by_name

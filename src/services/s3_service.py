@@ -4,6 +4,7 @@ Amazon S3へのファイルアップロード・ダウンロード・削除を�
 """
 
 import logging
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -33,13 +34,16 @@ class S3Service:
         self.s3_client = boto3.client("s3", region_name=region_name)
         logger.info(f"S3Service initialized with bucket: {bucket_name}")
 
-    def upload_file(self, file_content: bytes, s3_key: str) -> str:
+    def upload_file(
+        self, file_content: bytes, s3_key: str, content_type: str | None = None
+    ) -> str:
         """
         S3にファイルをアップロード
 
         Args:
             file_content: アップロードするファイルの内容（バイト列）
             s3_key: S3オブジェクトキー（例: "uploads/uuid_filename.txt"）
+            content_type: オブジェクトのContent-Type（未指定時はS3の既定値）
 
         Returns:
             S3パス（例: "s3://bucket-name/uploads/uuid_filename.txt"）
@@ -48,11 +52,14 @@ class S3Service:
             Exception: アップロードに失敗した場合
         """
         try:
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=s3_key,
-                Body=file_content,
-            )
+            put_kwargs: dict[str, Any] = {
+                "Bucket": self.bucket_name,
+                "Key": s3_key,
+                "Body": file_content,
+            }
+            if content_type:
+                put_kwargs["ContentType"] = content_type
+            self.s3_client.put_object(**put_kwargs)
             s3_path = f"s3://{self.bucket_name}/{s3_key}"
             logger.info(f"File uploaded successfully to {s3_path}")
             return s3_path

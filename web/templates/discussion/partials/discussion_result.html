@@ -100,9 +100,14 @@
             {% set color = persona_colors[color_index % persona_colors|length] %}
             <div class="flex gap-2 message-item">
                 <div class="flex-shrink-0">
-                    <div class="w-8 h-8 rounded-full persona-avatar-{{ color }} flex items-center justify-center shadow-sm">
-                        <span class="text-white font-bold text-xs">{{ (message.persona_name or 'P')[0] }}</span>
-                    </div>
+                    {# アイコン画像 / 自動アバター / 頭文字の出し分けは app.js の renderPersonaAvatars。
+                       画像URLは同じ画面の参加者一覧（data-avatar-url）で登録済みのものを引く #}
+                    <div class="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center shadow-sm text-white font-bold text-xs"
+                         data-avatar-seed="{{ message.persona_id }}"
+                         data-avatar-name="{{ message.persona_name or 'P' }}"
+                         data-avatar-color="{{ color }}"
+                         data-avatar-size="32"
+                         data-avatar-eager></div>
                 </div>
                 <div class="flex-1 min-w-0">
                     <span class="font-semibold persona-name-{{ color }} text-sm">{{ message.persona_name if message.persona_name else 'ペルソナ' }}</span>

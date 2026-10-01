@@ -654,6 +654,52 @@ class TestDatabaseServiceSerialization:
         assert deserialized.tags == ["premium", "early-adopter"]
 
     @patch("boto3.client")
+    def test_round_trip_preserves_every_persona_field(self, mock_boto3_client):
+        """Persona の全フィールドが DynamoDB 往復で失われないこと。
+
+        シリアライズはフィールドを明示列挙しているため、モデルに項目を足しても
+        ここを更新し忘れると保存されない（avatar_path で発生）。全項目に値を
+        入れた dataclass の等価比較で、列挙漏れを検出する。
+        """
+        from dataclasses import fields
+
+        from src.models.persona import Persona
+
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService()
+
+        original = Persona(
+            id="p1",
+            name="n",
+            age=40,
+            occupation="o",
+            background="b",
+            values=["v"],
+            pain_points=["p"],
+            goals=["g"],
+            created_at=datetime(2024, 1, 1, 12, 0, 0),
+            updated_at=datetime(2024, 1, 2, 12, 0, 0),
+            gender="female",
+            country="JP",
+            city="Tokyo",
+            tags=["t"],
+            generation_log=[{"type": "text", "content": "c"}],
+            generation_context={"source": "file"},
+            avatar_path="s3://bucket/persona_avatars/p1/x.webp",
+        )
+        unset = [
+            f.name for f in fields(Persona) if getattr(original, f.name) in (None, [])
+        ]
+        assert unset == [], f"テストデータに値が無いフィールド: {unset}"
+
+        restored = service._deserialize_persona(service._serialize_persona(original))
+
+        assert restored == original
+
+    @patch("boto3.client")
     def test_deserialize_persona_without_demographics(self, mock_boto3_client):
         """新フィールドを持たないDynamoDB itemを後方互換でデシリアライズできる"""
         from boto3.dynamodb.types import TypeSerializer
@@ -1247,9 +1293,40 @@ class TestPersonaCRUDOperations:
         assert result is True
 
     @patch("boto3.client")
-    def test_delete_persona(self, mock_boto3_client):
-        """Test deleting a persona from DynamoDB."""
-        # Mock boto3 client
+    def test_delete_persona_returning_old(self, mock_boto3_client):
+        """Test deleting a persona returns the item removed by the same write."""
+        from boto3.dynamodb.types import TypeSerializer
+
+        from src.models.persona import Persona
+
+        persona = Persona.create_new(
+            name="n",
+            age=30,
+            occupation="o",
+            background="b",
+            values=["v"],
+            pain_points=["p"],
+            goals=["g"],
+        )
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+        service = DatabaseService(table_prefix="Test")
+        mock_client.delete_item.return_value = {
+            "Attributes": service._serialize_persona(persona)
+        }
+
+        deleted = service.delete_persona_returning_old(persona.id)
+
+        call_args = mock_client.delete_item.call_args
+        assert call_args[1]["TableName"] == "Test_Personas"
+        assert call_args[1]["Key"] == {"id": TypeSerializer().serialize(persona.id)}
+        assert call_args[1]["ReturnValues"] == "ALL_OLD"
+        assert deleted == persona
+
+    @patch("boto3.client")
+    def test_delete_persona_returning_old_when_absent(self, mock_boto3_client):
+        """Test deleting a missing persona returns None."""
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
         mock_client.delete_item.return_value = {}
@@ -1257,17 +1334,7 @@ class TestPersonaCRUDOperations:
 
         service = DatabaseService(table_prefix="Test")
 
-        # Delete persona
-        result = service.delete_persona("test-id")
-
-        # Verify delete_item was called
-        mock_client.delete_item.assert_called_once()
-        call_args = mock_client.delete_item.call_args
-        assert call_args[1]["TableName"] == "Test_Personas"
-        assert "Key" in call_args[1]
-
-        # Verify result is True
-        assert result is True
+        assert service.delete_persona_returning_old("missing") is None
 
     @patch("boto3.client")
     def test_get_persona_found(self, mock_boto3_client):
@@ -1568,8 +1635,9 @@ class TestPersonaCRUDOperationsProperties:
             """Mock delete_item to remove items from memory."""
             key = kwargs["Key"]
             item_id = mock_client._deserializer.deserialize(key["id"])
-            if item_id in saved_items:
-                del saved_items[item_id]
+            old = saved_items.pop(item_id, None)
+            if old is not None and kwargs.get("ReturnValues") == "ALL_OLD":
+                return {"Attributes": old}
             return {}
 
         # Set up deserializer for mock client
@@ -1621,8 +1689,9 @@ class TestPersonaCRUDOperationsProperties:
         assert retrieved_updated.background == persona.background
 
         # Step 5: DELETE - Remove the persona
-        delete_result = service.delete_persona(persona.id)
-        assert delete_result is True, "Delete should succeed"
+        deleted = service.delete_persona_returning_old(persona.id)
+        assert deleted is not None, "Delete should succeed"
+        assert deleted.id == persona.id
 
         # Step 6: READ - Verify persona is deleted
         retrieved_after_delete = service.get_persona(persona.id)
@@ -1694,8 +1763,9 @@ class TestPersonaCRUDOperationsProperties:
 
             deserializer = TypeDeserializer()
             item_id = deserializer.deserialize(key["id"])
-            if item_id in saved_items:
-                del saved_items[item_id]
+            old = saved_items.pop(item_id, None)
+            if old is not None and kwargs.get("ReturnValues") == "ALL_OLD":
+                return {"Attributes": old}
             return {}
 
         mock_client.put_item = Mock(side_effect=mock_put_item)
@@ -1733,7 +1803,7 @@ class TestPersonaCRUDOperationsProperties:
         assert retrieved2_after.name == persona2.name  # Should be unchanged
 
         # Delete persona1
-        service.delete_persona(persona1.id)
+        service.delete_persona_returning_old(persona1.id)
 
         # Verify persona1 is deleted but persona2 still exists
         retrieved1_deleted = service.get_persona(persona1.id)

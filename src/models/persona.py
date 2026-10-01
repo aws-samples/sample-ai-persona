@@ -4,7 +4,7 @@ Persona data model for the AI Persona System.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from datetime import datetime
 from typing import List, Dict, Any
 import uuid
@@ -32,6 +32,7 @@ class Persona:
     tags: List[str] = field(default_factory=list)
     generation_log: list[dict[str, str]] | None = field(default=None)
     generation_context: dict[str, Any] | None = field(default=None)
+    avatar_path: str | None = field(default=None)
 
     @classmethod
     def create_new(
@@ -119,7 +120,16 @@ class Persona:
             tags=tags if tags is not None else self.tags,
             generation_log=self.generation_log,
             generation_context=self.generation_context,
+            avatar_path=self.avatar_path,
         )
+
+    def with_avatar(self, avatar_path: str | None) -> "Persona":
+        """
+        Return a new instance with the avatar image path replaced.
+
+        Passing None reverts the persona to the auto-generated avatar.
+        """
+        return replace(self, avatar_path=avatar_path, updated_at=datetime.now())
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -135,6 +145,7 @@ class Persona:
             "city",
             "generation_log",
             "generation_context",
+            "avatar_path",
         ):
             if data.get(key) is None:
                 data.pop(key, None)

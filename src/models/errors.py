@@ -285,6 +285,21 @@ class ErrorCode(StrEnum):
     PERSONA_NOT_FOUND = ("persona_not_found", ErrorKind.NOT_FOUND)
     PERSONA_UPDATE_FAILED = ("persona_update_failed", ErrorKind.TRANSIENT)
     PERSONA_OPERATION_FAILED = ("persona_operation_failed", ErrorKind.TRANSIENT)
+    # The uploaded file could not be decoded as an allowed image format.
+    PERSONA_AVATAR_INVALID_IMAGE = (
+        "persona_avatar_invalid_image",
+        ErrorKind.VALIDATION,
+    )
+    # Decodable but too many pixels: the user can fix it by resizing the image.
+    PERSONA_AVATAR_TOO_MANY_PIXELS = (
+        "persona_avatar_too_many_pixels",
+        ErrorKind.CAPACITY,
+    )
+    PERSONA_AVATAR_NOT_FOUND = ("persona_avatar_not_found", ErrorKind.NOT_FOUND)
+    # Another upload/revert changed the avatar first: retrying resolves it.
+    PERSONA_AVATAR_CONFLICT = ("persona_avatar_conflict", ErrorKind.TRANSIENT)
+    # Avatar images live in S3 only; the feature is off without a bucket.
+    PERSONA_AVATAR_UNAVAILABLE = ("persona_avatar_unavailable", ErrorKind.CONFIG)
     # The user picked a column that is not in the dataset: correctable input.
     DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
     DATASET_NOT_FOUND = ("dataset_not_found", ErrorKind.NOT_FOUND)
