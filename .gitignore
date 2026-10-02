@@ -44,3 +44,6 @@ cdk/lambda/auth-at-edge/node_modules/
 
 # Tailwind CSS standalone CLI binary
 tailwindcss
+
+# Playwright E2E failure artifacts
+test-results/

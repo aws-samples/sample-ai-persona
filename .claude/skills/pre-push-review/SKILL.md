@@ -55,9 +55,13 @@ Compound review gate covering quality, security, coverage, dead code, AWS safety
    - The version has a single source: `pyproject.toml` (see `/bump-version`). `src/__init__.py`, `web/main.py`, and `web/templates/base.html` read it at runtime.
    - Flag if changed code introduces a hardcoded version literal outside `pyproject.toml` (it would drift from the single source).
 
-12. **Summary** — report deterministic results and advisory findings separately so they are not conflated:
+12. **E2E regression** (advisory, **WARN** — only if `web/templates/`, `web/static/`, or `web/routers/` changed):
+   - Ask the user whether `uv run pytest -m e2e` has passed on this branch since the last UI-affecting change. If not, **WARN** "E2E not run" and offer to run it (~10 min, real Bedrock; preconditions in the `tests/e2e/conftest.py` docstring).
+   - Not a machine-check gate: it needs a running app and real AWS, so its absence must not FAIL the review. If it is run and fails, report the failing tests as WARN with the failure output.
+
+13. **Summary** — report deterministic results and advisory findings separately so they are not conflated:
    - **Machine checks** (steps 2, 3-dependency, 5, 6-cdk-diff, error-exposure tests): each is PASS or **FAIL** with a reproducible command. A FAIL blocks push.
-   - **Advisory findings** (steps 3-responsibility, 4, 8, 9-dead-code, 10): **WARN** with rationale; reviewer decides. Never present these as FAIL, and never present a passing advisory step as a guarantee.
+   - **Advisory findings** (steps 3-responsibility, 4, 8, 9-dead-code, 10, 12-e2e): **WARN** with rationale; reviewer decides. Never present these as FAIL, and never present a passing advisory step as a guarantee.
    - Overall: **FAIL** if any machine check failed; otherwise PASS with any WARNs listed.
 
 ## Additional Resources

@@ -9,6 +9,7 @@ uv sync --extra dev              # 依存インストール
 uv run python run_htmx.py        # ローカル起動
 uv run pytest -q                 # 全テスト
 uv run pytest -m unit -q         # 単体テスト
+uv run pytest -m e2e             # 固定E2E回帰（起動中の:8000に実AWSで実行・約10分。既定の実行からは除外）
 uv run ruff check --fix .        # リント自動修正
 uv run mypy src/ web/            # 型チェック
 ./scripts/build-css.sh --minify  # CSSビルド
@@ -22,6 +23,7 @@ cd cdk && npx cdk deploy --all   # CDKデプロイ
 | src/managers/ | `uv run pytest tests/unit/ -q` |
 | src/services/ | `uv run pytest tests/integration/ -q` |
 | web/routers/ | `uv run pytest tests/api/ -q` |
+| web/templates/, 主要画面フロー | `uv run pytest -m e2e`（アプリ起動が前提。初回のみ `uv run playwright install chromium`） |
 | cdk/ | `cd cdk && npx tsc --noEmit && npm test && npx cdk synth --no-staging` |
 
 ## 禁止事項

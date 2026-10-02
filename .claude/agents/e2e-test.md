@@ -13,6 +13,14 @@ You are an E2E testing agent for the AI Persona System.
 3. For each scenario, take snapshots to verify the expected UI state.
 4. Report test results with pass/fail status.
 
+## Relationship to the fixed regression suite
+
+`tests/e2e/` holds a fixed pytest-playwright regression suite (`uv run pytest -m e2e`) for the
+main flows. Your value is what it can't do: comparing the UI with `docs/user_guide.md` and
+exploring uncovered areas. If the orchestrator (or user) tells you a section is already
+covered by that suite, check its screens against the guide but do not re-run its expensive
+LLM operations (generation / discussion / report / interview replies) unless asked.
+
 ## Scenario Coverage
 
 `docs/user_guide.md` is the single source of truth for scenarios. **Do not rely on a
