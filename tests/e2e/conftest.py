@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Generator
+from typing import Callable, Generator
 
 import pytest
 from playwright.sync_api import Browser, BrowserContext, Page, expect
@@ -148,12 +148,15 @@ def start_discussion(
     topic: str,
     streaming: bool,
     rounds: int | None = None,
+    on_stream: Callable[[Page], None] | None = None,
 ) -> str:
     """Start a discussion from /discussion/setup and return its ID on completion.
 
     ``mode`` is the setup radio value (``traditional`` / ``agent``). With
     ``streaming`` the 「リアルタイム表示」 path (SSE) is used and at least one
-    message must appear in the live stream before the result is shown.
+    message must appear in the live stream before the result is shown;
+    ``on_stream`` then runs extra assertions against the live stream before
+    the final result is awaited.
     """
     page.goto("/discussion/setup")
     page.locator(f'label:has(input[name="mode"][value="{mode}"])').click()
@@ -169,6 +172,8 @@ def start_discussion(
         expect(page.locator("#streaming-messages .message-item").first).to_be_visible(
             timeout=LLM_TIMEOUT_MS
         )
+        if on_stream is not None:
+            on_stream(page)
     else:
         page.locator('button[type="submit"]:has-text("議論を開始")').click()
 

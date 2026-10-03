@@ -97,8 +97,29 @@ def test_agent_discussion_one_round(
     created: CreatedRecords,
     run_tag: str,
 ) -> None:
-    """しっかり議論 (1 round, streaming) shows persona turns and a facilitator summary."""
+    """しっかり議論 (1 round) with 「リアルタイム表示」, the primary path.
+
+    Agent mode streams message_start / message_delta / message_end per turn
+    (unlike 簡易議論's whole ``message`` events), so the live stage and the
+    conversation log are checked while the stream is running.
+    """
     personas = generated_personas[:2]
+
+    def check_live_stream(live: Page) -> None:
+        # message_start / message_delta: the active speaker bubble on the stage
+        expect(live.locator("#stage-active .active-content")).not_to_be_empty()
+        log = live.locator("#streaming-messages")
+        # message_end: each persona's turn is committed to the log with content
+        for persona in personas:
+            turn = log.locator(".message-item").filter(has_text=persona["name"])
+            expect(turn.locator(".streaming-content").first).not_to_be_empty(
+                timeout=LLM_TIMEOUT_MS
+            )
+        expect(log.locator(".facilitator-bubble").first).to_be_attached(
+            timeout=LLM_TIMEOUT_MS
+        )
+        expect(log).not_to_contain_text("[応答を取得できませんでした]")
+
     discussion = _run_discussion(
         session_context,
         created,
@@ -107,6 +128,7 @@ def test_agent_discussion_one_round(
         mode="agent",
         streaming=True,
         rounds=1,
+        on_stream=check_live_stream,
     )
     page.goto(f"/discussion/{discussion['id']}")
     _expect_persona_messages(page, [p["id"] for p in personas])
