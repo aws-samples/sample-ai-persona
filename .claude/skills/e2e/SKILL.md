@@ -8,6 +8,26 @@ description: This skill should be used when the user asks to run E2E tests "in p
 Split `docs/user_guide.md` into independent section groups and run one `e2e-test`
 subagent per group concurrently, instead of one agent walking every scenario serially.
 
+## Relationship to the fixed regression suite
+
+Repeatable regression checks live in `tests/e2e/` (pytest-playwright, `uv run pytest -m e2e`,
+~10 min, deterministic steps). This skill is for what that suite cannot do: **detecting
+`user_guide.md` vs UI discrepancies** and **exploratory coverage of areas the suite does not
+cover**. If the user only wants "did anything regress?", run the fixed suite instead of this
+skill (preconditions: `tests/e2e/conftest.py` module docstring).
+
+When this skill does run:
+- Read the module docstrings / test names in `tests/e2e/*.py` to list which guide sections
+  the fixed suite already exercises (they carry `§` references).
+- For those sections, batches check the screens against the guide (labels, steps, fields,
+  messages) but **do not repeat the expensive LLM operations** the suite already runs
+  (persona generation, discussions, report generation, interview replies) — reuse existing
+  data where needed, or create the minimum required.
+- Spend the full exploratory effort on the uncovered areas (currently §6.4 survey results,
+  §7, §8, and upload-limit / error paths).
+- Offer to run `uv run pytest -m e2e` first so the merged report has both the deterministic
+  regression result and the agent findings.
+
 ## Preconditions
 
 1. **Resolve target environment before dispatching:**

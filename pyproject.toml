@@ -39,6 +39,7 @@ dev = [
     "mypy>=1.5.0",
     "moto[dynamodb,s3]>=5.0.0",
     "hypothesis>=6.0.0",
+    "pytest-playwright>=0.9.0",
 ]
 
 [build-system]
@@ -53,12 +54,14 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+addopts = '-m "not e2e"'
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "unit: Unit tests (no external dependencies)",
     "integration: Integration tests (mocked external services)",
     "api: API endpoint tests (FastAPI TestClient)",
+    "e2e: Browser E2E regression tests against a running app with real AWS (run explicitly: -m e2e)",
 ]
 [tool.mypy]
 python_version = "3.13"
