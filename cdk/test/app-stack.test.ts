@@ -293,15 +293,21 @@ describe('AppStack: ログとメトリクス', () => {
     });
   });
 
-  test('メトリクスフィルタ 6 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
+  test('メトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
     const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'));
-    expect(filters).toHaveLength(6);
+    expect(filters).toHaveLength(7);
     const byName = Object.fromEntries(
       filters.map((f) => [f.Properties.MetricTransformations[0].MetricName, f.Properties]),
     );
-    expect(Object.keys(byName).sort()).toEqual(
-      ['CircuitOpened', 'CsrfRejected', 'DecryptFailed', 'LoginFailed', 'RefreshFailed', 'SessionExpired'],
-    );
+    expect(Object.keys(byName).sort()).toEqual([
+      'AuthzDenied',
+      'CircuitOpened',
+      'CsrfRejected',
+      'DecryptFailed',
+      'LoginFailed',
+      'RefreshFailed',
+      'SessionExpired',
+    ]);
     for (const props of Object.values(byName) as any[]) {
       expect(props.MetricTransformations[0].MetricNamespace).toBe('AIPersona/Auth');
       expect(props.MetricTransformations[0].MetricValue).toBe('1');
@@ -311,6 +317,54 @@ describe('AppStack: ログとメトリクス', () => {
     expect(byName.RefreshFailed.MetricTransformations[0].Dimensions).toEqual([
       { Key: 'reason', Value: '$.reason' },
     ]);
+  });
+
+  test('AuthzDenied: authz.denied を reason の次元で数える（U2、NFR8.7）。アラームなし', () => {
+    const filter = Object.values(template.findResources('AWS::Logs::MetricFilter')).find(
+      (f) => f.Properties.MetricTransformations[0].MetricName === 'AuthzDenied',
+    )!;
+    expect(filter.Properties.FilterPattern).toBe('{ $.event = "authz.denied" }');
+    const transformation = filter.Properties.MetricTransformations[0];
+    expect(transformation.MetricNamespace).toBe('AIPersona/Auth');
+    expect(transformation.DefaultValue).toBeUndefined();
+    expect(transformation.Dimensions).toEqual([{ Key: 'reason', Value: '$.reason' }]);
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+  });
+});
+
+describe('AppStack: 認可（U2）', () => {
+  function statements(t: Template): any[] {
+    return Object.values(t.findResources('AWS::IAM::Policy')).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement as any[],
+    );
+  }
+
+  test('タスクロールは ListGroups を Data スタックの User Pool の ARN だけに持つ（NFR3.8）', () => {
+    const listGroups = statements(template).filter((s) =>
+      [s.Action].flat().includes('cognito-idp:ListGroups'),
+    );
+    expect(listGroups).toHaveLength(1);
+    const resources = [listGroups[0].Resource].flat();
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).not.toBe('*');
+    const reference = JSON.stringify(resources[0]);
+    expect(reference).toContain('UserPool');
+    expect(reference).toContain('Arn');
+  });
+
+  test('Jobs テーブルの論理 ID・キー・GSI・TTL は U1 から変わらない（約束 C14）', () => {
+    const app = new cdk.App();
+    const data = new DataStack(app, 'Data', { env: TOKYO, parameter: devParameter });
+    const tables = Template.fromStack(data).findResources('AWS::DynamoDB::GlobalTable');
+    const jobs = tables.DatabaseJobs6F06B67C;
+    expect(jobs).toBeDefined();
+    expect(jobs.DeletionPolicy).toBe('Retain');
+    expect(jobs.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
+    expect(jobs.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(jobs.Properties.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expires_at',
+      Enabled: true,
+    });
   });
 });
 

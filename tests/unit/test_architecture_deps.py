@@ -11,7 +11,9 @@ pre-push-review の「アーキテクチャ違反チェック」は元々LLMが 
 - Service  : managers / routers を import しない。他の service も不可（`service_factory` は例外）
 - Manager  : routers を import しない。他の manager も不可（`shared/`・`components/` は可）
 - Component : `src/managers/components/`。複数 Manager が使う共有ワークフロー部品。
-             Manager → Component は可、Component → Manager / Router は不可
+             Manager → Component は可、Component → Manager / Router は不可。
+             Component どうしは一方向なら可、循環は不可（BR2.16。ファイル単位で別に検査）
+- Router は `AccessTarget`（判定の材料）を import しない（NFR3.7）
 - Shared   : services / routers を import しない
 - Router   : services を直接 import しない
              （例外: テンプレート表示ヘルパー。architecture.md 31行。`_DISPLAY_HELPER_ALLOW`）
@@ -311,6 +313,86 @@ def test_baseline_has_no_stale_entries() -> None:
     assert not set(_BASELINE) - known
 
 
+_COMPONENTS_DIR = _MANAGERS_DIR / "components"
+
+
+def _component_imports(components_dir: Path) -> dict[str, set[str]]:
+    """Component file -> Component files it imports (``src.managers.components.x``)."""
+    graph: dict[str, set[str]] = {}
+    files = _py_files(components_dir)
+    names = {p.stem for p in files}
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        targets: set[str] = set()
+        for dotted in _iter_imported_dotted(tree, path):
+            seg = _segments(dotted)
+            if seg[:3] == ["src", "managers", "components"] and len(seg) >= 4:
+                targets.add(seg[3])
+        # `from . import x` / `from src.managers.components import x` は
+        # パッケージそのものを指すので、import した名前を Component とみなす
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                resolved = _resolve_import(node, path)
+                if resolved and _segments(resolved) == [
+                    "src",
+                    "managers",
+                    "components",
+                ]:
+                    targets |= {alias.name for alias in node.names}
+        graph[path.stem] = {t for t in targets if t in names and t != path.stem}
+    return graph
+
+
+def _component_cycles(components_dir: Path) -> list[list[str]]:
+    """Cycles in the Component import graph, each as ``[a, b, ..., a]``."""
+    graph = _component_imports(components_dir)
+    cycles: list[list[str]] = []
+    seen: set[frozenset[str]] = set()
+
+    def visit(node: str, path: list[str]) -> None:
+        for nxt in sorted(graph.get(node, ())):
+            if nxt in path:
+                cycle = path[path.index(nxt) :] + [nxt]
+                key = frozenset(cycle)
+                if key not in seen:
+                    seen.add(key)
+                    cycles.append(cycle)
+                continue
+            visit(nxt, path + [nxt])
+
+    for start in sorted(graph):
+        visit(start, [start])
+    return cycles
+
+
+def _modules_importing(directory: Path, name: str) -> list[str]:
+    """File names under ``directory`` that import ``name`` from anywhere."""
+    found: list[str] = []
+    for path in _py_files(directory):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == name for alias in node.names
+            ):
+                found.append(path.name)
+                break
+    return found
+
+
+def test_components_have_no_import_cycle() -> None:
+    """Component どうしは一方向なら依存してよいが、循環させない（BR2.16、NFR1.6）。
+
+    上の層の検査は components/ 全体を 1 つのユニットとして扱い、Component どうしの
+    import を無条件に許す。循環はここでファイル単位のグラフで検査する。
+    """
+    assert _component_cycles(_COMPONENTS_DIR) == []
+
+
+def test_routers_do_not_import_access_target() -> None:
+    """判定の材料（AccessTarget）を画面・API に返さない（NFR3.7、ADR-011）。"""
+    assert _modules_importing(_ROUTERS_DIR, "AccessTarget") == []
+
+
 class TestCheckerItself:
     """検査ロジック自体が空振りしていないことの検証（error-catalog.md の要求）。"""
 
@@ -405,3 +487,40 @@ class TestCheckerItself:
     def test_model_importing_model_is_allowed(self, tmp_path: Path) -> None:
         f = self._write(tmp_path, "src/models/foo.py", "from .persona import Persona\n")
         assert not _violations_for(f, _MODELS_DIR)
+
+    def test_component_cycle_is_flagged(self, tmp_path: Path) -> None:
+        self._write(tmp_path, "src/managers/components/a.py", "from .b import B\n")
+        self._write(
+            tmp_path,
+            "src/managers/components/b.py",
+            "from src.managers.components.c import C\n",
+        )
+        self._write(tmp_path, "src/managers/components/c.py", "from . import a\n")
+        cycles = _component_cycles(tmp_path / "src/managers/components")
+        assert cycles == [["a", "b", "c", "a"]]
+
+    def test_one_way_component_imports_are_allowed(self, tmp_path: Path) -> None:
+        self._write(
+            tmp_path,
+            "src/managers/components/sharing.py",
+            "from .access_policy import AccessPolicy\n",
+        )
+        self._write(
+            tmp_path,
+            "src/managers/components/access_policy.py",
+            "from ...models.authz import Principal\n",
+        )
+        assert _component_cycles(tmp_path / "src/managers/components") == []
+
+    def test_router_importing_access_target_is_flagged(self, tmp_path: Path) -> None:
+        self._write(
+            tmp_path,
+            "web/routers/foo.py",
+            "from src.models.authz import AccessTarget, Principal\n",
+        )
+        self._write(
+            tmp_path, "web/routers/bar.py", "from src.models.authz import Principal\n"
+        )
+        assert _modules_importing(tmp_path / "web/routers", "AccessTarget") == [
+            "foo.py"
+        ]

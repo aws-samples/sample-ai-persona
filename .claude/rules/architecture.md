@@ -51,6 +51,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 - なぜshared/でなくcomponents/か: 共有対象がビジネスルールを含むためshared/には置けず、かつManager同士はインポート禁止。そこでManager → Component → Serviceの順方向を持つManager層の部品として切り出す
 - Serviceはコンストラクタ注入で受け取る（`service_factory`を直接参照しない。テスト時はモック注入）
 - Router・他Managerをインポートしてはならない（Component → Managerは逆方向）。Service・Shared・Models・Prompts・configは参照可
+- Component どうしは一方向・循環なしなら依存してよい（例: `ResourceSharing` → `AccessPolicy`）。循環は `tests/unit/test_architecture_deps.py` がファイル単位のグラフで検査する
 - 使いどころ: 同一のビジネスワークフローが2つ以上のManagerにコピーされる場合のみ。単一Managerでしか使わないロジックはそのManagerに置く
 - 例: `PersonaAgentIntegration`（KB/データセット分析ツールとpromptセクションの組み立てを discussion / interview Manager で共有）
 

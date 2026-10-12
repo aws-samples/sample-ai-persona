@@ -250,9 +250,11 @@ class TestJobEndpoint:
 
     @patch("web.routers.api.get_job_manager")
     def test_get_job_not_found(self, mock_get_jm, client):
-        """存在しないジョブIDで404"""
+        """存在しない（または他人の）ジョブIDで404（約束 C14）"""
+        from src.managers.job_manager import JobNotFoundError
+
         mock_jm = Mock()
-        mock_jm.get.return_value = None
+        mock_jm.get.side_effect = JobNotFoundError("no such job")
         mock_get_jm.return_value = mock_jm
 
         response = client.get("/api/jobs/non-existent")

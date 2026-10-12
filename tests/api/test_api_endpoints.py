@@ -16,10 +16,16 @@ from src.managers.job_manager import Job, JobStatus
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_persona(pid="p1", name="テスト太郎"):
     return Persona.create_new(
-        name=name, age=30, occupation="エンジニア",
-        background="テスト用", values=["効率"], pain_points=["時間"], goals=["成長"],
+        name=name,
+        age=30,
+        occupation="エンジニア",
+        background="テスト用",
+        values=["効率"],
+        pain_points=["時間"],
+        goals=["成長"],
     )
 
 
@@ -28,10 +34,13 @@ def _make_discussion():
     m = Message.create_new(persona_id="p1", persona_name="太郎", content="こんにちは")
     m2 = Message.create_new(persona_id="p2", persona_name="花子", content="はい")
     i = Insight.create_new(
-        category="テスト", description="テストインサイト",
-        supporting_messages=["msg1"], confidence_score=0.8,
+        category="テスト",
+        description="テストインサイト",
+        supporting_messages=["msg1"],
+        confidence_score=0.8,
     )
     from dataclasses import replace
+
     d = replace(d, messages=[m, m2], insights=[i])
     return d
 
@@ -40,6 +49,7 @@ def _make_discussion():
 # generate_personas (async job)
 # ---------------------------------------------------------------------------
 
+
 class TestGeneratePersonas:
     @patch("web.routers.api.get_job_manager")
     def test_returns_202_with_job_id(self, mock_get_jm, client):
@@ -47,11 +57,14 @@ class TestGeneratePersonas:
         mock_jm.submit.return_value = "job-123"
         mock_get_jm.return_value = mock_jm
 
-        response = client.post("/api/personas/generate", json={
-            "data_type": "interview",
-            "file_contents": ["テストインタビュー内容"],
-            "count": 1,
-        })
+        response = client.post(
+            "/api/personas/generate",
+            json={
+                "data_type": "interview",
+                "file_contents": ["テストインタビュー内容"],
+                "count": 1,
+            },
+        )
 
         assert response.status_code == 202
         data = response.json()
@@ -62,6 +75,7 @@ class TestGeneratePersonas:
 # ---------------------------------------------------------------------------
 # run_discussion (async job)
 # ---------------------------------------------------------------------------
+
 
 class TestRunDiscussion:
     @patch("web.routers.api.get_job_manager")
@@ -75,10 +89,13 @@ class TestRunDiscussion:
         mock_jm.submit.return_value = "job-456"
         mock_get_jm.return_value = mock_jm
 
-        response = client.post("/api/discussions", json={
-            "persona_ids": ["p1", "p2"],
-            "topic": "テスト議論",
-        })
+        response = client.post(
+            "/api/discussions",
+            json={
+                "persona_ids": ["p1", "p2"],
+                "topic": "テスト議論",
+            },
+        )
 
         assert response.status_code == 202
         data = response.json()
@@ -90,25 +107,32 @@ class TestRunDiscussion:
         mock_pm.get_persona.return_value = None
         mock_get_pm.return_value = mock_pm
 
-        response = client.post("/api/discussions", json={
-            "persona_ids": ["missing1", "missing2"],
-            "topic": "テスト",
-        })
+        response = client.post(
+            "/api/discussions",
+            json={
+                "persona_ids": ["missing1", "missing2"],
+                "topic": "テスト",
+            },
+        )
 
         assert response.status_code == 404
 
     def test_invalid_mode(self, client):
         """persona_idsが1つだけの場合はバリデーションエラー"""
-        response = client.post("/api/discussions", json={
-            "persona_ids": ["p1"],
-            "topic": "テスト",
-        })
+        response = client.post(
+            "/api/discussions",
+            json={
+                "persona_ids": ["p1"],
+                "topic": "テスト",
+            },
+        )
         assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------
 # get_discussion
 # ---------------------------------------------------------------------------
+
 
 class TestGetDiscussion:
     @patch("web.routers.api.get_discussion_manager")
@@ -138,6 +162,7 @@ class TestGetDiscussion:
 # ---------------------------------------------------------------------------
 # generate_insights
 # ---------------------------------------------------------------------------
+
 
 class TestGenerateInsights:
     @patch("web.routers.api.get_job_manager")
@@ -173,6 +198,7 @@ class TestGenerateInsights:
 # run_interview
 # ---------------------------------------------------------------------------
 
+
 class TestRunInterview:
     @patch("web.routers.api.get_interview_manager")
     @patch("web.routers.api.get_persona_manager")
@@ -192,10 +218,13 @@ class TestRunInterview:
         mock_im.send_user_message.return_value = [response_msg]
         mock_get_im.return_value = mock_im
 
-        response = client.post("/api/interviews", json={
-            "persona_ids": ["p1"],
-            "question": "テスト質問",
-        })
+        response = client.post(
+            "/api/interviews",
+            json={
+                "persona_ids": ["p1"],
+                "question": "テスト質問",
+            },
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -208,12 +237,15 @@ class TestRunInterview:
 # job status
 # ---------------------------------------------------------------------------
 
+
 class TestGetJob:
     @patch("web.routers.api.get_job_manager")
     def test_completed_job(self, mock_get_jm, client):
         job = Job(
-            id="job-1", status=JobStatus.COMPLETED,
-            created_at=datetime.now(), result={"data": "ok"},
+            id="job-1",
+            status=JobStatus.COMPLETED,
+            created_at=datetime.now(),
+            result={"data": "ok"},
         )
         mock_jm = Mock()
         mock_jm.get.return_value = job
@@ -228,8 +260,10 @@ class TestGetJob:
 
     @patch("web.routers.api.get_job_manager")
     def test_not_found(self, mock_get_jm, client):
+        from src.managers.job_manager import JobNotFoundError
+
         mock_jm = Mock()
-        mock_jm.get.return_value = None
+        mock_jm.get.side_effect = JobNotFoundError("no such job")
         mock_get_jm.return_value = mock_jm
 
         response = client.get("/api/jobs/nonexistent")

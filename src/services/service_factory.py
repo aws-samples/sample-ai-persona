@@ -15,6 +15,8 @@ from ..models.errors import CodedError, ErrorCode
 
 if TYPE_CHECKING:
     from ..models.login_session import SessionStore
+    from .authz_lookup_service import AuthzLookupService
+    from .cognito_groups_service import CognitoGroupsService
     from .oidc_service import OidcService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
@@ -56,6 +58,8 @@ class ServiceFactory:
         self._dataset_analysis_service: Optional["DatasetAnalysisService"] = None
         self._session_store: Optional["SessionStore"] = None
         self._oidc_service: Optional["OidcService"] = None
+        self._authz_lookup_service: Optional["AuthzLookupService"] = None
+        self._cognito_groups_service: Optional["CognitoGroupsService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -344,6 +348,47 @@ class ServiceFactory:
             domain=config.COGNITO_DOMAIN or "",
             redirect_uri=config.APP_BASE_URL.rstrip("/") + "/auth/callback",
         )
+
+    def get_authz_lookup_service(self) -> "AuthzLookupService":
+        """Return the reader of authorization columns and of the Jobs table.
+
+        Its DynamoDB client has the short limits of ``reliability-design.md``
+        and is separate from :meth:`get_database_service`'s client.
+        """
+        if self._authz_lookup_service is None:
+            with self._lock:
+                if self._authz_lookup_service is None:
+                    from .authz_lookup_service import AuthzLookupService
+
+                    self.logger.info("Creating new AuthzLookupService instance")
+                    self._authz_lookup_service = AuthzLookupService(
+                        region=config.DYNAMODB_REGION,
+                        jobs_table_name=config.table_name("Jobs"),
+                    )
+        return self._authz_lookup_service
+
+    def get_cognito_groups_service(self) -> "CognitoGroupsService":
+        """Return the department-group reader of the Cognito user pool.
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` when ``COGNITO_USER_POOL_ID``
+                is not set.
+        """
+        if self._cognito_groups_service is None:
+            with self._lock:
+                if self._cognito_groups_service is None:
+                    if not config.COGNITO_USER_POOL_ID:
+                        raise CodedError(
+                            "COGNITO_USER_POOL_ID is required for the department list",
+                            code=ErrorCode.AUTH_CONFIG_INVALID,
+                        )
+                    from .cognito_groups_service import CognitoGroupsService
+
+                    self.logger.info("Creating new CognitoGroupsService instance")
+                    self._cognito_groups_service = CognitoGroupsService(
+                        user_pool_id=config.COGNITO_USER_POOL_ID
+                    )
+        return self._cognito_groups_service
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """

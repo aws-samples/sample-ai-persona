@@ -1,5 +1,6 @@
 """
-Login URLs (contract C11): ``GET /login``, ``GET /auth/callback``, ``POST /signout``.
+Login URLs (contract C11): ``GET /login``, ``GET /auth/callback``, ``POST /signout``,
+and the no-role page ``GET /no-role`` (M4, BR2.8).
 
 HTTP translation only; every decision is made by
 :class:`src.managers.auth_manager.AuthManager`, whose synchronous DynamoDB /
@@ -23,8 +24,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from src.managers.auth_manager import AuthManager, LoginFailedError
+from src.models.authz import Principal
 from src.models.errors import LookupUnavailableError
-from web.auth_middleware import NO_STORE, SESSION_COOKIE_NAME, unavailable_response
+from web.auth_middleware import (
+    NO_ROLE_PATH,
+    NO_STORE,
+    SESSION_COOKIE_NAME,
+    unavailable_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,19 @@ async def auth_callback(
     return _with_session_cookie(
         RedirectResponse(result.next, status_code=303), result.session_id, manager
     )
+
+
+@router.get(NO_ROLE_PATH, response_class=HTMLResponse)
+async def no_role(request: Request) -> Response:
+    """The no-role page (M4, BR2.8): why the user cannot go further.
+
+    Only users without a role are sent here; one who has a role (for example
+    after logging in again) goes to the top page.
+    """
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, Principal) and principal.roles:
+        return RedirectResponse("/", status_code=303)
+    return _page(request, "auth/no_role.html", {"title": "利用権限がありません"})
 
 
 @router.post("/signout")

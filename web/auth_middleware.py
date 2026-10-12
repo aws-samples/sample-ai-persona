@@ -13,6 +13,10 @@ through untouched. Rules (``functional-design/rules.md``):
   activity. Each entry is also marked with a comment next to its route.
 - BR1.18 / NFR9.8: Sessions table unreachable -> 503, never "signed in".
 - BR1.20: every signed-in response gets ``Cache-Control: no-store``.
+- BR2.8 (U2, replaces U1's "no role still passes"): a signed-in user without
+  a role may only use :data:`ROLE_EXEMPT_PATHS`; pages go to the no-role page
+  (303), htmx gets ``HX-Redirect``, ``/api/*`` gets 403 ``ROLE_REQUIRED``, and
+  ``authz.denied`` (``role_required``) is logged.
 
 The session check is synchronous (DynamoDB / Cognito), so it runs in a worker
 thread (``anyio.to_thread``) and never blocks the event loop; ``/health`` and
@@ -42,6 +46,7 @@ from src.models.errors import (
     CodedError,
     ErrorCode,
     LookupUnavailableError,
+    RoleRequiredError,
 )
 from web.error_messages import toast_response, user_message_for
 
@@ -56,6 +61,12 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
 )
 #: Static assets (CSS / JS only; the login pages need them). Never user data.
 PUBLIC_PREFIXES: tuple[str, ...] = ("/static/",)
+
+#: The no-role page (M4, BR2.8).
+NO_ROLE_PATH = "/no-role"
+#: URLs a signed-in user *without a role* may use, besides the public ones
+#: above (BR2.8): the no-role page itself and signing out.
+ROLE_EXEMPT_PATHS: frozenset[str] = frozenset({NO_ROLE_PATH, "/signout"})
 
 #: Requests the user did not trigger (BR1.9). ``(method, path pattern)``.
 PASSIVE_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -77,6 +88,11 @@ NO_STORE = "no-store"
 def is_public_path(path: str) -> bool:
     """Whether ``path`` is reachable without a login."""
     return path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+
+
+def is_role_exempt_path(path: str) -> bool:
+    """Whether a signed-in user without a role may use ``path`` (BR2.8)."""
+    return is_public_path(path) or path in ROLE_EXEMPT_PATHS
 
 
 def is_passive_request(method: str, path: str) -> bool:
@@ -148,6 +164,26 @@ def unauthorized_response(
     response.headers["Cache-Control"] = NO_STORE
     if clear_cookie:
         _clear_session_cookie(response)
+    return response
+
+
+def role_required_response(request: Request) -> Response:
+    """The no-role answer of BR2.8: M4 for pages and htmx, 403 for the API."""
+    response: Response
+    if request.url.path.startswith("/api/"):
+        code = ErrorCode.ROLE_REQUIRED
+        response = JSONResponse(
+            status_code=403,
+            content={
+                "detail": user_message_for(RoleRequiredError("no role")),
+                "error_code": code.value,
+            },
+        )
+    elif request.headers.get("HX-Request"):
+        response = Response(status_code=403, headers={"HX-Redirect": NO_ROLE_PATH})
+    else:
+        response = RedirectResponse(NO_ROLE_PATH, status_code=303)
+    response.headers["Cache-Control"] = NO_STORE
     return response
 
 
@@ -232,6 +268,18 @@ class AuthMiddleware:
             return
         self._log_timing(started, principal.sub)
         scope.setdefault("state", {})["principal"] = principal
+        if not principal.roles and not is_role_exempt_path(scope["path"]):
+            # BR2.8: no role -> only the no-role page. Decided from the session's
+            # roles of this request, so a newly assigned role works after the
+            # next login or token refresh (NFR5.5).
+            record_event(
+                "authz.denied",
+                stream=self._log_stream,
+                reason="role_required",
+                sub=principal.sub,
+            )
+            await role_required_response(request)(scope, receive, send)
+            return
         await self.app(scope, receive, self._no_store(send))
 
     def _log_timing(self, started: float, sub: str) -> None:

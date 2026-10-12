@@ -135,6 +135,28 @@ class TestAuthCodes:
         assert LookupUnavailableError("store down").code is ErrorCode.LOOKUP_UNAVAILABLE
 
 
+class TestAuthzCodes:
+    """v1.0.0 U2 の認可のコード（約束 C5 の残り）。"""
+
+    @pytest.mark.parametrize("code", [ErrorCode.ROLE_REQUIRED, ErrorCode.ACCESS_DENIED])
+    def test_denials_are_forbidden(self, code):
+        assert code.kind is ErrorKind.FORBIDDEN
+
+    def test_malformed_request_is_validation(self):
+        assert ErrorCode.REQUEST_INVALID.kind is ErrorKind.VALIDATION
+
+    def test_framework_http_error_is_not_found(self):
+        assert ErrorCode.HTTP_ERROR.kind is ErrorKind.NOT_FOUND
+
+    def test_exception_classes_carry_their_codes(self):
+        from src.models.errors import AccessDeniedError, RoleRequiredError
+
+        assert AccessDeniedError("no").code is ErrorCode.ACCESS_DENIED
+        assert RoleRequiredError("no").code is ErrorCode.ROLE_REQUIRED
+        assert issubclass(AccessDeniedError, CodedError)
+        assert issubclass(RoleRequiredError, CodedError)
+
+
 class TestCodedErrorExposesKind:
     """例外インスタンスから分類を辿れること（表示層が使う経路）。"""
 

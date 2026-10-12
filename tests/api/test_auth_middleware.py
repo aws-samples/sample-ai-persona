@@ -176,9 +176,19 @@ class TestSignedInRequests:
             c.cookies.set("session_id", "sid")
             assert c.get("/page").json() == {"sub": "user-1"}
 
-    def test_users_without_roles_can_use_existing_screens(self, client, login_as):
-        login_as(client, name="ロールなし", roles=(), groups=())
-        assert client.get("/persona/management").status_code == 200
+    def test_users_without_roles_are_stopped_at_the_entrance(self):
+        """U1 の「ロールがなくても既存の画面を使える」は U2 の BR2.8 で置き換えた。
+
+        詳しい振る舞いは ``tests/api/test_role_required.py``。
+        """
+        manager = _manager(return_value=Principal(sub="user-1"))
+        with TestClient(_small_app(manager), follow_redirects=False) as c:
+            c.cookies.set("session_id", "sid")
+            page = c.get("/page")
+            api = c.get("/api/thing")
+        assert page.status_code == 303
+        assert api.status_code == 403
+        assert api.json()["error_code"] == ErrorCode.ROLE_REQUIRED
 
     def test_passive_requests_are_marked(self):
         manager = _manager()

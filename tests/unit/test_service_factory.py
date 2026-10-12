@@ -453,3 +453,57 @@ class TestServiceFactoryResetServices:
         from src.services.service_factory import ServiceFactory
 
         ServiceFactory._instance = None
+
+
+class TestServiceFactoryAuthzServices:
+    """判定用の読み取りと部署の一覧の Service（U2）。"""
+
+    def setup_method(self):
+        from src.services.service_factory import ServiceFactory
+
+        ServiceFactory._instance = None
+
+    def teardown_method(self):
+        from src.services.service_factory import ServiceFactory
+
+        ServiceFactory._instance = None
+
+    @patch("src.services.service_factory.config")
+    def test_authz_lookup_service_uses_the_jobs_table(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.table_name.return_value = "Jobs-physical"
+
+        factory = ServiceFactory()
+        service = factory.get_authz_lookup_service()
+
+        assert service is factory.get_authz_lookup_service()
+        assert service.jobs_table_name == "Jobs-physical"
+        mock_config.table_name.assert_called_with("Jobs")
+        assert service.client.meta.config.connect_timeout == 0.5
+
+    @patch("src.services.service_factory.config")
+    def test_cognito_groups_service_needs_a_user_pool(self, mock_config):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.COGNITO_USER_POOL_ID = None
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_cognito_groups_service()
+        assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID
+
+    @patch("src.services.service_factory.config")
+    def test_cognito_groups_service_reads_the_pool(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.COGNITO_USER_POOL_ID = "ap-northeast-1_Pool"
+
+        service = ServiceFactory().get_cognito_groups_service()
+
+        assert service.user_pool_id == "ap-northeast-1_Pool"
+        assert service.client.meta.region_name == "ap-northeast-1"

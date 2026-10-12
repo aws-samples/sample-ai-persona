@@ -6,17 +6,17 @@ FastAPI + Jinja2 + htmxベースのWebアプリケーション
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import anyio
 from fastapi import FastAPI, Request, Response
 from fastapi.exception_handlers import (
     http_exception_handler as fastapi_http_exception_handler,
 )
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -26,10 +26,15 @@ from src import __version__
 from src.config import config
 from src.managers.auth_manager import LOGIN_TRANSACTION_TTL, AuthManager
 from src.managers.persona_memory_manager import prepare_long_term_memory
-from src.models.errors import CodedError, ErrorKind
+from src.models.errors import CodedError, ErrorCode, ErrorKind
 from web.access_log import AccessLogMiddleware
-from web.auth_middleware import AuthMiddleware, unauthorized_response
-from web.error_messages import FALLBACK_MESSAGE, toast_response
+from web.auth_middleware import NO_STORE, AuthMiddleware, unauthorized_response
+from web.error_messages import (
+    FALLBACK_MESSAGE,
+    http_status_for,
+    toast_response,
+    user_message_for,
+)
 from web.middleware import CSRFMiddleware
 from web.routers import persona, discussion, interview, api, settings, survey, auth
 from web.user_badge import user_badge
@@ -115,47 +120,106 @@ app.include_router(survey.router, prefix="/survey", tags=["survey"])
 app.include_router(auth.router, tags=["auth"])
 
 
-@app.exception_handler(CodedError)
-async def coded_error_handler(request: Request, exc: CodedError) -> Response:
-    """約束 C13 のうち U1 が通る経路: UNAUTHORIZED の種類だけを扱う。
+# =============================================================================
+# 例外から HTTP 応答への変換（約束 C13、BR2.14）
+#
+# 4 つのハンドラで、どの経路でも JSON API の本文を {detail, error_code} にそろえる。
+# 例外の文言・入力値・ID は本文に出さず、ログだけに出す（NFR3.6）。htmx と画面は
+# 既存の種類ごとの表示（トースト・エラー画面・ログイン画面への移動）のまま。
+# =============================================================================
 
-    API は 401 の JSON、htmx は HX-Redirect、画面は /login への 303。
-    ほかの種類はこれまでどおり既定の扱い（500）に任せる（残りは U2）。
+
+def _is_api(request: Request) -> bool:
+    return request.url.path.startswith("/api/")
+
+
+def _api_error(
+    status_code: int,
+    code: ErrorCode,
+    detail: str,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
+    """The JSON API error body of contract C12 / C13."""
+    response = JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "error_code": code.value},
+        headers=headers,
+    )
+    response.headers["Cache-Control"] = NO_STORE
+    return response
+
+
+def _error_page(request: Request, status_code: int, message: str) -> Response:
+    """フルページのエラー画面（partials/error_page.html）。"""
+    return templates.TemplateResponse(
+        request,
+        "partials/error_page.html",
+        {
+            "request": request,
+            "title": "エラー",
+            "error": message,
+            "status_code": status_code,
+            "back_url": _back_url_for(request.url.path),
+        },
+        status_code=status_code,
+    )
+
+
+async def coded_error_handler(request: Request, exc: Exception) -> Response:
+    """CodedError: 種類で状態コードを決める（UNKNOWN は 500）。
+
+    UNAUTHORIZED は U1 の扱い（API は 401 の JSON、htmx は HX-Redirect、画面は
+    /login への 303）。それ以外は API なら {detail, error_code}、htmx はトースト
+    （発火元の hx-target を知らないため本文を差し替えない）、画面はエラー画面。
     """
-    if exc.code.kind is ErrorKind.UNAUTHORIZED:
+    assert isinstance(exc, CodedError)
+    code = exc.code
+    if code.kind is ErrorKind.UNAUTHORIZED:
         return unauthorized_response(request, exc)
-    raise exc
+    status_code = http_status_for(code)
+    if status_code >= 500:
+        logger.error(
+            "CodedError %s: %s %s",
+            code.value,
+            request.method,
+            request.url.path,
+            exc_info=exc,
+        )
+    else:
+        logger.info(
+            "CodedError %s: %s %s", code.value, request.method, request.url.path
+        )
+    message = user_message_for(exc)
+    if _is_api(request):
+        return _api_error(status_code, code, message)
+    if request.headers.get("HX-Request"):
+        return toast_response(exc, status_code=status_code)
+    return _error_page(request, status_code, message)
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> Response:
-    """リクエスト検証エラー（422）をhtmx向けのパーシャルHTMLに変換する。
+async def validation_exception_handler(request: Request, exc: Exception) -> Response:
+    """リクエスト検証エラー（422）。
 
     Form(...) の必須パラメータ欠落などは FastAPI/Pydantic がRouterに入る前に
     検出するため、Router内の except では捕捉できず、文言カタログ
-    （web/error_messages.py）を経由しない。htmx はレスポンス本文を描画せず
-    app.js の汎用フォールバックにフォールスルーするため、そのままでは
-    「エラーが発生しました」しか表示されない。
+    （web/error_messages.py）を経由しない。
+
+    - htmx: トーストで通知する。このハンドラは全フォーム共通で、どの hx-target が
+      発火元かを知らない。パーシャルHTMLを返すと発火元の hx-target（ペルソナ編集
+      なら本体コンテナ）へスワップされ、フォームと入力値がすべて消える（#117 原因B）
+    - それ以外（JSON API など）: 422 の {detail, error_code: REQUEST_INVALID}
+      （約束 C13）
 
     `exc.errors()` には利用者の入力値が `input` として含まれるため、
-    レスポンスには一切転写しない（診断はログのみ）。これは Router層で
-    `str(e)` を書かない原則（.claude/rules/architecture.md）と同じ扱い。
+    レスポンスには一切転写しない（診断はログのみ）。
     """
     logger.warning(
-        "リクエスト検証エラー: %s %s", request.method, request.url.path, exc_info=True
+        "リクエスト検証エラー: %s %s", request.method, request.url.path, exc_info=exc
     )
+    invalid = CodedError("request validation failed", code=ErrorCode.REQUEST_INVALID)
     if request.headers.get("HX-Request"):
-        # このハンドラは全フォーム共通で、どの hx-target が発火元かを知らない。
-        # パーシャルHTMLを返すと発火元の hx-target（ペルソナ編集なら本体
-        # コンテナ）へスワップされ、フォームと入力値がすべて消える（#117 原因B）。
-        # DOMを書き換えず入力を保持できるトーストで通知する。
-        return toast_response(
-            exc, default="入力内容を確認してください", status_code=422
-        )
-    # JSON APIクライアント（web/routers/api.py）向けには標準の422応答を維持する
-    return await request_validation_exception_handler(request, exc)
+        return toast_response(invalid, status_code=422)
+    return _api_error(422, ErrorCode.REQUEST_INVALID, user_message_for(invalid))
 
 
 def _wants_html_page(request: Request) -> bool:
@@ -165,30 +229,43 @@ def _wants_html_page(request: Request) -> bool:
     - htmx リクエストは各Routerがパーシャルを返す設計なので対象外
     - `Accept` に ``text/html`` を含むものをフルページ遷移とみなす
     """
-    if request.url.path.startswith("/api/"):
+    if _is_api(request):
         return False
     if request.headers.get("HX-Request"):
         return False
     return "text/html" in request.headers.get("accept", "")
 
 
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> Response:
-    """`HTTPException` をブラウザ向けにHTMLページとして描画する。
+def _router_detail(exc: StarletteHTTPException) -> str | None:
+    """Router が組み立てた固定文言（例外メッセージではない）。既定の英語の句は除く。"""
+    detail = exc.detail
+    if not isinstance(detail, str) or not detail:
+        return None
+    try:
+        if detail == HTTPStatus(exc.status_code).phrase:
+            return None
+    except ValueError:
+        pass
+    return detail
 
-    フルページ表示のエンドポイント（`GET /persona/{id}` 等）が
-    `raise HTTPException(404, detail=...)` すると、FastAPI の既定ハンドラが
-    `{"detail": "..."}` を返し、ブラウザに**生のJSONが表示される**。
-    Issue #117 が定めた NOT_FOUND の表示（バナー + 復帰リンク）が、この経路
-    だけ適用されていなかった。
 
-    `detail` はRouter内で組み立てた固定文言（例外メッセージではない）なので
-    そのまま表示してよい。文言を持たない場合はステータスに応じた既定文に落とす。
+async def http_exception_handler(request: Request, exc: Exception) -> Response:
+    """`HTTPException`: API は {detail, error_code: HTTP_ERROR}、画面はHTMLページ。
+
+    - API: 状態コードはそのまま。FastAPI 自身の 404・405 など既定の英語の句は
+      カタログの文言に置き換える。Router が組み立てた固定文言はそのまま使う
+      （v1.0.0 では各 Unit が HTTPException を CodedError に置き換えていく）
+    - フルページ表示のエンドポイント（`GET /persona/{id}` 等）: 生のJSONではなく
+      エラー画面（バナー + 復帰リンク）を返す（#117）
+    - htmx・その他: 既定の挙動を維持する
     """
+    assert isinstance(exc, StarletteHTTPException)
+    if _is_api(request):
+        detail = _router_detail(exc) or user_message_for(
+            CodedError(code=ErrorCode.HTTP_ERROR)
+        )
+        return _api_error(exc.status_code, ErrorCode.HTTP_ERROR, detail, exc.headers)
     if not _wants_html_page(request):
-        # JSON API / htmx 経路は既定の挙動を維持する
         return await fastapi_http_exception_handler(request, exc)
 
     logger.warning(
@@ -197,22 +274,39 @@ async def http_exception_handler(
         request.url.path,
         exc.status_code,
     )
-    detail = exc.detail if isinstance(exc.detail, str) and exc.detail else None
-    message = detail or (
+    message = _router_detail(exc) or (
         "お探しのページが見つかりません" if exc.status_code == 404 else FALLBACK_MESSAGE
     )
-    return templates.TemplateResponse(
-        request,
-        "partials/error_page.html",
-        {
-            "request": request,
-            "title": "エラー",
-            "error": message,
-            "status_code": exc.status_code,
-            "back_url": _back_url_for(request.url.path),
-        },
-        status_code=exc.status_code,
-    )
+    return _error_page(request, exc.status_code, message)
+
+
+async def unhandled_exception_handler(request: Request, exc: Exception) -> Response:
+    """想定外の例外: 500。例外の文言はログだけに出す（NFR9.21）。
+
+    Starlette はこのハンドラを一番外側の ServerErrorMiddleware で呼ぶため、
+    AuthMiddleware の ``no-store`` が付かない。ここで付ける。
+    """
+    logger.error("想定外の例外: %s %s", request.method, request.url.path, exc_info=exc)
+    response: Response
+    if _is_api(request):
+        response = _api_error(500, ErrorCode.UNKNOWN, FALLBACK_MESSAGE)
+    elif request.headers.get("HX-Request"):
+        response = toast_response(None, status_code=500)
+    else:
+        response = _error_page(request, 500, FALLBACK_MESSAGE)
+    response.headers["Cache-Control"] = NO_STORE
+    return response
+
+
+def register_exception_handlers(target: FastAPI) -> None:
+    """約束 C13 の 4 つのハンドラを ``target`` に登録する（テストの小さなアプリでも使う）。"""
+    target.add_exception_handler(CodedError, coded_error_handler)
+    target.add_exception_handler(RequestValidationError, validation_exception_handler)
+    target.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    target.add_exception_handler(Exception, unhandled_exception_handler)
+
+
+register_exception_handlers(app)
 
 
 def _back_url_for(path: str) -> str:

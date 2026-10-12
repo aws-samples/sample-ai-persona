@@ -2659,6 +2659,27 @@ class TestDatabaseServiceJobs:
         assert call_kwargs["Item"]["id"]["S"] == "job-1"
         assert call_kwargs["Item"]["status"]["S"] == "pending"
         assert call_kwargs["Item"]["expires_at"]["N"] == "9999999999"
+        assert "owner_sub" not in call_kwargs["Item"]
+
+    @patch("boto3.client")
+    def test_save_job_records_the_submitter(self, mock_boto3_client):
+        """v1.0.0 では投入者と種類を記録する（約束 C14）。"""
+        mock_client = Mock()
+        mock_client.list_tables.return_value = {"TableNames": []}
+        mock_boto3_client.return_value = mock_client
+
+        service = DatabaseService(table_prefix="Test", region="us-east-1")
+        service.save_job(
+            job_id="job-1",
+            status="pending",
+            expires_at=9999999999,
+            owner_sub="user-a",
+            job_type="discussion",
+        )
+
+        item = mock_client.put_item.call_args[1]["Item"]
+        assert item["owner_sub"] == {"S": "user-a"}
+        assert item["job_type"] == {"S": "discussion"}
 
     @patch("boto3.client")
     def test_get_job_found(self, mock_boto3_client):

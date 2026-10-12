@@ -7,6 +7,7 @@ CI環境でのテスト実行に必要な共通設定とフィクスチャを提
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generator, Iterable
 from unittest.mock import Mock
@@ -27,6 +28,7 @@ os.environ.pop("S3_BUCKET_NAME", None)
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.models.authz import Principal, Role
 from src.models.persona import Persona
 from src.models.discussion import Discussion
 from src.models.message import Message
@@ -281,6 +283,77 @@ def login_as_fixture() -> Callable[..., None]:
     return login_as
 
 
+@dataclass(frozen=True)
+class SampleUser:
+    """A test user that can sign in through :func:`login_as` or act as a Principal.
+
+    The ``sub`` matches what ``AuthManager.start_local_session`` assigns
+    (``local:<email>``), so API tests and Manager tests see the same identity.
+    """
+
+    name: str
+    email: str
+    roles: tuple[str, ...]
+    groups: tuple[str, ...]
+
+    @property
+    def sub(self) -> str:
+        """The Principal ``sub`` of this user under ``AUTH_MODE=local``."""
+        return f"local:{self.email}"
+
+    def principal(self) -> Principal:
+        """Build the Principal ``AuthMiddleware`` would put on the request."""
+        return Principal(
+            sub=self.sub,
+            roles=frozenset(Role(role) for role in self.roles),
+            group_ids=frozenset(self.groups),
+            display_name=self.name,
+            email=self.email,
+        )
+
+    def login(self, client: Any) -> None:
+        """Sign ``client`` in as this user (replaces any previous login)."""
+        login_as(
+            client,
+            name=self.name,
+            email=self.email,
+            roles=self.roles,
+            groups=self.groups,
+        )
+
+
+#: The four users of the authorization tests (U2): two members in different
+#: departments, an admin, and a user without any role.
+MEMBER_A = SampleUser("メンバーA", "member-a@example.com", ("member",), ("sales",))
+MEMBER_B = SampleUser("メンバーB", "member-b@example.com", ("member",), ("dev",))
+ADMIN = SampleUser("管理者", "admin@example.com", ("admin",), ())
+NO_ROLE = SampleUser("ロールなし", "no-role@example.com", (), ("sales",))
+
+
+@pytest.fixture
+def member_a() -> SampleUser:
+    """Member in the ``sales`` department."""
+    return MEMBER_A
+
+
+@pytest.fixture
+def member_b() -> SampleUser:
+    """Member in the ``dev`` department (unrelated to member A)."""
+    return MEMBER_B
+
+
+@pytest.fixture
+def admin_user() -> SampleUser:
+    """Admin without any department."""
+    return ADMIN
+
+
+@pytest.fixture
+def no_role_user() -> SampleUser:
+    """Signed-in user in ``sales`` without any role (FR1.7)."""
+    return NO_ROLE
+
+
 @pytest.fixture
 def client(test_app) -> Generator:
     """ログイン済み（開発用の利用者）の同期テストクライアント（CSRF対策ヘッダー付き）。
@@ -326,6 +399,7 @@ def reset_singletons():
 
         api._persona_manager = None
         api._discussion_manager = None
+        api._job_manager = None
         persona._persona_manager = None
         persona._persona_memory_manager = None
         persona._file_manager = None
