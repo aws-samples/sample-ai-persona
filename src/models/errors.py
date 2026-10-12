@@ -39,6 +39,11 @@ class ErrorKind(StrEnum):
     CONFIG = "config"
     #: May succeed on retry. Show it without destroying the user's input.
     TRANSIENT = "transient"
+    #: The user must sign in (again). Pages move to the login screen, htmx gets
+    #: ``HX-Redirect``, the JSON API answers 401 (contract C5 / C13).
+    UNAUTHORIZED = "unauthorized"
+    #: Signed in but not allowed. Answer 403 without replacing the page body.
+    FORBIDDEN = "forbidden"
 
 
 class ErrorCode(StrEnum):
@@ -92,6 +97,20 @@ class ErrorCode(StrEnum):
     # --- Generic ---
     NETWORK_ERROR = ("network_error", ErrorKind.TRANSIENT)
     JOB_NOT_FOUND = ("job_not_found", ErrorKind.NOT_FOUND)
+
+    # --- Login (v1.0.0 U1; the part of contract C5 that U1 uses) ---
+    # No valid LoginSession on a URL that requires one (BR1.1, BR1.2).
+    AUTH_REQUIRED = ("auth_required", ErrorKind.UNAUTHORIZED)
+    # The session hit the 8-hour idle or 7-day absolute limit (BR1.7, BR1.8).
+    SESSION_EXPIRED = ("session_expired", ErrorKind.UNAUTHORIZED)
+    # A state-changing request without the custom header or own Origin (BR1.19).
+    CSRF_FAILED = ("csrf_failed", ErrorKind.FORBIDDEN)
+    # The lookup needed to decide (Sessions table, Cognito) is unreachable;
+    # fail closed with 503 instead of treating the user as signed in (BR1.18).
+    LOOKUP_UNAVAILABLE = ("lookup_unavailable", ErrorKind.TRANSIENT)
+    # Login settings are missing or malformed (AUTH_MODE, token key list).
+    # Only an operator can fix it; the app refuses to start (BR1.15).
+    AUTH_CONFIG_INVALID = ("auth_config_invalid", ErrorKind.CONFIG)
 
     # --- Generation capacity ---
     GENERATION_CAPACITY_EXCEEDED = (
@@ -559,6 +578,15 @@ class ErrorCode(StrEnum):
     DATABASE_OPERATION_FAILED = ("database_operation_failed", ErrorKind.TRANSIENT)
     S3_OPERATION_FAILED = ("s3_operation_failed", ErrorKind.TRANSIENT)
     S3_OBJECT_NOT_FOUND = ("s3_object_not_found", ErrorKind.NOT_FOUND)
+    # Sessions table unreachable (timeout, throttling past retries).
+    SESSION_STORE_UNAVAILABLE = ("session_store_unavailable", ErrorKind.TRANSIENT)
+    # Cognito unreachable, timed out, 5xx, 429, or the circuit breaker is open.
+    OIDC_UNAVAILABLE = ("oidc_unavailable", ErrorKind.TRANSIENT)
+    # Cognito rejected the grant (refresh token revoked/expired, user disabled):
+    # permanent, the session must end (BR1.11).
+    OIDC_GRANT_INVALID = ("oidc_grant_invalid", ErrorKind.UNAUTHORIZED)
+    # ID token failed signature / iss / aud / exp / nonce verification (BR1.4).
+    OIDC_TOKEN_INVALID = ("oidc_token_invalid", ErrorKind.UNAUTHORIZED)
 
 
 class CodedError(Exception):
@@ -588,3 +616,19 @@ class CodedError(Exception):
         if code is not None:
             self.code = code
         self.context: dict[str, object] = dict(context or {})
+
+
+class AuthRequiredError(CodedError):
+    """The request needs a valid login (contract C5).
+
+    ``SESSION_EXPIRED`` is expressed by overriding ``code`` rather than by a
+    separate class, so callers catch one type for both.
+    """
+
+    code = ErrorCode.AUTH_REQUIRED
+
+
+class LookupUnavailableError(CodedError):
+    """A lookup needed for the auth decision is unreachable (fail closed, 503)."""
+
+    code = ErrorCode.LOOKUP_UNAVAILABLE

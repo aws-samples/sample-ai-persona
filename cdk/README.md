@@ -1,6 +1,129 @@
 # AI ペルソナシステムの AWS CDK デプロイについて
 
-AI ペルソナシステムをAWSにデプロイするためのCDKコードです。ECS Express Modeを使用してシンプルにデプロイします。
+AI ペルソナシステムを AWS にデプロイするための CDK コードです。v1.0.0 では、ログインをアプリ自身が行い（Lambda@Edge をやめた）、アプリを ECS Fargate と内部 ALB で動かし、CDK を Data・App・Edge の 3 スタックに分けました。
+
+v1.0.0 より前の構成（ECS Express Mode と Lambda@Edge の認証）を使い続ける場合は、後半の「[v0 を使い続ける場合](#v0-を使い続ける場合v100-より前の構成)」を参照してください。
+
+## v1.0.0 の構成
+
+```mermaid
+graph TB
+    User([ユーザー]) -->|HTTPS| CloudFront[Amazon CloudFront]
+    WAF[AWS WAF（Edge、us-east-1）] -.-> CloudFront
+    CloudFront -->|VPC オリジン HTTP 80| ALB
+
+    subgraph App["App スタック（ap-northeast-1）"]
+        subgraph VPC["VPC（プライベートサブネット）"]
+            ALB[内部 ALB] --> ECS[ECS Fargate（アプリ）]
+        end
+    end
+
+    subgraph Data["Data スタック（ap-northeast-1、すべて RETAIN）"]
+        DynamoDB[(DynamoDB 10 テーブル + Sessions)]
+        S3[(S3)]
+        ECR[ECR]
+        Cognito[Cognito User Pool]
+        Memory[AgentCore Memory]
+        Secrets[Secrets Manager（鍵）]
+    end
+
+    ECS -->|ログイン（OIDC）| Cognito
+    ECS --> DynamoDB
+    ECS --> S3
+    ECS --> Memory
+    ECR -.->|イメージ| ECS
+    Secrets -.->|起動時に環境変数として| ECS
+```
+
+テキストでの説明: 利用者は CloudFront（WAF はオプション）から内部 ALB を経てアプリへ届きます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB の Sessions テーブルに置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+
+| スタック（Stage `AIPersonaDev`） | リージョン | 中身 | 依存 |
+|---|---|---|---|
+| `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB（既存と同じ形の 10 テーブル + Sessions）、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、トークンの暗号化鍵・ログイン途中の Cookie の署名鍵 | なし |
+| `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF WebACL（`enableWaf: true` のとき） | なし |
+| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ロググループとメトリクスフィルタ | Data、Edge |
+
+v0 のスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）とは名前が重ならないため、同じアカウントに並べて動かせます（切り戻しの備え）。v0 のスタックの削除は、利用者が判断して手で行ってください。
+
+### v1.0.0 のデプロイ（CloudShell）
+
+前提: CloudShell（ap-northeast-1）で、作業ツリーに未コミットの変更がないこと（イメージのタグに Git のコミットの短いハッシュを使うため）。
+
+```bash
+git clone https://github.com/aws-samples/sample-ai-persona.git
+cd sample-ai-persona
+./deploy.sh
+```
+
+`deploy.sh` は次の順に動きます。人が ID を書き写す手順はありません。
+
+1. CDK の依存のインストールと bootstrap（ap-northeast-1 と us-east-1）
+2. ① `AIPersonaDev/Data` と `AIPersonaDev/Edge` をデプロイ（ECR を含む Data を先に作る）
+3. ② コンテナイメージをビルドし、Data の ECR へ送る（タグは `git rev-parse --short HEAD`。同じタグがあれば送らない。ECR のタグは不変）
+4. ③ `AIPersonaDev/App` を `-c imageTag=<タグ>` でデプロイ
+5. アプリの URL と、最初の admin を作るコマンドを表示
+
+| オプション | 使いどころ |
+|---|---|
+| `--restart-app` | Secrets Manager の秘密の値を書き換えたあと。ECS のタスクを入れ替えて完了を待つ（①〜③はしない） |
+| `--image-tag <タグ>` | 前の版に戻すとき。ビルドせず、ECR にあるそのタグで③を行う |
+| `--region <リージョン>` | Data・App のリージョン（既定 ap-northeast-1。Edge は常に us-east-1） |
+
+デプロイの前に、ローカルの検査（`uv run pytest -q`、`uv run ruff check .`、`uv run mypy src/ web/`、`cd cdk && npx tsc --noEmit && npm test && npx cdk synth --no-staging`）を通し、差分を確かめてください。ステートフルなリソース（DynamoDB、S3、Cognito User Pool）の置き換え（replace）があれば止めます。
+
+```bash
+cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=$(git rev-parse --short HEAD)
+```
+
+#### 最初の admin を作る
+
+`deploy.sh` の最後に表示されるコマンドで、利用者を作って `role:admin` のグループに入れます。仮のパスワードがメールで届き、初回ログインで新しいパスワードを設定します。部署は `group:<名前>` のグループで表します（U1 では画面上部にグループ名をそのまま出します）。
+
+#### 設定（`cdk/parameters.ts`）
+
+v1.0.0 では `deploy.sh` のオプションで設定を変えず、`cdk/parameters.ts` を編集してコミットしてから `./deploy.sh` を実行します。
+
+| 項目 | 既定 | 説明 |
+|---|---|---|
+| `appDesiredCount` | 1 | タスクの台数（1〜10。範囲外は synth でエラー）。`-c appDesiredCount=2` でも変えられる |
+| `deploymentMode` | `public` | `closed`（閉域構成）は後続リリースで提供。v1.0.0 では synth でエラー |
+| `enableWaf` / `allowedIpAddresses` | `false` / なし | CloudFront 用 WAF と IP 制限 |
+| `enableAdditionalPersonaModels` | `false` | 追加ペルソナベースモデル（Bedrock Mantle 経由） |
+| `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
+| `dataAgentRuntimeArn` / `dataAgentRegion` | なし | データ分析エージェント連携 |
+| `enableMcpGateway` | `false` | MCP Gateway は後続リリースで提供。v1.0.0 では `true` にすると synth でエラー |
+
+Cognito の ID、AgentCore Memory の ID・Strategy ID を手で書き写す項目はなくなりました（スタック間の参照と、アプリの起動時の `GetMemory` で受け渡す）。
+
+#### 更新時の再デプロイ
+
+最新のコードを取り込んで（コミットされた状態で）`./deploy.sh` を実行します。コードが変わっていなければイメージは送り直しません。
+
+#### 前の版に戻す
+
+```bash
+./deploy.sh --image-tag <前のタグ>
+```
+
+インフラごと戻すときは、前のコミットを取り出して `./deploy.sh` をやり直します。データを持つリソースは RETAIN のため消えません。
+
+#### トークンの暗号化鍵の入れ替え
+
+Secrets Manager の `TokenEncryptionKeys`（`{"current": "v1", "k_v1": "..."}`）を手で書き換え、そのたびに `./deploy.sh --restart-app` でタスクを入れ替えます（秘密の値を変えても `cdk deploy` には差分が出ないため）。
+
+1. 新しい版（例: `"k_v2": "<64 文字の乱数>"`）を足し、`--restart-app`（暗号化はまだ `current` の古い版）
+2. すべてのタスクが入れ替わったら `current` を新しい版にして、`--restart-app`
+3. 7 日後（セッションの最長）に古い版を外して、`--restart-app`
+
+### v1.0.0 の手元の開発
+
+手元では `AUTH_MODE=local` で起動します（Cognito・DynamoDB の Sessions テーブル・Secrets Manager を使わず、設定した開発用の利用者でログインする）。詳しくは [ローカル開発ガイド](../docs/local_development.md) を参照してください。`AUTH_MODE=local` は ECS の中では起動しません。
+
+---
+
+# v0 を使い続ける場合（v1.0.0 より前の構成）
+
+以下は v1.0.0 より前の構成（ECS Express Mode、CloudFront Lambda@Edge + cognito-at-edge の認証、6 スタック）の手順です。v1.0.0 のコードには v0 のスタックの定義（`AIPersona-dev` など）がないため、この手順を実行するときは v1.0.0 より前のリリースのタグを取り出してください。デプロイ済みの v0 のスタックは、v1.0.0 をデプロイしてもそのまま残ります。
 
 ## アーキテクチャ
 

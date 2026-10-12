@@ -39,6 +39,25 @@ class TestCatalogCoverage:
         assert len(wordings) == len(set(wordings))
 
 
+class TestAuthWording:
+    """ログインのコードが既定文言に落ちず、カタログの文言を返すこと（U1）。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.AUTH_REQUIRED,
+            ErrorCode.SESSION_EXPIRED,
+            ErrorCode.CSRF_FAILED,
+            ErrorCode.LOOKUP_UNAVAILABLE,
+        ],
+    )
+    def test_auth_codes_resolve_to_catalog_wording(self, code):
+        sentinel = "SENTINEL_GENERIC_FAILURE"
+        assert user_message_for(CodedError("diag", code=code), default=sentinel) != (
+            sentinel
+        )
+
+
 class TestResolution:
     """例外 → 文言の解決。"""
 

@@ -27,6 +27,9 @@ dependencies = [
     "nh3>=0.2.0",
     "Pillow>=12.3.0",
     "pycountry>=24.0.0",
+    "authlib>=1.8.0",
+    "itsdangerous>=2.2.0",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]

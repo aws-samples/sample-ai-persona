@@ -179,6 +179,7 @@ async def download_nemotron(request: Request) -> Any:
     )
 
 
+# 受け身の要求（BR1.9）: 5 秒ごとの自動更新。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/persona-data/nemotron-status", response_class=HTMLResponse)
 async def nemotron_download_status(request: Request) -> Any:
     """Nemotronダウンロード状況をポーリングで返す"""

@@ -67,6 +67,10 @@ DATA_AGENT_REGION=us-east-1  # データ分析エージェントをデプロイ�
 
 ### deploy.sh によるデプロイ
 
+> **v1.0.0 の場合:** `deploy.sh` のオプションでは設定しません。`cdk/parameters.ts` の
+> `dataAgentRuntimeArn`（と必要なら `dataAgentRegion`）を設定してコミットし、`./deploy.sh` を
+> 実行してください（[CDK デプロイガイド](../cdk/README.md#設定cdkparametersts)）。以下は v0 の構成の手順です。
+
 `--data-agent-arn` オプションを指定してデプロイします。
 
 ```bash

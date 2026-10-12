@@ -19,6 +19,15 @@ class PersonaMemoryManagerError(CodedError):
     pass
 
 
+def prepare_long_term_memory() -> None:
+    """Resolve AgentCore Memory strategy IDs once at application startup.
+
+    Delegates to the Service layer (``GetMemory``); a failed lookup turns
+    long-term memory off instead of stopping the app.
+    """
+    service_factory.resolve_memory_strategies()
+
+
 class PersonaMemoryManager:
     """ペルソナの記憶管理を行うManager"""
 

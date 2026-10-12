@@ -2,29 +2,24 @@ import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { RemovalPolicy } from 'aws-cdk-lib';
 
-export interface UploadBucketProps {
-  bucketNamePrefix: string;
-  accountId: string;
-  region: string;
-  removalPolicy: RemovalPolicy;
-}
-
+/**
+ * アップロードファイル用の S3 バケット（v1.0.0、Data スタック）。
+ *
+ * 物理名は自動生成にし（v0 のバケットと並べて置けるように）、RETAIN にする。
+ * オブジェクトの自動削除（autoDeleteObjects）は使わない（project.md の Forbidden）。
+ */
 export class UploadBucket extends Construct {
-  public readonly bucket: s3.IBucket;
+  public readonly bucket: s3.Bucket;
 
-  constructor(scope: Construct, id: string, props: UploadBucketProps) {
+  constructor(scope: Construct, id: string) {
     super(scope, id);
 
-    const { bucketNamePrefix, accountId, region, removalPolicy } = props;
-
-    // S3 Bucket for file uploads
     this.bucket = new s3.Bucket(this, 'Bucket', {
-      bucketName: `${bucketNamePrefix.toLowerCase()}-uploads-${accountId}-${region}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
-      removalPolicy,
-      autoDeleteObjects: removalPolicy === RemovalPolicy.DESTROY,
+      enforceSSL: true,
+      removalPolicy: RemovalPolicy.RETAIN,
     });
   }
 }

@@ -2,22 +2,26 @@ import { Construct } from 'constructs';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 
 export interface CloudFrontDistributionProps {
-  loadBalancerArn: string;
-  expressEndpoint: string;
-  envName: string;
-  /** WAF WebACL ARN (from WafStack in us-east-1) */
+  /** 内部 ALB（VPC オリジン）。 */
+  loadBalancer: elbv2.IApplicationLoadBalancer;
+  /** WAF WebACL の ARN（Edge スタック、us-east-1）。 */
   webAclArn?: string;
-  cognitoRegion: string;
-  cognitoUserPoolId: string;
-  cognitoUserPoolAppId: string;
-  cognitoUserPoolDomain: string;
 }
 
+/**
+ * CloudFront（v1.0.0、App スタック）。
+ *
+ * - Lambda@Edge は使わない（ログインはアプリが行う。ADR-010）
+ * - 既定の振る舞いはキャッシュしない（CachingDisabled、BR1.20）。/static/* だけ
+ *   キャッシュする（CachingOptimized）
+ * - オリジンリクエストポリシーは AWS 管理の AllViewerExceptHostHeader（全 Cookie・
+ *   全クエリ・Host 以外の全ヘッダー。CSRF の検査に要る Origin・HX-Request・
+ *   X-Requested-With を含む）
+ * - 内部 ALB へは VPC オリジンで HTTP（ポート 80）、読み取りタイムアウト 120 秒
+ */
 export class CloudFrontDistribution extends Construct {
   public readonly distribution: cloudfront.Distribution;
   public readonly domainName: string;
@@ -25,109 +29,33 @@ export class CloudFrontDistribution extends Construct {
   constructor(scope: Construct, id: string, props: CloudFrontDistributionProps) {
     super(scope, id);
 
-    const {
-      loadBalancerArn, expressEndpoint, envName, webAclArn,
-      cognitoRegion, cognitoUserPoolId, cognitoUserPoolAppId, cognitoUserPoolDomain,
-    } = props;
-
-    // VPC Origin via L1
-    const cfnVpcOrigin = new cloudfront.CfnVpcOrigin(this, 'VpcOrigin', {
-      vpcOriginEndpointConfig: {
-        arn: loadBalancerArn,
-        httpPort: 80,
-        httpsPort: 443,
-        originProtocolPolicy: 'https-only',
-        originSslProtocols: ['TLSv1.2'],
-        name: `ai-persona-origin-${envName}`,
-      },
+    const origin = origins.VpcOrigin.withApplicationLoadBalancer(props.loadBalancer, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+      httpPort: 80,
+      readTimeout: cdk.Duration.seconds(120),
     });
 
-    const vpcOrigin = cloudfront.VpcOrigin.fromVpcOriginAttributes(this, 'VpcOriginL2', {
-      vpcOriginId: cfnVpcOrigin.attrId,
-      domainName: expressEndpoint,
-    });
-
-    // Lambda@Edge: inject Cognito config into index.js at synth time
-    const lambdaDir = path.join(__dirname, '../../lambda/auth-at-edge');
-    const indexContent = `const { Authenticator } = require('cognito-at-edge');
-const authenticator = new Authenticator({
-  region: '${cognitoRegion}',
-  userPoolId: '${cognitoUserPoolId}',
-  userPoolAppId: '${cognitoUserPoolAppId}',
-  userPoolDomain: '${cognitoUserPoolDomain}',
-  cookieExpirationDays: 30,
-  cookiePath: '/',
-  httpOnly: true,
-  sameSite: 'Lax',
-  logLevel: 'warn',
-  logoutConfiguration: {
-    logoutUri: '/signout',
-    logoutRedirectUri: '/__cognito_logout__',
-  },
-});
-exports.handler = async (event) => {
-  const response = await authenticator.handle(event);
-  if (response.status === '302' && response.headers?.location?.[0]?.value?.includes('/__cognito_logout__')) {
-    const cfDomain = event.Records[0].cf.request.headers.host[0].value;
-    response.headers.location[0].value = 'https://${cognitoUserPoolDomain}/logout'
-      + '?client_id=${cognitoUserPoolAppId}'
-      + '&logout_uri=' + encodeURIComponent('https://' + cfDomain + '/');
-  }
-  return response;
-};
-`;
-    fs.writeFileSync(path.join(lambdaDir, 'index.js'), indexContent);
-
-    const authFunction = new cloudfront.experimental.EdgeFunction(this, 'AuthAtEdge', {
-      functionName: `ai-persona-auth-edge-${envName}`,
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset(lambdaDir),
-      memorySize: 128,
-      timeout: cdk.Duration.seconds(5),
-    });
-
-    // Origin Request Policy (exclude Host for Express Mode ALB routing)
-    const originRequestPolicy = new cloudfront.OriginRequestPolicy(this, 'OriginRequestPolicy', {
-      originRequestPolicyName: `ai-persona-orp-${envName}`,
-      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
-        'Accept', 'Accept-Language', 'Content-Type', 'Referer', 'User-Agent',
-        'X-Requested-With', 'HX-Request', 'HX-Current-URL', 'HX-Target', 'HX-Trigger',
-      ),
-      cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
-      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-    });
-
-    // CloudFront Distribution
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
-      comment: `AI Persona - ${envName}`,
+      comment: 'AI Persona v1',
       defaultBehavior: {
-        origin: origins.VpcOrigin.withVpcOrigin(vpcOrigin, {
-          readTimeout: cdk.Duration.seconds(120),
-        }),
+        origin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        edgeLambdas: [{
-          functionVersion: authFunction.currentVersion,
-          eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
-        }],
       },
-      webAclId: webAclArn,
+      additionalBehaviors: {
+        '/static/*': {
+          origin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+        },
+      },
+      webAclId: props.webAclArn,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
     });
-
     this.domainName = this.distribution.distributionDomainName;
-
-    new cdk.CfnOutput(this, 'DistributionDomainName', {
-      value: this.distribution.distributionDomainName,
-      description: 'CloudFront Distribution Domain Name',
-    });
-    new cdk.CfnOutput(this, 'DistributionId', {
-      value: this.distribution.distributionId,
-      description: 'CloudFront Distribution ID',
-    });
   }
 }

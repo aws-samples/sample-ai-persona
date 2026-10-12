@@ -551,6 +551,7 @@ async def get_messages(request: Request, session_id: str) -> Any:
         )
 
 
+# 受け身の要求（BR1.9）: 状態の確認。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/{session_id}/status", response_class=JSONResponse)
 async def get_session_status(request: Request, session_id: str) -> Any:
     """インタビューセッション状態取得エンドポイント"""
@@ -819,6 +820,7 @@ async def end_interview_session(request: Request, session_id: str) -> Any:
 
 
 # リアルタイムメッセージ送受信のためのSSEエンドポイント
+# 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/{session_id}/stream")
 async def stream_interview_messages(request: Request, session_id: str) -> Any:
     """インタビューメッセージのリアルタイムストリーミング（SSE）"""

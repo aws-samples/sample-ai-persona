@@ -1,179 +1,126 @@
 import { Construct } from 'constructs';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as kms from 'aws-cdk-lib/aws-kms';
 
-export interface DatabaseProps {
-  tablePrefix: string;
-  removalPolicy?: RemovalPolicy;
-}
-
+/**
+ * v1.0.0 の DynamoDB テーブル（Data スタック）。
+ *
+ * - 今と同じキー・GSI・PITR の 10 テーブルを TableV2 で新しく作る（形の作り直しは U4〜U7）
+ * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
+ * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
+ * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
+ */
 export class Database extends Construct {
-  public readonly personasTable: dynamodb.Table;
-  public readonly discussionsTable: dynamodb.Table;
-  public readonly uploadedFilesTable: dynamodb.Table;
-  public readonly datasetsTable: dynamodb.Table;
-  public readonly bindingsTable: dynamodb.Table;
-  public readonly surveyTemplatesTable: dynamodb.Table;
-  public readonly surveysTable: dynamodb.Table;
-  public readonly knowledgeBasesTable: dynamodb.Table;
-  public readonly personaKBBindingsTable: dynamodb.Table;
-  public readonly jobsTable: dynamodb.Table;
+  public readonly personasTable: dynamodb.TableV2;
+  public readonly discussionsTable: dynamodb.TableV2;
+  public readonly uploadedFilesTable: dynamodb.TableV2;
+  public readonly datasetsTable: dynamodb.TableV2;
+  public readonly bindingsTable: dynamodb.TableV2;
+  public readonly surveyTemplatesTable: dynamodb.TableV2;
+  public readonly surveysTable: dynamodb.TableV2;
+  public readonly knowledgeBasesTable: dynamodb.TableV2;
+  public readonly personaKBBindingsTable: dynamodb.TableV2;
+  public readonly jobsTable: dynamodb.TableV2;
+  public readonly sessionsTable: dynamodb.TableV2;
+  public readonly sessionsKey: kms.Key;
 
-  constructor(scope: Construct, id: string, props: DatabaseProps) {
+  constructor(scope: Construct, id: string) {
     super(scope, id);
 
-    const { tablePrefix, removalPolicy = RemovalPolicy.RETAIN } = props;
+    const gsi = (
+      indexName: string,
+      partitionKey: string,
+      sortKey?: string,
+    ): dynamodb.GlobalSecondaryIndexPropsV2 => ({
+      indexName,
+      partitionKey: { name: partitionKey, type: dynamodb.AttributeType.STRING },
+      ...(sortKey ? { sortKey: { name: sortKey, type: dynamodb.AttributeType.STRING } } : {}),
+    });
 
-    // Personas Table
-    this.personasTable = new dynamodb.Table(this, 'Personas', {
-      tableName: `${tablePrefix}_Personas`,
+    this.personasTable = this.table('Personas', {
+      globalSecondaryIndexes: [
+        gsi('CreatedAtIndex', 'type', 'created_at'),
+        gsi('NameIndex', 'type', 'name'),
+        gsi('OccupationIndex', 'type', 'occupation'),
+      ],
+    });
+    this.discussionsTable = this.table('Discussions', {
+      globalSecondaryIndexes: [
+        gsi('CreatedAtIndex', 'type', 'created_at'),
+        gsi('TopicIndex', 'type', 'topic'),
+        gsi('ModeIndex', 'mode', 'created_at'),
+      ],
+    });
+    this.uploadedFilesTable = this.table('UploadedFiles', {
+      globalSecondaryIndexes: [gsi('UploadedAtIndex', 'type', 'uploaded_at')],
+    });
+    this.datasetsTable = this.table('Datasets');
+    this.bindingsTable = this.table('PersonaDatasetBindings', {
+      globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
+    });
+    this.surveyTemplatesTable = this.table('SurveyTemplates');
+    this.surveysTable = this.table('Surveys');
+    this.knowledgeBasesTable = this.table('KnowledgeBases');
+    this.personaKBBindingsTable = this.table('PersonaKBBindings', {
+      globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
+    });
+    // Jobs: 非同期ジョブの追跡。今と同じく PITR なし、TTL は expires_at
+    this.jobsTable = this.table('Jobs', { pitr: false, timeToLiveAttribute: 'expires_at' });
+
+    // Sessions: ログインセッション（NFR3.4、reliability-design.md）。
+    // 業務データを持たず、消えても再ログインで済むため PITR は付けない。
+    this.sessionsKey = new kms.Key(this, 'SessionsKey', {
+      description: 'AI Persona v1 Sessions table encryption',
+      enableKeyRotation: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.sessionsTable = new dynamodb.TableV2(this, 'Sessions', {
+      partitionKey: { name: 'session_id_hash', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.customerManagedKey(this.sessionsKey),
+      timeToLiveAttribute: 'ttl',
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+  }
+
+  private table(
+    id: string,
+    options: {
+      globalSecondaryIndexes?: dynamodb.GlobalSecondaryIndexPropsV2[];
+      pitr?: boolean;
+      timeToLiveAttribute?: string;
+    } = {},
+  ): dynamodb.TableV2 {
+    const { globalSecondaryIndexes, pitr = true, timeToLiveAttribute } = options;
+    return new dynamodb.TableV2(this, id, {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      globalSecondaryIndexes,
+      timeToLiveAttribute,
+      ...(pitr
+        ? { pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true } }
+        : {}),
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
     });
+  }
 
-    this.personasTable.addGlobalSecondaryIndex({
-      indexName: 'CreatedAtIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
-    });
-
-    this.personasTable.addGlobalSecondaryIndex({
-      indexName: 'NameIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'name', type: dynamodb.AttributeType.STRING },
-    });
-
-    this.personasTable.addGlobalSecondaryIndex({
-      indexName: 'OccupationIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'occupation', type: dynamodb.AttributeType.STRING },
-    });
-
-    // Discussions Table
-    this.discussionsTable = new dynamodb.Table(this, 'Discussions', {
-      tableName: `${tablePrefix}_Discussions`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    this.discussionsTable.addGlobalSecondaryIndex({
-      indexName: 'CreatedAtIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
-    });
-
-    this.discussionsTable.addGlobalSecondaryIndex({
-      indexName: 'TopicIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'topic', type: dynamodb.AttributeType.STRING },
-    });
-
-    this.discussionsTable.addGlobalSecondaryIndex({
-      indexName: 'ModeIndex',
-      partitionKey: { name: 'mode', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
-    });
-
-    // UploadedFiles Table
-    this.uploadedFilesTable = new dynamodb.Table(this, 'UploadedFiles', {
-      tableName: `${tablePrefix}_UploadedFiles`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    this.uploadedFilesTable.addGlobalSecondaryIndex({
-      indexName: 'UploadedAtIndex',
-      partitionKey: { name: 'type', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'uploaded_at', type: dynamodb.AttributeType.STRING },
-    });
-
-    // Datasets Table
-    this.datasetsTable = new dynamodb.Table(this, 'Datasets', {
-      tableName: `${tablePrefix}_Datasets`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    // PersonaDatasetBindings Table
-    this.bindingsTable = new dynamodb.Table(this, 'PersonaDatasetBindings', {
-      tableName: `${tablePrefix}_PersonaDatasetBindings`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    this.bindingsTable.addGlobalSecondaryIndex({
-      indexName: 'PersonaIdIndex',
-      partitionKey: { name: 'persona_id', type: dynamodb.AttributeType.STRING },
-    });
-
-    // SurveyTemplates Table
-    this.surveyTemplatesTable = new dynamodb.Table(this, 'SurveyTemplates', {
-      tableName: `${tablePrefix}_SurveyTemplates`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    // Surveys Table
-    this.surveysTable = new dynamodb.Table(this, 'Surveys', {
-      tableName: `${tablePrefix}_Surveys`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    // KnowledgeBases Table
-    this.knowledgeBasesTable = new dynamodb.Table(this, 'KnowledgeBases', {
-      tableName: `${tablePrefix}_KnowledgeBases`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    // PersonaKBBindings Table
-    this.personaKBBindingsTable = new dynamodb.Table(this, 'PersonaKBBindings', {
-      tableName: `${tablePrefix}_PersonaKBBindings`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy,
-    });
-
-    this.personaKBBindingsTable.addGlobalSecondaryIndex({
-      indexName: 'PersonaIdIndex',
-      partitionKey: { name: 'persona_id', type: dynamodb.AttributeType.STRING },
-    });
-
-    // Jobs Table (async job tracking with TTL)
-    this.jobsTable = new dynamodb.Table(this, 'Jobs', {
-      tableName: `${tablePrefix}_Jobs`,
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      timeToLiveAttribute: 'expires_at',
-      removalPolicy,
-    });
+  /** App スタックがタスクロールに権限を与え、環境変数に名前を渡す 10 テーブル。 */
+  public get applicationTables(): Record<string, dynamodb.TableV2> {
+    return {
+      PERSONAS_TABLE_NAME: this.personasTable,
+      DISCUSSIONS_TABLE_NAME: this.discussionsTable,
+      UPLOADED_FILES_TABLE_NAME: this.uploadedFilesTable,
+      DATASETS_TABLE_NAME: this.datasetsTable,
+      PERSONA_DATASET_BINDINGS_TABLE_NAME: this.bindingsTable,
+      SURVEY_TEMPLATES_TABLE_NAME: this.surveyTemplatesTable,
+      SURVEYS_TABLE_NAME: this.surveysTable,
+      KNOWLEDGE_BASES_TABLE_NAME: this.knowledgeBasesTable,
+      PERSONA_KB_BINDINGS_TABLE_NAME: this.personaKBBindingsTable,
+      JOBS_TABLE_NAME: this.jobsTable,
+    };
   }
 }

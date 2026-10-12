@@ -11,8 +11,11 @@ from .ai_service import AIService
 from .agent_service import AgentService
 from .database_service import DatabaseService
 from ..config import config
+from ..models.errors import CodedError, ErrorCode
 
 if TYPE_CHECKING:
+    from ..models.login_session import SessionStore
+    from .oidc_service import OidcService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
     from .memory.memory_service import MemoryService
@@ -51,6 +54,8 @@ class ServiceFactory:
         self._s3_service: Optional["S3Service"] = None
         self._survey_batch_service: Optional["SurveyBatchService"] = None
         self._dataset_analysis_service: Optional["DatasetAnalysisService"] = None
+        self._session_store: Optional["SessionStore"] = None
+        self._oidc_service: Optional["OidcService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -100,6 +105,8 @@ class ServiceFactory:
                     self._database_service = DatabaseService(
                         table_prefix=config.DYNAMODB_TABLE_PREFIX,
                         region=config.DYNAMODB_REGION,
+                        # CDK が渡したテーブルごとの物理名（なければ接頭辞から組み立てる）
+                        table_names=config.table_names(),
                     )
         return self._database_service
 
@@ -169,6 +176,15 @@ class ServiceFactory:
                         self._memory_service = None
 
         return self._memory_service
+
+    def resolve_memory_strategies(self) -> None:
+        """起動時に AgentCore Memory の Strategy ID を GetMemory で引き、config に入れる。
+
+        環境変数で渡されていればそれを使う。引けなければ長期記憶を無効にする。
+        """
+        from .memory.strategy_lookup import resolve_memory_strategies
+
+        resolve_memory_strategies(config)
 
     def check_stm_session_exists(self, session_id: str) -> bool:
         """AgentCore Memory STMにセッション履歴が存在するか確認する。
@@ -259,6 +275,75 @@ class ServiceFactory:
                         ),
                     )
         return self._dataset_analysis_service
+
+    def get_session_store(self) -> "SessionStore":
+        """Return the LoginSession store for the running AUTH_MODE.
+
+        ``local`` keeps sessions in the process (BR1.15); ``oidc`` uses the
+        DynamoDB Sessions table so every task reads the same session (BR1.18).
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` when ``oidc`` has no table name.
+        """
+        if self._session_store is None:
+            with self._lock:
+                if self._session_store is None:
+                    self._session_store = self._create_session_store()
+        return self._session_store
+
+    def _create_session_store(self) -> "SessionStore":
+        if config.AUTH_MODE == "local":
+            from .memory_session_store import MemorySessionStore
+
+            self.logger.info("Using the in-process session store (AUTH_MODE=local)")
+            return MemorySessionStore()
+        if not config.SESSIONS_TABLE_NAME:
+            raise CodedError(
+                "SESSIONS_TABLE_NAME is required unless AUTH_MODE=local",
+                code=ErrorCode.AUTH_CONFIG_INVALID,
+            )
+        from .session_store_service import SessionStoreService
+
+        self.logger.info("Using the DynamoDB session store")
+        return SessionStoreService(
+            table_name=config.SESSIONS_TABLE_NAME, region=config.DYNAMODB_REGION
+        )
+
+    def get_oidc_service(self) -> "OidcService":
+        """Return the Cognito OIDC client (AUTH_MODE=oidc only).
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` when a Cognito setting is missing.
+        """
+        if self._oidc_service is None:
+            with self._lock:
+                if self._oidc_service is None:
+                    self._oidc_service = self._create_oidc_service()
+        return self._oidc_service
+
+    def _create_oidc_service(self) -> "OidcService":
+        required = {
+            "COGNITO_USER_POOL_ID": config.COGNITO_USER_POOL_ID,
+            "COGNITO_CLIENT_ID": config.COGNITO_CLIENT_ID,
+            "COGNITO_CLIENT_SECRET": config.COGNITO_CLIENT_SECRET,
+            "COGNITO_DOMAIN": config.COGNITO_DOMAIN,
+        }
+        missing = sorted(name for name, value in required.items() if not value)
+        if missing:
+            raise CodedError(
+                f"Cognito settings are missing: {', '.join(missing)}",
+                code=ErrorCode.AUTH_CONFIG_INVALID,
+            )
+        from .oidc_service import OidcService
+
+        self.logger.info("Creating new OidcService instance")
+        return OidcService(
+            user_pool_id=config.COGNITO_USER_POOL_ID or "",
+            client_id=config.COGNITO_CLIENT_ID or "",
+            client_secret=config.COGNITO_CLIENT_SECRET or "",
+            domain=config.COGNITO_DOMAIN or "",
+            redirect_uri=config.APP_BASE_URL.rstrip("/") + "/auth/callback",
+        )
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """

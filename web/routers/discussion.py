@@ -264,6 +264,7 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
         )
 
 
+# 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/stream")
 async def stream_discussion(
     request: Request,

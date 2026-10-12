@@ -63,7 +63,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 |---------|------|
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
 | AI | Amazon Bedrock (Claude Sonnet 5 / Haiku 4.5), Strands Agent SDK |
-| インフラ | AWS CDK (TypeScript), ECS Express Mode, CloudFront, Lambda@Edge, WAF, ECR, Cognito |
+| インフラ | AWS CDK (TypeScript), ECS Fargate, 内部 ALB, CloudFront（VPC オリジン）, WAF, ECR, Cognito（アプリでの OIDC ログイン）, DynamoDB, Secrets Manager |
 
 
 ## オプション
@@ -77,8 +77,8 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 
 
 オプションの有効化（デフォルトは表示されず、以下の方法で有効化した場合のみ画面上でモデル選択に表示されます。）
-- CDKデプロイ時: `parameters.ts` で `enableAdditionalPersonaModels: true` を設定
-- CloudShellスクリプトデプロイ時: `./deploy.sh --enable-additional-persona-models`
+- `cdk/parameters.ts` で `enableAdditionalPersonaModels: true` を設定してコミットし、`./deploy.sh` を実行（v1.0.0 では `deploy.sh` のオプションでは設定しません）
+- v0 の構成を使い続ける場合: `./deploy.sh --enable-additional-persona-models`（v1.0.0 より前のリリースの `deploy.sh`）
 
 詳細は [CDKデプロイガイド](cdk/README.md#パラメータ) と [ユーザーガイド](docs/user_guide.md#技術的な質問) を参照してください。
 

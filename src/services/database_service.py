@@ -44,6 +44,7 @@ class DatabaseService:
         self,
         table_prefix: str = "AIPersona",
         region: str = "us-east-1",
+        table_names: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize DynamoDB service with AWS configuration.
@@ -51,6 +52,9 @@ class DatabaseService:
         Args:
             table_prefix: Prefix for DynamoDB table names
             region: AWS region for DynamoDB
+            table_names: Physical names by table kind (``"Personas"`` etc.),
+                as created by CDK. Kinds missing here fall back to
+                ``{table_prefix}_{kind}``.
 
         Raises:
             DatabaseError: If AWS credentials are invalid or missing
@@ -98,17 +102,22 @@ class DatabaseService:
         self.serializer = TypeSerializer()
         self.deserializer = TypeDeserializer()
 
-        # Table names
-        self.personas_table = f"{table_prefix}_Personas"
-        self.discussions_table = f"{table_prefix}_Discussions"
-        self.files_table = f"{table_prefix}_UploadedFiles"
-        self.datasets_table = f"{table_prefix}_Datasets"
-        self.bindings_table = f"{table_prefix}_PersonaDatasetBindings"
-        self.survey_templates_table = f"{table_prefix}_SurveyTemplates"
-        self.surveys_table = f"{table_prefix}_Surveys"
-        self.kb_table = f"{table_prefix}_KnowledgeBases"
-        self.persona_kb_bindings_table = f"{table_prefix}_PersonaKBBindings"
-        self.jobs_table = f"{table_prefix}_Jobs"
+        # Table names: CDK-generated physical names when given, else prefix-based
+        names = table_names or {}
+
+        def name_of(kind: str) -> str:
+            return names.get(kind) or f"{table_prefix}_{kind}"
+
+        self.personas_table = name_of("Personas")
+        self.discussions_table = name_of("Discussions")
+        self.files_table = name_of("UploadedFiles")
+        self.datasets_table = name_of("Datasets")
+        self.bindings_table = name_of("PersonaDatasetBindings")
+        self.survey_templates_table = name_of("SurveyTemplates")
+        self.surveys_table = name_of("Surveys")
+        self.kb_table = name_of("KnowledgeBases")
+        self.persona_kb_bindings_table = name_of("PersonaKBBindings")
+        self.jobs_table = name_of("Jobs")
 
     def _get_table_name(self, entity_type: str) -> str:
         """

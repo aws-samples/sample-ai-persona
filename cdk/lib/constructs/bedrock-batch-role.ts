@@ -4,6 +4,11 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export interface BedrockBatchRoleProps {
   bucket: s3.IBucket;
+  /**
+   * IAM ロールの名前。省略時は自動生成（v1 は v0 と同じアカウントに並べて置くため、
+   * 固定名 BedrockBatchInferenceRole とぶつからないようにする）。
+   */
+  roleName?: string;
 }
 
 export class BedrockBatchRole extends Construct {
@@ -12,10 +17,10 @@ export class BedrockBatchRole extends Construct {
   constructor(scope: Construct, id: string, props: BedrockBatchRoleProps) {
     super(scope, id);
 
-    const { bucket } = props;
+    const { bucket, roleName } = props;
 
     this.role = new iam.Role(this, 'Role', {
-      roleName: 'BedrockBatchInferenceRole',
+      roleName,
       assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
       description: 'IAM role for Amazon Bedrock Batch Inference to access S3 input/output',
     });

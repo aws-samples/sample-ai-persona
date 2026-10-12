@@ -19,4 +19,8 @@ RUN uv sync --frozen \
 EXPOSE 80
 
 # FastAPI + uvicornを起動（uv run を介さず venv 直起動）
-CMD ["/app/.venv/bin/uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "80"]
+# --no-access-log: uvicorn のアクセスログは URL のクエリ（/auth/callback の code・state）を
+#   そのまま出すため止め、アプリの http.access（クエリを除いたパス）に置き換える（NFR3.3）
+# --timeout-keep-alive 310: 内部 ALB の無操作タイムアウト（300 秒）より長くし、ALB より先に
+#   アプリが接続を閉じて 502 になるのを防ぐ
+CMD ["/app/.venv/bin/uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "80", "--no-access-log", "--timeout-keep-alive", "310"]
