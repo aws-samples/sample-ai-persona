@@ -41,6 +41,10 @@ graph LR
 
 ## セットアップ手順
 
+> **v1.0.0 の場合:** MCP Gateway は後続リリースで提供します。v1.0.0 の CDK では
+> `enableMcpGateway: true` にすると synth でエラーになります。以下は v0 の構成
+> （メインスタック `AIPersona-{env}`）の手順です。
+
 ### 1. パラメータの設定
 
 #### deploy.sh を使う場合（推奨）

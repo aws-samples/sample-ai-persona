@@ -56,6 +56,9 @@ _ALLOWED_CALLS = frozenset(
         # error_kind_of/is_correctable（いずれも上記で許可済み）のみで
         # error_type 文字列を導出し、例外メッセージには触らない。
         "_error_type_for",
+        # web/auth_middleware.py の未ログインの応答。exc.code だけを読み、本文は
+        # カタログの文言とコードに限る（TestAuthErrorBodies で直接検証している）。
+        "unauthorized_response",
     }
 )
 
@@ -70,6 +73,19 @@ _TRACEBACK_BASELINE: set[str] = set()
 
 def _router_modules() -> list[Path]:
     return sorted(p for p in _ROUTERS_DIR.glob("*.py") if p.name != "__init__.py")
+
+
+#: Router の前で応答を作る部品（v1.0.0 U1 のログインの入口・CSRF・アクセスログ）。
+#: 例外変数の参照と traceback の使用を Router と同じ規則で検査する。
+_ENTRY_MODULES = [
+    _ROUTERS_DIR.parent / "auth_middleware.py",
+    _ROUTERS_DIR.parent / "middleware.py",
+    _ROUTERS_DIR.parent / "access_log.py",
+]
+
+
+def _exposure_modules() -> list[Path]:
+    return _router_modules() + _ENTRY_MODULES
 
 
 class _ExposureVisitor(ast.NodeVisitor):
@@ -139,7 +155,7 @@ class _ExposureVisitor(ast.NodeVisitor):
         return isinstance(func, ast.Attribute) and func.attr in _ALLOWED_CALLS
 
 
-@pytest.mark.parametrize("path", _router_modules(), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _exposure_modules(), ids=lambda p: p.name)
 def test_router_does_not_reference_exception_outside_logging(path: Path) -> None:
     """例外変数がログ・文言カタログ以外から参照されていないこと。
 
@@ -164,7 +180,7 @@ def test_router_does_not_reference_exception_outside_logging(path: Path) -> None
     )
 
 
-@pytest.mark.parametrize("path", _router_modules(), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _exposure_modules(), ids=lambda p: p.name)
 def test_router_does_not_import_traceback(path: Path) -> None:
     """Router がスタックトレースを文字列化する経路を持たないこと。"""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -194,7 +210,7 @@ def test_router_does_not_import_traceback(path: Path) -> None:
 
 def test_baseline_has_no_stale_modules() -> None:
     """_BASELINE に存在しないモジュール名が残っていないこと。"""
-    known = {p.name for p in _router_modules()}
+    known = {p.name for p in _exposure_modules()}
     assert not set(_BASELINE) - known
     assert not _TRACEBACK_BASELINE - known
 
@@ -313,17 +329,18 @@ class TestRequestValidationErrorHandling:
         payload = json.loads(response.headers["HX-Trigger"])
         assert "入力内容を確認してください" in payload["showToast"]["message"]
 
-    def test_json_client_response_is_not_a_toast(self, test_app):
+    def test_json_client_response_is_not_a_toast(self, test_app, login_as):
         """JSON APIクライアント向けには標準422応答（JSON本文）を維持する。
 
         `client` フィクスチャは HX-Request を常に付けるため、ここでは付けない
-        クライアントを用意する（CSRFは X-Requested-With で通す）。
+        ログイン済みのクライアントを用意する（CSRFは X-Requested-With で通す）。
         """
         from fastapi.testclient import TestClient
 
         with TestClient(
             test_app, headers={"X-Requested-With": "XMLHttpRequest"}
         ) as json_client:
+            login_as(json_client)
             response = json_client.put("/persona/some-id", data={"age": "30"})
 
         assert response.status_code == 422
@@ -357,16 +374,20 @@ class TestRequestValidationErrorHandling:
             assert internal not in response.text
             assert internal not in trigger
 
-    def test_json_api_keeps_standard_422(self, test_app):
+    def test_json_api_keeps_standard_422(self, test_app, login_as):
         """JSON APIクライアント（web/routers/api.py）の挙動を変えないこと。
 
         共有の `client` フィクスチャはCSRF対策で HX-Request を常時付与するため、
         htmx以外のクライアントを再現するには専用のクライアントが必要。
-        `/api/*` はCSRF免除パスなのでヘッダーなしでも到達する。
+        v1.0.0 では `/api/*` もCSRFの対象になったため、JSON クライアントと同じく
+        X-Requested-With を付け、ログイン済みにする（約束 C11、C12）。
         """
         from fastapi.testclient import TestClient
 
-        with TestClient(test_app) as api_client:
+        with TestClient(
+            test_app, headers={"X-Requested-With": "XMLHttpRequest"}
+        ) as api_client:
+            login_as(api_client)
             response = api_client.post("/api/discussions", json={})
 
         assert response.status_code == 422
@@ -915,14 +936,15 @@ class TestHttpExceptionRendersHtmlPage:
         assert StarletteHTTPException in app.exception_handlers
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_persona_not_found_renders_html(self, mock_get_mgr, test_app):
+    def test_persona_not_found_renders_html(self, mock_get_mgr, test_app, login_as):
         from fastapi.testclient import TestClient
 
         mgr = Mock()
         mgr.get_persona.return_value = None
         mock_get_mgr.return_value = mgr
 
-        with TestClient(test_app) as browser:
+        with TestClient(test_app, follow_redirects=False) as browser:
+            login_as(browser)
             response = browser.get("/persona/nope", headers=self._BROWSER)
 
         assert response.status_code == 404
@@ -935,35 +957,38 @@ class TestHttpExceptionRendersHtmlPage:
         assert "/persona/management" in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
-    def test_discussion_not_found_renders_html(self, mock_get_mgr, test_app):
+    def test_discussion_not_found_renders_html(self, mock_get_mgr, test_app, login_as):
         from fastapi.testclient import TestClient
 
         mgr = Mock()
         mgr.get_discussion.return_value = None
         mock_get_mgr.return_value = mgr
 
-        with TestClient(test_app) as browser:
+        with TestClient(test_app, follow_redirects=False) as browser:
+            login_as(browser)
             response = browser.get("/discussion/nope", headers=self._BROWSER)
 
         assert response.status_code == 404
         assert not response.text.strip().startswith("{")
         assert "/discussion/results" in response.text
 
-    def test_json_api_keeps_json_response(self, test_app):
+    def test_json_api_keeps_json_response(self, test_app, login_as):
         """`/api/*` はJSONクライアント向けなので既定の挙動を維持する。"""
         from fastapi.testclient import TestClient
 
-        with TestClient(test_app) as browser:
+        with TestClient(test_app, follow_redirects=False) as browser:
+            login_as(browser)
             # Accept に text/html を含めてもJSONを返すこと
             response = browser.get("/api/personas/nope", headers=self._BROWSER)
 
         assert "application/json" in response.headers["content-type"]
 
-    def test_htmx_request_is_not_given_a_full_page(self, test_app):
+    def test_htmx_request_is_not_given_a_full_page(self, test_app, login_as):
         """htmx 経路はパーシャルを返す設計なので、フルページに差し替えない。"""
         from fastapi.testclient import TestClient
 
-        with TestClient(test_app) as hx:
+        with TestClient(test_app, follow_redirects=False) as hx:
+            login_as(hx)
             response = hx.get(
                 "/persona/nope",
                 headers={"HX-Request": "true", **self._BROWSER},
@@ -972,7 +997,7 @@ class TestHttpExceptionRendersHtmlPage:
         # base.html を継承したフルページ（ナビ・フッター）を返していないこと
         assert "<footer" not in response.text
 
-    def test_error_page_does_not_leak_exception_details(self, test_app):
+    def test_error_page_does_not_leak_exception_details(self, test_app, login_as):
         """内部エラー（500）で例外の内容を画面に出さないこと。"""
         from fastapi.testclient import TestClient
 
@@ -981,7 +1006,10 @@ class TestHttpExceptionRendersHtmlPage:
         mgr.get_persona.side_effect = RuntimeError(secret)
 
         with patch("web.routers.persona.get_persona_manager", return_value=mgr):
-            with TestClient(test_app, raise_server_exceptions=False) as browser:
+            with TestClient(
+                test_app, raise_server_exceptions=False, follow_redirects=False
+            ) as browser:
+                login_as(browser)
                 response = browser.get("/persona/p1", headers=self._BROWSER)
 
         assert secret not in response.text
@@ -1154,6 +1182,65 @@ class TestPersistedFailuresDoNotLeak:
         )
         assert survey.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
         assert "secret-bucket" not in str(survey.to_dict())
+
+
+class TestAuthErrorBodies:
+    """v1.0.0 U1 のログインのエラー（401・403・503）の本文に内部の値が出ないこと。
+
+    本文は {detail, error_code} だけで、detail はカタログの文言（約束 C5、C12）。
+    """
+
+    _ALLOWED_KEYS = {"detail", "error_code"}
+
+    def _assert_catalog_body(self, response, code: ErrorCode) -> None:
+        from src.models.errors import CodedError
+        from web.error_messages import user_message_for
+
+        body = response.json()
+        assert set(body) == self._ALLOWED_KEYS
+        assert body["error_code"] == code.value
+        assert body["detail"] == user_message_for(CodedError(code=code))
+
+    def test_unauthenticated_api_body(self, test_app):
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as anonymous:
+            anonymous.cookies.set("session_id", "secret-session-value")
+            response = anonymous.get("/api/personas")
+
+        assert response.status_code == 401
+        self._assert_catalog_body(response, ErrorCode.AUTH_REQUIRED)
+        assert "secret-session-value" not in response.text
+
+    def test_csrf_rejection_body(self, test_app, login_as):
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as no_header:
+            login_as(no_header)
+            response = no_header.post("/api/discussions", json={})
+
+        assert response.status_code == 403
+        self._assert_catalog_body(response, ErrorCode.CSRF_FAILED)
+
+    def test_lookup_unavailable_body(self, test_app, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from src.models.errors import LookupUnavailableError
+        from web.routers import auth
+
+        manager = Mock()
+        manager.check_request.side_effect = LookupUnavailableError(
+            "arn:aws:dynamodb:ap-northeast-1:999999999999:table/Sessions"
+        )
+        monkeypatch.setattr(auth, "_auth_manager", manager)
+
+        with TestClient(test_app) as browser:
+            browser.cookies.set("session_id", "sid")
+            response = browser.get("/api/personas")
+
+        assert response.status_code == 503
+        self._assert_catalog_body(response, ErrorCode.LOOKUP_UNAVAILABLE)
+        assert "arn:aws" not in response.text
 
 
 def _stringifies_something(node: ast.AST) -> bool:

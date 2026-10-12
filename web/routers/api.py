@@ -621,6 +621,7 @@ async def run_interview(req: RunInterviewRequest) -> Any:
 # --- job status ---
 
 
+# 受け身の要求（BR1.9）: 状態の確認の繰り返し。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get(
     "/jobs/{job_id}",
     response_model=JobResponse,

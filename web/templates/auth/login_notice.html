@@ -1,0 +1,17 @@
+{% extends "auth/layout.html" %}
+{# 期限切れ（reason=expired、BR1.22）とログアウト済み（reason=signed_out、R-11）の案内。
+   すぐには Cognito へ移さず、ボタンでログインを始める。 #}
+{% block content %}
+<div data-testid="login-notice" role="status">
+    {% if reason == "expired" %}
+    <p class="text-gray-900 font-medium mb-6">再度ログインしてください</p>
+    {% else %}
+    <p class="text-gray-900 font-medium mb-6">ログアウトしました</p>
+    {% endif %}
+    <a href="{{ login_url }}"
+       data-testid="login-button"
+       class="block w-full text-center px-4 py-3 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700">
+        ログイン
+    </a>
+</div>
+{% endblock %}

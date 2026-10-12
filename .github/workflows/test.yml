@@ -11,6 +11,8 @@ permissions:
 
 env:
   AWS_DEFAULT_REGION: us-east-1
+  # ログイン方式（v1.0.0）。テストは手元専用の local で動かす（tests/conftest.py でも設定する）
+  AUTH_MODE: local
   DYNAMODB_TABLE_PREFIX: Test
   DYNAMODB_REGION: us-east-1
   ENABLE_LONG_TERM_MEMORY: "false"

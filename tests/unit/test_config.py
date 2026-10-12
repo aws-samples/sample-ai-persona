@@ -352,3 +352,41 @@ class TestConfigInsightCategories:
 
         # すべてのカテゴリーに説明があることを確認
         assert all(len(cat.description) > 0 for cat in categories)
+
+
+class TestTableNames:
+    """テーブルごとの物理名（v1.0.0 U1、FR9.2、約束 C10）。
+
+    CDK が自動生成した名前を App スタックが環境変数で渡す。なければ手元の .env のため
+    DYNAMODB_TABLE_PREFIX から組み立てる。
+    """
+
+    def test_explicit_table_name_wins(self):
+        from src.config import Config
+
+        with patch.dict(
+            os.environ,
+            {
+                "DYNAMODB_TABLE_PREFIX": "Local",
+                "PERSONAS_TABLE_NAME": "AIPersonaDev-Data-PersonasABC123",
+            },
+            clear=True,
+        ):
+            config = Config()
+            assert config.table_name("Personas") == "AIPersonaDev-Data-PersonasABC123"
+            assert config.table_name("Discussions") == "Local_Discussions"
+
+    def test_prefix_is_the_fallback_for_every_table(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
+            names = Config().table_names()
+        assert len(names) == 10
+        assert names["Jobs"] == "Local_Jobs"
+        assert names["PersonaKBBindings"] == "Local_PersonaKBBindings"
+
+    def test_unknown_table_kind_is_an_error(self):
+        from src.config import Config
+
+        with pytest.raises(KeyError):
+            Config().table_name("Sessions")

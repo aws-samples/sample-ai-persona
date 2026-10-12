@@ -22,6 +22,8 @@ uv run python -c "import duckdb; c=duckdb.connect(); c.execute('INSTALL httpfs')
 # 3. 環境変数を設定（.env.exampleを参考に実際の値を記入）
 cp .env.example .env
 # .env を編集してAWSリソース名等を設定
+# AUTH_MODE=local は必須（未設定だと起動しない）。手元では Cognito を使わず、
+# LOCAL_DEV_USER_* で決めた開発用の利用者としてログインする
 
 # 4. Tailwind CSSビルド
 ./scripts/build-css.sh --minify
@@ -31,6 +33,19 @@ uv run python run_htmx.py
 ```
 
 ブラウザで http://localhost:8000 にアクセス
+
+> **ログイン（v1.0.0）:** `AUTH_MODE=local` では、画面を開くと開発用の利用者
+> （既定: 名前「開発ユーザー」、ロール `member`、部署なし）で自動的にログインし、
+> 画面上部に名前・ロール・部署が出ます。利用者は `.env` の `LOCAL_DEV_USER_NAME`・
+> `LOCAL_DEV_USER_EMAIL`・`LOCAL_DEV_USER_ROLES`（`admin` / `member`、カンマ区切り）・
+> `LOCAL_DEV_USER_GROUPS`（部署、カンマ区切り）で変えられます。ログインセッションは
+> プロセスの中に置くため、再起動すると再ログインになります。ログアウトすると
+> 「ログアウトしました」の画面になり、「ログイン」ボタンでログインし直します。
+> 無操作 8 時間・ログインから 7 日でセッションが切れるのは AWS 上と同じです。
+>
+> **テーブル名:** `DYNAMODB_TABLE_PREFIX` から `{接頭辞}_Personas` などを組み立てます。
+> v1.0.0 の CDK（Data スタック）が作ったテーブルを手元から使う場合は、
+> `PERSONAS_TABLE_NAME` などテーブルごとの物理名を `.env` に書きます（`.env.example` 参照）。
 
 > **httpfs について:** マスアンケート（S3 上の Parquet）や S3 データセットの
 > `analyze_dataset` は DuckDB の httpfs 拡張を使います。手順 2 を実行していないと

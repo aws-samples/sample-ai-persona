@@ -4,13 +4,25 @@
 CI環境でのテスト実行に必要な共通設定とフィクスチャを提供します。
 """
 
+import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Generator
+from typing import Any, Callable, Generator, Iterable
 from unittest.mock import Mock
 
 import pytest
+
+# web.main を import する前にログイン方式を手元専用にする（BR1.15、WF5 の 4）。
+# 開発者のシェルに別の値があってもテストは常に local で動かす。
+os.environ["AUTH_MODE"] = "local"
+os.environ.pop("ECS_CONTAINER_METADATA_URI_V4", None)
+# 長期記憶は CI（test.yml）と同じく無効にする。シェルに AgentCore Memory の設定が
+# あると、memory_service=None のテストが本物の MemoryService を作ってしまうため。
+os.environ["ENABLE_LONG_TERM_MEMORY"] = "false"
+# S3 のバケット名も CI と同じく持たせない。シェルにあると、モックを渡していない
+# テストが本物の S3 へ書き込みに行く。
+os.environ.pop("S3_BUCKET_NAME", None)
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -237,16 +249,53 @@ def test_app():
         pytest.skip(f"FastAPI or dependencies not available: {e}")
 
 
+def login_as(
+    client: Any,
+    *,
+    name: str | None = "開発ユーザー",
+    email: str | None = "dev@example.com",
+    roles: Iterable[str] = ("member",),
+    groups: Iterable[str] = (),
+) -> None:
+    """Log the test client in as a local development user.
+
+    Creates a ``local`` LoginSession through the running AuthManager (the
+    same path ``GET /login`` uses under ``AUTH_MODE=local``) and stores its
+    session cookie on the client, replacing any previous login.
+    """
+    from web.auth_middleware import SESSION_COOKIE_NAME
+    from web.routers.auth import get_auth_manager
+
+    session_id = get_auth_manager().start_local_session(
+        display_name=name,
+        email=email,
+        roles=frozenset(roles),
+        group_ids=frozenset(groups),
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+
+@pytest.fixture(name="login_as")
+def login_as_fixture() -> Callable[..., None]:
+    """`login_as(client, name=..., roles=..., groups=...)` を返す。"""
+    return login_as
+
+
 @pytest.fixture
 def client(test_app) -> Generator:
-    """同期テストクライアントを提供（CSRF対策ヘッダー付き）"""
+    """ログイン済み（開発用の利用者）の同期テストクライアント（CSRF対策ヘッダー付き）。
+
+    既存の画面・API のテストを変えずに通すため、既定でログイン済みにする。
+    未ログインの振る舞いは Cookie を持たない TestClient を個別に作って確かめる。
+    """
     try:
         from fastapi.testclient import TestClient
-
-        with TestClient(test_app, headers={"HX-Request": "true"}) as c:
-            yield c
     except ImportError as e:
         pytest.skip(f"FastAPI TestClient not available: {e}")
+
+    with TestClient(test_app, headers={"HX-Request": "true"}) as c:
+        login_as(c)
+        yield c
 
 
 @pytest.fixture
@@ -302,6 +351,12 @@ def reset_singletons():
         from web.routers import settings
 
         settings._dataset_manager = None
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from web.routers import auth
+
+        auth._auth_manager = None
     except (ImportError, AttributeError):
         pass
 

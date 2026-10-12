@@ -38,7 +38,7 @@ export interface AgentCoreMemoryProps {
 
   /**
    * Removal policy for the memory resource
-   * @default RemovalPolicy.DESTROY
+   * @default RemovalPolicy.RETAIN
    */
   removalPolicy?: RemovalPolicy;
 }
@@ -59,7 +59,7 @@ export class AgentCoreMemory extends Construct {
       description,
       enableSummaryStrategy = true,
       enableSemanticStrategy = true,
-      removalPolicy = RemovalPolicy.DESTROY,
+      removalPolicy = RemovalPolicy.RETAIN,
     } = props;
 
     // Memory name (must start with letter, alphanumeric and underscores only)

@@ -4,10 +4,12 @@ FastAPI + Jinja2 + htmxベースのWebアプリケーション
 """
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, Request, Response
 from fastapi.exception_handlers import (
     http_exception_handler as fastapi_http_exception_handler,
@@ -18,11 +20,19 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.sessions import SessionMiddleware
 
 from src import __version__
+from src.config import config
+from src.managers.auth_manager import LOGIN_TRANSACTION_TTL, AuthManager
+from src.managers.persona_memory_manager import prepare_long_term_memory
+from src.models.errors import CodedError, ErrorKind
+from web.access_log import AccessLogMiddleware
+from web.auth_middleware import AuthMiddleware, unauthorized_response
 from web.error_messages import FALLBACK_MESSAGE, toast_response
 from web.middleware import CSRFMiddleware
-from web.routers import persona, discussion, interview, api, settings, survey
+from web.routers import persona, discussion, interview, api, settings, survey, auth
+from web.user_badge import user_badge
 
 # ログ設定
 logging.basicConfig(
@@ -39,6 +49,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 async def lifespan(app: FastAPI) -> Any:
     """アプリケーションのライフサイクル管理"""
     logger.info("AIペルソナシステムを起動中...")
+    # ログインの設定が使えなければ起動しない（BR1.15、NFR4.7）
+    AuthManager.check_startup(config)
+    # AgentCore Memory の Strategy ID を引く（引けなければ長期記憶を無効にして続ける）
+    await anyio.to_thread.run_sync(prepare_long_term_memory)
     yield
     logger.info("AIペルソナシステムをシャットダウン中...")
 
@@ -51,8 +65,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CSRF保護ミドルウェア
+# ミドルウェア（後に足したものほど外側）。外側から順に:
+#   AccessLog → SessionMiddleware（ログイン途中の Cookie）→ AuthMiddleware → CSRF
+# AuthMiddleware を CSRF より外に置くのは、未ログインの要求を CSRF より先に
+# 401 / ログイン画面へ移すため。
 app.add_middleware(CSRFMiddleware)
+app.add_middleware(AuthMiddleware)
+app.add_middleware(
+    SessionMiddleware,
+    # local では Cookie の署名鍵を持たないため、プロセスごとの乱数にする
+    secret_key=config.LOGIN_COOKIE_SIGNING_KEY or secrets.token_urlsafe(32),
+    session_cookie="login_tx",
+    max_age=int(LOGIN_TRANSACTION_TTL.total_seconds()),
+    same_site="lax",
+    https_only=config.AUTH_MODE != "local",
+)
+app.add_middleware(AccessLogMiddleware)
 
 # 静的ファイルのマウント
 app.mount(
@@ -70,9 +98,12 @@ from web.sanitize import render_markdown  # noqa: E402
 templates.env.filters["markdown"] = render_markdown
 
 # テンプレートグローバル変数
+# user_badge は画面上部の利用者表示（BR1.16）。base.html を描く全 Router に登録する
 templates.env.globals["app_version"] = __version__
-for _mod in [persona, discussion, interview, settings, survey]:
+templates.env.globals["user_badge"] = user_badge
+for _mod in [persona, discussion, interview, settings, survey, auth]:
     _mod.templates.env.globals["app_version"] = __version__
+    _mod.templates.env.globals["user_badge"] = user_badge
 
 # ルーターの登録
 app.include_router(persona.router, prefix="/persona", tags=["persona"])
@@ -81,6 +112,19 @@ app.include_router(interview.router, prefix="/interview", tags=["interview"])
 app.include_router(api.router, prefix="/api", tags=["api"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(survey.router, prefix="/survey", tags=["survey"])
+app.include_router(auth.router, tags=["auth"])
+
+
+@app.exception_handler(CodedError)
+async def coded_error_handler(request: Request, exc: CodedError) -> Response:
+    """約束 C13 のうち U1 が通る経路: UNAUTHORIZED の種類だけを扱う。
+
+    API は 401 の JSON、htmx は HX-Redirect、画面は /login への 303。
+    ほかの種類はこれまでどおり既定の扱い（500）に任せる（残りは U2）。
+    """
+    if exc.code.kind is ErrorKind.UNAUTHORIZED:
+        return unauthorized_response(request, exc)
+    raise exc
 
 
 @app.exception_handler(RequestValidationError)

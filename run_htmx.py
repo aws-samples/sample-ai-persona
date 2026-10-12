@@ -22,4 +22,8 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         reload_dirs=["web", "src"],
+        # Dockerfile の CMD と同じ設定。uvicorn のアクセスログはクエリ（code・state）を
+        # 出すため止め、アプリの http.access に置き換える（NFR3.3）
+        access_log=False,
+        timeout_keep_alive=310,
     )

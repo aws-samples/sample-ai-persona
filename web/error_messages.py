@@ -51,6 +51,21 @@ _CATALOG: dict[ErrorCode, str] = {
         "ネットワーク接続エラーが発生しました。接続を確認してください。"
     ),
     ErrorCode.JOB_NOT_FOUND: "ジョブが見つかりません",
+    # --- ログイン（v1.0.0 U1） ---
+    ErrorCode.AUTH_REQUIRED: "ログインしてください",
+    ErrorCode.SESSION_EXPIRED: (
+        "ログインの有効期限が切れました。再度ログインしてください"
+    ),
+    ErrorCode.CSRF_FAILED: (
+        "要求を確認できなかったため処理できませんでした。"
+        "画面を再読み込みしてからやり直してください"
+    ),
+    ErrorCode.LOOKUP_UNAVAILABLE: (
+        "ログイン情報を確認できませんでした。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.AUTH_CONFIG_INVALID: (
+        "ログインの設定が正しくありません。管理者に連絡してください"
+    ),
     ErrorCode.GENERATION_CAPACITY_EXCEEDED: (
         "生成するデータ量が大きすぎて処理しきれませんでした。"
         "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
@@ -393,6 +408,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DATABASE_OPERATION_FAILED: "データベース処理中にエラーが発生しました",
     ErrorCode.S3_OPERATION_FAILED: "S3処理中にエラーが発生しました",
     ErrorCode.S3_OBJECT_NOT_FOUND: "S3オブジェクトが見つかりません",
+    ErrorCode.SESSION_STORE_UNAVAILABLE: "ログインセッションの保存先に接続できません",
+    ErrorCode.OIDC_UNAVAILABLE: "認証サービスに接続できません",
+    ErrorCode.OIDC_GRANT_INVALID: "認証情報が無効になりました",
+    ErrorCode.OIDC_TOKEN_INVALID: "認証情報を検証できませんでした",
 }
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"

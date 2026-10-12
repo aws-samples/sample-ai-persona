@@ -97,6 +97,44 @@ class TestKindConsistency:
         assert counts[ErrorKind.VALIDATION] == max(counts.values())
 
 
+class TestAuthCodes:
+    """v1.0.0 U1 のログインのコード（約束 C5 のうち U1 が使うもの）。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.AUTH_REQUIRED,
+            ErrorCode.SESSION_EXPIRED,
+            ErrorCode.OIDC_GRANT_INVALID,
+            ErrorCode.OIDC_TOKEN_INVALID,
+        ],
+    )
+    def test_login_required_codes_are_unauthorized(self, code):
+        assert code.kind is ErrorKind.UNAUTHORIZED
+
+    def test_csrf_failure_is_forbidden(self):
+        assert ErrorCode.CSRF_FAILED.kind is ErrorKind.FORBIDDEN
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.LOOKUP_UNAVAILABLE,
+            ErrorCode.SESSION_STORE_UNAVAILABLE,
+            ErrorCode.OIDC_UNAVAILABLE,
+        ],
+    )
+    def test_unreachable_dependencies_are_transient(self, code):
+        assert code.kind is ErrorKind.TRANSIENT
+
+    def test_auth_required_error_can_carry_session_expired(self):
+        from src.models.errors import AuthRequiredError, LookupUnavailableError
+
+        assert AuthRequiredError("no session").code is ErrorCode.AUTH_REQUIRED
+        expired = AuthRequiredError("idle", code=ErrorCode.SESSION_EXPIRED)
+        assert expired.code is ErrorCode.SESSION_EXPIRED
+        assert LookupUnavailableError("store down").code is ErrorCode.LOOKUP_UNAVAILABLE
+
+
 class TestCodedErrorExposesKind:
     """例外インスタンスから分類を辿れること（表示層が使う経路）。"""
 

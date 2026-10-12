@@ -71,15 +71,40 @@
                     </div>
                 </div>
 
-                <!-- 右側：ログアウト -->
-                <div class="hidden sm:flex sm:items-center">
-                    <a href="/signout"
-                       class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-md transition-colors">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                        </svg>
-                        ログアウト
-                    </a>
+                {# 右側：利用者表示とログアウト（M1、BR1.16）。ログアウトはフォーム送信（POST /signout）。
+                   フォーム送信はカスタムヘッダーを付けられないため、CSRF は Origin で確かめる（BR1.19） #}
+                {% set badge = user_badge(request) if request is defined else none %}
+                <div class="hidden sm:flex sm:items-center gap-3">
+                    {% if badge %}
+                    <div data-testid="user-badge" class="flex flex-col items-end text-sm leading-tight">
+                        <span class="font-medium text-gray-900">{{ badge.name }}</span>
+                        <span class="flex items-center gap-2 text-gray-600">
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-400 text-xs text-gray-700">{{ badge.role_label }}</span>
+                            <span>{{ badge.departments_label }}</span>
+                            {% if badge.hidden_count %}
+                            <span class="relative" x-data="{ open: false }" @keydown.escape="open = false">
+                                <button type="button" @click="open = !open" :aria-expanded="open.toString()" aria-expanded="false"
+                                        class="text-blue-600 hover:underline" data-testid="user-badge-more">ほか {{ badge.hidden_count }} 件</button>
+                                <ul x-show="open" x-cloak @click.away="open = false"
+                                    class="absolute right-0 mt-1 w-48 bg-white shadow-lg rounded-md py-1 z-50 text-left text-gray-700">
+                                    {% for department in badge.all_departments %}
+                                    <li class="px-3 py-1">{{ department }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                    <form method="post" action="/signout">
+                        <button type="submit" data-testid="signout-button"
+                                class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-md transition-colors">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                            </svg>
+                            ログアウト
+                        </button>
+                    </form>
                 </div>
                 
                 <!-- モバイルメニューボタン -->
@@ -113,12 +138,24 @@
                             設定
                         </a>
                         <div class="border-t my-1"></div>
-                        <a href="/signout" class="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                            </svg>
-                            ログアウト
-                        </a>
+                        {% if badge %}
+                        <div data-testid="user-badge-mobile" class="px-4 py-2 text-sm">
+                            <p class="font-medium text-gray-900">{{ badge.name }}</p>
+                            <p class="text-gray-600">
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-400 text-xs text-gray-700">{{ badge.role_label }}</span>
+                                ・ {{ badge.departments_label }}{% if badge.hidden_count %}、ほか {{ badge.hidden_count }} 件{% endif %}
+                            </p>
+                        </div>
+                        {% endif %}
+                        <form method="post" action="/signout">
+                            <button type="submit" data-testid="signout-button-mobile"
+                                    class="flex items-center gap-2 w-full px-4 py-2 text-red-600 hover:bg-red-50">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                </svg>
+                                ログアウト
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
