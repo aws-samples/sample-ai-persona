@@ -121,7 +121,7 @@ class TestDialog:
         view = manager.dialog(ADMIN, "persona", "p1")
         assert view.vanished == ("old-dept",) and "old-dept" in view.selected
         assert not view.show_scope_note
-        assert VANISHED_LABEL == "（存在しない部署）"
+        assert VANISHED_LABEL == "（存在しないグループ）"
 
     def test_member_without_department_cannot_save(self, manager, store):
         store.add("p1", "sub-c")

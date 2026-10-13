@@ -937,7 +937,7 @@ class TestDepartmentNames:
     def test_unknown_departments_are_marked(self, sharing):
         assert sharing.department_names(["plan", "old-dept"]) == [
             "企画部",
-            "（存在しない部署）",
+            "（存在しないグループ）",
         ]
 
     def test_unavailable_directory_falls_back_to_ids(self, sharing, departments):

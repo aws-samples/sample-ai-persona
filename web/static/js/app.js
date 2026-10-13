@@ -1134,7 +1134,7 @@ registerBlock('BulkSelect', function() {
 // 始まりが選択・未選択の部署は押すたびに入れ替わる（ブラウザのまま）。始まりが
 // 中間の部署は 選択 → 未選択 → 中間（元のまま）と回り、中間の間は
 // {name}_unchanged の隠し入力で部署 id を送る（中間の選択欄はブラウザが送らない）。
-// 何も変えないうちは保存を無効にし、外れる部署は件数とともに読み上げる。
+// 何も変えないうちは保存を無効にし、外れるグループは件数とともに読み上げる。
 // Dialog の存在は知らない（中で使われても、ここはフォームとだけやりとりする）。
 // -------------------------------------------------------------
 registerBlock('DepartmentPicker', function() {
@@ -1176,8 +1176,8 @@ registerBlock('DepartmentPicker', function() {
             .map((o) => `${o.dataset.departmentName}（${o.dataset.sharedCount} 件）`);
         if (!removed.length) return '';
         const lead = picker.dataset.mode === 'scope'
-            ? '保存すると利用範囲から外れる部署'
-            : '保存すると共有が外れる部署';
+            ? '保存すると利用範囲から外れるグループ'
+            : '保存すると共有が外れるグループ';
         return `${lead}: ${removed.join('、')}`;
     }
 
@@ -1205,7 +1205,7 @@ registerBlock('DepartmentPicker', function() {
         refresh(picker);
     }
 
-    // 保存すると、選べる部署のどれにも共有しない対象が 1 件以上できるか。
+    // 保存すると、選べるグループのどれにも共有しない対象が 1 件以上できるか。
     // 選択の部署が 1 つでも残れば全対象に残る。中間だけが残るときは、残る件数の
     // 合計が対象の件数に満たなければ、どれにも残らない対象が必ずある
     function needsConfirm(picker) {

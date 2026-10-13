@@ -214,7 +214,7 @@ class TestList:
     def test_own_rows_show_where_they_are_shared(self, manager, world):
         world.add("p1", MEMBER_A.sub, {"plan", "old-dept"})
         listing = manager.list_personas(MEMBER_A, "mine", None)
-        assert sorted(listing.shared_with["p1"]) == ["企画部", "（存在しない部署）"]
+        assert sorted(listing.shared_with["p1"]) == ["企画部", "（存在しないグループ）"]
 
     def test_admin_all_scans_and_marks_unknown_owners(self, manager, world):
         world.add("p1", MEMBER_A.sub)

@@ -163,11 +163,13 @@
                     詳細
                 </a>
                 {%- if manageable %}
+                {#- 見える文字は短く「共有」。読み上げではどのペルソナかが分かるよう名前を足す（見える文字を名前に含める） #}
                 <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                        aria-label="{{ persona.name }} を共有"
                         data-share-url="/share/persona/{{ persona.id }}/dialog"
                         data-testid="persona-share-button"
                         class="text-blue-600 hover:text-blue-800 text-sm">
-                    共有先を設定
+                    共有
                 </button>
                 <button hx-delete="/persona/{{ persona.id }}"
                         hx-target="#persona-card-{{ persona.id }}"
@@ -244,9 +246,9 @@
     {%- if search %}
     <h2 class="text-xl font-semibold text-gray-700 mb-2">一致するペルソナがありません</h2>
     {%- elif tab == "shared" and listing.no_department %}
-    <h2 class="text-xl font-semibold text-gray-700 mb-2">所属部署がないため、共有されたペルソナはありません</h2>
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">所属グループがないため、共有されたペルソナはありません</h2>
     {%- elif tab == "shared" %}
-    <h2 class="text-xl font-semibold text-gray-700 mb-2">共有されたペルソナはありません。所属部署に共有されると、ここに表示されます</h2>
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">共有されたペルソナはありません。所属グループに共有されると、ここに表示されます</h2>
     {%- elif tab == "all" %}
     <h2 class="text-xl font-semibold text-gray-700 mb-2">ペルソナがありません</h2>
     {%- else %}

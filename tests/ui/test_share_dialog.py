@@ -38,7 +38,7 @@ def _content(view: ShareDialogView, post_url: str = "/share/persona/p1") -> str:
         "sharing/partials/dialog_content.html",
         view=view,
         post_url=post_url,
-        vanished_label="（存在しない部署）",
+        vanished_label="（存在しないグループ）",
     )
 
 

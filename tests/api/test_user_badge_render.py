@@ -42,7 +42,7 @@ def test_mobile_menu_also_has_the_badge_and_signout(client, login_as):
     mobile = _block(html, "user-badge-mobile")
     assert "hanako@example.com" in mobile
     assert "member" in mobile
-    assert "所属部署なし" in mobile
+    assert "所属グループなし" in mobile
     assert 'data-testid="signout-button-mobile"' in html
 
 

@@ -84,7 +84,7 @@ class TestDialog:
         # ペルソナの注意文と member の注記が保存ボタンに結び付く（BR6.5、BR7.5）
         assert "share-persona-notice" in html and "share-scope-note" in html
         assert 'aria-describedby="share-persona-notice share-scope-note' in html
-        assert "選べるのは所属部署だけです" in html
+        assert "選べるのは所属グループだけです" in html
         assert "生成過程" in html
 
     def test_bulk_dialog_counts_without_names(self, member_b, store):
@@ -105,7 +105,7 @@ class TestDialog:
         _as(client, "c@example.com", ())
         store.add("p1", "local:c@example.com")
         html = client.get("/share/persona/p1/dialog").text
-        assert "所属部署がないため共有できません" in html
+        assert "所属グループがないため共有できません" in html
         assert "data-share-save" in html and "disabled" in html
 
     def test_shared_only_target_is_forbidden(self, member_b, store):
@@ -185,7 +185,7 @@ class TestSave:
 
         assert response.status_code == 400
         assert response.headers["X-Render-Response"] == "true"
-        assert "選べない部署が含まれています" in response.text
+        assert "選べないグループが含まれています" in response.text
         assert "write_shares" not in store.calls
 
     def test_retryable_failure_is_shown_in_the_dialog(

@@ -1485,6 +1485,24 @@ class TestPersonaTabs:
         assert 'data-share-url="/share/persona/p1/dialog"' in html
         assert 'data-dialog-open="share-dialog"' in html
 
+    def test_card_share_button_says_share_and_names_the_persona(self, client, world):
+        """The card button reads 「共有」; its accessible name adds the persona name."""
+        import re
+
+        world.add("p1", A_SUB)
+        html = _panel(_login(client, "a"), "mine")
+        buttons = re.findall(
+            r'<button[^>]*data-testid="persona-share-button"[^>]*>\s*(.*?)\s*</button>',
+            html,
+            re.S,
+        )
+        assert buttons == ["共有"]
+        labels = re.findall(
+            r'<button[^>]*aria-label="([^"]*)"[^>]*data-testid="persona-share-button"',
+            html,
+        )
+        assert len(labels) == 1 and labels[0].endswith(" を共有")
+
     def test_admin_all_marks_unknown_owner(self, client, world):
         world.add("legacy", None)
         html = _panel(_login(client, "admin"), "all")
@@ -1498,9 +1516,9 @@ class TestPersonaTabs:
             (
                 "a",
                 "shared",
-                "共有されたペルソナはありません。所属部署に共有されると、ここに表示されます",
+                "共有されたペルソナはありません。所属グループに共有されると、ここに表示されます",
             ),
-            ("c", "shared", "所属部署がないため、共有されたペルソナはありません"),
+            ("c", "shared", "所属グループがないため、共有されたペルソナはありません"),
         ],
     )
     def test_empty_states(self, client, who, tab, text):

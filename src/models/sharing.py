@@ -231,7 +231,7 @@ class ShareDialogView:
         selected: Departments shared by every target.
         mixed: For a bulk dialog, ``{group_id: (shared, total)}``.
         unmanageable_count: Targets left out because they cannot be managed.
-        show_scope_note: Show "選べるのは所属部署だけです" (BR7.5).
+        show_scope_note: Show "選べるのは所属グループだけです" (BR7.5).
         show_persona_notice: Show the long-term memory notice (BR6.5).
         no_department: No department to choose; saving is disabled (BR1.4).
     """

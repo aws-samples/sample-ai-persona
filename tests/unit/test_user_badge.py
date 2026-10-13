@@ -42,7 +42,7 @@ def test_role_label(roles, label):
 
 def test_no_department():
     badge = build_user_badge(_principal(group_ids=frozenset()))
-    assert badge.departments_label == "所属部署なし"
+    assert badge.departments_label == "所属グループなし"
     assert badge.hidden_count == 0
 
 

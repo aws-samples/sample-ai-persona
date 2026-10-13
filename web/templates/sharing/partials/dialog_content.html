@@ -8,7 +8,7 @@
   引数:
     view           ... src/models/sharing.py の ShareDialogView
     post_url       ... 保存の送り先（/share/{type}/{id} か /share/{type}）
-    vanished_label ... 消えた部署の表示名（「（存在しない部署）」）
+    vanished_label ... 消えた部署の表示名（「（存在しないグループ）」）
 #}
 {%- set describedby = [] -%}
 {%- if view.show_persona_notice %}{% set _ = describedby.append("share-persona-notice") %}{% endif -%}
@@ -34,13 +34,13 @@
     {%- endif %}
 
     {%- if view.no_department %}
-    <p class="text-sm text-gray-700" data-testid="share-no-department">所属部署がないため共有できません</p>
+    <p class="text-sm text-gray-700" data-testid="share-no-department">所属グループがないため共有できません</p>
     {%- else %}
     {{ department_picker("departments", view.choices, view.selected, view.mixed, "share", vanished=view.vanished, vanished_label=vanished_label) }}
     {%- endif %}
 
     {%- if view.show_scope_note %}
-    <p id="share-scope-note" class="text-xs text-gray-700">※ 選べるのは所属部署だけです。それ以外の共有先は変わりません</p>
+    <p id="share-scope-note" class="text-xs text-gray-700">※ 選べるのは所属グループだけです。それ以外の共有先は変わりません</p>
     {%- endif %}
 
     {%- if view.show_persona_notice %}

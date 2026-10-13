@@ -13,7 +13,7 @@ from src.models.authz import Principal, Role
 
 MAX_SHOWN_DEPARTMENTS = 2
 NO_ROLE_LABEL = "ロールなし"
-NO_DEPARTMENT_LABEL = "所属部署なし"
+NO_DEPARTMENT_LABEL = "所属グループなし"
 _SEPARATOR = "、"
 
 

@@ -1,7 +1,7 @@
 {#
   部署の選択（C6、約束 C6）。共有先（M7）・利用範囲（M10）の部署を複数選ぶ。
   中間の部署の 3 段の切り替え（indeterminate）、{name}_unchanged の隠し入力、
-  外れる部署の注意、全部外すときの確認、保存ボタンの有効・無効は app.js の
+  外れるグループの注意、全部外すときの確認、保存ボタンの有効・無効は app.js の
   DepartmentPicker が受け持つ。値の意味づけは U4 の ResourceSharing（BR1.12）:
   {name} は共有する、{name}_unchanged は対象ごとに今のまま、{name}_initial は
   開いたときに選択か中間だった部署。外すのは「開いたときに共有中か中間で、
@@ -10,7 +10,7 @@
 
   引数（約束 C6。mode は Jinja のマクロとして書けるよう既定値を付けた）:
     name      ... 送信欄の名前
-    choices   ... 選べる部署（src/models/authz.py の Department。group_id と display_name を読む）。
+    choices   ... 選べるグループ（src/models/authz.py の Department。group_id と display_name を読む）。
                   member は所属だけ、admin は全部署
     selected  ... 1 件を対象に開いたときの今の設定（group_id の集合）
     mixed     ... 複数を対象に開いたときの {group_id: (共有中の件数, 対象の件数)}
@@ -21,9 +21,9 @@
                   選択肢の最後に vanished_label の名前で出し、今の状態（選択か中間）から始める
     vanished_label ... 消えた部署の表示名
 #}
-{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しない部署）") -%}
+{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しないグループ）") -%}
 {%- set prefix = id_prefix or name -%}
-{%- set legend = "利用できる部署（複数選択可）" if mode == "scope" else "共有する部署（複数選択可）" -%}
+{%- set legend = "利用できるグループ（複数選択可）" if mode == "scope" else "共有するグループ（複数選択可）" -%}
 {#- 対象の件数（1 件を対象に開いたときは 1）。全部外す確認の判定に app.js が使う -#}
 {%- set ns = namespace(targets=1) -%}
 {%- if mixed %}{% for counts in mixed.values() %}{% if counts[1] > ns.targets %}{% set ns.targets = counts[1] %}{% endif %}{% endfor %}{% endif -%}
@@ -34,7 +34,7 @@
     <legend class="text-sm font-medium text-gray-700 mb-2">{{ legend }}</legend>
     {%- if not options %}
     <p data-department-empty class="text-sm text-gray-700">
-        選べる部署がありません。所属している部署が登録されていないため、{{ "利用範囲" if mode == "scope" else "共有先" }}を設定できません。
+        選べるグループがありません。所属しているグループが登録されていないため、{{ "利用範囲" if mode == "scope" else "共有先" }}を設定できません。
     </p>
     {%- else %}
     <div data-department-options class="grid gap-2 {{ 'sm:grid-cols-2' if options | length > 8 else 'grid-cols-1' }}">
@@ -72,13 +72,13 @@
         {%- endfor %}
     </div>
     {%- endif %}
-    {# 保存すると外れる部署と件数。読み込み時から置き、変わったときだけ文字を入れ替える #}
+    {# 保存すると外れるグループと件数。読み込み時から置き、変わったときだけ文字を入れ替える #}
     <p id="{{ prefix }}-removing" data-department-removing role="status" aria-live="polite" class="mt-2 text-sm text-yellow-800"></p>
-    {# 選べる部署のすべてから外れる対象ができるときの確認。既定のフォーカスは「戻る」 #}
+    {# 選べるグループのすべてから外れる対象ができるときの確認。既定のフォーカスは「戻る」 #}
     <div data-department-confirm hidden role="group" aria-labelledby="{{ prefix }}-confirm-text"
          class="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
         <p id="{{ prefix }}-confirm-text" class="text-sm text-yellow-900">
-            保存すると、選べる部署のどれにも{{ "利用範囲が設定されない" if mode == "scope" else "共有されない" }}ものができます。このまま保存しますか？
+            保存すると、選べるグループのどれにも{{ "利用範囲が設定されない" if mode == "scope" else "共有されない" }}ものができます。このまま保存しますか？
         </p>
         <div class="mt-2 flex gap-2">
             <button type="button" data-department-confirm-back data-testid="department-confirm-back"

@@ -89,7 +89,7 @@ SEARCH_LIMIT = 500
 #: How long the ``all`` count is kept per task (BR3.4, NFR2.4).
 ALL_COUNT_TTL_SECONDS = 60
 #: Label of a department that no longer exists.
-VANISHED_LABEL = "（存在しない部署）"
+VANISHED_LABEL = "（存在しないグループ）"
 
 _ID = "id"
 _OWNER = "owner_sub"
@@ -440,7 +440,7 @@ class ResourceSharing:
     def department_names(self, group_ids: Iterable[str]) -> list[str]:
         """Display names of departments, in the given order (display only).
 
-        Departments that no longer exist read ``（存在しない部署）``; when the
+        Departments that no longer exist read ``（存在しないグループ）``; when the
         directory is unavailable the IDs are shown as they are.
         """
         ids = list(dict.fromkeys(group_ids))
