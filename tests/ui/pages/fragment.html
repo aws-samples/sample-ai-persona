@@ -1,0 +1,5 @@
+{% extends "_frame.html" %}
+{# 実画面の部分テンプレートを、差し替え先の id を持つ入れ物の中に置く #}
+{% block component %}
+<div id="{{ container_id }}">{{ fragment | safe }}</div>
+{% endblock %}

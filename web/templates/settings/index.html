@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/dialog.html" import dialog, dialog_open_button %}
 
 {% block content %}
 <div class="max-w-6xl mx-auto">
@@ -17,12 +18,7 @@
         <div class="border-t border-gray-200 mt-6 pt-6">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-base font-semibold text-gray-700">データセット管理</h3>
-                <button 
-                    class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-                    onclick="document.getElementById('upload-modal').classList.remove('hidden')"
-                >
-                    + 新規アップロード
-                </button>
+                {{ dialog_open_button("upload-modal", "+ 新規アップロード", classes="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition") }}
             </div>
             
             <div id="dataset-list" hx-get="/settings/datasets" hx-trigger="load">
@@ -38,12 +34,7 @@
                 <h2 class="text-lg font-semibold text-gray-700">ナレッジベース管理</h2>
                 <p class="text-xs text-gray-500 mt-1">Bedrock Knowledge Basesを登録して、ペルソナがRAGで情報を取得できるようにします</p>
             </div>
-            <button 
-                class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition"
-                onclick="document.getElementById('kb-register-modal').classList.remove('hidden')"
-            >
-                + ナレッジベース登録
-            </button>
+            {{ dialog_open_button("kb-register-modal", "+ ナレッジベース登録", classes="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition") }}
         </div>
         
         <div id="kb-list" hx-get="/settings/knowledge-bases" hx-trigger="load">
@@ -62,23 +53,12 @@
     </div>
 </div>
 
-<!-- ナレッジベース登録モーダル -->
-<div id="kb-register-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold text-gray-900">ナレッジベースを登録</h3>
-                <button onclick="document.getElementById('kb-register-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            
+<!-- ナレッジベース登録ダイアログ（開閉は app.js の Dialog。保存に成功したら dialogClose で閉じる） -->
+{% call dialog("kb-register-modal", "ナレッジベースを登録") %}
             <form hx-post="/settings/knowledge-bases"
                   hx-target="#kb-list"
                   hx-swap="innerHTML"
-                  hx-on::after-request="if(event.detail.successful) document.getElementById('kb-register-modal').classList.add('hidden')">
+                  hx-on::after-request="if(event.detail.successful) htmx.trigger(this, 'dialogClose', {id: 'kb-register-modal'})">
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">ナレッジベースID <span class="text-red-500">*</span></label>
                     <input type="text" name="knowledge_base_id" required
@@ -108,28 +88,15 @@
                 </div>
                 
                 <div class="flex justify-end gap-2 pt-4 border-t">
-                    <button type="button" onclick="document.getElementById('kb-register-modal').classList.add('hidden')" 
+                    <button type="button" data-dialog-close data-testid="kb-register-modal-cancel"
                             class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
                     <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">登録</button>
                 </div>
             </form>
-        </div>
-    </div>
-</div>
+{% endcall %}
 
-<!-- アップロードモーダル -->
-<div id="upload-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold text-gray-900">データセットをアップロード</h3>
-                <button onclick="closeUploadModal()" class="text-gray-500 hover:text-gray-700">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            
+<!-- アップロードダイアログ（閉じたときの入力の初期化は dialog:closed で行う） -->
+{% call dialog("upload-modal", "データセットをアップロード", panel_class="max-w-2xl") %}
             <form id="upload-form" x-data="{ step: 1, columns: [], filename: '', rowCount: 0, uploading: false }">
                 <!-- Step 1: ファイル選択 -->
                 <div x-show="step === 1">
@@ -224,9 +191,7 @@
                     </div>
                 </div>
             </form>
-        </div>
-    </div>
-</div>
+{% endcall %}
 
 <script>
 // 安全なinnerHTML設定（DOMPurifyでサニタイズ）
@@ -254,8 +219,16 @@ function updateColumnDesc(index, value) {
 
 let uploadFormData = { columns: [], filename: '', rowCount: 0 };
 
+// アップロードダイアログが閉じたら（×・Escape・アップロード後）入力を初期化する
+document.addEventListener('dialog:closed', function(evt) {
+    if (evt.detail && evt.detail.id === 'upload-modal') resetUploadForm();
+});
+
 function closeUploadModal() {
-    document.getElementById('upload-modal').classList.add('hidden');
+    htmx.trigger(document.body, 'dialogClose', {id: 'upload-modal'});
+}
+
+function resetUploadForm() {
     // フォームをリセット
     const form = document.getElementById('upload-form');
     form.reset();

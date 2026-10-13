@@ -1,0 +1,17 @@
+{% extends "_frame.html" %}
+{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
+{% block component %}
+<div id="persona-list">
+    {{ bulk_select_bar("persona", selectable) }}
+    <ul id="rows" class="divide-y">
+        {% for value, name in rows %}
+        <li class="flex items-center gap-3 py-2">
+            {{ bulk_select_row(value, name, selectable) }}
+            <span class="text-gray-700">{{ name }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    <button type="button" id="more-button" data-testid="more-button" class="mt-2 px-4 py-2 border rounded-md"
+            hx-get="/more" hx-target="#rows" hx-swap="beforeend">もっと見る</button>
+</div>
+{% endblock %}

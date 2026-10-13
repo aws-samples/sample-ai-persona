@@ -421,6 +421,47 @@ _CATALOG: dict[ErrorCode, str] = {
 
 FALLBACK_MESSAGE = "エラーが発生しました。時間をおいて再度お試しください。"
 
+#: Toast wording shared by every "resource not found" error on htmx requests
+#: (U3 WF8, M11). The kind of resource is not named, so the toast does not
+#: tell whether something exists but is unreadable or does not exist (NFR1.9,
+#: contract C5). Only the toast changes: ``user_message_for()`` keeps the
+#: resource-specific catalog wording for JSON API bodies and error banners.
+NOT_FOUND_TOAST_MESSAGE = "ページが見つかりません"
+
+#: ``ErrorKind.NOT_FOUND`` codes whose toast uses :data:`NOT_FOUND_TOAST_MESSAGE`:
+#: looking up one resource by its id found nothing.
+UNIFIED_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
+    {
+        ErrorCode.PERSONA_NOT_FOUND,
+        ErrorCode.DISCUSSION_NOT_FOUND,
+        ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
+        ErrorCode.REPORT_NOT_FOUND,
+        ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+        ErrorCode.SURVEY_NOT_FOUND,
+        ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
+        ErrorCode.DATASET_NOT_FOUND,
+        ErrorCode.JOB_NOT_FOUND,
+    }
+)
+
+#: ``ErrorKind.NOT_FOUND`` codes that keep their own toast wording, because the
+#: user's next action differs (not generated yet, nothing configured, already
+#: done, an internal failure, or a JSON API error). Every NOT_FOUND code must be
+#: in exactly one of the two sets (``tests/unit/test_error_messages.py``).
+DISTINCT_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
+    {
+        ErrorCode.SURVEY_RESULT_NOT_READY,
+        ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED,
+        ErrorCode.PERSONA_AVATAR_NOT_FOUND,
+        ErrorCode.DATASET_BINDING_NOT_FOUND,
+        ErrorCode.MEMORY_ALREADY_DELETED,
+        ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED,
+        ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING,
+        ErrorCode.S3_OBJECT_NOT_FOUND,
+        ErrorCode.HTTP_ERROR,
+    }
+)
+
 
 def user_message_for(exc: BaseException | None, *, default: str | None = None) -> str:
     """Resolve user-facing wording from an exception's error code.
@@ -546,13 +587,21 @@ def toast_response(
     refuses to swap non-2xx bodies). That is why TRANSIENT errors are unaffected
     by the swap limitation described in Issue #117.
 
+    A missing resource (:data:`UNIFIED_NOT_FOUND_TOAST_CODES`) is announced
+    with :data:`NOT_FOUND_TOAST_MESSAGE` instead of the resource-specific
+    wording, so the toast reads the same whether the resource is unreadable
+    or does not exist (NFR1.9).
+
     Args:
         exc: The caught exception. Only its code/context are used.
         default: Wording for exceptions carrying no usable code.
         status_code: HTTP status. Kept in the 4xx range so that
             ``htmx:responseError`` semantics and server logs stay accurate.
     """
-    message = user_message_for(exc, default=default)
+    if getattr(exc, "code", None) in UNIFIED_NOT_FOUND_TOAST_CODES:
+        message = NOT_FOUND_TOAST_MESSAGE
+    else:
+        message = user_message_for(exc, default=default)
     # HTTPヘッダーは latin-1 でしかエンコードできないため、日本語文言は
     # ensure_ascii=True（既定）で \uXXXX にエスケープする。JSON.parse する
     # クライアント側で元の文字列に戻る。

@@ -1,7 +1,9 @@
-<!-- ペルソナ生成 分析・評価ログ モーダル -->
+<!-- ペルソナ生成 分析・評価ログ ダイアログ（閲覧だけ。背景のクリックで閉じる） -->
+{% from "components/dialog.html" import dialog %}
 {% if persona.generation_log or persona.generation_context %}
-<div x-data="{ showGenLog: false }" x-effect="document.body.classList.toggle('overflow-hidden', showGenLog)">
-    <button @click="showGenLog = true"
+<div>
+    <button type="button" aria-haspopup="dialog"
+            data-dialog-open="generation-log-dialog" data-testid="generation-log-dialog-open-button"
             class="inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 px-4 py-2 rounded-md hover:bg-purple-100 transition-colors text-sm font-medium">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
@@ -9,23 +11,7 @@
         生成ログ・評価
     </button>
 
-    <!-- モーダル -->
-    <div x-show="showGenLog" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
-        <div class="fixed inset-0 bg-black/50" @click="showGenLog = false"></div>
-        <div class="flex min-h-full items-start justify-center py-8 px-4">
-            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full">
-                <!-- ヘッダー -->
-                <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
-                        </svg>
-                        {{ persona.name }} — 生成ログ・評価
-                    </h3>
-                    <button @click="showGenLog = false" class="text-gray-400 hover:text-gray-600">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
-                </div>
+    {% call dialog("generation-log-dialog", persona.name ~ " — 生成ログ・評価", close_on_backdrop=True, panel_class="max-w-4xl") %}
 
                 <!-- ペルソナ生成インプットデータ -->
                 {% if persona.generation_context %}
@@ -111,8 +97,6 @@
                     </div>
                 </div>
                 {% endif %}
-            </div>
-        </div>
-    </div>
+    {% endcall %}
 </div>
 {% endif %}

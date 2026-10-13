@@ -14,6 +14,7 @@ from src.managers.interview_manager import (
     InterviewSessionNotFoundError,
     InterviewValidationError,
 )
+from tests.dialog_helpers import dialog_markup
 
 
 class TestCreateInterviewSessionEndpoint:
@@ -577,3 +578,39 @@ class TestCleanupEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["cleaned_sessions"] == 3
+
+
+class TestSaveNameDialog:
+    """U3 WF3: the session-name prompt is a shared dialog drawn in chat.html."""
+
+    @patch("web.routers.interview.get_persona_manager")
+    @patch("web.routers.interview.get_interview_manager")
+    def test_save_name_dialog_keeps_e2e_selectors_and_fetch(
+        self, mock_get_interview, mock_get_persona, client, sample_persona
+    ):
+        session = InterviewSession(
+            id="test-session",
+            participants=[sample_persona.id],
+            messages=[],
+            created_at=datetime.now(),
+            is_saved=False,
+        )
+        mock_get_interview.return_value.get_interview_session.return_value = session
+        mock_get_persona.return_value.get_persona.return_value = sample_persona
+
+        html = client.get("/interview/chat/test-session").text
+
+        dialog_markup(html, "save-name-dialog")
+        # E2E（tests/e2e/test_interview.py）が使う要素
+        for selector in (
+            'id="save-session-btn"',
+            'id="session-name-input"',
+            'id="confirm-save-btn"',
+        ):
+            assert selector in html
+        assert 'data-dialog-close="confirm"' in html
+        assert "openDialog('save-name-dialog')" in html
+        # 送信は今どおり X-Requested-With 付きの fetch()
+        assert "fetch(`/interview/${sessionId}/save`" in html
+        assert "'X-Requested-With': 'XMLHttpRequest'" in html
+        assert 'id="save-name-modal"' not in html

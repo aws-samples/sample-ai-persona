@@ -1,19 +1,10 @@
-<div id="edit-dataset-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold text-gray-900">データセットを編集</h3>
-                <button onclick="document.getElementById('edit-dataset-modal').remove()" class="text-gray-500 hover:text-gray-700">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-
+{% from "components/dialog.html" import dialog %}
+{# htmx で body の末尾に差し込まれ、差し込まれたら開き、閉じたら要素ごと消える（U3 WF2） #}
+{% call dialog("edit-dataset-modal", "データセットを編集", autoopen=True, remove_on_close=True, panel_class="max-w-2xl") %}
             <form hx-put="/settings/datasets/{{ dataset.id }}"
                   hx-target="#dataset-list"
                   hx-swap="innerHTML"
-                  hx-on::after-request="if(event.detail.successful) document.getElementById('edit-dataset-modal').remove()"
+                  hx-on::after-request="if(event.detail.successful) htmx.trigger(this, 'dialogClose', {id: 'edit-dataset-modal'})"
                   x-data='{ columns: {{ dataset.columns | tojson }} }'
                   x-init="$watch('columns', v => $refs.columnsJson.value = JSON.stringify(v))">
                 <input type="hidden" name="columns_json" x-ref="columnsJson" :value="JSON.stringify(columns)">
@@ -76,11 +67,9 @@
                 </div>
 
                 <div class="flex justify-end gap-2 pt-4 border-t">
-                    <button type="button" onclick="document.getElementById('edit-dataset-modal').remove()"
+                    <button type="button" data-dialog-close data-testid="edit-dataset-modal-cancel"
                             class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
                     <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">保存</button>
                 </div>
             </form>
-        </div>
-    </div>
-</div>
+{% endcall %}

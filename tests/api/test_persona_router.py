@@ -14,6 +14,7 @@ import pytest
 from src.managers.file_manager import FileUploadError
 from src.managers.persona_manager import PersonaManagerError
 from src.models.errors import ErrorCode
+from tests.dialog_helpers import dialog_ids, dialog_markup
 
 
 class TestPersonaGenerationPage:
@@ -1203,3 +1204,78 @@ class TestPersonaAvatarEndpoints:
         assert response.status_code == 200
         assert "persona-avatar-editor-slot" in response.text
         assert "画像を変更" not in response.text
+
+
+class TestPersonaModalsUseSharedDialog:
+    """U3 WF3: the persona modals are rendered by components/dialog.html."""
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_kb_binding_dialogs_have_unique_ids_and_close_on_success(
+        self, mock_get_manager, client
+    ):
+        kbs = [
+            {
+                "id": kb_id,
+                "name": f"KB {kb_id}",
+                "description": "",
+                "knowledge_base_id": "ABC",
+            }
+            for kb_id in ("kb1", "kb2")
+        ]
+        mock_get_manager.return_value.get_kb_binding.return_value = (kbs, None)
+
+        html = client.get("/persona/p1/kb-binding").text
+
+        assert dialog_ids(html) == ["kb-binding-kb1", "kb-binding-kb2"]
+        for kb_id in ("kb1", "kb2"):
+            outer = dialog_markup(html, f"kb-binding-{kb_id}")
+            assert "data-dialog-close-on-success" in outer
+            assert "data-dialog-backdrop-close" not in outer
+            assert f'data-dialog-open="kb-binding-{kb_id}"' in html
+        assert html.count('hx-post="/persona/p1/kb-binding"') == 2
+        assert "showModal" not in html
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_dataset_binding_and_preview_dialogs(self, mock_get_manager, client):
+        datasets = [
+            {
+                "id": ds_id,
+                "name": f"DS {ds_id}",
+                "description": "",
+                "row_count": 3,
+                "columns": [{"name": "user_id", "data_type": "string"}],
+            }
+            for ds_id in ("ds1", "ds2")
+        ]
+        bindings = {"ds2": {"id": "b2", "binding_keys": {"user_id": "u1"}}}
+        mock_get_manager.return_value.get_dataset_bindings.return_value = (
+            datasets,
+            bindings,
+        )
+
+        html = client.get("/persona/p1/dataset-bindings").text
+
+        assert dialog_ids(html) == ["dataset-binding-ds1", "dataset-preview-ds2"]
+        binding = dialog_markup(html, "dataset-binding-ds1")
+        assert "data-dialog-backdrop-close" not in binding
+        preview = dialog_markup(html, "dataset-preview-ds2")
+        assert "data-dialog-backdrop-close" in preview
+        assert 'hx-get="/persona/p1/dataset-bindings/b2/preview"' in html
+        assert 'hx-post="/persona/p1/dataset-bindings"' in html
+        assert "showModal" not in html and "showPreview" not in html
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_generation_log_is_a_viewing_dialog(
+        self, mock_get_manager, client, sample_persona
+    ):
+        persona = replace(
+            sample_persona, generation_log=[{"type": "thinking", "content": "分析"}]
+        )
+        mock_get_manager.return_value.get_persona.return_value = persona
+
+        html = client.get(f"/persona/{persona.id}").text
+
+        outer = dialog_markup(html, "generation-log-dialog")
+        assert "data-dialog-backdrop-close" in outer
+        assert 'data-dialog-open="generation-log-dialog"' in html
+        assert "showGenLog" not in html

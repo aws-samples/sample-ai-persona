@@ -1406,8 +1406,9 @@
     </div>
 </div>
 
-<!-- 議論中のローディング表示 -->
-<div id="discussion-loading" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+<!-- 議論中のローディング表示（ダイアログにはしない。表示中であることを aria-busy と読み上げで伝える。U3 WF3） -->
+<p id="discussion-loading-status" role="status" class="sr-only"></p>
+<div id="discussion-loading" aria-busy="true" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
     <div class="bg-white rounded-lg p-8 max-w-md text-center">
         <div class="spinner mx-auto mb-4" style="width: 64px; height: 64px; border-width: 4px;"></div>
         <h3 class="text-xl font-semibold text-gray-900 mb-2 flex items-center justify-center gap-2">{{ icon_chat("w-6 h-6 text-blue-600") }} 議論進行中...</h3>
@@ -1420,12 +1421,15 @@
 document.body.addEventListener('htmx:beforeRequest', function(evt) {
     if (evt.detail.elt.getAttribute('hx-post') === '/discussion/start') {
         document.getElementById('discussion-loading').classList.remove('hidden');
+        // 読み上げ領域は読み込み時からある要素にし、文字だけを入れる
+        document.getElementById('discussion-loading-status').textContent = '議論を開始しています';
     }
 });
 
 document.body.addEventListener('htmx:afterRequest', function(evt) {
     if (evt.detail.elt.getAttribute('hx-post') === '/discussion/start') {
         document.getElementById('discussion-loading').classList.add('hidden');
+        document.getElementById('discussion-loading-status').textContent = '';
     }
 });
 

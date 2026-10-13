@@ -1,10 +1,11 @@
 <!-- ナレッジベース紐付けパーシャル（データセット紐付けUIと統一） -->
+{% from "components/dialog.html" import dialog, dialog_open_button %}
 {% if not knowledge_bases %}
 <p class="text-gray-500 text-sm">利用可能なナレッジベースがありません。<a href="/settings" class="text-indigo-600 hover:underline">設定</a>からナレッジベースを登録してください。</p>
 {% else %}
 <div class="space-y-3">
     {% for kb in knowledge_bases %}
-    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false, filters: [], addFilter() { this.filters.push({key:'',value:''}); }, removeFilter(i) { this.filters.splice(i,1); } }">
+    <div class="border border-gray-200 rounded-lg p-4" x-data="{ filters: [], addFilter() { this.filters.push({key:'',value:''}); }, removeFilter(i) { this.filters.splice(i,1); } }">
         <div class="flex items-center justify-between">
             <div class="flex-1">
                 <h4 class="font-medium text-gray-900">{{ kb.name }}</h4>
@@ -31,20 +32,14 @@
                 </div>
                 {% endif %}
                 {% elif not binding %}
-                <button
-                    @click="showModal = true"
-                    class="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-                >紐付ける</button>
+                {{ dialog_open_button("kb-binding-" ~ kb.id, "紐付ける", classes="text-indigo-600 hover:text-indigo-800 text-sm font-medium") }}
                 {% endif %}
             </div>
         </div>
-        
-        <!-- 紐付けモーダル -->
+
+        <!-- 紐付けダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま） -->
         {% if not binding %}
-        <div x-show="showModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
-            <div class="fixed inset-0 bg-black/50" @click="showModal = false"></div>
-            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
-                <h3 class="text-lg font-semibold mb-4">{{ kb.name }} を紐付け</h3>
+        {% call dialog("kb-binding-" ~ kb.id, kb.name ~ " を紐付け", close_on_success=True) %}
                 <p class="text-sm text-gray-600 mb-4">ナレッジベース検索時に適用するメタデータフィルタを設定してください（オプション）。</p>
                 
                 <form id="kb-binding-form-{{ kb.id }}">
@@ -69,19 +64,18 @@
                 </form>
                 
                 <div class="flex justify-end gap-2">
-                    <button type="button" @click="showModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-                    <button 
+                    <button type="button" data-dialog-close class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                    <button
                         type="button"
                         hx-post="/persona/{{ persona_id }}/kb-binding"
                         hx-target="#kb-binding-content"
                         hx-swap="innerHTML"
                         hx-include="#kb-binding-form-{{ kb.id }}"
-                        @click="showModal = false"
+                        data-testid="kb-binding-{{ kb.id }}-submit"
                         class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
                     >紐付ける</button>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
         {% endif %}
     </div>
     {% endfor %}

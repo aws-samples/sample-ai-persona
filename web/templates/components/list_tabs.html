@@ -1,0 +1,61 @@
+{#
+  一覧のタブ（C4、約束 C6）。「自分のもの」「共有されたもの」「すべて」（admin）を切り替える。
+  タブは <a href="?tab=..."> なので、htmx が動かなくても画面遷移で切り替わる。
+  左右の矢印でフォーカスを移し、Enter / Space で切り替える（手動切替）のは app.js の ListTabs。
+
+  マクロは渡された値を表示するだけで、判定をしない（約束 C6）。member が tab=all を
+  指定したときの読み替えは Router が active に渡す値で行う。
+
+  list_tabs の引数:
+    active   ... 選択中のタブ（"mine" / "shared" / "all"）
+    counts   ... 各タブの件数。取れないものは None（「-」と表示する）
+    show_all ... 「すべて」を出すか（admin）
+    base_url ... 一覧の URL（"/persona/management" など）。タブは base_url?tab=<key>
+    target   ... 差し替える一覧部分（list_tabpanel）の id。先頭の # はあってもなくてもよい
+#}
+{% macro _count_text(count) -%}
+{{ "-" if count is none else count ~ " 件" }}
+{%- endmacro %}
+
+{% macro list_tabs(active, counts, show_all, base_url, target) -%}
+{%- set panel_id = target | replace("#", "") -%}
+{%- set TAB_LABELS = [("mine", "自分のもの"), ("shared", "共有されたもの"), ("all", "すべて")] -%}
+<div data-list-tabs data-testid="list-tabs" class="mb-4">
+    <div role="tablist" aria-label="一覧の切り替え" class="flex gap-6 border-b border-gray-200 overflow-x-auto">
+        {%- for key, label in TAB_LABELS if key != "all" or show_all %}
+        {%- set count = counts.get(key) %}
+        {%- set selected = key == active %}
+        <a role="tab" id="{{ panel_id }}-tab-{{ key }}" data-tab="{{ key }}" data-testid="list-tab-{{ key }}"
+           href="{{ base_url }}?tab={{ key }}" hx-get="{{ base_url }}?tab={{ key }}"
+           hx-target="#{{ panel_id }}" hx-swap="innerHTML" hx-push-url="true"
+           aria-controls="{{ panel_id }}" aria-selected="{{ 'true' if selected else 'false' }}"
+           tabindex="{{ '0' if selected else '-1' }}"
+           data-count-label="{{ label }} {{ _count_text(count) }}"
+           class="-mb-px whitespace-nowrap px-1 py-2 text-sm border-b-2 {{ 'border-blue-600 font-semibold text-gray-900' if selected else 'border-transparent text-gray-600 hover:text-gray-900' }}">
+            {{ label }}
+            {%- if count is none %} <span>-</span>
+            {%- else %} <span>{{ count }}</span><span class="sr-only"> 件</span>
+            {%- endif %}
+        </a>
+        {%- endfor %}
+    </div>
+    {# 切り替え後に「自分のもの 12 件」を読む。読み上げ領域は読み込み時から置く #}
+    <p data-list-tabs-status role="status" aria-live="polite" class="sr-only"></p>
+</div>
+{%- endmacro %}
+
+{#
+  タブの一覧部分。listReload で読み直す URL（今のタブを含む）を data-reload-url に持つ。
+  引数:
+    id       ... 一覧部分の id（list_tabs の target と同じ）
+    active   ... 選択中のタブ
+    base_url ... 一覧の URL（data-reload-url に使う）
+#}
+{% macro list_tabpanel(id, active, base_url="") -%}
+<div id="{{ id }}" role="tabpanel" aria-labelledby="{{ id }}-tab-{{ active }}" data-list-tabpanel
+     data-reload-url="{{ base_url }}?tab={{ active }}" data-testid="{{ id }}">
+    {%- if caller %}
+    {{ caller() }}
+    {%- endif %}
+</div>
+{%- endmacro %}

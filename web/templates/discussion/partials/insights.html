@@ -1,9 +1,9 @@
 <!-- インサイト一覧パーシャル -->
+{% from "components/dialog.html" import dialog %}
 <script>
     window.defaultCategories = {{ (default_categories|tojson|safe) if default_categories is defined and default_categories else '[]' }};
 </script>
-<div x-data="{ 
-    showRegenerateModal: false,
+<div x-data="{
     categories: window.defaultCategories || [],
     addCategory() {
         if (this.categories.length >= 10) {
@@ -32,8 +32,8 @@
     <!-- 再生成ボタン -->
     {% if discussion_id is defined and discussion_id %}
     <div class="mb-4 flex justify-end">
-        <button type="button"
-                @click="showRegenerateModal = true"
+        <button type="button" aria-haspopup="dialog"
+                data-dialog-open="regenerate-insights-dialog" data-testid="regenerate-insights-dialog-open-button"
                 class="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 transition-colors text-sm font-medium flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -80,27 +80,8 @@
     </div>
     {% endif %}
 
-    <!-- 再生成モーダル -->
-    <div x-show="showRegenerateModal"
-         x-transition:enter="transition ease-out duration-300"
-         x-transition:enter-start="opacity-0"
-         x-transition:enter-end="opacity-100"
-         x-transition:leave="transition ease-in duration-200"
-         x-transition:leave-start="opacity-100"
-         x-transition:leave-end="opacity-0"
-         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-         style="display: none;">
-        <div @click.away="showRegenerateModal = false"
-             class="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div class="p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-xl font-bold text-gray-900">インサイトカテゴリーを変更</h3>
-                    <button @click="showRegenerateModal = false" class="text-gray-400 hover:text-gray-600">
-                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                    </button>
-                </div>
+    <!-- 再生成ダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま。背景のクリックでは閉じない） -->
+    {% call dialog("regenerate-insights-dialog", "インサイトカテゴリーを変更", close_on_success=True, panel_class="max-w-3xl") %}
 
                 <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
                     <p class="font-medium mb-1">💡 インサイト再生成について</p>
@@ -115,8 +96,7 @@
                 <form hx-post="/discussion/{{ discussion_id }}/regenerate-insights"
                       hx-target="#insights-container"
                       hx-swap="innerHTML"
-                      hx-indicator="#regenerate-spinner"
-                      @htmx:after-request="showRegenerateModal = false">
+                      hx-indicator="#regenerate-spinner">
                 {% else %}
                 <form>
                 {% endif %}
@@ -174,8 +154,7 @@
                     </div>
 
                     <div class="flex gap-3">
-                        <button type="button"
-                                @click="showRegenerateModal = false"
+                        <button type="button" data-dialog-close
                                 class="flex-1 bg-gray-200 text-gray-700 px-4 py-3 rounded-md hover:bg-gray-300 font-medium">
                             キャンセル
                         </button>
@@ -188,7 +167,5 @@
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    {% endcall %}
 </div>

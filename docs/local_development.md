@@ -62,8 +62,20 @@ uv run pytest                          # 全テスト
 uv run pytest -m unit                  # 単体テスト（マーカー指定）
 uv run pytest -m integration           # 統合テスト（マーカー指定）
 uv run pytest -m api                   # APIテスト（マーカー指定）
+uv run pytest -m ui                    # 画面の部品のテスト（Playwright + axe-core）
 uv run pytest --cov=src --cov-report=html  # カバレッジ付き
 ```
+
+画面の部品のテスト（`ui`）は、ヘッドレスの Chromium で部品の画面を読み込み、キー操作・フォーカス・
+読み上げ領域と axe-core（WCAG 2.1 AA）の違反を確かめます。アプリの起動や AWS は使いません。
+初回だけ Chromium を入れてください（E2E と同じ手順です）。
+
+```bash
+uv run playwright install chromium
+```
+
+Chromium が入っていない手元では `ui` のテストは skip されます（理由に上のコマンドが出ます）。
+CI（環境変数 `CI` がある）では skip せずに失敗します。
 
 ## リント・型チェック
 
@@ -124,5 +136,7 @@ tests/
 ├── conftest.py        # 共通フィクスチャ（DB、モデル、モック）
 ├── unit/              # 単体テスト（外部依存をモック）
 ├── integration/       # 統合テスト（モックDB、AIモック）
-└── api/               # APIエンドポイントテスト
+├── api/               # APIエンドポイントテスト
+├── ui/                # 画面の部品のテスト（Playwright + axe-core、マーカー ui）
+└── e2e/               # 実画面の回帰テスト（起動中のアプリと実 AWS、手動で -m e2e）
 ```

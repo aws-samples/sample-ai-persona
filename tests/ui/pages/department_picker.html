@@ -1,0 +1,8 @@
+{% extends "_frame.html" %}
+{% from "components/department_picker.html" import department_picker %}
+{% block component %}
+<form id="picker-form" hx-post="/share-save" hx-swap="none" class="max-w-xl">
+    {{ department_picker("departments", choices, selected, mixed, mode) }}
+    <button type="submit" data-testid="picker-save" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md disabled:bg-gray-200 disabled:text-gray-600">保存</button>
+</form>
+{% endblock %}

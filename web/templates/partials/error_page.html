@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_x_circle, icon_arrow_left %}
+{# 404 のときは題名も理由を区別しない 1 つにする（M11、A7）。base.html は「題名 - AIペルソナシステム」を出す #}
+{% if status_code == 404 %}{% set title = "ページが見つかりません" %}{% endif %}
 {#
   フルページ表示のエラー画面（Issue #117）。
 
@@ -12,9 +14,13 @@
   そこからも移動できる。
 
   引数:
-    error       ... 表示する文言
+    error       ... 表示する文言（404 のときは出さない）
     status_code ... HTTPステータス（見出しの出し分けに使う）
     back_url    ... 復帰先の一覧画面
+
+  404 は「ページが見つかりません」（M11、U3 WF8、NFR1.9）。読めないリソース・存在しない ID・
+  admin 専用画面・知らない URL を区別せず、同じ見出しと本文を出す。渡された error
+  （「ペルソナが見つかりません」など）は出さない。404 以外は今どおり。
 #}
 {% block content %}
 <div class="max-w-2xl mx-auto py-12">
@@ -31,7 +37,13 @@
             {% endif %}
         </h1>
 
-        <p class="text-gray-600 mb-8">{{ error }}</p>
+        <p class="text-gray-600 mb-8" data-testid="error-page-message">
+            {%- if status_code == 404 -%}
+            指定されたページは存在しないか、表示できません。
+            {%- else -%}
+            {{ error }}
+            {%- endif -%}
+        </p>
 
         <div class="flex items-center justify-center gap-3">
             <a href="{{ back_url or '/' }}"

@@ -952,9 +952,10 @@ class TestHttpExceptionRendersHtmlPage:
         # 生のJSONを返していないこと
         assert not response.text.strip().startswith("{")
         assert '"detail"' not in response.text
-        # 文言と復帰リンクが出ること
-        assert "ペルソナが見つかりません" in response.text
-        assert "/persona/management" in response.text
+        # 理由を区別しない 1 つの画面（M11）と復帰リンクが出ること。資源別の文言は出さない
+        assert "<h1" in response.text and "ページが見つかりません" in response.text
+        assert "ペルソナが見つかりません" not in response.text
+        assert 'href="/persona/management"' in response.text
 
     @patch("web.routers.discussion.get_discussion_manager")
     def test_discussion_not_found_renders_html(self, mock_get_mgr, test_app, login_as):
@@ -970,7 +971,9 @@ class TestHttpExceptionRendersHtmlPage:
 
         assert response.status_code == 404
         assert not response.text.strip().startswith("{")
-        assert "/discussion/results" in response.text
+        assert "ページが見つかりません" in response.text
+        assert "議論が見つかりません" not in response.text
+        assert 'href="/discussion/results"' in response.text
 
     def test_json_api_keeps_json_response(self, test_app, login_as):
         """`/api/*` はJSONクライアント向けなので既定の挙動を維持する。"""
@@ -1037,6 +1040,10 @@ class TestToastIsVisibleRegardlessOfScroll:
         tag = m.group(0)
         for cls in ("fixed", "z-toast"):
             assert cls in tag, f"{cls} が無い（スクロールで見えなくなる）"
+        # 読み上げ領域は種類ごとの 2 つの入れ物（U3 WF4）。外側には重ねない
+        assert "aria-live" not in tag, "外側の aria-live は二重の読み上げになる"
+        assert re.search(r'id="toast-status"[^>]*role="status"', base)
+        assert re.search(r'id="toast-alert"[^>]*role="alert"', base)
 
     def test_required_classes_exist_in_built_css(self):
         """ビルド済みCSSに必要なユーティリティが含まれていること。
