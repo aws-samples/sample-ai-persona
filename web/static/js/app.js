@@ -965,6 +965,24 @@ registerBlock('ListTabs', function() {
         }
     });
 
+    // 一覧部分ごとに最後に出した要求を覚え、それより古い要求の応答は差し替えない。
+    // タブどうしは hx-sync で前の要求を打ち切るが、listReload の読み直し（htmx.ajax）は
+    // タブと別の要求なので、遅れて着いた読み直しが新しいタブを上書きしないようにここで捨てる。
+    // X-Render-Response の許可（上の htmx:beforeSwap）より後に登録しているため、こちらが勝つ。
+    const latest = new WeakMap();
+    const PANEL = '[data-list-tabpanel]';
+
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+        const panel = evt.detail.target;
+        if (panel instanceof Element && panel.matches(PANEL)) latest.set(panel, evt.detail.xhr);
+    });
+
+    document.body.addEventListener('htmx:beforeSwap', function(evt) {
+        const panel = evt.detail.target;
+        if (!(panel instanceof Element) || !panel.matches(PANEL)) return;
+        if (latest.has(panel) && latest.get(panel) !== evt.detail.xhr) evt.detail.shouldSwap = false;
+    });
+
     document.body.addEventListener('htmx:afterSwap', function(evt) {
         const config = evt.detail.requestConfig;
         const tab = config && config.elt;
@@ -981,13 +999,28 @@ registerBlock('ListTabs', function() {
 registerBlock('BusyRegion', function() {
     const BUSY = '[data-list-tabpanel], [data-busy-target]';
     const isBusyRegion = (node) => node instanceof Element && node.matches(BUSY);
+    // 一覧ごとに、走っている要求を持つ。最後の 1 つが終わるまで aria-busy を外さない
+    // （タブを続けて押したとき、先に終わった要求で読み込み中が消えないように）
+    const pending = new WeakMap();
+
+    function finish(evt) {
+        const region = evt.detail.target;
+        if (!isBusyRegion(region)) return;
+        const requests = pending.get(region);
+        if (requests) requests.delete(evt.detail.xhr);
+        if (!requests || requests.size === 0) region.removeAttribute('aria-busy');
+    }
 
     document.body.addEventListener('htmx:beforeRequest', function(evt) {
-        if (isBusyRegion(evt.detail.target)) evt.detail.target.setAttribute('aria-busy', 'true');
+        const region = evt.detail.target;
+        if (!isBusyRegion(region)) return;
+        if (!pending.has(region)) pending.set(region, new Set());
+        pending.get(region).add(evt.detail.xhr);
+        region.setAttribute('aria-busy', 'true');
     });
 
-    document.body.addEventListener('htmx:afterRequest', function(evt) {
-        if (isBusyRegion(evt.detail.target)) evt.detail.target.removeAttribute('aria-busy');
+    ['htmx:afterRequest', 'htmx:sendAbort'].forEach((name) => {
+        document.body.addEventListener(name, finish);
     });
 
     // 読み込み中の印を残したまま履歴に保存しない（戻ったときに読み込み中に見えるため）

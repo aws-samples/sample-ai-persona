@@ -121,6 +121,72 @@ def test_panel_is_busy_while_switching(ui: UiHarness) -> None:
     assert ui.page.get_attribute("#list-panel", "aria-busy") is None
 
 
+def _current_tab_in_url(ui: UiHarness) -> str | None:
+    return ui.page.evaluate("new URL(location.href).searchParams.get('tab')")
+
+
+def test_late_reply_of_an_earlier_tab_is_discarded(ui: UiHarness) -> None:
+    """Shared then All: Shared's late reply must not overwrite All (list, tab, URL)."""
+    shared = ui.hold("/items?tab=shared")
+    ui.respond("/items?tab=all", body=_rows("all"))
+    _load(ui)
+
+    ui.page.click(_tab("shared"))
+    shared.wait_for_request()
+    ui.page.click(_tab("all"))
+    ui.page.wait_for_selector("#list-panel:has-text('all の行')")
+    shared.release(body=_rows("shared"))
+    ui.page.wait_for_timeout(300)
+    ui.settle()
+
+    assert "shared の行" not in ui.page.inner_text("#list-panel")
+    assert "all の行" in ui.page.inner_text("#list-panel")
+    assert _selected(ui) == ["all"]
+    assert _current_tab_in_url(ui) == "all"
+    assert ui.page.get_attribute("#list-panel", "data-reload-url") == "/items?tab=all"
+
+
+def test_panel_stays_busy_until_the_latest_tab_arrives(ui: UiHarness) -> None:
+    shared = ui.hold("/items?tab=shared")
+    all_tab = ui.hold("/items?tab=all")
+    _load(ui)
+
+    ui.page.click(_tab("shared"))
+    shared.wait_for_request()
+    ui.page.click(_tab("all"))
+    all_tab.wait_for_request()
+    shared.release(body=_rows("shared"))
+    ui.page.wait_for_timeout(300)
+    ui.settle()
+    assert ui.page.get_attribute("#list-panel", "aria-busy") == "true"
+
+    all_tab.release(body=_rows("all"))
+    ui.page.wait_for_selector("#list-panel:has-text('all の行')")
+    ui.settle()
+    assert ui.page.get_attribute("#list-panel", "aria-busy") is None
+
+
+def test_late_list_reload_does_not_overwrite_a_newer_tab(ui: UiHarness) -> None:
+    reload_reply = ui.hold("/items?tab=mine")
+    ui.respond("/items?tab=all", body=_rows("all"))
+    _load(ui)
+    ui.respond(
+        "/reload-probe",
+        headers={"HX-Trigger": json.dumps({"listReload": {"target": "#list-panel"}})},
+    )
+
+    ui.page.click("#reload-probe")
+    reload_reply.wait_for_request()
+    ui.page.click(_tab("all"))
+    ui.page.wait_for_selector("#list-panel:has-text('all の行')")
+    reload_reply.release(body=_rows("読み直し"))
+    ui.page.wait_for_timeout(300)
+    ui.settle()
+
+    assert "読み直し の行" not in ui.page.inner_text("#list-panel")
+    assert _selected(ui) == ["all"]
+
+
 def test_switch_announces_the_count(ui: UiHarness) -> None:
     ui.respond("/items?tab=all", body=_rows("all"))
     _load(ui)

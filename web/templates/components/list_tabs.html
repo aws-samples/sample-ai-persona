@@ -2,6 +2,8 @@
   一覧のタブ（C4、約束 C6）。「自分のもの」「共有されたもの」「すべて」（admin）を切り替える。
   タブは <a href="?tab=..."> なので、htmx が動かなくても画面遷移で切り替わる。
   左右の矢印でフォーカスを移し、Enter / Space で切り替える（手動切替）のは app.js の ListTabs。
+  タブの要求はタブ一覧（tablist）の 1 つの列で扱い（hx-sync の replace）、新しく押したタブが
+  前の要求を打ち切る。遅れて着いた古い応答で一覧・選択中のタブ・URL を上書きしないため。
 
   マクロは渡された値を表示するだけで、判定をしない（約束 C6）。member が tab=all を
   指定したときの読み替えは Router が active に渡す値で行う。
@@ -28,6 +30,7 @@
         <a role="tab" id="{{ panel_id }}-tab-{{ key }}" data-tab="{{ key }}" data-testid="list-tab-{{ key }}"
            href="{{ base_url }}?tab={{ key }}" hx-get="{{ base_url }}?tab={{ key }}"
            hx-target="#{{ panel_id }}" hx-swap="innerHTML" hx-push-url="true"
+           hx-sync="closest [role=tablist]:replace"
            aria-controls="{{ panel_id }}" aria-selected="{{ 'true' if selected else 'false' }}"
            tabindex="{{ '0' if selected else '-1' }}"
            data-count-label="{{ label }} {{ _count_text(count) }}"
