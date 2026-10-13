@@ -19,7 +19,7 @@ const EDGE_REGION = 'us-east-1';
  * v1.0.0 の Stage（FR9.1、ADR-001）: Data・App・Edge の 3 スタック。
  *
  * 依存は App → Data と App → Edge だけ。設定は parameters.ts を既定にし、
- * コンテキスト（-c deploymentMode=... / -c appDesiredCount=... / -c enableMcpGateway=...）
+ * コンテキスト（-c region=... / -c deploymentMode=... / -c appDesiredCount=... / -c enableMcpGateway=...）
  * で上書きできる。synth 時に決められない形（閉域構成・MCP Gateway・台数の範囲外）は
  * synth でエラーにする。v0 のスタックとは名前・エクスポート名が重ならない。
  */
@@ -37,7 +37,11 @@ export class AIPersonaStage extends Stage {
     const appDesiredCount = this.resolveDesiredCount(parameter);
 
     const account = props.account ?? parameter.env?.account;
-    const region = parameter.env?.region ?? 'ap-northeast-1';
+    // deploy.sh --region は -c region=<リージョン> で渡す（bootstrap・出力の取得と同じリージョンにする）
+    const region =
+      (this.node.tryGetContext('region') as string | undefined) ??
+      parameter.env?.region ??
+      'ap-northeast-1';
 
     this.data = new DataStack(this, 'Data', {
       env: { account, region },

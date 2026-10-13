@@ -138,7 +138,7 @@ for target_region in "${REGION}" "${EDGE_REGION}"; do
   npx cdk bootstrap "aws://${ACCOUNT_ID}/${target_region}" --region "${target_region}"
 done
 
-CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}")
+CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}" -c "region=${REGION}")
 
 # ===== Step 2: ① Data・Edge =====
 log_step "Step 2: Data・Edge スタック（① テーブル・ECR・Cognito・WAF）"

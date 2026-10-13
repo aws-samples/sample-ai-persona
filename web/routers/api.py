@@ -8,7 +8,8 @@ AgentCore Gateway 経由で外部AIエージェントからも利用可能。
 import logging
 from typing import Annotated, Any, Literal, Optional, List
 
-from fastapi import APIRouter, HTTPException
+import anyio
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.managers.persona_manager import PersonaManager
@@ -16,7 +17,8 @@ from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.interview_manager import InterviewManager
 from src.managers.job_manager import JobManager
-from src.models.errors import ErrorCode
+from src.models.authz import Principal
+from src.models.errors import CodedError, ErrorCode
 from src.models.insight_category import InsightCategory
 from web.error_messages import user_message_for, user_message_for_code
 
@@ -67,6 +69,12 @@ def get_job_manager() -> JobManager:
     if _job_manager is None:
         _job_manager = JobManager()
     return _job_manager
+
+
+def _principal(request: Request) -> Principal:
+    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    principal: Principal = request.state.principal
+    return principal
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +353,7 @@ def _resolve_personas(persona_ids: List[str]) -> list:
 
 
 def _run_generate_personas(
+    principal: Principal,
     file_contents: list[tuple[bytes, str]],
     data_type: str,
     persona_count: int,
@@ -375,7 +384,7 @@ def _run_generate_personas(
     summary="AIペルソナを生成する",
     description="テキストデータからAIペルソナを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def generate_personas(req: GeneratePersonasRequest) -> Any:
+async def generate_personas(request: Request, req: GeneratePersonasRequest) -> Any:
     try:
         file_contents: list[tuple[bytes, str]] = [
             (text.encode("utf-8"), f"input_{i}.txt")
@@ -383,6 +392,8 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
         ]
         jm = get_job_manager()
         job_id = jm.submit(
+            _principal(request),
+            "persona_generation",
             _run_generate_personas,
             file_contents,
             req.data_type,
@@ -391,6 +402,9 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
             req.custom_prompt,
         )
         return JobResponse(job_id=job_id, status="pending")
+    except CodedError:
+        # 権限なし（ACCESS_DENIED）などは約束 C13 のハンドラに任せる
+        raise
     except Exception as e:
         logger.error(f"Failed to submit persona generation job: {e}")
         raise HTTPException(
@@ -403,6 +417,7 @@ async def generate_personas(req: GeneratePersonasRequest) -> Any:
 
 
 def _run_classic_discussion(
+    principal: Principal,
     personas: list,
     topic: str,
     categories: list | None,
@@ -422,6 +437,7 @@ def _run_classic_discussion(
 
 
 def _run_agent_discussion(
+    principal: Principal,
     personas: list,
     topic: str,
     categories: list | None,
@@ -479,16 +495,24 @@ def _discussion_detail(discussion: Any) -> dict:
     summary="ペルソナ間の議論を実行する",
     description="指定されたペルソナ間で議論を実行します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def run_discussion(req: RunDiscussionRequest) -> Any:
+async def run_discussion(request: Request, req: RunDiscussionRequest) -> Any:
     try:
         personas = _resolve_personas(req.persona_ids)
         jm = get_job_manager()
         runner = (
             _run_classic_discussion if req.mode == "classic" else _run_agent_discussion
         )
-        job_id = jm.submit(runner, personas, req.topic, req.categories, req.rounds)
+        job_id = jm.submit(
+            _principal(request),
+            "discussion",
+            runner,
+            personas,
+            req.topic,
+            req.categories,
+            req.rounds,
+        )
         return JobResponse(job_id=job_id, status="pending")
-    except HTTPException:
+    except (HTTPException, CodedError):
         raise
     except Exception as e:
         logger.error(f"Failed to submit discussion job: {e}")
@@ -537,7 +561,9 @@ async def get_discussion_detail(discussion_id: str) -> Any:
     summary="議論結果からインサイトを生成する",
     description="保存済みの議論結果からインサイトを生成します。処理は非同期で実行され、ジョブIDが返されます。GET /api/jobs/{job_id} でステータスと結果を確認してください。",
 )
-async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) -> Any:
+async def generate_insights(
+    request: Request, discussion_id: str, req: GenerateInsightsRequest
+) -> Any:
     try:
         dm = get_discussion_manager()
         discussion = dm.get_discussion(discussion_id)
@@ -553,7 +579,7 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
             else None
         )
 
-        def _run() -> list[dict]:
+        def _run(principal: Principal) -> list[dict]:
             insights = dm.generate_insights(discussion, categories=cats)
             return [
                 InsightResponse(
@@ -566,9 +592,9 @@ async def generate_insights(discussion_id: str, req: GenerateInsightsRequest) ->
             ]
 
         jm = get_job_manager()
-        job_id = jm.submit(_run)
+        job_id = jm.submit(_principal(request), "insights", _run)
         return JobResponse(job_id=job_id, status="pending")
-    except HTTPException:
+    except (HTTPException, CodedError):
         raise
     except Exception as e:
         logger.error(f"Failed to generate insight: {e}")
@@ -628,14 +654,12 @@ async def run_interview(req: RunInterviewRequest) -> Any:
     summary="非同期ジョブのステータスを確認する",
     description="非同期ジョブ（ペルソナ生成、議論実行）のステータスと結果を取得します。statusがcompletedの場合、resultに結果が含まれます。",
 )
-async def get_job(job_id: str) -> Any:
+async def get_job(request: Request, job_id: str) -> Any:
+    # 投入した本人だけ（BR2.12）。他人・投入者なし・存在しないは JobManager が
+    # JOB_NOT_FOUND を送出し、Jobs に届かなければ LOOKUP_UNAVAILABLE を送出する。
+    # どちらも約束 C13 のハンドラが {detail, error_code} にする（ここでは捕まえない）。
     jm = get_job_manager()
-    job = jm.get(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=404,
-            detail=user_message_for_code(ErrorCode.JOB_NOT_FOUND),
-        )
+    job = await anyio.to_thread.run_sync(jm.get, _principal(request), job_id)
     return JobResponse(
         job_id=job.id,
         status=job.status.value,

@@ -718,6 +718,21 @@ class TestLogout:
         assert local_manager.logout(session_id) == "/login?reason=signed_out"
         assert store.get(_hash(session_id)) is None
 
+    def test_delete_failure_is_not_reported_as_logged_out(
+        self, manager, store, oidc, capsys
+    ):
+        """If the session row cannot be deleted, the old cookie would still work."""
+        session_id = _login(manager)
+        store.delete.side_effect = SessionStoreError("down")
+        capsys.readouterr()
+
+        with raises_code(LookupUnavailableError, ErrorCode.LOOKUP_UNAVAILABLE):
+            manager.logout(session_id)
+
+        oidc.revoke.assert_called_once_with("refresh-1")
+        oidc.logout_url.assert_not_called()
+        assert "auth.logout" not in [e["event"] for e in _events(capsys)]
+
     def test_logout_without_a_session_still_redirects(self, manager, oidc):
         assert manager.logout(None).startswith("https://cognito.example.com/logout")
         oidc.revoke.assert_not_called()

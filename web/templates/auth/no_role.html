@@ -1,0 +1,26 @@
+{% extends "auth/layout.html" %}
+{# ロール未割り当て画面（M4、BR2.8、NFR6.1）。ナビゲーションは出さず、見出し・本文・
+   利用者の表示・ログアウトのボタンだけを置く。状態は文で示し、色だけに頼らない。
+   ログアウトはフォーム送信（POST /signout）で、<button> なのでキーボードで届く。 #}
+{% set badge = user_badge(request) %}
+{% block content %}
+<div data-testid="no-role-notice">
+    <h1 class="text-xl font-bold text-gray-900 mb-4">利用権限がまだありません</h1>
+    <p class="text-gray-700 leading-relaxed mb-4">
+        このアプリを使うためのロールが割り当てられていません。管理者に連絡してください。
+    </p>
+    <p class="text-gray-700 leading-relaxed mb-4">
+        ロールが割り当てられたら、いったんログアウトしてログインし直すと使えるようになります。
+    </p>
+    {% if badge %}
+    <p class="text-sm text-gray-600 mb-6" data-testid="no-role-user">ログイン中: {{ badge.name }}</p>
+    {% endif %}
+    <form method="post" action="/signout">
+        <button type="submit"
+                data-testid="no-role-signout"
+                class="block w-full text-center px-4 py-3 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700">
+            ログアウト
+        </button>
+    </form>
+</div>
+{% endblock %}

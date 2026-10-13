@@ -345,3 +345,71 @@ def test_error_messages_do_not_contain_tokens(service, cognito):
     text = str(exc_info.value) + json.dumps(exc_info.value.context)
     assert "secret-refresh-token" not in text
     assert "secret-token-x" not in text
+
+
+class ClosableTransport(httpx.MockTransport):
+    """MockTransport that refuses requests after close (like a closed pool)."""
+
+    def __init__(self, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+        super().__init__(handler)
+        self.closed = False
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if self.closed:
+            raise httpx.ConnectError("transport closed")
+        return super().handle_request(request)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TestSharedTransport:
+    """The pooled transport outlives each short-lived client (concurrent users)."""
+
+    def _service(self, transport: httpx.BaseTransport) -> OidcService:
+        return OidcService(
+            user_pool_id=POOL_ID,
+            client_id=CLIENT_ID,
+            client_secret="test-client-secret",
+            domain=DOMAIN,
+            redirect_uri=REDIRECT,
+            transport=transport,
+            wall_clock=lambda: NOW,
+        )
+
+    def test_finished_calls_do_not_close_the_shared_transport(self, cognito):
+        transport = ClosableTransport(cognito)
+        service = self._service(transport)
+
+        service.create_authorization_request()
+        service.exchange_code("code-1", "verifier-1", nonce="nonce-1")
+        service.refresh("refresh-token-1")
+        service.revoke("refresh-token-1")
+
+        assert transport.closed is False
+        service.refresh("refresh-token-1")  # まだ使える
+
+    def test_a_call_finishing_mid_flight_does_not_break_another(self, cognito):
+        transport = ClosableTransport(cognito)
+        service = self._service(transport)
+
+        def token_while_another_user_finishes(request: httpx.Request) -> httpx.Response:
+            # 別の利用者の処理がこの要求の途中で終わる（そのクライアントが閉じられる）
+            service.create_authorization_request()
+            service.revoke("other-refresh-token")
+            if transport.closed:
+                raise httpx.ConnectError("connection closed by another client")
+            return _token_response()
+
+        cognito.token = token_while_another_user_finishes
+        tokens = service.refresh("refresh-token-1")
+
+        assert tokens.access_token == "access-token-1"
+
+    def test_close_releases_the_transport(self, cognito):
+        transport = ClosableTransport(cognito)
+        service = self._service(transport)
+
+        service.close()
+
+        assert transport.closed is True

@@ -22,6 +22,17 @@ test('Data・App・Edge の 3 つのスタックを持つ', () => {
   expect(s.edge.region).toBe('us-east-1');
 });
 
+test('-c region で Data・App のリージョンを変えられる（deploy.sh --region）。Edge は us-east-1 のまま', () => {
+  const s = stage({ region: 'us-east-1' });
+  expect(s.data.region).toBe('us-east-1');
+  expect(s.app.region).toBe('us-east-1');
+  expect(s.edge.region).toBe('us-east-1');
+});
+
+test('CloudFront のプレフィックスリストが分からないリージョンは synth でエラー', () => {
+  expect(() => stage({ region: 'us-west-2' })).toThrow(/prefix list/);
+});
+
 test('依存は App → Data と App → Edge だけ', () => {
   const s = stage();
   const ids = (stack: cdk.Stack) => stack.dependencies.map((d) => d.node.id).sort();

@@ -1243,6 +1243,121 @@ class TestAuthErrorBodies:
         assert "arn:aws" not in response.text
 
 
+class TestAuthzErrorBodies:
+    """v1.0.0 U2 のコードの API の本文に、内部の値・例外文・ID が出ないこと（NFR3.6）。
+
+    本文は {detail, error_code} だけで、detail はカタログの文言（約束 C5、C13）。
+    ACCESS_DENIED の状態コードと本文は ``tests/api/test_exception_handlers.py`` が
+    種類ごとに確かめる。
+    """
+
+    _ALLOWED_KEYS = {"detail", "error_code"}
+    _SECRET = "arn:aws:dynamodb:ap-northeast-1:999999999999:table/Jobs-secret"
+
+    def _assert_catalog_body(self, response, code: ErrorCode) -> None:
+        from src.models.errors import CodedError
+        from web.error_messages import FALLBACK_MESSAGE, user_message_for
+
+        body = response.json()
+        assert set(body) == self._ALLOWED_KEYS
+        assert body["error_code"] == code.value
+        expected = (
+            FALLBACK_MESSAGE
+            if code is ErrorCode.UNKNOWN
+            else user_message_for(CodedError(code=code))
+        )
+        assert body["detail"] == expected
+        assert self._SECRET not in response.text
+
+    def _jobs(self, monkeypatch, **behaviour: object) -> Mock:
+        from src.managers.job_manager import JobManager
+        from web.routers import api
+
+        lookup = Mock()
+        for name, value in behaviour.items():
+            setattr(lookup.get_job, name, value)
+        monkeypatch.setattr(
+            api,
+            "_job_manager",
+            JobManager(database_service=Mock(), lookup_service=lookup),
+        )
+        return lookup
+
+    def test_role_required_body(self, test_app, no_role_user):
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as browser:
+            no_role_user.login(browser)
+            response = browser.get("/api/personas")
+
+        assert response.status_code == 403
+        self._assert_catalog_body(response, ErrorCode.ROLE_REQUIRED)
+
+    def test_job_not_found_body(self, test_app, member_b, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        self._jobs(monkeypatch, return_value=None)
+        with TestClient(test_app) as browser:
+            member_b.login(browser)
+            response = browser.get("/api/jobs/job-secret-1")
+
+        assert response.status_code == 404
+        self._assert_catalog_body(response, ErrorCode.JOB_NOT_FOUND)
+        assert "job-secret-1" not in response.text
+
+    def test_lookup_unavailable_body(self, test_app, member_a, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from src.services.authz_lookup_service import AuthzLookupError
+
+        self._jobs(
+            monkeypatch,
+            side_effect=AuthzLookupError(self._SECRET, reason="unreachable"),
+        )
+        with TestClient(test_app) as browser:
+            member_a.login(browser)
+            response = browser.get("/api/jobs/job-1")
+
+        assert response.status_code == 503
+        self._assert_catalog_body(response, ErrorCode.LOOKUP_UNAVAILABLE)
+
+    def test_request_invalid_body(self, test_app, member_a):
+        from fastapi.testclient import TestClient
+
+        with TestClient(
+            test_app, headers={"X-Requested-With": "XMLHttpRequest"}
+        ) as api_client:
+            member_a.login(api_client)
+            response = api_client.post(
+                "/api/discussions", json={"persona_ids": ["<script>x</script>"]}
+            )
+
+        assert response.status_code == 422
+        self._assert_catalog_body(response, ErrorCode.REQUEST_INVALID)
+        assert "<script>" not in response.text
+
+    def test_http_error_body(self, test_app, member_a):
+        from fastapi.testclient import TestClient
+
+        with TestClient(test_app) as browser:
+            member_a.login(browser)
+            response = browser.get("/api/no-such-endpoint")
+
+        assert response.status_code == 404
+        self._assert_catalog_body(response, ErrorCode.HTTP_ERROR)
+
+    def test_unknown_body(self, test_app, member_a, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        self._jobs(monkeypatch, side_effect=RuntimeError(self._SECRET))
+        with TestClient(test_app, raise_server_exceptions=False) as browser:
+            member_a.login(browser)
+            response = browser.get("/api/jobs/job-1")
+
+        assert response.status_code == 500
+        self._assert_catalog_body(response, ErrorCode.UNKNOWN)
+
+
 def _stringifies_something(node: ast.AST) -> bool:
     """`str(...)` または f-string による文字列化か。"""
     if isinstance(node, ast.JoinedStr):

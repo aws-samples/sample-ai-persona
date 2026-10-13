@@ -66,6 +66,11 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.AUTH_CONFIG_INVALID: (
         "ログインの設定が正しくありません。管理者に連絡してください"
     ),
+    # --- 認可（v1.0.0 U2） ---
+    ErrorCode.ROLE_REQUIRED: "利用権限がまだありません。管理者に連絡してください",
+    ErrorCode.ACCESS_DENIED: "この操作の権限がありません",
+    ErrorCode.REQUEST_INVALID: "入力内容を確認してください",
+    ErrorCode.HTTP_ERROR: "お探しのページまたは操作が見つかりません",
     ErrorCode.GENERATION_CAPACITY_EXCEEDED: (
         "生成するデータ量が大きすぎて処理しきれませんでした。"
         "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"
@@ -482,6 +487,29 @@ def user_message_for_code(
             logger.warning("未知のエラーコードです (code=%r)", code)
         return default or FALLBACK_MESSAGE
     return user_message_for(CodedError(code=parsed, context=context), default=default)
+
+
+#: HTTP status per kind for the global exception handler (contract C13).
+_STATUS_BY_KIND: dict[ErrorKind, int] = {
+    ErrorKind.UNAUTHORIZED: 401,
+    ErrorKind.FORBIDDEN: 403,
+    ErrorKind.NOT_FOUND: 404,
+    ErrorKind.VALIDATION: 400,
+    ErrorKind.CAPACITY: 413,
+    ErrorKind.CONFIG: 500,
+    ErrorKind.TRANSIENT: 503,
+}
+
+
+def http_status_for(code: ErrorCode) -> int:
+    """HTTP status for a coded error (contract C13).
+
+    ``UNKNOWN`` is looked at before its kind: its kind is TRANSIENT (so it is
+    never shown as fixable), but an unclassified failure answers 500.
+    """
+    if code is ErrorCode.UNKNOWN:
+        return 500
+    return _STATUS_BY_KIND[code.kind]
 
 
 def error_kind_of(exc: BaseException | None) -> ErrorKind:

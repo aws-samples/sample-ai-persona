@@ -407,7 +407,12 @@ class AuthManager:
     # --- logout ------------------------------------------------------------------
 
     def logout(self, session_id: str | None) -> str:
-        """End the session here and at Cognito; return where to redirect (BR1.13)."""
+        """End the session here and at Cognito; return where to redirect (BR1.13).
+
+        Raises:
+            LookupUnavailableError: The session row could not be deleted, so the
+                logout is not confirmed (503).
+        """
         if session_id:
             self._end_session(_hash_session_id(session_id))
         if self._oidc is None:
@@ -422,7 +427,12 @@ class AuthManager:
             session = None
         if session is not None and session.refresh_token_enc and self._oidc:
             self._revoke(session)
-        self._delete_quietly(session_hash)
+        # Logout must not report success while the old cookie still works, so a
+        # delete failure surfaces as 503 (the user can sign out again).
+        try:
+            self._store.delete(session_hash)
+        except SessionStoreError as e:
+            raise LookupUnavailableError("Sessions table unreachable at logout") from e
         log_event(
             "auth.logout",
             sub=session.user_sub if session else None,

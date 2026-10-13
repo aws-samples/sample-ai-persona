@@ -99,3 +99,25 @@ def test_unset_image_tag_is_refused(workspace):
     assert result.returncode != 0
     assert "unset" in result.stdout + result.stderr
     assert calls.read_text() == ""
+
+
+def test_region_option_reaches_every_cdk_deploy(workspace, tmp_path):
+    """--region is passed to CDK as -c region=..., not only to bootstrap and the CLI."""
+    repo, _, _ = workspace
+    calls = tmp_path / "ok-calls.log"
+    calls.touch()
+    ok_bin = tmp_path / "ok-bin"
+    ok_bin.mkdir()
+    for tool in ("aws", "docker", "npx", "npm"):
+        fake = ok_bin / tool
+        fake.write_text(f'#!/bin/sh\necho "{tool} $*" >> "{calls}"\necho 123\nexit 0\n')
+        fake.chmod(0o755)
+
+    result = _run(["--region", "us-west-2", "--image-tag", "abc1234"], repo, ok_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    deploys = [line for line in calls.read_text().splitlines() if " cdk deploy " in line]
+    assert len(deploys) == 2  # ① Data・Edge と ③ App
+    assert all("-c region=us-west-2" in line for line in deploys)
+    bootstraps = [line for line in calls.read_text().splitlines() if "cdk bootstrap" in line]
+    assert any("aws://123/us-west-2" in line for line in bootstraps)

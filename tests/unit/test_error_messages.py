@@ -49,6 +49,11 @@ class TestAuthWording:
             ErrorCode.SESSION_EXPIRED,
             ErrorCode.CSRF_FAILED,
             ErrorCode.LOOKUP_UNAVAILABLE,
+            # U2（約束 C5 の残り）
+            ErrorCode.ROLE_REQUIRED,
+            ErrorCode.ACCESS_DENIED,
+            ErrorCode.REQUEST_INVALID,
+            ErrorCode.HTTP_ERROR,
         ],
     )
     def test_auth_codes_resolve_to_catalog_wording(self, code):

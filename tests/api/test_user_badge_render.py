@@ -32,12 +32,16 @@ def test_header_shows_name_role_departments_and_signout(client, login_as):
 
 
 def test_mobile_menu_also_has_the_badge_and_signout(client, login_as):
-    login_as(client, name=None, email="hanako@example.com", roles=(), groups=())
+    # ロールのない利用者は U2 の BR2.8 でロール未割り当て画面へ移るため、ここでは
+    # member で確かめる（「ロールなし」の表示は tests/unit/test_user_badge.py）。
+    login_as(
+        client, name=None, email="hanako@example.com", roles=("member",), groups=()
+    )
     html = client.get("/persona/management").text
 
     mobile = _block(html, "user-badge-mobile")
     assert "hanako@example.com" in mobile
-    assert "ロールなし" in mobile
+    assert "member" in mobile
     assert "所属部署なし" in mobile
     assert 'data-testid="signout-button-mobile"' in html
 

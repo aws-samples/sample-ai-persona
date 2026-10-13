@@ -23,6 +23,8 @@ const AUTH_METRICS: { name: string; event: string; dimensions?: Record<string, s
   { name: 'CsrfRejected', event: 'auth.csrf_rejected' },
   { name: 'CircuitOpened', event: 'auth.circuit_opened' },
   { name: 'DecryptFailed', event: 'auth.decrypt_failed' },
+  // U2: 認可で拒否した件数（not_found / denied / hidden / role_required）。アラームは作らない
+  { name: 'AuthzDenied', event: 'authz.denied', dimensions: { reason: '$.reason' } },
 ];
 
 export interface AppStackProps extends StackProps {
@@ -208,6 +210,11 @@ export class AppStack extends Stack {
       resources: ['*'],
     }));
     data.uploadBucket.bucket.grantReadWrite(taskRole);
+    // 部署の一覧（DepartmentDirectory、ADR-009）。v1 の User Pool の ListGroups だけ（NFR3.8）
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['cognito-idp:ListGroups'],
+      resources: [data.cognito.userPool.userPoolArn],
+    }));
     // Bedrock・AgentCore Memory は v0 と同じ範囲（* の絞り込みは U9）
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [

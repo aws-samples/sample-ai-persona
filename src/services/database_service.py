@@ -2289,21 +2289,36 @@ class DatabaseService:
     # Jobs CRUD
     # =========================================================================
 
-    def save_job(self, job_id: str, status: str, expires_at: int) -> None:
-        """Save a new job record."""
+    def save_job(
+        self,
+        job_id: str,
+        status: str,
+        expires_at: int,
+        owner_sub: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> None:
+        """Save a new job record.
+
+        Args:
+            owner_sub: ``sub`` of the submitter (contract C14). Results are
+                returned only to this user.
+            job_type: What the job does (for logs).
+        """
         now = datetime.now().isoformat()
+        item: Dict[str, Any] = {
+            "id": {"S": job_id},
+            "status": {"S": status},
+            "created_at": {"S": now},
+            "updated_at": {"S": now},
+            "expires_at": {"N": str(expires_at)},
+        }
+        if owner_sub:
+            item["owner_sub"] = {"S": owner_sub}
+        if job_type:
+            item["job_type"] = {"S": job_type}
 
         def _save() -> None:
-            self.dynamodb_client.put_item(
-                TableName=self.jobs_table,
-                Item={
-                    "id": {"S": job_id},
-                    "status": {"S": status},
-                    "created_at": {"S": now},
-                    "updated_at": {"S": now},
-                    "expires_at": {"N": str(expires_at)},
-                },
-            )
+            self.dynamodb_client.put_item(TableName=self.jobs_table, Item=item)
 
         self._execute_with_retry(_save, operation_name=f"save_job({job_id})")
 

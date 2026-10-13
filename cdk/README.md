@@ -43,6 +43,8 @@ graph TB
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF WebACL（`enableWaf: true` のとき） | なし |
 | `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ロググループとメトリクスフィルタ | Data、Edge |
 
+App スタックのタスクロールには、部署の一覧を読むための `cognito-idp:ListGroups`（Data スタックの User Pool だけ）を付けています。メトリクスフィルタには、認可の拒否を `reason`（`denied`・`hidden`・`not_found`・`role_required`）ごとに数える `AIPersona/Auth` の `AuthzDenied` があります（アラームはなし）。
+
 v0 のスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）とは名前が重ならないため、同じアカウントに並べて動かせます（切り戻しの備え）。v0 のスタックの削除は、利用者が判断して手で行ってください。
 
 ### v1.0.0 のデプロイ（CloudShell）
@@ -78,6 +80,8 @@ cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=$(git rev-parse --short HEAD
 #### 最初の admin を作る
 
 `deploy.sh` の最後に表示されるコマンドで、利用者を作って `role:admin` のグループに入れます。仮のパスワードがメールで届き、初回ログインで新しいパスワードを設定します。部署は `group:<名前>` のグループで表します（U1 では画面上部にグループ名をそのまま出します）。
+
+`role:admin` にも `role:member` にも入っていない利用者は、ログインすると「利用権限がまだありません」の画面に送られ、ログアウトしかできません（API は 403 の `role_required`）。グループに入れたあとは、ログアウトしてログインし直すと使えるようになります。
 
 #### 設定（`cdk/parameters.ts`）
 

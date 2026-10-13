@@ -112,6 +112,18 @@ class ErrorCode(StrEnum):
     # Only an operator can fix it; the app refuses to start (BR1.15).
     AUTH_CONFIG_INVALID = ("auth_config_invalid", ErrorKind.CONFIG)
 
+    # --- Authorization (v1.0.0 U2; the rest of contract C5) ---
+    # Signed in without any role: only the no-role page is usable (BR2.8).
+    ROLE_REQUIRED = ("role_required", ErrorKind.FORBIDDEN)
+    # The user can read the target but not manage it, or lacks the permission
+    # for the operation (BR2.2, BR2.7).
+    ACCESS_DENIED = ("access_denied", ErrorKind.FORBIDDEN)
+    # The JSON API request did not match its schema (422, contract C13).
+    REQUEST_INVALID = ("request_invalid", ErrorKind.VALIDATION)
+    # FastAPI's own HTTPException (unknown URL 404, 405, ...) carried in the
+    # JSON API body. The HTTP status stays as raised (contract C13).
+    HTTP_ERROR = ("http_error", ErrorKind.NOT_FOUND)
+
     # --- Generation capacity ---
     GENERATION_CAPACITY_EXCEEDED = (
         "generation_capacity_exceeded",
@@ -632,3 +644,15 @@ class LookupUnavailableError(CodedError):
     """A lookup needed for the auth decision is unreachable (fail closed, 503)."""
 
     code = ErrorCode.LOOKUP_UNAVAILABLE
+
+
+class AccessDeniedError(CodedError):
+    """Readable but not manageable, or the permission is missing (403, C5)."""
+
+    code = ErrorCode.ACCESS_DENIED
+
+
+class RoleRequiredError(CodedError):
+    """Signed in without any role (403 on the JSON API, BR2.8)."""
+
+    code = ErrorCode.ROLE_REQUIRED

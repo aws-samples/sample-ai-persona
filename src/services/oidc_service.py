@@ -75,6 +75,26 @@ def _raise_for_transient_status(response: httpx.Response) -> None:
         raise _TransientStatusError(response.status_code)
 
 
+class _SharedTransport(httpx.BaseTransport):
+    """Lend the service's pooled transport to a short-lived client.
+
+    ``httpx.Client.close()`` (and leaving its ``with`` block) closes its
+    transport. Each call builds its own client, so closing the real pool there
+    would drop connections other users' token exchanges and refreshes are still
+    using. This wrapper forwards requests and ignores ``close()``; the service
+    owns the pool and closes it in :meth:`OidcService.close`.
+    """
+
+    def __init__(self, transport: httpx.BaseTransport) -> None:
+        self._transport = transport
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._transport.handle_request(request)
+
+    def close(self) -> None:
+        """Do nothing: the owning service closes the pool."""
+
+
 @dataclass(frozen=True)
 class AuthorizationRequest:
     """Where to send the browser, plus the values to keep until the callback."""
@@ -201,12 +221,17 @@ class OidcService:
         self._client_secret = client_secret
         self._base = f"https://{domain}"
         self._redirect_uri = redirect_uri
-        self._transport = transport or httpx.HTTPTransport()
+        self._pool = transport or httpx.HTTPTransport()
+        self._transport = _SharedTransport(self._pool)
         self.breaker = breaker or CircuitBreaker()
         self.timeout_seconds = timeout
         self._wall_clock = wall_clock
         self._jwks: KeySet | None = None
         self._jwks_lock = Lock()
+
+    def close(self) -> None:
+        """Close the pooled transport. Call once, when the service is discarded."""
+        self._pool.close()
 
     # --- client construction -------------------------------------------------
 
