@@ -1186,8 +1186,9 @@ registerBlock('DepartmentPicker', function() {
     }
 
     function init(picker) {
-        if (picker.dataset.departmentReady) return;
-        picker.dataset.departmentReady = '';
+        // 初期化済みは属性の有無で見る（別の領域の htmx 更新のたびに状態を戻さないため）
+        if ('departmentReady' in picker.dataset) return;
+        picker.dataset.departmentReady = 'true';
         optionsOf(picker).forEach((o) => {
             if (o.dataset.initial === 'mixed') applyState(o, 'mixed', picker);
         });

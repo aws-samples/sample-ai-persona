@@ -136,6 +136,26 @@ def test_sent_values_follow_the_states(ui: UiHarness) -> None:
     ]
 
 
+def test_another_htmx_swap_keeps_the_picker_state(ui: UiHarness) -> None:
+    """A swap elsewhere on the page must not re-initialise the picker."""
+    ui.respond("/elsewhere", body="<p>更新した</p>")
+    _load_mixed(ui)
+    ui.page.click(_option("plan"))
+    assert _states(ui)["plan"] == "checked"
+    assert not ui.page.is_disabled(SAVE)
+
+    ui.page.click("#elsewhere-swap")
+    ui.page.wait_for_selector("#elsewhere:has-text('更新した')")
+    ui.settle()
+
+    assert _states(ui)["plan"] == "checked"
+    assert sorted(map(tuple, _sent(ui))) == [
+        ("departments", "plan"),
+        ("departments", "sales"),
+    ]
+    assert not ui.page.is_disabled(SAVE)
+
+
 def test_removed_departments_are_announced_with_counts(ui: UiHarness) -> None:
     _load_mixed(ui)
     removing = ui.page.locator(REMOVING)
