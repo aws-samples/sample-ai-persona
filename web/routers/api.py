@@ -234,6 +234,9 @@ async def list_personas(request: Request, search: Optional[str] = None) -> Any:
             )
             for p in personas
         ]
+    except CodedError:
+        # 照合の障害（503 lookup_unavailable）などは共通の例外ハンドラに任せる（U4 レビュー P2）
+        raise
     except Exception as e:
         logger.error(f"Failed to fetch persona list: {e}")
         raise HTTPException(

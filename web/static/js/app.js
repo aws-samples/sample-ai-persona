@@ -1,5 +1,15 @@
 // AIペルソナシステム - htmx版 JavaScript
 
+// htmx の履歴キャッシュ（localStorage の htmx-history-cache）は使わない（U4 レビュー P1）。
+// 画面の写しが利用者の区別なくブラウザに残り、別の利用者に替わったあとも「戻る」で
+// 前の利用者の一覧が出てしまうため。保存は base.html の hx-history="false" で止め、
+// 以前の版が残した写しはここで消す。戻るときはサーバーから読み直す。
+try {
+    localStorage.removeItem('htmx-history-cache');
+} catch (e) {
+    // localStorage が使えないブラウザでは写しもない
+}
+
 // htmxイベントハンドラ
 document.body.addEventListener('htmx:afterSwap', function(evt) {
     // 新しいコンテンツにフェードインアニメーションを適用

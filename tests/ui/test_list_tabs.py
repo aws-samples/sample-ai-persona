@@ -213,6 +213,37 @@ def test_back_button_returns_to_the_previous_tab(ui: UiHarness) -> None:
     assert _selected(ui) == ["mine"]
 
 
+def _history_cache(ui: UiHarness) -> str | None:
+    return ui.page.evaluate("localStorage.getItem('htmx-history-cache')")
+
+
+def test_switching_tabs_keeps_no_page_snapshot_in_local_storage(
+    ui: UiHarness,
+) -> None:
+    """Lists must not survive a sign-out in htmx's history cache (U4 review P1)."""
+    ui.respond("/items?tab=shared", body=_rows("shared"))
+    _load(ui)
+
+    ui.page.click(_tab("shared"))
+    ui.page.wait_for_selector("#list-panel:has-text('shared の行')")
+    ui.settle()
+
+    assert _history_cache(ui) is None
+
+
+def test_a_snapshot_left_by_an_earlier_session_is_removed_on_load(
+    ui: UiHarness,
+) -> None:
+    _load(ui)
+    ui.page.evaluate(
+        "localStorage.setItem('htmx-history-cache', JSON.stringify([{url: '/x', content: '前の利用者'}]))"
+    )
+
+    _load(ui)  # the next page load (e.g. after signing in again)
+
+    assert _history_cache(ui) is None
+
+
 def test_list_reload_refetches_the_current_tab(ui: UiHarness) -> None:
     ui.respond("/items?tab=shared", body=_rows("shared"))
     _load(ui)

@@ -111,7 +111,9 @@ class UserDirectoryService:
         kwargs: dict[str, Any] = {
             "UserPoolId": self.user_pool_id,
             "Limit": _PAGE_SIZE,
-            "AttributesToGet": ["sub", "name"],
+            # No AttributesToGet: naming "name" fails the call when a user has
+            # no name (the first admin, for one). Every attribute is read and
+            # only sub / name / Enabled are kept (_to_summary); email is dropped.
         }
         if token:
             kwargs["PaginationToken"] = token

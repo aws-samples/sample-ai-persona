@@ -101,6 +101,22 @@ class TestPersonasAPIEndpoint:
         assert response.status_code == 500
         assert "ペルソナ一覧の取得に失敗しました" in response.json()["detail"]
 
+    @patch("web.routers.api.get_persona_manager")
+    def test_list_personas_keeps_the_lookup_outage_code(self, mock_get_manager, client):
+        """An unreachable lookup stays 503 lookup_unavailable (common handler)."""
+        from src.models.errors import LookupUnavailableError
+
+        mock_manager = Mock()
+        mock_manager.list_accessible_personas.side_effect = LookupUnavailableError(
+            "index unreachable"
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/api/personas")
+
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "lookup_unavailable"
+
 
 class TestPersonaDetailAPIEndpoint:
     """ペルソナ詳細APIエンドポイントのテスト"""

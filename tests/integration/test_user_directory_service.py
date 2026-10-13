@@ -51,7 +51,10 @@ def stubbed(monkeypatch):
 class TestListUsers:
     def test_reads_every_page_of_60(self, stubbed):
         client, stubber = stubbed
-        expected = {"UserPoolId": POOL, "Limit": 60, "AttributesToGet": ["sub", "name"]}
+        # No AttributesToGet: naming "name" makes ListUsers fail when a user
+        # (e.g. the first admin) has no name, so read every attribute and keep
+        # only sub / name / Enabled.
+        expected = {"UserPoolId": POOL, "Limit": 60}
         stubber.add_response(
             "list_users",
             {"Users": [_user("s1", "中村 由美")], "PaginationToken": "t-1"},
