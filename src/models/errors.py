@@ -124,6 +124,26 @@ class ErrorCode(StrEnum):
     # JSON API body. The HTTP status stays as raised (contract C13).
     HTTP_ERROR = ("http_error", ErrorKind.NOT_FOUND)
 
+    # --- Department sharing (v1.0.0 U4, functional-spec.md §5) ---
+    # A department outside the user's choices was added or removed, a removed
+    # department no longer exists, or the same one is added and removed (BR1.2,
+    # BR1.5). Reachable only through a tampered form; nothing is written.
+    SHARE_SCOPE_INVALID = ("share_scope_invalid", ErrorKind.VALIDATION)
+    # The user belongs to no department, so there is nothing to choose (BR1.4).
+    SHARE_NO_DEPARTMENT = ("share_no_department", ErrorKind.VALIDATION)
+    # The resource has no owner_sub (made before v1.0.0); it cannot be shared
+    # (BR1.10).
+    SHARE_OWNER_MISSING = ("share_owner_missing", ErrorKind.VALIDATION)
+    # A bulk share without any target (BR2.1).
+    SHARE_NO_TARGET = ("share_no_target", ErrorKind.VALIDATION)
+    # More than 100 targets in one bulk share (BR2.1).
+    SHARE_TOO_MANY_TARGETS = ("share_too_many_targets", ErrorKind.CAPACITY)
+    # A resource would be shared with more than 99 departments (BR1.11).
+    SHARE_TOO_MANY_GROUPS = ("share_too_many_groups", ErrorKind.CAPACITY)
+    # Concurrent changes kept the conditional write from succeeding three
+    # times, or DynamoDB failed (BR1.9). Retrying can succeed.
+    SHARE_UPDATE_FAILED = ("share_update_failed", ErrorKind.TRANSIENT)
+
     # --- Generation capacity ---
     GENERATION_CAPACITY_EXCEEDED = (
         "generation_capacity_exceeded",

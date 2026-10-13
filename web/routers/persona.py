@@ -30,7 +30,8 @@ from src.managers.persona_generation_manager import (  # noqa: E501
     PersonaGenerationCapacityError,
     PersonaGenerationManagerError,
 )
-from src.models.errors import ErrorCode, ErrorKind
+from src.models.authz import Principal
+from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.persona import Persona
 from web.error_messages import (
     error_kind_of,
@@ -42,7 +43,6 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
-from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,12 @@ def get_persona_manager() -> PersonaManager:
     return _persona_manager
 
 
+def _principal(request: Request) -> Principal:
+    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    principal: Principal = request.state.principal
+    return principal
+
+
 def get_persona_memory_manager() -> PersonaMemoryManager:
     """PersonaMemoryManagerのシングルトンインスタンスを取得"""
     global _persona_memory_manager
@@ -126,14 +132,77 @@ async def persona_generation_page(request: Request) -> Any:
     )
 
 
+#: The tab panel of the management page (``list_tabpanel``); tab switches and
+#: ``listReload`` target it and get only the panel content back.
+LIST_PANEL_ID = "persona-list"
+
+
+def _with_list_reload(response: Response) -> Response:
+    """Add ``listReload`` of the persona list to the response's ``HX-Trigger``.
+
+    The existing triggers (the toast) are kept; the list re-reads its own
+    ``data-reload-url`` (``frontend.md``).
+    """
+    raw = response.headers.get("HX-Trigger")
+    triggers: dict[str, Any] = json.loads(raw) if raw else {}
+    triggers["listReload"] = {"target": f"#{LIST_PANEL_ID}"}
+    response.headers["HX-Trigger"] = json.dumps(triggers)
+    return response
+
+
 @router.get("/management", response_class=HTMLResponse)
-async def persona_management_page(request: Request) -> Any:
-    """ペルソナ管理ページ（ペルソナ一覧は htmx で遅延ロード）"""
-    return templates.TemplateResponse(
-        request,
-        "persona/management.html",
-        {"request": request, "title": "ペルソナ管理"},
-    )
+async def persona_management_page(request: Request, tab: Optional[str] = None) -> Any:
+    """ペルソナ管理ページ（タブ別の一覧、M6、BR3）。
+
+    タブの切り替えと一覧の読み直し（HX-Target が一覧部分）には一覧部分だけを返す。
+    member の tab=all は「自分のもの」になる（BR3.1）。
+    """
+    loop = asyncio.get_running_loop()
+    panel_only = request.headers.get("HX-Target") == LIST_PANEL_ID
+    try:
+        listing = await loop.run_in_executor(
+            executor,
+            get_persona_manager().list_personas,
+            _principal(request),
+            tab,
+            None,
+        )
+    except CodedError as e:
+        logger.warning("Persona list fetch error", exc_info=True)
+        message = user_message_for(e, default="ペルソナ一覧の取得に失敗しました")
+        if panel_only:
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_banner.html",
+                    {"request": request, "error": message},
+                    status_code=503,
+                )
+            )
+        return templates.TemplateResponse(
+            request,
+            "persona/management.html",
+            {
+                "request": request,
+                "title": "ペルソナ管理",
+                "listing": None,
+                "tab": tab,
+                "error": message,
+            },
+        )
+    context = {
+        "request": request,
+        "title": "ペルソナ管理",
+        "listing": listing,
+        "selectable": False,
+        "search": "",
+        "is_append": False,
+    }
+    if panel_only:
+        return templates.TemplateResponse(
+            request, "persona/partials/persona_list.html", context
+        )
+    return templates.TemplateResponse(request, "persona/management.html", context)
 
 
 def _generate_personas_sync(
@@ -516,7 +585,7 @@ async def save_persona(
             persona.generation_log = cached.generation_log
             persona.generation_context = cached.generation_context
 
-        persona_manager.save_persona(persona)
+        persona_manager.save_persona(_principal(request), persona)
 
         # 行動データセットの保存・紐付け（Router が2つのManagerを調整）
         if selected_behavior_datasets:
@@ -578,30 +647,40 @@ async def save_persona(
 
 @router.get("/{persona_id}/edit", response_class=HTMLResponse)
 async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
-    """ペルソナ編集フォームパーシャル（htmx対応）"""
+    """ペルソナ編集フォームパーシャル（htmx対応）。管理できる人だけ（BR6.2）"""
     try:
-        persona_manager = get_persona_manager()
-        persona = persona_manager.get_persona(persona_id)
-
-        if not persona:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_banner.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-                        "back_url": "/persona/management",
-                        "back_label": "ペルソナ一覧に戻る",
-                    },
-                    status_code=404,
-                )
-            )
+        loop = asyncio.get_running_loop()
+        persona = await loop.run_in_executor(
+            executor,
+            get_persona_manager().get_persona_for_edit,
+            _principal(request),
+            persona_id,
+        )
 
         return templates.TemplateResponse(
             request,
             "persona/partials/edit_form.html",
             {"request": request, "persona": persona},
+        )
+    except CodedError as e:
+        kind = error_kind_of(e)
+        if kind is ErrorKind.FORBIDDEN:
+            raise  # 403 は共通の例外ハンドラ（トースト）
+        if kind is ErrorKind.NOT_FOUND:
+            return _not_found_banner(request)
+        logger.warning("Persona edit form fetch error", exc_info=True)
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {
+                    "request": request,
+                    "error": user_message_for(
+                        e, default="編集フォームの取得に失敗しました"
+                    ),
+                },
+                status_code=500,
+            )
         )
     except Exception as e:
         logger.error(f"Persona edit form fetch error: {e}")
@@ -618,6 +697,23 @@ async def get_persona_edit_form(request: Request, persona_id: str) -> Any:
                 status_code=500,
             )
         )
+
+
+def _not_found_banner(request: Request) -> Any:
+    """読めない・存在しないペルソナの領域置換（同じ応答、NFR1.14）。"""
+    return mark_renderable(
+        templates.TemplateResponse(
+            request,
+            "partials/error_banner.html",
+            {
+                "request": request,
+                "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
+                "back_url": "/persona/management",
+                "back_label": "ペルソナ一覧に戻る",
+            },
+            status_code=404,
+        )
+    )
 
 
 def _render_edit_form_with_error(
@@ -643,11 +739,11 @@ def _render_edit_form_with_error(
         描画できない場合は ``None``（呼び出し側でトーストに退避する）。
     """
     try:
-        persona = get_persona_manager().get_persona(persona_id)
+        persona = get_persona_manager().get_persona_for_edit(
+            _principal(request), persona_id
+        )
     except Exception:
         logger.warning("Failed to fetch persona for edit form re-render", exc_info=True)
-        return None
-    if not persona:
         return None
 
     return mark_renderable(
@@ -682,11 +778,12 @@ async def update_persona(
     city: str = Form(""),
     tags: str = Form(""),
 ) -> Any:
-    """ペルソナ更新処理（htmx対応）- 詳細画面用"""
+    """ペルソナ更新処理（htmx対応）- 詳細画面用。管理できる人だけ（BR6.2、BR6.7）"""
     try:
         persona_manager = get_persona_manager()
 
         updated_persona = persona_manager.update_persona(
+            _principal(request),
             persona_id=persona_id,
             name=name,
             age=age,
@@ -701,34 +798,29 @@ async def update_persona(
             tags=[t.strip() for t in tags.split("\n") if t.strip()],
         )
 
-        if updated_persona:
-            # htmxスワップ用：ヘッダー + ボディを返す
-            return templates.TemplateResponse(
-                request,
-                "persona/partials/detail_swap.html",
-                {
-                    "request": request,
-                    "persona": updated_persona,
-                    "message": "ペルソナを更新しました",
-                    "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
-                },
-            )
-        else:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_banner.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-                        "back_url": "/persona/management",
-                        "back_label": "ペルソナ一覧に戻る",
-                    },
-                    status_code=404,
-                )
-            )
-    except PersonaManagerError as e:
+        # htmxスワップ用：ヘッダー + ボディを返す。所有者・共有先の行も詳細ページと
+        # 同じ値で描く（保存後に行が消えないように、R-07）
+        detail = persona_manager.describe_persona(_principal(request), updated_persona)
+        return templates.TemplateResponse(
+            request,
+            "persona/partials/detail_swap.html",
+            {
+                "request": request,
+                "persona": detail.persona,
+                "manageable": detail.manageable,
+                "owner_label": detail.owner_label,
+                "shared_with": detail.shared_with,
+                "message": "ペルソナを更新しました",
+                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
+            },
+        )
+    except CodedError as e:
         logger.warning("Persona update error", exc_info=True)
+        kind = error_kind_of(e)
+        if kind is ErrorKind.FORBIDDEN:
+            raise  # 403 は共通の例外ハンドラ（トースト）
+        if kind is ErrorKind.NOT_FOUND:
+            return _not_found_banner(request)
         if is_correctable(e):
             # 入力を直せば解決するエラーは、送信値を保持したまま編集フォームを
             # 再描画する。汎用パーシャルに置換すると11項目の入力が失われる
@@ -765,16 +857,17 @@ async def update_persona(
 
 @router.get("/{persona_id}", response_class=HTMLResponse)
 async def get_persona_detail(request: Request, persona_id: str) -> Any:
-    """ペルソナ詳細ページ"""
+    """ペルソナ詳細ページ。読める人だけ（BR6.2）、操作は管理できる人だけ（BR6.4）"""
     try:
         persona_manager = get_persona_manager()
-        persona = persona_manager.get_persona(persona_id)
-
-        if not persona:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-            )
+        loop = asyncio.get_running_loop()
+        detail = await loop.run_in_executor(
+            executor,
+            persona_manager.get_persona_detail,
+            _principal(request),
+            persona_id,
+        )
+        persona = detail.persona
 
         return templates.TemplateResponse(
             request,
@@ -783,10 +876,14 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
                 "request": request,
                 "title": f"ペルソナ: {persona.name}",
                 "persona": persona,
+                "manageable": detail.manageable,
+                "owner_label": detail.owner_label,
+                "shared_with": detail.shared_with,
                 "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
             },
         )
-    except HTTPException:
+    except (HTTPException, CodedError):
+        # 読めない・存在しない（同じ 404）は共通の例外ハンドラがエラー画面にする
         raise
     except Exception as e:
         logger.error(f"Persona fetch error: {e}")
@@ -800,14 +897,21 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
 
 @router.delete("/{persona_id}", response_class=HTMLResponse)
 async def delete_persona(request: Request, persona_id: str) -> Any:
-    """ペルソナ削除処理（htmx対応）"""
+    """ペルソナ削除処理（htmx対応）。管理できる人だけ（BR6.2、BR4）
+
+    一覧から削除して 404（別タブで削除済み・読めない）になったときは、読めない対象と
+    同じ 404 のトーストに一覧の読み直し（listReload）を添えて、残ったカードを消す。
+    """
+    referer = request.headers.get("hx-current-url", "")
+    from_detail = f"/persona/{persona_id}" in referer
     try:
         persona_manager = get_persona_manager()
-        deleted = persona_manager.delete_persona(persona_id)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            executor, persona_manager.delete_persona, _principal(request), persona_id
+        )
 
-        # 別タブ等で既に削除済み(False)でも利用者の目的は達成済みなので、成功と同じ遷移にする
-        referer = request.headers.get("hx-current-url", "")
-        if f"/persona/{persona_id}" in referer:
+        if from_detail:
             return HTMLResponse(
                 content="",
                 headers={"HX-Redirect": "/persona/management"},
@@ -815,13 +919,22 @@ async def delete_persona(request: Request, persona_id: str) -> Any:
         return templates.TemplateResponse(
             request,
             "partials/success.html",
-            {
-                "request": request,
-                "message": "ペルソナを削除しました"
-                if deleted
-                else "このペルソナは既に削除されています",
-            },
+            {"request": request, "message": "ペルソナを削除しました"},
         )
+    except CodedError as e:
+        kind = error_kind_of(e)
+        if (
+            kind is ErrorKind.NOT_FOUND
+            and request.headers.get("HX-Request")
+            and not from_detail
+        ):
+            # 共通の例外ハンドラと同じ 404 のトースト + 一覧の読み直し（R-04）
+            return _with_list_reload(toast_response(e, status_code=404))
+        if kind in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
+            # 読めない・存在しないは同じ 404、共有されているだけは 403（共通の例外ハンドラ）
+            raise
+        logger.error("Persona delete error", exc_info=True)
+        return toast_response(e, status_code=500)
     except Exception as e:
         # 再試行で解決しうるエラーは一覧を消さずトーストで通知する
         logger.error("Persona delete error", exc_info=True)
@@ -935,6 +1048,7 @@ async def get_persona_list_partial(
     cursor: Optional[str] = None,
     selectable: bool = False,
     append: bool = False,
+    tab: Optional[str] = None,
 ) -> Any:
     """ペルソナ一覧パーシャル（htmx対応・カーソル型ページング）。
 
@@ -943,42 +1057,35 @@ async def get_persona_list_partial(
     """
     try:
         persona_manager = get_persona_manager()
+        principal = _principal(request)
         search_query = (search or "").strip()
-        total_count: Optional[int] = None
+        loop = asyncio.get_running_loop()
         if search_query:
-            # 検索時は全件 scan フォールバックし、Python 側で部分一致フィルタ（最大100件）
-            personas, _ = persona_manager.get_all_personas(search_all=True)
-            search_lower = search_query.lower()
-            personas = [
-                p
-                for p in personas
-                if search_lower in p.name.lower()
-                or search_lower in p.occupation.lower()
-                or search_lower in p.background.lower()
-            ][:100]
-            next_cursor_encoded: Optional[str] = None
-        else:
-            personas, next_cursor = persona_manager.get_all_personas(
-                limit=21, cursor=decode_cursor(cursor)
+            listing = await loop.run_in_executor(
+                executor,
+                persona_manager.search_personas,
+                principal,
+                tab,
+                search_query,
             )
-            next_cursor_encoded = encode_cursor(next_cursor)
-            if not append:
-                try:
-                    total_count = persona_manager.get_persona_count()
-                except Exception:
-                    total_count = None
+        else:
+            listing = await loop.run_in_executor(
+                executor,
+                persona_manager.list_personas,
+                principal,
+                tab,
+                cursor,
+            )
 
         return templates.TemplateResponse(
             request,
             "persona/partials/persona_list.html",
             {
                 "request": request,
-                "personas": personas,
-                "next_cursor": next_cursor_encoded,
+                "listing": listing,
                 "selectable": selectable,
                 "search": search_query,
                 "is_append": append,
-                "total_count": total_count,
             },
         )
     except Exception as e:
@@ -1605,7 +1712,7 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
                 # TTLキャッシュからペルソナを取得
                 persona = gen_manager.get_cached_persona(persona_id)
                 if persona:
-                    persona_manager.save_persona(persona)
+                    persona_manager.save_persona(_principal(request), persona)
                     saved_count += 1
                     logger.info(
                         f"Successfully saved persona: {persona.name} (ID: {persona_id})"

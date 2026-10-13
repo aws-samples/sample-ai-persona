@@ -253,3 +253,28 @@ class TestIsTransient:
 
     def test_true_for_connection_errors(self):
         assert is_transient(ConnectionError("unreachable"))
+
+
+class TestSharingCodes:
+    """共有のコード（U4、functional-spec.md §5）の分類。"""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "SHARE_SCOPE_INVALID",
+            "SHARE_NO_DEPARTMENT",
+            "SHARE_OWNER_MISSING",
+            "SHARE_NO_TARGET",
+        ],
+    )
+    def test_input_errors_are_validation(self, name):
+        assert ErrorCode[name].kind is ErrorKind.VALIDATION
+
+    @pytest.mark.parametrize(
+        "name", ["SHARE_TOO_MANY_TARGETS", "SHARE_TOO_MANY_GROUPS"]
+    )
+    def test_limits_are_capacity(self, name):
+        assert ErrorCode[name].kind is ErrorKind.CAPACITY
+
+    def test_update_failure_is_transient(self):
+        assert ErrorCode["SHARE_UPDATE_FAILED"].kind is ErrorKind.TRANSIENT

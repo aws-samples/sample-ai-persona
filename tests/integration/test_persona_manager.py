@@ -10,9 +10,15 @@ from tests.error_helpers import raises_code
 from unittest.mock import Mock, patch
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.models.authz import Principal, Role
+from src.models.errors import CodedError
 from src.models.persona import Persona
 from src.services.ai_service import AIService
 from src.services.database_service import DatabaseError
+
+#: The saver / owner and an admin (U4: saving and editing take the user).
+OWNER = Principal("local:owner@example.com", frozenset({Role.MEMBER}))
+ADMIN = Principal("local:admin@example.com", frozenset({Role.ADMIN}))
 
 
 class TestPersonaManagerIntegration:
@@ -29,7 +35,7 @@ class TestPersonaManagerIntegration:
             personas_storage[persona.id] = persona
             return persona.id
 
-        def mock_get_persona(persona_id):
+        def mock_get_persona(persona_id, consistent=False):
             return personas_storage.get(persona_id)
 
         def mock_get_all_personas(limit=20, cursor=None, search_all=False):
@@ -75,6 +81,7 @@ class TestPersonaManagerIntegration:
         mock_db.get_persona_count.side_effect = mock_get_persona_count
         mock_db.get_personas_by_name.side_effect = mock_get_personas_by_name
         mock_db.get_personas_by_occupation.side_effect = mock_get_personas_by_occupation
+        mock_db.storage = personas_storage
 
         return mock_db
 
@@ -91,8 +98,18 @@ class TestPersonaManagerIntegration:
 
     @pytest.fixture
     def persona_manager(self, database_service):
-        """Create a persona manager with real database."""
-        return PersonaManager(database_service=database_service)
+        """Create a persona manager whose deletes go through a fake ResourceSharing."""
+        storage = database_service.storage
+
+        def delete_with_shares(principal, resource_type, persona_id):
+            deleted = storage.pop(persona_id, None)
+            return None if deleted is None else {"id": deleted.id}
+
+        sharing = Mock()
+        sharing.delete_with_shares.side_effect = delete_with_shares
+        return PersonaManager(
+            database_service=database_service, resource_sharing=sharing
+        )
 
     @pytest.fixture
     def sample_interview_text(self):
@@ -163,7 +180,7 @@ class TestPersonaManagerIntegration:
         persona = Persona.create_new(**sample_persona_data)
 
         # Save persona
-        result_id = persona_manager.save_persona(persona)
+        result_id = persona_manager.save_persona(OWNER, persona)
 
         # Verify result
         assert result_id == persona.id
@@ -178,7 +195,7 @@ class TestPersonaManagerIntegration:
         """Test saving persona with invalid data."""
         # Test with None persona
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_INVALID):
-            persona_manager.save_persona(None)
+            persona_manager.save_persona(OWNER, None)
 
         # Test with invalid persona (missing name)
         invalid_persona = Persona.create_new(
@@ -193,7 +210,7 @@ class TestPersonaManagerIntegration:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
         ):
-            persona_manager.save_persona(invalid_persona)
+            persona_manager.save_persona(OWNER, invalid_persona)
 
     def test_save_persona_city_too_long(self, persona_manager, sample_persona_data):
         """居住都市が100文字超だと拒否される。"""
@@ -204,7 +221,7 @@ class TestPersonaManagerIntegration:
             field="city",
             max_length=100,
         ):
-            persona_manager.save_persona(persona)
+            persona_manager.save_persona(OWNER, persona)
 
     def test_save_persona_tag_with_comma_rejected(
         self, persona_manager, sample_persona_data
@@ -212,7 +229,7 @@ class TestPersonaManagerIntegration:
         """タグにカンマが含まれると拒否される（フィルタ区切りの破損防止）。"""
         persona = Persona.create_new(**sample_persona_data, tags=["B2B, enterprise"])
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED):
-            persona_manager.save_persona(persona)
+            persona_manager.save_persona(OWNER, persona)
 
     def test_save_persona_tag_too_long(self, persona_manager, sample_persona_data):
         """タグが50文字超だと拒否される。"""
@@ -223,7 +240,7 @@ class TestPersonaManagerIntegration:
             field="tags",
             max_length=50,
         ):
-            persona_manager.save_persona(persona)
+            persona_manager.save_persona(OWNER, persona)
 
     def test_save_persona_valid_demographics(
         self, persona_manager, sample_persona_data
@@ -234,14 +251,14 @@ class TestPersonaManagerIntegration:
             city="東京都",
             tags=["VIP", "リピーター"],
         )
-        saved_id = persona_manager.save_persona(persona)
+        saved_id = persona_manager.save_persona(OWNER, persona)
         assert saved_id == persona.id
 
     def test_get_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona retrieval."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
-        persona_manager.save_persona(persona)
+        persona_manager.save_persona(OWNER, persona)
 
         # Retrieve persona
         result = persona_manager.get_persona(persona.id)
@@ -265,39 +282,23 @@ class TestPersonaManagerIntegration:
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             persona_manager.get_persona("   ")
 
-    def test_get_all_personas(self, persona_manager, sample_persona_data):
-        """Test retrieving all personas."""
-        # Initially should be empty
-        personas, _ = persona_manager.get_all_personas()
-        assert len(personas) == 0
-
-        # Save multiple personas
-        persona1 = Persona.create_new(**sample_persona_data)
-        persona2_data = sample_persona_data.copy()
-        persona2_data["name"] = "佐藤 太郎"
-        persona2_data["age"] = 28
-        persona2 = Persona.create_new(**persona2_data)
-
-        persona_manager.save_persona(persona1)
-        persona_manager.save_persona(persona2)
-
-        # Retrieve all personas
-        personas, _ = persona_manager.get_all_personas()
-        assert len(personas) == 2
-
-        # Verify personas are ordered by creation date (newest first)
-        persona_names = [p.name for p in personas]
-        assert "田中 花子" in persona_names
-        assert "佐藤 太郎" in persona_names
+    def test_saved_persona_is_owned_by_the_saver(
+        self, persona_manager, sample_persona_data
+    ):
+        """BR6.1: 保存した人が所有者になる。"""
+        persona = Persona.create_new(**sample_persona_data)
+        persona_manager.save_persona(OWNER, persona)
+        assert persona_manager.get_persona(persona.id).owner_sub == OWNER.sub
 
     def test_update_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona update via update_persona (partial update)."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
-        persona_manager.save_persona(persona)
+        persona_manager.save_persona(OWNER, persona)
 
         # Update persona using partial update interface
         result = persona_manager.update_persona(
+            OWNER,
             persona.id,
             name="田中 花子（更新済み）",
             age=36,
@@ -313,38 +314,39 @@ class TestPersonaManagerIntegration:
 
     def test_update_persona_not_found(self, persona_manager, sample_persona_data):
         """Test updating non-existent persona."""
-        result = persona_manager.update_persona("non-existent-id", name="New Name")
-        assert result is None
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            persona_manager.update_persona(OWNER, "non-existent-id", name="New Name")
 
     def test_delete_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona deletion."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
-        persona_manager.save_persona(persona)
+        persona_manager.save_persona(OWNER, persona)
 
         # Verify persona exists
         assert persona_manager.get_persona(persona.id) is not None
 
         # Delete persona
-        result = persona_manager.delete_persona(persona.id)
+        result = persona_manager.delete_persona(OWNER, persona.id)
 
         # Verify deletion was successful
         assert result is True
         assert persona_manager.get_persona(persona.id) is None
 
     def test_delete_persona_not_found(self, persona_manager):
-        """Test deleting non-existent persona."""
-        result = persona_manager.delete_persona("non-existent-id")
-        assert result is False
+        """Test deleting non-existent persona (the same answer as unreadable)."""
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
+            persona_manager.delete_persona(OWNER, "non-existent-id")
 
     def test_update_persona_partial_fields(self, persona_manager, sample_persona_data):
         """Test partial field update preserves other fields."""
         # Save a persona first
         persona = Persona.create_new(**sample_persona_data)
-        persona_manager.save_persona(persona)
+        persona_manager.save_persona(OWNER, persona)
 
         # Update only some fields
         result = persona_manager.update_persona(
+            OWNER,
             persona.id,
             name="田中 花子（編集済み）",
             age=37,
@@ -360,26 +362,12 @@ class TestPersonaManagerIntegration:
         assert result.occupation == sample_persona_data["occupation"]
         assert result.background == sample_persona_data["background"]
 
-    def test_update_persona_not_found_returns_none(self, persona_manager):
-        """Test updating non-existent persona returns None."""
-        result = persona_manager.update_persona("non-existent-id", name="New Name")
-        assert result is None
-
-    def test_get_persona_count(self, persona_manager, sample_persona_data):
-        """Test getting persona count."""
-        # Initially should be 0
-        assert persona_manager.get_persona_count() == 0
-
-        # Save personas and check count
-        persona1 = Persona.create_new(**sample_persona_data)
-        persona_manager.save_persona(persona1)
-        assert persona_manager.get_persona_count() == 1
-
-        persona2_data = sample_persona_data.copy()
-        persona2_data["name"] = "佐藤 太郎"
-        persona2 = Persona.create_new(**persona2_data)
-        persona_manager.save_persona(persona2)
-        assert persona_manager.get_persona_count() == 2
+    def test_admin_update_keeps_the_owner(self, persona_manager, sample_persona_data):
+        """BR6.6: admin が編集しても所有者は変わらない。"""
+        persona = Persona.create_new(**sample_persona_data)
+        persona_manager.save_persona(OWNER, persona)
+        result = persona_manager.update_persona(ADMIN, persona.id, name="管理者が編集")
+        assert result.owner_sub == OWNER.sub
 
     def test_database_error_handling(self, mock_database_service):
         """Test handling of database errors."""
@@ -403,7 +391,7 @@ class TestPersonaManagerIntegration:
         )
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_validation_edge_cases(self, persona_manager):
         """Test validation with edge cases."""
@@ -419,7 +407,7 @@ class TestPersonaManagerIntegration:
         )
 
         # Should not raise exception
-        persona_id = persona_manager.save_persona(valid_persona)
+        persona_id = persona_manager.save_persona(OWNER, valid_persona)
         assert persona_id == valid_persona.id
 
         # Test persona with invalid age
@@ -433,7 +421,5 @@ class TestPersonaManagerIntegration:
             goals=["目標1"],
         )
 
-        with raises_code(
-            PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE
-        ):
-            persona_manager.save_persona(invalid_persona)
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
+            persona_manager.save_persona(OWNER, invalid_persona)

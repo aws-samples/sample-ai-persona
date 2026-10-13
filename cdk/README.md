@@ -111,6 +111,47 @@ Cognito の ID、AgentCore Memory の ID・Strategy ID を手で書き写す項�
 
 インフラごと戻すときは、前のコミットを取り出して `./deploy.sh` をやり直します。データを持つリソースは RETAIN のため消えません。
 
+前の版から進め直したとき（共有の書き込みが前の版と今の版で食い違ったおそれがあるとき）は、下の「共有の索引（ResourceShares）の作り直し」の差分を流して、ずれがないことを確かめます。
+
+#### インフラの変更を確かめる
+
+CDK を変えたときは、デプロイの前に差分を見ます（`deploy.sh` と同じ形）。
+
+```bash
+cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=<タグ>
+```
+
+テーブル・バケット・User Pool が置き換わる差分（同じ論理 ID の `[-]` と `[+]`）があれば止めます。v1.0.0 の U4 では `ResourceShares` テーブルの追加と、`Personas` テーブルへの GSI `OwnerIndex` の追加（テーブルは置き換わらない）が出ます。
+
+#### 共有の索引（ResourceShares）の作り直し
+
+`ResourceShares` は部署ごとの共有の索引で、正は各テーブルの本体の `shared_group_ids` です。索引だけがずれたとき（または本体を戻したとき）は、PITR で戻さずに本体から作り直します。admin の手元の資格情報で流します（アプリのタスクロールには `ResourceShares` の Scan の権限がありません）。
+
+```bash
+# 既定は差分（足りない項目・余分な項目・created_at と owner_sub の食い違い）を出すだけ
+uv run python scripts/rebuild_resource_shares.py --region ap-northeast-1 --shares-table <ResourceShares の物理名>
+# 差分を確かめたら、--apply を付けて直す
+uv run python scripts/rebuild_resource_shares.py --region ap-northeast-1 --shares-table <ResourceShares の物理名> --apply
+```
+
+本体のテーブル名は `PERSONAS_TABLE_NAME` などの環境変数（`src/config.py`）で渡します。`owner_sub` のない本体（v1.0.0 より前のデータ）は数えて飛ばします。
+
+#### 本体のテーブルを PITR で戻す
+
+1. 戻したい時刻を決め、本体のテーブル（例: `Personas`）を PITR で**新しいテーブル**に復元する（元のテーブルは消さない）
+
+   ```bash
+   aws dynamodb restore-table-to-point-in-time \
+     --source-table-name <Personas の物理名> \
+     --target-table-name <Personas の物理名>-restore-<日時> \
+     --restore-date-time <ISO 8601 の時刻>
+   ```
+
+2. 復元したテーブルの項目を元のテーブルへ書き戻す（`aws dynamodb scan` で読み、`aws dynamodb batch-write-item` で書く。U4 では書き戻しのスクリプトを用意していない）
+3. 共有の索引の作り直しを差分だけで流し、出た差分が戻した時刻のとおりかを確かめる
+4. `--apply` を付けて流し、索引を本体に合わせる
+5. 確かめ終わったら、復元に使った新しいテーブルを手で消す（元のテーブルではないことを確かめてから）
+
 #### トークンの暗号化鍵の入れ替え
 
 Secrets Manager の `TokenEncryptionKeys`（`{"current": "v1", "k_v1": "..."}`）を手で書き換え、そのたびに `./deploy.sh --restart-app` でタスクを入れ替えます（秘密の値を変えても `cdk deploy` には差分が出ないため）。

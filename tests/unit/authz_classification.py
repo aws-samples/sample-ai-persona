@@ -46,19 +46,38 @@ NO_USER_DATA = Entry(Kind.EXEMPT, Reason.NO_USER_DATA)
 #: Units in build order. ``pending_unit`` must name one after ``CURRENT_UNIT``.
 UNIT_ORDER: tuple[str, ...] = ("U1", "U2", "U3", "U4", "U5", "U6", "U7")
 #: The Unit being built. Each Unit's Code Generation moves it forward.
-CURRENT_UNIT = "U2"
+CURRENT_UNIT = "U4"
 #: At this Unit's Build and Test no ``pending_unit`` may remain (NFR1.8).
 FINAL_UNIT = "U7"
 
 #: Components / Managers whose methods count as a decision when called
 #: (matched on the receiver's name, e.g. ``self._job_manager.get``).
-#: U4 adds ``ResourceSharing``.
+#: U4 adds ``ResourceSharing``: every listed method calls ``AccessPolicy``
+#: (``ensure_manageable`` / ``can_read`` / ``shareable_groups`` / the
+#: ``resource:read_all`` check) before it returns anything.
 DECISION_PORTS: dict[str, frozenset[str]] = {
     "JobManager": frozenset({"get"}),
+    "ResourceSharing": frozenset(
+        {
+            "list_page",
+            "count",
+            "collect_ids",
+            "effective_tab",
+            "update_shares",
+            "bulk_update_shares",
+            "delete_with_shares",
+            "dialog_state",
+            "build_change",
+            "can_read_body",
+            "can_manage_body",
+        }
+    ),
 }
 
 #: ``pending_unit`` count per Unit. Lower it when a Unit adds its decisions.
-PENDING_BASELINE: dict[str, int] = {"U5": 32, "U6": 35, "U7": 55}
+#: U4: PersonaManager の保存・更新・削除を CHECKS にし（3 件）、一覧・件数の古い
+#: メソッド 3 件を消した（32 → 26）。
+PENDING_BASELINE: dict[str, int] = {"U5": 26, "U6": 35, "U7": 55}
 
 CLASSIFICATION: dict[str, Entry] = {
     # agent_discussion_manager.py
@@ -135,18 +154,22 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaGenerationManager.get_cached_behavior_datasets": pending("U5"),
     "PersonaGenerationManager.pop_cached_behavior_datasets": pending("U5"),
     "PersonaGenerationManager.build_and_cache_behavior_datasets": pending("U5"),
-    # persona_manager.py
-    "PersonaManager.save_persona": pending("U5"),
+    # persona_manager.py — U4 で所有・共有の判定を入れた分は CHECKS。
+    # get_persona は議論・インタビューが使う（U5・U6 が判定を入れる）
+    "PersonaManager.save_persona": CHECKS,  # resource:create（BR6.1）
     "PersonaManager.get_persona": pending("U5"),
-    "PersonaManager.get_all_personas": pending("U5"),
-    "PersonaManager.get_all_personas_full": pending("U5"),
-    "PersonaManager.delete_persona": pending("U5"),
-    "PersonaManager.update_persona": pending("U5"),
+    "PersonaManager.list_personas": CHECKS,  # ResourceSharing + can_read（BR3.7）
+    "PersonaManager.search_personas": CHECKS,
+    "PersonaManager.list_accessible_personas": CHECKS,
+    "PersonaManager.get_persona_detail": CHECKS,  # ensure_readable（BR6.2）
+    "PersonaManager.describe_persona": CHECKS,  # ensure_readable + can_manage（R-07）
+    "PersonaManager.get_persona_for_edit": CHECKS,  # ensure_manageable
+    "PersonaManager.delete_persona": CHECKS,  # delete_with_shares（BR4.1）
+    "PersonaManager.update_persona": CHECKS,  # ensure_manageable（BR6.7）
     "PersonaManager.avatar_upload_enabled": NO_USER_DATA,  # 設定の有無だけ
     "PersonaManager.set_avatar": pending("U5"),
     "PersonaManager.delete_avatar": pending("U5"),
     "PersonaManager.get_avatar_url": pending("U5"),
-    "PersonaManager.get_persona_count": pending("U5"),
     "PersonaManager.get_kb_binding": pending("U5"),
     "PersonaManager.create_kb_binding": pending("U5"),
     "PersonaManager.delete_kb_binding": pending("U5"),
@@ -166,6 +189,12 @@ CLASSIFICATION: dict[str, Entry] = {
     "ReportManager.save_report": pending("U6"),
     "ReportManager.update_report_content": pending("U6"),
     "ReportManager.delete_report": pending("U6"),
+    # sharing_manager.py — U4（判定は ResourceSharing に任せる）
+    "SharingManager.resource_type_of": NO_USER_DATA,  # 登録された種類の照合だけ
+    "SharingManager.dialog": CHECKS,
+    "SharingManager.bulk_dialog": CHECKS,
+    "SharingManager.save": CHECKS,
+    "SharingManager.bulk_save": CHECKS,
     # settings_manager.py
     "SettingsManager.get_all_knowledge_bases": pending("U7"),
     "SettingsManager.create_knowledge_base": pending("U7"),

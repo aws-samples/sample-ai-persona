@@ -1258,6 +1258,126 @@ registerBlock('DepartmentPicker', function() {
     });
 });
 
+// -------------------------------------------------------------
+// ShareDialog（U4、M7、WF1・WF2、BR7.3）
+// 画面に 1 つの共有ダイアログ #share-dialog の中身の読み込み先を、開くボタンごとに
+// 決める。1 件は data-share-url、一括は操作バー（data-bulk-select の種類）と選んだ
+// 行から /share/{種類}/dialog?ids=... を組み立てる。開く前（捕捉の段階）に差し替える。
+// 保存中はキャンセルも無効にする。一部失敗（[data-share-result]）か権限を失っていた
+// （HX-Trigger: shareReloadOnClose）ときは、閉じたら一覧を読み直し、一部失敗では
+// 失敗した対象だけを選び直す。読み直す URL は一覧部分の data-reload-url だけを使う。
+// -------------------------------------------------------------
+registerBlock('ShareDialog', function() {
+    const DIALOG_ID = 'share-dialog';
+    const TARGET = /^#[A-Za-z0-9_-]+$/;
+    const state = { panel: null, failed: null, reload: false, opener: null, refocus: null };
+
+    const loaderOf = () => document.querySelector(`#${DIALOG_ID} [data-share-content]`);
+
+    function setUrl(url) {
+        const loader = loaderOf();
+        if (!loader || !url || loader.getAttribute('hx-get') === url) return;
+        loader.setAttribute('hx-get', url);
+        htmx.process(loader);
+    }
+
+    function rowsNear(bar) {
+        for (let scope = bar.parentElement; scope; scope = scope.parentElement) {
+            const rows = scope.querySelectorAll('[data-bulk-row]');
+            if (rows.length) return Array.from(rows);
+        }
+        return [];
+    }
+
+    function bulkUrl(action) {
+        const bar = action.closest('[data-bulk-select]');
+        if (!bar) return null;
+        const ids = rowsNear(bar).filter((row) => row.checked)
+            .map((row) => `ids=${encodeURIComponent(row.value)}`);
+        return `/share/${encodeURIComponent(bar.dataset.bulkSelect)}/dialog?${ids.join('&')}`;
+    }
+
+    // Dialog（バブリングの段階）が開いて中身を読む前に、読み込み先を決める
+    document.addEventListener('click', function(evt) {
+        const target = evt.target instanceof Element ? evt.target : null;
+        const opener = target && target.closest(`[data-dialog-open="${DIALOG_ID}"]`);
+        if (!opener) return;
+        const url = opener.dataset.shareUrl ||
+            (opener.matches('[data-bulk-action]') ? bulkUrl(opener) : null);
+        setUrl(url);
+        state.panel = opener.closest('[data-list-tabpanel]');
+        state.opener = opener.dataset.shareUrl
+            ? `[data-share-url="${CSS.escape(opener.dataset.shareUrl)}"]`
+            : '[data-bulk-action]';
+        state.failed = null;
+        state.reload = false;
+    }, true);
+
+    // 閉じた直後に一覧が読み直されると、フォーカスを戻した開くボタンが差し替わって
+    // 消える。読み直した一覧の同じボタンへ戻す（ボタンが残っていればそのまま）
+    function restoreFocus(panel) {
+        const selector = state.refocus;
+        state.refocus = null;
+        const active = document.activeElement;
+        if (!selector || (active && active !== document.body && active.isConnected &&
+                active.id !== 'main')) return;
+        const next = panel.querySelector(selector);
+        if (next && !next.disabled) next.focus();
+    }
+
+    document.body.addEventListener('htmx:afterSettle', function(evt) {
+        const root = evt.detail && evt.detail.elt;
+        if (root instanceof Element && root.matches('[data-list-tabpanel]')) restoreFocus(root);
+    });
+
+    const isShareForm = (elt) => !!elt && !!elt.matches && elt.matches('[data-share-form]');
+    const cancelButtons = (form) => Array.from(form.querySelectorAll('[data-dialog-close]'));
+
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+        if (isShareForm(evt.detail.elt)) cancelButtons(evt.detail.elt).forEach((b) => { b.disabled = true; });
+    });
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+        if (isShareForm(evt.detail.elt)) cancelButtons(evt.detail.elt).forEach((b) => { b.disabled = false; });
+    });
+
+    // 一部失敗の結果が入ったら、失敗した対象を覚えておく
+    document.body.addEventListener('htmx:afterSettle', function() {
+        const result = document.querySelector(`#${DIALOG_ID} [data-share-result]`);
+        if (!result) return;
+        state.failed = new Set((result.dataset.failedIds || '').split(',').filter(Boolean));
+    });
+
+    // 権限を失っていた（403）。閉じたら一覧を読み直す
+    document.body.addEventListener('shareReloadOnClose', function(evt) {
+        const target = evt.detail ? evt.detail.target : undefined;
+        if (typeof target === 'string' && TARGET.test(target)) {
+            state.panel = document.getElementById(target.slice(1)) || state.panel;
+        }
+        state.reload = true;
+    });
+
+    function reselect(panel, failed) {
+        const rows = Array.from(panel.querySelectorAll('[data-bulk-row]'));
+        rows.forEach((row) => { row.checked = failed.has(row.value); });
+        if (rows.length) rows[0].dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    document.body.addEventListener('dialog:closed', function(evt) {
+        if (!evt.detail || evt.detail.id !== DIALOG_ID) return;
+        const panel = state.panel;
+        const failed = state.failed;
+        const reload = state.reload || !!failed;
+        state.failed = null;
+        state.reload = false;
+        state.refocus = state.opener;
+        const url = panel ? panel.getAttribute('data-reload-url') : null;
+        if (!reload || !url) return;
+        htmx.ajax('GET', url, { target: panel, swap: 'innerHTML' }).then(function() {
+            if (failed) reselect(panel, failed);
+        });
+    });
+});
+
 // ページ読み込み完了時の処理
 document.addEventListener('DOMContentLoaded', function() {
     // ドラッグ＆ドロップの設定

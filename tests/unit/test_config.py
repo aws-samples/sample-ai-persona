@@ -390,3 +390,30 @@ class TestTableNames:
 
         with pytest.raises(KeyError):
             Config().table_name("Sessions")
+
+
+class TestResourceSharesTableName:
+    """ResourceShares の物理名（U4。TABLE_NAME_SETTINGS とは別の項目）。"""
+
+    def test_falls_back_to_the_prefix(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
+            config = Config()
+        assert config.RESOURCE_SHARES_TABLE_NAME == "Local_ResourceShares"
+
+    def test_reads_the_cdk_name(self):
+        from src.config import Config
+
+        with patch.dict(
+            os.environ, {"RESOURCE_SHARES_TABLE_NAME": "Data-SharesXYZ"}, clear=True
+        ):
+            config = Config()
+        assert config.RESOURCE_SHARES_TABLE_NAME == "Data-SharesXYZ"
+
+    def test_is_not_one_of_the_bulk_granted_tables(self):
+        from src.config import TABLE_NAME_SETTINGS, Config
+
+        assert "ResourceShares" not in TABLE_NAME_SETTINGS
+        with patch.dict(os.environ, {}, clear=True):
+            assert "ResourceShares" not in Config().table_names()

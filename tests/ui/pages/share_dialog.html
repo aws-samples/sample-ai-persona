@@ -1,0 +1,24 @@
+{% extends "_frame.html" %}
+{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
+{% from "components/list_tabs.html" import list_tabpanel %}
+{#
+  共有ダイアログ（U4、M7）の部品の画面。一覧（list_tabpanel）の中に 1 件の
+  「共有先を設定」と一括の操作バーを置き、ダイアログは画面に 1 つだけ置く。
+#}
+{% block component %}
+{% call list_tabpanel("persona-list", "mine", "/persona/management") %}
+{{ bulk_select_bar("persona", True, "共有先を設定", "share-dialog") }}
+<ul class="divide-y">
+    {% for value, name in rows %}
+    <li class="flex items-center gap-3 py-2">
+        {{ bulk_select_row(value, name, True) }}
+        <span class="text-gray-700">{{ name }}</span>
+        <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                data-share-url="/share/persona/{{ value }}/dialog" data-testid="share-{{ value }}"
+                class="text-blue-600 text-sm">{{ name }} の共有先を設定</button>
+    </li>
+    {% endfor %}
+</ul>
+{% endcall %}
+{% include "sharing/partials/share_dialog.html" %}
+{% endblock %}

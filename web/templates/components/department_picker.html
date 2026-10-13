@@ -2,8 +2,11 @@
   部署の選択（C6、約束 C6）。共有先（M7）・利用範囲（M10）の部署を複数選ぶ。
   中間の部署の 3 段の切り替え（indeterminate）、{name}_unchanged の隠し入力、
   外れる部署の注意、全部外すときの確認、保存ボタンの有効・無効は app.js の
-  DepartmentPicker が受け持つ。値の意味づけ（{name} は共有する、{name}_unchanged は
-  対象ごとに今のまま、どちらにもない選べる部署は外す）は U4 の ResourceSharing。
+  DepartmentPicker が受け持つ。値の意味づけは U4 の ResourceSharing（BR1.12）:
+  {name} は共有する、{name}_unchanged は対象ごとに今のまま、{name}_initial は
+  開いたときに選択か中間だった部署。外すのは「開いたときに共有中か中間で、
+  利用者が外した部署」だけ（{name}_initial − {name} − {name}_unchanged）。
+  開いたときに未選択だった部署は外さない（開いた後に別の人が足した部署を守る）。
 
   引数（約束 C6。mode は Jinja のマクロとして書けるよう既定値を付けた）:
     name      ... 送信欄の名前
@@ -14,23 +17,28 @@
     mode      ... "share"（共有先）/ "scope"（利用範囲）
     id_prefix ... この部品の中の要素の id の頭。省略すると name。同じ name の部品を
                   1 画面に 2 つ置くときは別の値を渡す（id が重ならないように）
+    vanished  ... もう存在しないが共有されている部署の group_id（U4、admin のときだけ渡す）。
+                  選択肢の最後に vanished_label の名前で出し、今の状態（選択か中間）から始める
+    vanished_label ... 消えた部署の表示名
 #}
-{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None) -%}
+{% macro department_picker(name, choices, selected, mixed=None, mode="share", id_prefix=None, vanished=None, vanished_label="（存在しない部署）") -%}
 {%- set prefix = id_prefix or name -%}
 {%- set legend = "利用できる部署（複数選択可）" if mode == "scope" else "共有する部署（複数選択可）" -%}
 {#- 対象の件数（1 件を対象に開いたときは 1）。全部外す確認の判定に app.js が使う -#}
 {%- set ns = namespace(targets=1) -%}
 {%- if mixed %}{% for counts in mixed.values() %}{% if counts[1] > ns.targets %}{% set ns.targets = counts[1] %}{% endif %}{% endfor %}{% endif -%}
+{%- set options = choices | list -%}
+{%- for group_id in (vanished or []) %}{% set _ = options.append({"group_id": group_id, "display_name": vanished_label}) %}{% endfor -%}
 <fieldset data-department-picker data-name="{{ name }}" data-mode="{{ mode }}" data-target-count="{{ ns.targets }}"
           data-testid="department-picker">
     <legend class="text-sm font-medium text-gray-700 mb-2">{{ legend }}</legend>
-    {%- if not choices %}
+    {%- if not options %}
     <p data-department-empty class="text-sm text-gray-700">
         選べる部署がありません。所属している部署が登録されていないため、{{ "利用範囲" if mode == "scope" else "共有先" }}を設定できません。
     </p>
     {%- else %}
-    <div data-department-options class="grid gap-2 {{ 'sm:grid-cols-2' if choices | length > 8 else 'grid-cols-1' }}">
-        {%- for department in choices %}
+    <div data-department-options class="grid gap-2 {{ 'sm:grid-cols-2' if options | length > 8 else 'grid-cols-1' }}">
+        {%- for department in options %}
         {%- set group_id = department.group_id %}
         {%- set counts = mixed.get(group_id) if mixed else none %}
         {%- if counts %}
@@ -48,6 +56,7 @@
             <input type="checkbox" name="{{ name }}" value="{{ group_id }}"
                    data-department-option data-initial="{{ state }}" data-shared-count="{{ shared_count }}"
                    data-department-name="{{ department.display_name }}" data-testid="department-option"
+                   {%- if group_id in (vanished or []) %} data-department-vanished{% endif %}
                    {%- if state == "checked" %} checked{% endif %}
                    {%- if state == "mixed" %} aria-describedby="{{ note_id }}"{% endif %}
                    class="rounded border-gray-300">
@@ -55,12 +64,16 @@
             {%- if state == "mixed" %}
             <span id="{{ note_id }}" class="text-xs text-gray-600">{{ counts[1] }} 件中 {{ counts[0] }} 件で共有中</span>
             {%- endif %}
+            {%- if state != "unchecked" %}
+            {#- 開いたときに選択か中間だった部署（BR1.12）。外す部署はこの中からだけ決まる #}
+            <input type="hidden" name="{{ name }}_initial" value="{{ group_id }}" data-department-initial>
+            {%- endif %}
         </label>
         {%- endfor %}
     </div>
     {%- endif %}
     {# 保存すると外れる部署と件数。読み込み時から置き、変わったときだけ文字を入れ替える #}
-    <p data-department-removing role="status" aria-live="polite" class="mt-2 text-sm text-yellow-800"></p>
+    <p id="{{ prefix }}-removing" data-department-removing role="status" aria-live="polite" class="mt-2 text-sm text-yellow-800"></p>
     {# 選べる部署のすべてから外れる対象ができるときの確認。既定のフォーカスは「戻る」 #}
     <div data-department-confirm hidden role="group" aria-labelledby="{{ prefix }}-confirm-text"
          class="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">

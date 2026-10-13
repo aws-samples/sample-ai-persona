@@ -24,6 +24,11 @@ export class Database extends Construct {
   public readonly jobsTable: dynamodb.TableV2;
   public readonly sessionsTable: dynamodb.TableV2;
   public readonly sessionsKey: kms.Key;
+  /**
+   * 部署ごとの共有の索引（U4、ADR-003）。applicationTables には入れない: そちらの
+   * 一括付与（grantReadWriteData）は Scan を含むため、App スタックが 7 つの操作だけを付ける。
+   */
+  public readonly resourceSharesTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
@@ -32,10 +37,12 @@ export class Database extends Construct {
       indexName: string,
       partitionKey: string,
       sortKey?: string,
+      projectionType?: dynamodb.ProjectionType,
     ): dynamodb.GlobalSecondaryIndexPropsV2 => ({
       indexName,
       partitionKey: { name: partitionKey, type: dynamodb.AttributeType.STRING },
       ...(sortKey ? { sortKey: { name: sortKey, type: dynamodb.AttributeType.STRING } } : {}),
+      ...(projectionType ? { projectionType } : {}),
     });
 
     this.personasTable = this.table('Personas', {
@@ -43,6 +50,8 @@ export class Database extends Construct {
         gsi('CreatedAtIndex', 'type', 'created_at'),
         gsi('NameIndex', 'type', 'name'),
         gsi('OccupationIndex', 'type', 'occupation'),
+        // 「自分のもの」の一覧と件数（U4、BR3.2）。owner_sub のない項目は入らない
+        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     this.discussionsTable = this.table('Discussions', {
@@ -80,6 +89,18 @@ export class Database extends Construct {
       billing: dynamodb.Billing.onDemand(),
       encryption: dynamodb.TableEncryptionV2.customerManagedKey(this.sessionsKey),
       timeToLiveAttribute: 'ttl',
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // ResourceShares: PK group_id、SK share_key（{resource_type}#{created_at}#{resource_id}、約束 C8）。
+    // 本体から作り直せる索引だが、作り直しの手間を避けるため PITR と RETAIN を付ける
+    this.resourceSharesTable = new dynamodb.TableV2(this, 'ResourceShares', {
+      partitionKey: { name: 'group_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'share_key', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });

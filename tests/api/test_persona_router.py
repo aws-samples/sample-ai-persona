@@ -17,6 +17,30 @@ from src.models.errors import ErrorCode
 from tests.dialog_helpers import dialog_ids, dialog_markup
 
 
+def _listing(personas, tab="mine"):
+    """A TabbedList the mocked PersonaManager returns (U4)."""
+    from src.models.sharing import ListTab, TabbedList
+
+    return TabbedList(
+        tab=ListTab(tab),
+        items=list(personas),
+        counts={"mine": len(personas), "shared": 0},
+        manageable=frozenset(p.id for p in personas),
+    )
+
+
+def _detail(persona, manageable=True):
+    from src.managers.persona_manager import PersonaDetail
+
+    return PersonaDetail(persona, manageable=manageable, owner_label="自分")
+
+
+def _not_found():
+    from src.models.errors import CodedError
+
+    return CodedError("not readable", code=ErrorCode.PERSONA_NOT_FOUND)
+
+
 class TestPersonaGenerationPage:
     """ペルソナ生成ページのテスト"""
 
@@ -35,7 +59,7 @@ class TestPersonaManagementPage:
     def test_management_page_loads(self, mock_get_manager, client):
         """ペルソナ管理ページが正常に読み込まれることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = []
+        mock_manager.list_personas.return_value = _listing([])
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/management")
@@ -46,15 +70,33 @@ class TestPersonaManagementPage:
     def test_management_page_with_personas(
         self, mock_get_manager, client, sample_persona
     ):
-        """ペルソナ管理ページが正常に読み込まれることを確認（一覧は htmx 遅延ロード）"""
+        """最初のページはタブと一緒にサーバーで描く（U4、M6）"""
         mock_manager = Mock()
+        mock_manager.list_personas.return_value = _listing([sample_persona])
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/management")
 
         assert response.status_code == 200
-        # ペルソナ一覧は htmx で遅延ロードされるため、初期HTMLには含まれない
-        assert "hx-get" in response.text
+        assert "田中花子" in response.text
+        assert 'data-testid="list-tabs"' in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_list_failure_keeps_the_page_and_shows_dash_counts(
+        self, mock_get_manager, client
+    ):
+        mock_manager = Mock()
+        mock_manager.list_personas.side_effect = PersonaManagerError(
+            "down", code=ErrorCode.PERSONA_OPERATION_FAILED
+        )
+        mock_get_manager.return_value = mock_manager
+
+        page = client.get("/persona/management")
+        assert page.status_code == 200
+        assert 'data-count-label="自分のもの -"' in page.text
+        panel = client.get("/persona/management", headers={"HX-Target": "persona-list"})
+        assert panel.status_code == 503
+        assert panel.headers["X-Render-Response"] == "true"
 
 
 class TestPersonaGenerateEndpoint:
@@ -333,7 +375,7 @@ class TestPersonaDetailEndpoint:
     def test_get_detail_success(self, mock_get_manager, client, sample_persona):
         """ペルソナ詳細ページが正常に表示されることを確認"""
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = sample_persona
+        mock_manager.get_persona_detail.return_value = _detail(sample_persona)
         mock_get_manager.return_value = mock_manager
 
         response = client.get(f"/persona/{sample_persona.id}")
@@ -345,7 +387,7 @@ class TestPersonaDetailEndpoint:
     def test_get_detail_not_found(self, mock_get_manager, client):
         """存在しないペルソナで404エラーを返すことを確認"""
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = None
+        mock_manager.get_persona_detail.side_effect = _not_found()
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/non-existent-id")
@@ -363,6 +405,7 @@ class TestPersonaUpdateEndpoint:
         mock_manager.get_persona.return_value = sample_persona
         updated_persona = sample_persona.update(name="更新された名前")
         mock_manager.update_persona.return_value = updated_persona
+        mock_manager.describe_persona.side_effect = lambda _p, persona: _detail(persona)
         mock_get_manager.return_value = mock_manager
 
         response = client.put(
@@ -405,6 +448,7 @@ class TestPersonaUpdateEndpoint:
         )
         mock_manager = Mock()
         mock_manager.update_persona.return_value = updated_persona
+        mock_manager.describe_persona.side_effect = lambda _p, persona: _detail(persona)
         mock_manager.avatar_upload_enabled.return_value = True
         mock_get_manager.return_value = mock_manager
 
@@ -429,9 +473,9 @@ class TestPersonaUpdateEndpoint:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_update_not_found(self, mock_get_manager, client):
-        """存在しないペルソナの更新で400エラーを返すことを確認"""
+        """読めない・存在しないペルソナの更新で404を返すことを確認"""
         mock_manager = Mock()
-        mock_manager.update_persona.return_value = None
+        mock_manager.update_persona.side_effect = _not_found()
         mock_get_manager.return_value = mock_manager
 
         response = client.put(
@@ -512,28 +556,40 @@ class TestPersonaListPartialEndpoint:
     def test_list_partial_success(self, mock_get_manager, client, sample_persona):
         """ペルソナ一覧パーシャルが正常に返されることを確認"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = ([sample_persona], None)
+        mock_manager.list_personas.return_value = _listing([sample_persona])
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/list/partial")
 
         assert response.status_code == 200
+        assert "田中花子" in response.text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_list_partial_with_search(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """検索フィルタが機能することを確認"""
+        """検索はタブと検索語を Manager に渡す（タブの中で絞る、BR3.8）"""
         mock_manager = Mock()
-        mock_manager.get_all_personas.return_value = (
-            [sample_persona, sample_persona_2],
-            None,
-        )
+        mock_manager.search_personas.return_value = _listing([sample_persona])
         mock_get_manager.return_value = mock_manager
 
-        response = client.get("/persona/list/partial?search=田中")
+        response = client.get("/persona/list/partial?search=田中&tab=shared")
 
         assert response.status_code == 200
+        _principal, tab, query = mock_manager.search_personas.call_args.args
+        assert (tab, query) == ("shared", "田中")
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_list_partial_failure_is_a_banner(self, mock_get_manager, client):
+        mock_manager = Mock()
+        mock_manager.list_personas.side_effect = RuntimeError("down")
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/persona/list/partial")
+
+        assert response.status_code == 500
+        assert response.headers["X-Render-Response"] == "true"
+        assert "down" not in response.text
 
 
 class TestSaveSelectedPersonasEndpoint:
@@ -607,7 +663,11 @@ class TestSaveSelectedPersonasEndpoint:
         )
 
         assert response.status_code == 200
-        mock_manager.save_persona.assert_called_once_with(sample_persona)
+        # 保存した人（ログイン中の利用者）を所有者にする（BR6.1）
+        ((principal, saved),) = [
+            c.args for c in mock_manager.save_persona.call_args_list
+        ]
+        assert saved is sample_persona and principal.sub == "local:dev@example.com"
 
 
 class TestPersonaEditForm:
@@ -616,7 +676,7 @@ class TestPersonaEditForm:
     @patch("web.routers.persona.get_persona_manager")
     def test_edit_form_loads(self, mock_get_mgr, client, sample_persona):
         mock_mgr = Mock()
-        mock_mgr.get_persona.return_value = sample_persona
+        mock_mgr.get_persona_for_edit.return_value = sample_persona
         mock_get_mgr.return_value = mock_mgr
 
         response = client.get(f"/persona/{sample_persona.id}/edit")
@@ -625,16 +685,28 @@ class TestPersonaEditForm:
     @patch("web.routers.persona.get_persona_manager")
     def test_edit_form_not_found(self, mock_get_mgr, client):
         mock_mgr = Mock()
-        mock_mgr.get_persona.return_value = None
+        mock_mgr.get_persona_for_edit.side_effect = _not_found()
         mock_get_mgr.return_value = mock_mgr
 
         response = client.get("/persona/nonexistent/edit")
         assert response.status_code == 404
 
     @patch("web.routers.persona.get_persona_manager")
+    def test_edit_form_retryable_error(self, mock_get_mgr, client):
+        mock_mgr = Mock()
+        mock_mgr.get_persona_for_edit.side_effect = PersonaManagerError(
+            "down", code=ErrorCode.PERSONA_OPERATION_FAILED
+        )
+        mock_get_mgr.return_value = mock_mgr
+
+        response = client.get("/persona/test-id/edit")
+        assert response.status_code == 500
+        assert response.headers["X-Render-Response"] == "true"
+
+    @patch("web.routers.persona.get_persona_manager")
     def test_edit_form_error(self, mock_get_mgr, client):
         mock_mgr = Mock()
-        mock_mgr.get_persona.side_effect = Exception("DB error")
+        mock_mgr.get_persona_for_edit.side_effect = Exception("DB error")
         mock_get_mgr.return_value = mock_mgr
 
         response = client.get("/persona/test-id/edit")
@@ -668,8 +740,8 @@ class TestPersonaUpdateValidationPreservesInput:
     def _manager(sample_persona, exc):
         mgr = Mock()
         mgr.update_persona.side_effect = exc
-        # 再描画のヘッダー部（名前・戻るリンク）に使う元データ
-        mgr.get_persona.return_value = sample_persona
+        # 再描画のヘッダー部（名前・戻るリンク）に使う元データ（管理できる人として読む）
+        mgr.get_persona_for_edit.return_value = sample_persona
         return mgr
 
     @patch("web.routers.persona.get_persona_manager")
@@ -746,7 +818,7 @@ class TestPersonaUpdateValidationPreservesInput:
             code=ErrorCode.PERSONA_FIELD_REQUIRED,
             context={"field": "name"},
         )
-        mgr.get_persona.return_value = None  # 取得できない
+        mgr.get_persona_for_edit.side_effect = _not_found()  # 取得できない
         mock_get_mgr.return_value = mgr
 
         response = client.put(f"/persona/{sample_persona.id}", data=self._SUBMITTED)
@@ -782,6 +854,7 @@ class TestPersonaUpdate:
         mock_mgr = Mock()
         mock_mgr.get_persona.return_value = sample_persona
         mock_mgr.update_persona.return_value = sample_persona
+        mock_mgr.describe_persona.side_effect = lambda _p, persona: _detail(persona)
         mock_get_mgr.return_value = mock_mgr
 
         response = client.put(
@@ -806,6 +879,7 @@ class TestPersonaUpdate:
         mock_mgr = Mock()
         mock_mgr.get_persona.return_value = sample_persona
         mock_mgr.update_persona.return_value = sample_persona
+        mock_mgr.describe_persona.side_effect = lambda _p, persona: _detail(persona)
         mock_get_mgr.return_value = mock_mgr
 
         response = client.put(
@@ -833,7 +907,7 @@ class TestPersonaUpdate:
     @patch("web.routers.persona.get_persona_manager")
     def test_update_not_found(self, mock_get_mgr, client):
         mock_mgr = Mock()
-        mock_mgr.update_persona.return_value = None
+        mock_mgr.update_persona.side_effect = _not_found()
         mock_get_mgr.return_value = mock_mgr
 
         response = client.put(
@@ -1195,7 +1269,7 @@ class TestPersonaAvatarEndpoints:
         self, mock_get_manager, client, sample_persona
     ):
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = sample_persona
+        mock_manager.get_persona_detail.return_value = _detail(sample_persona)
         mock_manager.avatar_upload_enabled.return_value = False
         mock_get_manager.return_value = mock_manager
 
@@ -1271,7 +1345,7 @@ class TestPersonaModalsUseSharedDialog:
         persona = replace(
             sample_persona, generation_log=[{"type": "thinking", "content": "分析"}]
         )
-        mock_get_manager.return_value.get_persona.return_value = persona
+        mock_get_manager.return_value.get_persona_detail.return_value = _detail(persona)
 
         html = client.get(f"/persona/{persona.id}").text
 
@@ -1279,3 +1353,349 @@ class TestPersonaModalsUseSharedDialog:
         assert "data-dialog-backdrop-close" in outer
         assert 'data-dialog-open="generation-log-dialog"' in html
         assert "showGenLog" not in html
+
+
+# =============================================================================
+# U4: タブ別の一覧・検索・詳細・編集・削除の判定（BR3、BR6、M6、M8）
+# PersonaManager と ResourceSharing は本物、Store はメモリ上の偽物にする。
+# =============================================================================
+
+A_SUB = "local:a@example.com"  # member（sales）
+B_SUB = "local:b@example.com"  # member（sales・plan）
+D_SUB = "local:d@example.com"  # member（hr）。無関係
+
+
+@pytest.fixture
+def world():
+    from tests.unit.test_persona_manager_sharing import World
+
+    return World()
+
+
+@pytest.fixture
+def real_manager(world):
+    from src.managers.components.resource_sharing import ResourceSharing
+    from src.managers.persona_manager import PersonaManager
+    from tests.unit.test_resource_sharing import DEPARTMENTS, TABLE
+
+    departments = Mock()
+    departments.list_all.return_value = list(DEPARTMENTS)
+    departments.get_many.side_effect = lambda ids: {
+        d.group_id: d for d in DEPARTMENTS if d.group_id in ids
+    }
+    owners = Mock()
+    owners.labels.side_effect = lambda subs: {s: f"氏名-{s}" for s in subs}
+    sharing = ResourceSharing(world.store, departments, sleep=lambda _s: None)
+    sharing.register(TABLE)
+    manager = PersonaManager(
+        database_service=world.db,
+        s3_service=Mock(),
+        resource_sharing=sharing,
+        owners=owners,
+    )
+    with (
+        patch("web.routers.persona.get_persona_manager", return_value=manager),
+        patch("web.routers.api.get_persona_manager", return_value=manager),
+    ):
+        yield manager
+
+
+def _login(client, who: str):
+    from tests.conftest import login_as
+
+    users = {
+        "a": ("a@example.com", ("member",), ("sales",)),
+        "b": ("b@example.com", ("member",), ("sales", "plan")),
+        "c": ("c@example.com", ("member",), ()),
+        "d": ("d@example.com", ("member",), ("hr",)),
+        "admin": ("admin@example.com", ("admin",), ()),
+    }
+    email, roles, groups = users[who]
+    login_as(client, email=email, roles=roles, groups=groups)
+    return client
+
+
+def _panel(client, tab: str, **params) -> str:
+    query = "&".join(f"{k}={v}" for k, v in {"tab": tab, **params}.items())
+    return client.get(f"/persona/list/partial?{query}").text
+
+
+@pytest.mark.usefixtures("real_manager")
+class TestPersonaTabs:
+    def test_member_sees_two_tabs_with_counts(self, client, world):
+        world.add("p1", A_SUB)
+        world.add("p2", B_SUB, {"sales"})
+        html = _login(client, "a").get("/persona/management").text
+
+        assert 'data-testid="list-tab-mine"' in html
+        assert 'data-testid="list-tab-shared"' in html
+        assert 'data-testid="list-tab-all"' not in html
+        assert 'data-count-label="自分のもの 1 件"' in html
+        assert 'data-count-label="共有されたもの 1 件"' in html
+        assert 'data-reload-url="/persona/management?tab=mine"' in html
+
+    def test_admin_sees_the_all_tab(self, client, world):
+        world.add("p1", A_SUB)
+        html = _login(client, "admin").get("/persona/management?tab=all").text
+        assert 'data-count-label="すべて 1 件"' in html
+        assert 'id="persona-list-tab-all"' in html and 'aria-selected="true"' in html
+
+    def test_count_that_cannot_be_read_is_a_dash(self, client, world):
+        from src.services.resource_share_store import ResourceShareStoreError
+
+        world.add("p1", A_SUB)
+        world.store.count_owner = Mock(side_effect=ResourceShareStoreError("down"))
+        html = _login(client, "a").get("/persona/management").text
+        assert 'data-count-label="自分のもの -"' in html
+
+    def test_member_asking_for_all_gets_mine(self, client, world):
+        world.add("p1", A_SUB)
+        world.add("p2", D_SUB)
+        html = _login(client, "a").get("/persona/management?tab=all").text
+        assert 'data-reload-url="/persona/management?tab=mine"' in html
+        assert "名前-p1" in html and "名前-p2" not in html
+
+    def test_tab_request_from_the_list_returns_the_panel_only(self, client, world):
+        world.add("p2", B_SUB, {"sales"})
+        response = _login(client, "a").get(
+            "/persona/management?tab=shared", headers={"HX-Target": "persona-list"}
+        )
+        assert "<html" not in response.text and "名前-p2" in response.text
+
+    def test_shared_rows_have_owner_and_source(self, client, world):
+        world.add("p2", B_SUB, {"sales"})
+        html = _panel(_login(client, "a"), "shared")
+        assert f"所有者: 氏名-{B_SUB}" in html
+        assert "共有元: 営業部" in html
+
+    def test_shared_tab_has_no_selection_or_share_button(self, client, world):
+        world.add("p2", B_SUB, {"sales"})
+        html = _panel(_login(client, "a"), "shared")
+        assert 'data-testid="bulk-select-bar"' not in html
+        assert 'data-testid="bulk-select-row"' not in html
+        assert "data-share-url" not in html
+        assert 'hx-delete="/persona/p2"' not in html
+
+    def test_own_rows_have_the_share_column_and_actions(self, client, world):
+        world.add("p1", A_SUB, {"plan"})
+        world.add("p3", A_SUB)
+        html = _panel(_login(client, "a"), "mine")
+        assert "共有: 企画部" in html and "〔共有なし〕" in html
+        assert 'data-testid="bulk-select-bar"' in html
+        assert 'data-share-url="/share/persona/p1/dialog"' in html
+        assert 'data-dialog-open="share-dialog"' in html
+
+    def test_admin_all_marks_unknown_owner(self, client, world):
+        world.add("legacy", None)
+        html = _panel(_login(client, "admin"), "all")
+        assert "〔所有者不明〕" in html
+        assert 'data-testid="bulk-select-bar"' in html
+
+    @pytest.mark.parametrize(
+        ("who", "tab", "text"),
+        [
+            ("a", "mine", "まだペルソナがありません"),
+            (
+                "a",
+                "shared",
+                "共有されたペルソナはありません。所属部署に共有されると、ここに表示されます",
+            ),
+            ("c", "shared", "所属部署がないため、共有されたペルソナはありません"),
+        ],
+    )
+    def test_empty_states(self, client, who, tab, text):
+        assert text in _panel(_login(client, who), tab)
+
+    def test_load_more_follows_the_next_cursor(self, client, world):
+        for i in range(21):
+            world.add(f"p{i:02d}", A_SUB, minutes=i)
+        html = _panel(_login(client, "a"), "mine")
+        assert 'id="load-more-persona"' in html and "tab=mine" in html
+        world.store.bodies.pop("p00")
+        assert 'id="load-more-persona"' not in _panel(client, "mine")
+
+    def test_search_stays_inside_the_tab(self, client, world):
+        world.add("p1", A_SUB, name="田中")
+        world.add("p2", D_SUB, name="田中")
+        html = _panel(_login(client, "a"), "mine", search="田中")
+        assert "persona-card-p1" in html and "persona-card-p2" not in html
+
+    def test_search_over_500_says_so(self, client, world):
+        for i in range(501):
+            world.add(f"p{i:03d}", A_SUB, minutes=i)
+        html = _panel(_login(client, "a"), "mine", search="名前")
+        assert "新しい順に 500 件までを検索しました" in html
+
+    def test_selection_list_is_tab_scoped(self, client, world):
+        world.add("p1", A_SUB)
+        world.add("p2", D_SUB)
+        world.add("p3", B_SUB, {"sales"})
+        html = _panel(_login(client, "a"), "mine", selectable="1")
+        assert 'data-persona-id="p1"' in html and 'data-persona-id="p2"' not in html
+        assert 'data-testid="persona-select-tab-shared"' in html
+        shared = _panel(client, "shared", selectable="1")
+        assert 'data-persona-id="p3"' in shared
+
+
+@pytest.mark.usefixtures("real_manager")
+class TestPersonaDetailAuthz:
+    def test_unshared_member_gets_not_found(self, client, world):
+        world.add("p1", A_SUB)
+        response = _login(client, "d").get(
+            "/persona/p1", headers={"HX-Request": "", "Accept": "text/html"}
+        )
+        assert response.status_code == 404
+
+    def test_shared_member_sees_no_change_operations(self, client, world):
+        world.add("p1", A_SUB, {"sales"})
+        html = _login(client, "b").get("/persona/p1").text
+        assert f"所有者: 氏名-{A_SUB}" in html
+        assert 'hx-get="/persona/p1/edit"' not in html
+        assert 'hx-delete="/persona/p1"' not in html
+        assert "data-share-url" not in html
+        assert "共有されたペルソナです" in html
+
+    def test_owner_sees_edit_share_and_delete(self, client, world):
+        world.add("p1", A_SUB)
+        html = _login(client, "a").get("/persona/p1").text
+        assert 'hx-get="/persona/p1/edit"' in html
+        assert 'hx-delete="/persona/p1"' in html
+        assert 'data-share-url="/share/persona/p1/dialog"' in html
+        assert 'id="share-dialog"' in html
+
+    @pytest.mark.parametrize(
+        ("who", "expected"), [("b", 403), ("d", 404), ("admin", 200)]
+    )
+    def test_edit_form(self, client, world, who, expected):
+        world.add("p1", A_SUB, {"sales"})
+        assert _login(client, who).get("/persona/p1/edit").status_code == expected
+
+    @pytest.mark.parametrize(
+        ("who", "expected"), [("b", 403), ("d", 404), ("admin", 200)]
+    )
+    def test_update(self, client, world, who, expected):
+        world.add("p1", A_SUB, {"sales"})
+        response = _login(client, who).put(
+            "/persona/p1",
+            data={
+                "name": "新しい名前",
+                "age": 30,
+                "occupation": "職業",
+                "background": "背景",
+                "values": "v",
+                "pain_points": "p",
+                "goals": "g",
+            },
+        )
+        assert response.status_code == expected
+
+    @pytest.mark.parametrize(
+        ("who", "expected"), [("b", 403), ("d", 404), ("admin", 200)]
+    )
+    def test_delete(self, client, world, who, expected):
+        world.add("p1", A_SUB, {"sales"})
+        assert _login(client, who).delete("/persona/p1").status_code == expected
+
+    @staticmethod
+    def _delete_from_list(client, persona_id: str):
+        return client.delete(
+            f"/persona/{persona_id}",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/management",
+            },
+        )
+
+    def test_deleting_an_already_deleted_persona_reloads_the_list(self, client, world):
+        """R-04: the stale card goes away; the answer is still a 404 toast."""
+        from web.error_messages import NOT_FOUND_TOAST_MESSAGE
+
+        response = self._delete_from_list(_login(client, "a"), "gone")
+
+        assert response.status_code == 404
+        triggers = json.loads(response.headers["HX-Trigger"])
+        assert triggers["showToast"]["message"] == NOT_FOUND_TOAST_MESSAGE
+        assert triggers["listReload"] == {"target": "#persona-list"}
+
+    def test_deleted_and_unreadable_answer_the_same(self, client, world):
+        """R-04 / NFR1.14: an unreadable target gets the very same response."""
+        world.add("p1", A_SUB)
+        unreadable = self._delete_from_list(_login(client, "d"), "p1")
+        missing = self._delete_from_list(client, "gone")
+        assert unreadable.status_code == missing.status_code == 404
+        assert unreadable.headers["HX-Trigger"] == missing.headers["HX-Trigger"]
+        assert unreadable.content == missing.content == b""
+        assert "p1" in world.store.bodies
+
+    def test_deleting_a_missing_persona_from_its_detail_page_does_not_reload(
+        self, client, world
+    ):
+        response = _login(client, "a").delete(
+            "/persona/gone",
+            headers={
+                "HX-Request": "true",
+                "HX-Current-URL": "http://testserver/persona/gone",
+            },
+        )
+        assert response.status_code == 404
+        assert "listReload" not in json.loads(response.headers["HX-Trigger"])
+
+    def test_update_response_keeps_the_owner_and_shared_rows(self, client, world):
+        """R-07: the swapped header shows the same rows as the detail page."""
+        world.add("p1", A_SUB, {"sales", "plan"})
+        response = _login(client, "a").put(
+            "/persona/p1",
+            data={
+                "name": "新しい名前",
+                "age": 30,
+                "occupation": "職業",
+                "background": "背景",
+                "values": "v",
+                "pain_points": "p",
+                "goals": "g",
+            },
+        )
+        assert response.status_code == 200
+        html = response.text
+        assert 'data-testid="persona-owner-line"' in html
+        assert f"所有者: 氏名-{A_SUB}" in html
+        assert "共有: 企画部、営業部" in html
+
+    def test_update_response_of_an_unshared_persona_says_not_shared(
+        self, client, world
+    ):
+        world.add("p1", A_SUB)
+        html = (
+            _login(client, "admin")
+            .put(
+                "/persona/p1",
+                data={
+                    "name": "新しい名前",
+                    "age": 30,
+                    "occupation": "職業",
+                    "background": "背景",
+                    "values": "v",
+                    "pain_points": "p",
+                    "goals": "g",
+                },
+            )
+            .text
+        )
+        assert f"所有者: 氏名-{A_SUB}" in html
+        assert "共有なし" in html
+
+
+@pytest.mark.usefixtures("real_manager")
+class TestPersonaApiScope:
+    def test_list_returns_own_and_shared_only(self, client, world):
+        world.add("p1", A_SUB)
+        world.add("p2", B_SUB, {"sales"})
+        world.add("p3", D_SUB)
+        body = _login(client, "a").get("/api/personas").json()
+        assert {p["id"] for p in body} == {"p1", "p2"}
+
+    def test_unreadable_detail_is_not_found(self, client, world):
+        world.add("p3", D_SUB)
+        response = _login(client, "a").get("/api/personas/p3")
+        assert response.status_code == 404
+        assert response.json()["error_code"] == "persona_not_found"

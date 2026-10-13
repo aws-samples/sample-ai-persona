@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_users, icon_plus %}
+{% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
 {# GENDER_LABELS / country_choices は persona ルーターで templates.env.globals に登録済み #}
+{#
+  引数（U4）:
+    listing    ... TabbedList（最初のページと各タブの件数）。取れなければ None
+    list_error ... 一覧を取れなかったときの文言
+#}
 
 {% block content %}
 <div class="max-w-6xl mx-auto">
@@ -27,7 +33,7 @@
                        hx-trigger="keyup changed delay:300ms"
                        hx-target="#persona-list"
                        hx-swap="innerHTML"
-                       hx-include="this"
+                       hx-include="this, #persona-list [data-persona-tab]"
                        name="search"
                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
@@ -67,12 +73,17 @@
         </div>
     </div>
 
-    <!-- ペルソナ一覧 -->
-    <div id="persona-list"
-         hx-get="/persona/list/partial"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-    </div>
+    <!-- ペルソナ一覧（タブ別、M6）。タブと読み直しは /persona/management?tab=... -->
+    {%- set active = listing.tab.value if listing else (tab or "mine") %}
+    {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/persona/management", "persona-list") }}
+    {% call list_tabpanel("persona-list", active, "/persona/management") %}
+    {%- if listing %}
+    {% include "persona/partials/persona_list.html" %}
+    {%- else %}
+    {% include "partials/error_banner.html" %}
+    {%- endif %}
+    {% endcall %}
+    {% include "sharing/partials/share_dialog.html" %}
     <p id="filter-empty-message" class="text-center text-gray-500 py-8" style="display: none;">
         フィルタ条件に一致するペルソナがありません
     </p>

@@ -246,8 +246,12 @@ class TestNotFoundPage:
     def test_router_http_exception_detail_is_hidden_too(self, test_app, login_as):
         from unittest.mock import patch
 
+        from src.models.errors import CodedError, ErrorCode
+
         with patch("web.routers.persona.get_persona_manager") as get_manager:
-            get_manager.return_value.get_persona.return_value = None
+            get_manager.return_value.get_persona_detail.side_effect = CodedError(
+                "not readable", code=ErrorCode.PERSONA_NOT_FOUND
+            )
             with TestClient(test_app, follow_redirects=False) as browser:
                 login_as(browser)
                 response = browser.get("/persona/nope", headers=BROWSER)

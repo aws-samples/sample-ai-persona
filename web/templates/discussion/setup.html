@@ -926,10 +926,12 @@
             </div>
 
             <!-- ペルソナ一覧（htmx 遅延ロード） -->
-            <div hx-get="/persona/list/partial?selectable=1"
+            <!-- 選べるのは「自分のもの」「共有されたもの」のタブの範囲だけ（BR6.3） -->
+            <div hx-get="/persona/list/partial?selectable=1&tab=mine"
                  hx-trigger="load"
                  hx-target="this"
                  hx-swap="innerHTML"
+                 data-persona-select-list
                  class="max-h-96 overflow-y-auto">
                 <p class="text-center text-gray-400 py-8">読み込み中...</p>
             </div>

@@ -1,0 +1,18 @@
+{#
+  一括の保存で一部が失敗したときの結果（M7、BR2.4、BR7.3）。共有ダイアログの
+  .share-dialog-message に入る。読めない対象は名前を出さず件数だけ出す。
+  閉じると app.js の ShareDialog が一覧を読み直し、data-failed-ids の行だけを選び直す。
+
+  引数:
+    result ... src/managers/sharing_manager.py の ShareSaveResult
+#}
+<div data-share-result data-failed-ids="{{ result.failed_ids | join(',') }}" role="status"
+     data-testid="share-bulk-result" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-900">
+    <p>
+        {{ result.total }} 件中 {{ result.updated | length }} 件を更新しました。次の {{ result.failed | length }} 件は更新できませんでした
+        {%- if result.named_failures %}: {{ result.named_failures | map(attribute="display_name") | join("、") }}{% endif %}
+    </p>
+    {%- if result.unnamed_failure_count %}
+    <p class="mt-1">名前を表示できない対象 {{ result.unnamed_failure_count }} 件</p>
+    {%- endif %}
+</div>

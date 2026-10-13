@@ -12,6 +12,10 @@
 
     {% include "persona/partials/detail_body.html" %}
 </div>
+{#- 共有ダイアログは #persona-detail-container の外に置く（編集の保存で中身が差し替わっても残す） #}
+{%- if manageable %}
+{% include "sharing/partials/share_dialog.html" %}
+{%- endif %}
 {% endblock %}
 
 {% block scripts %}

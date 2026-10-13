@@ -36,7 +36,16 @@ from web.error_messages import (
     user_message_for,
 )
 from web.middleware import CSRFMiddleware
-from web.routers import persona, discussion, interview, api, settings, survey, auth
+from web.routers import (
+    persona,
+    discussion,
+    interview,
+    api,
+    settings,
+    survey,
+    auth,
+    sharing,
+)
 from web.user_badge import user_badge
 
 # ログ設定
@@ -106,7 +115,7 @@ templates.env.filters["markdown"] = render_markdown
 # user_badge は画面上部の利用者表示（BR1.16）。base.html を描く全 Router に登録する
 templates.env.globals["app_version"] = __version__
 templates.env.globals["user_badge"] = user_badge
-for _mod in [persona, discussion, interview, settings, survey, auth]:
+for _mod in [persona, discussion, interview, settings, survey, auth, sharing]:
     _mod.templates.env.globals["app_version"] = __version__
     _mod.templates.env.globals["user_badge"] = user_badge
 
@@ -118,6 +127,8 @@ app.include_router(api.router, prefix="/api", tags=["api"])
 app.include_router(settings.router, prefix="/settings", tags=["settings"])
 app.include_router(survey.router, prefix="/survey", tags=["survey"])
 app.include_router(auth.router, tags=["auth"])
+# 共有の入口（/share/...、U4）。AuthMiddleware と CSRF の対象のまま（NFR4.11）
+app.include_router(sharing.router, tags=["sharing"])
 
 
 # =============================================================================

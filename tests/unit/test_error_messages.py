@@ -312,3 +312,36 @@ class TestNotFoundToastWording:
         assert _toast(ErrorCode.ACCESS_DENIED)["message"] == user_message_for(
             CodedError(code=ErrorCode.ACCESS_DENIED)
         )
+
+
+class TestSharingWording:
+    """共有のコード（U4）がカタログの文言を返し、上限を補間すること。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.SHARE_SCOPE_INVALID,
+            ErrorCode.SHARE_NO_DEPARTMENT,
+            ErrorCode.SHARE_OWNER_MISSING,
+            ErrorCode.SHARE_NO_TARGET,
+            ErrorCode.SHARE_UPDATE_FAILED,
+        ],
+    )
+    def test_codes_resolve_to_catalog_wording(self, code):
+        message = user_message_for(CodedError(code=code), default="既定")
+        assert message != "既定"
+        assert message == error_messages._CATALOG[code]
+
+    def test_target_limit_is_interpolated(self):
+        message = user_message_for(
+            CodedError(
+                code=ErrorCode.SHARE_TOO_MANY_TARGETS, context={"max_targets": 100}
+            )
+        )
+        assert "100" in message
+
+    def test_group_limit_is_interpolated(self):
+        message = user_message_for(
+            CodedError(code=ErrorCode.SHARE_TOO_MANY_GROUPS, context={"max_groups": 99})
+        )
+        assert "99" in message

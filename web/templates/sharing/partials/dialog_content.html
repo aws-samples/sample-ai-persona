@@ -1,0 +1,70 @@
+{% from "components/department_picker.html" import department_picker %}
+{#
+  共有ダイアログの中身（M7、WF1・WF2）。components/dialog.html の share-dialog の
+  中身の読み込み（[data-share-content]）に入る。保存の結果は .share-dialog-message に
+  入る（入力の誤り・再試行で直る失敗・403・一部失敗）。全件成功は本文なしで
+  HX-Trigger（dialogClose・listReload・showToast）が閉じる。
+
+  引数:
+    view           ... src/models/sharing.py の ShareDialogView
+    post_url       ... 保存の送り先（/share/{type}/{id} か /share/{type}）
+    vanished_label ... 消えた部署の表示名（「（存在しない部署）」）
+#}
+{%- set describedby = [] -%}
+{%- if view.show_persona_notice %}{% set _ = describedby.append("share-persona-notice") %}{% endif -%}
+{%- if view.show_scope_note %}{% set _ = describedby.append("share-scope-note") %}{% endif -%}
+{%- if not view.no_department %}{% set _ = describedby.append("departments-removing") %}{% endif -%}
+{%- set ns = namespace(mixed=false) -%}
+{%- if view.mixed %}{% for counts in view.mixed.values() %}{% if 0 < counts[0] < counts[1] %}{% set ns.mixed = true %}{% endif %}{% endfor %}{% endif -%}
+<form hx-post="{{ post_url }}" hx-target="find .share-dialog-message" hx-swap="innerHTML"
+      data-share-form data-testid="share-form" class="space-y-4">
+    <p class="text-sm text-gray-700">対象: {{ view.target_label or "なし" }}</p>
+    {%- if view.is_bulk %}
+    {%- for target_id in view.target_ids %}
+    <input type="hidden" name="ids" value="{{ target_id }}">
+    {%- endfor %}
+    {%- endif %}
+    {%- if ns.mixed %}
+    <p class="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded-md p-3">
+        対象によって現在の共有先が異なります。保存すると、選んだ共有先に揃えます。
+    </p>
+    {%- endif %}
+    {%- if view.unmanageable_count %}
+    <p class="text-sm text-gray-700" data-testid="share-unmanageable">{{ view.unmanageable_count }} 件は共有先を変えられません</p>
+    {%- endif %}
+
+    {%- if view.no_department %}
+    <p class="text-sm text-gray-700" data-testid="share-no-department">所属部署がないため共有できません</p>
+    {%- else %}
+    {{ department_picker("departments", view.choices, view.selected, view.mixed, "share", vanished=view.vanished, vanished_label=vanished_label) }}
+    {%- endif %}
+
+    {%- if view.show_scope_note %}
+    <p id="share-scope-note" class="text-xs text-gray-700">※ 選べるのは所属部署だけです。それ以外の共有先は変わりません</p>
+    {%- endif %}
+
+    {%- if view.show_persona_notice %}
+    <div id="share-persona-notice" class="text-sm text-gray-700 bg-yellow-50 border border-yellow-200 rounded-md p-3">
+        <p class="font-medium">ペルソナを共有すると、次のことが起こります</p>
+        <ul class="list-disc pl-5 mt-1 space-y-1">
+            <li>生成過程（分析の記録）も共有先に見えます</li>
+            <li>あなたとの会話から蓄積された記憶は、共有先の人との会話でも思い出されます</li>
+            <li>共有先の人は記憶の一覧を見られず、共有先の人との会話は記憶に書き込まれません</li>
+        </ul>
+    </div>
+    {%- endif %}
+
+    <p class="text-xs text-gray-600">共有された人は、閲覧・エクスポートと、自分の議論・インタビュー・アンケートでの利用だけができます。</p>
+
+    <div class="share-dialog-message" data-testid="share-dialog-message"></div>
+
+    <div class="flex justify-end gap-2">
+        <button type="button" data-dialog-close data-testid="share-cancel"
+                class="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">キャンセル</button>
+        <button type="submit" data-share-save data-testid="share-save"
+                {%- if describedby %} aria-describedby="{{ describedby | join(' ') }}"{% endif %}
+                {%- if view.no_department or not view.target_ids %} disabled{% endif %}
+                class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-600 disabled:cursor-not-allowed">
+保存</button>
+    </div>
+</form>
