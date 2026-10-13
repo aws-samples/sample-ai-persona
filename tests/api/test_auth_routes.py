@@ -258,6 +258,32 @@ class TestSignout:
         after = client.get("/persona/management", follow_redirects=False)
         assert after.status_code in (303, 401)
 
+    def test_signout_is_503_when_the_session_cannot_be_deleted(
+        self, client, monkeypatch
+    ):
+        """Do not report success (or clear the cookie) while the session still works."""
+        assert client.get("/persona/management").status_code == 200
+
+        def broken_delete(
+            self: MemorySessionStore,
+            session_id_hash: str,
+            expected_version: int | None = None,
+        ) -> bool:
+            raise SessionStoreError("down")
+
+        monkeypatch.setattr(MemorySessionStore, "delete", broken_delete)
+        response = client.post(
+            "/signout", headers={"Accept": "application/json"}, follow_redirects=False
+        )
+
+        assert response.status_code == 503
+        assert not any(c.startswith("session_id=") for c in _set_cookies(response))
+        monkeypatch.undo()
+        retried = client.post("/signout", follow_redirects=False)
+        assert retried.status_code == 303
+        after = client.get("/persona/management", follow_redirects=False)
+        assert after.status_code in (303, 401)
+
     def test_signout_without_a_session_still_redirects(self, test_app):
         with TestClient(
             test_app, headers={"HX-Request": "true"}, follow_redirects=False
