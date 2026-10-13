@@ -20,8 +20,8 @@
             <div class="flex flex-wrap gap-4 items-end">
                 <!-- モードフィルタ -->
                 <div class="flex-1 min-w-[150px]">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">モード</label>
-                    <select name="mode" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                    <label for="filter-mode" class="block text-sm font-medium text-gray-700 mb-1">モード</label>
+                    <select id="filter-mode" name="mode" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
                             hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" hx-include="#filter-form">
                         <option value="" {% if not current_mode %}selected{% endif %}>すべて</option>
                         <option value="agent" {% if current_mode == 'agent' %}selected{% endif %}>しっかり議論モード</option>
@@ -32,22 +32,22 @@
                 
                 <!-- トピック検索 -->
                 <div class="flex-[2] min-w-[200px]">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">トピック検索</label>
+                    <label for="filter-search" class="block text-sm font-medium text-gray-700 mb-1">トピック検索</label>
                     <div class="relative">
-                        <input type="text" name="search" value="{{ current_search or '' }}" placeholder="トピックを検索..."
+                        <input type="text" id="filter-search" name="search" value="{{ current_search or '' }}" placeholder="トピックを検索..."
                                class="w-full border border-gray-300 rounded-md pl-9 pr-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
                                hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" 
                                hx-trigger="keyup changed delay:300ms" hx-include="#filter-form">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                            <svg class="w-4 h-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                         </div>
                     </div>
                 </div>
                 
                 <!-- ソート -->
                 <div class="flex-1 min-w-[150px]">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">並び順</label>
-                    <select name="sort" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                    <label for="filter-sort" class="block text-sm font-medium text-gray-700 mb-1">並び順</label>
+                    <select id="filter-sort" name="sort" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
                             hx-get="/discussion/results" hx-target="#discussion-list" hx-swap="innerHTML" hx-push-url="true" hx-include="#filter-form">
                         <option value="newest" {% if current_sort == 'newest' or not current_sort %}selected{% endif %}>新しい順</option>
                         <option value="oldest" {% if current_sort == 'oldest' %}selected{% endif %}>古い順</option>

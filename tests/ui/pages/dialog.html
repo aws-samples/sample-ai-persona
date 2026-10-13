@@ -1,0 +1,56 @@
+{% extends "_frame.html" %}
+{% from "components/dialog.html" import dialog, dialog_open_button %}
+{% block component %}
+<p class="text-gray-700 mb-4">ダイアログの確認</p>
+<div id="pre-inert" inert><button type="button" class="px-3 py-1 border rounded">もともと操作できない</button></div>
+
+<div class="flex flex-wrap gap-2 mb-4">
+    {{ dialog_open_button("form-dialog", "名前を編集", classes="px-4 py-2 text-white bg-blue-600 rounded-md") }}
+    {{ dialog_open_button("view-dialog", "詳細を見る", classes="px-4 py-2 border rounded-md") }}
+    {{ dialog_open_button("info-dialog", "お知らせ", classes="px-4 py-2 border rounded-md") }}
+    {{ dialog_open_button("load-dialog", "読み込む", classes="px-4 py-2 border rounded-md") }}
+    {{ dialog_open_button("success-dialog", "カテゴリーを変更", classes="px-4 py-2 border rounded-md") }}
+    <button type="button" id="insert-button" data-testid="insert-button" class="px-4 py-2 border rounded-md"
+            hx-get="/insert" hx-target="#insert-target" hx-swap="innerHTML">編集を開く</button>
+</div>
+
+<div id="insert-target"></div>
+
+<div id="swap-region" class="border rounded p-2">
+    {{ dialog_open_button("region-dialog", "領域の中のダイアログ", classes="px-4 py-2 border rounded-md") }}
+    {% call dialog("region-dialog", "領域の中") %}
+    <p class="text-gray-700">差し替わる領域の中にあるダイアログ</p>
+    {% endcall %}
+</div>
+
+{% call dialog("form-dialog", "名前の編集", describedby="form-dialog-note") %}
+<p id="form-dialog-note" class="text-sm text-gray-600 mb-3">変更は保存すると反映されます</p>
+<form hx-post="/submit" hx-swap="none">
+    <label for="form-name" class="block text-sm font-medium text-gray-700 mb-1">名前</label>
+    <input type="text" id="form-name" name="name" class="w-full border border-gray-300 rounded-md px-3 py-2">
+    <div class="flex justify-end gap-2 mt-4">
+        <button type="button" data-dialog-close data-testid="form-dialog-cancel" class="px-4 py-2 text-gray-700 rounded">キャンセル</button>
+        <button type="submit" data-testid="form-dialog-submit" class="px-4 py-2 bg-blue-600 text-white rounded">保存</button>
+    </div>
+</form>
+{% endcall %}
+
+{% call dialog("view-dialog", "詳細", close_on_backdrop=True) %}
+<p class="text-gray-700">閲覧だけの内容</p>
+{% endcall %}
+
+{% call dialog("info-dialog", "お知らせ") %}
+<p class="text-gray-700">入力欄のないダイアログ</p>
+<button type="button" data-dialog-close="ok" data-testid="info-dialog-ok" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded">わかった</button>
+{% endcall %}
+
+{{ dialog("load-dialog", "中身の読み込み", content_url="/dialog-content") }}
+
+{% call dialog("success-dialog", "カテゴリーを変更", close_on_success=True) %}
+<form hx-post="/save" hx-swap="none">
+    <label for="category-name" class="block text-sm font-medium text-gray-700 mb-1">カテゴリー</label>
+    <input type="text" id="category-name" name="category" class="w-full border border-gray-300 rounded-md px-3 py-2">
+    <button type="submit" data-testid="success-dialog-submit" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded">再生成</button>
+</form>
+{% endcall %}
+{% endblock %}

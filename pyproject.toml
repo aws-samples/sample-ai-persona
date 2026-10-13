@@ -43,6 +43,7 @@ dev = [
     "moto[dynamodb,s3]>=5.0.0",
     "hypothesis>=6.0.0",
     "pytest-playwright>=0.9.0",
+    "axe-playwright-python>=0.1.8",
 ]
 
 [build-system]

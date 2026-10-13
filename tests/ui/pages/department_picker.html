@@ -1,0 +1,12 @@
+{% extends "_frame.html" %}
+{% from "components/department_picker.html" import department_picker %}
+{% block component %}
+<form id="picker-form" hx-post="/share-save" hx-swap="none" class="max-w-xl">
+    {{ department_picker("departments", choices, selected, mixed, mode) }}
+    <button type="submit" data-testid="picker-save" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md disabled:bg-gray-200 disabled:text-gray-600">保存</button>
+</form>
+{# 部署の選択とは別の領域を htmx で差し替える（再初期化で状態が戻らないことを確かめる） #}
+<button type="button" id="elsewhere-swap" data-testid="elsewhere-swap" class="mt-4 px-4 py-2 border rounded-md"
+        hx-get="/elsewhere" hx-target="#elsewhere" hx-swap="innerHTML">別の領域を更新</button>
+<div id="elsewhere"></div>
+{% endblock %}

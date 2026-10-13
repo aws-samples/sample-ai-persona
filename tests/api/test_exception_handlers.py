@@ -11,6 +11,7 @@ htmx と画面は、既存の表示（トースト・エラー画面・ログイ
 """
 
 import json
+import re
 
 import pytest
 from fastapi import FastAPI
@@ -20,7 +21,11 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.models.errors import CodedError, ErrorCode
-from web.error_messages import FALLBACK_MESSAGE, user_message_for
+from web.error_messages import (
+    FALLBACK_MESSAGE,
+    UNIFIED_NOT_FOUND_TOAST_CODES,
+    user_message_for,
+)
 from web.main import app as main_app
 from web.main import register_exception_handlers
 
@@ -167,9 +172,8 @@ class TestHtmxAndPages:
         )
         assert response.status_code == 404
         assert "text/html" in response.headers["content-type"]
-        assert user_message_for(CodedError(code=ErrorCode.PERSONA_NOT_FOUND)) in (
-            response.text
-        )
+        # 404 の画面は理由を区別しない（M11）。資源別の文言は出さない
+        assert _not_found_text(response.text) == M11
         assert SECRET not in response.text
 
     def test_page_unauthorized_goes_to_login(self, api):
@@ -182,3 +186,80 @@ class TestHtmxAndPages:
         assert response.status_code == 500
         assert "text/html" in response.headers["content-type"]
         assert SECRET not in response.text
+
+
+#: M11（mockups.md）の固定の見出しと本文。画面の仕様の固定文言として確かめる
+M11 = ("ページが見つかりません", "指定されたページは存在しないか、表示できません。")
+BROWSER = {"accept": "text/html"}
+
+
+def _not_found_text(html: str) -> tuple[str, str]:
+    heading = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.DOTALL)
+    message = re.search(
+        r'<p[^>]*data-testid="error-page-message"[^>]*>(.*?)</p>', html, re.DOTALL
+    )
+    assert heading and message, "エラー画面の見出しか本文がない"
+    return (" ".join(heading.group(1).split()), " ".join(message.group(1).split()))
+
+
+def _title(html: str) -> str:
+    match = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
+    assert match
+    return " ".join(match.group(1).split())
+
+
+class TestNotFoundPage:
+    """M11 / NFR1.9: one 404 screen whatever the reason (WF8)."""
+
+    def test_heading_body_links_and_title(self, api):
+        response = api.get(
+            f"/page/boom/{ErrorCode.PERSONA_NOT_FOUND.value}", headers=BROWSER
+        )
+
+        assert _not_found_text(response.text) == M11
+        assert _title(response.text) == "ページが見つかりません - AIペルソナシステム"
+        assert re.search(r'<a href="/"[^>]*>\s*トップへ\s*</a>', response.text)
+        assert "一覧に戻る" in response.text
+
+    def test_given_wording_is_not_shown(self, api):
+        response = api.get(
+            f"/page/boom/{ErrorCode.PERSONA_NOT_FOUND.value}", headers=BROWSER
+        )
+
+        assert (
+            user_message_for(CodedError(code=ErrorCode.PERSONA_NOT_FOUND))
+            not in response.text
+        )
+
+    @pytest.mark.parametrize(
+        "code",
+        sorted(UNIFIED_NOT_FOUND_TOAST_CODES, key=str),
+        ids=lambda c: c.name,
+    )
+    def test_every_resource_code_matches_an_unknown_url(self, api, code):
+        unknown = api.get("/page/no-such-thing", headers=BROWSER)
+        response = api.get(f"/page/boom/{code.value}", headers=BROWSER)
+
+        assert response.status_code == unknown.status_code == 404
+        assert _not_found_text(response.text) == _not_found_text(unknown.text) == M11
+
+    def test_router_http_exception_detail_is_hidden_too(self, test_app, login_as):
+        from unittest.mock import patch
+
+        with patch("web.routers.persona.get_persona_manager") as get_manager:
+            get_manager.return_value.get_persona.return_value = None
+            with TestClient(test_app, follow_redirects=False) as browser:
+                login_as(browser)
+                response = browser.get("/persona/nope", headers=BROWSER)
+
+        assert response.status_code == 404
+        assert _not_found_text(response.text) == M11
+        assert 'href="/persona/management"' in response.text
+
+    def test_other_errors_keep_their_screen(self, api):
+        response = api.get("/page/crash", headers=BROWSER)
+
+        heading, message = _not_found_text(response.text)
+        assert heading == "エラーが発生しました"
+        assert message == FALLBACK_MESSAGE
+        assert _title(response.text) == "エラー - AIペルソナシステム"

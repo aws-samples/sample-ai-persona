@@ -1,0 +1,62 @@
+{#
+  共通ダイアログ（C3、約束 C6）。開閉・背景の inert・Tab の循環・Escape・フォーカスの
+  移動と戻し・中身の読み込み失敗の表示は web/static/js/app.js の Dialog が受け持つ。
+  開閉の状態は hidden 属性で表し、Alpine の x-show は使わない。
+
+  ダイアログは描かれた場所（多くは main の中）から動かさない。中身が頼る親の
+  Alpine の状態や htmx の相対指定（find）が切れないようにするため。
+
+  引数（約束 C6 の署名に、既定値付きの引数を後ろに足したもの）:
+    id                ... ダイアログの id。見出しは id-title
+    title             ... 見出し（h2）
+    describedby       ... 注意文の要素の id（任意）
+    content_url       ... 開いたときに htmx で中身を読み込む URL（任意）
+    close_on_backdrop ... 背景のクリックで閉じるか。入力のあるダイアログは閉じない
+    autoopen          ... htmx で差し込まれたら開く（データセット編集など）
+    remove_on_close   ... 閉じたら要素ごと消す
+    close_on_success  ... 中の htmx の要求が成功したら閉じる（失敗なら開いたまま）
+    panel_class       ... 面の幅（既存のモーダルの見た目を保つため）
+#}
+{% macro dialog(id, title, describedby=None, content_url=None, close_on_backdrop=False, autoopen=False, remove_on_close=False, close_on_success=False, panel_class="max-w-md") -%}
+<div id="{{ id }}" data-dialog data-testid="{{ id }}" hidden
+     {%- if close_on_backdrop %} data-dialog-backdrop-close{% endif %}
+     {%- if autoopen %} data-dialog-autoopen{% endif %}
+     {%- if remove_on_close %} data-dialog-remove-on-close{% endif %}
+     {%- if close_on_success %} data-dialog-close-on-success{% endif %}>
+    <div data-dialog-backdrop class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title"
+             {%- if describedby %} aria-describedby="{{ describedby }}"{% endif %}
+             data-dialog-panel
+             class="bg-white rounded-lg shadow-xl w-full mx-4 max-h-[90vh] overflow-y-auto {{ panel_class }}">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 id="{{ id }}-title" tabindex="-1" class="text-lg font-semibold text-gray-900">{{ title }}</h2>
+                    <button type="button" data-dialog-close aria-label="閉じる" data-testid="{{ id }}-close-button"
+                            class="text-gray-500 hover:text-gray-700">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                {%- if content_url %}
+                <div data-dialog-content hx-get="{{ content_url }}" hx-trigger="dialogLoad" hx-swap="innerHTML">
+                    <p class="text-sm text-gray-600">読み込み中...</p>
+                </div>
+                {%- endif %}
+                {%- if caller %}
+                {{ caller() }}
+                {%- endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{%- endmacro %}
+
+{#
+  ダイアログを開くボタン。押すと app.js の Dialog が target のダイアログを開き、
+  閉じたらこのボタンへフォーカスを戻す。
+#}
+{% macro dialog_open_button(target, label, classes="") -%}
+<button type="button" aria-haspopup="dialog" data-dialog-open="{{ target }}"
+        data-testid="{{ target }}-open-button" class="{{ classes }}">{{ label }}</button>
+{%- endmacro %}

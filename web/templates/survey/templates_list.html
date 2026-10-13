@@ -18,19 +18,21 @@
                class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
                 アンケート開始
             </a>
-            <a href="/survey/templates/new" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors flex items-center gap-1.5">
+            <a href="/survey/templates/new" class="bg-teal-700 text-white px-4 py-2 rounded-md hover:bg-teal-800 transition-colors flex items-center gap-1.5">
                 {{ icon_plus("w-4 h-4") }} 新規作成
             </a>
         </div>
     </div>
 
+    {# 一覧部分（U4〜U7 がタブの差し替え先に使う） #}
+    <div id="template-list">
     {% if templates %}
     <div class="space-y-4">
         {% for tmpl in templates %}
         <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition-shadow" id="template-card-{{ tmpl.id }}">
             <div class="flex items-start justify-between">
                 <div>
-                    <h3 class="text-lg font-semibold text-gray-900">{{ tmpl.name }}</h3>
+                    <h2 class="text-lg font-semibold text-gray-900">{{ tmpl.name }}</h2>
                     <p class="text-sm text-gray-500 mt-1">
                         {{ tmpl.questions|length }}問
                         {% if tmpl.images %} ・ 画像あり{% endif %} ・
@@ -74,13 +76,14 @@
     {% else %}
     <div class="bg-gray-50 rounded-lg p-12 text-center">
         <div class="flex justify-center mb-4 text-gray-400">{{ icon_document("w-16 h-16") }}</div>
-        <h3 class="text-xl font-semibold text-gray-700 mb-2">テンプレートがありません</h3>
+        <h2 class="text-xl font-semibold text-gray-700 mb-2">テンプレートがありません</h2>
         <p class="text-gray-500 mb-6">新しいアンケートテンプレートを作成してください。</p>
         <a href="/survey/templates/new"
-           class="inline-flex items-center gap-2 bg-teal-600 text-white px-6 py-2 rounded-md hover:bg-teal-700 transition-colors">
+           class="inline-flex items-center gap-2 bg-teal-700 text-white px-6 py-2 rounded-md hover:bg-teal-800 transition-colors">
             {{ icon_plus("w-4 h-4") }} テンプレートを作成
         </a>
     </div>
     {% endif %}
+    </div>
 </div>
 {% endblock %}

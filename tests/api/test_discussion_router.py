@@ -4,7 +4,10 @@
 議論設定、開始、ストリーミング、結果取得エンドポイントをテストします。
 """
 
+import re
 from unittest.mock import Mock, patch
+
+from tests.dialog_helpers import dialog_markup
 
 
 class TestDiscussionSetupPage:
@@ -1062,3 +1065,41 @@ class TestDiscussionFollowupReportEndpoint:
 
         assert response.status_code == 200
         assert "error" in response.text
+
+
+class TestDiscussionDialogs:
+    """U3 WF3: insight categories dialog and the discussion-start indicator."""
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    def test_regenerate_insights_is_a_dialog_that_closes_on_success(
+        self, mock_get_manager, client
+    ):
+        manager = mock_get_manager.return_value
+        manager.regenerate_insights.return_value = []
+        manager.get_default_categories.return_value = [
+            {"name": "顧客ニーズ", "description": "ニーズ"}
+        ]
+
+        html = client.post(
+            "/discussion/d1/regenerate-insights",
+            data={
+                "categories[0][name]": "顧客ニーズ",
+                "categories[0][description]": "ニーズ",
+            },
+        ).text
+
+        outer = dialog_markup(html, "regenerate-insights-dialog")
+        assert "data-dialog-close-on-success" in outer
+        assert "data-dialog-backdrop-close" not in outer
+        assert 'data-dialog-open="regenerate-insights-dialog"' in html
+        assert 'hx-post="/discussion/d1/regenerate-insights"' in html
+        assert "showRegenerateModal" not in html
+
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_start_indicator_is_busy_and_announced(self, mock_get_manager, client):
+        html = client.get("/discussion/setup").text
+
+        loading = re.search(r'<div id="discussion-loading"[^>]*>', html)
+        assert loading and 'aria-busy="true"' in loading.group(0)
+        assert re.search(r'id="discussion-loading-status"[^>]*role="status"', html)
+        assert "議論を開始しています" in html

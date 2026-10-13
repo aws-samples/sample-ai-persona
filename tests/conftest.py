@@ -35,6 +35,19 @@ from src.models.message import Message
 from src.models.insight import Insight
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register markers that are not declared in pyproject.toml.
+
+    ``ui`` (U3) is registered here because pyproject.toml is a protected
+    config file that is not edited by hand (team practices).
+    """
+    config.addinivalue_line(
+        "markers",
+        "ui: Component behaviour tests in a headless browser "
+        "(Playwright + axe-core, no running app, no AWS)",
+    )
+
+
 # =============================================================================
 # ディレクトリフィクスチャ
 # =============================================================================

@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock, patch
 
+from tests.dialog_helpers import dialog_markup
+
 
 class TestSettingsPage:
     @patch("web.routers.settings.get_dataset_manager")
@@ -96,3 +98,61 @@ class TestSettingsDeleteKnowledgeBase:
             headers={"HX-Request": "true"},
         )
         assert resp.status_code == 200
+
+
+class TestSettingsModalsUseSharedDialog:
+    """U3 WF3: the settings modals are rendered by components/dialog.html."""
+
+    @staticmethod
+    def _settings_page(client) -> str:
+        with (
+            patch("web.routers.settings.get_dataset_manager") as get_dm,
+            patch("web.routers.settings.get_settings_manager") as get_sm,
+        ):
+            get_dm.return_value.get_datasets.return_value = []
+            get_sm.return_value.get_all_knowledge_bases.return_value = []
+            return client.get("/settings/").text
+
+    def test_kb_register_and_upload_are_hidden_dialogs(self, client):
+        html = self._settings_page(client)
+
+        for dialog_id in ("kb-register-modal", "upload-modal"):
+            outer = dialog_markup(html, dialog_id)
+            assert "data-dialog-backdrop-close" not in outer
+            assert f'data-dialog-open="{dialog_id}"' in html
+        # 開閉は app.js の Dialog が持つ（hidden クラスの付け外しをやめた）
+        assert "classList.remove('hidden')" not in html
+        assert "classList.add('hidden')" not in html
+
+    def test_kb_register_still_posts_with_htmx(self, client):
+        html = self._settings_page(client)
+
+        assert 'hx-post="/settings/knowledge-bases"' in html
+        assert "dialogClose" in html
+
+    def test_upload_still_uses_fetch_with_requested_with(self, client):
+        html = self._settings_page(client)
+
+        assert "fetch('/settings/datasets'" in html
+        assert "'X-Requested-With': 'XMLHttpRequest'" in html
+        assert "dialog:closed" in html
+
+    @patch("web.routers.settings.get_dataset_manager")
+    def test_dataset_edit_is_an_inserted_dialog(self, mock_get_dm, client):
+        dataset = Mock()
+        dataset.to_dict.return_value = {
+            "id": "d1",
+            "name": "購買履歴",
+            "description": "",
+            "notes": "",
+            "columns": [{"name": "user_id", "data_type": "string"}],
+        }
+        mock_get_dm.return_value.get_dataset.return_value = dataset
+
+        html = client.get("/settings/datasets/form?dataset_id=d1").text
+
+        outer = dialog_markup(html, "edit-dataset-modal")
+        assert "data-dialog-autoopen" in outer
+        assert "data-dialog-remove-on-close" in outer
+        assert 'hx-put="/settings/datasets/d1"' in html
+        assert ".remove()" not in html

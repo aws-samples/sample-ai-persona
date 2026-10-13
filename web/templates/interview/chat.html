@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_chat, icon_save, icon_arrow_left, icon_paper_airplane, icon_users, icon_persona, icon_attachment %}
+{% from "components/dialog.html" import dialog %}
 
 {% block content %}
 <style>
@@ -235,6 +236,33 @@
     </div>
     {% endif %}
 </div>
+
+{# 保存名の入力（U3 WF3）。JavaScript から openDialog('save-name-dialog') で開き、
+   押したボタンの data-dialog-close の値（confirm / cancel、Escape・× は null）が返る #}
+{% call dialog("save-name-dialog", "インタビューセッションを保存", describedby="save-name-description") %}
+    <p id="save-name-description" class="text-gray-600 text-sm mb-4">保存するセッションの名前を入力してください。この名前は議論一覧で表示されます。</p>
+
+    <div class="mb-4">
+        <label for="session-name-input" class="block text-sm font-medium text-gray-700 mb-2">セッション名</label>
+        <input type="text"
+               id="session-name-input"
+               placeholder="例: 新商品に関するインタビュー"
+               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+               maxlength="100">
+        <p class="text-xs text-gray-500 mt-1">最大100文字まで入力できます</p>
+    </div>
+
+    <div class="flex gap-3 justify-end">
+        <button type="button" id="cancel-save-btn" data-dialog-close="cancel"
+                class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors">
+            キャンセル
+        </button>
+        <button type="button" id="confirm-save-btn" data-dialog-close="confirm"
+                class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            保存
+        </button>
+    </div>
+{% endcall %}
 
 <script>
 
@@ -1016,104 +1044,44 @@ async function saveInterviewSession() {
     }
 }
 
-// 保存名入力モーダルを表示
-function showSaveNameModal() {
-    return new Promise((resolve) => {
-        // モーダルHTML作成
-        const modalHtml = `
-            <div id="save-name-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-                    <h3 class="text-lg font-semibold text-gray-900 mb-4">インタビューセッションを保存</h3>
-                    <p class="text-gray-600 text-sm mb-4">保存するセッションの名前を入力してください。この名前は議論一覧で表示されます。</p>
-                    
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">セッション名</label>
-                        <input type="text" 
-                               id="session-name-input"
-                               placeholder="例: 新商品に関するインタビュー"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                               maxlength="100">
-                        <p class="text-xs text-gray-500 mt-1">最大100文字まで入力できます</p>
-                    </div>
-                    
-                    <div class="flex gap-3 justify-end">
-                        <button id="cancel-save-btn" 
-                                class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors">
-                            キャンセル
-                        </button>
-                        <button id="confirm-save-btn" 
-                                class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                            保存
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // モーダルをDOMに追加（静的HTMLだがDOMPurifyで一貫性を保つ）
-        const modalContainer = document.createElement('div');
-        safeSetInnerHTML(modalContainer, modalHtml);
-        document.body.appendChild(modalContainer.firstElementChild);
-        
-        const modal = document.getElementById('save-name-modal');
-        const input = document.getElementById('session-name-input');
-        const cancelBtn = document.getElementById('cancel-save-btn');
-        const confirmBtn = document.getElementById('confirm-save-btn');
-        
-        // 入力フィールドにフォーカス
-        input.focus();
-        
-        // デフォルト名を設定（現在の日時ベース）
-        const now = new Date();
-        const defaultName = `インタビューセッション ${now.getFullYear()}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getDate().toString().padStart(2,'0')} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
-        input.value = defaultName;
-        input.select(); // テキストを選択状態にする
-        
-        // 入力値の検証
-        function validateInput() {
-            const value = input.value.trim();
-            confirmBtn.disabled = !value || value.length === 0;
+// 保存名の入力欄の検証（空欄なら確定ボタンを無効にする）
+function validateSaveNameInput() {
+    const input = document.getElementById('session-name-input');
+    const confirmBtn = document.getElementById('confirm-save-btn');
+    confirmBtn.disabled = !input.value.trim();
+}
+
+(function bindSaveNameDialog() {
+    const input = document.getElementById('session-name-input');
+    const confirmBtn = document.getElementById('confirm-save-btn');
+    if (!input || !confirmBtn) return;
+    input.addEventListener('input', validateSaveNameInput);
+    // Enter キーで確定（Escape・× での取消は app.js の Dialog が受け持つ）
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !confirmBtn.disabled) {
+            e.preventDefault();
+            confirmBtn.click();
         }
-        
-        input.addEventListener('input', validateInput);
-        validateInput(); // 初期検証
-        
-        // キャンセルボタン
-        cancelBtn.addEventListener('click', () => {
-            modal.remove();
-            resolve(null);
-        });
-        
-        // 確定ボタン
-        confirmBtn.addEventListener('click', () => {
-            const sessionName = input.value.trim();
-            if (sessionName) {
-                modal.remove();
-                resolve(sessionName);
-            }
-        });
-        
-        // Enterキーで確定
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !confirmBtn.disabled) {
-                const sessionName = input.value.trim();
-                if (sessionName) {
-                    modal.remove();
-                    resolve(sessionName);
-                }
-            } else if (e.key === 'Escape') {
-                modal.remove();
-                resolve(null);
-            }
-        });
-        
-        // モーダル外クリックでキャンセル
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.remove();
-                resolve(null);
-            }
-        });
+    });
+})();
+
+// 保存名入力ダイアログを表示する。確定なら入力した名前、取消なら null を返す
+function showSaveNameModal() {
+    const input = document.getElementById('session-name-input');
+
+    // デフォルト名を設定（現在の日時ベース）
+    const now = new Date();
+    const defaultName = `インタビューセッション ${now.getFullYear()}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getDate().toString().padStart(2,'0')} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+    input.value = defaultName;
+    validateSaveNameInput(); // 初期検証
+
+    // 開くと入力欄へフォーカスが移る（Dialog）。テキストを選択状態にする
+    const closed = openDialog('save-name-dialog');
+    input.select();
+
+    return closed.then((choice) => {
+        if (choice !== 'confirm') return null;
+        return input.value.trim() || null;
     });
 }
 

@@ -1,8 +1,10 @@
 """エラーコード + 文言カタログ方式の契約テスト（Issue #112）"""
 
+import json
+
 import pytest
 
-from src.models.errors import CodedError, ErrorCode
+from src.models.errors import CodedError, ErrorCode, ErrorKind
 from web import error_messages
 from web.error_messages import FALLBACK_MESSAGE, user_message_for
 
@@ -252,3 +254,61 @@ class TestActionableWordingPreserved:
         sentinel = "SENTINEL_GENERIC_FAILURE"
         exc = CodedError("diagnostic detail", code=code, context=_SAMPLE_CONTEXT)
         assert user_message_for(exc, default=sentinel) != sentinel
+
+
+def _toast(code: ErrorCode) -> dict[str, str]:
+    response = error_messages.toast_response(CodedError("diagnostic", code=code))
+    return json.loads(response.headers["HX-Trigger"])["showToast"]
+
+
+#: 「ページが見つかりません」にそろえるコード（U3 functional-spec.md WF8、約束 C5）
+_RESOURCE_NOT_FOUND = {
+    ErrorCode.PERSONA_NOT_FOUND,
+    ErrorCode.DISCUSSION_NOT_FOUND,
+    ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
+    ErrorCode.REPORT_NOT_FOUND,
+    ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+    ErrorCode.SURVEY_NOT_FOUND,
+    ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
+    ErrorCode.DATASET_NOT_FOUND,
+    ErrorCode.JOB_NOT_FOUND,
+}
+
+
+class TestNotFoundToastWording:
+    """NFR1.9: the htmx toast for a missing resource does not reveal its kind."""
+
+    def test_every_not_found_code_is_classified_exactly_once(self):
+        unified = error_messages.UNIFIED_NOT_FOUND_TOAST_CODES
+        distinct = error_messages.DISTINCT_NOT_FOUND_TOAST_CODES
+        not_found = {code for code in ErrorCode if code.kind is ErrorKind.NOT_FOUND}
+
+        assert not unified & distinct
+        assert unified | distinct == not_found
+
+    def test_unified_set_is_the_resource_lookups(self):
+        assert error_messages.UNIFIED_NOT_FOUND_TOAST_CODES == _RESOURCE_NOT_FOUND
+
+    def test_unified_codes_share_one_error_toast(self):
+        toasts = [_toast(code) for code in sorted(_RESOURCE_NOT_FOUND, key=str)]
+
+        assert {t["message"] for t in toasts} == {
+            error_messages.NOT_FOUND_TOAST_MESSAGE
+        }
+        assert {t["type"] for t in toasts} == {"error"}
+
+    @pytest.mark.parametrize("code", sorted(_RESOURCE_NOT_FOUND, key=str))
+    def test_catalog_wording_is_unchanged(self, code):
+        exc = CodedError("diagnostic", code=code)
+
+        assert user_message_for(exc) == error_messages._CATALOG[code]
+        assert user_message_for(exc) != error_messages.NOT_FOUND_TOAST_MESSAGE
+
+    def test_distinct_codes_keep_their_own_toast(self):
+        for code in error_messages.DISTINCT_NOT_FOUND_TOAST_CODES:
+            assert _toast(code)["message"] == user_message_for(CodedError(code=code))
+
+    def test_other_kinds_are_not_affected(self):
+        assert _toast(ErrorCode.ACCESS_DENIED)["message"] == user_message_for(
+            CodedError(code=ErrorCode.ACCESS_DENIED)
+        )

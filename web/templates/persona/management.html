@@ -19,8 +19,9 @@
     <div class="bg-white rounded-lg shadow-md p-4 mb-6">
         <div class="flex gap-4">
             <div class="flex-1">
-                <input type="text" 
+                <input type="text"
                        id="search-input"
+                       aria-label="ペルソナを検索（名前、職業、背景）"
                        placeholder="ペルソナを検索（名前、職業、背景）..."
                        hx-get="/persona/list/partial"
                        hx-trigger="keyup changed delay:300ms"
@@ -30,7 +31,7 @@
                        name="search"
                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
-            <button onclick="document.getElementById('search-input').value=''; htmx.trigger('#search-input', 'keyup')"
+            <button type="button" onclick="document.getElementById('search-input').value=''; htmx.trigger('#search-input', 'keyup')"
                     class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors">
                 クリア
             </button>
@@ -38,7 +39,7 @@
         <!-- 属性フィルタ（クライアントサイド） -->
         <div class="flex flex-wrap gap-4 mt-4">
             <div>
-                <label class="block text-xs text-gray-500 mb-1">性別</label>
+                <label for="filter-gender" class="block text-xs text-gray-500 mb-1">性別</label>
                 <select id="filter-gender" onchange="applyPersonaFilters()"
                         class="px-3 py-2 border border-gray-300 rounded-md text-sm">
                     <option value="">すべて</option>
@@ -48,7 +49,7 @@
                 </select>
             </div>
             <div>
-                <label class="block text-xs text-gray-500 mb-1">居住国</label>
+                <label for="filter-country" class="block text-xs text-gray-500 mb-1">居住国</label>
                 <select id="filter-country" onchange="applyPersonaFilters()"
                         class="px-3 py-2 border border-gray-300 rounded-md text-sm">
                     <option value="">すべて</option>
@@ -58,7 +59,7 @@
                 </select>
             </div>
             <div>
-                <label class="block text-xs text-gray-500 mb-1">タグ</label>
+                <label for="filter-tag" class="block text-xs text-gray-500 mb-1">タグ</label>
                 <input type="text" id="filter-tag" placeholder="タグで絞り込み"
                        oninput="applyPersonaFilters()"
                        class="px-3 py-2 border border-gray-300 rounded-md text-sm">
@@ -72,7 +73,7 @@
          hx-trigger="load"
          hx-swap="innerHTML">
     </div>
-    <p id="filter-empty-message" class="text-center text-gray-400 py-8" style="display: none;">
+    <p id="filter-empty-message" class="text-center text-gray-500 py-8" style="display: none;">
         フィルタ条件に一致するペルソナがありません
     </p>
 </div>

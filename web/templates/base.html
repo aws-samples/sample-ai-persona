@@ -1,4 +1,9 @@
 {% from "components/icons.html" import icon_cpu_chip, icon_sparkles, icon_users, icon_cog, icon_chat, icon_document, icon_play %}
+{# メニューを開くボタンに共通の属性（C1）。項目の一覧の id は menu-<key> #}
+{% macro nav_toggle_attrs(key) -%}
+type="button" data-nav-toggle="{{ key }}" data-testid="nav-{{ key }}-button"
+aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu === '{{ key }}').toString()"
+{%- endmacro %}
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -27,8 +32,14 @@
 <style>[x-cloak]{display:none!important}</style>
 </head>
 <body class="bg-gray-50 min-h-screen">
+    {# スキップリンク（A6、NFR6.10）。Tab の 1 回目で画面の左上に見え、Enter で本文へ移る #}
+    <a href="#main" data-testid="skip-link"
+       class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-white focus:text-blue-700 focus:font-medium focus:rounded-md focus:shadow-lg">本文へ移動</a>
+
     <!-- ナビゲーション -->
-    <nav class="bg-white shadow-sm border-b" x-data="{ openMenu: null }">
+    {# 開閉の状態は Alpine の openMenu のまま。キー操作（矢印・Escape・Tab で外へ出たら閉じる）と
+       外側のクリックは app.js の NavMenu が data-nav-menu / data-nav-toggle / data-nav-item を見て行う（C1、WF1） #}
+    <nav aria-label="メインメニュー" class="bg-white shadow-sm border-b" x-data="{ openMenu: null }" data-nav-menu>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
                 <div class="flex">
@@ -36,7 +47,8 @@
                         {{ icon_cpu_chip("w-7 h-7 text-blue-600") }} AIペルソナシステム
                     </a>
                     <div class="hidden sm:ml-6 sm:flex sm:items-center sm:space-x-2">
-                        <button @click="openMenu = openMenu === 'interview' ? null : 'interview'"
+                        <button {{ nav_toggle_attrs("interview") }}
+                                @click="openMenu = openMenu === 'interview' ? null : 'interview'"
                                 :class="openMenu === 'interview' ? 'text-indigo-600 bg-indigo-50' : 'text-gray-700 hover:text-indigo-600 hover:bg-gray-50'"
                                 class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md">
                             {{ icon_chat("w-4 h-4") }} インタビュー
@@ -45,7 +57,8 @@
                             </svg>
                         </button>
 
-                        <button @click="openMenu = openMenu === 'survey' ? null : 'survey'"
+                        <button {{ nav_toggle_attrs("survey") }}
+                                @click="openMenu = openMenu === 'survey' ? null : 'survey'"
                                 :class="openMenu === 'survey' ? 'text-teal-600 bg-teal-50' : 'text-gray-700 hover:text-teal-600 hover:bg-gray-50'"
                                 class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md">
                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -109,28 +122,30 @@
                 
                 <!-- モバイルメニューボタン -->
                 <div class="flex items-center sm:hidden">
-                    <button @click="openMenu = openMenu ? null : 'mobile'" class="p-2 rounded-md text-gray-700 hover:bg-gray-100">
-                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <button {{ nav_toggle_attrs("mobile") }}
+                            @click="openMenu = openMenu ? null : 'mobile'" class="p-2 rounded-md text-gray-700 hover:bg-gray-100">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
                         </svg>
+                        <span class="sr-only">メニュー</span>
                     </button>
-                    
-                    <!-- モバイルメニュー -->
-                    <div x-show="openMenu === 'mobile'" @click.away="openMenu = null" 
+
+                    <!-- モバイルメニュー（外側のクリックで閉じるのは app.js の NavMenu） -->
+                    <div id="menu-mobile" x-show="openMenu === 'mobile'" style="display: none;"
                          class="absolute top-16 right-0 w-56 bg-white shadow-lg rounded-md py-2 z-50">
-                        <p class="px-4 py-1 text-xs font-semibold text-indigo-500 uppercase tracking-wider">インタビュー</p>
-                        <a href="/persona/generation" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_sparkles("w-4 h-4") }} ペルソナ生成</a>
-                        <a href="/persona/management" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_users("w-4 h-4") }} ペルソナ管理</a>
-                        <a href="/discussion/setup" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_cog("w-4 h-4") }} 議論設定</a>
-                        <a href="/discussion/results" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_chat("w-4 h-4") }} 議論結果</a>
+                        <p class="px-4 py-1 text-xs font-semibold text-indigo-700 uppercase tracking-wider">インタビュー</p>
+                        <a href="/persona/generation" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_sparkles("w-4 h-4") }} ペルソナ生成</a>
+                        <a href="/persona/management" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_users("w-4 h-4") }} ペルソナ管理</a>
+                        <a href="/discussion/setup" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_cog("w-4 h-4") }} 議論設定</a>
+                        <a href="/discussion/results" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_chat("w-4 h-4") }} 議論結果</a>
                         <div class="border-t my-1"></div>
-                        <p class="px-4 py-1 text-xs font-semibold text-teal-500 uppercase tracking-wider">アンケート</p>
-                        <a href="/survey/persona-data" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_users("w-4 h-4") }} ペルソナデータ設定</a>
-                        <a href="/survey/templates" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_document("w-4 h-4") }} テンプレート管理</a>
-                        <a href="/survey/start" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_play("w-4 h-4") }} アンケート開始</a>
-                        <a href="/survey/results" class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_chat("w-4 h-4") }} 結果表示</a>
+                        <p class="px-4 py-1 text-xs font-semibold text-teal-700 uppercase tracking-wider">アンケート</p>
+                        <a href="/survey/persona-data" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_users("w-4 h-4") }} ペルソナデータ設定</a>
+                        <a href="/survey/templates" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_document("w-4 h-4") }} テンプレート管理</a>
+                        <a href="/survey/start" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_play("w-4 h-4") }} アンケート開始</a>
+                        <a href="/survey/results" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_chat("w-4 h-4") }} 結果表示</a>
                         <div class="border-t my-1"></div>
-                        <a href="/settings" class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100">
+                        <a href="/settings" data-nav-item class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -148,7 +163,7 @@
                         </div>
                         {% endif %}
                         <form method="post" action="/signout">
-                            <button type="submit" data-testid="signout-button-mobile"
+                            <button type="submit" data-testid="signout-button-mobile" data-nav-item
                                     class="flex items-center gap-2 w-full px-4 py-2 text-red-600 hover:bg-red-50">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
@@ -163,22 +178,22 @@
         
         <!-- サブナビ：インタビュー -->
         <div x-show="openMenu === 'interview'" x-transition class="border-t bg-indigo-50 sm:block" style="display: none;">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
-                <a href="/persona/generation" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_sparkles("w-4 h-4") }} ペルソナ生成</a>
-                <a href="/persona/management" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_users("w-4 h-4") }} ペルソナ管理</a>
-                <a href="/discussion/setup" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_cog("w-4 h-4") }} 議論設定</a>
-                <a href="/discussion/results" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_chat("w-4 h-4") }} 議論結果</a>
-            </div>
+            <ul id="menu-interview" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
+                <li><a href="/persona/generation" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_sparkles("w-4 h-4") }} ペルソナ生成</a></li>
+                <li><a href="/persona/management" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_users("w-4 h-4") }} ペルソナ管理</a></li>
+                <li><a href="/discussion/setup" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_cog("w-4 h-4") }} 議論設定</a></li>
+                <li><a href="/discussion/results" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-indigo-600 hover:bg-white rounded-md">{{ icon_chat("w-4 h-4") }} 議論結果</a></li>
+            </ul>
         </div>
 
         <!-- サブナビ：アンケート -->
         <div x-show="openMenu === 'survey'" x-transition class="border-t bg-green-50 sm:block" style="display: none;">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
-                <a href="/survey/persona-data" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_users("w-4 h-4") }} ペルソナデータ設定</a>
-                <a href="/survey/templates" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_document("w-4 h-4") }} テンプレート管理</a>
-                <a href="/survey/start" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_play("w-4 h-4") }} アンケート開始</a>
-                <a href="/survey/results" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_chat("w-4 h-4") }} 結果表示</a>
-            </div>
+            <ul id="menu-survey" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-4 py-2">
+                <li><a href="/survey/persona-data" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_users("w-4 h-4") }} ペルソナデータ設定</a></li>
+                <li><a href="/survey/templates" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_document("w-4 h-4") }} テンプレート管理</a></li>
+                <li><a href="/survey/start" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_play("w-4 h-4") }} アンケート開始</a></li>
+                <li><a href="/survey/results" data-nav-item class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:text-teal-600 hover:bg-white rounded-md">{{ icon_chat("w-4 h-4") }} 結果表示</a></li>
+            </ul>
         </div>
     </nav>
     
@@ -191,14 +206,21 @@
        z-index はモーダル（z-50）より上に置く。モーダル内のフォーム送信が
        失敗した場合（ナレッジベース登録など）、同じ z-50 だと後方のモーダルが
        トーストを覆って文言が見えない。
-       pointer-events は個々のトースト（閉じるボタン）にだけ戻す。 #}
+       pointer-events は個々のトースト（閉じるボタン）にだけ戻す。
+
+       読み上げ領域は種類ごとに 2 つ置き、画面の読み込み時から用意する
+       （あとから作った領域は読まれないことがあるため。U3 WF4、B19）。
+       成功・情報は role="status"、エラー・警告は role="alert"。外側には
+       aria-live を付けない（二重に読まれるため）。ダイアログを開いても
+       この入れ物には inert を付けない（B22）。 #}
     <div id="flash-messages"
-         class="fixed top-20 right-4 z-toast w-full max-w-sm pointer-events-none"
-         aria-live="polite"
-         aria-atomic="false"></div>
+         class="fixed top-20 right-4 z-toast w-full max-w-sm pointer-events-none">
+        <div id="toast-status" role="status" aria-atomic="false"></div>
+        <div id="toast-alert" role="alert" aria-atomic="false"></div>
+    </div>
 
     <!-- メインコンテンツ -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main id="main" tabindex="-1" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {% block content %}{% endblock %}
     </main>
     

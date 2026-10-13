@@ -170,6 +170,16 @@ except PersonaManagerError as e:
 - **変更系（POST/PUT/DELETE）の `except Exception`（総称ハンドラ）はエラーパーシャルを返してはならない。**
   コードを持たない例外は TRANSIENT に落ちるため `toast_response()` を使う
   （`TestGenericExceptionsDoNotReplaceContent` が機械検査する）
+- **例外: リソースが見つからない 9 コードのトーストは固定文言「ページが見つかりません」にする**（v1.0.0 U3、M11、NFR1.9）。
+  `toast_response()` は、コードが `UNIFIED_NOT_FOUND_TOAST_CODES`（`PERSONA_NOT_FOUND`・`DISCUSSION_NOT_FOUND`・
+  `DISCUSSION_DOCUMENT_NOT_FOUND`・`REPORT_NOT_FOUND`・`INTERVIEW_SESSION_NOT_FOUND`・`SURVEY_NOT_FOUND`・
+  `SURVEY_TEMPLATE_NOT_FOUND`・`DATASET_NOT_FOUND`・`JOB_NOT_FOUND`）に入っていれば、カタログの資源別の文言ではなく
+  `NOT_FOUND_TOAST_MESSAGE` を出す。読めないときと存在しないときでトーストが同じになるため（約束 C5）。
+  変えるのはトーストだけで、カタログ（`user_message_for()`）・JSON API の `detail`・`error_banner.html` の文言は
+  資源別のまま。行動が違う残りの `ErrorKind.NOT_FOUND`（まだできていない、設定がない、内部の失敗、JSON API など）は
+  `DISTINCT_NOT_FOUND_TOAST_CODES` に入れて今の文言を保つ。新しい NOT_FOUND のコードはどちらかの集合に入れるまで
+  `tests/unit/test_error_messages.py` が失敗する。画面遷移の 404 は `partials/error_page.html` が理由を区別しない
+  1 つの見出しと本文（M11）を出し、渡された `error` は表示しない
 
 ---
 

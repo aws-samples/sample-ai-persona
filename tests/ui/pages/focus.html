@@ -1,0 +1,15 @@
+{% extends "_frame.html" %}
+{% block component %}
+<form class="space-y-3" onsubmit="return false">
+    <label class="block text-gray-700" for="focus-input">名前</label>
+    <input type="text" id="focus-input" class="border border-gray-300 rounded-md px-3 py-2">
+    <label class="block text-gray-700" for="focus-select">種類</label>
+    <select id="focus-select" class="border border-gray-300 rounded-md px-3 py-2">
+        <option>A</option>
+        <option>B</option>
+    </select>
+    <button type="button" id="focus-button" data-testid="focus-probe-button"
+            class="px-4 py-2 text-white bg-blue-600 rounded-md">保存</button>
+    <a href="#focus-input" id="focus-link" class="text-blue-700 underline">名前へ</a>
+</form>
+{% endblock %}

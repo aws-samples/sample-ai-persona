@@ -39,6 +39,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "axe-playwright-python" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "moto", extra = ["dynamodb", "s3"] },
@@ -53,6 +54,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "authlib", specifier = ">=1.8.0" },
+    { name = "axe-playwright-python", marker = "extra == 'dev'", specifier = ">=0.1.8" },
     { name = "bedrock-agentcore", specifier = ">=1.18.1" },
     { name = "boto3", specifier = ">=1.34.0" },
     { name = "botocore", specifier = ">=1.34.0" },
@@ -265,6 +267,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/54/b2/455c0bfcbd772dafd4c9e93c4b713e36790abf9ccbca9b8e661968b29798/aws-requests-auth-0.4.3.tar.gz", hash = "sha256:33593372018b960a31dbbe236f89421678b885c35f0b6a7abfae35bb77e069b2", size = 10096, upload-time = "2020-05-27T23:10:34.742Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/af/11/5dc8be418e1d54bed15eaf3a7461797e5ebb9e6a34869ad750561f35fa5b/aws_requests_auth-0.4.3-py2.py3-none-any.whl", hash = "sha256:646bc37d62140ea1c709d20148f5d43197e6bd2d63909eb36fa4bb2345759977", size = 6838, upload-time = "2020-05-27T23:10:33.658Z" },
+]
+
+[[package]]
+name = "axe-playwright-python"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "playwright" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4c/3a/0ac4e97b92a3f8dc98f7dfb3b68c3e8d3811eda630000ccf4f7654e3498a/axe_playwright_python-0.1.8.tar.gz", hash = "sha256:97de160210fd5ce51e552d21d3b0a1cabb850235942737643ee3b9398de81a47", size = 194644, upload-time = "2026-07-24T20:11:06.699Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/c6/5fdb6d5d96653927b6a4763a4b7aaa9e468d4a6eda5048b7c2e158d17bc9/axe_playwright_python-0.1.8-py3-none-any.whl", hash = "sha256:fdd263c998388f1a8e67cad02677e612d946248bd44d163be5e8650ea31f95f8", size = 160681, upload-time = "2026-07-24T20:11:05.228Z" },
 ]
 
 [[package]]

@@ -121,7 +121,10 @@ class TestListDepartments:
         assert client.list_groups.call_count == 1
 
     def test_client_makes_a_single_attempt(self):
-        assert CLIENT_CONFIG.retries == {"total_max_attempts": 1}
+        # botocore adds a "mode" key to this shared Config once any client is
+        # created from it, so only the attempt count is compared (order-independent).
+        assert CLIENT_CONFIG.retries is not None
+        assert CLIENT_CONFIG.retries.get("total_max_attempts") == 1
         assert CLIENT_CONFIG.connect_timeout + CLIENT_CONFIG.read_timeout <= 5.0
 
     def test_region_comes_from_the_pool_id(self, monkeypatch):

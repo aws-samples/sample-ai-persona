@@ -1,0 +1,6 @@
+{% from "components/dialog.html" import dialog %}
+{% call dialog("inserted-dialog", "データセットの編集", autoopen=True, remove_on_close=True) %}
+<label for="inserted-name" class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
+<input type="text" id="inserted-name" name="name" class="w-full border border-gray-300 rounded-md px-3 py-2">
+<button type="button" data-dialog-close data-testid="inserted-dialog-cancel" class="mt-4 px-4 py-2 text-gray-700 rounded">キャンセル</button>
+{% endcall %}

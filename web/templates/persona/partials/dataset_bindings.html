@@ -1,10 +1,11 @@
 <!-- データセット紐付け一覧パーシャル -->
+{% from "components/dialog.html" import dialog, dialog_open_button %}
 {% if not datasets %}
 <p class="text-gray-500 text-sm">利用可能なデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。</p>
 {% else %}
 <div class="space-y-3">
     {% for dataset in datasets %}
-    <div class="border border-gray-200 rounded-lg p-4" x-data="{ showModal: false, showPreview: false }">
+    <div class="border border-gray-200 rounded-lg p-4">
         <div class="flex items-center justify-between">
             <div class="flex-1">
                 <h4 class="font-medium text-gray-900">{{ dataset.name }}</h4>
@@ -25,13 +26,7 @@
                         hx-confirm="この紐付けを解除しますか？"
                         class="text-red-500 hover:text-red-700 text-sm"
                     >解除</button>
-                    <button
-                        hx-get="/persona/{{ persona_id }}/dataset-bindings/{{ binding.id }}/preview"
-                        hx-target="#dataset-preview-modal-{{ binding.id }}"
-                        hx-swap="innerHTML"
-                        @click="showPreview = true"
-                        class="text-cyan-600 hover:text-cyan-800 text-sm font-medium"
-                    >プレビュー</button>
+                    {{ dialog_open_button("dataset-preview-" ~ dataset.id, "プレビュー", classes="text-cyan-600 hover:text-cyan-800 text-sm font-medium") }}
                 </div>
                 {% if binding.binding_keys %}
                 <div class="mt-2 text-xs text-gray-500">
@@ -42,39 +37,19 @@
                     全行対象（キー指定なし）
                 </div>
                 {% endif %}
-                <!-- プレビューモーダル -->
-                <div x-show="showPreview" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
-                    <div class="fixed inset-0 bg-black/50" @click="showPreview = false"></div>
-                    <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full mx-4 max-h-[80vh] flex flex-col">
-                        <div class="flex items-center justify-between mb-4">
-                            <h3 class="text-lg font-semibold">{{ dataset.name }} - データプレビュー</h3>
-                            <button @click="showPreview = false" class="text-gray-400 hover:text-gray-600">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                            </button>
-                        </div>
-                        <div id="dataset-preview-modal-{{ binding.id }}" class="overflow-auto flex-1">
-                            <div class="flex items-center justify-center py-8">
-                                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-cyan-600"></div>
-                                <span class="ml-2 text-gray-500 text-sm">読み込み中...</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <!-- プレビューダイアログ（閲覧だけ。開くと中身を読み込み、背景のクリックで閉じる） -->
+                {{ dialog("dataset-preview-" ~ dataset.id, dataset.name ~ " - データプレビュー",
+                          content_url="/persona/" ~ persona_id ~ "/dataset-bindings/" ~ binding.id ~ "/preview",
+                          close_on_backdrop=True, panel_class="max-w-4xl") }}
                 {% else %}
-                <button
-                    @click="showModal = true"
-                    class="text-cyan-600 hover:text-cyan-800 text-sm font-medium"
-                >紐付ける</button>
+                {{ dialog_open_button("dataset-binding-" ~ dataset.id, "紐付ける", classes="text-cyan-600 hover:text-cyan-800 text-sm font-medium") }}
                 {% endif %}
             </div>
         </div>
-        
-        <!-- 紐付けモーダル -->
+
+        <!-- 紐付けダイアログ（保存に成功すると一覧の部分ごと差し替わり、そのとき閉じる） -->
         {% if not bindings_map.get(dataset.id) %}
-        <div x-show="showModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
-            <div class="fixed inset-0 bg-black/50" @click="showModal = false"></div>
-            <div class="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
-                <h3 class="text-lg font-semibold mb-4">{{ dataset.name }} を紐付け</h3>
+        {% call dialog("dataset-binding-" ~ dataset.id, dataset.name ~ " を紐付け") %}
                 <p class="text-sm text-gray-600 mb-4">このペルソナがデータセットにアクセスする際のキー値を設定してください。</p>
                 
                 <form id="binding-form-{{ dataset.id }}" x-data="{ useKey: true }">
@@ -101,18 +76,18 @@
                 
                 <div id="binding-error-{{ dataset.id }}"></div>
                 <div class="flex justify-end gap-2">
-                    <button type="button" @click="showModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-                    <button 
+                    <button type="button" data-dialog-close class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+                    <button
                         type="button"
                         hx-post="/persona/{{ persona_id }}/dataset-bindings"
                         hx-target="#binding-error-{{ dataset.id }}"
                         hx-swap="innerHTML"
                         hx-include="#binding-form-{{ dataset.id }}"
+                        data-testid="dataset-binding-{{ dataset.id }}-submit"
                         class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700"
                     >紐付ける</button>
                 </div>
-            </div>
-        </div>
+        {% endcall %}
         {% endif %}
     </div>
     {% endfor %}

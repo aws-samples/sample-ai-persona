@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{#
+  部品のテスト用の枠。base.html をそのまま継承し、本文に h1 と部品を置く。
+  部品だけの画面は見出しやランドマークを持たないため、axe-core の規則
+  （page-has-heading-one、landmark-one-main、region）を外さずに検査できるよう、
+  実画面と同じ枠の中に描く。
+#}
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-900 mb-4">{{ heading | default("部品のテスト") }}</h1>
+{% block component %}{% endblock %}
+{% endblock %}

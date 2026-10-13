@@ -49,6 +49,19 @@ htmx:beforeOnLoad → HX-Trigger → HX-Location → HX-Refresh → HX-Redirect
   （二重登録で `fade-in` が重複適用される）
 - `TestHtmxHandlersAreNotDuplicated` が検査する
 
+## モーダル（ダイアログ）
+
+- **モーダルは `web/templates/components/dialog.html` の `dialog()` マクロで描き、開閉は `app.js` の Dialog が持つ。**
+  Alpine の `x-show` や `hidden` クラスの付け外し、`.remove()` で開閉を書いてはならない（背景の `inert`、
+  Tab の循環、Escape、フォーカスの戻しが抜けるため。v1.0.0 U3）
+- 開くボタンは `dialog_open_button()` か `data-dialog-open="<id>"`、閉じるボタンは `data-dialog-close`
+  （値は `openDialog()` が返す結果）。保存の成功で閉じるときは、サーバーの `HX-Trigger: {"dialogClose": {"id": ...}}`
+  か `close_on_success=True`。htmx で差し込むものは `autoopen=True, remove_on_close=True`
+- ダイアログは描いた場所から動かさない（親の Alpine の状態や `find` の相対指定が切れるため）。重ねて開かない
+- 一覧の読み直しは `HX-Trigger: {"listReload": {"target": "#<id>"}}`。読み直す URL は要素の `data-reload-url`
+  （`list_tabpanel()` が描く）だけで、イベントの値から URL を受け取らない
+- 部品の振る舞いは `tests/ui/`（マーカー `ui`、Playwright + axe-core）で確かめる
+
 ## Jinja テンプレート
 
 - **送信値を参照するときは `f['key']` 形式を使う。** `f.values` / `f.items` / `f.keys` は

@@ -88,11 +88,16 @@ input[type="checkbox"]:checked + div {
     background: #a1a1a1;
 }
 
-/* フォーカス状態 */
-input:focus, textarea:focus, select:focus {
-    outline: none;
-    ring: 2px;
-    ring-color: #3b82f6;
+/* フォーカスの枠（U3 NFR6.7、A9）
+   全画面に効く共通の枠はここ 1 か所だけに置く。2px の実線（blue-600）と
+   2px の隙間で、枠は要素の外側の背景（白・gray-50）の上に出る
+   （白に 5.2:1、gray-50 に 4.9:1）。文字の入力欄はマウスで押しても、
+   ボタン・リンク・選択欄はキーボードで操作したときだけ出る（:focus-visible）。
+   プログラムで移したフォーカス（スキップリンクの先の <main>、ダイアログの
+   見出し）にも出し、キーボードで操作している人に移動先を示す。 */
+:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
 }
 
 /* ボタンホバー効果 */

@@ -1,0 +1,8 @@
+{% extends "_frame.html" %}
+{% block component %}
+<p class="text-gray-700 mb-4">トーストの確認</p>
+<button type="button" id="probe-button" data-testid="toast-probe-button"
+        class="px-4 py-2 text-white bg-blue-600 rounded-md"
+        hx-post="/toast-probe" hx-swap="none">送る</button>
+<input type="text" id="probe-input" aria-label="確認用の入力欄" class="border rounded px-2 py-1">
+{% endblock %}
