@@ -895,6 +895,43 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
         )
 
 
+@router.get("/{persona_id}/header", response_class=HTMLResponse)
+async def get_persona_detail_header(request: Request, persona_id: str) -> Any:
+    """詳細のヘッダーの中身だけ（共有の保存後の listReload、U4 レビュー）。
+
+    判定は詳細と同じ（読める人だけ、BR6.2）。読み直しに失敗しても今の表示は消さない
+    （本文なしのトースト。htmx は 2xx 以外を差し替えない）。
+    """
+    try:
+        persona_manager = get_persona_manager()
+        loop = asyncio.get_running_loop()
+        detail = await loop.run_in_executor(
+            executor,
+            persona_manager.get_persona_detail,
+            _principal(request),
+            persona_id,
+        )
+        return templates.TemplateResponse(
+            request,
+            "persona/partials/detail_header_body.html",
+            {
+                "request": request,
+                "persona": detail.persona,
+                "manageable": detail.manageable,
+                "owner_label": detail.owner_label,
+                "shared_with": detail.shared_with,
+                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
+            },
+        )
+    except (HTTPException, CodedError):
+        raise
+    except Exception as e:
+        logger.error("Persona header fetch error", exc_info=True)
+        return toast_response(
+            e, default="ペルソナの取得中にエラーが発生しました", status_code=500
+        )
+
+
 @router.delete("/{persona_id}", response_class=HTMLResponse)
 async def delete_persona(request: Request, persona_id: str) -> Any:
     """ペルソナ削除処理（htmx対応）。管理できる人だけ（BR6.2、BR4）

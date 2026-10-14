@@ -1604,6 +1604,33 @@ class TestPersonaDetailAuthz:
         ):
             assert "whitespace-nowrap" in button
 
+    def test_detail_header_is_a_reloadable_region(self, client, world):
+        """The share save reloads #persona-detail-header from its own URL (U4 review)."""
+        world.add("p1", A_SUB)
+        html = _login(client, "a").get("/persona/p1").text
+        assert 'id="persona-detail-header"' in html
+        assert 'data-reload-url="/persona/p1/header"' in html
+        assert html.count('id="persona-detail-header"') == 1
+
+    def test_header_partial_shows_the_current_shares(self, client, world):
+        world.add("p1", A_SUB, {"plan"})
+        response = _login(client, "a").get(
+            "/persona/p1/header", headers={"HX-Request": "true"}
+        )
+        assert response.status_code == 200
+        assert "共有: 企画部" in response.text
+        assert 'data-testid="persona-owner-line"' in response.text
+        # the region's content only, not the region itself (innerHTML swap)
+        assert 'id="persona-detail-header"' not in response.text
+
+    @pytest.mark.parametrize(("who", "expected"), [("b", 200), ("d", 404)])
+    def test_header_partial_needs_read_access(self, client, world, who, expected):
+        world.add("p1", A_SUB, {"sales"})
+        response = _login(client, who).get(
+            "/persona/p1/header", headers={"HX-Request": "true"}
+        )
+        assert response.status_code == expected
+
     @pytest.mark.parametrize(
         ("who", "expected"), [("b", 403), ("d", 404), ("admin", 200)]
     )

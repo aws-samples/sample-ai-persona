@@ -148,7 +148,11 @@ class TestSave:
         assert response.status_code == 200 and response.text == ""
         triggers = _triggers(response)
         assert triggers["dialogClose"] == {"id": "share-dialog"}
-        assert triggers["listReload"] == {"target": "#persona-list"}
+        # The list (management screen) and the detail header (detail screen);
+        # whichever is not on the screen is skipped by app.js.
+        assert triggers["listReload"] == {
+            "targets": ["#persona-list", "#persona-detail-header"]
+        }
         assert triggers["showToast"]["message"] == "共有先を更新しました"
         assert store.bodies["p1"]["shared_group_ids"] == {"sales"}
 

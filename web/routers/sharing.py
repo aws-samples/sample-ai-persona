@@ -51,6 +51,11 @@ DIALOG_ID = "share-dialog"
 #: The list panel each type reloads after a save (``list_tabpanel`` id).
 _LIST_TARGETS: dict[str, str] = {"persona": "#persona-list"}
 
+#: Detail-screen regions that show the shares and are reloaded after a save
+#: (their own ``data-reload-url``). The list and the detail are never on the
+#: same screen, so the response names both.
+_DETAIL_TARGETS: dict[str, tuple[str, ...]] = {"persona": ("#persona-detail-header",)}
+
 #: Status code of an error shown inside the dialog, by kind.
 _DIALOG_ERROR_STATUS: dict[ErrorKind, int] = {
     ErrorKind.FORBIDDEN: 403,
@@ -159,7 +164,9 @@ def _saved_response(resource_type: str, result: ShareSaveResult, *, bulk: bool) 
     }
     target = _LIST_TARGETS.get(resource_type)
     if target:
-        triggers["listReload"] = {"target": target}
+        # 一覧（管理画面）と詳細のヘッダー（詳細画面）の両方を指す。画面にない方は app.js が飛ばす
+        targets = [target, *_DETAIL_TARGETS.get(resource_type, ())]
+        triggers["listReload"] = {"targets": targets}
     return Response(content="", headers={"HX-Trigger": json.dumps(triggers)})
 
 

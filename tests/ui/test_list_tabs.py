@@ -275,6 +275,25 @@ def test_list_reload_refetches_the_current_tab(ui: UiHarness) -> None:
     assert ui.requests.count("/items?tab=shared") == 2
 
 
+def test_list_reload_with_targets_reloads_those_on_the_screen(ui: UiHarness) -> None:
+    """``targets`` names several regions; the ones not on this screen are skipped."""
+    ui.respond("/items?tab=mine", body=_rows("読み直し"))
+    _load(ui)
+    ui.respond(
+        "/reload-probe",
+        headers={
+            "HX-Trigger": json.dumps(
+                {"listReload": {"targets": ["#list-panel", "#not-on-this-screen"]}}
+            )
+        },
+    )
+
+    ui.page.click("#reload-probe")
+    ui.page.wait_for_selector("#list-panel:has-text('読み直し の行')")
+
+    assert ui.requests.count("/items?tab=mine") == 1
+
+
 def test_list_reload_never_uses_a_url_from_the_event(ui: UiHarness) -> None:
     ui.respond("/items?tab=mine", body=_rows("読み直し"))
     _load(ui)

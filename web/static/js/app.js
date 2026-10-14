@@ -1065,9 +1065,21 @@ registerBlock('ListReload', function() {
         htmx.ajax('GET', url, { target: panel, swap: 'innerHTML' });
     }
 
+    // {"target": "#id"} か {"targets": ["#a", "#b"]}。targets は画面ごとに違う領域
+    // （一覧と詳細など）をまとめて指すため、この画面にないものは黙って飛ばす。
+    function present(target) {
+        return typeof target === 'string' && TARGET.test(target)
+            && document.getElementById(target.slice(1)) !== null;
+    }
+
     document.body.addEventListener('listReload', function(evt) {
-        const target = evt.detail ? evt.detail.target : undefined;
-        setTimeout(() => reload(target), 0);
+        const detail = evt.detail || {};
+        if (Array.isArray(detail.targets)) {
+            const targets = detail.targets.filter(present);
+            setTimeout(() => targets.forEach(reload), 0);
+            return;
+        }
+        setTimeout(() => reload(detail.target), 0);
     });
 });
 
