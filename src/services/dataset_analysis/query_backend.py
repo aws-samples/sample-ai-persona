@@ -83,6 +83,7 @@ class DuckDBQueryBackend:
         self.allowed_s3_prefixes = allowed_s3_prefixes or [
             "datasets/",
             "persona-dataset/",
+            "persona_datasets/",  # ペルソナ専用のデータセット（行動データ、U5）
         ]
         roots = allowed_local_roots or [
             tempfile.gettempdir(),
