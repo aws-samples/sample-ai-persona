@@ -165,9 +165,8 @@ class MemoryService:
 
     def _init_semantic_strategy(self) -> None:
         """Semantic戦略を初期化（設定されている場合）"""
-        from src.config import Config
-
-        config = Config()
+        # 起動時に GetMemory で引いた ID は共有の config にだけある（環境変数にはない）
+        from src.config import config
 
         if not config.SEMANTIC_MEMORY_STRATEGY_ID:
             logger.debug("Semantic strategy not configured, skipping initialization")

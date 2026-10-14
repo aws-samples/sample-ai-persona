@@ -65,14 +65,13 @@ class SummaryStrategy(MemoryStrategy):
             region: AWSリージョン（デフォルト: us-east-1）
             memory_strategy_id: namespaceで使用するmemoryStrategyId（デフォルト: configから取得）
         """
-        from src.config import Config
+        from src.config import config
 
         self.memory_id = memory_id
         self.region = region
 
         # memory_strategy_idが指定されていない場合はconfigから取得
         if memory_strategy_id is None:
-            config = Config()
             self.memory_strategy_id = config.SUMMARY_MEMORY_STRATEGY_ID
         else:
             self.memory_strategy_id = memory_strategy_id

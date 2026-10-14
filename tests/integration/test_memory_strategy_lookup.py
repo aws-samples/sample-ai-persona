@@ -111,3 +111,35 @@ def test_missing_strategy_type_leaves_that_id_unset(monkeypatch):
     assert cfg.SUMMARY_MEMORY_STRATEGY_ID == "summary-abc"
     assert cfg.SEMANTIC_MEMORY_STRATEGY_ID is None
     assert cfg.ENABLE_LONG_TERM_MEMORY is True
+
+
+def test_memory_service_uses_the_ids_looked_up_at_startup(monkeypatch):
+    """The looked-up IDs live on the shared config, not in the environment.
+
+    The memory strategies must read that shared object; a fresh ``Config()``
+    re-reads the environment and loses them (manual knowledge input then
+    fails with MEMORY_STRATEGY_NOT_CONFIGURED).
+    """
+    from unittest.mock import patch
+
+    from src import config as config_module
+    from src.services.memory.memory_service import MemoryService
+
+    shared = _config(monkeypatch, **ENABLED)
+    monkeypatch.setattr(config_module, "config", shared)
+    resolve_memory_strategies(
+        shared,
+        client=_client(
+            [
+                {"strategyId": "summary-abc", "type": "SUMMARIZATION"},
+                {"strategyId": "semantic-xyz", "type": "SEMANTIC"},
+            ]
+        ),
+    )
+
+    with patch("bedrock_agentcore.memory.MemoryClient"):
+        service = MemoryService(memory_id="mem-1", validate_connection=False)
+
+    assert service.is_semantic_enabled is True
+    assert service._semantic_strategy.memory_strategy_id == "semantic-xyz"
+    assert service._strategy.memory_strategy_id == "summary-abc"
