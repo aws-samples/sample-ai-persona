@@ -118,8 +118,10 @@ class TestPersonaGenerateEndpoint:
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_success(self, mock_get_gen_manager, client, sample_persona):
         """ペルソナ生成が成功することを確認（SSE）"""
+        from src.managers.persona_generation_manager import GenerationResult
+
         mock_manager = Mock()
-        mock_manager.generate_and_cache.return_value = ([sample_persona], [])
+        mock_manager.generate.return_value = GenerationResult([sample_persona], [])
         mock_get_gen_manager.return_value = mock_manager
 
         file_content = (
@@ -146,6 +148,11 @@ class TestPersonaGenerateEndpoint:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
         assert "event: result" in response.text
+        # 生成した人を候補の持ち主にする（BR1.1）
+        (principal,) = mock_manager.generate.call_args.args
+        assert principal.sub == "local:dev@example.com"
+        # 画面に出す候補の ID は candidate_id（保存で送り返す）
+        assert f'value="{sample_persona.id}"' in response.text
 
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_rejects_unsupported_extension(
@@ -176,7 +183,7 @@ class TestPersonaGenerateEndpoint:
 
         assert response.status_code == 200
         assert "event: error" in response.text
-        mock_manager.generate_and_cache.assert_not_called()
+        mock_manager.generate.assert_not_called()
 
     @patch("web.routers.persona.get_persona_manager")
     def test_generate_empty_text(self, mock_get_manager, client):
@@ -229,8 +236,10 @@ class TestPersonaGenerateEndpoint:
         self, mock_get_gen_manager, client, sample_persona, sample_persona_2
     ):
         """複数ペルソナ生成が成功することを確認（SSE）"""
+        from src.managers.persona_generation_manager import GenerationResult
+
         mock_manager = Mock()
-        mock_manager.generate_and_cache.return_value = (
+        mock_manager.generate.return_value = GenerationResult(
             [sample_persona, sample_persona_2],
             [{"type": "thinking", "content": "分析中..."}],
         )
@@ -266,9 +275,7 @@ class TestPersonaGenerateEndpoint:
         )
 
         mock_manager = Mock()
-        mock_manager.generate_and_cache.side_effect = PersonaGenerationManagerError(
-            "生成エラー"
-        )
+        mock_manager.generate.side_effect = PersonaGenerationManagerError("生成エラー")
         mock_get_gen_manager.return_value = mock_manager
 
         file_content = "テスト用テキスト。" * 10
@@ -297,34 +304,101 @@ class TestPersonaGenerateEndpoint:
 class TestPersonaSaveEndpoint:
     """ペルソナ保存エンドポイントのテスト"""
 
+    _FORM = {
+        "persona_id": "cand-1",
+        "name": "テストペルソナ",
+        "age": 30,
+        "occupation": "エンジニア",
+        "background": "テスト背景",
+        "values": "価値観1\n価値観2",
+        "pain_points": "課題1\n課題2",
+        "goals": "目標1\n目標2",
+    }
+
+    @staticmethod
+    def _managers(mock_get_manager, mock_get_gen_manager, result=None):
+        from src.models.persona_candidate import CandidateSaveResult
+
+        calls = []
+        gen = Mock()
+        gen.claim_candidates.side_effect = lambda *a, **k: calls.append("claim") or (
+            "the-claim"
+        )
+        gen.finish_candidates.side_effect = lambda *a, **k: calls.append("finish")
+        manager = Mock()
+        saved = result or CandidateSaveResult(
+            saved_ids=("cand-1",), saved_persona_ids=("new-1",)
+        )
+        manager.save_generated_personas.side_effect = lambda *a, **k: (
+            calls.append("save") or saved
+        )
+        mock_get_gen_manager.return_value = gen
+        mock_get_manager.return_value = manager
+        return gen, manager, calls
+
     @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
-    def test_save_success(self, mock_get_manager, mock_get_gen_manager, client):
-        """ペルソナ保存が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.save_persona.return_value = "new-persona-id"
-        mock_get_manager.return_value = mock_manager
-        mock_gen_manager = Mock()
-        mock_gen_manager.pop_cached_persona.return_value = None
-        mock_gen_manager.pop_cached_behavior_datasets.return_value = None
-        mock_get_gen_manager.return_value = mock_gen_manager
+    def test_save_claims_saves_then_finishes(
+        self, mock_get_manager, mock_get_gen_manager, client
+    ):
+        """押さえ → 保存 → 片付けの順に呼ぶだけ（functional-spec.md §2、WF2）"""
+        gen, manager, calls = self._managers(mock_get_manager, mock_get_gen_manager)
 
         response = client.post(
             "/persona/save",
-            data={
-                "persona_id": "test-id",
-                "name": "テストペルソナ",
-                "age": 30,
-                "occupation": "エンジニア",
-                "background": "テスト背景",
-                "values": "価値観1\n価値観2",
-                "pain_points": "課題1\n課題2",
-                "goals": "目標1\n目標2",
-            },
+            data={**self._FORM, "selected_behavior_datasets": "t1, t2"},
         )
 
         assert response.status_code == 200
         assert "保存しました" in response.text
+        assert calls == ["claim", "save", "finish"]
+        principal, ids = gen.claim_candidates.call_args.args
+        assert principal.sub == "local:dev@example.com" and ids == ["cand-1"]
+        kwargs = manager.save_generated_personas.call_args.kwargs
+        assert kwargs["edited"].name == "テストペルソナ"
+        assert set(kwargs["selected_temp_ids"]) == {"t1", "t2"}
+        claim, result = gen.finish_candidates.call_args.args
+        assert claim == "the-claim" and result.saved_ids == ("cand-1",)
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    @patch("web.routers.persona.get_persona_manager")
+    def test_failed_save_still_finishes(
+        self, mock_get_manager, mock_get_gen_manager, client
+    ):
+        """保存が失敗しても片付けを必ず呼ぶ（結果なし = 押さえを外す、BR1.7）"""
+        gen, manager, calls = self._managers(mock_get_manager, mock_get_gen_manager)
+        manager.save_generated_personas.side_effect = PersonaManagerError(
+            "db down", code=ErrorCode.PERSONA_OPERATION_FAILED
+        )
+
+        response = client.post("/persona/save", data=self._FORM)
+
+        assert response.status_code == 503
+        assert response.text == ""
+        gen.finish_candidates.assert_called_once_with("the-claim", None)
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    @patch("web.routers.persona.get_persona_manager")
+    def test_unavailable_candidate_is_the_expired_toast(
+        self, mock_get_manager, mock_get_gen_manager, client
+    ):
+        """押さえられなければ何も保存せず「期限切れ」のトースト（BR1.3）"""
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        gen, manager, _calls = self._managers(mock_get_manager, mock_get_gen_manager)
+        gen.claim_candidates.side_effect = PersonaGenerationManagerError(
+            "unavailable", code=ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
+        )
+
+        response = client.post("/persona/save", data=self._FORM)
+
+        assert response.status_code == 404
+        trigger = json.loads(response.headers["HX-Trigger"])
+        assert "期限切れ" in trigger["showToast"]["message"]
+        manager.save_generated_personas.assert_not_called()
+        gen.finish_candidates.assert_not_called()
 
     @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
@@ -335,27 +409,10 @@ class TestPersonaSaveEndpoint:
         通知する。本文でエラーパーシャルを返すと生成済みペルソナが画面から
         消えて保存し直せなくなるため（Issue #117）。
         """
-        mock_manager = Mock()
-        mock_manager.save_persona.side_effect = Exception("Database error")
-        mock_get_manager.return_value = mock_manager
-        mock_gen_manager = Mock()
-        mock_gen_manager.pop_cached_persona.return_value = None
-        mock_gen_manager.pop_cached_behavior_datasets.return_value = None
-        mock_get_gen_manager.return_value = mock_gen_manager
+        _gen, manager, _calls = self._managers(mock_get_manager, mock_get_gen_manager)
+        manager.save_generated_personas.side_effect = Exception("Database error")
 
-        response = client.post(
-            "/persona/save",
-            data={
-                "persona_id": "test-id",
-                "name": "テストペルソナ",
-                "age": 30,
-                "occupation": "エンジニア",
-                "background": "テスト背景",
-                "values": "価値観1",
-                "pain_points": "課題1",
-                "goals": "目標1",
-            },
-        )
+        response = client.post("/persona/save", data=self._FORM)
 
         assert response.status_code == 500
         # 画面を書き換えないため本文は空
@@ -597,24 +654,37 @@ class TestSaveSelectedPersonasEndpoint:
 
     @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
-    def test_save_selected_success(
-        self, mock_get_manager, mock_get_gen_manager, client, sample_persona
+    def test_save_selected_claims_all_then_reports_counts(
+        self, mock_get_manager, mock_get_gen_manager, client
     ):
-        """選択ペルソナ保存が成功することを確認"""
-        mock_gen_manager = Mock()
-        mock_gen_manager.get_cached_persona.return_value = sample_persona
-        mock_gen_manager.pop_cached_persona.return_value = sample_persona
-        mock_get_gen_manager.return_value = mock_gen_manager
+        """一括は保存できた件数と保存できなかった候補の名前を出す（BR1.9）"""
+        from src.models.persona_candidate import CandidateSaveResult
 
-        mock_manager = Mock()
-        mock_manager.save_persona.return_value = sample_persona.id
-        mock_get_manager.return_value = mock_manager
+        gen = Mock()
+        gen.claim_candidates.return_value = "the-claim"
+        mock_get_gen_manager.return_value = gen
+        manager = Mock()
+        result = CandidateSaveResult(
+            saved_ids=("id1",),
+            failed_ids=("id2",),
+            saved_persona_ids=("new-1",),
+            failed_names=("鈴木 一郎",),
+        )
+        manager.save_generated_personas.return_value = result
+        mock_get_manager.return_value = manager
 
         response = client.post(
-            "/persona/save-selected", data={"persona_ids": sample_persona.id}
+            "/persona/save-selected", data={"persona_ids": "id1, id2"}
         )
 
         assert response.status_code == 200
+        assert "1人のペルソナを保存しました" in response.text
+        assert "鈴木 一郎" in response.text
+        principal, ids = gen.claim_candidates.call_args.args
+        assert ids == ["id1", "id2"] and principal.sub == "local:dev@example.com"
+        args, kwargs = manager.save_generated_personas.call_args
+        assert args == (principal, "the-claim") and "edited" not in kwargs
+        gen.finish_candidates.assert_called_once_with("the-claim", result)
 
     def test_save_selected_empty_ids(self, client):
         """空のIDリストでエラーを返すことを確認"""
@@ -625,49 +695,30 @@ class TestSaveSelectedPersonasEndpoint:
 
     @patch("web.routers.persona.get_persona_generation_manager")
     @patch("web.routers.persona.get_persona_manager")
-    def test_save_selected_not_found_in_cache(
+    def test_save_selected_unavailable_is_the_expired_toast(
         self, mock_get_manager, mock_get_gen_manager, client
     ):
-        """キャッシュ期限切れで専用エラーメッセージを返すことを確認"""
-        mock_gen_manager = Mock()
-        mock_gen_manager.get_cached_persona.return_value = None
-        mock_gen_manager.pop_cached_persona.return_value = None
-        mock_get_gen_manager.return_value = mock_gen_manager
+        """1 件でも押さえられなければ何も保存しない（BR1.3）"""
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
 
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
+        gen = Mock()
+        gen.claim_candidates.side_effect = PersonaGenerationManagerError(
+            "unavailable", code=ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
+        )
+        mock_get_gen_manager.return_value = gen
+        manager = Mock()
+        mock_get_manager.return_value = manager
 
         response = client.post(
             "/persona/save-selected", data={"persona_ids": "non-existent-id"}
         )
 
-        assert response.status_code == 500
-        assert "一時データが期限切れ" in response.text
-
-    @patch("web.routers.persona.get_persona_generation_manager")
-    @patch("web.routers.persona.get_persona_manager")
-    def test_save_selected_partial_cache_miss(
-        self, mock_get_manager, mock_get_gen_manager, client, sample_persona
-    ):
-        """一部キャッシュ切れでも保存成功分はカウントされることを確認"""
-        mock_gen_manager = Mock()
-        mock_gen_manager.get_cached_persona.side_effect = [sample_persona, None]
-        mock_gen_manager.pop_cached_persona.return_value = None
-        mock_get_gen_manager.return_value = mock_gen_manager
-
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/persona/save-selected", data={"persona_ids": "id1,id2"}
-        )
-
-        assert response.status_code == 200
-        # 保存した人（ログイン中の利用者）を所有者にする（BR6.1）
-        ((principal, saved),) = [
-            c.args for c in mock_manager.save_persona.call_args_list
-        ]
-        assert saved is sample_persona and principal.sub == "local:dev@example.com"
+        assert response.status_code == 404
+        trigger = json.loads(response.headers["HX-Trigger"])
+        assert "一時データが期限切れ" in trigger["showToast"]["message"]
+        manager.save_generated_personas.assert_not_called()
 
 
 class TestPersonaEditForm:
@@ -1037,6 +1088,56 @@ class TestPersonaMemories:
         assert response.status_code == 200
 
 
+class TestMemoryLookupUnavailableIs503:
+    """R-05: a failed decision read on the memory screen is the common 503.
+
+    ``LookupUnavailableError`` (NFR1.32) is not a ``PersonaMemoryManagerError``;
+    it must reach the common exception handler instead of the generic
+    "unexpected error" branches (error-catalog.md).
+    """
+
+    @staticmethod
+    def _unavailable():
+        from src.models.errors import LookupUnavailableError
+
+        return LookupUnavailableError("personas table unreachable")
+
+    @pytest.mark.parametrize(
+        ("method", "path", "manager_method", "kwargs"),
+        [
+            ("get", "/persona/p1/memories", "get_memories", {}),
+            ("delete", "/persona/p1/memories/m1", "delete_memory", {}),
+            ("delete", "/persona/p1/memories", "delete_all_memories", {}),
+            (
+                "post",
+                "/persona/p1/memories",
+                "add_knowledge",
+                {"data": {"topic_name": "t", "topic_content": "c"}},
+            ),
+            (
+                "post",
+                "/persona/p1/memories/upload-preview",
+                "ensure_memory_manageable",
+                {"files": {"file": ("k.txt", b"knowledge", "text/plain")}},
+            ),
+        ],
+    )
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_lookup_failure_is_503(
+        self, mock_get_mgr, client, method, path, manager_method, kwargs
+    ):
+        mock_mgr = Mock()
+        getattr(mock_mgr, manager_method).side_effect = self._unavailable()
+        mock_mgr.safe_get_memories.return_value = []
+        mock_get_mgr.return_value = mock_mgr
+
+        response = getattr(client, method)(path, **kwargs)
+
+        assert response.status_code == 503
+        # the common handler answers; no memory partial is rendered
+        assert "memory-list" not in response.text
+
+
 class TestAddMemoryValidationPreservesInput:
     """知識追加のバリデーション失敗時に入力が失われないこと（#117 ステップ4）。
 
@@ -1181,7 +1282,9 @@ class TestPersonaAvatarEndpoints:
         )
 
         assert response.status_code == 200
-        mock_manager.set_avatar.assert_called_once_with(sample_persona.id, b"png-bytes")
+        principal, persona_id, content = mock_manager.set_avatar.call_args.args
+        assert principal.sub == "local:dev@example.com"
+        assert (persona_id, content) == (sample_persona.id, b"png-bytes")
         assert f"/persona/{sample_persona.id}/avatar?v=abcd-1234" in response.text
         assert "自動アバターに戻す" in response.text
         trigger = json.loads(response.headers["HX-Trigger"])
@@ -1236,7 +1339,9 @@ class TestPersonaAvatarEndpoints:
         response = client.delete(f"/persona/{sample_persona.id}/avatar")
 
         assert response.status_code == 200
-        mock_manager.delete_avatar.assert_called_once_with(sample_persona.id)
+        principal, persona_id = mock_manager.delete_avatar.call_args.args
+        assert principal.sub == "local:dev@example.com"
+        assert persona_id == sample_persona.id
         assert "自動アバターに戻す" not in response.text
         assert "画像を変更" in response.text
 
@@ -1287,16 +1392,16 @@ class TestPersonaModalsUseSharedDialog:
     def test_kb_binding_dialogs_have_unique_ids_and_close_on_success(
         self, mock_get_manager, client
     ):
+        from src.managers.persona_manager import KbBindingView
+        from src.models.knowledge_base import KnowledgeBase
+
         kbs = [
-            {
-                "id": kb_id,
-                "name": f"KB {kb_id}",
-                "description": "",
-                "knowledge_base_id": "ABC",
-            }
+            replace(KnowledgeBase.create_new("ABC", f"KB {kb_id}", ""), id=kb_id)
             for kb_id in ("kb1", "kb2")
         ]
-        mock_get_manager.return_value.get_kb_binding.return_value = (kbs, None)
+        mock_get_manager.return_value.get_kb_binding.return_value = KbBindingView(
+            persona_id="p1", manageable=True, binding=None, choices=kbs
+        )
 
         html = client.get("/persona/p1/kb-binding").text
 
@@ -1311,30 +1416,45 @@ class TestPersonaModalsUseSharedDialog:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_dataset_binding_and_preview_dialogs(self, mock_get_manager, client):
-        datasets = [
-            {
-                "id": ds_id,
-                "name": f"DS {ds_id}",
-                "description": "",
-                "row_count": 3,
-                "columns": [{"name": "user_id", "data_type": "string"}],
-            }
-            for ds_id in ("ds1", "ds2")
-        ]
-        bindings = {"ds2": {"id": "b2", "binding_keys": {"user_id": "u1"}}}
-        mock_get_manager.return_value.get_dataset_bindings.return_value = (
-            datasets,
-            bindings,
+        from src.managers.persona_manager import BindingRow, DatasetBindingsView
+        from src.models.dataset import Dataset, DatasetColumn
+
+        ds1 = replace(
+            Dataset.create_new(
+                name="DS ds1",
+                description="",
+                s3_path="s3://b/k.csv",
+                columns=[DatasetColumn(name="user_id", data_type="string")],
+                row_count=3,
+            ),
+            id="ds1",
         )
+        view = DatasetBindingsView(
+            persona_id="p1",
+            manageable=True,
+            bindings=[
+                BindingRow(
+                    target_id="ds2",
+                    name="DS ds2",
+                    usable=True,
+                    binding_keys={"user_id": "u1"},
+                )
+            ],
+            choices=[ds1],
+        )
+        mock_get_manager.return_value.get_dataset_bindings.return_value = view
 
         html = client.get("/persona/p1/dataset-bindings").text
 
-        assert dialog_ids(html) == ["dataset-binding-ds1", "dataset-preview-ds2"]
+        # 紐付けを先に、追加の選択肢をあとに出す
+        assert dialog_ids(html) == ["dataset-preview-ds2", "dataset-binding-ds1"]
         binding = dialog_markup(html, "dataset-binding-ds1")
         assert "data-dialog-backdrop-close" not in binding
         preview = dialog_markup(html, "dataset-preview-ds2")
         assert "data-dialog-backdrop-close" in preview
-        assert 'hx-get="/persona/p1/dataset-bindings/b2/preview"' in html
+        # プレビュー・削除の URL はデータセットの ID（紐付けの ID ではない）
+        assert 'hx-get="/persona/p1/dataset-bindings/ds2/preview"' in html
+        assert 'hx-delete="/persona/p1/dataset-bindings/ds2"' in html
         assert 'hx-post="/persona/p1/dataset-bindings"' in html
         assert "showModal" not in html and "showPreview" not in html
 
@@ -1387,11 +1507,16 @@ def real_manager(world):
     owners.labels.side_effect = lambda subs: {s: f"氏名-{s}" for s in subs}
     sharing = ResourceSharing(world.store, departments, sleep=lambda _s: None)
     sharing.register(TABLE)
+    from tests.unit.persona_u5_world import FakeBindingStore
+
+    # 紐付けと長期記憶は偽物・なしにする（削除の後始末で本物の AWS に触れない）
     manager = PersonaManager(
         database_service=world.db,
         s3_service=Mock(),
         resource_sharing=sharing,
         owners=owners,
+        binding_store=FakeBindingStore(),
+        memory_service=None,
     )
     with (
         patch("web.routers.persona.get_persona_manager", return_value=manager),

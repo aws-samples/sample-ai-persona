@@ -82,7 +82,7 @@ class TestRunDiscussion:
     @patch("web.routers.api.get_persona_manager")
     def test_returns_202_with_job_id(self, mock_get_pm, mock_get_jm, client):
         mock_pm = Mock()
-        mock_pm.get_persona.return_value = _make_persona()
+        mock_pm.get_persona_unchecked.return_value = _make_persona()
         mock_get_pm.return_value = mock_pm
 
         mock_jm = Mock()
@@ -104,7 +104,7 @@ class TestRunDiscussion:
     @patch("web.routers.api.get_persona_manager")
     def test_persona_not_found(self, mock_get_pm, client):
         mock_pm = Mock()
-        mock_pm.get_persona.return_value = None
+        mock_pm.get_persona_unchecked.return_value = None
         mock_get_pm.return_value = mock_pm
 
         response = client.post(
@@ -205,7 +205,7 @@ class TestRunInterview:
     def test_returns_messages(self, mock_get_pm, mock_get_im, client):
         persona = _make_persona()
         mock_pm = Mock()
-        mock_pm.get_persona.return_value = persona
+        mock_pm.get_persona_unchecked.return_value = persona
         mock_get_pm.return_value = mock_pm
 
         session = Mock()

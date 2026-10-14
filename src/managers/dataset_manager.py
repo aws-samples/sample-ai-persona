@@ -8,9 +8,9 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Any
 
-from ..models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from ..models.dataset import Dataset, DatasetColumn
 from ..models.errors import CodedError, ErrorCode
 from ..services.service_factory import service_factory
 from .shared.file_utils import normalize_csv_headers
@@ -115,8 +115,6 @@ class DatasetManager:
             return False
 
     def _is_date(self, v: str) -> bool:
-        import re
-
         return bool(re.match(r"^\d{4}-\d{2}-\d{2}", v))
 
     def download_csv_from_url(self, url: str) -> bytes:
@@ -229,95 +227,6 @@ class DatasetManager:
         logger.info(f"Dataset deleted: {dataset_id}")
         return True
 
-    # ==================== Binding Operations ====================
-
-    def save_binding(self, binding: PersonaDatasetBinding) -> PersonaDatasetBinding:
-        """紐付けを保存"""
-        return self.db_service.save_binding(binding)
-
-    def get_bindings_by_persona(self, persona_id: str) -> List[PersonaDatasetBinding]:
-        """ペルソナの紐付けを取得"""
-        return self.db_service.get_bindings_by_persona(persona_id)
-
-    def delete_binding(self, binding_id: str) -> bool:
-        """紐付けを削除"""
-        return self.db_service.delete_binding(binding_id)
-
-    def set_persona_bindings(
-        self, persona_id: str, bindings_data: List[Dict[str, Any]]
-    ) -> List[PersonaDatasetBinding]:
-        """
-        ペルソナの紐付けを一括設定（既存を削除して新規作成）
-
-        bindings_data: [{"dataset_id": "...", "binding_keys": {"user_id": "..."}}]
-        """
-        # 既存削除
-        self.db_service.delete_bindings_by_persona(persona_id)
-
-        # 新規作成
-        bindings = []
-        for data in bindings_data:
-            binding = PersonaDatasetBinding.create_new(
-                persona_id=persona_id,
-                dataset_id=data["dataset_id"],
-                binding_keys=data.get("binding_keys", {}),
-            )
-            self.db_service.save_binding(binding)
-            bindings.append(binding)
-
-        return bindings
-
-    # ==================== Preview Operations ====================
-
-    def preview_binding_data(
-        self, persona_id: str, binding_id: str, limit: int = 10
-    ) -> Dict[str, Any]:
-        """
-        紐付けのbinding_keysでフィルタしたデータをプレビュー取得
-
-        Returns:
-            {"columns": [str, ...], "rows": [[val, ...], ...], "total_count": int}
-        """
-        bindings = self.db_service.get_bindings_by_persona(persona_id)
-        binding = next((b for b in bindings if b.id == binding_id), None)
-        if not binding:
-            raise DatasetManagerError(
-                f"binding not found: {binding_id}",
-                code=ErrorCode.DATASET_BINDING_NOT_FOUND,
-            )
-
-        dataset = self.db_service.get_dataset(binding.dataset_id)
-        if not dataset:
-            raise DatasetManagerError(
-                f"dataset not found: {binding.dataset_id}",
-                code=ErrorCode.DATASET_NOT_FOUND,
-            )
-
-        valid_columns = {col.name for col in dataset.columns}
-        where_clauses = []
-        params: List[Any] = []
-        for key, value in binding.binding_keys.items():
-            if key not in valid_columns:
-                raise DatasetManagerError(
-                    f"binding key {key!r} not in dataset columns",
-                    code=ErrorCode.DATASET_OPERATION_FAILED,
-                )
-            if not re.fullmatch(r"[\w]+", key, re.UNICODE):
-                raise DatasetManagerError(
-                    f"binding key {key!r} contains unsafe characters",
-                    code=ErrorCode.DATASET_OPERATION_FAILED,
-                )
-            where_clauses.append(f'"{key}" = ${len(params) + 1}')
-            params.append(value)
-
-        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        count_sql = f"SELECT COUNT(*) FROM dataset{where_sql}"
-        data_sql = f"SELECT * FROM dataset{where_sql} LIMIT {int(limit)}"
-
-        total_count, columns, rows = self.survey_batch_service.execute_dataset_preview(
-            s3_path=dataset.s3_path,
-            count_sql=count_sql,
-            data_sql=data_sql,
-            params=params if params else None,
-        )
-        return {"columns": columns, "rows": rows, "total_count": total_count}
+    # 紐付けの 5 メソッド（保存・ペルソナごとの一覧・削除・一括設定・プレビュー）は
+    # U5 で PersonaManager へ移した
+    # （ADR-007。紐付けの判定はペルソナの読み書きの判定と一緒に行うため）。

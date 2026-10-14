@@ -6,21 +6,52 @@ Tests the complete flow from file upload to discussion with documents.
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
+from src.managers.components.file_attachments import FileAttachments
 from src.managers.file_manager import FileManager
+from src.services.uploaded_file_store import UploadedFileStore
+from tests.conftest import MEMBER_A, MEMBER_B
 from src.managers.discussion_manager import DiscussionManager
 from src.models.persona import Persona
 from src.models.message import Message
 
 
-def test_complete_document_flow(tmp_path):
+@pytest.fixture
+def upload_store(monkeypatch):
+    """Upload metadata on moto DynamoDB (U5: UploadedFileStore)."""
+    moto = pytest.importorskip("moto")
+    import boto3
+
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        client.create_table(
+            TableName="UploadedFilesFlow",
+            KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        yield UploadedFileStore(
+            region="us-east-1", table_name="UploadedFilesFlow", client=client
+        )
+
+
+def test_complete_document_flow(tmp_path, upload_store):
     """Test complete flow: upload documents -> start discussion with documents."""
 
-    # Setup with mock services
+    # Setup with mock services (the files themselves are stored locally)
     mock_db = Mock()
     mock_db.save_persona.return_value = "persona-id"
-    file_manager = FileManager(db_service=mock_db)
+    attachments = FileAttachments(upload_store, None)
+    file_manager = FileManager(
+        db_service=mock_db, file_store=upload_store, attachments=attachments
+    )
     file_manager.discussion_doc_dir = tmp_path / "discussion_documents"
     file_manager.discussion_doc_dir.mkdir()
+    uploader = MEMBER_A.principal()
 
     # Test files
     test_image_path = Path(__file__).parent.parent / "test_file" / "test_image.jpeg"
@@ -39,35 +70,20 @@ def test_complete_document_flow(tmp_path):
     with open(test_image_path, "rb") as f:
         image_content = f.read()
     image_metadata = file_manager.upload_discussion_document(
-        image_content, "test_image.jpeg"
+        uploader, image_content, "test_image.jpeg"
     )
     print(f"✓ Image uploaded: {image_metadata.file_id}")
 
     with open(test_pdf_path, "rb") as f:
         pdf_content = f.read()
-    pdf_metadata = file_manager.upload_discussion_document(pdf_content, "pdf_test.pdf")
+    pdf_metadata = file_manager.upload_discussion_document(
+        uploader, pdf_content, "pdf_test.pdf"
+    )
     print(f"✓ PDF uploaded: {pdf_metadata.file_id}")
 
-    # Setup mock for get_uploaded_file_info
-    file_info_map = {
-        image_metadata.file_id: {
-            "file_path": str(file_manager.discussion_doc_dir / image_metadata.saved_filename),
-            "mime_type": "image/jpeg",
-            "file_size": len(image_content),
-            "filename": "test_image.jpeg",
-            "original_filename": "test_image.jpeg",
-            "uploaded_at": image_metadata.uploaded_at.isoformat() if hasattr(image_metadata, 'uploaded_at') else "2026-01-01T00:00:00",
-        },
-        pdf_metadata.file_id: {
-            "file_path": str(file_manager.discussion_doc_dir / pdf_metadata.saved_filename),
-            "mime_type": "application/pdf",
-            "file_size": len(pdf_content),
-            "filename": "pdf_test.pdf",
-            "original_filename": "pdf_test.pdf",
-            "uploaded_at": pdf_metadata.uploaded_at.isoformat() if hasattr(pdf_metadata, 'uploaded_at') else "2026-01-01T00:00:00",
-        },
-    }
-    mock_db.get_uploaded_file_info.side_effect = lambda doc_id: file_info_map.get(doc_id)
+    # U5: the metadata records the uploader; nobody else may read the files
+    assert upload_store.get(image_metadata.file_id).owner_sub == uploader.sub
+    assert not attachments.can_read_file(MEMBER_B.principal(), pdf_metadata.file_id)
 
     # Step 2: Create test personas
     print("\n[Step 2] Creating test personas...")
@@ -117,13 +133,16 @@ def test_complete_document_flow(tmp_path):
     ]
 
     discussion_manager_with_mock = DiscussionManager(
-        ai_service=mock_ai_service, database_service=mock_db
+        ai_service=mock_ai_service,
+        database_service=mock_db,
+        file_attachments=attachments,
     )
 
     discussion = discussion_manager_with_mock.start_discussion(
         personas=[persona1, persona2],
         topic="新商品のマーケティング戦略について、提供されたドキュメントを参考に議論してください",
         document_ids=[image_metadata.file_id, pdf_metadata.file_id],
+        principal=uploader,
     )
 
     print(f"✓ Discussion created: {discussion.id}")

@@ -5,11 +5,12 @@ Handles discussion setup, progress management, and insight generation functional
 
 import json
 import logging
-from typing import Generator, List, Optional, Dict, Any, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 
 from ..config import config
+from ..models.authz import Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
@@ -19,6 +20,8 @@ from ..services.ai_service import AIService, AIServiceError
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 from .components import discussion_validation
+from .components.file_attachments import FileAttachments
+from .components.sharing_runtime import build_access_parts, shared_access_parts
 
 
 class DiscussionManagerError(CodedError):
@@ -37,6 +40,7 @@ class DiscussionManager:
         self,
         ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
+        file_attachments: Optional[FileAttachments] = None,
     ):
         """
         Initialize discussion manager.
@@ -44,6 +48,7 @@ class DiscussionManager:
         Args:
             ai_service: AI service instance for discussion facilitation (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            file_attachments: The per-task ``FileAttachments`` (optional, U5)
         """
         self.logger = logging.getLogger(__name__)
 
@@ -52,12 +57,66 @@ class DiscussionManager:
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
+        self._attachments = file_attachments
+
+    @property
+    def _files(self) -> FileAttachments:
+        if self._attachments is None:
+            self._attachments = shared_access_parts(
+                lambda: build_access_parts(
+                    service_factory.get_authz_lookup_service(),
+                    service_factory.get_uploaded_file_store(),
+                    service_factory.get_optional_s3_service(),
+                )
+            ).files
+        return self._attachments
+
+    def _save_with_files(
+        self,
+        discussion: Discussion,
+        principal: Optional[Principal],
+        write: Callable[[], str],
+    ) -> str:
+        """Attach the discussion's documents, then save it (U5 BR5.3).
+
+        The documents are attached first; if the save fails they are
+        detached again (back to unattached with their expiry). Documents can
+        only be attached by their uploader, so without a user nothing is saved.
+
+        Raises:
+            DiscussionManagerError: The documents could not be attached
+                (``FILE_NOT_FOUND`` etc.); the discussion is not saved.
+        """
+        file_ids = [str(d["id"]) for d in (discussion.documents or []) if d.get("id")]
+        attached = None
+        if file_ids:
+            if principal is None:
+                raise DiscussionManagerError(
+                    "documents need the uploader", code=ErrorCode.FILE_NOT_FOUND
+                )
+            try:
+                attached = self._files.attach_all(
+                    principal, file_ids, "discussion", discussion.id
+                )
+            except CodedError as e:
+                raise DiscussionManagerError(
+                    f"documents could not be attached ({type(e).__name__})",
+                    code=e.code,
+                    context=e.context,
+                ) from e
+        try:
+            return write()
+        except Exception:
+            if attached is not None:
+                self._files.detach(attached)
+            raise
 
     def start_discussion(
         self,
         personas: List[Persona],
         topic: str,
         document_ids: Optional[List[str]] = None,
+        principal: Optional[Principal] = None,
     ) -> Discussion:
         """
         Start a discussion between selected personas on a given topic.
@@ -87,7 +146,9 @@ class DiscussionManager:
         documents_data = None
         documents_metadata = None
         if document_ids:
-            documents_data, documents_metadata = self._load_documents(document_ids)
+            documents_data, documents_metadata = self._load_documents(
+                document_ids, principal
+            )
 
         self.logger.info(
             f"Starting discussion with {len(personas)} personas on topic: '{topic[:50]}...'"
@@ -192,18 +253,25 @@ class DiscussionManager:
                 error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
             ) from e
 
-    def save_discussion(self, discussion: Discussion) -> str:
+    def save_discussion(
+        self, discussion: Discussion, principal: Optional[Principal] = None
+    ) -> str:
         """
         Save a discussion to the database.
 
+        U5: its documents are attached to it first (``FileAttachments``);
+        a failed save detaches them again.
+
         Args:
             discussion: Discussion object to save
+            principal: The user who started it (the documents' uploader)
 
         Returns:
             str: The discussion ID
 
         Raises:
-            DiscussionManagerError: If save operation fails
+            DiscussionManagerError: If save operation fails, or a document
+                cannot be attached (``FILE_NOT_FOUND``)
         """
         if not discussion:
             raise DiscussionManagerError(
@@ -214,12 +282,18 @@ class DiscussionManager:
         self._validate_discussion_for_save(discussion)
 
         try:
-            discussion_id = self.database_service.save_discussion(discussion)
+            discussion_id = self._save_with_files(
+                discussion,
+                principal,
+                lambda: self.database_service.save_discussion(discussion),
+            )
             self.logger.info(
                 f"Discussion saved successfully: {discussion.topic} (ID: {discussion_id})"
             )
             return discussion_id
 
+        except DiscussionManagerError:
+            raise
         except DatabaseError as e:
             error_msg = f"Database error while saving discussion: {e}"
             self.logger.error(error_msg)
@@ -455,14 +529,46 @@ class DiscussionManager:
             personas, topic, error_cls=DiscussionManagerError
         )
 
+    def _readable_document(
+        self, principal: Optional[Principal], doc_id: str
+    ) -> Dict[str, Any]:
+        """The metadata of a document the user may still attach (U5, R-02).
+
+        The same rule as ``attach_all`` at the save (WF6 step 5): the user's
+        own, unexpired, not yet attached upload. Anything else stops the
+        discussion before the AI runs with ``FILE_NOT_FOUND``.
+        """
+        try:
+            if principal is None:
+                raise CodedError("no user", code=ErrorCode.FILE_NOT_FOUND)
+            uploaded = self._files.attachable_file(principal, doc_id)
+        except CodedError as e:
+            if e.code is not ErrorCode.FILE_NOT_FOUND:
+                raise DiscussionManagerError(
+                    f"document read failed ({type(e).__name__})",
+                    code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+                ) from e
+            raise DiscussionManagerError(
+                "document not attachable", code=ErrorCode.FILE_NOT_FOUND
+            ) from e
+        return {
+            "id": uploaded.id,
+            "original_filename": uploaded.original_filename,
+            "file_path": uploaded.file_path,
+            "file_size": uploaded.file_size,
+            "mime_type": uploaded.mime_type,
+            "uploaded_at": uploaded.uploaded_at,
+        }
+
     def _load_documents(
-        self, document_ids: List[str]
+        self, document_ids: List[str], principal: Optional[Principal] = None
     ) -> tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
         """
-        Load document files and metadata from database.
+        Load document files and metadata the user may still attach (U5, R-02).
 
         Args:
             document_ids: List of document IDs to load
+            principal: The user starting the discussion
 
         Returns:
             Tuple of (documents_data, documents_metadata):
@@ -470,7 +576,8 @@ class DiscussionManager:
                 - documents_metadata: List of dicts with metadata for Discussion model
 
         Raises:
-            DiscussionManagerError: If document loading fails
+            DiscussionManagerError: If document loading fails (someone else's,
+                expired or already attached documents are ``FILE_NOT_FOUND``)
         """
         if not document_ids:
             return None, None
@@ -482,13 +589,7 @@ class DiscussionManager:
         max_total_size = config.MAX_REQUEST_PAYLOAD_SIZE  # 32MB total request payload
 
         for doc_id in document_ids:
-            # Get file info from database
-            file_info = self.database_service.get_uploaded_file_info(doc_id)
-            if not file_info:
-                raise DiscussionManagerError(
-                    f"document not found: {doc_id}",
-                    code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
-                )
+            file_info = self._readable_document(principal, doc_id)
 
             # Validate file path exists
             file_path = file_info.get("file_path")
@@ -791,6 +892,7 @@ class DiscussionManager:
         topic: str,
         categories: Optional[List[InsightCategory]] = None,
         document_ids: Optional[List[str]] = None,
+        principal: Optional[Principal] = None,
     ) -> Generator[str, None, None]:
         """classicモード議論のフルフロー（ストリーミング）。
 
@@ -812,7 +914,9 @@ class DiscussionManager:
         self._validate_discussion_input(personas, topic)
 
         documents_data, documents_metadata = (
-            self._load_documents(document_ids) if document_ids else (None, None)
+            self._load_documents(document_ids, principal)
+            if document_ids
+            else (None, None)
         )
 
         messages = []
@@ -838,7 +942,11 @@ class DiscussionManager:
 
         discussion = self._attach_insights(discussion, categories)
 
-        self.database_service.save_discussion(discussion)
+        self._save_with_files(
+            discussion,
+            principal,
+            lambda: self.database_service.save_discussion(discussion),
+        )
 
         complete_data = {
             "type": "complete",
@@ -854,6 +962,7 @@ class DiscussionManager:
         topic: str,
         categories: Optional[List[InsightCategory]] = None,
         document_ids: Optional[List[str]] = None,
+        principal: Optional[Principal] = None,
     ) -> Discussion:
         """classicモード議論のフルフロー（非ストリーミング）。
 
@@ -866,12 +975,15 @@ class DiscussionManager:
             DiscussionManagerError: バリデーション失敗、AI/DB例外
         """
         discussion = self.start_discussion(
-            personas=personas, topic=topic, document_ids=document_ids
+            personas=personas,
+            topic=topic,
+            document_ids=document_ids,
+            principal=principal,
         )
 
         discussion = self._attach_insights(discussion, categories)
 
-        self.save_discussion(discussion)
+        self.save_discussion(discussion, principal=principal)
         return discussion
 
     def get_default_categories(self) -> List[Dict[str, Any]]:

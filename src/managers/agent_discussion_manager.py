@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Generator, List, Dict, Mapping, Optional, Any, TYPE_CHECKING
 
+from ..models.authz import Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.discussion import Discussion
@@ -24,7 +25,9 @@ from ..services.agent_service import (
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 from .components import discussion_validation
+from .components.file_attachments import FileAttachments
 from .components.persona_agent_integration import PersonaAgentIntegration
+from .components.sharing_runtime import build_access_parts, shared_access_parts
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
     resolve_effective_persona_models,
@@ -34,6 +37,7 @@ from .shared.model_validation import (
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
+    from ..services.persona_binding_store import PersonaBindingStore
 
 
 class AgentDiscussionManagerError(CodedError):
@@ -59,6 +63,8 @@ class AgentDiscussionManager:
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
+        file_attachments: Optional[FileAttachments] = None,
+        binding_store: Optional["PersonaBindingStore"] = None,
     ):
         """
         Initialize agent discussion manager.
@@ -67,6 +73,8 @@ class AgentDiscussionManager:
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
             dataset_analysis_service: Dataset analysis service for analyze_dataset tools (optional, uses singleton if not provided)
+            file_attachments: The per-task ``FileAttachments`` (optional, U5)
+            binding_store: ``PersonaBindings`` for KB / dataset tools (optional, U5)
         """
         self.logger = logging.getLogger(__name__)
 
@@ -82,7 +90,49 @@ class AgentDiscussionManager:
             database_service=self.database_service,
             agent_service=self.agent_service,
             dataset_analysis_service=self.dataset_analysis_service,
+            binding_store=binding_store or service_factory.get_persona_binding_store(),
         )
+        self._attachments = file_attachments
+
+    @property
+    def _files(self) -> FileAttachments:
+        if self._attachments is None:
+            self._attachments = shared_access_parts(
+                lambda: build_access_parts(
+                    service_factory.get_authz_lookup_service(),
+                    service_factory.get_uploaded_file_store(),
+                    service_factory.get_optional_s3_service(),
+                )
+            ).files
+        return self._attachments
+
+    def _save_with_files(
+        self, discussion: Discussion, principal: Optional[Principal]
+    ) -> str:
+        """Attach the documents, then save; a failed save detaches (U5 BR5.3)."""
+        file_ids = [str(d["id"]) for d in (discussion.documents or []) if d.get("id")]
+        attached = None
+        if file_ids:
+            if principal is None:
+                raise AgentDiscussionManagerError(
+                    "documents need the uploader", code=ErrorCode.FILE_NOT_FOUND
+                )
+            try:
+                attached = self._files.attach_all(
+                    principal, file_ids, "discussion", discussion.id
+                )
+            except CodedError as e:
+                raise AgentDiscussionManagerError(
+                    f"documents could not be attached ({type(e).__name__})",
+                    code=e.code,
+                    context=e.context,
+                ) from e
+        try:
+            return self.database_service.save_discussion(discussion)
+        except Exception:
+            if attached is not None:
+                self._files.detach(attached)
+            raise
 
     def create_persona_agents(
         self,
@@ -315,6 +365,7 @@ class AgentDiscussionManager:
         document_ids: Optional[List[str]] = None,
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> Discussion:
         """
         Start and execute an AI agent mode discussion.
@@ -347,7 +398,7 @@ class AgentDiscussionManager:
             # Load documents if provided
             documents_metadata, document_context, document_contents = (
                 self._load_and_attach_documents(
-                    document_ids, persona_agents, persona_models
+                    document_ids, persona_agents, persona_models, principal=principal
                 )
             )
 
@@ -538,18 +589,24 @@ class AgentDiscussionManager:
             # エージェントリソースを確実に解放
             self.cleanup_agents(persona_agents, facilitator)
 
-    def save_agent_discussion(self, discussion: Discussion) -> str:
+    def save_agent_discussion(
+        self, discussion: Discussion, principal: Optional[Principal] = None
+    ) -> str:
         """
         Save an AI agent mode discussion to the database.
 
+        U5: its documents are attached first; a failed save detaches them.
+
         Args:
             discussion: Discussion object to save
+            principal: The user who started it (the documents' uploader)
 
         Returns:
             str: The discussion ID
 
         Raises:
-            AgentDiscussionManagerError: If save operation fails
+            AgentDiscussionManagerError: If save operation fails, or a
+                document cannot be attached (``FILE_NOT_FOUND``)
         """
         if not discussion:
             raise AgentDiscussionManagerError(
@@ -567,12 +624,14 @@ class AgentDiscussionManager:
         self._validate_discussion_for_save(discussion)
 
         try:
-            discussion_id = self.database_service.save_discussion(discussion)
+            discussion_id = self._save_with_files(discussion, principal)
             self.logger.info(
                 f"Agent discussion saved successfully: {discussion.topic} (ID: {discussion_id})"
             )
             return discussion_id
 
+        except AgentDiscussionManagerError:
+            raise
         except DatabaseError as e:
             self.logger.error(
                 "Database error while saving agent discussion", exc_info=True
@@ -595,8 +654,15 @@ class AgentDiscussionManager:
         document_ids: Optional[List[str]],
         persona_agents: List[PersonaAgent],
         persona_models: Optional[Dict[str, str]] = None,
+        *,
+        principal: Optional[Principal] = None,
     ) -> tuple:
-        """ドキュメントを読み込みエージェントに添付する。"""
+        """ドキュメントを読み込みエージェントに添付する。
+
+        U5（R-02）: 読むのは、保存時の紐付けと同じ条件（``FileAttachments.
+        attachable_file``: 本人の・期限内の・まだどこにも紐付いていない資料）を満たす
+        ものだけ。1 つでも満たさなければ、議論を走らせる前に ``FILE_NOT_FOUND`` で止める。
+        """
         documents_metadata = None
         document_context = None
         document_contents: List[Dict[str, Any]] = []
@@ -608,9 +674,22 @@ class AgentDiscussionManager:
                 prepare_document_contents,
             )
 
-            documents_metadata = load_documents_metadata(
-                document_ids, self.database_service
-            )
+            def read_file(file_id: str) -> Any:
+                try:
+                    if principal is None:
+                        raise CodedError("no user", code=ErrorCode.FILE_NOT_FOUND)
+                    return self._files.attachable_file(principal, file_id)
+                except CodedError as e:
+                    if e.code is not ErrorCode.FILE_NOT_FOUND:
+                        raise AgentDiscussionManagerError(
+                            f"document read failed ({type(e).__name__})",
+                            code=ErrorCode.DISCUSSION_OPERATION_FAILED,
+                        ) from e
+                    raise AgentDiscussionManagerError(
+                        "document not attachable", code=ErrorCode.FILE_NOT_FOUND
+                    ) from e
+
+            documents_metadata = load_documents_metadata(document_ids, read_file)
 
             if documents_metadata:
                 # 環境既定モデル（config.AGENT_MODEL_ID）はGemma4等のMantle系モデルに設定されうるため、
@@ -724,6 +803,7 @@ class AgentDiscussionManager:
         document_ids: Optional[List[str]] = None,
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> Any:
         """
         Start and execute an AI agent mode discussion with streaming.
@@ -759,7 +839,7 @@ class AgentDiscussionManager:
             # Load documents if provided
             documents_metadata, document_context, document_contents = (
                 self._load_and_attach_documents(
-                    document_ids, persona_agents, persona_models
+                    document_ids, persona_agents, persona_models, principal=principal
                 )
             )
 
@@ -1245,6 +1325,7 @@ class AgentDiscussionManager:
         document_ids: Optional[List[str]] = None,
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> Generator[str, None, None]:
         """agentモード議論のフルフロー（ストリーミング）。
 
@@ -1307,6 +1388,7 @@ class AgentDiscussionManager:
             document_ids=document_ids,
             persona_models=persona_models,
             facilitator_model=facilitator_model,
+            principal=principal,
         ):
             if event_type == "message_start":
                 yield f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
@@ -1327,7 +1409,7 @@ class AgentDiscussionManager:
 
         if discussion:
             discussion = self._attach_insights(discussion, categories)
-            self.save_agent_discussion(discussion)
+            self.save_agent_discussion(discussion, principal=principal)
 
             complete_data = {
                 "type": "complete",
@@ -1351,6 +1433,7 @@ class AgentDiscussionManager:
         document_ids: Optional[List[str]] = None,
         persona_models: Optional[Dict[str, str]] = None,
         facilitator_model: Optional[str] = None,
+        principal: Optional[Principal] = None,
     ) -> Discussion:
         """agentモード議論のフルフロー（非ストリーミング）。
 
@@ -1401,10 +1484,11 @@ class AgentDiscussionManager:
             document_ids=document_ids,
             persona_models=persona_models,
             facilitator_model=facilitator_model,
+            principal=principal,
         )
 
         discussion = self._attach_insights(discussion, categories)
-        self.save_agent_discussion(discussion)
+        self.save_agent_discussion(discussion, principal=principal)
         return discussion
 
     def _validate_memory_mode(self, memory_mode: str) -> None:

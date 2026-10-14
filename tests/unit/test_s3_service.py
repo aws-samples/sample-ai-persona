@@ -233,3 +233,69 @@ def test_upload_pdf_document_to_s3(s3_service, s3_bucket_name):
     # ダウンロードして検証
     downloaded_content = s3_service.download_file(s3_path)
     assert downloaded_content == file_content
+
+
+# =============================================================================
+# U5: タグと写し（BR5.2、BR5.3、BR6.1、NFR1.30、infrastructure-specification.md）
+# =============================================================================
+
+
+def _tags(s3_bucket_name: str, key: str) -> dict[str, str]:
+    client = boto3.client("s3", region_name="us-east-1")
+    tag_set = client.get_object_tagging(Bucket=s3_bucket_name, Key=key)["TagSet"]
+    return {t["Key"]: t["Value"] for t in tag_set}
+
+
+def test_upload_with_tags_places_the_pending_tag(s3_service, s3_bucket_name):
+    key = "uploads/sub-a/discussion_document/f_資料.pdf"
+    s3_service.upload_file(b"x", key, tags={"pending": "true"})
+    assert _tags(s3_bucket_name, key) == {"pending": "true"}
+
+
+def test_tags_are_removed_put_back_and_read(s3_service, s3_bucket_name):
+    key = "uploads/sub-a/survey_image/f_a.png"
+    s3_service.upload_file(b"x", key, tags={"pending": "true"})
+
+    s3_service.delete_object_tagging(key)
+    assert s3_service.get_object_tags(key) == {}
+    s3_service.put_object_tags(key, {"pending": "true"})
+    assert s3_service.get_object_tags(key) == {"pending": "true"}
+
+
+def test_tag_calls_on_a_missing_object_fail(s3_service):
+    # moto 5.1 の delete_object_tagging は存在しないキーで内部エラーになるため、
+    # 失敗の変換は put / get で確かめる（実 S3 はどれも NoSuchKey を返す）
+    with pytest.raises(S3ServiceError):
+        s3_service.put_object_tags("uploads/none", {"pending": "true"})
+    with pytest.raises(S3ServiceError):
+        s3_service.get_object_tags("uploads/none")
+
+
+def test_copy_object_replaces_tags_with_none(s3_service, s3_bucket_name):
+    source = "candidates/sub-a/c/t.csv"
+    s3_service.upload_file(b"a,b\n1,2\n", source, tags={"pending": "true"})
+
+    path = s3_service.copy_object(source, "persona_datasets/p1/d1.csv")
+
+    assert path == f"s3://{s3_bucket_name}/persona_datasets/p1/d1.csv"
+    assert _tags(s3_bucket_name, "persona_datasets/p1/d1.csv") == {}
+    assert s3_service.download_file(path) == b"a,b\n1,2\n"
+
+
+def test_copy_object_of_a_missing_source_fails(s3_service):
+    with pytest.raises(S3ServiceError):
+        s3_service.copy_object("candidates/none.csv", "persona_datasets/p/d.csv")
+
+
+def test_presigned_url_has_an_expiry(s3_service):
+    path = s3_service.upload_file(b"x", "uploads/sub-a/survey_image/f_a.png")
+    url = s3_service.generate_presigned_url(path, 300)
+    assert "Expires=" in url or "X-Amz-Expires=300" in url
+
+
+def test_paths_and_keys_convert_both_ways(s3_service, s3_bucket_name):
+    path = s3_service.path_of("uploads/a")
+    assert path == f"s3://{s3_bucket_name}/uploads/a"
+    assert s3_service.key_of(path) == "uploads/a"
+    assert s3_service.key_of("s3://another-bucket/uploads/a") is None
+    assert s3_service.key_of("/tmp/local") is None

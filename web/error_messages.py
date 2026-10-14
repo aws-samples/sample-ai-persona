@@ -101,6 +101,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED: (
         "生成されたペルソナの一時データが期限切れです。お手数ですが再度生成してください。"
     ),
+    ErrorCode.GENERATION_RESULT_TOO_LARGE: (
+        "生成結果が大きすぎるため保存できません。"
+        "人数を減らすか、条件を変えて生成し直してください。"
+    ),
     ErrorCode.GENERATION_OPERATION_FAILED: (
         "ペルソナ生成の処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
@@ -126,6 +130,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.FILE_BINARY_NOT_ALLOWED: "バイナリファイルはアップロードできません。",
     ErrorCode.FILE_OPERATION_FAILED: (
         "ファイルの処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    ErrorCode.FILE_NOT_FOUND: "ファイルが見つかりません",
+    ErrorCode.FILE_ATTACH_LIMIT_EXCEEDED: (
+        "一度に添付できるファイルは{max_files}件までです。ファイルの数を減らしてください"
     ),
     # --- アンケート ---
     # ID は画面に出さずログにのみ残す（診断情報とユーザー向け案内の分離）。
@@ -391,6 +399,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.DATASET_NOT_FOUND: "データセットが見つかりません",
     ErrorCode.DATASET_BINDING_NOT_FOUND: "紐付け情報が見つかりません",
+    ErrorCode.KB_BINDING_NOT_FOUND: "ナレッジベースの紐付けが見つかりません",
     ErrorCode.DATASET_OPERATION_FAILED: (
         "データセットの処理中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
@@ -455,6 +464,9 @@ UNIFIED_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
         ErrorCode.DATASET_NOT_FOUND,
         ErrorCode.JOB_NOT_FOUND,
+        # U5: 他人・期限切れ・紐付け済みのファイルと、KB の紐付け（NFR1.14）
+        ErrorCode.FILE_NOT_FOUND,
+        ErrorCode.KB_BINDING_NOT_FOUND,
     }
 )
 

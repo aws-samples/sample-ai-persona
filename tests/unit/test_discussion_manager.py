@@ -15,6 +15,10 @@ from src.models.message import Message
 from src.models.insight import Insight
 from src.services.ai_service import AIServiceError
 from src.services.database_service import DatabaseError
+from tests.conftest import MEMBER_A
+
+#: The uploader of the documents (U5: documents are read through can_read_file)
+PRINCIPAL = MEMBER_A.principal()
 
 
 class TestDiscussionManager:
@@ -561,9 +565,37 @@ class TestDiscussionManagerWithDocuments:
         """Set up test fixtures."""
         self.mock_ai_service = Mock()
         self.mock_database_service = Mock()
+        # U5: documents are read through FileAttachments.attachable_file (R-02);
+        # the metadata each test sets below is served as the uploader's own file.
+        self.uploads: dict = {}
+
+        def readable(principal, file_id):
+            from src.models.errors import CodedError
+            from src.models.uploaded_file import UploadedFile
+
+            info = self.uploads.get(file_id)
+            if not info or principal is not PRINCIPAL:
+                raise CodedError("not readable", code=ErrorCode.FILE_NOT_FOUND)
+            return UploadedFile(
+                id=file_id,
+                owner_sub=PRINCIPAL.sub,
+                file_type="discussion_document",
+                s3_key="uploads/k",
+                original_filename=info.get("original_filename", "unknown"),
+                file_size=info.get("file_size", 0),
+                file_hash="h",
+                mime_type=info.get("mime_type", "application/octet-stream"),
+                uploaded_at=datetime(2024, 1, 1),
+                file_path=info["file_path"],
+            )
+
+        files = Mock()
+        files.attachable_file.side_effect = readable
 
         self.discussion_manager = DiscussionManager(
-            ai_service=self.mock_ai_service, database_service=self.mock_database_service
+            ai_service=self.mock_ai_service,
+            database_service=self.mock_database_service,
+            file_attachments=files,
         )
 
         self.persona1 = Persona.create_new(
@@ -588,7 +620,7 @@ class TestDiscussionManagerWithDocuments:
     def test_start_discussion_with_documents(self):
         """Test starting discussion with documents."""
         # Mock file info
-        self.mock_database_service.get_uploaded_file_info.return_value = {
+        self.uploads["doc1"] = {
             "file_id": "doc1",
             "original_filename": "test.pdf",
             "file_path": "/tmp/test.pdf",
@@ -617,7 +649,10 @@ class TestDiscussionManagerWithDocuments:
 
             # Execute
             discussion = self.discussion_manager.start_discussion(
-                [self.persona1, self.persona2], "テストトピック", document_ids=["doc1"]
+                [self.persona1, self.persona2],
+                "テストトピック",
+                document_ids=["doc1"],
+                principal=PRINCIPAL,
             )
 
             # Verify
@@ -633,16 +668,15 @@ class TestDiscussionManagerWithDocuments:
 
     def test_load_documents_not_found(self):
         """Test loading non-existent document."""
-        self.mock_database_service.get_uploaded_file_info.return_value = None
-
         with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager._load_documents(["invalid_id"])
+            self.discussion_manager._load_documents(["invalid_id"], PRINCIPAL)
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
+        # R-02: the same code as the save's attach_all
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
 
     def test_load_documents_file_not_exists(self):
         """Test loading document with missing file."""
-        self.mock_database_service.get_uploaded_file_info.return_value = {
+        self.uploads["doc1"] = {
             "file_id": "doc1",
             "file_path": "/nonexistent/file.pdf",
             "file_size": 1024,
@@ -650,13 +684,13 @@ class TestDiscussionManagerWithDocuments:
         }
 
         with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager._load_documents(["doc1"])
+            self.discussion_manager._load_documents(["doc1"], PRINCIPAL)
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
 
     def test_load_documents_size_limit(self):
         """Test document total size limit."""
-        self.mock_database_service.get_uploaded_file_info.return_value = {
+        self.uploads["doc1"] = {
             "file_id": "doc1",
             "file_path": "/tmp/large.pdf",
             "file_size": 33 * 1024 * 1024,  # 33MB
@@ -667,7 +701,7 @@ class TestDiscussionManagerWithDocuments:
 
         with patch("pathlib.Path.exists", return_value=True):
             with pytest.raises(DiscussionManagerError) as exc_info:
-                self.discussion_manager._load_documents(["doc1"])
+                self.discussion_manager._load_documents(["doc1"], PRINCIPAL)
 
             assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE
 

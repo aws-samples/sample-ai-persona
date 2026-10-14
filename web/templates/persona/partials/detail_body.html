@@ -100,6 +100,8 @@
     </ul>
 </div>
 
+{#- 長期記憶（メモリ画面）は管理できる人だけ。共有された人には導線も出さない（BR4.1、AC4.2.4） #}
+{% if manageable %}
 <!-- 長期記憶セクション -->
 <div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false, loaded: false, activeTab: 'summary' }">
     <button 
@@ -165,6 +167,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 <!-- ナレッジベース紐付けセクション -->
 <div class="bg-white rounded-lg shadow-md mb-6" x-data="{ open: false }">

@@ -8,10 +8,11 @@ AgentDiscussionManager, InterviewManager から共通利用される
 import re
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+from ...models.uploaded_file import UploadedFile
 
 if TYPE_CHECKING:
-    from ...services.database_service import DatabaseService
     from ...services.s3_service import S3Service
 
 logger = logging.getLogger(__name__)
@@ -44,48 +45,39 @@ def is_image_type(mime_type: str) -> bool:
 
 def load_documents_metadata(
     document_ids: List[str],
-    database_service: "DatabaseService",
+    read_file: Callable[[str], UploadedFile],
 ) -> List[Dict[str, Any]]:
     """
     ドキュメントIDリストからメタデータを取得する。
 
+    U5: ``read_file`` は利用者がまだ紐付けられる資料だけを返す関数（``FileAttachments``
+    の ``attachable_file``）。使えない資料は飛ばさず、``read_file`` の例外をそのまま
+    出す（R-02: 議論を走らせる前に止める。保存時の紐付けと同じ条件）。
+
     Args:
         document_ids: ドキュメントIDのリスト
-        database_service: データベースサービス
+        read_file: file ID -> the user's attachable ``UploadedFile`` (raises otherwise)
 
     Returns:
         メタデータ辞書のリスト。各辞書は id, filename, file_path, file_size, mime_type, uploaded_at を含む。
+
+    Raises:
+        Exception: Whatever ``read_file`` raises for an unusable document.
     """
     documents_metadata: List[Dict[str, Any]] = []
 
     for doc_id in document_ids:
-        try:
-            file_info = database_service.get_uploaded_file_info(doc_id)
-            if file_info is None:
-                logger.warning(f"ドキュメントが見つかりません: {doc_id}")
-                continue
-
-            from datetime import datetime
-
-            uploaded_at = file_info.get("uploaded_at")
-            if isinstance(uploaded_at, str):
-                uploaded_at = datetime.fromisoformat(uploaded_at)
-
-            documents_metadata.append(
-                {
-                    "id": file_info["id"],
-                    "filename": file_info.get(
-                        "original_filename", file_info["filename"]
-                    ),
-                    "file_path": file_info["file_path"],
-                    "file_size": file_info.get("file_size", 0),
-                    "mime_type": file_info.get("mime_type", "text/plain"),
-                    "uploaded_at": uploaded_at.isoformat() if uploaded_at else None,
-                }
-            )
-        except Exception as e:
-            logger.error(f"ドキュメントメタデータ取得エラー ({doc_id}): {e}")
-            continue
+        uploaded = read_file(doc_id)
+        documents_metadata.append(
+            {
+                "id": uploaded.id,
+                "filename": uploaded.original_filename,
+                "file_path": uploaded.file_path,
+                "file_size": uploaded.file_size,
+                "mime_type": uploaded.mime_type or "text/plain",
+                "uploaded_at": uploaded.uploaded_at.isoformat(),
+            }
+        )
 
     return documents_metadata
 

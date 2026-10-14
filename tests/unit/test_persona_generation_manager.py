@@ -9,8 +9,12 @@ import pytest
 # （同一モジュールの import / import from 混在を避ける。config / save_temp_csv 等の
 #  monkeypatch もこのハンドル経由で行う）。
 from src.managers import persona_generation_manager as mod
+from tests.conftest import MEMBER_A
 
 pytestmark = pytest.mark.unit
+
+#: 生成には ai:execute が要る（U5: generate は利用者を受け取る）
+MEMBER = MEMBER_A.principal()
 
 
 def _valid_result():
@@ -46,6 +50,8 @@ def _manager(dataset_service=None, run_side_effect=None):
         agent_service=agent_service,
         database_service=Mock(),
         dataset_analysis_service=ds,
+        candidate_store=Mock(),
+        s3_service=None,
     )
 
 
@@ -126,7 +132,8 @@ class TestTempCleanup:
     def test_temp_removed_on_success(self, monkeypatch):
         mgr = _manager()
         created = self._capture_paths(mgr, monkeypatch)
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER,
             file_contents=[(b"region,amount\neast,10\n", "d.csv")],
             data_type="purchase",
             persona_count=1,
@@ -171,7 +178,8 @@ class TestTempCleanup:
         created = self._capture_paths(mgr, monkeypatch)
 
         with pytest.raises(mod.PersonaGenerationManagerError):
-            mgr.generate_and_cache(
+            mgr.generate(
+                MEMBER,
                 file_contents=[(b"region,amount\neast,10\n", "d.csv")],
                 data_type="purchase",
                 persona_count=1,
@@ -184,7 +192,8 @@ class TestEffectiveFlag:
         monkeypatch.setattr(mod.config, "ENABLE_DATASET_ANALYSIS", False)
         ds = Mock()
         mgr = _manager(dataset_service=ds)
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER,
             file_contents=[(b"region,amount\neast,10\n", "d.csv")],
             data_type="purchase",
             persona_count=1,
@@ -196,7 +205,8 @@ class TestEffectiveFlag:
         ds = Mock()
         ds.build_source_tools.return_value = [Mock()]
         mgr = _manager(dataset_service=ds)
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER,
             file_contents=[(b"region,amount\neast,10\n", "d.csv")],
             data_type="purchase",
             persona_count=1,

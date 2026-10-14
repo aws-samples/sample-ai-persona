@@ -6,6 +6,7 @@ AgentCore Gateway 経由で外部AIエージェントからも利用可能。
 """
 
 import logging
+from dataclasses import replace
 from typing import Annotated, Any, Literal, Optional, List
 
 import anyio
@@ -17,7 +18,9 @@ from src.managers.discussion_manager import DiscussionManager
 from src.managers.agent_discussion_manager import AgentDiscussionManager
 from src.managers.interview_manager import InterviewManager
 from src.managers.job_manager import JobManager
+from src.managers.persona_generation_manager import PersonaGenerationManager
 from src.models.authz import Principal
+from src.models.persona_candidate import CandidateSaveResult
 from src.models.errors import CodedError, ErrorCode
 from src.models.insight_category import InsightCategory
 from web.error_messages import user_message_for, user_message_for_code
@@ -32,6 +35,7 @@ _discussion_manager: DiscussionManager | None = None
 _agent_discussion_manager: AgentDiscussionManager | None = None
 _interview_manager: InterviewManager | None = None
 _job_manager: JobManager | None = None
+_persona_generation_manager: PersonaGenerationManager | None = None
 
 
 def get_persona_manager() -> PersonaManager:
@@ -69,6 +73,13 @@ def get_job_manager() -> JobManager:
     if _job_manager is None:
         _job_manager = JobManager()
     return _job_manager
+
+
+def get_persona_generation_manager() -> PersonaGenerationManager:
+    global _persona_generation_manager
+    if _persona_generation_manager is None:
+        _persona_generation_manager = PersonaGenerationManager()
+    return _persona_generation_manager
 
 
 def _principal(request: Request) -> Principal:
@@ -134,6 +145,9 @@ class JobResponse(BaseModel):
     status: str
     result: Any = None
     error: Optional[str] = None
+    #: Persona generation only (R-06, C12 additive): candidates not saved
+    failed_count: Optional[int] = None
+    failed_names: Optional[List[str]] = None
 
 
 # --- MCP Request models ---
@@ -333,7 +347,8 @@ def _resolve_personas(persona_ids: List[str]) -> list:
     pm = get_persona_manager()
     personas = []
     for pid in persona_ids:
-        p = pm.get_persona(pid)
+        # 参加者の判定は U6（get_persona_unchecked）
+        p = pm.get_persona_unchecked(pid)
         if not p:
             raise HTTPException(
                 status_code=404,
@@ -353,23 +368,41 @@ def _run_generate_personas(
     persona_count: int,
     data_description: str | None,
     custom_prompt: str | None,
-) -> list[dict]:
-    """バックグラウンドスレッドで実行されるペルソナ生成処理"""
-    from src.managers.persona_generation_manager import PersonaGenerationManager
+) -> dict[str, Any]:
+    """バックグラウンドスレッドで実行されるペルソナ生成処理。
 
-    gen_manager = PersonaGenerationManager()
-    personas, _logs = gen_manager.generate_and_cache(
+    画面と同じく、生成 → 押さえ → 保存 → 片付け（必ず呼ぶ）の順に呼ぶだけ（BR1.3、BR1.4）。
+    返す ID は保存したペルソナの ID（候補の ID ではない、BR1.5）。
+
+    R-06: ジョブに保存する結果は ``{"personas", "failed_count", "failed_names"}``。
+    ``GET /api/jobs/{job_id}`` は ``result`` を今までどおりペルソナの配列で返し、保存
+    できなかった件数と名前（本人の候補）を項目として足す（C12、互換を壊さない）。
+    """
+    gen_manager = get_persona_generation_manager()
+    generated = gen_manager.generate(
+        principal,
         file_contents=file_contents,
         data_type=data_type,
         persona_count=persona_count,
         data_description=data_description,
         custom_prompt=custom_prompt,
     )
-    pm = get_persona_manager()
-    for p in personas:
-        # 投入した人を所有者にする（BR6.1）
-        pm.save_persona(principal, p)
-    return [_persona_to_response(p).model_dump() for p in personas]
+    claim = gen_manager.claim_candidates(principal, [p.id for p in generated.personas])
+    result: CandidateSaveResult | None = None
+    try:
+        result = get_persona_manager().save_generated_personas(principal, claim)
+    finally:
+        gen_manager.finish_candidates(claim, result)
+    saved = dict(zip(result.saved_ids, result.saved_persona_ids))
+    return {
+        "personas": [
+            _persona_to_response(replace(p, id=saved[p.id])).model_dump()
+            for p in generated.personas
+            if p.id in saved
+        ],
+        "failed_count": len(result.failed_ids),
+        "failed_names": list(result.failed_names),
+    }
 
 
 @router.post(
@@ -655,9 +688,20 @@ async def get_job(request: Request, job_id: str) -> Any:
     # どちらも約束 C13 のハンドラが {detail, error_code} にする（ここでは捕まえない）。
     jm = get_job_manager()
     job = await anyio.to_thread.run_sync(jm.get, _principal(request), job_id)
-    return JobResponse(
+    response = JobResponse(
         job_id=job.id,
         status=job.status.value,
         result=job.result,
         error="処理中にエラーが発生しました" if job.error else None,
     )
+    stored = job.result
+    if (
+        job.job_type == "persona_generation"
+        and isinstance(stored, dict)
+        and "personas" in stored
+    ):
+        # 生成ジョブ（R-06）: result はペルソナの配列のまま、保存できなかった分を足す
+        response.result = stored["personas"]
+        response.failed_count = stored.get("failed_count")
+        response.failed_names = stored.get("failed_names")
+    return response

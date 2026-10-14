@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from ...config import config
+from ...models.persona_binding import BindingTargetType, PersonaBinding
 from ..shared.agent_integration import combine_integration
 
 
@@ -38,10 +39,28 @@ class PersonaAgentIntegration:
         database_service: Any,
         agent_service: Any,
         dataset_analysis_service: Any,
+        binding_store: Any = None,
     ) -> None:
+        """
+        Args:
+            database_service: Reads datasets and knowledge bases.
+            agent_service: Builds the KB tool and the agent.
+            dataset_analysis_service: Builds the dataset tools.
+            binding_store: ``PersonaBindingStore`` (U5): bindings are read
+                with a ``persona_id`` query, never from the old tables.
+        """
         self._database_service = database_service
         self._agent_service = agent_service
         self._dataset_analysis_service = dataset_analysis_service
+        self._binding_store = binding_store
+
+    def _bindings(self, persona_id: str) -> List[PersonaBinding]:
+        if self._binding_store is None:
+            return []
+        bindings: List[PersonaBinding] = self._binding_store.list_for_persona(
+            persona_id
+        )
+        return bindings
 
     def prepare(
         self,
@@ -110,18 +129,30 @@ class PersonaAgentIntegration:
 
         sections: list[str] = []
         tool_groups: list[list[Any]] = []
+        use_dataset = enable_dataset and config.ENABLE_DATASET_ANALYSIS
+        bindings = self._bindings(persona_id) if (enable_kb or use_dataset) else []
 
         if enable_kb:
+            kb_binding = next(
+                (b for b in bindings if b.target_type is BindingTargetType.KB), None
+            )
+            knowledge_base = (
+                self._database_service.get_knowledge_base(kb_binding.target_id)
+                if kb_binding is not None
+                else None
+            )
             kb_tools, kb_info = self._agent_service.get_kb_tools(
-                persona_id, self._database_service
+                kb_binding, knowledge_base
             )
             tool_groups.append(kb_tools)
             if kb_info:
                 sections.append(build_kb_prompt_section(**kb_info))
 
         # global kill switch と session フラグの AND。
-        if enable_dataset and config.ENABLE_DATASET_ANALYSIS:
-            accepted_bindings, datasets = self._resolve_dataset_bindings(persona_id)
+        if use_dataset:
+            accepted_bindings, datasets = self._resolve_dataset_bindings(
+                persona_id, bindings
+            )
             ds_tools, descriptors = self._dataset_analysis_service.build_binding_tools(
                 accepted_bindings, datasets
             )
@@ -132,32 +163,38 @@ class PersonaAgentIntegration:
         return sections, tool_groups
 
     def _resolve_dataset_bindings(
-        self, persona_id: str
+        self, persona_id: str, bindings: Optional[List[PersonaBinding]] = None
     ) -> tuple[list[dict[str, Any]], list[Any]]:
         """ペルソナの binding を解決し、重複 dataset を丸ごと除外して返す。
 
         persona×dataset に複数 binding が存在する dataset はどれを使うか一意に定まらない
         ため、その dataset を丸ごと除外する（fail-closed）。一意な空 binding_keys は
-        従来どおり全行アクセスとして許可する。
+        従来どおり全行アクセスとして許可する。U5 の PersonaBindings はキーが
+        persona_id + target_key のため重複は起きないが、除外の規則は残す。
+        組織資産の除外（約束 C9 の asset_filter）は U6。
         """
-        bindings = self._database_service.get_bindings_by_persona(persona_id)
-        if not bindings:
+        dataset_bindings = [
+            b
+            for b in (bindings if bindings is not None else self._bindings(persona_id))
+            if b.is_dataset
+        ]
+        if not dataset_bindings:
             return [], []
 
         counts: dict[str, int] = {}
-        for b in bindings:
-            counts[b.dataset_id] = counts.get(b.dataset_id, 0) + 1
+        for b in dataset_bindings:
+            counts[b.target_id] = counts.get(b.target_id, 0) + 1
 
-        accepted = [b for b in bindings if counts[b.dataset_id] == 1]
+        accepted = [b for b in dataset_bindings if counts[b.target_id] == 1]
         if not accepted:
             return [], []
 
-        dataset_ids = list({b.dataset_id for b in accepted})
+        dataset_ids = list({b.target_id for b in accepted})
         datasets = [self._database_service.get_dataset(did) for did in dataset_ids]
         datasets = [d for d in datasets if d is not None]
 
         accepted_bindings = [
-            {"dataset_id": b.dataset_id, "binding_keys": b.binding_keys}
+            {"dataset_id": b.target_id, "binding_keys": b.binding_keys}
             for b in accepted
         ]
         return accepted_bindings, datasets

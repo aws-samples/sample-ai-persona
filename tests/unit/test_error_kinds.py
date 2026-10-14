@@ -157,6 +157,23 @@ class TestAuthzCodes:
         assert issubclass(RoleRequiredError, CodedError)
 
 
+class TestPersonaU5Codes:
+    """U5 のコード（rules.md BR1.6、BR2.5、BR5.3、security-design.md §5）。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [ErrorCode.GENERATION_RESULT_TOO_LARGE, ErrorCode.FILE_ATTACH_LIMIT_EXCEEDED],
+    )
+    def test_size_limits_are_capacity(self, code):
+        assert code.kind is ErrorKind.CAPACITY
+
+    @pytest.mark.parametrize(
+        "code", [ErrorCode.FILE_NOT_FOUND, ErrorCode.KB_BINDING_NOT_FOUND]
+    )
+    def test_missing_targets_are_not_found(self, code):
+        assert code.kind is ErrorKind.NOT_FOUND
+
+
 class TestCodedErrorExposesKind:
     """例外インスタンスから分類を辿れること（表示層が使う経路）。"""
 

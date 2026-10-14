@@ -49,10 +49,9 @@ class World:
         self.db.get_personas_by_ids.side_effect = lambda ids: {
             i: p for i in ids if (p := self._get(i)) is not None
         }
-        self.db.get_all_personas.side_effect = lambda **_kw: (
-            [p for i in sorted(self.store.bodies) if (p := self._get(i))],
-            None,
-        )
+        self.db.scan_all_personas.side_effect = lambda: [
+            p for i in sorted(self.store.bodies) if (p := self._get(i))
+        ]
         self.db.save_persona.side_effect = lambda p: p.id
         self.db.update_persona.return_value = True
 
@@ -118,11 +117,16 @@ def manager(world, owners, s3) -> PersonaManager:
     }
     sharing = ResourceSharing(world.store, departments, sleep=lambda _s: None)
     sharing.register(TABLE)
+    bindings = Mock()
+    bindings.list_for_persona.return_value = []
     return PersonaManager(
         database_service=world.db,
         s3_service=s3,
         resource_sharing=sharing,
         owners=owners,
+        # U5: the deletion cleanup reads bindings; no long-term memory in tests
+        binding_store=bindings,
+        memory_service=None,
     )
 
 
@@ -347,7 +351,7 @@ class TestSearch:
         world.add("p2", MEMBER_B.sub)
         listing = manager.search_personas(ADMIN, "all", "名前")
         assert set(_ids(listing)) == {"p1", "p2"}
-        world.db.get_all_personas.assert_called_once_with(search_all=True)
+        world.db.scan_all_personas.assert_called_once_with()
 
 
 # =============================================================================
@@ -400,9 +404,14 @@ class TestDetail:
             manager.describe_persona(MEMBER_B, persona)
         owners.labels.assert_not_called()  # 所有者の名前を引かない
 
-    def test_existing_get_persona_is_unchanged(self, manager, world):
+    def test_get_persona_needs_read(self, manager, world):
+        """U5 (BR4.5): get_persona takes the user and checks read."""
         world.add("p1", MEMBER_A.sub)
-        assert manager.get_persona("p1").id == "p1"
+        assert manager.get_persona(MEMBER_A, "p1").id == "p1"
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.get_persona(MEMBER_B, "p1")
+        # discussions and interviews still read without a decision until U6
+        assert manager.get_persona_unchecked("p1").id == "p1"
 
 
 class TestUpdate:

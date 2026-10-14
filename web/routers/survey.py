@@ -38,7 +38,9 @@ from src.managers.survey_template_manager import (
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
 )
-from src.models.errors import ErrorCode
+from src.managers.file_manager import FileManager
+from src.models.authz import Principal
+from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.survey_template import Question, TemplateImage
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
 from web.error_messages import (  # noqa: E402
+    error_kind_of,
     is_transient,
     mark_renderable,
     toast_response,
@@ -65,6 +68,7 @@ _template_manager: SurveyTemplateManager | None = None
 _dataset_manager: SurveyDatasetManager | None = None
 _execution_manager: SurveyExecutionManager | None = None
 _analysis_manager: SurveyAnalysisManager | None = None
+_file_manager: FileManager | None = None
 
 
 def get_template_manager() -> SurveyTemplateManager:
@@ -93,6 +97,20 @@ def get_analysis_manager() -> SurveyAnalysisManager:
     if _analysis_manager is None:
         _analysis_manager = SurveyAnalysisManager()
     return _analysis_manager
+
+
+def get_file_manager() -> FileManager:
+    """FileManager（テンプレートの画像のアップロードと配信、U5）"""
+    global _file_manager
+    if _file_manager is None:
+        _file_manager = FileManager()
+    return _file_manager
+
+
+def _principal(request: Request) -> Principal:
+    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    principal: Principal = request.state.principal
+    return principal
 
 
 # =========================================================================
@@ -1116,42 +1134,64 @@ async def delete_survey(survey_id: str) -> Any:
 
 
 @router.post("/templates/upload-image")
-async def upload_survey_image(file: UploadFile = File(...)) -> Any:
-    """アンケートテンプレート用画像をアップロード"""
+async def upload_survey_image(request: Request, file: UploadFile = File(...)) -> Any:
+    """アンケートテンプレート用画像をアップロード（利用者のキー、24 時間の期限、BR5.1）"""
+    principal = _principal(request)
     try:
-        from src.managers.file_manager import FileManager
-
-        file_manager = FileManager()
+        file_manager = get_file_manager()
         file_content = await file.read()
-        metadata = file_manager.upload_survey_image(file_content, file.filename)  # type: ignore[arg-type]
+        loop = asyncio.get_running_loop()
+        metadata = await loop.run_in_executor(
+            executor,
+            file_manager.upload_survey_image,
+            principal,
+            file_content,
+            file.filename or "",
+        )
         return JSONResponse(
             {
                 "file_id": metadata.file_id,
                 "file_path": metadata.file_path,
                 "mime_type": metadata.mime_type,
                 "original_filename": metadata.original_filename,
-                "preview_url": _get_image_preview_url(metadata.file_path),
+                "preview_url": _own_upload_preview_url(
+                    file_manager, principal, metadata.file_path
+                ),
             }
         )
     except Exception as e:
-        logger.error(f"Survey image upload error: {e}")
+        logger.error("Survey image upload error", exc_info=True)
         return JSONResponse(
             {"error": user_message_for(e, default="画像のアップロードに失敗しました")},
             status_code=400,
         )
 
 
-@router.get("/image-preview")
-async def image_preview(file_path: str) -> Any:
-    """画像のプレビューURL（署名付きURL）を返す"""
-    url = _get_image_preview_url(file_path)
-    if not url:
-        from fastapi import HTTPException
+def _own_upload_preview_url(
+    file_manager: FileManager, principal: Principal, file_path: str
+) -> str:
+    """The preview URL of an upload just made (empty when it cannot be signed)."""
+    try:
+        return file_manager.preview_url_for_path(principal, file_path)
+    except CodedError:
+        logger.warning("Preview URL of an upload is unavailable", exc_info=True)
+        return ""
 
-        raise HTTPException(
-            status_code=404,
-            detail=user_message_for_code(ErrorCode.S3_OBJECT_NOT_FOUND),
-        )
+
+@router.get("/image-preview")
+async def image_preview(request: Request, file_path: str) -> Any:
+    """画像のプレビューURL（署名付きURL）を返す。
+
+    読めるアップロードのパスだけ（BR5.8）。任意のパス・他人のパスは 404 で URL を作らない
+    （共通の例外ハンドラが答える）。
+    """
+    loop = asyncio.get_running_loop()
+    url = await loop.run_in_executor(
+        executor,
+        get_file_manager().preview_url_for_path,
+        _principal(request),
+        file_path,
+    )
     return JSONResponse({"url": url})
 
 
@@ -1208,35 +1248,42 @@ async def create_template(request: Request) -> Any:
 
     manager = get_template_manager()
     try:
-        manager.create_template(name=name, questions=questions, images=images or None)
-    except SurveyTemplateValidationError as e:
-        logger.warning("Template validation error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
+        # 画像は保存する人のアップロードとして紐付ける（BR5.3）
+        manager.create_template(
+            name=name,
+            questions=questions,
+            images=images or None,
+            principal=_principal(request),
         )
     except SurveyTemplateManagerError as e:
+        if error_kind_of(e) is ErrorKind.NOT_FOUND:
+            # 他人の・期限切れの画像は、ないものと同じ 404 のトースト
+            logger.warning("Template image not attachable", exc_info=True)
+            return toast_response(e, status_code=404)
+        if isinstance(e, SurveyTemplateValidationError):
+            logger.warning("Template validation error", exc_info=True)
+            return _template_save_error(request, user_message_for(e), 400)
         logger.error("Template save error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {
-                    "request": request,
-                    "error": user_message_for(e, default="保存に失敗しました"),
-                },
-                status_code=500,
-            )
+        return _template_save_error(
+            request, user_message_for(e, default="保存に失敗しました"), 500
         )
 
     # 成功時はテンプレート一覧にリダイレクト（htmx対応）
     response = HTMLResponse(content="", status_code=200)
     response.headers["HX-Redirect"] = "/survey/templates"
     return response
+
+
+def _template_save_error(request: Request, message: str, status_code: int) -> Any:
+    """Inline error of a template save (the catalog wording, 400 or 500)."""
+    return mark_renderable(
+        templates.TemplateResponse(
+            request,
+            "partials/error_inline.html",
+            {"request": request, "error": message},
+            status_code=status_code,
+        )
+    )
 
 
 @router.put("/templates/{template_id}", response_class=HTMLResponse)
@@ -1274,34 +1321,24 @@ async def update_template(request: Request, template_id: str) -> Any:
 
     manager = get_template_manager()
     try:
+        # 新しく足した画像だけを更新する人のアップロードとして紐付ける（BR5.3）
         manager.update_template(
             template_id=template_id,
             name=name,
             questions=questions,
             images=images or None,
-        )
-    except SurveyTemplateValidationError as e:
-        logger.warning("Template validation error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {"request": request, "error": user_message_for(e)},
-                status_code=400,
-            )
+            principal=_principal(request),
         )
     except SurveyTemplateManagerError as e:
+        if error_kind_of(e) is ErrorKind.NOT_FOUND:
+            logger.warning("Template image not attachable", exc_info=True)
+            return toast_response(e, status_code=404)
+        if isinstance(e, SurveyTemplateValidationError):
+            logger.warning("Template validation error", exc_info=True)
+            return _template_save_error(request, user_message_for(e), 400)
         logger.error("Template update error", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_inline.html",
-                {
-                    "request": request,
-                    "error": user_message_for(e, default="更新に失敗しました"),
-                },
-                status_code=500,
-            )
+        return _template_save_error(
+            request, user_message_for(e, default="更新に失敗しました"), 500
         )
 
     response = HTMLResponse(content="", status_code=200)

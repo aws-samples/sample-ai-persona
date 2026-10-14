@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 
 class TestSurveyIndexPage:
     def test_survey_index_loads(self, client):
@@ -355,3 +357,123 @@ class TestSurveyExecute:
             headers={"HX-Request": "true"},
         )
         assert resp.status_code == 200
+
+
+# =============================================================================
+# U5: テンプレートの画像は利用者のキーで置き、配信は判定を通す（BR5.1、BR5.8）
+# =============================================================================
+
+_UPLOADED = (
+    "s3://bucket/uploads/local:dev@example.com/survey_image/"
+    "0b9c8f2e-3c1d-4d55-9a57-2a9f4b1f0c11_a.png"
+)
+
+
+class TestSurveyImagesU5:
+    @patch("web.routers.survey.get_file_manager")
+    def test_upload_passes_the_signed_in_user(self, mock_get_fm, client):
+        manager = mock_get_fm.return_value
+        manager.upload_survey_image.return_value = Mock(
+            file_id="f1",
+            file_path=_UPLOADED,
+            mime_type="image/png",
+            original_filename="a.png",
+        )
+        manager.preview_url_for_path.return_value = "https://signed/a.png"
+
+        resp = client.post(
+            "/survey/templates/upload-image",
+            files={"file": ("a.png", b"\x89PNG", "image/png")},
+        )
+
+        assert resp.status_code == 200
+        principal, content, filename = manager.upload_survey_image.call_args.args
+        assert principal.sub == "local:dev@example.com"
+        assert (content, filename) == (b"\x89PNG", "a.png")
+        assert resp.json()["preview_url"] == "https://signed/a.png"
+        # 配信 URL は判定を通して作る（本人のアップロード）
+        assert manager.preview_url_for_path.call_args.args[1] == _UPLOADED
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "s3://bucket/datasets/secret.csv",
+            "s3://bucket/uploads/local:other@example.com/survey_image/x_a.png",
+            "../../etc/passwd",
+        ],
+    )
+    def test_image_preview_of_any_other_path_is_not_found(self, client, path):
+        """任意のパス・他人のパスは 404 で URL を作らない（BR5.8）"""
+        from src.managers.file_manager import FileManager
+
+        s3 = Mock()
+        s3.key_of.side_effect = lambda p: (
+            p.removeprefix("s3://bucket/") if p.startswith("s3://bucket/") else None
+        )
+        store = Mock()
+        store.get.return_value = None
+        attachments = Mock()
+        from src.models.errors import CodedError, ErrorCode
+
+        attachments.readable_file.side_effect = CodedError(
+            "unreadable", code=ErrorCode.FILE_NOT_FOUND
+        )
+        manager = FileManager(
+            db_service=Mock(), s3_service=s3, file_store=store, attachments=attachments
+        )
+        with patch("web.routers.survey.get_file_manager", return_value=manager):
+            resp = client.get("/survey/image-preview", params={"file_path": path})
+
+        assert resp.status_code == 404
+        s3.generate_presigned_url.assert_not_called()
+
+    @patch("web.routers.survey.get_file_manager")
+    def test_image_preview_of_own_upload(self, mock_get_fm, client):
+        mock_get_fm.return_value.preview_url_for_path.return_value = "https://signed"
+
+        resp = client.get("/survey/image-preview", params={"file_path": _UPLOADED})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"url": "https://signed"}
+        principal, path = mock_get_fm.return_value.preview_url_for_path.call_args.args
+        assert principal.sub == "local:dev@example.com" and path == _UPLOADED
+
+    @patch("web.routers.survey.get_template_manager")
+    def test_template_save_passes_the_user_for_attaching(self, mock_get_mgr, client):
+        resp = client.post(
+            "/survey/templates",
+            data={"name": "テンプレート", "questions_json": "[]"},
+        )
+
+        assert resp.status_code == 200
+        kwargs = mock_get_mgr.return_value.create_template.call_args.kwargs
+        assert kwargs["principal"].sub == "local:dev@example.com"
+
+    @patch("web.routers.survey.get_template_manager")
+    def test_template_update_passes_the_user(self, mock_get_mgr, client):
+        resp = client.put(
+            "/survey/templates/t1",
+            data={"name": "テンプレート", "questions_json": "[]"},
+        )
+
+        assert resp.status_code == 200
+        kwargs = mock_get_mgr.return_value.update_template.call_args.kwargs
+        assert kwargs["principal"].sub == "local:dev@example.com"
+
+    @patch("web.routers.survey.get_template_manager")
+    def test_image_that_cannot_be_attached_is_not_found(self, mock_get_mgr, client):
+        from src.managers.survey_template_manager import SurveyTemplateManagerError
+        from src.models.errors import ErrorCode
+
+        mock_get_mgr.return_value.create_template.side_effect = (
+            SurveyTemplateManagerError(
+                "image not attachable", code=ErrorCode.FILE_NOT_FOUND
+            )
+        )
+
+        resp = client.post(
+            "/survey/templates",
+            data={"name": "テンプレート", "questions_json": "[]"},
+        )
+
+        assert resp.status_code == 404

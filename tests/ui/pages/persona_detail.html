@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{#
+  ペルソナ詳細（U5、M8）の部品の画面。実画面（persona/detail.html）と同じ 2 つの部分
+  テンプレートを、所有者（manageable=True）と共有された人（False）の文脈で描く。
+  見出し（h1）はペルソナの名前だけにするため、_frame.html ではなく base.html を継承する。
+  紐付けの一覧は htmx で読み込むため、テストは /persona/{id}/kb-binding と
+  /persona/{id}/dataset-bindings の応答を登録する。
+#}
+{% block content %}
+<div class="max-w-4xl mx-auto" id="persona-detail-container">
+    {% include "persona/partials/detail_header.html" %}
+    {% include "persona/partials/detail_body.html" %}
+</div>
+{% endblock %}

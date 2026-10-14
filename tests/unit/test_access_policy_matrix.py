@@ -368,3 +368,175 @@ def test_share_bulk(actor, kind, expected):
     assert _SHARE_CODES[failure.code] == expected
     # 読めない対象の名前は出さない（BR2.4）
     assert (failure.display_name is None) is (expected == "404")
+
+
+# =============================================================================
+# U5: ペルソナに付随するもの（記憶・紐付け・プレビュー・アバター・エクスポート・ファイル）
+# security-design.md §1、BR2〜BR5、BR7、NFR1.31
+# =============================================================================
+
+
+def _u5_world():
+    from tests.unit.persona_u5_world import World, make_persona
+
+    world = World()
+    owner = ACTORS["member"]
+    persona = world.add_persona(make_persona("owner-1", ["sales"]))
+    own = world.add_persona(make_persona(owner.sub))
+    dedicated = world.add_dataset(owner_persona_id=own.id)
+    from src.models.persona_binding import PersonaBinding
+
+    for p in (persona, own):
+        world.bindings.put(
+            PersonaBinding.for_dataset(p.id, dedicated.id, dedicated=True)
+        )
+    world.personas[own.id] = own.with_avatar("s3://bucket/a.webp")
+    world.personas[persona.id] = persona.with_avatar("s3://bucket/b.webp")
+    world.s3.generate_presigned_url.return_value = "https://signed"
+    return world, {"own": own.id, "shared": persona.id}, dedicated.id
+
+
+def _memory_manager(world):
+    from src.managers.persona_memory_manager import PersonaMemoryManager
+
+    memory = world.memory
+    memory.list_memories.return_value = []
+    return PersonaMemoryManager(
+        database_service=world.db, memory_service=memory, resource_lookup=world.lookup
+    )
+
+
+#: Actors of the U5 rows: the member is in ``sales``; the ``shared`` persona
+#: belongs to someone else and is shared with ``sales``.
+U5_ACTORS = {
+    "member": ACTORS["member"],
+    "admin": ACTORS["admin"],
+    "no_role": ACTORS["no_role"],
+    "stranger": Principal(sub="stranger-1", roles=frozenset({Role.MEMBER})),
+}
+
+#: (operation, actor, target, outcome)
+U5_MATRIX: list[tuple[str, str, str, Outcome]] = []
+for _op, _rows in {
+    # 記憶は管理できる人だけ。共有されただけの人も 404（BR4.1）
+    "memory": {"own": "ok", "shared": "404", "admin": "ok"},
+    "bindings": {"own": "ok", "shared": "ok", "admin": "ok"},
+    "bind": {"own": "ok", "shared": "403", "admin": "ok"},
+    "preview": {"own": "ok", "shared": "ok", "admin": "ok"},
+    "avatar_url": {"own": "ok", "shared": "ok", "admin": "ok"},
+    "avatar_change": {"own": "ok", "shared": "403", "admin": "ok"},
+    "export": {"own": "ok", "shared": "ok", "admin": "ok"},
+}.items():
+    U5_MATRIX += [
+        (_op, "member", "own", _rows["own"]),
+        (_op, "member", "shared", _rows["shared"]),
+        (_op, "admin", "shared", _rows["admin"]),
+        (_op, "stranger", "shared", "404"),
+        (_op, "no_role", "shared", "404"),
+    ]
+
+
+def _u5_call(op: str, world, principal: Principal, persona_id: str, dataset_id: str):
+    manager = world.manager()
+    if op == "memory":
+        return _memory_manager(world).get_memories(principal, persona_id)
+    if op == "bindings":
+        return manager.get_dataset_bindings(principal, persona_id)
+    from dataclasses import replace
+
+    # the dataset is dedicated to the persona under test (always usable, BR2.4)
+    world.datasets[dataset_id] = replace(
+        world.datasets[dataset_id], owner_persona_id=persona_id
+    )
+    if op == "bind":
+        world.bindings.delete(persona_id, f"DATASET#{dataset_id}")
+        return manager.create_dataset_binding(principal, persona_id, dataset_id)
+    if op == "preview":
+        return manager.preview_binding_data(principal, persona_id, dataset_id)
+    if op == "avatar_url":
+        return manager.get_avatar_url(principal, persona_id)
+    if op == "avatar_change":
+        return manager.delete_avatar(principal, persona_id)
+    if op == "export":
+        return manager.export_persona(principal, persona_id)
+    raise AssertionError(op)
+
+
+@pytest.mark.parametrize(
+    ("op", "actor", "kind", "expected"),
+    U5_MATRIX,
+    ids=[f"{op}-{actor}-{kind}" for op, actor, kind, _ in U5_MATRIX],
+)
+def test_u5_persona_attachments(op, actor, kind, expected):
+    world, personas, dataset_id = _u5_world()
+    principal = U5_ACTORS[actor]
+    try:
+        _u5_call(op, world, principal, personas[kind], dataset_id)
+    except AccessDeniedError:
+        assert expected == "403"
+        return
+    except CodedError as e:
+        assert e.code is ErrorCode.PERSONA_NOT_FOUND
+        assert expected == "404"
+        return
+    assert expected == "ok"
+
+
+#: Upload before attaching: only the uploader, only before expiry (BR5.4).
+U5_FILE_ROWS: list[tuple[str, Outcome]] = [
+    ("member", "ok"),
+    ("admin", "404"),
+    ("stranger", "404"),
+    ("no_role", "404"),
+]
+
+
+@pytest.mark.parametrize(("actor", "expected"), U5_FILE_ROWS)
+def test_u5_unattached_file(actor, expected):
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+
+    from src.managers.components.file_attachments import FileAttachments
+    from src.models.uploaded_file import UploadedFile
+
+    uploaded = UploadedFile.create_new(
+        owner_sub=ACTORS["member"].sub,
+        file_type="survey_image",
+        original_filename="a.png",
+        file_size=1,
+        file_hash="h",
+        mime_type="image/png",
+        now=datetime.now(timezone.utc),
+    )
+    store = Mock()
+    store.get.return_value = uploaded
+    files = FileAttachments(store, None)
+    allowed = files.can_read_file(U5_ACTORS[actor], uploaded.id)
+    assert ("ok" if allowed else "404") == expected
+
+
+@pytest.mark.parametrize(
+    ("actor", "expected"), [("member", "ok"), ("admin", "ok"), ("stranger", "404")]
+)
+def test_u5_attached_file_before_parent_registration(actor, expected):
+    """U6 / U7 が親の判定を登録するまでは、アップロードした本人と admin だけ（BR5.7）。"""
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+
+    from src.managers.components.file_attachments import FileAttachments
+    from src.models.uploaded_file import UploadedFile
+
+    uploaded = UploadedFile.create_new(
+        owner_sub=ACTORS["member"].sub,
+        file_type="discussion_document",
+        original_filename="a.pdf",
+        file_size=1,
+        file_hash="h",
+        mime_type="application/pdf",
+        now=datetime.now(timezone.utc),
+    ).attached_to("discussion", "d1")
+    store = Mock()
+    store.get.return_value = uploaded
+    files = FileAttachments(store, None)
+    allowed = files.can_read_file(U5_ACTORS[actor], uploaded.id)
+    assert ("ok" if allowed else "404") == expected

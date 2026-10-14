@@ -146,7 +146,7 @@ class TestDiscussionStartEndpoint:
     def test_start_invalid_personas(self, mock_get_manager, client):
         """無効なペルソナIDでエラーを返すことを確認"""
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = None
+        mock_manager.get_persona_unchecked.return_value = None
         mock_get_manager.return_value = mock_manager
 
         response = client.post(
@@ -174,7 +174,7 @@ class TestDiscussionStartEndpoint:
     ):
         """従来モードでの議論開始が成功することを確認"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -227,7 +227,7 @@ class TestDiscussionStartEndpoint:
     ):
         """agentモードでpersona_models[id]・facilitator_modelがManagerに渡ることを確認"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -279,7 +279,7 @@ class TestDiscussionDetailEndpoint:
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         response = client.get(f"/discussion/{sample_discussion.id}")
@@ -317,7 +317,7 @@ class TestDiscussionDetailEndpoint:
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -356,7 +356,7 @@ class TestDiscussionDetailEndpoint:
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -455,7 +455,7 @@ class TestDiscussionStreamEndpoint:
     def test_stream_invalid_personas(self, mock_get_manager, client):
         """無効なペルソナIDでエラーを返すことを確認"""
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = None
+        mock_manager.get_persona_unchecked.return_value = None
         mock_get_manager.return_value = mock_manager
 
         response = client.get(
@@ -479,7 +479,7 @@ class TestDiscussionStreamEndpoint:
         import json as json_module
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -675,7 +675,7 @@ class TestDiscussionStartWithDocuments:
         """ドキュメント付き議論開始が成功することを確認"""
         # ペルソナマネージャーのモック
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -731,7 +731,7 @@ class TestDiscussionStartWithDocuments:
         """ドキュメントなし議論開始が従来通り動作することを確認"""
         # ペルソナマネージャーのモック
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.side_effect = [
+        mock_persona_manager.get_persona_unchecked.side_effect = [
             sample_persona,
             sample_persona_2,
         ]
@@ -802,7 +802,7 @@ class TestDiscussionDetailWithDocuments:
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         response = client.get(f"/discussion/{sample_discussion.id}")
@@ -827,7 +827,7 @@ class TestDiscussionDetailWithDocuments:
         mock_get_discussion.return_value = mock_discussion_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         response = client.get(f"/discussion/{sample_discussion.id}")
@@ -1103,3 +1103,105 @@ class TestDiscussionDialogs:
         assert loading and 'aria-busy="true"' in loading.group(0)
         assert re.search(r'id="discussion-loading-status"[^>]*role="status"', html)
         assert "議論を開始しています" in html
+
+
+class TestDiscussionDocumentsU5:
+    """U5: 資料は利用者のキーで置き、他人の資料では議論を始めない（BR5.1、BR5.3）"""
+
+    @patch("web.routers.discussion.get_file_manager")
+    def test_upload_passes_the_signed_in_user(self, mock_get_manager, client):
+        from datetime import datetime
+
+        from src.managers.file_manager import FileMetadata
+
+        manager = mock_get_manager.return_value
+        manager.upload_discussion_document.return_value = FileMetadata(
+            file_id="doc-1",
+            original_filename="a.pdf",
+            saved_filename="doc-1_a.pdf",
+            file_path="s3://b/uploads/local:dev@example.com/discussion_document/doc-1_a.pdf",
+            file_size=10,
+            file_hash="h",
+            mime_type="application/pdf",
+            uploaded_at=datetime.now(),
+        )
+
+        response = client.post(
+            "/discussion/upload-document",
+            files={"file": ("a.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        principal, content, filename = manager.upload_discussion_document.call_args.args
+        assert principal.sub == "local:dev@example.com"
+        assert (content, filename) == (b"%PDF-1.4\n", "a.pdf")
+        # 応答の項目は今のまま（キーは返さない）
+        assert set(response.json()) == {
+            "file_id",
+            "filename",
+            "file_size",
+            "mime_type",
+            "uploaded_at",
+        }
+
+    @patch("web.routers.discussion.get_discussion_manager")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_someone_elses_document_is_not_found(
+        self, mock_get_persona, mock_get_discussion, client, sample_persona
+    ):
+        from src.managers.discussion_manager import DiscussionManagerError
+        from src.models.errors import ErrorCode
+
+        mock_get_persona.return_value.get_persona_unchecked.return_value = (
+            sample_persona
+        )
+        manager = mock_get_discussion.return_value
+        manager.run_classic_discussion.side_effect = DiscussionManagerError(
+            "document not readable", code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
+        )
+
+        response = client.post(
+            "/discussion/start",
+            data={
+                "topic": "テストトピック",
+                "persona_ids": ["p1", "p2"],
+                "mode": "traditional",
+                "document_ids": ["someone-elses"],
+            },
+        )
+
+        assert response.status_code == 404
+        assert "showToast" in response.headers["HX-Trigger"]
+        kwargs = manager.run_classic_discussion.call_args.kwargs
+        assert kwargs["document_ids"] == ["someone-elses"]
+        assert kwargs["principal"].sub == "local:dev@example.com"
+
+    @patch("web.routers.discussion.get_agent_discussion_manager")
+    @patch("web.routers.discussion.get_persona_manager")
+    def test_agent_discussion_gets_the_user(
+        self,
+        mock_get_persona,
+        mock_get_agent,
+        client,
+        sample_persona,
+        sample_discussion,
+    ):
+        mock_get_persona.return_value.get_persona_unchecked.return_value = (
+            sample_persona
+        )
+        manager = mock_get_agent.return_value
+        manager.run_agent_discussion_full.return_value = sample_discussion
+
+        response = client.post(
+            "/discussion/start",
+            data={
+                "topic": "テストトピック",
+                "persona_ids": ["p1", "p2"],
+                "mode": "agent",
+                "document_ids": ["doc-1"],
+            },
+        )
+
+        assert response.status_code == 200
+        kwargs = manager.run_agent_discussion_full.call_args.kwargs
+        assert kwargs["principal"].sub == "local:dev@example.com"

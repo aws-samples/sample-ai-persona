@@ -39,7 +39,7 @@ graph TB
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 | 依存 |
 |---|---|---|---|
-| `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB（既存と同じ形の 10 テーブル + Sessions）、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、トークンの暗号化鍵・ログイン途中の Cookie の署名鍵 | なし |
+| `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB（既存と同じ形の 10 テーブル + Sessions、U4 の ResourceShares、U5 の PersonaCandidates・PersonaBindings）、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、トークンの暗号化鍵・ログイン途中の Cookie の署名鍵 | なし |
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF WebACL（`enableWaf: true` のとき） | なし |
 | `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ロググループとメトリクスフィルタ | Data、Edge |
 
@@ -111,6 +111,14 @@ Cognito の ID、AgentCore Memory の ID・Strategy ID を手で書き写す項�
 
 インフラごと戻すときは、前のコミットを取り出して `./deploy.sh` をやり直します。データを持つリソースは RETAIN のため消えません。
 
+戻し方は「前に直す」（直したコミットで `./deploy.sh` をやり直す）が基本です。`deploy.sh` は App だけでなく Data も入れ直すため、前のコミットに戻すと Data スタックの形も前に戻ります。U5 の後で U5 より前のコミットまで戻したときは次のようになります。
+
+- `PersonaCandidates`・`PersonaBindings` はスタックの定義から外れて切り離されます（RETAIN のため実体とデータは残る）。もう一度 U5 を入れると、新しい 2 テーブルは別の物理名で空のまま作られ、切り離されたテーブルのデータ（紐付け、候補）は自動では戻りません。dev では紐付けを画面で作り直します（v1.0.0 は移行を持たない）
+- 古い紐付けの 2 テーブル（`PersonaDatasetBindings`・`PersonaKBBindings`）は U5 の間も残してあり、前の版のアプリはそれを読みます。U5 の後に作った紐付けは前の版からは見えません
+- アップロード用バケットのライフサイクル（下）がなくなり、`UploadedFiles` の TTL も外れます（消えるはずのものが残るだけで、消えるものは増えません）
+- U5 の後は、イメージだけを前のタグに戻す（`--image-tag`）方法は使えません。新しい App スタックの権限には古い紐付けのテーブルがなく、前のアプリが紐付けを読めないためです
+- 切り離されたテーブルを消すかどうかは、利用者が判断して手で行います（テーブルとバケットは消さない、RETAIN）
+
 前の版から進め直したとき（共有の書き込みが前の版と今の版で食い違ったおそれがあるとき）は、下の「共有の索引（ResourceShares）の作り直し」の差分を流して、ずれがないことを確かめます。
 
 #### インフラの変更を確かめる
@@ -122,6 +130,21 @@ cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=<タグ>
 ```
 
 テーブル・バケット・User Pool が置き換わる差分（同じ論理 ID の `[-]` と `[+]`）があれば止めます。v1.0.0 の U4 では `ResourceShares` テーブルの追加と、`Personas` テーブルへの GSI `OwnerIndex` の追加（テーブルは置き換わらない）が出ます。
+
+U5 では次の差分が出ます。どれもテーブル・バケットの置き換えではありません。
+
+- Data: `PersonaCandidates`（PK `candidate_id`、TTL `expires_at`、PITR なし）と `PersonaBindings`（PK `persona_id`・SK `target_key`、GSI `TargetIndex`、PITR、削除保護）の追加。`UploadedFiles` への TTL `expires_at` の追加。アップロード用バケットへのライフサイクルの追加（下の表）
+- App: 新しい 2 テーブルの権限（Scan なし）と環境変数 `PERSONA_CANDIDATES_TABLE_NAME`・`PERSONA_BINDINGS_TABLE_NAME` の追加。古い紐付けの 2 テーブルの権限と環境変数の削除（テーブルは残る。外すのは U9）。S3 の権限を `grantReadWrite` から明示的な文に置き換え（古いバージョンの操作は付けない。タグの操作は `uploads/*` と `candidates/*` だけ）
+
+#### アップロード用バケットのライフサイクル（U5）
+
+| ルール | 対象 | 動作 |
+|---|---|---|
+| `ExpireCandidateCsv` | `candidates/`（生成候補の行動データの一時 CSV） | 作成から 1 日で失効 |
+| `ExpireUnattachedUploads` | タグ `pending=true`（議論・テンプレートに使われていないアップロード） | 作成から 1 日で失効 |
+| `ExpireNoncurrentVersions` | バケット全体 | 古いバージョンは 7 日で削除、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日で中止 |
+
+バケットはバージョニングを有効にしているため、アプリが消したオブジェクト（ペルソナの削除で消したアバター・専用データセットなど）は古いバージョンとして 7 日間残り、そのあと消えます。アプリのタスクロールには古いバージョンを読む権限がないため、その 7 日の間もアプリからは読めません。誤って消したものを戻すときは、admin の資格情報で 7 日以内に古いバージョンを取り出します。
 
 #### 共有の索引（ResourceShares）の作り直し
 

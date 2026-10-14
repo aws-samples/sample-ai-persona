@@ -22,7 +22,8 @@ const EXISTING_TABLES: { pk: string; gsis: string[]; pitr: boolean; ttl?: string
   // Personas（U4 で OwnerIndex を足した。既存の 3 つは今と同じ）
   { pk: 'id', gsis: ['CreatedAtIndex', 'NameIndex', 'OccupationIndex', 'OwnerIndex'], pitr: true },
   { pk: 'id', gsis: ['CreatedAtIndex', 'TopicIndex', 'ModeIndex'], pitr: true }, // Discussions
-  { pk: 'id', gsis: ['UploadedAtIndex'], pitr: true }, // UploadedFiles
+  // UploadedFiles（U5 で TTL expires_at を足した。キー・GSI・PITR は今のまま）
+  { pk: 'id', gsis: ['UploadedAtIndex'], pitr: true, ttl: 'expires_at' },
   { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaDatasetBindings
   { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaKBBindings
   { pk: 'id', gsis: [], pitr: false, ttl: 'expires_at' }, // Jobs
@@ -99,10 +100,99 @@ describe('DataStack: ResourceShares テーブルと OwnerIndex（U4、NFR1.20、
   });
 });
 
+describe('DataStack: PersonaCandidates と PersonaBindings（U5、NFR1.40、NFR9.30）', () => {
+  function byKeys(...names: string[]): any {
+    return Object.values(template.findResources('AWS::DynamoDB::GlobalTable')).find(
+      (t) => JSON.stringify(t.Properties.KeySchema.map((k: any) => k.AttributeName)) ===
+        JSON.stringify(names),
+    );
+  }
+
+  test('PersonaCandidates は PK candidate_id、TTL expires_at、PITR なし、RETAIN、削除保護なし、GSI なし', () => {
+    const candidates = byKeys('candidate_id');
+    expect(candidates).toBeDefined();
+    expect(candidates.DeletionPolicy).toBe('Retain');
+    expect(candidates.UpdateReplacePolicy).toBe('Retain');
+    expect(candidates.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(candidates.Properties.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expires_at',
+      Enabled: true,
+    });
+    expect(candidates.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    const replica = candidates.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toBeUndefined();
+    // 8 時間の一時データで、作り直しても失うものがない（Infrastructure Design R 2 回目）
+    expect(replica.DeletionProtectionEnabled).toBeUndefined();
+  });
+
+  test('PersonaBindings は PK persona_id・SK target_key、GSI TargetIndex（KEYS_ONLY）、PITR、RETAIN、削除保護', () => {
+    const bindings = byKeys('persona_id', 'target_key');
+    expect(bindings).toBeDefined();
+    expect(bindings.DeletionPolicy).toBe('Retain');
+    expect(bindings.UpdateReplacePolicy).toBe('Retain');
+    expect(bindings.Properties.KeySchema).toEqual([
+      { AttributeName: 'persona_id', KeyType: 'HASH' },
+      { AttributeName: 'target_key', KeyType: 'RANGE' },
+    ]);
+    expect(bindings.Properties.GlobalSecondaryIndexes).toEqual([
+      {
+        IndexName: 'TargetIndex',
+        KeySchema: [{ AttributeName: 'target_id', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'KEYS_ONLY' },
+      },
+    ]);
+    expect(bindings.Properties.TimeToLiveSpecification).toBeUndefined();
+    const replica = bindings.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+});
+
+describe('DataStack: アップロード用バケットのライフサイクル（U5、NFR1.33、NFR1.41）', () => {
+  function rules(): any[] {
+    const bucket = Object.values(template.findResources('AWS::S3::Bucket'))[0];
+    return bucket.Properties.LifecycleConfiguration?.Rules ?? [];
+  }
+
+  test('ルールは 3 つで、どれも有効', () => {
+    expect(rules()).toHaveLength(3);
+    for (const rule of rules()) {
+      expect(rule.Status).toBe('Enabled');
+    }
+  });
+
+  test('candidates/ の一時 CSV は 1 日で失効', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireCandidateCsv');
+    expect(rule).toMatchObject({ Prefix: 'candidates/', ExpirationInDays: 1 });
+  });
+
+  test('タグ pending=true の紐付かなかったアップロードは 1 日で失効', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireUnattachedUploads');
+    expect(rule.TagFilters).toEqual([{ Key: 'pending', Value: 'true' }]);
+    expect(rule.ExpirationInDays).toBe(1);
+    expect(rule.Prefix).toBeUndefined();
+  });
+
+  test('古いバージョンは 7 日、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireNoncurrentVersions');
+    expect(rule.NoncurrentVersionExpiration).toEqual({ NoncurrentDays: 7 });
+    expect(rule.ExpiredObjectDeleteMarker).toBe(true);
+    expect(rule.AbortIncompleteMultipartUpload).toEqual({ DaysAfterInitiation: 7 });
+    expect(rule.Prefix).toBeUndefined();
+    expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('バージョニング・暗号化・公開アクセスの遮断は今のまま', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: { Status: 'Enabled' },
+    });
+  });
+});
+
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions と ResourceShares を含めて 12 テーブル。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つを含めて 14 テーブル。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(12);
+    expect(Object.keys(tables)).toHaveLength(14);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

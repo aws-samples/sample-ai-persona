@@ -30,11 +30,11 @@ def test_given_physical_names_are_used():
         region=REGION,
         table_names={
             "Personas": "AIPersonaDev-Data-Personas1",
-            "PersonaKBBindings": "AIPersonaDev-Data-Bindings2",
+            "KnowledgeBases": "AIPersonaDev-Data-Kb2",
         },
     )
     assert service.personas_table == "AIPersonaDev-Data-Personas1"
-    assert service.persona_kb_bindings_table == "AIPersonaDev-Data-Bindings2"
+    assert service.kb_table == "AIPersonaDev-Data-Kb2"
     # 渡されなかったものは接頭辞から組み立てる
     assert service.surveys_table == "Local_Surveys"
 
@@ -57,4 +57,4 @@ def test_factory_passes_the_configured_names(monkeypatch):
     factory.get_database_service()
 
     assert captured["table_names"]["Personas"] == "AIPersonaDev-Data-Personas1"
-    assert len(captured["table_names"]) == 10
+    assert len(captured["table_names"]) == 8

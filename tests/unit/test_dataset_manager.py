@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime
 from dataclasses import asdict
 
-from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from src.models.dataset import Dataset, DatasetColumn
 from src.models.errors import ErrorCode
 from tests.error_helpers import raises_code
 
@@ -121,72 +121,8 @@ class TestDatasetModels:
         assert dataset.row_count == 1000
 
 
-class TestPersonaDatasetBinding:
-    """ペルソナ-データセット紐付けモデルテスト"""
-
-    def test_binding_creation(self):
-        """PersonaDatasetBinding作成テスト"""
-        binding = PersonaDatasetBinding(
-            id="bind-001",
-            persona_id="persona-123",
-            dataset_id="dataset-456",
-            binding_keys={"user_id": "U001"},
-            created_at=datetime.now(),
-        )
-
-        assert binding.id == "bind-001"
-        assert binding.persona_id == "persona-123"
-        assert binding.dataset_id == "dataset-456"
-        assert binding.binding_keys["user_id"] == "U001"
-
-    def test_binding_create_new(self):
-        """PersonaDatasetBinding.create_newテスト"""
-        binding = PersonaDatasetBinding.create_new(
-            persona_id="persona-abc",
-            dataset_id="dataset-xyz",
-            binding_keys={"customer_id": "C123"},
-        )
-
-        assert binding.id is not None
-        assert binding.persona_id == "persona-abc"
-        assert binding.dataset_id == "dataset-xyz"
-        assert binding.created_at is not None
-
-    def test_binding_to_dict(self):
-        """PersonaDatasetBinding辞書変換テスト"""
-        now = datetime.now()
-        binding = PersonaDatasetBinding(
-            id="bind-002",
-            persona_id="persona-abc",
-            dataset_id="dataset-xyz",
-            binding_keys={"customer_id": "C123", "region": "Tokyo"},
-            created_at=now,
-        )
-
-        data = binding.to_dict()
-
-        assert data["id"] == "bind-002"
-        assert data["persona_id"] == "persona-abc"
-        assert data["dataset_id"] == "dataset-xyz"
-        assert data["binding_keys"]["customer_id"] == "C123"
-        assert data["binding_keys"]["region"] == "Tokyo"
-
-    def test_binding_from_dict(self):
-        """PersonaDatasetBinding辞書からの復元テスト"""
-        data = {
-            "id": "bind-003",
-            "persona_id": "persona-def",
-            "dataset_id": "dataset-ghi",
-            "binding_keys": {"member_id": "M999"},
-            "created_at": "2024-02-01T12:00:00",
-        }
-
-        binding = PersonaDatasetBinding.from_dict(data)
-
-        assert binding.id == "bind-003"
-        assert binding.persona_id == "persona-def"
-        assert binding.dataset_id == "dataset-ghi"
-        assert binding.binding_keys["member_id"] == "M999"
+# ペルソナとデータセットの紐付けのモデル（PersonaBinding）は
+# tests/unit/test_persona_u5_models.py が確かめる（U5）。
 
 
 class TestInterviewManagerDataset:
@@ -530,50 +466,31 @@ class TestDatasetManagerCRUD:
         assert result is False
 
 
-class TestDatasetManagerBindings:
-    """紐付け操作テスト"""
+class TestDatasetManagerBindingsMoved:
+    """紐付けの 5 メソッドは PersonaManager へ移した（U5、ADR-007）。"""
 
-    @pytest.fixture
-    def manager(self):
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "save_binding",
+            "get_bindings_by_persona",
+            "delete_binding",
+            "set_persona_bindings",
+            "preview_binding_data",
+        ],
+    )
+    def test_binding_methods_are_gone(self, method):
+        from src.managers.dataset_manager import DatasetManager
+
+        assert not hasattr(DatasetManager, method)
+
+    def test_listing_is_the_organization_assets(self):
         with patch("src.managers.dataset_manager.service_factory") as mock_factory:
             mock_db = Mock()
+            mock_db.get_all_datasets.return_value = ["org"]
             mock_factory.get_database_service.return_value = mock_db
             mock_factory.get_s3_service.return_value = Mock()
             from src.managers.dataset_manager import DatasetManager
 
-            mgr = DatasetManager()
-            mgr._mock_db = mock_db
-            return mgr
-
-    def test_save_binding(self, manager):
-        binding = PersonaDatasetBinding.create_new("p1", "d1", {"key": "val"})
-        manager._mock_db.save_binding.return_value = binding
-
-        result = manager.save_binding(binding)
-        assert result == binding
-
-    def test_get_bindings_by_persona(self, manager):
-        manager._mock_db.get_bindings_by_persona.return_value = ["b1", "b2"]
-        result = manager.get_bindings_by_persona("p1")
-        assert result == ["b1", "b2"]
-
-    def test_delete_binding(self, manager):
-        manager._mock_db.delete_binding.return_value = True
-        result = manager.delete_binding("b1")
-        assert result is True
-
-    def test_set_persona_bindings(self, manager):
-        manager._mock_db.save_binding.return_value = None
-        bindings_data = [
-            {"dataset_id": "d1", "binding_keys": {"user_id": "U001"}},
-            {"dataset_id": "d2", "binding_keys": {"customer_id": "C001"}},
-        ]
-
-        result = manager.set_persona_bindings("p1", bindings_data)
-
-        assert len(result) == 2
-        assert result[0].persona_id == "p1"
-        assert result[0].dataset_id == "d1"
-        assert result[1].dataset_id == "d2"
-        manager._mock_db.delete_bindings_by_persona.assert_called_once_with("p1")
-        assert manager._mock_db.save_binding.call_count == 2
+            # get_all_datasets leaves out persona-dedicated datasets (BR6.2)
+            assert DatasetManager().get_datasets() == ["org"]

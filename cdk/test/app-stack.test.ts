@@ -162,12 +162,12 @@ describe('AppStack: Fargate', () => {
       'DISCUSSIONS_TABLE_NAME',
       'UPLOADED_FILES_TABLE_NAME',
       'DATASETS_TABLE_NAME',
-      'PERSONA_DATASET_BINDINGS_TABLE_NAME',
       'SURVEY_TEMPLATES_TABLE_NAME',
       'SURVEYS_TABLE_NAME',
       'KNOWLEDGE_BASES_TABLE_NAME',
-      'PERSONA_KB_BINDINGS_TABLE_NAME',
       'JOBS_TABLE_NAME',
+      'PERSONA_CANDIDATES_TABLE_NAME',
+      'PERSONA_BINDINGS_TABLE_NAME',
       'S3_BUCKET_NAME',
       'AGENTCORE_MEMORY_ID',
       'DYNAMODB_REGION',
@@ -402,6 +402,107 @@ describe('AppStack: 認可（U2）', () => {
       AttributeName: 'expires_at',
       Enabled: true,
     });
+  });
+});
+
+describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40、NFR1.41）', () => {
+  /** Statements of the task role's policies (the Bedrock batch role is separate). */
+  function taskStatements(t: Template): any[] {
+    return Object.values(t.findResources('AWS::IAM::Policy'))
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('TaskRole'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+  }
+  const actionsOf = (statements: any[]) =>
+    new Set(statements.flatMap((s) => [s.Action].flat() as string[]));
+  const touching = (logicalIdPart: string) =>
+    taskStatements(template).filter((s) => JSON.stringify(s.Resource ?? '').includes(logicalIdPart));
+
+  test('新しい 2 テーブルの名前をテーブルの参照で渡す（約束 C10）', () => {
+    const env = envOf(template);
+    expect(JSON.stringify(env.PERSONA_CANDIDATES_TABLE_NAME)).toContain('DatabasePersonaCandidates');
+    expect(JSON.stringify(env.PERSONA_BINDINGS_TABLE_NAME)).toContain('DatabasePersonaBindings');
+  });
+
+  test('古い 2 つの紐付けのテーブルの環境変数と権限はない（Q1 A）', () => {
+    const env = envOf(template);
+    expect(env.PERSONA_DATASET_BINDINGS_TABLE_NAME).toBeUndefined();
+    expect(env.PERSONA_KB_BINDINGS_TABLE_NAME).toBeUndefined();
+    expect(touching('DatabasePersonaDatasetBindings')).toEqual([]);
+    expect(touching('DatabasePersonaKBBindings')).toEqual([]);
+  });
+
+  test('PersonaCandidates は 6 つの操作だけで Scan と Query を含まない', () => {
+    const actions = actionsOf(touching('DatabasePersonaCandidates'));
+    expect([...actions].sort()).toEqual([
+      'dynamodb:BatchGetItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+    ]);
+  });
+
+  test('PersonaBindings はテーブルと TargetIndex に 7 つの操作だけで Scan を含まない', () => {
+    const statements = touching('DatabasePersonaBindings');
+    const actions = actionsOf(statements);
+    expect([...actions].sort()).toEqual([
+      'dynamodb:BatchGetItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    ]);
+    expect(JSON.stringify(statements)).toContain('/index/*');
+  });
+
+  test('S3 の方針に古いバージョンの操作がない', () => {
+    const actions = actionsOf(taskStatements(template));
+    for (const forbidden of [
+      's3:GetObjectVersion',
+      's3:GetObjectVersionTagging',
+      's3:ListBucketVersions',
+      's3:DeleteObjectVersion',
+      's3:PutObjectVersionTagging',
+    ]) {
+      expect(actions.has(forbidden)).toBe(false);
+    }
+    for (const action of actions) {
+      expect(action).not.toMatch(/^s3:.*Version/);
+      expect(action).not.toBe('s3:*');
+      expect(action).not.toMatch(/^s3:(GetObject|DeleteObject)\*$/);
+    }
+  });
+
+  test('今のコードが使う S3 の操作はある（足りないことを見落とさない）', () => {
+    const actions = actionsOf(taskStatements(template));
+    for (const needed of [
+      's3:GetObject',
+      's3:PutObject',
+      's3:DeleteObject',
+      's3:ListBucket',
+      's3:AbortMultipartUpload',
+    ]) {
+      expect(actions.has(needed)).toBe(true);
+    }
+  });
+
+  test('タグの 3 操作は uploads/* と candidates/* だけが対象', () => {
+    const tagging = taskStatements(template).filter((s) =>
+      [s.Action].flat().some((a: string) => a.endsWith('ObjectTagging')),
+    );
+    expect(tagging).toHaveLength(1);
+    expect([tagging[0].Action].flat().sort()).toEqual([
+      's3:DeleteObjectTagging',
+      's3:GetObjectTagging',
+      's3:PutObjectTagging',
+    ]);
+    const resources = JSON.stringify(tagging[0].Resource);
+    expect(resources).toContain('/uploads/*');
+    expect(resources).toContain('/candidates/*');
+    expect([tagging[0].Resource].flat()).toHaveLength(2);
   });
 });
 

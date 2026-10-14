@@ -1,7 +1,9 @@
-"""KnowledgeBase / PersonaKBBinding モデルの単体テスト"""
+"""KnowledgeBase / KB の紐付け（PersonaBinding）モデルの単体テスト"""
+
 from datetime import datetime
 
-from src.models.knowledge_base import KnowledgeBase, PersonaKBBinding
+from src.models.knowledge_base import KnowledgeBase
+from src.models.persona_binding import PersonaBinding
 
 
 class TestKnowledgeBase:
@@ -37,35 +39,33 @@ class TestKnowledgeBase:
 
 
 class TestPersonaKBBinding:
+    """KB の紐付けは U5 から PersonaBinding（固定キー KB）が持つ。"""
+
     def test_create_new(self):
-        binding = PersonaKBBinding.create_new("persona-1", "kb-1")
+        binding = PersonaBinding.for_kb("persona-1", "kb-1")
         assert binding.persona_id == "persona-1"
-        assert binding.kb_id == "kb-1"
+        assert binding.target_id == "kb-1"
+        assert binding.target_key == "KB"
         assert binding.metadata_filters == {}
-        assert binding.id
 
     def test_create_new_with_filters(self):
         filters = {"category": "tech", "level": "advanced"}
-        binding = PersonaKBBinding.create_new("p1", "kb1", metadata_filters=filters)
+        binding = PersonaBinding.for_kb("p1", "kb1", metadata_filters=filters)
         assert binding.metadata_filters == filters
 
     def test_to_dict_from_dict_roundtrip(self):
         filters = {"key": "value"}
-        binding = PersonaKBBinding.create_new("p1", "kb1", metadata_filters=filters)
-        data = binding.to_dict()
-        restored = PersonaKBBinding.from_dict(data)
-        assert restored.id == binding.id
-        assert restored.persona_id == binding.persona_id
-        assert restored.kb_id == binding.kb_id
-        assert restored.metadata_filters == filters
-        assert restored.created_at == binding.created_at
+        binding = PersonaBinding.for_kb("p1", "kb1", metadata_filters=filters)
+        restored = PersonaBinding.from_dict(binding.to_dict())
+        assert restored == binding
 
     def test_from_dict_missing_metadata_filters(self):
         data = {
-            "id": "test-id",
             "persona_id": "p1",
-            "kb_id": "kb1",
+            "target_key": "KB",
+            "target_type": "KB",
+            "target_id": "kb1",
             "created_at": datetime.now().isoformat(),
         }
-        binding = PersonaKBBinding.from_dict(data)
+        binding = PersonaBinding.from_dict(data)
         assert binding.metadata_filters == {}

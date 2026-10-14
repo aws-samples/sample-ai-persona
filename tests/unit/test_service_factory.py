@@ -502,6 +502,32 @@ class TestServiceFactoryAuthzServices:
         assert store.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
+    def test_u5_stores_use_their_tables(self, mock_config, monkeypatch):
+        """U5 の 3 つの Service（候補・紐付け・アップロードファイル）。"""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.PERSONA_CANDIDATES_TABLE_NAME = "Candidates-physical"
+        mock_config.PERSONA_BINDINGS_TABLE_NAME = "Bindings-physical"
+        mock_config.table_name.return_value = "Files-physical"
+
+        factory = ServiceFactory()
+        candidates = factory.get_persona_candidate_store()
+        bindings = factory.get_persona_binding_store()
+        files = factory.get_uploaded_file_store()
+
+        assert candidates is factory.get_persona_candidate_store()
+        assert bindings is factory.get_persona_binding_store()
+        assert files is factory.get_uploaded_file_store()
+        assert candidates.table_name == "Candidates-physical"
+        assert bindings.table_name == "Bindings-physical"
+        assert files.table_name == "Files-physical"
+        mock_config.table_name.assert_called_with("UploadedFiles")
+        assert bindings.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
     def test_user_directory_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory

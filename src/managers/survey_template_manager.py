@@ -5,10 +5,16 @@ SurveyTemplateManager
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
+from ..config import config
+from ..models.authz import Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.survey_template import Question, SurveyTemplate, TemplateImage
+from ..models.uploaded_file import file_id_from_key, is_uuid
+from .components.file_attachments import FileAttachments
+from .components.sharing_runtime import build_access_parts, shared_access_parts
 from ..prompts.survey_prompts import (
     SURVEY_CHAT_SYSTEM_PROMPT,
     SURVEY_DRAFT_SYSTEM_PROMPT,
@@ -42,21 +48,106 @@ class SurveyTemplateManager:
         self,
         database_service: Optional[DatabaseService] = None,
         ai_service: Optional[AIService] = None,
+        file_attachments: Optional[FileAttachments] = None,
     ) -> None:
         self.db = database_service or service_factory.get_database_service()
         self.ai_service = ai_service or service_factory.get_ai_service()
+        self._attachments = file_attachments
+
+    @property
+    def _files(self) -> FileAttachments:
+        if self._attachments is None:
+            self._attachments = shared_access_parts(
+                lambda: build_access_parts(
+                    service_factory.get_authz_lookup_service(),
+                    service_factory.get_uploaded_file_store(),
+                    service_factory.get_optional_s3_service(),
+                )
+            ).files
+        return self._attachments
 
     # =========================================================================
     # テンプレートCRUD
     # =========================================================================
+
+    @staticmethod
+    def _image_file_id(principal: Optional[Principal], image: TemplateImage) -> str:
+        """The upload ID inside an image path (security-design.md §4).
+
+        S3 paths must be ``s3://{bucket}/uploads/{the user}/survey_image/{id}_{name}``
+        (the bucket checked when configured); local development paths end in
+        ``{id}_{name}``. Anything else is ``FILE_NOT_FOUND``.
+        """
+        path = image.file_path or ""
+        file_id: Optional[str] = None
+        if path.startswith("s3://"):
+            bucket, _, key = path[len("s3://") :].partition("/")
+            parts = key.split("/")
+            if (
+                (not config.S3_BUCKET_NAME or bucket == config.S3_BUCKET_NAME)
+                and len(parts) == 4
+                and parts[2] == "survey_image"
+                and principal is not None
+                and parts[1] == principal.sub
+            ):
+                file_id = file_id_from_key(key)
+        elif path:
+            candidate, sep, _ = Path(path).name.partition("_")
+            file_id = candidate if sep and is_uuid(candidate) else None
+        if not file_id:
+            raise SurveyTemplateValidationError(
+                "image path is not an upload of this user",
+                code=ErrorCode.FILE_NOT_FOUND,
+            )
+        return file_id
+
+    def _save_with_images(
+        self,
+        principal: Optional[Principal],
+        template: SurveyTemplate,
+        new_images: List[TemplateImage],
+        write: Callable[[], Any],
+    ) -> None:
+        """Attach the new images, then save; a failed save detaches (U5 BR5.3)."""
+        file_ids = [self._image_file_id(principal, img) for img in new_images]
+        attached = None
+        if file_ids:
+            if principal is None:
+                raise SurveyTemplateValidationError(
+                    "images need the uploader", code=ErrorCode.FILE_NOT_FOUND
+                )
+            try:
+                attached = self._files.attach_all(
+                    principal, file_ids, "survey_template", template.id
+                )
+            except CodedError as e:
+                raise SurveyTemplateManagerError(
+                    f"images could not be attached ({type(e).__name__})",
+                    code=e.code,
+                    context=e.context,
+                ) from e
+        try:
+            write()
+        except Exception as e:
+            if attached is not None:
+                self._files.detach(attached)
+            logger.error("Template save failed", exc_info=True)
+            raise SurveyTemplateManagerError(
+                f"template save failed ({type(e).__name__})",
+                code=ErrorCode.SURVEY_OPERATION_FAILED,
+            ) from e
 
     def create_template(
         self,
         name: str,
         questions: List[Question],
         images: Optional[List[TemplateImage]] = None,
+        principal: Optional[Principal] = None,
     ) -> SurveyTemplate:
-        """アンケートテンプレートを作成して保存する。"""
+        """アンケートテンプレートを作成して保存する。
+
+        U5: 画像のファイルを、保存の前にテンプレートへ紐付ける（失敗したら保存しない）。
+        """
         self._validate_template_name(name)
         self._validate_questions(questions)
         if images:
@@ -65,7 +156,12 @@ class SurveyTemplateManager:
         template = SurveyTemplate.create_new(
             name=name.strip(), questions=questions, images=images or []
         )
-        self.db.save_survey_template(template)
+        self._save_with_images(
+            principal,
+            template,
+            list(images or []),
+            lambda: self.db.save_survey_template(template),
+        )
         logger.info(f"Template created: {template.id} ({template.name})")
         return template
 
@@ -83,8 +179,12 @@ class SurveyTemplateManager:
         name: str,
         questions: List[Question],
         images: Optional[List[TemplateImage]] = None,
+        principal: Optional[Principal] = None,
     ) -> SurveyTemplate:
-        """既存テンプレートを更新する。"""
+        """既存テンプレートを更新する。
+
+        U5: 新しく足した画像だけを、保存の前にテンプレートへ紐付ける。
+        """
         self._validate_template_name(name)
         self._validate_questions(questions)
         if images:
@@ -105,7 +205,13 @@ class SurveyTemplateManager:
             updated_at=datetime.now(),
             images=images or [],
         )
-        self.db.update_survey_template(updated)
+        kept = {img.file_path for img in existing.images or []}
+        self._save_with_images(
+            principal,
+            updated,
+            [img for img in images or [] if img.file_path not in kept],
+            lambda: self.db.update_survey_template(updated),
+        )
         logger.info(f"Template updated: {updated.id} ({updated.name})")
         return updated
 

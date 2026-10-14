@@ -503,79 +503,8 @@ class TestDatabaseServiceSerialization:
         assert discussion.mode == "agent"
         assert discussion.agent_config == {"rounds": 3}
 
-    @patch("boto3.client")
-    def test_serialize_file_info(self, mock_boto3_client):
-        """Test file info serialization to DynamoDB format."""
-        from datetime import datetime
-
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService()
-
-        # Serialize file info
-        serialized = service._serialize_file_info(
-            file_id="file-id",
-            filename="test.txt",
-            file_path="/path/to/test.txt",
-            file_size=1024,
-            file_hash="abc123",
-            mime_type="text/plain",
-            uploaded_at=datetime(2024, 1, 1, 12, 0, 0),
-        )
-
-        # Verify structure
-        assert "id" in serialized
-        assert "filename" in serialized
-        assert "file_path" in serialized
-        assert "file_size" in serialized
-        assert "file_hash" in serialized
-        assert "mime_type" in serialized
-        assert "uploaded_at" in serialized
-        assert "type" in serialized
-
-        # Verify type descriptors
-        assert "S" in serialized["id"]
-        assert "N" in serialized["file_size"]
-
-    @patch("boto3.client")
-    def test_deserialize_file_info(self, mock_boto3_client):
-        """Test file info deserialization from DynamoDB format."""
-        from datetime import datetime
-
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService()
-
-        # Create DynamoDB format item
-        item = {
-            "id": {"S": "file-id"},
-            "filename": {"S": "test.txt"},
-            "original_filename": {"S": "test.txt"},
-            "file_path": {"S": "/path/to/test.txt"},
-            "file_size": {"N": "1024"},
-            "file_hash": {"S": "abc123"},
-            "mime_type": {"S": "text/plain"},
-            "uploaded_at": {"S": "2024-01-01T12:00:00"},
-            "type": {"S": "file"},
-        }
-
-        # Deserialize
-        file_info = service._deserialize_file_info(item)
-
-        # Verify file info dictionary
-        assert file_info["id"] == "file-id"
-        assert file_info["filename"] == "test.txt"
-        assert file_info["file_path"] == "/path/to/test.txt"
-        assert file_info["file_size"] == 1024
-        assert file_info["file_hash"] == "abc123"
-        assert file_info["mime_type"] == "text/plain"
-        assert file_info["uploaded_at"] == datetime(2024, 1, 1, 12, 0, 0)
+    # U5: upload metadata moved to UploadedFileStore
+    # (tests/integration/test_uploaded_file_store.py).
 
     @patch("boto3.client")
     def test_round_trip_persona_serialization(self, mock_boto3_client):
@@ -1130,93 +1059,46 @@ class TestSerializationRoundTripProperties:
                 < 0.0001
             )
 
-    @patch("boto3.client")
     @given(
-        file_id=st.text(
-            min_size=1,
-            max_size=50,
-            alphabet=st.characters(blacklist_categories=("Cs",)),
-        ),
         filename=st.text(
             min_size=1,
             max_size=100,
             alphabet=st.characters(blacklist_categories=("Cs",)),
         ),
-        file_path=st.text(
-            min_size=1,
-            max_size=200,
-            alphabet=st.characters(blacklist_categories=("Cs",)),
-        ),
-        file_size=st.one_of(st.none(), st.integers(min_value=0, max_value=1000000000)),
-        file_hash=st.one_of(
-            st.none(),
-            st.text(
-                min_size=1,
-                max_size=64,
-                alphabet=st.characters(blacklist_categories=("Cs",)),
-            ),
-        ),
-        mime_type=st.one_of(
-            st.none(),
-            st.sampled_from(
-                ["text/plain", "application/json", "image/png", "application/pdf"]
-            ),
+        file_size=st.integers(min_value=0, max_value=1000000000),
+        mime_type=st.sampled_from(
+            ["text/plain", "application/json", "image/png", "application/pdf"]
         ),
         uploaded_at=st.datetimes(
             min_value=datetime(2020, 1, 1), max_value=datetime(2030, 12, 31)
         ),
+        attached=st.booleans(),
     )
     @settings(max_examples=100, deadline=None)
     def test_file_info_serialization_round_trip(
-        self,
-        mock_boto3_client,
-        file_id,
-        filename,
-        file_path,
-        file_size,
-        file_hash,
-        mime_type,
-        uploaded_at,
+        self, filename, file_size, mime_type, uploaded_at, attached
     ):
         """
-        Property test: For any valid file metadata, serializing to DynamoDB format
-        and then deserializing should produce an equivalent dictionary.
+        Property test: upload metadata (U5: ``UploadedFile``, written by
+        ``UploadedFileStore``) survives ``to_dict`` / ``from_dict``.
 
         **Feature: dynamodb-migration, Property 5: Serialization round-trip**
-        **Validates: Requirements 2.5**
         """
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
+        from src.models.uploaded_file import UploadedFile
 
-        service = DatabaseService()
-
-        # Serialize then deserialize
-        serialized = service._serialize_file_info(
-            file_id=file_id,
-            filename=filename,
-            file_path=file_path,
+        uploaded = UploadedFile.create_new(
+            owner_sub="sub-a",
+            file_type="discussion_document",
+            original_filename=filename,
             file_size=file_size,
-            file_hash=file_hash,
+            file_hash="h",
             mime_type=mime_type,
-            uploaded_at=uploaded_at,
-        )
-        deserialized = service._deserialize_file_info(serialized)
+            now=uploaded_at,
+        ).with_path("s3://bucket/key")
+        if attached:
+            uploaded = uploaded.attached_to("discussion", "d1")
 
-        # Verify all fields are preserved
-        assert deserialized["id"] == file_id
-        assert deserialized["filename"] == filename
-        assert deserialized["file_path"] == file_path
-        assert deserialized["uploaded_at"] == uploaded_at
-
-        # Verify optional fields
-        if file_size is not None:
-            assert deserialized["file_size"] == file_size
-        if file_hash is not None:
-            assert deserialized["file_hash"] == file_hash
-        if mime_type is not None:
-            assert deserialized["mime_type"] == mime_type
+        assert UploadedFile.from_dict(uploaded.to_dict()) == uploaded
 
 
 class TestPersonaCRUDOperations:
@@ -1400,14 +1282,12 @@ class TestPersonaCRUDOperations:
         assert persona is None
 
     @patch("boto3.client")
-    def test_get_all_personas(self, mock_boto3_client):
-        """Test retrieving personas with cursor-based pagination via GSI query."""
-        # Mock boto3 client
+    def test_scan_all_personas(self, mock_boto3_client):
+        """U5: the admin tab reads every persona with a scan (no type GSI)."""
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
 
-        # Mock query response (GSI CreatedAtIndex) with two personas
-        mock_client.query.return_value = {
+        mock_client.scan.return_value = {
             "Items": [
                 {
                     "id": {"S": "persona-1"},
@@ -1436,157 +1316,16 @@ class TestPersonaCRUDOperations:
                     "type": {"S": "persona"},
                 },
             ]
-            # No LastEvaluatedKey => next_cursor is None
         }
         mock_boto3_client.return_value = mock_client
 
         service = DatabaseService(table_prefix="Test")
 
-        personas, next_cursor = service.get_all_personas()
+        personas = service.scan_all_personas()
 
-        # Verify query (not scan) was called with GSI
-        mock_client.query.assert_called_once()
-        call_kwargs = mock_client.query.call_args.kwargs
-        assert call_kwargs["IndexName"] == "CreatedAtIndex"
-        assert call_kwargs["ScanIndexForward"] is False
-
-        assert len(personas) == 2
-        assert personas[0].id == "persona-1"
-        assert personas[1].id == "persona-2"
-        assert next_cursor is None
-
-    @patch("boto3.client")
-    def test_persona_exists_true(self, mock_boto3_client):
-        """Test checking if a persona exists when it does."""
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_client.get_item.return_value = {"Item": {"id": {"S": "test-id"}}}
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService(table_prefix="Test")
-
-        # Check if persona exists
-        exists = service.persona_exists("test-id")
-
-        # Verify result
-        assert exists is True
-
-    @patch("boto3.client")
-    def test_persona_exists_false(self, mock_boto3_client):
-        """Test checking if a persona exists when it doesn't."""
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_client.get_item.return_value = {}  # No 'Item' key
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService(table_prefix="Test")
-
-        # Check if persona exists
-        exists = service.persona_exists("nonexistent-id")
-
-        # Verify result
-        assert exists is False
-
-    @patch("boto3.client")
-    def test_get_persona_count(self, mock_boto3_client):
-        """Test getting the count of personas via GSI query."""
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_client.query.return_value = {"Count": 5}
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService(table_prefix="Test")
-        count = service.get_persona_count()
-
-        mock_client.query.assert_called_once()
-        call_kwargs = mock_client.query.call_args.kwargs
-        assert call_kwargs["IndexName"] == "CreatedAtIndex"
-        assert call_kwargs["Select"] == "COUNT"
-        assert count == 5
-
-    @patch("boto3.client")
-    def test_get_personas_by_name(self, mock_boto3_client):
-        """Test querying personas by name pattern."""
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-
-        # Mock scan response
-        mock_client.scan.return_value = {
-            "Items": [
-                {
-                    "id": {"S": "persona-1"},
-                    "name": {"S": "John Smith"},
-                    "age": {"N": "30"},
-                    "occupation": {"S": "Engineer"},
-                    "background": {"S": "Background"},
-                    "values": {"L": [{"S": "value1"}]},
-                    "pain_points": {"L": [{"S": "pain1"}]},
-                    "goals": {"L": [{"S": "goal1"}]},
-                    "created_at": {"S": "2024-01-01T12:00:00"},
-                    "updated_at": {"S": "2024-01-02T12:00:00"},
-                    "type": {"S": "persona"},
-                }
-            ]
-        }
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService(table_prefix="Test")
-
-        # Query by name
-        personas = service.get_personas_by_name("John")
-
-        # Verify scan was called with filter
         mock_client.scan.assert_called_once()
-        call_args = mock_client.scan.call_args
-        assert "FilterExpression" in call_args[1]
-
-        # Verify personas were returned
-        assert len(personas) == 1
-        assert personas[0].name == "John Smith"
-
-    @patch("boto3.client")
-    def test_get_personas_by_occupation(self, mock_boto3_client):
-        """Test querying personas by occupation pattern."""
-        # Mock boto3 client
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-
-        # Mock scan response
-        mock_client.scan.return_value = {
-            "Items": [
-                {
-                    "id": {"S": "persona-1"},
-                    "name": {"S": "User 1"},
-                    "age": {"N": "30"},
-                    "occupation": {"S": "Software Engineer"},
-                    "background": {"S": "Background"},
-                    "values": {"L": [{"S": "value1"}]},
-                    "pain_points": {"L": [{"S": "pain1"}]},
-                    "goals": {"L": [{"S": "goal1"}]},
-                    "created_at": {"S": "2024-01-01T12:00:00"},
-                    "updated_at": {"S": "2024-01-02T12:00:00"},
-                    "type": {"S": "persona"},
-                }
-            ]
-        }
-        mock_boto3_client.return_value = mock_client
-
-        service = DatabaseService(table_prefix="Test")
-
-        # Query by occupation
-        personas = service.get_personas_by_occupation("Engineer")
-
-        # Verify scan was called with filter
-        mock_client.scan.assert_called_once()
-        call_args = mock_client.scan.call_args
-        assert "FilterExpression" in call_args[1]
-
-        # Verify personas were returned
-        assert len(personas) == 1
-        assert personas[0].occupation == "Software Engineer"
+        mock_client.query.assert_not_called()
+        assert [p.id for p in personas] == ["persona-1", "persona-2"]
 
 
 def _in_memory_update_item(saved_items: dict, deserializer):
@@ -2630,54 +2369,8 @@ class TestKnowledgeBaseCRUDOperations:
         assert result is True
         mock_client.delete_item.assert_called_once()
 
-    def test_save_and_get_kb_binding(self):
-        from src.models.knowledge_base import PersonaKBBinding
-
-        service, mock_client = self._make_service()
-        binding = PersonaKBBinding.create_new("p1", "kb1", {"key": "val"})
-
-        mock_client.put_item.return_value = {}
-        mock_client.scan.return_value = {"Items": [], "Count": 0}
-
-        service.save_kb_binding(binding)
-        mock_client.put_item.assert_called_once()
-
-    def test_delete_kb_binding(self):
-        service, mock_client = self._make_service()
-        mock_client.delete_item.return_value = {}
-        result = service.delete_kb_binding("binding-1")
-        assert result is True
-
-
-class TestUploadedFileCRUDOperations:
-    """UploadedFile の DatabaseService CRUD テスト"""
-
-    @patch("boto3.client")
-    def _make_service(self, mock_boto3_client):
-        mock_client = Mock()
-        mock_boto3_client.return_value = mock_client
-        mock_client.list_tables.return_value = {"TableNames": []}
-        return DatabaseService(table_prefix="Test", region="us-east-1"), mock_client
-
-    def test_save_uploaded_file_info(self):
-        service, mock_client = self._make_service()
-        mock_client.put_item.return_value = {}
-        result = service.save_uploaded_file_info(
-            file_id="f1",
-            filename="uuid_test.txt",
-            file_path="uploads/uuid_test.txt",
-            file_size=1024,
-            file_hash="abc123",
-            mime_type="text/plain",
-        )
-        mock_client.put_item.assert_called_once()
-        assert result == "f1"
-
-    def test_get_uploaded_file_info_not_found(self):
-        service, mock_client = self._make_service()
-        mock_client.get_item.return_value = {}
-        result = service.get_uploaded_file_info("nonexistent")
-        assert result is None
+    # U5: KB bindings are PersonaBindings (tests/integration/test_persona_binding_store.py)
+    # and upload metadata is UploadedFileStore (tests/integration/test_uploaded_file_store.py).
 
 
 # =========================================================================
@@ -2993,3 +2686,162 @@ class TestPersonaOwnerColumns:
             client.scan(TableName="OwnerTest_ResourceShares")["Items"] == index_before
         )
         assert len(index_before) == 1
+
+
+# =========================================================================
+# U5: 使われていない読み出しの整理と専用データセット（BR6.2、BR8.2、NFR2.9）
+# =========================================================================
+
+_PERSONA_FILE_GSIS = (
+    "CreatedAtIndex",
+    "NameIndex",
+    "OccupationIndex",
+    "UploadedAtIndex",
+)
+
+
+def _database_service_functions() -> dict:
+    import ast
+    import inspect
+
+    import src.services.database_service as module
+
+    tree = ast.parse(inspect.getsource(module))
+    source = inspect.getsource(module).splitlines()
+    functions = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            functions[node.name] = "\n".join(source[node.lineno - 1 : node.end_lineno])
+    return functions
+
+
+class TestNoTypeFixedIndexReads:
+    """Personas・UploadedFiles の type 固定の GSI を読むコードがない（BR8.2）。
+
+    Discussions の CreatedAtIndex・ModeIndex は U6 の担当のため対象外。
+    """
+
+    def test_persona_and_file_reads_do_not_use_type_fixed_indexes(self):
+        for name, body in _database_service_functions().items():
+            if "personas_table" in body or "files_table" in body:
+                for index in _PERSONA_FILE_GSIS:
+                    assert index not in body, f"{name} reads {index}"
+
+    def test_persona_only_indexes_are_not_named_anywhere(self):
+        import inspect
+
+        import src.services.database_service as module
+
+        source = inspect.getsource(module)
+        for index in ("NameIndex", "OccupationIndex", "UploadedAtIndex"):
+            assert index not in source
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "get_persona_count",
+            "get_personas_by_name",
+            "get_personas_by_occupation",
+            "persona_exists",
+            "get_all_personas",
+            "save_binding",
+            "get_bindings_by_persona",
+            "delete_binding",
+            "delete_bindings_by_persona",
+            "save_kb_binding",
+            "get_kb_binding_by_persona",
+            "delete_kb_binding",
+            "delete_kb_bindings_by_persona",
+            "save_uploaded_file_info",
+            "get_uploaded_file_info",
+        ],
+    )
+    def test_unused_and_legacy_reads_are_gone(self, method):
+        assert not hasattr(DatabaseService, method)
+
+    def test_scan_of_every_persona_is_the_admin_tab_only(self, moto_service):
+        """admin の「すべて」タブの Scan（U4 BR3.5）は残る。"""
+        first = _new_persona()
+        second = _new_persona()
+        moto_service.save_persona(first)
+        moto_service.save_persona(second)
+
+        scanned = moto_service.scan_all_personas()
+
+        assert {p.id for p in scanned} == {first.id, second.id}
+
+
+@pytest.fixture
+def moto_dataset_service(monkeypatch):
+    moto = pytest.importorskip("moto")
+    import boto3
+
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        service = DatabaseService(table_prefix="DsTest", region="us-east-1")
+        boto3.client("dynamodb", region_name="us-east-1").create_table(
+            TableName=service.datasets_table,
+            KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        yield service
+
+
+class TestDedicatedDatasets:
+    """ペルソナ専用のデータセット（BR6.1、BR6.2）。"""
+
+    def _dataset(self, **kwargs):
+        from src.models.dataset import Dataset, DatasetColumn
+
+        return Dataset.create_new(
+            name="n",
+            description="",
+            s3_path="s3://b/k.csv",
+            columns=[DatasetColumn(name="user_id", data_type="string")],
+            row_count=1,
+            **kwargs,
+        )
+
+    def test_owner_persona_id_is_saved_and_read(self, moto_dataset_service):
+        dataset = self._dataset(owner_persona_id="p1")
+        moto_dataset_service.save_dataset(dataset)
+
+        stored = moto_dataset_service.get_dataset(dataset.id)
+        assert stored.owner_persona_id == "p1"
+
+    def test_org_assets_are_saved_without_the_column(self, moto_dataset_service):
+        dataset = self._dataset()
+        moto_dataset_service.save_dataset(dataset)
+        item = moto_dataset_service.dynamodb_client.get_item(
+            TableName=moto_dataset_service.datasets_table,
+            Key={"id": {"S": dataset.id}},
+        )["Item"]
+        assert "owner_persona_id" not in item
+
+    def test_listing_leaves_out_dedicated_datasets(self, moto_dataset_service):
+        org = self._dataset()
+        dedicated = self._dataset(owner_persona_id="p1")
+        moto_dataset_service.save_dataset(org)
+        moto_dataset_service.save_dataset(dedicated)
+
+        listed = moto_dataset_service.get_all_datasets()
+
+        assert [d.id for d in listed] == [org.id]
+
+    def test_listing_filters_in_the_scan(self, moto_dataset_service):
+        spy = Mock(wraps=moto_dataset_service.dynamodb_client.scan)
+        moto_dataset_service.dynamodb_client.scan = spy
+        moto_dataset_service.get_all_datasets()
+        assert (
+            "attribute_not_exists(owner_persona_id)"
+            in spy.call_args.kwargs["FilterExpression"]
+        )
+
+    def test_dedicated_dataset_is_deleted(self, moto_dataset_service):
+        dataset = self._dataset(owner_persona_id="p1")
+        moto_dataset_service.save_dataset(dataset)
+        assert moto_dataset_service.delete_dataset(dataset.id)
+        assert moto_dataset_service.get_dataset(dataset.id) is None

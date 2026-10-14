@@ -6,8 +6,9 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime
 
-from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from src.models.dataset import Dataset, DatasetColumn
 from src.models.persona import Persona
+from src.models.persona_binding import PersonaBinding
 
 
 class TestDatasetIntegrationFlow:
@@ -55,19 +56,19 @@ class TestDatasetIntegrationFlow:
     @pytest.fixture
     def sample_binding(self, sample_persona, sample_dataset):
         """サンプル紐付け"""
-        return PersonaDatasetBinding(
-            id="binding-integration-001",
-            persona_id=sample_persona.id,
-            dataset_id=sample_dataset.id,
+        return PersonaBinding.for_dataset(
+            sample_persona.id,
+            sample_dataset.id,
             binding_keys={"user_id": "U12345"},
-            created_at=datetime.now(),
+            now=datetime.now(),
         )
 
     def test_dataset_binding_flow(self, sample_dataset, sample_persona, sample_binding):
         """データセット紐付けフローテスト"""
         # 紐付け情報の検証
         assert sample_binding.persona_id == sample_persona.id
-        assert sample_binding.dataset_id == sample_dataset.id
+        assert sample_binding.target_id == sample_dataset.id
+        assert sample_binding.target_key == f"DATASET#{sample_dataset.id}"
         assert sample_binding.binding_keys["user_id"] == "U12345"
 
     def test_dataset_to_dict_and_back(self, sample_dataset):
@@ -90,13 +91,10 @@ class TestDatasetIntegrationFlow:
         data = sample_binding.to_dict()
 
         # 辞書から復元
-        restored = PersonaDatasetBinding.from_dict(data)
+        restored = PersonaBinding.from_dict(data)
 
         # 検証
-        assert restored.id == sample_binding.id
-        assert restored.persona_id == sample_binding.persona_id
-        assert restored.dataset_id == sample_binding.dataset_id
-        assert restored.binding_keys == sample_binding.binding_keys
+        assert restored == sample_binding
 
 
 class TestInterviewDatasetIntegration:
