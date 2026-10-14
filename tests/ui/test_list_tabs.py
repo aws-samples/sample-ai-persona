@@ -231,6 +231,20 @@ def test_switching_tabs_keeps_no_page_snapshot_in_local_storage(
     assert _history_cache(ui) is None
 
 
+def test_going_back_reloads_the_whole_page_instead_of_a_fragment(
+    ui: UiHarness,
+) -> None:
+    """With no history cache, Back must reload the full page (U4 review P2).
+
+    Otherwise htmx asks the server again with HX-Request set, and routes that
+    answer HX-Request with a fragment (e.g. /discussion/results) replace the
+    whole body with that fragment.
+    """
+    _load(ui)
+
+    assert ui.page.evaluate("htmx.config.refreshOnHistoryMiss") is True
+
+
 def test_a_snapshot_left_by_an_earlier_session_is_removed_on_load(
     ui: UiHarness,
 ) -> None:

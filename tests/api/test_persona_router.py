@@ -1581,6 +1581,29 @@ class TestPersonaDetailAuthz:
         assert 'data-share-url="/share/persona/p1/dialog"' in html
         assert 'id="share-dialog"' in html
 
+    def test_detail_actions_say_share_and_do_not_wrap(self, client, world):
+        """The detail actions read 「共有」 and never break mid-word (review of the M8 header)."""
+        import re
+
+        world.add("p1", A_SUB)
+        html = _login(client, "a").get("/persona/p1").text
+        share = re.search(
+            r'<button[^>]*data-testid="persona-share-button"[^>]*>\s*(.*?)\s*</button>',
+            html,
+            re.S,
+        )
+        assert share and share.group(1) == "共有"
+        actions = re.search(
+            r'<div[^>]*data-testid="persona-detail-actions"[^>]*>', html
+        )
+        assert actions and "flex-wrap" in actions.group(0)
+        for button in re.findall(
+            r'<button[^>]*(?:hx-get="/persona/p1/edit"|data-testid="persona-share-button"'
+            r'|hx-delete="/persona/p1"|data-dialog-open="generation-log-dialog")[^>]*>',
+            html,
+        ):
+            assert "whitespace-nowrap" in button
+
     @pytest.mark.parametrize(
         ("who", "expected"), [("b", 403), ("d", 404), ("admin", 200)]
     )
