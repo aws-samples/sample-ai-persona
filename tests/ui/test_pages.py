@@ -8,6 +8,7 @@ import pytest
 
 from src.models.discussion import Discussion
 from src.models.persona import Persona
+from src.models.sharing import ListTab, TabbedList
 from src.models.survey import Survey
 from src.models.survey_template import Question, SurveyTemplate
 from tests.ui.conftest import UiHarness
@@ -36,6 +37,38 @@ def _personas() -> list[Persona]:
         )
         for i, (name, job) in enumerate(names)
     ]
+
+
+#: The cursor the persona list hands to 「もっと見る」 (opaque to the screen).
+PERSONA_NEXT = "persona-next"
+
+
+def _persona_listing(personas: list[Persona], tab: str | None) -> TabbedList:
+    """What PersonaManager.list_personas returns for the admin of screen_client."""
+    active = ListTab.parse(tab) or ListTab.MINE
+    owners = (
+        {}
+        if active is ListTab.MINE
+        else {
+            p.id: name for p, name in zip(personas, ["中村 由美", "所有者不明", None])
+        }
+    )
+    shared = {
+        p.id: names
+        for p, names in zip(personas, [["企画部"], [], ["企画部", "マーケティング部"]])
+    }
+    return TabbedList(
+        tab=active,
+        items=personas,
+        next_cursor=PERSONA_NEXT,
+        counts={"mine": 30, "shared": 2, "all": 48},
+        show_all=True,
+        owners=owners,
+        shared_with=shared,
+        manageable=frozenset()
+        if active is ListTab.SHARED
+        else frozenset(p.id for p in personas),
+    )
 
 
 def _discussions(personas: list[Persona]) -> list[Discussion]:
@@ -97,8 +130,9 @@ def screens() -> Generator[dict[str, Mock]]:
     """Patch the Managers behind the four list screens with a few rows each."""
     personas = _personas()
     persona_manager = Mock()
-    persona_manager.get_all_personas.return_value = (personas, NEXT)
-    persona_manager.get_persona_count.return_value = 30
+    persona_manager.list_personas.side_effect = lambda _p, tab, _c: _persona_listing(
+        personas, tab
+    )
     persona_manager.get_persona.side_effect = lambda pid: next(
         (p for p in personas if p.id == pid), None
     )
@@ -129,12 +163,9 @@ def screens() -> Generator[dict[str, Mock]]:
 
 
 def _open(ui: UiHarness, client: Any, path: str) -> None:
-    if path == "/persona/management":
-        ui.respond(
-            "/persona/list/partial", body=client.get("/persona/list/partial").text
-        )
+    # ペルソナ管理は最初のページをタブと一緒にサーバーで描く（U4）
     ui.load_screen(client, path)
-    if path == "/persona/management":
+    if path.startswith("/persona/management"):
         ui.page.wait_for_selector("#persona-grid")
     ui.settle()
 
@@ -164,6 +195,21 @@ def test_list_screen_has_no_axe_violations(
 
     assert ui.page.locator("h1").count() == 1
     assert ui.page.locator("main h2").count() >= 1
+    ui.check_a11y()
+
+
+@pytest.mark.parametrize("tab", ["mine", "shared", "all"])
+def test_persona_tabs_have_no_axe_violations(
+    ui: UiHarness, screen_client: Any, screens: dict[str, Mock], tab: str
+) -> None:
+    """ペルソナ管理の 3 つのタブ（U4、M6、NFR6.13）。"""
+    _open(ui, screen_client, f"/persona/management?tab={tab}")
+
+    selected = ui.page.locator("[role=tab][aria-selected=true]")
+    assert selected.get_attribute("data-tab") == tab
+    assert (ui.page.locator("[data-testid='bulk-select-bar']").count() == 0) is (
+        tab == "shared"
+    )
     ui.check_a11y()
 
 
@@ -211,7 +257,7 @@ def test_icon_only_delete_buttons_are_named(
     [
         (
             "/persona/management",
-            f"/persona/list/partial?cursor={encode_cursor(NEXT)}&append=1",
+            f"/persona/list/partial?tab=mine&cursor={PERSONA_NEXT}&append=1",
             "#persona-grid",
         ),
         (

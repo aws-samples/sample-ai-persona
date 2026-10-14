@@ -13,8 +13,11 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from src.managers.components.access_policy import AccessPolicy
+from src.managers.components.resource_sharing import ResourceSharing
+from src.models.sharing import ShareChange
 from src.models.authz import (
     AccessTarget,
+    Department,
     Permission,
     Principal,
     ResourceType,
@@ -269,3 +272,99 @@ def test_deleted_targets_are_never_allowed(principal, target):
         assert not AccessPolicy.can_read(principal, target)
         assert not AccessPolicy.can_manage(principal, target)
         assert not AccessPolicy.can_use_asset(principal, target)
+
+
+# =============================================================================
+# 共有先の変更（U4、ResourceSharing 経由。ロール × 関係 × 1 件・一括）
+# 「sales を足す」を、上の表と同じ 5 つの関係のペルソナに当てる。
+# 結果: ok / 404 / 403 / owner（所有者なしは共有できない、BR1.10）/
+#       no_dept（選べる部署がない、BR1.4。どの対象も読まない）
+# =============================================================================
+
+SHARE_ROWS: list[tuple[str, str, str]] = [
+    ("member", "own", "ok"),
+    ("member", "shared", "403"),
+    ("member", "unrelated", "404"),
+    ("member", "ownerless", "404"),
+    ("member", "deleted", "404"),
+    ("admin", "own", "ok"),
+    ("admin", "shared", "ok"),
+    ("admin", "unrelated", "ok"),
+    ("admin", "ownerless", "owner"),
+    ("admin", "deleted", "404"),
+    ("no_role", "own", "no_dept"),
+    ("no_role", "shared", "no_dept"),
+    ("no_role", "unrelated", "no_dept"),
+    ("no_role", "ownerless", "no_dept"),
+    ("no_role", "deleted", "no_dept"),
+]
+
+_SHARE_CODES: dict[ErrorCode, str] = {
+    ErrorCode.PERSONA_NOT_FOUND: "404",
+    ErrorCode.ACCESS_DENIED: "403",
+    ErrorCode.SHARE_OWNER_MISSING: "owner",
+    ErrorCode.SHARE_NO_DEPARTMENT: "no_dept",
+}
+
+
+class _Departments:
+    """The department list (no Cognito, NFR9.13)."""
+
+    def list_all(self) -> list[Department]:
+        return [Department("sales", "営業部"), Department("hr", "人事部")]
+
+    def get_many(self, group_ids: frozenset[str]) -> dict[str, Department]:
+        return {d.group_id: d for d in self.list_all() if d.group_id in group_ids}
+
+
+def _sharing_with(actor: Principal, kind: str) -> tuple[ResourceSharing, str]:
+    from tests.unit.test_resource_sharing import TABLE, FakeStore
+
+    store = FakeStore()
+    target = _target(actor, kind)
+    if target.exists:
+        store.add("r", target.owner_sub, set(target.shared_group_ids))
+    sharing = ResourceSharing(store, _Departments(), sleep=lambda _s: None)
+    sharing.register(TABLE)
+    return sharing, "r"
+
+
+_ADD_SALES = ShareChange(add=frozenset({"sales"}))
+
+
+@pytest.mark.parametrize(
+    ("actor", "kind", "expected"), SHARE_ROWS, ids=_ids(SHARE_ROWS)
+)
+def test_share_one(actor, kind, expected):
+    principal = ACTORS[actor]
+    sharing, rid = _sharing_with(principal, kind)
+    try:
+        sharing.update_shares(
+            principal, AccessTarget(ResourceType.PERSONA, rid), _ADD_SALES
+        )
+        outcome = "ok"
+    except CodedError as e:
+        outcome = _SHARE_CODES[e.code]
+    assert outcome == expected
+
+
+@pytest.mark.parametrize(
+    ("actor", "kind", "expected"), SHARE_ROWS, ids=_ids(SHARE_ROWS)
+)
+def test_share_bulk(actor, kind, expected):
+    principal = ACTORS[actor]
+    sharing, rid = _sharing_with(principal, kind)
+    try:
+        result = sharing.bulk_update_shares(
+            principal, [AccessTarget(ResourceType.PERSONA, rid)], _ADD_SALES
+        )
+    except CodedError as e:  # 全体の確認（BR2.2）で断られた
+        assert _SHARE_CODES[e.code] == expected
+        return
+    if expected == "ok":
+        assert result.updated == [rid] and result.failed == []
+        return
+    (failure,) = result.failed
+    assert _SHARE_CODES[failure.code] == expected
+    # 読めない対象の名前は出さない（BR2.4）
+    assert (failure.display_name is None) is (expected == "404")

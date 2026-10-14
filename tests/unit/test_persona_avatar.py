@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.models.authz import Principal, Role
 from src.models.errors import ErrorCode
 from src.models.persona import Persona
 from tests.error_helpers import raises_code
@@ -245,24 +246,39 @@ class TestGetAvatarUrl:
 
 
 class TestDeletePersonaCleansUpAvatar:
-    def test_deletes_avatar_of_deleted_record(self, manager, db, s3):
-        """削除と同時に得たレコードの画像を消す（事前の読み取りに頼らない）"""
-        db.delete_persona_returning_old.return_value = _persona(OLD_PATH)
+    """削除した時点の本体（delete_with_shares の戻り値）の画像を消す（BR4.1）。"""
 
-        assert manager.delete_persona("p1") is True
+    OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
+
+    @pytest.fixture
+    def sharing(self) -> Mock:
+        return Mock()
+
+    @pytest.fixture
+    def deleter(self, db, s3, sharing) -> PersonaManager:
+        return PersonaManager(
+            database_service=db, s3_service=s3, resource_sharing=sharing
+        )
+
+    def test_deletes_avatar_of_deleted_record(self, deleter, db, s3, sharing):
+        """削除と同時に得たレコードの画像を消す（事前の読み取りに頼らない）"""
+        sharing.delete_with_shares.return_value = {"id": "p1", "avatar_path": OLD_PATH}
+
+        assert deleter.delete_persona(self.OWNER, "p1") is True
         s3.delete_file.assert_called_once_with(OLD_PATH)
         db.get_persona.assert_not_called()
 
-    def test_s3_failure_does_not_fail_persona_deletion(self, manager, db, s3):
-        db.delete_persona_returning_old.return_value = _persona(OLD_PATH)
+    def test_s3_failure_does_not_fail_persona_deletion(self, deleter, s3, sharing):
+        sharing.delete_with_shares.return_value = {"id": "p1", "avatar_path": OLD_PATH}
         s3.delete_file.side_effect = RuntimeError("s3 down")
 
-        assert manager.delete_persona("p1") is True
+        assert deleter.delete_persona(self.OWNER, "p1") is True
 
-    def test_not_found_does_not_touch_s3(self, manager, db, s3):
-        db.delete_persona_returning_old.return_value = None
+    def test_not_found_does_not_touch_s3(self, deleter, s3, sharing):
+        sharing.delete_with_shares.return_value = None
 
-        assert manager.delete_persona("p1") is False
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
+            deleter.delete_persona(self.OWNER, "p1")
         s3.delete_file.assert_not_called()
 
 

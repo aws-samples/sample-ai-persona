@@ -61,6 +61,7 @@ htmx:beforeOnLoad → HX-Trigger → HX-Location → HX-Refresh → HX-Redirect
 - 一覧の読み直しは `HX-Trigger: {"listReload": {"target": "#<id>"}}`。読み直す URL は要素の `data-reload-url`
   （`list_tabpanel()` が描く）だけで、イベントの値から URL を受け取らない
 - 部品の振る舞いは `tests/ui/`（マーカー `ui`、Playwright + axe-core）で確かめる
+- **部署への共有は `/share/{resource_type}/...`（`web/routers/sharing.py`）と `ResourceSharing` を通す。** 画面ごとに共有の入口や保存を作らず、`sharing/partials/share_dialog.html`（画面に 1 つの `share-dialog`）を置いて、開くボタンに `data-share-url` を付ける（v1.0.0 U4）
 
 ## Jinja テンプレート
 

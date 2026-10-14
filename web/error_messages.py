@@ -71,6 +71,20 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.ACCESS_DENIED: "この操作の権限がありません",
     ErrorCode.REQUEST_INVALID: "入力内容を確認してください",
     ErrorCode.HTTP_ERROR: "お探しのページまたは操作が見つかりません",
+    # --- 部署への共有（v1.0.0 U4） ---
+    ErrorCode.SHARE_SCOPE_INVALID: "選べないグループが含まれています",
+    ErrorCode.SHARE_NO_DEPARTMENT: "所属グループがないため共有できません",
+    ErrorCode.SHARE_OWNER_MISSING: "所有者が分からないため共有できません",
+    ErrorCode.SHARE_NO_TARGET: "共有先を設定する対象を1件以上選択してください",
+    ErrorCode.SHARE_TOO_MANY_TARGETS: (
+        "一度に共有先を設定できるのは{max_targets}件までです。選ぶ件数を減らしてください"
+    ),
+    ErrorCode.SHARE_TOO_MANY_GROUPS: (
+        "1つのリソースを共有できるグループは{max_groups}グループまでです"
+    ),
+    ErrorCode.SHARE_UPDATE_FAILED: (
+        "共有先を更新できませんでした。時間をおいて再度お試しください"
+    ),
     ErrorCode.GENERATION_CAPACITY_EXCEEDED: (
         "生成するデータ量が大きすぎて処理しきれませんでした。"
         "ペルソナ生成数を減らすか、アップロードするファイルを小さくして再度お試しください。"

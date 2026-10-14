@@ -4,7 +4,7 @@ Service Factory
 """
 
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from threading import Lock
 
 from .ai_service import AIService
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from .authz_lookup_service import AuthzLookupService
     from .cognito_groups_service import CognitoGroupsService
     from .oidc_service import OidcService
+    from .resource_share_store import ResourceShareStore
+    from .user_directory_service import UserDirectoryService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
     from .memory.memory_service import MemoryService
@@ -60,6 +62,8 @@ class ServiceFactory:
         self._oidc_service: Optional["OidcService"] = None
         self._authz_lookup_service: Optional["AuthzLookupService"] = None
         self._cognito_groups_service: Optional["CognitoGroupsService"] = None
+        self._resource_share_store: Optional["ResourceShareStore"] = None
+        self._user_directory_service: Optional["UserDirectoryService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -389,6 +393,77 @@ class ServiceFactory:
                         user_pool_id=config.COGNITO_USER_POOL_ID
                     )
         return self._cognito_groups_service
+
+    def get_resource_share_store(self) -> "ResourceShareStore":
+        """Return the store of department shares (U4, ADR-003).
+
+        The body tables it also writes are passed per call from
+        ``ResourceSharing``'s registration, so only the ResourceShares table
+        name is configured here.
+        """
+        if self._resource_share_store is None:
+            with self._lock:
+                if self._resource_share_store is None:
+                    from .resource_share_store import ResourceShareStore
+
+                    self.logger.info("Creating new ResourceShareStore instance")
+                    self._resource_share_store = ResourceShareStore(
+                        region=config.DYNAMODB_REGION,
+                        shares_table=config.RESOURCE_SHARES_TABLE_NAME,
+                    )
+        return self._resource_share_store
+
+    def get_user_directory_service(self) -> "UserDirectoryService":
+        """Return the user-list reader for owner names (U4, BR5.1).
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` when ``COGNITO_USER_POOL_ID``
+                is not set.
+        """
+        if self._user_directory_service is None:
+            with self._lock:
+                if self._user_directory_service is None:
+                    if not config.COGNITO_USER_POOL_ID:
+                        raise CodedError(
+                            "COGNITO_USER_POOL_ID is required for the owner names",
+                            code=ErrorCode.AUTH_CONFIG_INVALID,
+                        )
+                    from .user_directory_service import UserDirectoryService
+
+                    self.logger.info("Creating new UserDirectoryService instance")
+                    self._user_directory_service = UserDirectoryService(
+                        user_pool_id=config.COGNITO_USER_POOL_ID
+                    )
+        return self._user_directory_service
+
+    def get_department_source(self) -> Any:
+        """Return where the departments come from (U4).
+
+        The Cognito ``group:`` groups when a user pool is configured; under
+        ``AUTH_MODE=local`` without one, the development user's groups.
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` outside local mode without a pool.
+        """
+        if config.COGNITO_USER_POOL_ID or config.AUTH_MODE != "local":
+            return self.get_cognito_groups_service()
+        return self._local_directory()
+
+    def get_user_source(self) -> Any:
+        """Return where the owner names come from (U4).
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` outside local mode without a pool.
+        """
+        if config.COGNITO_USER_POOL_ID or config.AUTH_MODE != "local":
+            return self.get_user_directory_service()
+        return self._local_directory()
+
+    def _local_directory(self) -> Any:
+        from .local_directory_service import LocalDirectoryService
+
+        self.logger.info("Using the local department and user list (AUTH_MODE=local)")
+        return LocalDirectoryService(config)
 
     def get_data_agent_service(self) -> Optional["DataAgentService"]:
         """

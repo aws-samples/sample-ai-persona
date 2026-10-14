@@ -25,7 +25,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_empty(self, mock_get_manager, client):
         """ペルソナが存在しない場合、空のリストを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas_full.return_value = []
+        mock_manager.list_accessible_personas.return_value = []
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
@@ -37,7 +37,7 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_with_data(self, mock_get_manager, client, sample_persona):
         """ペルソナが存在する場合、正しいデータを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas_full.return_value = [sample_persona]
+        mock_manager.list_accessible_personas.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
@@ -56,12 +56,9 @@ class TestPersonasAPIEndpoint:
     def test_list_personas_with_search(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """検索パラメータでフィルタリングできることを確認"""
+        """検索語を利用者と一緒に Manager へ渡す（絞り込みは Manager、U4）"""
         mock_manager = Mock()
-        mock_manager.get_all_personas_full.return_value = [
-            sample_persona,
-            sample_persona_2,
-        ]
+        mock_manager.list_accessible_personas.return_value = [sample_persona]
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas?search=田中")
@@ -70,37 +67,55 @@ class TestPersonasAPIEndpoint:
         data = response.json()
         assert len(data) == 1
         assert data[0]["name"] == "田中花子"
+        principal, search = mock_manager.list_accessible_personas.call_args.args
+        assert search == "田中" and principal.sub
 
     @patch("web.routers.api.get_persona_manager")
     def test_list_personas_search_by_occupation(
         self, mock_get_manager, client, sample_persona, sample_persona_2
     ):
-        """職業での検索が機能することを確認"""
+        """検索語がないときは None を渡す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas_full.return_value = [
+        mock_manager.list_accessible_personas.return_value = [
             sample_persona,
             sample_persona_2,
         ]
         mock_get_manager.return_value = mock_manager
 
-        response = client.get("/api/personas?search=商品開発")
+        response = client.get("/api/personas")
 
         assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 1
-        assert data[0]["name"] == "佐藤太郎"
+        assert len(response.json()) == 2
+        _principal, search = mock_manager.list_accessible_personas.call_args.args
+        assert search is None
 
     @patch("web.routers.api.get_persona_manager")
     def test_list_personas_error_handling(self, mock_get_manager, client):
         """エラー発生時に500エラーを返す"""
         mock_manager = Mock()
-        mock_manager.get_all_personas_full.side_effect = Exception("Database error")
+        mock_manager.list_accessible_personas.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas")
 
         assert response.status_code == 500
         assert "ペルソナ一覧の取得に失敗しました" in response.json()["detail"]
+
+    @patch("web.routers.api.get_persona_manager")
+    def test_list_personas_keeps_the_lookup_outage_code(self, mock_get_manager, client):
+        """An unreachable lookup stays 503 lookup_unavailable (common handler)."""
+        from src.models.errors import LookupUnavailableError
+
+        mock_manager = Mock()
+        mock_manager.list_accessible_personas.side_effect = LookupUnavailableError(
+            "index unreachable"
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/api/personas")
+
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "lookup_unavailable"
 
 
 class TestPersonaDetailAPIEndpoint:
@@ -109,8 +124,12 @@ class TestPersonaDetailAPIEndpoint:
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_success(self, mock_get_manager, client, sample_persona):
         """ペルソナ詳細を正常に取得できることを確認"""
+        from src.managers.persona_manager import PersonaDetail
+
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = sample_persona
+        mock_manager.get_persona_detail.return_value = PersonaDetail(
+            sample_persona, manageable=True
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get(f"/api/personas/{sample_persona.id}")
@@ -123,21 +142,26 @@ class TestPersonaDetailAPIEndpoint:
 
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_not_found(self, mock_get_manager, client):
-        """存在しないペルソナIDで404エラーを返す"""
+        """読めない・存在しないペルソナIDで404エラーを返す（同じ応答、NFR1.14）"""
+        from src.models.errors import CodedError, ErrorCode
+
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = None
+        mock_manager.get_persona_detail.side_effect = CodedError(
+            "not readable", code=ErrorCode.PERSONA_NOT_FOUND
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas/non-existent-id")
 
         assert response.status_code == 404
         assert "ペルソナが見つかりません" in response.json()["detail"]
+        assert response.json()["error_code"] == "persona_not_found"
 
     @patch("web.routers.api.get_persona_manager")
     def test_get_persona_error_handling(self, mock_get_manager, client):
         """エラー発生時に500エラーを返す"""
         mock_manager = Mock()
-        mock_manager.get_persona.side_effect = Exception("Database error")
+        mock_manager.get_persona_detail.side_effect = Exception("Database error")
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/api/personas/test-id")

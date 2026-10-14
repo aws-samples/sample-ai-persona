@@ -32,7 +32,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.managers.persona_manager import PersonaManagerError
-from src.models.errors import ErrorCode
+from src.models.errors import CodedError, ErrorCode
 
 _ROUTERS_DIR = Path(__file__).parent.parent.parent / "web" / "routers"
 
@@ -940,7 +940,10 @@ class TestHttpExceptionRendersHtmlPage:
         from fastapi.testclient import TestClient
 
         mgr = Mock()
-        mgr.get_persona.return_value = None
+        # 読めない・存在しないペルソナ（U4 から詳細は判定を通す）
+        mgr.get_persona_detail.side_effect = CodedError(
+            "not readable", code=ErrorCode.PERSONA_NOT_FOUND
+        )
         mock_get_mgr.return_value = mgr
 
         with TestClient(test_app, follow_redirects=False) as browser:

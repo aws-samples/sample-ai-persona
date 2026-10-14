@@ -58,7 +58,7 @@ def test_fieldset_legend_and_labels(ui: UiHarness) -> None:
 
     assert ui.page.locator(
         "fieldset[data-department-picker] > legend"
-    ).inner_text().strip() == ("共有する部署（複数選択可）")
+    ).inner_text().strip() == ("共有するグループ（複数選択可）")
     labels = ui.page.locator("[data-department-picker] label").all_inner_texts()
     assert [label.strip() for label in labels] == ["営業部", "企画部", "人事部"]
 
@@ -82,7 +82,7 @@ def test_scope_mode_uses_its_own_legend(ui: UiHarness) -> None:
     _load(ui, mode="scope")
 
     assert ui.page.locator("[data-department-picker] legend").inner_text().strip() == (
-        "利用できる部署（複数選択可）"
+        "利用できるグループ（複数選択可）"
     )
 
 
@@ -119,10 +119,15 @@ def test_mixed_option_cycles_checked_unchecked_mixed(ui: UiHarness) -> None:
     assert ui.page.is_disabled(SAVE)
 
 
+#: Departments that were checked or mixed when the mixed picker opened (BR1.12).
+INITIAL = [("departments_initial", "plan"), ("departments_initial", "sales")]
+
+
 def test_sent_values_follow_the_states(ui: UiHarness) -> None:
     _load_mixed(ui)
     assert sorted(map(tuple, _sent(ui))) == [
         ("departments", "sales"),
+        *INITIAL,
         ("departments_unchanged", "plan"),
     ]
 
@@ -133,7 +138,36 @@ def test_sent_values_follow_the_states(ui: UiHarness) -> None:
     assert sorted(map(tuple, _sent(ui))) == [
         ("departments", "hr"),
         ("departments", "plan"),
+        *INITIAL,
     ]
+
+
+def test_initial_values_are_the_departments_shared_when_opened(ui: UiHarness) -> None:
+    """{name}_initial は開いたときに選択か中間だった部署だけ。押しても変わらない（U4、C6）。"""
+    _load(ui)
+    initial = [("departments_initial", "sales")]
+    assert [tuple(v) for v in _sent(ui) if v[0] == "departments_initial"] == initial
+
+    ui.page.uncheck(_option("sales"))
+    ui.page.check(_option("hr"))
+
+    assert [tuple(v) for v in _sent(ui) if v[0] == "departments_initial"] == initial
+
+
+def test_vanished_department_comes_last_and_can_be_removed(ui: UiHarness) -> None:
+    """消えた部署（admin のとき）は「（存在しないグループ）」として最後に出る（U4）。"""
+    _load(ui, selected=frozenset({"sales", "old-dept"}), vanished=["old-dept"])
+
+    labels = ui.page.locator("[data-department-picker] label").all_inner_texts()
+    assert [label.strip() for label in labels][-1] == "（存在しないグループ）"
+    assert _states(ui)["old-dept"] == "checked"
+
+    ui.page.uncheck(_option("old-dept"))
+
+    sent = sorted(map(tuple, _sent(ui)))
+    assert ("departments", "old-dept") not in sent
+    assert ("departments_initial", "old-dept") in sent
+    assert "（存在しないグループ）" in ui.page.locator(REMOVING).inner_text()
 
 
 def test_another_htmx_swap_keeps_the_picker_state(ui: UiHarness) -> None:
@@ -152,6 +186,7 @@ def test_another_htmx_swap_keeps_the_picker_state(ui: UiHarness) -> None:
     assert sorted(map(tuple, _sent(ui))) == [
         ("departments", "plan"),
         ("departments", "sales"),
+        *INITIAL,
     ]
     assert not ui.page.is_disabled(SAVE)
 
@@ -218,7 +253,7 @@ def test_no_choices_explains_why_and_disables_saving(ui: UiHarness) -> None:
     text = ui.page.locator(
         "[data-department-picker] [data-department-empty]"
     ).inner_text()
-    assert "選べる部署がありません" in text
+    assert "選べるグループがありません" in text
     assert ui.page.is_disabled(SAVE)
 
 

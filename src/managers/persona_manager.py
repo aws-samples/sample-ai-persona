@@ -5,15 +5,33 @@ Persona Manager for AI Persona System.
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+)
 
 from ..config import config
+from ..models.authz import AccessTarget, Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.demographics import VALID_GENDERS
+from ..models.sharing import ListTab, TabbedList
 from ..services import country_service
 from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
+from .components.access_policy import AccessPolicy
+from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
+from .components.resource_sharing import ResourceSharing
+from .components.sharing_runtime import SharingParts, build_sharing_parts, shared_parts
 from .shared.image_normalize import (
     AVATAR_FILE_EXTENSION,
     AVATAR_MIME_TYPE,
@@ -29,6 +47,11 @@ if TYPE_CHECKING:
 AVATAR_KEY_PREFIX = "persona_avatars"
 #: Lifetime of the presigned URL the avatar endpoint redirects to
 AVATAR_URL_EXPIRATION_SECONDS = 3600
+#: Most rows a search returns (BR3.8, unchanged from before v1.0.0)
+SEARCH_RESULT_LIMIT = 100
+
+_PERSONA = ResourceType.PERSONA
+_T = TypeVar("_T")
 
 
 class PersonaManagerError(CodedError):
@@ -37,22 +60,48 @@ class PersonaManagerError(CodedError):
     pass
 
 
+@dataclass(frozen=True)
+class PersonaDetail:
+    """What the detail page shows (BR6.2, BR6.4).
+
+    Attributes:
+        persona: The persona (read with a strongly consistent read).
+        manageable: Whether the user may edit, delete and share it.
+        owner_label: The owner's name, ``所有者不明``, or ``None`` when the
+            owner copy is unavailable (shown as ``-``).
+        shared_with: Names of the departments it is shared with.
+    """
+
+    persona: Persona
+    manageable: bool
+    owner_label: str | None = None
+    shared_with: list[str] = dataclass_field(default_factory=list)
+
+
 class PersonaManager:
     """
     ペルソナのCRUD操作とバインディング管理を行うManager。
     記憶管理はPersonaMemoryManagerに委譲済み。
+
+    v1.0.0 U4: 保存した人を所有者にし（BR6.1）、一覧・検索・詳細・編集・削除は
+    利用者（Principal）を受け取って ResourceSharing と AccessPolicy で判定する。
     """
 
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
         s3_service: Optional["S3Service"] = None,
+        resource_sharing: Optional[ResourceSharing] = None,
+        owners: Optional[OwnerDirectory] = None,
     ):
         """
         Args:
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
             s3_service: S3 service for avatar images (optional, uses singleton if not provided;
                 None when S3_BUCKET_NAME is not configured, which disables avatar upload)
+            resource_sharing: Sharing component (optional; the per-task
+                instance shared with the other Managers, built on first use)
+            owners: Owner-name copy (optional; the per-task instance)
         """
         self.logger = logging.getLogger(__name__)
         self.database_service = (
@@ -65,20 +114,56 @@ class PersonaManager:
                 self.s3_service = service_factory.get_s3_service()
             except RuntimeError:
                 self.s3_service = None
+        self._sharing = resource_sharing
+        self._owner_directory = owners
 
-    def save_persona(self, persona: Persona) -> str:
+    # ------------------------------------------------------------------
+    # Sharing parts (built lazily so that callers that never list or share
+    # do not create the DynamoDB and Cognito clients)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parts() -> SharingParts:
+        return shared_parts(
+            lambda: build_sharing_parts(
+                service_factory.get_resource_share_store(),
+                service_factory.get_department_source(),
+                service_factory.get_user_source(),
+            )
+        )
+
+    @property
+    def _resource_sharing(self) -> ResourceSharing:
+        if self._sharing is None:
+            self._sharing = self._parts().sharing
+        return self._sharing
+
+    @property
+    def _owners(self) -> OwnerDirectory:
+        if self._owner_directory is None:
+            self._owner_directory = self._parts().owners
+        return self._owner_directory
+
+    def save_persona(self, principal: Principal, persona: Persona) -> str:
         """
-        Save a persona to the database.
+        Save a new persona owned by ``principal`` (BR6.1).
+
+        The persona starts unshared; ``owner_sub`` never changes afterwards.
 
         Args:
+            principal: The user who saves it (needs ``resource:create``)
             persona: Persona object to save
 
         Returns:
             str: The persona ID
 
         Raises:
+            AccessDeniedError: The user may not create resources
             PersonaManagerError: If save operation fails
         """
+        AccessPolicy.require(
+            principal, Permission.RESOURCE_CREATE, resource_type=_PERSONA
+        )
         if not persona:
             raise PersonaManagerError(
                 "persona object is falsy", code=ErrorCode.PERSONA_INVALID
@@ -86,6 +171,7 @@ class PersonaManager:
 
         # Validate persona before saving
         self._validate_persona_for_save(persona)
+        persona = persona.owned_by(principal.sub)
 
         try:
             persona_id = self.database_service.save_persona(persona)
@@ -150,72 +236,311 @@ class PersonaManager:
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             ) from e
 
-    def get_all_personas(
-        self,
-        limit: int = 20,
-        cursor: Optional[Dict[str, Any]] = None,
-        search_all: bool = False,
-    ) -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
+    # ------------------------------------------------------------------
+    # Tabbed lists, search, detail (BR3, BR6.2〜BR6.4)
+    # ------------------------------------------------------------------
+
+    def list_personas(
+        self, principal: Principal, tab: str | None, cursor: str | None
+    ) -> TabbedList[Persona]:
         """
-        Retrieve personas with cursor-based pagination.
+        One page of a tab, newest first (``all`` is in scan order).
 
-        Args:
-            limit: Page size (default 20).
-            cursor: LastEvaluatedKey from previous call.
-            search_all: If True, fall back to full scan (for search queries
-                that cannot be satisfied by GSI Query).
-
-        Returns:
-            Tuple of (personas, next_cursor). next_cursor is None if no more pages.
+        ``all`` without ``resource:read_all`` (and an unknown tab) is
+        ``mine`` (BR3.1). The rows are read again with a strongly consistent
+        batch read and rows the user can no longer read are left out (BR3.7).
+        Counts are only computed for the first page.
 
         Raises:
-            PersonaManagerError: If retrieval operation fails
+            CodedError: ``LOOKUP_UNAVAILABLE`` when the index cannot be read
+            PersonaManagerError: When the bodies cannot be read
         """
-        try:
-            personas, next_cursor = self.database_service.get_all_personas(
-                limit=limit, cursor=cursor, search_all=search_all
-            )
-            self.logger.info(
-                f"Retrieved {len(personas)} personas (next_cursor={'yes' if next_cursor else 'no'})"
-            )
-            return personas, next_cursor
+        active = self._resource_sharing.effective_tab(
+            principal, ListTab.parse(tab) or ListTab.MINE
+        )
+        page = self._resource_sharing.list_page(principal, _PERSONA, active, cursor)
+        personas = self._readable(principal, [t.resource_id for t in page.items])
+        counts = self._counts(principal, {active: page.total}) if cursor is None else {}
+        return self._listing(
+            principal, active, personas, next_cursor=page.next_cursor, counts=counts
+        )
 
-        except DatabaseError as e:
-            self.logger.error(
-                "Database error while retrieving all personas", exc_info=True
-            )
-            raise PersonaManagerError(
-                f"persona retrieval failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
-        except Exception as e:
-            self.logger.error(
-                "Unexpected error while retrieving all personas", exc_info=True
-            )
-            raise PersonaManagerError(
-                f"persona retrieval failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
+    def search_personas(
+        self, principal: Principal, tab: str | None, query: str
+    ) -> TabbedList[Persona]:
+        """
+        Search names, occupations and backgrounds inside one tab (BR3.8).
 
-    def get_all_personas_full(self) -> List[Persona]:
+        ``mine`` / ``shared`` look at the newest 500 items of their index
+        (``search_truncated`` tells when more existed); ``all`` scans the
+        table (``resource:read_all`` only). At most 100 rows are returned.
+        Only the searched tab is counted, from the same read (``None`` when
+        the search was cut off).
         """
-        Retrieve every persona (scan-based). Use sparingly; prefer cursor
-        pagination via get_all_personas() for UI listings.
-        """
-        personas, _ = self.get_all_personas(search_all=True)
-        return personas
+        active = self._resource_sharing.effective_tab(
+            principal, ListTab.parse(tab) or ListTab.MINE
+        )
+        truncated = False
+        if active is ListTab.ALL:
+            scanned = self._scan_all()
+            total: int | None = len(scanned)
+            personas = [
+                p
+                for p in scanned
+                if AccessPolicy.can_read(principal, self._target_of(p, p.id))
+            ]
+        else:
+            ids, truncated = self._resource_sharing.collect_ids(
+                principal, _PERSONA, active
+            )
+            # The index read above already holds the whole tab unless it was
+            # cut off; then the count is unknown and the truncation notice
+            # is shown instead (R-06: no second read for the count).
+            total = None if truncated else len(ids)
+            personas = self._readable(principal, ids)
+        matched = [p for p in personas if _matches(p, query)][:SEARCH_RESULT_LIMIT]
+        return self._listing(
+            principal,
+            active,
+            matched,
+            counts={active.value: total},
+            search_truncated=truncated,
+        )
 
-    def delete_persona(self, persona_id: str) -> bool:
+    def list_accessible_personas(
+        self, principal: Principal, search: str | None = None
+    ) -> List[Persona]:
         """
-        Delete a persona from the database.
+        The user's own personas and the ones shared with them (JSON API).
+
+        Each tab contributes its newest 500 items; ``search`` filters names and
+        occupations.
+        """
+        ids: list[str] = []
+        for tab in (ListTab.MINE, ListTab.SHARED):
+            tab_ids, _ = self._resource_sharing.collect_ids(principal, _PERSONA, tab)
+            ids += tab_ids
+        personas = self._readable(principal, list(dict.fromkeys(ids)))
+        if not search:
+            return personas
+        needle = search.lower()
+        return [
+            p
+            for p in personas
+            if needle in p.name.lower() or needle in p.occupation.lower()
+        ]
+
+    def get_persona_detail(
+        self, principal: Principal, persona_id: str
+    ) -> PersonaDetail:
+        """
+        The detail page of a persona the user may read (BR6.2, BR6.4).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            PersonaManagerError: When the persona cannot be read
+        """
+        persona = self._read_consistent(persona_id)
+        target = self._target_of(persona, persona_id)
+        AccessPolicy.ensure_readable(principal, target, ErrorCode.PERSONA_NOT_FOUND)
+        assert persona is not None  # ensure_readable raised for a missing persona
+        return self.describe_persona(principal, persona)
+
+    def describe_persona(self, principal: Principal, persona: Persona) -> PersonaDetail:
+        """
+        The detail rows (owner and shares, BR6.4) of a persona already read.
+
+        Used by the detail page and by the response to an edit, so the
+        header shows the same rows before and after saving (R-07). Nothing is
+        read again: the owner name comes from the owner copy and the
+        department names from the department directory (display only).
 
         Args:
+            principal: The user (decides ``manageable``)
+            persona: A persona the caller has read
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when the user cannot read it
+                (the owner name is never shown for an unreadable persona)
+        """
+        target = self._target_of(persona, persona.id)
+        AccessPolicy.ensure_readable(principal, target, ErrorCode.PERSONA_NOT_FOUND)
+        labels = self._owner_labels([persona])
+        return PersonaDetail(
+            persona=persona,
+            manageable=AccessPolicy.can_manage(principal, target),
+            owner_label=None if labels is None else labels[persona.id],
+            shared_with=self._resource_sharing.department_names(
+                sorted(persona.shared_group_ids)
+            ),
+        )
+
+    def get_persona_for_edit(self, principal: Principal, persona_id: str) -> Persona:
+        """
+        The persona for the edit form; the user must manage it (BR6.2).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            AccessDeniedError: Readable but not manageable (403)
+        """
+        persona = self._read_consistent(persona_id)
+        AccessPolicy.ensure_manageable(
+            principal,
+            self._target_of(persona, persona_id),
+            ErrorCode.PERSONA_NOT_FOUND,
+        )
+        assert persona is not None
+        return persona
+
+    # --- list helpers -----------------------------------------------------
+
+    @staticmethod
+    def _target_of(persona: Persona | None, persona_id: str) -> AccessTarget:
+        if persona is None:
+            return AccessTarget.missing(_PERSONA, persona_id)
+        return AccessTarget(
+            resource_type=_PERSONA,
+            resource_id=persona.id,
+            owner_sub=persona.owner_sub,
+            shared_group_ids=persona.shared_group_ids,
+            display_name=persona.name,
+        )
+
+    def _read_consistent(self, persona_id: str) -> Optional[Persona]:
+        if not persona_id or not persona_id.strip():
+            raise PersonaManagerError(
+                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+            )
+        return self._read_bodies(
+            lambda: self.database_service.get_persona(
+                persona_id.strip(), consistent=True
+            )
+        )
+
+    def _readable(self, principal: Principal, ids: List[str]) -> List[Persona]:
+        """Bodies of ``ids`` (in order) that the user can still read (BR3.7)."""
+        if not ids:
+            return []
+        found = self._read_bodies(
+            lambda: self.database_service.get_personas_by_ids(ids)
+        )
+        return [
+            p
+            for i in ids
+            if (p := found.get(i)) is not None
+            and AccessPolicy.can_read(principal, self._target_of(p, i))
+        ]
+
+    def _scan_all(self) -> List[Persona]:
+        personas, _ = self._read_bodies(
+            lambda: self.database_service.get_all_personas(search_all=True)
+        )
+        return personas
+
+    def _read_bodies(self, read: Callable[[], _T]) -> _T:
+        """Run a body read; failures become ``PERSONA_OPERATION_FAILED``."""
+        try:
+            return read()
+        except Exception as e:
+            self.logger.error("Failed to read personas", exc_info=True)
+            raise PersonaManagerError(
+                f"persona retrieval failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
+
+    def _counts(
+        self, principal: Principal, known: Dict[ListTab, int | None]
+    ) -> Dict[str, int | None]:
+        """Count of every visible tab; ``None`` when it could not be read."""
+        tabs = [ListTab.MINE, ListTab.SHARED]
+        if self._resource_sharing.effective_tab(principal, ListTab.ALL) is ListTab.ALL:
+            tabs.append(ListTab.ALL)
+        counts: Dict[str, int | None] = {}
+        for tab in tabs:
+            if tab in known and known[tab] is not None:
+                counts[tab.value] = known[tab]
+            else:
+                counts[tab.value] = self._resource_sharing.count(
+                    principal, _PERSONA, tab
+                )
+        return counts
+
+    def _owner_labels(self, personas: Iterable[Persona]) -> Dict[str, str] | None:
+        """Row id -> owner label (BR5.2); ``None`` when the copy is unavailable."""
+        rows = list(personas)
+        subs = {p.owner_sub for p in rows if p.owner_sub}
+        labels = self._owners.labels(subs)
+        if labels is None:
+            return None
+        return {
+            p.id: labels.get(p.owner_sub, OWNER_UNKNOWN)
+            if p.owner_sub
+            else OWNER_UNKNOWN
+            for p in rows
+        }
+
+    def _listing(
+        self,
+        principal: Principal,
+        active: ListTab,
+        personas: List[Persona],
+        *,
+        next_cursor: str | None = None,
+        counts: Dict[str, int | None],
+        search_truncated: bool = False,
+    ) -> TabbedList[Persona]:
+        sharing = self._resource_sharing
+        owners: Dict[str, str | None] = {}
+        if active is not ListTab.MINE and personas:
+            labels = self._owner_labels(personas)
+            owners = {p.id: None if labels is None else labels[p.id] for p in personas}
+        shared_with = {
+            p.id: sharing.department_names(
+                sorted(
+                    p.shared_group_ids & principal.group_ids
+                    if active is ListTab.SHARED
+                    else p.shared_group_ids
+                )
+            )
+            for p in personas
+        }
+        return TabbedList(
+            tab=active,
+            items=personas,
+            next_cursor=next_cursor,
+            counts=counts,
+            show_all=sharing.effective_tab(principal, ListTab.ALL) is ListTab.ALL,
+            owners=owners,
+            shared_with=shared_with,
+            manageable=frozenset(
+                p.id
+                for p in personas
+                if AccessPolicy.can_manage(principal, self._target_of(p, p.id))
+            ),
+            no_department=not principal.group_ids,
+            search_truncated=search_truncated,
+        )
+
+    def delete_persona(self, principal: Principal, persona_id: str) -> bool:
+        """
+        Delete a persona the user manages, with its department shares (BR4).
+
+        ``ResourceSharing.delete_with_shares`` reads the persona strongly,
+        judges ``ensure_manageable`` on that body and deletes it together with
+        its ``ResourceShares`` items, returning the body as deleted. Its avatar
+        image (the one at deletion time) is removed afterwards.
+
+        Args:
+            principal: The user
             persona_id: ID of the persona to delete
 
         Returns:
-            True if deletion was successful, False if persona not found
+            True when deleted
 
         Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or already
+                missing (the same answer, NFR1.14)
+            AccessDeniedError: Readable but not manageable (403)
             PersonaManagerError: If deletion operation fails
         """
         if not persona_id or not persona_id.strip():
@@ -224,35 +549,31 @@ class PersonaManager:
             )
 
         try:
-            # 削除と同時に削除直前のレコードを受け取り、その時点の画像を消す
-            # （事前に読み取ると、削除までの間に差し替えられた画像が残る）
-            deleted = self.database_service.delete_persona_returning_old(
-                persona_id.strip()
+            deleted = self._resource_sharing.delete_with_shares(
+                principal, _PERSONA, persona_id.strip()
             )
-            success = deleted is not None
-            if deleted is not None:
-                self.logger.info(f"Persona deleted successfully: {persona_id}")
-                if deleted.avatar_path:
-                    self._delete_avatar_object(deleted.avatar_path)
-            else:
-                self.logger.warning(f"Persona not found for deletion: {persona_id}")
-            return success
-
-        except DatabaseError as e:
-            self.logger.error("Database error while deleting persona", exc_info=True)
-            raise PersonaManagerError(
-                f"persona delete failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
+        except CodedError:
+            raise
         except Exception as e:
             self.logger.error("Unexpected error while deleting persona", exc_info=True)
             raise PersonaManagerError(
                 f"persona delete failed ({type(e).__name__})",
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             ) from e
+        if deleted is None:
+            self.logger.info(f"Persona not found for deletion: {persona_id}")
+            raise PersonaManagerError(
+                "nothing to delete", code=ErrorCode.PERSONA_NOT_FOUND
+            )
+        self.logger.info(f"Persona deleted successfully: {persona_id}")
+        avatar_path = deleted.get("avatar_path")
+        if avatar_path:
+            self._delete_avatar_object(str(avatar_path))
+        return True
 
     def update_persona(
         self,
+        principal: Principal,
         persona_id: str,
         name: str | None = None,
         age: int | None = None,
@@ -265,11 +586,16 @@ class PersonaManager:
         country: str | None = None,
         city: str | None = None,
         tags: List[str] | None = None,
-    ) -> Optional[Persona]:
+    ) -> Persona:
         """
-        Edit an existing persona with new values.
+        Edit a persona the user manages (BR6.2, BR6.7).
+
+        The persona is read strongly and judged with ``ensure_manageable``;
+        only the editable columns are written (a partial update), so the
+        owner, the shares and ``ResourceShares`` never change (BR6.6).
 
         Args:
+            principal: The user
             persona_id: ID of the persona to edit
             name: New name (optional)
             age: New age (optional)
@@ -284,23 +610,23 @@ class PersonaManager:
             tags: New filter tags list (optional)
 
         Returns:
-            Updated Persona object if successful, None if persona not found
+            The updated Persona
 
         Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+                (also when it was deleted while being edited)
+            AccessDeniedError: Readable but not manageable (403)
             PersonaManagerError: If edit operation fails
         """
-        if not persona_id or not persona_id.strip():
-            raise PersonaManagerError(
-                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
-            )
+        existing_persona = self._read_consistent(persona_id)
+        AccessPolicy.ensure_manageable(
+            principal,
+            self._target_of(existing_persona, persona_id),
+            ErrorCode.PERSONA_NOT_FOUND,
+        )
+        assert existing_persona is not None
 
         try:
-            # Get existing persona
-            existing_persona = self.get_persona(persona_id)
-            if not existing_persona:
-                self.logger.warning(f"Persona not found for editing: {persona_id}")
-                return None
-
             # Create updated persona
             updated_persona = existing_persona.update(
                 name=name,
@@ -326,11 +652,10 @@ class PersonaManager:
                     f"Persona edited successfully: {updated_persona.name} (ID: {persona_id})"
                 )
                 return updated_persona
-            else:
-                raise PersonaManagerError(
-                    "database reported update failure",
-                    code=ErrorCode.PERSONA_UPDATE_FAILED,
-                )
+            # The conditional write found no persona: deleted meanwhile
+            raise PersonaManagerError(
+                "persona deleted while editing", code=ErrorCode.PERSONA_NOT_FOUND
+            )
 
         except PersonaManagerError:
             # Re-raise PersonaManagerError
@@ -544,31 +869,6 @@ class PersonaManager:
             self.s3_service.delete_file(avatar_path)
         except Exception:
             self.logger.warning("Failed to delete avatar object", exc_info=True)
-
-    def get_persona_count(self) -> int:
-        """
-        Get the total number of personas in the database.
-
-        Returns:
-            Number of personas
-
-        Raises:
-            PersonaManagerError: If count operation fails
-        """
-        try:
-            return self.database_service.get_persona_count()
-
-        except PersonaManagerError:
-            # Re-raise PersonaManagerError
-            raise
-        except Exception as e:
-            self.logger.error(
-                "Unexpected error while getting persona count", exc_info=True
-            )
-            raise PersonaManagerError(
-                f"persona count failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
 
     def _validate_generated_persona(self, persona: Persona) -> None:
         """
@@ -843,3 +1143,13 @@ class PersonaManager:
         """データセット紐付けを削除する。"""
         self.database_service.delete_binding(binding_id)
         self.logger.info(f"Deleted dataset binding: {binding_id}")
+
+
+def _matches(persona: Persona, query: str) -> bool:
+    """Partial match on the name, occupation and background (BR3.8)."""
+    needle = query.strip().lower()
+    return (
+        needle in persona.name.lower()
+        or needle in persona.occupation.lower()
+        or needle in persona.background.lower()
+    )

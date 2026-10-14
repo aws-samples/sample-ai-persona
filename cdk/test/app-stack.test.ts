@@ -352,6 +352,43 @@ describe('AppStack: 認可（U2）', () => {
     expect(reference).toContain('Arn');
   });
 
+  test('ListUsers は ListGroups と同じ文で、Data スタックの User Pool の ARN だけ（U4、NFR2.7）', () => {
+    const listUsers = statements(template).filter((s) =>
+      [s.Action].flat().includes('cognito-idp:ListUsers'),
+    );
+    expect(listUsers).toHaveLength(1);
+    expect([listUsers[0].Action].flat().sort()).toEqual([
+      'cognito-idp:ListGroups',
+      'cognito-idp:ListUsers',
+    ]);
+    const resources = [listUsers[0].Resource].flat();
+    expect(resources).toHaveLength(1);
+    expect(JSON.stringify(resources[0])).toContain('UserPool');
+  });
+
+  test('ResourceShares への権限は 7 つの操作だけで Scan を含まない（U4、NFR1.21）', () => {
+    const touchesShares = (s: any) =>
+      JSON.stringify(s.Resource ?? '').includes('DatabaseResourceShares');
+    const shareStatements = statements(template).filter(touchesShares);
+    expect(shareStatements.length).toBeGreaterThan(0);
+    const actions = new Set(shareStatements.flatMap((s) => [s.Action].flat()));
+    expect([...actions].sort()).toEqual([
+      'dynamodb:BatchGetItem',
+      'dynamodb:ConditionCheckItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    ]);
+    expect(actions.has('dynamodb:Scan')).toBe(false);
+  });
+
+  test('コンテナに RESOURCE_SHARES_TABLE_NAME をテーブルの参照で渡す（約束 C10）', () => {
+    const value = JSON.stringify(envOf(template).RESOURCE_SHARES_TABLE_NAME);
+    expect(value).toContain('DatabaseResourceShares');
+  });
+
   test('Jobs テーブルの論理 ID・キー・GSI・TTL は U1 から変わらない（約束 C14）', () => {
     const app = new cdk.App();
     const data = new DataStack(app, 'Data', { env: TOKYO, parameter: devParameter });

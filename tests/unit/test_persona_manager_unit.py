@@ -5,10 +5,16 @@ import pytest
 from src.models.errors import ErrorCode
 from tests.error_helpers import raises_code
 from unittest.mock import Mock, patch
+from dataclasses import replace
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.models.authz import Principal, Role
 from src.models.dataset import Dataset, DatasetColumn
+from src.models.errors import AccessDeniedError, CodedError
 from src.models.persona import Persona
+
+#: The user who saves and edits in these tests (owner of the personas).
+OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
 
 
 @pytest.fixture
@@ -157,7 +163,7 @@ class TestSavePersona:
 
     def test_none_persona_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_INVALID):
-            manager.save_persona(None)
+            manager.save_persona(OWNER, None)
 
     def test_success(self, manager):
         persona = Persona.create_new(
@@ -170,7 +176,7 @@ class TestSavePersona:
             goals=["g"],
         )
         manager.database_service.save_persona.return_value = persona.id
-        result = manager.save_persona(persona)
+        result = manager.save_persona(OWNER, persona)
         assert result == persona.id
         manager.database_service.save_persona.assert_called_once()
 
@@ -188,7 +194,7 @@ class TestSavePersona:
         )
         manager.database_service.save_persona.side_effect = DatabaseError("DB down")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
 
 class TestGetPersona:
@@ -229,34 +235,8 @@ class TestGetPersona:
             manager.get_persona("p1")
 
 
-class TestGetAllPersonas:
-    """get_all_personas のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_success(self, manager):
-        manager.database_service.get_all_personas.return_value = (["p1", "p2"], None)
-        personas, cursor = manager.get_all_personas()
-        assert personas == ["p1", "p2"]
-        assert cursor is None
-
-    def test_with_cursor(self, manager):
-        manager.database_service.get_all_personas.return_value = (["p3"], {"id": "x"})
-        personas, cursor = manager.get_all_personas(cursor={"id": "prev"})
-        assert cursor == {"id": "x"}
-
-    def test_db_error(self, manager):
-        from src.services.database_service import DatabaseError
-
-        manager.database_service.get_all_personas.side_effect = DatabaseError("fail")
-        with pytest.raises(PersonaManagerError):
-            manager.get_all_personas()
-
-
 class TestEditPersona:
-    """update_persona のテスト"""
+    """update_persona のテスト（所有者として編集する。判定は test_persona_manager_sharing）"""
 
     @pytest.fixture
     def manager(self):
@@ -269,111 +249,86 @@ class TestEditPersona:
             values=["v"],
             pain_points=["p"],
             goals=["g"],
-        )
+        ).owned_by(OWNER.sub)
         mock_db.get_persona.return_value = persona
         mock_db.update_persona.return_value = True
-        return PersonaManager(database_service=mock_db)
+        return PersonaManager(database_service=mock_db, resource_sharing=Mock())
 
     def test_empty_id_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
-            manager.update_persona("")
+            manager.update_persona(OWNER, "")
 
     def test_persona_not_found(self, manager):
         manager.database_service.get_persona.return_value = None
-        result = manager.update_persona("p1", name="新名前")
-        assert result is None
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.update_persona(OWNER, "p1", name="新名前")
 
     def test_success(self, manager):
-        result = manager.update_persona("p1", name="新名前")
-        assert result is not None
+        result = manager.update_persona(OWNER, "p1", name="新名前")
         assert result.name == "新名前"
         manager.database_service.update_persona.assert_called_once()
 
-    def test_update_failure_raises(self, manager):
+    def test_deleted_while_editing_is_not_found(self, manager):
         manager.database_service.update_persona.return_value = False
-        with raises_code(PersonaManagerError, ErrorCode.PERSONA_UPDATE_FAILED):
-            manager.update_persona("p1", name="新名前")
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.update_persona(OWNER, "p1", name="新名前")
+
+    def test_validation_error_is_kept(self, manager):
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED):
+            manager.update_persona(OWNER, "p1", name=" ")
+
+    def test_db_error(self, manager):
+        manager.database_service.update_persona.side_effect = RuntimeError("down")
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.update_persona(OWNER, "p1", name="新名前")
+
+    def test_read_error(self, manager):
+        manager.database_service.get_persona.side_effect = RuntimeError("down")
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.update_persona(OWNER, "p1", name="新名前")
+
+    def test_other_member_cannot_edit(self, manager):
+        shared = replace(
+            manager.database_service.get_persona.return_value,
+            shared_group_ids=frozenset({"sales"}),
+        )
+        manager.database_service.get_persona.return_value = shared
+        member = Principal("sub-other", frozenset({Role.MEMBER}), frozenset({"sales"}))
+        with pytest.raises(AccessDeniedError):
+            manager.update_persona(member, "p1", name="新名前")
 
 
 class TestDeletePersona:
-    """delete_persona のテスト"""
+    """delete_persona のテスト（ResourceSharing.delete_with_shares を通す）"""
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(database_service=Mock())
+        return PersonaManager(database_service=Mock(), resource_sharing=Mock())
 
     def test_empty_id_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
-            manager.delete_persona("")
+            manager.delete_persona(OWNER, "")
 
     def test_success(self, manager):
-        manager.database_service.delete_persona_returning_old.return_value = (
-            Persona.create_new(
-                name="n",
-                age=30,
-                occupation="o",
-                background="b",
-                values=["v"],
-                pain_points=["p"],
-                goals=["g"],
-            )
-        )
-        assert manager.delete_persona("p1") is True
+        manager._resource_sharing.delete_with_shares.return_value = {"id": "p1"}
+        assert manager.delete_persona(OWNER, "p1") is True
 
     def test_not_found(self, manager):
-        manager.database_service.delete_persona_returning_old.return_value = None
-        assert manager.delete_persona("p1") is False
+        manager._resource_sharing.delete_with_shares.return_value = None
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.delete_persona(OWNER, "p1")
 
-    def test_db_error(self, manager):
-        from src.services.database_service import DatabaseError
+    def test_unexpected_error(self, manager):
+        manager._resource_sharing.delete_with_shares.side_effect = RuntimeError("x")
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.delete_persona(OWNER, "p1")
 
-        manager.database_service.delete_persona_returning_old.side_effect = (
-            DatabaseError("fail")
+    def test_coded_error_passes_through(self, manager):
+        manager._resource_sharing.delete_with_shares.side_effect = CodedError(
+            "x", code=ErrorCode.PERSONA_OPERATION_FAILED
         )
-        with pytest.raises(PersonaManagerError):
-            manager.delete_persona("p1")
-
-
-class TestSearchPersonas:
-    """search_personas のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        mock_db = Mock()
-        personas = [
-            Persona.create_new(
-                name="田中花子",
-                age=30,
-                occupation="マーケター",
-                background="東京在住",
-                values=[],
-                pain_points=[],
-                goals=[],
-            ),
-            Persona.create_new(
-                name="佐藤太郎",
-                age=40,
-                occupation="エンジニア",
-                background="大阪在住",
-                values=[],
-                pain_points=[],
-                goals=[],
-            ),
-        ]
-        mock_db.get_all_personas.return_value = (personas, None)
-        return PersonaManager(database_service=mock_db)
-
-
-class TestPersonaCount:
-    """get_persona_count / persona_exists のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_count(self, manager):
-        manager.database_service.get_persona_count.return_value = 5
-        assert manager.get_persona_count() == 5
+        with raises_code(CodedError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.delete_persona(OWNER, "p1")
 
 
 # --- Lines 306-542: _validate_persona_for_save, KB/Dataset bindings ---
@@ -411,44 +366,44 @@ class TestValidatePersonaForSave:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_whitespace_name_raises(self, manager):
         persona = _valid_persona(name="   ")
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="name"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_age_none_raises(self, manager):
         persona = _valid_persona()
         persona.age = None
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_age_negative_raises(self, manager):
         persona = _valid_persona(age=-1)
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_age_over_150_raises(self, manager):
         persona = _valid_persona(age=151)
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AGE_OUT_OF_RANGE):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_occupation_raises(self, manager):
         persona = _valid_persona(occupation="")
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="occupation"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_background_raises(self, manager):
         persona = _valid_persona(background="")
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_REQUIRED, field="background"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- リストフィールド（空リスト）---
 
@@ -457,21 +412,21 @@ class TestValidatePersonaForSave:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="values"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_pain_points_raises(self, manager):
         persona = _valid_persona(pain_points=[])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="pain_points"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_goals_raises(self, manager):
         persona = _valid_persona(goals=[])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_EMPTY, field="goals"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- リストフィールド（空文字項目）---
 
@@ -480,7 +435,7 @@ class TestValidatePersonaForSave:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="values"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_string_in_pain_points_raises(self, manager):
         persona = _valid_persona(pain_points=["valid", "  "])
@@ -489,14 +444,14 @@ class TestValidatePersonaForSave:
             ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM,
             field="pain_points",
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_string_in_goals_raises(self, manager):
         persona = _valid_persona(goals=["valid", ""])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="goals"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- 文字数上限 ---
 
@@ -508,21 +463,21 @@ class TestValidatePersonaForSave:
             field="name",
             max_length=100,
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_occupation_over_200_chars_raises(self, manager):
         persona = _valid_persona(occupation="あ" * 201)
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_TOO_LONG, max_length=200
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_background_over_2000_chars_raises(self, manager):
         persona = _valid_persona(background="あ" * 2001)
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_FIELD_TOO_LONG, max_length=2000
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- リスト項目数上限 ---
 
@@ -531,37 +486,37 @@ class TestValidatePersonaForSave:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_pain_points_over_10_items_raises(self, manager):
         persona = _valid_persona(pain_points=[f"p{i}" for i in range(11)])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_goals_over_10_items_raises(self, manager):
         persona = _valid_persona(goals=[f"g{i}" for i in range(11)])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_TOO_MANY_ITEMS, max_items=10
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- 性別バリデーション ---
 
     def test_invalid_gender_raises(self, manager):
         persona = _valid_persona(gender="invalid_gender")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_GENDER_INVALID):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_valid_gender_passes(self, manager):
         persona = _valid_persona(gender="male")
-        result = manager.save_persona(persona)
+        result = manager.save_persona(OWNER, persona)
         assert result == "id-123"
 
     def test_none_gender_passes(self, manager):
         persona = _valid_persona(gender=None)
-        result = manager.save_persona(persona)
+        result = manager.save_persona(OWNER, persona)
         assert result == "id-123"
 
     # --- 国コードバリデーション ---
@@ -571,13 +526,13 @@ class TestValidatePersonaForSave:
         mock_cs.is_valid_country.return_value = False
         persona = _valid_persona(country="XX")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_COUNTRY_INVALID):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     @patch("src.managers.persona_manager.country_service")
     def test_valid_country_passes(self, mock_cs, manager):
         mock_cs.is_valid_country.return_value = True
         persona = _valid_persona(country="JP")
-        result = manager.save_persona(persona)
+        result = manager.save_persona(OWNER, persona)
         assert result == "id-123"
 
     # --- 都市バリデーション ---
@@ -590,7 +545,7 @@ class TestValidatePersonaForSave:
             field="city",
             max_length=100,
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     # --- タグバリデーション ---
 
@@ -602,14 +557,14 @@ class TestValidatePersonaForSave:
             field="tags",
             max_items=20,
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_empty_tag_raises(self, manager):
         persona = _valid_persona(tags=["valid", ""])
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_LIST_HAS_EMPTY_ITEM, field="tags"
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_tag_over_50_chars_raises(self, manager):
         persona = _valid_persona(tags=["あ" * 51])
@@ -619,16 +574,16 @@ class TestValidatePersonaForSave:
             field="tags",
             max_length=50,
         ):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_tag_with_comma_raises(self, manager):
         persona = _valid_persona(tags=["tag,with,comma"])
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED):
-            manager.save_persona(persona)
+            manager.save_persona(OWNER, persona)
 
     def test_valid_tags_passes(self, manager):
         persona = _valid_persona(tags=["タグ1", "タグ2"])
-        result = manager.save_persona(persona)
+        result = manager.save_persona(OWNER, persona)
         assert result == "id-123"
 
 

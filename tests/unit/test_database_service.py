@@ -689,6 +689,9 @@ class TestDatabaseServiceSerialization:
             generation_log=[{"type": "text", "content": "c"}],
             generation_context={"source": "file"},
             avatar_path="s3://bucket/persona_avatars/p1/x.webp",
+            owner_sub="sub-1",
+            # shared_group_ids は ResourceSharing だけが書く（BR1.6）ため、
+            # save のシリアライズに載らない。既定の空集合で往復を確かめる
         )
         unset = [
             f.name for f in fields(Persona) if getattr(original, f.name) in (None, [])
@@ -1262,7 +1265,7 @@ class TestPersonaCRUDOperations:
         # Mock boto3 client
         mock_client = Mock()
         mock_client.list_tables.return_value = {"TableNames": []}
-        mock_client.put_item.return_value = {}
+        mock_client.update_item.return_value = {}
         mock_boto3_client.return_value = mock_client
 
         service = DatabaseService(table_prefix="Test")
@@ -1284,10 +1287,14 @@ class TestPersonaCRUDOperations:
         # Update persona
         result = service.update_persona(persona)
 
-        # Verify put_item was called
-        mock_client.put_item.assert_called_once()
-        call_args = mock_client.put_item.call_args
+        # 編集は部分更新（BR6.7）。項目全体を置き換える put_item は使わない
+        mock_client.put_item.assert_not_called()
+        mock_client.update_item.assert_called_once()
+        call_args = mock_client.update_item.call_args
         assert call_args[1]["TableName"] == "Test_Personas"
+        assert call_args[1]["ConditionExpression"] == "attribute_exists(id)"
+        written = set(call_args[1]["ExpressionAttributeNames"].values())
+        assert not written & {"owner_sub", "shared_group_ids", "avatar_path"}
 
         # Verify result is True
         assert result is True
@@ -1582,6 +1589,35 @@ class TestPersonaCRUDOperations:
         assert personas[0].occupation == "Software Engineer"
 
 
+def _in_memory_update_item(saved_items: dict, deserializer):
+    """A tiny ``update_item`` for the in-memory mocks (SET / REMOVE, BR6.7).
+
+    ``update_persona`` writes a partial update instead of ``put_item``. Returns
+    the error a real table gives when the item is missing.
+    """
+
+    def update_item(**kwargs):
+        item_id = deserializer.deserialize(kwargs["Key"]["id"])
+        if item_id not in saved_items:
+            raise ClientError(
+                {"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem"
+            )
+        names = kwargs.get("ExpressionAttributeNames", {})
+        values = kwargs.get("ExpressionAttributeValues", {})
+        expression = kwargs["UpdateExpression"]
+        set_part, _, remove_part = expression.partition(" REMOVE ")
+        item = dict(saved_items[item_id])
+        for assignment in set_part.removeprefix("SET ").split(", "):
+            name, _, placeholder = assignment.partition(" = ")
+            item[names.get(name, name)] = values[placeholder]
+        for name in filter(None, remove_part.split(", ")):
+            item.pop(names.get(name, name), None)
+        saved_items[item_id] = item
+        return {}
+
+    return update_item
+
+
 class TestPersonaCRUDOperationsProperties:
     """
     Property-based tests for Persona CRUD operations.
@@ -1649,6 +1685,9 @@ class TestPersonaCRUDOperationsProperties:
         mock_client.put_item = Mock(side_effect=mock_put_item)
         mock_client.get_item = Mock(side_effect=mock_get_item)
         mock_client.delete_item = Mock(side_effect=mock_delete_item)
+        mock_client.update_item = Mock(
+            side_effect=_in_memory_update_item(saved_items, mock_client._deserializer)
+        )
 
         mock_boto3_client.return_value = mock_client
 
@@ -1771,6 +1810,11 @@ class TestPersonaCRUDOperationsProperties:
         mock_client.put_item = Mock(side_effect=mock_put_item)
         mock_client.get_item = Mock(side_effect=mock_get_item)
         mock_client.delete_item = Mock(side_effect=mock_delete_item)
+        from boto3.dynamodb.types import TypeDeserializer
+
+        mock_client.update_item = Mock(
+            side_effect=_in_memory_update_item(saved_items, TypeDeserializer())
+        )
 
         mock_boto3_client.return_value = mock_client
 
@@ -2757,3 +2801,195 @@ class TestDatabaseServiceJobs:
             call_kwargs["ExpressionAttributeValues"][":e"]["S"]
             == "something went wrong"
         )
+
+
+# =============================================================================
+# 所有者と共有先の列（v1.0.0 U4。BR6.1、BR6.7、NFR1.15）。moto で条件と部分更新を確かめる
+# =============================================================================
+
+
+@pytest.fixture
+def moto_service(monkeypatch):
+    moto = pytest.importorskip("moto")
+    import boto3
+
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        service = DatabaseService(table_prefix="OwnerTest", region="us-east-1")
+        boto3.client("dynamodb", region_name="us-east-1").create_table(
+            TableName=service.personas_table,
+            KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        yield service
+
+
+def _new_persona(**kwargs) -> Persona:
+    return Persona.create_new(
+        name="佐藤 太郎",
+        age=35,
+        occupation="会社員",
+        background="背景",
+        values=["v"],
+        pain_points=["p"],
+        goals=["g"],
+        **kwargs,
+    )
+
+
+def _raw_item(service: DatabaseService, persona_id: str) -> dict:
+    return service.dynamodb_client.get_item(
+        TableName=service.personas_table, Key={"id": {"S": persona_id}}
+    )["Item"]
+
+
+class TestPersonaOwnerColumns:
+    def test_save_writes_owner_sub_but_not_shares(self, moto_service):
+        persona = _new_persona().owned_by("sub-a")
+        persona = Persona.from_dict(
+            {**persona.to_dict(), "shared_group_ids": ["sales"]}
+        )
+
+        moto_service.save_persona(persona)
+
+        item = _raw_item(moto_service, persona.id)
+        assert item["owner_sub"] == {"S": "sub-a"}
+        assert "shared_group_ids" not in item
+
+    def test_deserialize_reads_owner_and_shares(self, moto_service):
+        persona = _new_persona().owned_by("sub-a")
+        moto_service.save_persona(persona)
+        moto_service.dynamodb_client.update_item(
+            TableName=moto_service.personas_table,
+            Key={"id": {"S": persona.id}},
+            UpdateExpression="SET shared_group_ids = :s",
+            ExpressionAttributeValues={":s": {"SS": ["sales", "plan"]}},
+        )
+
+        stored = moto_service.get_persona(persona.id, consistent=True)
+
+        assert stored.owner_sub == "sub-a"
+        assert stored.shared_group_ids == frozenset({"sales", "plan"})
+
+    def test_update_is_partial_and_keeps_owner_shares_and_avatar(self, moto_service):
+        persona = _new_persona().owned_by("sub-a").with_avatar("s3://a.webp")
+        moto_service.save_persona(persona)
+        moto_service.dynamodb_client.update_item(
+            TableName=moto_service.personas_table,
+            Key={"id": {"S": persona.id}},
+            UpdateExpression="SET shared_group_ids = :s",
+            ExpressionAttributeValues={":s": {"SS": ["sales"]}},
+        )
+        # 編集画面から届いた値（所有者と共有先を持たない古い形）で更新する
+        edited = Persona.from_dict(
+            {
+                **{
+                    k: v
+                    for k, v in persona.to_dict().items()
+                    if k not in ("owner_sub", "avatar_path")
+                },
+                "name": "編集後",
+                "gender": None,
+            }
+        )
+
+        assert moto_service.update_persona(edited) is True
+
+        item = _raw_item(moto_service, persona.id)
+        assert item["name"] == {"S": "編集後"}
+        assert item["owner_sub"] == {"S": "sub-a"}
+        assert item["shared_group_ids"] == {"SS": ["sales"]}
+        assert item["avatar_path"] == {"S": "s3://a.webp"}
+
+    def test_update_clears_emptied_optional_fields(self, moto_service):
+        persona = _new_persona(gender="female", city="大阪").owned_by("sub-a")
+        moto_service.save_persona(persona)
+
+        moto_service.update_persona(persona.update(gender="", city=""))
+
+        item = _raw_item(moto_service, persona.id)
+        assert "gender" not in item and "city" not in item
+
+    def test_update_of_a_missing_persona_returns_false(self, moto_service):
+        assert moto_service.update_persona(_new_persona()) is False
+        with pytest.raises(KeyError):
+            _raw_item(moto_service, "never-created")
+
+    def test_get_personas_by_ids_reads_consistently(self, moto_service):
+        personas = [_new_persona().owned_by("sub-a") for _ in range(3)]
+        for p in personas:
+            moto_service.save_persona(p)
+
+        found = moto_service.get_personas_by_ids([p.id for p in personas] + ["nope"])
+
+        assert set(found) == {p.id for p in personas}
+        assert found[personas[0].id].owner_sub == "sub-a"
+
+    def test_saving_an_existing_id_fails_and_keeps_the_body_and_the_index(
+        self, moto_service
+    ):
+        """R-02: a new save never overwrites a body (BR6.1 owner, BR1 shares)."""
+        from src.managers.persona_manager import PersonaManager, PersonaManagerError
+        from src.models.authz import Principal, ResourceType, Role
+        from src.models.errors import ErrorCode
+        from src.services.resource_share_store import ResourceShareStore
+        from tests.error_helpers import raises_code
+
+        client = moto_service.dynamodb_client
+        client.create_table(
+            TableName="OwnerTest_ResourceShares",
+            KeySchema=[
+                {"AttributeName": "group_id", "KeyType": "HASH"},
+                {"AttributeName": "share_key", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "group_id", "AttributeType": "S"},
+                {"AttributeName": "share_key", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        shares = ResourceShareStore(
+            region="us-east-1",
+            shares_table="OwnerTest_ResourceShares",
+            client=client,
+            sleep=lambda _s: None,
+        )
+        original = _new_persona().owned_by("sub-a")
+        moto_service.save_persona(original)
+        shares.write_shares(
+            moto_service.personas_table,
+            ResourceType.PERSONA,
+            original.id,
+            expected=frozenset(),
+            new=frozenset({"sales"}),
+            created_at=_raw_item(moto_service, original.id)["created_at"]["S"],
+            owner_sub="sub-a",
+        )
+        body_before = _raw_item(moto_service, original.id)
+        index_before = client.scan(TableName="OwnerTest_ResourceShares")["Items"]
+
+        # Service: the same id cannot be written as a new item
+        with pytest.raises(DatabaseError):
+            moto_service.save_persona(original.update(name="上書き"))
+
+        # Manager: another user's save of the same id is the existing failure
+        manager = PersonaManager(
+            database_service=moto_service,
+            s3_service=Mock(),
+            resource_sharing=Mock(),
+            owners=Mock(),
+        )
+        saver = Principal("sub-b", frozenset({Role.MEMBER}), frozenset({"sales"}))
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.save_persona(saver, original.update(name="上書き"))
+
+        assert _raw_item(moto_service, original.id) == body_before
+        assert body_before["owner_sub"] == {"S": "sub-a"}
+        assert body_before["shared_group_ids"] == {"SS": ["sales"]}
+        assert (
+            client.scan(TableName="OwnerTest_ResourceShares")["Items"] == index_before
+        )
+        assert len(index_before) == 1

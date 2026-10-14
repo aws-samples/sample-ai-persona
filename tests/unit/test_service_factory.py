@@ -486,6 +486,46 @@ class TestServiceFactoryAuthzServices:
         assert service.client.meta.config.connect_timeout == 0.5
 
     @patch("src.services.service_factory.config")
+    def test_resource_share_store_uses_the_shares_table(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.RESOURCE_SHARES_TABLE_NAME = "Shares-physical"
+
+        factory = ServiceFactory()
+        store = factory.get_resource_share_store()
+
+        assert store is factory.get_resource_share_store()
+        assert store.shares_table == "Shares-physical"
+        assert store.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
+    def test_user_directory_service_needs_a_user_pool(self, mock_config):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.COGNITO_USER_POOL_ID = None
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_user_directory_service()
+        assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID
+
+    @patch("src.services.service_factory.config")
+    def test_user_directory_service_reads_the_pool(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.COGNITO_USER_POOL_ID = "ap-northeast-1_Pool"
+
+        factory = ServiceFactory()
+        service = factory.get_user_directory_service()
+
+        assert service is factory.get_user_directory_service()
+        assert service.user_pool_id == "ap-northeast-1_Pool"
+
+    @patch("src.services.service_factory.config")
     def test_cognito_groups_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory
@@ -507,3 +547,48 @@ class TestServiceFactoryAuthzServices:
 
         assert service.user_pool_id == "ap-northeast-1_Pool"
         assert service.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
+    def test_sources_are_cognito_when_a_pool_is_set(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.COGNITO_USER_POOL_ID = "ap-northeast-1_Pool"
+        mock_config.AUTH_MODE = "local"
+        factory = ServiceFactory()
+
+        assert factory.get_department_source() is factory.get_cognito_groups_service()
+        assert factory.get_user_source() is factory.get_user_directory_service()
+
+    @patch("src.services.service_factory.config")
+    def test_local_mode_without_a_pool_uses_the_development_user(self, mock_config):
+        from src.services.local_directory_service import LocalDirectoryService
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.COGNITO_USER_POOL_ID = None
+        mock_config.AUTH_MODE = "local"
+        mock_config.LOCAL_DEV_USER_GROUPS = "sales, plan"
+        mock_config.LOCAL_DEV_USER_NAME = "開発ユーザー"
+        mock_config.LOCAL_DEV_USER_EMAIL = "dev@example.com"
+        factory = ServiceFactory()
+
+        departments = factory.get_department_source()
+        assert isinstance(departments, LocalDirectoryService)
+        assert [d.group_id for d in departments.list_departments()] == [
+            "sales",
+            "plan",
+        ]
+        (user,) = factory.get_user_source().list_users()
+        assert user.sub == "local:dev@example.com" and user.enabled
+
+    @patch("src.services.service_factory.config")
+    def test_oidc_without_a_pool_is_a_config_error(self, mock_config):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.COGNITO_USER_POOL_ID = None
+        mock_config.AUTH_MODE = "oidc"
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_user_source()
+        assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID

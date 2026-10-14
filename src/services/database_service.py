@@ -4,6 +4,7 @@ Handles DynamoDB database operations with retry logic and error handling.
 """
 
 import logging
+import random
 import time
 from typing import List, Optional, Dict, Any, Callable, Tuple, TypeVar, TYPE_CHECKING
 from datetime import datetime
@@ -457,6 +458,10 @@ class DatabaseService:
             persona_dict["generation_context"] = persona.generation_context
         if persona.avatar_path is not None:
             persona_dict["avatar_path"] = persona.avatar_path
+        # Owner of a new persona (BR6.1). shared_group_ids is written only by
+        # ResourceSharing together with ResourceShares (BR1.6), never here.
+        if persona.owner_sub is not None:
+            persona_dict["owner_sub"] = persona.owner_sub
 
         # Use boto3 TypeSerializer to convert to DynamoDB format
         serialized = {}
@@ -630,6 +635,8 @@ class DatabaseService:
             generation_log=deserialized.get("generation_log"),
             generation_context=deserialized.get("generation_context"),
             avatar_path=deserialized.get("avatar_path"),
+            owner_sub=deserialized.get("owner_sub") or None,
+            shared_group_ids=frozenset(deserialized.get("shared_group_ids") or ()),
         )
 
     def _deserialize_discussion(self, item: Dict[str, Any]) -> Discussion:
@@ -745,7 +752,12 @@ class DatabaseService:
 
     def save_persona(self, persona: Persona) -> str:
         """
-        Save a persona to DynamoDB.
+        Save a new persona to DynamoDB.
+
+        The write is conditioned on the id not existing yet, so a save can
+        never overwrite a stored persona: its ``owner_sub`` (BR6.1) and its
+        ``shared_group_ids`` (kept in step with ``ResourceShares``) stay as
+        they are. Edits go through :meth:`update_persona`.
 
         Args:
             persona: Persona object to save
@@ -754,14 +766,17 @@ class DatabaseService:
             Persona ID
 
         Raises:
-            DatabaseError: If save operation fails
+            DatabaseError: If save operation fails, including when a persona
+                with the same id already exists (conditional check failed)
         """
 
         def _save() -> str:
             serialized_persona = self._serialize_persona(persona)
 
             self.dynamodb_client.put_item(
-                TableName=self.personas_table, Item=serialized_persona
+                TableName=self.personas_table,
+                Item=serialized_persona,
+                ConditionExpression="attribute_not_exists(id)",
             )
 
             return persona.id
@@ -772,27 +787,72 @@ class DatabaseService:
 
     def update_persona(self, persona: Persona) -> bool:
         """
-        Update an existing persona in DynamoDB.
+        Write the columns the edit screen can change (BR6.7).
+
+        A partial ``UpdateItem`` conditioned on the persona still existing.
+        ``owner_sub``, ``shared_group_ids``, ``avatar_path``, the generation
+        log and ``created_at`` are never part of the write, so editing a shared
+        persona leaves its owner and shares (and ResourceShares) untouched.
+        Optional columns that became empty are removed.
 
         Args:
             persona: Persona object with updated data
 
         Returns:
-            True if update was successful, False otherwise
+            True if written, False if the persona does not exist
 
         Raises:
             DatabaseError: If update operation fails
         """
+        required: Dict[str, Any] = {
+            "name": persona.name,
+            "age": persona.age,
+            "occupation": persona.occupation,
+            "background": persona.background,
+            "values": persona.values,
+            "pain_points": persona.pain_points,
+            "goals": persona.goals,
+            "updated_at": persona.updated_at.isoformat(),
+        }
+        optional: Dict[str, Any] = {
+            "gender": persona.gender,
+            "country": persona.country,
+            "city": persona.city,
+            "tags": persona.tags or None,
+        }
+        names: Dict[str, str] = {}
+        values: Dict[str, Any] = {}
+        sets: list[str] = []
+        removes: list[str] = []
+        for index, (column, value) in enumerate({**required, **optional}.items()):
+            names[f"#f{index}"] = column
+            if value is None:
+                removes.append(f"#f{index}")
+            else:
+                values[f":f{index}"] = self.serializer.serialize(value)
+                sets.append(f"#f{index} = :f{index}")
+        expression = "SET " + ", ".join(sets)
+        if removes:
+            expression += " REMOVE " + ", ".join(removes)
 
         def _update() -> bool:
-            serialized_persona = self._serialize_persona(persona)
-
-            # Use put_item to replace the entire item (replaces all fields)
-            self.dynamodb_client.put_item(
-                TableName=self.personas_table, Item=serialized_persona
-            )
-
-            return True
+            try:
+                self.dynamodb_client.update_item(
+                    TableName=self.personas_table,
+                    Key={"id": self.serializer.serialize(persona.id)},
+                    UpdateExpression=expression,
+                    ConditionExpression="attribute_exists(id)",
+                    ExpressionAttributeNames=names,
+                    ExpressionAttributeValues=values,
+                )
+                return True
+            except ClientError as e:
+                if (
+                    e.response.get("Error", {}).get("Code")
+                    == "ConditionalCheckFailedException"
+                ):
+                    return False
+                raise
 
         return self._execute_with_retry(
             _update, operation_name=f"update_persona({persona.id})"
@@ -893,12 +953,16 @@ class DatabaseService:
             _delete, operation_name=f"delete_persona_returning_old({persona_id})"
         )
 
-    def get_persona(self, persona_id: str) -> Optional[Persona]:
+    def get_persona(
+        self, persona_id: str, *, consistent: bool = False
+    ) -> Optional[Persona]:
         """
         Retrieve a persona by ID from DynamoDB.
 
         Args:
             persona_id: ID of persona to retrieve
+            consistent: Strongly consistent read. Authorization reads use it,
+                so a share removed a moment ago is never seen (NFR1.12).
 
         Returns:
             Persona object if found, None otherwise
@@ -911,6 +975,7 @@ class DatabaseService:
             response = self.dynamodb_client.get_item(
                 TableName=self.personas_table,
                 Key={"id": self.serializer.serialize(persona_id)},
+                ConsistentRead=consistent,
             )
 
             # Check if item was found
@@ -922,6 +987,62 @@ class DatabaseService:
 
         return self._execute_with_retry(
             _get, operation_name=f"get_persona({persona_id})"
+        )
+
+    def get_personas_by_ids(self, persona_ids: List[str]) -> Dict[str, Persona]:
+        """
+        Read personas with strongly consistent ``BatchGetItem`` calls (NFR2.5).
+
+        100 IDs per call. Keys left in ``UnprocessedKeys`` are read again up to
+        three times (50, 100, 200 ms apart, jittered); keys still left raise,
+        so a list never silently drops rows (reliability-design.md §4).
+
+        Args:
+            persona_ids: IDs to read (duplicates are read once)
+
+        Returns:
+            id -> Persona for the IDs that exist
+
+        Raises:
+            DatabaseError: If the read fails or keys stay unprocessed
+        """
+        ids = list(dict.fromkeys(persona_ids))
+        found: Dict[str, Persona] = {}
+        for start in range(0, len(ids), 100):
+            chunk = ids[start : start + 100]
+
+            def _read(chunk: List[str] = chunk) -> Dict[str, Persona]:
+                return self._batch_get_personas(chunk)
+
+            found.update(
+                self._execute_with_retry(_read, operation_name="get_personas_by_ids")
+            )
+        return found
+
+    def _batch_get_personas(self, ids: List[str]) -> Dict[str, Persona]:
+        keys: List[Dict[str, Any]] = [{"id": {"S": i}} for i in ids]
+        found: Dict[str, Persona] = {}
+        for attempt, backoff in enumerate((0.0, 0.05, 0.1, 0.2)):
+            if attempt:
+                time.sleep(backoff * (0.5 + random.random()))  # noqa: S311
+            response = self.dynamodb_client.batch_get_item(
+                RequestItems={
+                    self.personas_table: {"Keys": keys, "ConsistentRead": True}
+                }
+            )
+            for item in response.get("Responses", {}).get(self.personas_table, []):
+                persona = self._deserialize_persona(item)
+                found[persona.id] = persona
+            keys = (
+                response.get("UnprocessedKeys", {})
+                .get(self.personas_table, {})
+                .get("Keys", [])
+            )
+            if not keys:
+                return found
+        raise DatabaseError(
+            f"BatchGetItem left {len(keys)} keys unprocessed after three re-reads",
+            code=ErrorCode.DATABASE_OPERATION_FAILED,
         )
 
     def get_all_personas(

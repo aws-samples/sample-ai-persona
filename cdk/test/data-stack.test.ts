@@ -19,7 +19,8 @@ function synth(): Template {
 const template = synth();
 
 const EXISTING_TABLES: { pk: string; gsis: string[]; pitr: boolean; ttl?: string }[] = [
-  { pk: 'id', gsis: ['CreatedAtIndex', 'NameIndex', 'OccupationIndex'], pitr: true }, // Personas
+  // Personas（U4 で OwnerIndex を足した。既存の 3 つは今と同じ）
+  { pk: 'id', gsis: ['CreatedAtIndex', 'NameIndex', 'OccupationIndex', 'OwnerIndex'], pitr: true },
   { pk: 'id', gsis: ['CreatedAtIndex', 'TopicIndex', 'ModeIndex'], pitr: true }, // Discussions
   { pk: 'id', gsis: ['UploadedAtIndex'], pitr: true }, // UploadedFiles
   { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaDatasetBindings
@@ -56,10 +57,52 @@ describe('DataStack: Sessions テーブル', () => {
   });
 });
 
+describe('DataStack: ResourceShares テーブルと OwnerIndex（U4、NFR1.20、NFR1.21、NFR2.1）', () => {
+  function tables(): any[] {
+    return Object.values(template.findResources('AWS::DynamoDB::GlobalTable'));
+  }
+
+  test('ResourceShares は PK group_id・SK share_key、PITR、RETAIN、削除保護、GSI なし', () => {
+    const shares = tables().find((t) => t.Properties.KeySchema[0].AttributeName === 'group_id');
+    expect(shares).toBeDefined();
+    expect(shares.DeletionPolicy).toBe('Retain');
+    expect(shares.UpdateReplacePolicy).toBe('Retain');
+    expect(shares.Properties.KeySchema).toEqual([
+      { AttributeName: 'group_id', KeyType: 'HASH' },
+      { AttributeName: 'share_key', KeyType: 'RANGE' },
+    ]);
+    expect(shares.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(shares.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(shares.Properties.TimeToLiveSpecification).toBeUndefined();
+    const replica = shares.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('Personas の OwnerIndex は PK owner_sub・SK created_at、キーだけの射影', () => {
+    const personas = tables().find((t) =>
+      (t.Properties.GlobalSecondaryIndexes ?? []).some((g: any) => g.IndexName === 'OwnerIndex'),
+    );
+    expect(personas).toBeDefined();
+    const indexes = Object.fromEntries(
+      personas.Properties.GlobalSecondaryIndexes.map((g: any) => [g.IndexName, g]),
+    );
+    expect(indexes.OwnerIndex.KeySchema).toEqual([
+      { AttributeName: 'owner_sub', KeyType: 'HASH' },
+      { AttributeName: 'created_at', KeyType: 'RANGE' },
+    ]);
+    expect(indexes.OwnerIndex.Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
+    // 既存の GSI の射影は今と同じ（すべての列）
+    for (const name of ['CreatedAtIndex', 'NameIndex', 'OccupationIndex']) {
+      expect(indexes[name].Projection).toEqual({ ProjectionType: 'ALL' });
+    }
+  });
+});
+
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions を含めて 11 テーブル。物理名はなく、すべて RETAIN', () => {
+  test('Sessions と ResourceShares を含めて 12 テーブル。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(11);
+    expect(Object.keys(tables)).toHaveLength(12);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

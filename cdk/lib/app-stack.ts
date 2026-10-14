@@ -141,6 +141,8 @@ export class AppStack extends Stack {
       COGNITO_USER_POOL_ID: data.cognito.userPool.userPoolId,
       COGNITO_DOMAIN: data.cognito.domainHost,
       SESSIONS_TABLE_NAME: data.database.sessionsTable.tableName,
+      // 部署ごとの共有の索引（U4、src/config.py の RESOURCE_SHARES_TABLE_NAME）
+      RESOURCE_SHARES_TABLE_NAME: data.database.resourceSharesTable.tableName,
       ...tableNames,
       S3_BUCKET_NAME: data.uploadBucket.bucket.bucketName,
       // Strategy ID はアプリが起動時に GetMemory で引く（手で書き写さない）
@@ -209,10 +211,23 @@ export class AppStack extends Stack {
       actions: ['dynamodb:ListTables'],
       resources: ['*'],
     }));
+    // 部署ごとの共有の索引（U4、security-design.md §8）。Scan は付けない（member の一覧で
+    // Scan をしない、BR3.6）。トランザクションはこれらの操作の権限で動く
+    data.database.resourceSharesTable.grant(
+      taskRole,
+      'dynamodb:GetItem',
+      'dynamodb:BatchGetItem',
+      'dynamodb:Query',
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:ConditionCheckItem',
+    );
     data.uploadBucket.bucket.grantReadWrite(taskRole);
-    // 部署の一覧（DepartmentDirectory、ADR-009）。v1 の User Pool の ListGroups だけ（NFR3.8）
+    // 部署の一覧（DepartmentDirectory、ADR-009）と所有者の名前の写し（OwnerDirectory、U4）。
+    // v1 の User Pool の ListGroups・ListUsers だけ（NFR3.8、NFR2.7）
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['cognito-idp:ListGroups'],
+      actions: ['cognito-idp:ListGroups', 'cognito-idp:ListUsers'],
       resources: [data.cognito.userPool.userPoolArn],
     }));
     // Bedrock・AgentCore Memory は v0 と同じ範囲（* の絞り込みは U9）

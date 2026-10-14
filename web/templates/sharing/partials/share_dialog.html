@@ -1,0 +1,13 @@
+{% from "components/dialog.html" import dialog %}
+{#
+  画面に 1 つだけ置く共有ダイアログ（M7、約束 C6）。開くボタンは
+  data-dialog-open="share-dialog" と、1 件なら data-share-url（/share/{type}/{id}/dialog）。
+  一括は bulk_select_bar の操作ボタン（data-bulk-select の種類と選んだ行から app.js の
+  ShareDialog が /share/{type}/dialog?ids=... を組み立てる）。中身の読み込み先は
+  開く直前に ShareDialog が差し替える。
+#}
+{% call dialog("share-dialog", "共有先の設定", panel_class="max-w-lg") %}
+<div data-dialog-content data-share-content hx-get="/share/persona/dialog" hx-trigger="dialogLoad" hx-swap="innerHTML">
+    <p class="text-sm text-gray-600">読み込み中...</p>
+</div>
+{% endcall %}

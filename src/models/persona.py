@@ -33,6 +33,10 @@ class Persona:
     generation_log: list[dict[str, str]] | None = field(default=None)
     generation_context: dict[str, Any] | None = field(default=None)
     avatar_path: str | None = field(default=None)
+    # 所有者と共有先（約束 C8、BR6.7）。読み取り専用で持ち、編集の書き込みには載せない。
+    # owner_sub は保存した人（BR6.1）、shared_group_ids は ResourceSharing だけが書く。
+    owner_sub: str | None = field(default=None)
+    shared_group_ids: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def create_new(
@@ -121,7 +125,13 @@ class Persona:
             generation_log=self.generation_log,
             generation_context=self.generation_context,
             avatar_path=self.avatar_path,
+            owner_sub=self.owner_sub,
+            shared_group_ids=self.shared_group_ids,
         )
+
+    def owned_by(self, owner_sub: str) -> "Persona":
+        """Return a new instance owned by ``owner_sub`` (BR6.1)."""
+        return replace(self, owner_sub=owner_sub)
 
     def with_avatar(self, avatar_path: str | None) -> "Persona":
         """
@@ -146,12 +156,18 @@ class Persona:
             "generation_log",
             "generation_context",
             "avatar_path",
+            "owner_sub",
         ):
             if data.get(key) is None:
                 data.pop(key, None)
         # Omit empty tags list as well
         if not data.get("tags"):
             data.pop("tags", None)
+        # An empty share set is not stored (contract C8); a set becomes a sorted list
+        if self.shared_group_ids:
+            data["shared_group_ids"] = sorted(self.shared_group_ids)
+        else:
+            data.pop("shared_group_ids", None)
         return data
 
     @classmethod
@@ -162,4 +178,5 @@ class Persona:
         parsed = {**data}
         parsed["created_at"] = datetime.fromisoformat(parsed["created_at"])
         parsed["updated_at"] = datetime.fromisoformat(parsed["updated_at"])
+        parsed["shared_group_ids"] = frozenset(parsed.get("shared_group_ids") or ())
         return cls(**parsed)

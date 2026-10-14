@@ -12,6 +12,10 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
     <title>{{ title }} - AIペルソナシステム</title>
     
     <!-- htmx -->
+    {#- 履歴キャッシュを使わない（body の hx-history="false"）ため、「戻る」はブラウザの再読み込みで
+        ページ全体を取り直す。既定の再取得は HX-Request 付きで、断片を返す画面（議論結果など）で
+        ページ全体が断片に置き換わるため（U4 レビュー P2） #}
+    <meta name="htmx-config" content='{"refreshOnHistoryMiss": true}'>
     <script src="/static/js/vendor/htmx.min.js"></script>
     
     <!-- Tailwind CSS (ビルド済み、typographyプラグイン含む) -->
@@ -31,7 +35,8 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
     {% block head %}{% endblock %}
 <style>[x-cloak]{display:none!important}</style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+{# hx-history="false": htmx が画面の写しを localStorage に残さない（利用者が替わっても前の画面を復元させない、U4） #}
+<body class="bg-gray-50 min-h-screen" hx-history="false">
     {# スキップリンク（A6、NFR6.10）。Tab の 1 回目で画面の左上に見え、Enter で本文へ移る #}
     <a href="#main" data-testid="skip-link"
        class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-white focus:text-blue-700 focus:font-medium focus:rounded-md focus:shadow-lg">本文へ移動</a>

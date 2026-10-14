@@ -136,6 +136,9 @@ class Config:
     KNOWLEDGE_BASES_TABLE_NAME: Optional[str] = None
     PERSONA_KB_BINDINGS_TABLE_NAME: Optional[str] = None
     JOBS_TABLE_NAME: Optional[str] = None
+    # 部署ごとの共有の索引（U4）。TABLE_NAME_SETTINGS に入れないのは、App スタックの
+    # 一括の権限付与（Scan を含む）と同じ扱いにしないため。未設定なら接頭辞から組み立てる
+    RESOURCE_SHARES_TABLE_NAME: str = ""
     # AUTH_MODE=local の開発用の利用者（ロール・部署はカンマ区切り）
     LOCAL_DEV_USER_NAME: str = "開発ユーザー"
     LOCAL_DEV_USER_EMAIL: str = "dev@example.com"
@@ -268,6 +271,10 @@ class Config:
         ):
             setattr(self, name, os.getenv(name, getattr(self, name)))
         self.RUNNING_IN_ECS = bool(os.getenv("ECS_CONTAINER_METADATA_URI_V4"))
+        self.RESOURCE_SHARES_TABLE_NAME = (
+            os.getenv("RESOURCE_SHARES_TABLE_NAME")
+            or f"{self.DYNAMODB_TABLE_PREFIX}_ResourceShares"
+        )
         sample_rate = os.getenv("AUTH_TIMING_SAMPLE_RATE")
         if sample_rate:
             rate = float(sample_rate)

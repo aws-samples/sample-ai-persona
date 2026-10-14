@@ -209,20 +209,13 @@ class RunInterviewRequest(BaseModel):
 
 
 @router.get("/personas", response_model=List[PersonaResponse])
-async def list_personas(search: Optional[str] = None) -> Any:
-    """ペルソナ一覧取得API"""
+async def list_personas(request: Request, search: Optional[str] = None) -> Any:
+    """ペルソナ一覧取得API（自分のものと共有されたものだけ、U4）"""
     try:
         persona_manager = get_persona_manager()
-        personas = persona_manager.get_all_personas_full()
-
-        if search:
-            search_lower = search.lower()
-            personas = [
-                p
-                for p in personas
-                if search_lower in p.name.lower()
-                or search_lower in p.occupation.lower()
-            ]
+        personas = await anyio.to_thread.run_sync(
+            persona_manager.list_accessible_personas, _principal(request), search
+        )
 
         return [
             PersonaResponse(
@@ -241,6 +234,9 @@ async def list_personas(search: Optional[str] = None) -> Any:
             )
             for p in personas
         ]
+    except CodedError:
+        # 照合の障害（503 lookup_unavailable）などは共通の例外ハンドラに任せる（U4 レビュー P2）
+        raise
     except Exception as e:
         logger.error(f"Failed to fetch persona list: {e}")
         raise HTTPException(
@@ -250,17 +246,14 @@ async def list_personas(search: Optional[str] = None) -> Any:
 
 
 @router.get("/personas/{persona_id}", response_model=PersonaResponse)
-async def get_persona(persona_id: str) -> Any:
-    """ペルソナ詳細取得API"""
+async def get_persona(request: Request, persona_id: str) -> Any:
+    """ペルソナ詳細取得API（読める人だけ。読めなければ 404、BR6.2）"""
     try:
         persona_manager = get_persona_manager()
-        persona = persona_manager.get_persona(persona_id)
-
-        if not persona:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-            )
+        detail = await anyio.to_thread.run_sync(
+            persona_manager.get_persona_detail, _principal(request), persona_id
+        )
+        persona = detail.persona
 
         return PersonaResponse(
             id=persona.id,
@@ -276,7 +269,8 @@ async def get_persona(persona_id: str) -> Any:
             city=persona.city,
             tags=persona.tags,
         )
-    except HTTPException:
+    except (HTTPException, CodedError):
+        # 読めない・存在しない（同じ 404）や 503 は共通の例外ハンドラが JSON にする
         raise
     except Exception as e:
         logger.error(f"Failed to fetch persona: {e}")
@@ -373,7 +367,8 @@ def _run_generate_personas(
     )
     pm = get_persona_manager()
     for p in personas:
-        pm.save_persona(p)
+        # 投入した人を所有者にする（BR6.1）
+        pm.save_persona(principal, p)
     return [_persona_to_response(p).model_dump() for p in personas]
 
 

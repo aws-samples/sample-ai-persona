@@ -213,6 +213,51 @@ def test_back_button_returns_to_the_previous_tab(ui: UiHarness) -> None:
     assert _selected(ui) == ["mine"]
 
 
+def _history_cache(ui: UiHarness) -> str | None:
+    return ui.page.evaluate("localStorage.getItem('htmx-history-cache')")
+
+
+def test_switching_tabs_keeps_no_page_snapshot_in_local_storage(
+    ui: UiHarness,
+) -> None:
+    """Lists must not survive a sign-out in htmx's history cache (U4 review P1)."""
+    ui.respond("/items?tab=shared", body=_rows("shared"))
+    _load(ui)
+
+    ui.page.click(_tab("shared"))
+    ui.page.wait_for_selector("#list-panel:has-text('shared の行')")
+    ui.settle()
+
+    assert _history_cache(ui) is None
+
+
+def test_going_back_reloads_the_whole_page_instead_of_a_fragment(
+    ui: UiHarness,
+) -> None:
+    """With no history cache, Back must reload the full page (U4 review P2).
+
+    Otherwise htmx asks the server again with HX-Request set, and routes that
+    answer HX-Request with a fragment (e.g. /discussion/results) replace the
+    whole body with that fragment.
+    """
+    _load(ui)
+
+    assert ui.page.evaluate("htmx.config.refreshOnHistoryMiss") is True
+
+
+def test_a_snapshot_left_by_an_earlier_session_is_removed_on_load(
+    ui: UiHarness,
+) -> None:
+    _load(ui)
+    ui.page.evaluate(
+        "localStorage.setItem('htmx-history-cache', JSON.stringify([{url: '/x', content: '前の利用者'}]))"
+    )
+
+    _load(ui)  # the next page load (e.g. after signing in again)
+
+    assert _history_cache(ui) is None
+
+
 def test_list_reload_refetches_the_current_tab(ui: UiHarness) -> None:
     ui.respond("/items?tab=shared", body=_rows("shared"))
     _load(ui)
@@ -228,6 +273,25 @@ def test_list_reload_refetches_the_current_tab(ui: UiHarness) -> None:
     ui.page.wait_for_selector("#list-panel:has-text('更新後 の行')")
 
     assert ui.requests.count("/items?tab=shared") == 2
+
+
+def test_list_reload_with_targets_reloads_those_on_the_screen(ui: UiHarness) -> None:
+    """``targets`` names several regions; the ones not on this screen are skipped."""
+    ui.respond("/items?tab=mine", body=_rows("読み直し"))
+    _load(ui)
+    ui.respond(
+        "/reload-probe",
+        headers={
+            "HX-Trigger": json.dumps(
+                {"listReload": {"targets": ["#list-panel", "#not-on-this-screen"]}}
+            )
+        },
+    )
+
+    ui.page.click("#reload-probe")
+    ui.page.wait_for_selector("#list-panel:has-text('読み直し の行')")
+
+    assert ui.requests.count("/items?tab=mine") == 1
 
 
 def test_list_reload_never_uses_a_url_from_the_event(ui: UiHarness) -> None:

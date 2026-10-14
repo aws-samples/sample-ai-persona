@@ -446,6 +446,15 @@ def reset_singletons():
         auth._auth_manager = None
     except (ImportError, AttributeError):
         pass
+    try:
+        # 共有の入口（U4）と、タスクごとに 1 つの共有の部品（写しを持つ）
+        from src.managers.components.sharing_runtime import reset_shared_parts
+        from web.routers import sharing
+
+        sharing._sharing_manager = None
+        reset_shared_parts()
+    except (ImportError, AttributeError):
+        pass
 
 
 @pytest.fixture

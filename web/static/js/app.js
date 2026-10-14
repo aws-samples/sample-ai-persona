@@ -1,5 +1,15 @@
 // AIペルソナシステム - htmx版 JavaScript
 
+// htmx の履歴キャッシュ（localStorage の htmx-history-cache）は使わない（U4 レビュー P1）。
+// 画面の写しが利用者の区別なくブラウザに残り、別の利用者に替わったあとも「戻る」で
+// 前の利用者の一覧が出てしまうため。保存は base.html の hx-history="false" で止め、
+// 以前の版が残した写しはここで消す。戻るときはサーバーから読み直す。
+try {
+    localStorage.removeItem('htmx-history-cache');
+} catch (e) {
+    // localStorage が使えないブラウザでは写しもない
+}
+
 // htmxイベントハンドラ
 document.body.addEventListener('htmx:afterSwap', function(evt) {
     // 新しいコンテンツにフェードインアニメーションを適用
@@ -1055,9 +1065,21 @@ registerBlock('ListReload', function() {
         htmx.ajax('GET', url, { target: panel, swap: 'innerHTML' });
     }
 
+    // {"target": "#id"} か {"targets": ["#a", "#b"]}。targets は画面ごとに違う領域
+    // （一覧と詳細など）をまとめて指すため、この画面にないものは黙って飛ばす。
+    function present(target) {
+        return typeof target === 'string' && TARGET.test(target)
+            && document.getElementById(target.slice(1)) !== null;
+    }
+
     document.body.addEventListener('listReload', function(evt) {
-        const target = evt.detail ? evt.detail.target : undefined;
-        setTimeout(() => reload(target), 0);
+        const detail = evt.detail || {};
+        if (Array.isArray(detail.targets)) {
+            const targets = detail.targets.filter(present);
+            setTimeout(() => targets.forEach(reload), 0);
+            return;
+        }
+        setTimeout(() => reload(detail.target), 0);
     });
 });
 
@@ -1124,7 +1146,7 @@ registerBlock('BulkSelect', function() {
 // 始まりが選択・未選択の部署は押すたびに入れ替わる（ブラウザのまま）。始まりが
 // 中間の部署は 選択 → 未選択 → 中間（元のまま）と回り、中間の間は
 // {name}_unchanged の隠し入力で部署 id を送る（中間の選択欄はブラウザが送らない）。
-// 何も変えないうちは保存を無効にし、外れる部署は件数とともに読み上げる。
+// 何も変えないうちは保存を無効にし、外れるグループは件数とともに読み上げる。
 // Dialog の存在は知らない（中で使われても、ここはフォームとだけやりとりする）。
 // -------------------------------------------------------------
 registerBlock('DepartmentPicker', function() {
@@ -1166,8 +1188,8 @@ registerBlock('DepartmentPicker', function() {
             .map((o) => `${o.dataset.departmentName}（${o.dataset.sharedCount} 件）`);
         if (!removed.length) return '';
         const lead = picker.dataset.mode === 'scope'
-            ? '保存すると利用範囲から外れる部署'
-            : '保存すると共有が外れる部署';
+            ? '保存すると利用範囲から外れるグループ'
+            : '保存すると共有が外れるグループ';
         return `${lead}: ${removed.join('、')}`;
     }
 
@@ -1195,7 +1217,7 @@ registerBlock('DepartmentPicker', function() {
         refresh(picker);
     }
 
-    // 保存すると、選べる部署のどれにも共有しない対象が 1 件以上できるか。
+    // 保存すると、選べるグループのどれにも共有しない対象が 1 件以上できるか。
     // 選択の部署が 1 つでも残れば全対象に残る。中間だけが残るときは、残る件数の
     // 合計が対象の件数に満たなければ、どれにも残らない対象が必ずある
     function needsConfirm(picker) {
@@ -1255,6 +1277,126 @@ registerBlock('DepartmentPicker', function() {
     document.querySelectorAll(PICKER).forEach(init);
     document.body.addEventListener('htmx:afterSettle', function() {
         document.querySelectorAll(PICKER).forEach(init);
+    });
+});
+
+// -------------------------------------------------------------
+// ShareDialog（U4、M7、WF1・WF2、BR7.3）
+// 画面に 1 つの共有ダイアログ #share-dialog の中身の読み込み先を、開くボタンごとに
+// 決める。1 件は data-share-url、一括は操作バー（data-bulk-select の種類）と選んだ
+// 行から /share/{種類}/dialog?ids=... を組み立てる。開く前（捕捉の段階）に差し替える。
+// 保存中はキャンセルも無効にする。一部失敗（[data-share-result]）か権限を失っていた
+// （HX-Trigger: shareReloadOnClose）ときは、閉じたら一覧を読み直し、一部失敗では
+// 失敗した対象だけを選び直す。読み直す URL は一覧部分の data-reload-url だけを使う。
+// -------------------------------------------------------------
+registerBlock('ShareDialog', function() {
+    const DIALOG_ID = 'share-dialog';
+    const TARGET = /^#[A-Za-z0-9_-]+$/;
+    const state = { panel: null, failed: null, reload: false, opener: null, refocus: null };
+
+    const loaderOf = () => document.querySelector(`#${DIALOG_ID} [data-share-content]`);
+
+    function setUrl(url) {
+        const loader = loaderOf();
+        if (!loader || !url || loader.getAttribute('hx-get') === url) return;
+        loader.setAttribute('hx-get', url);
+        htmx.process(loader);
+    }
+
+    function rowsNear(bar) {
+        for (let scope = bar.parentElement; scope; scope = scope.parentElement) {
+            const rows = scope.querySelectorAll('[data-bulk-row]');
+            if (rows.length) return Array.from(rows);
+        }
+        return [];
+    }
+
+    function bulkUrl(action) {
+        const bar = action.closest('[data-bulk-select]');
+        if (!bar) return null;
+        const ids = rowsNear(bar).filter((row) => row.checked)
+            .map((row) => `ids=${encodeURIComponent(row.value)}`);
+        return `/share/${encodeURIComponent(bar.dataset.bulkSelect)}/dialog?${ids.join('&')}`;
+    }
+
+    // Dialog（バブリングの段階）が開いて中身を読む前に、読み込み先を決める
+    document.addEventListener('click', function(evt) {
+        const target = evt.target instanceof Element ? evt.target : null;
+        const opener = target && target.closest(`[data-dialog-open="${DIALOG_ID}"]`);
+        if (!opener) return;
+        const url = opener.dataset.shareUrl ||
+            (opener.matches('[data-bulk-action]') ? bulkUrl(opener) : null);
+        setUrl(url);
+        state.panel = opener.closest('[data-list-tabpanel]');
+        state.opener = opener.dataset.shareUrl
+            ? `[data-share-url="${CSS.escape(opener.dataset.shareUrl)}"]`
+            : '[data-bulk-action]';
+        state.failed = null;
+        state.reload = false;
+    }, true);
+
+    // 閉じた直後に一覧が読み直されると、フォーカスを戻した開くボタンが差し替わって
+    // 消える。読み直した一覧の同じボタンへ戻す（ボタンが残っていればそのまま）
+    function restoreFocus(panel) {
+        const selector = state.refocus;
+        state.refocus = null;
+        const active = document.activeElement;
+        if (!selector || (active && active !== document.body && active.isConnected &&
+                active.id !== 'main')) return;
+        const next = panel.querySelector(selector);
+        if (next && !next.disabled) next.focus();
+    }
+
+    document.body.addEventListener('htmx:afterSettle', function(evt) {
+        const root = evt.detail && evt.detail.elt;
+        if (root instanceof Element && root.matches('[data-list-tabpanel]')) restoreFocus(root);
+    });
+
+    const isShareForm = (elt) => !!elt && !!elt.matches && elt.matches('[data-share-form]');
+    const cancelButtons = (form) => Array.from(form.querySelectorAll('[data-dialog-close]'));
+
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+        if (isShareForm(evt.detail.elt)) cancelButtons(evt.detail.elt).forEach((b) => { b.disabled = true; });
+    });
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+        if (isShareForm(evt.detail.elt)) cancelButtons(evt.detail.elt).forEach((b) => { b.disabled = false; });
+    });
+
+    // 一部失敗の結果が入ったら、失敗した対象を覚えておく
+    document.body.addEventListener('htmx:afterSettle', function() {
+        const result = document.querySelector(`#${DIALOG_ID} [data-share-result]`);
+        if (!result) return;
+        state.failed = new Set((result.dataset.failedIds || '').split(',').filter(Boolean));
+    });
+
+    // 権限を失っていた（403）。閉じたら一覧を読み直す
+    document.body.addEventListener('shareReloadOnClose', function(evt) {
+        const target = evt.detail ? evt.detail.target : undefined;
+        if (typeof target === 'string' && TARGET.test(target)) {
+            state.panel = document.getElementById(target.slice(1)) || state.panel;
+        }
+        state.reload = true;
+    });
+
+    function reselect(panel, failed) {
+        const rows = Array.from(panel.querySelectorAll('[data-bulk-row]'));
+        rows.forEach((row) => { row.checked = failed.has(row.value); });
+        if (rows.length) rows[0].dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    document.body.addEventListener('dialog:closed', function(evt) {
+        if (!evt.detail || evt.detail.id !== DIALOG_ID) return;
+        const panel = state.panel;
+        const failed = state.failed;
+        const reload = state.reload || !!failed;
+        state.failed = null;
+        state.reload = false;
+        state.refocus = state.opener;
+        const url = panel ? panel.getAttribute('data-reload-url') : null;
+        if (!reload || !url) return;
+        htmx.ajax('GET', url, { target: panel, swap: 'innerHTML' }).then(function() {
+            if (failed) reselect(panel, failed);
+        });
     });
 });
 
