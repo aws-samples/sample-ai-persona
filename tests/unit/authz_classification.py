@@ -46,7 +46,7 @@ NO_USER_DATA = Entry(Kind.EXEMPT, Reason.NO_USER_DATA)
 #: Units in build order. ``pending_unit`` must name one after ``CURRENT_UNIT``.
 UNIT_ORDER: tuple[str, ...] = ("U1", "U2", "U3", "U4", "U5", "U6", "U7")
 #: The Unit being built. Each Unit's Code Generation moves it forward.
-CURRENT_UNIT = "U4"
+CURRENT_UNIT = "U5"
 #: At this Unit's Build and Test no ``pending_unit`` may remain (NFR1.8).
 FINAL_UNIT = "U7"
 
@@ -72,12 +72,36 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
             "can_manage_body",
         }
     ),
+    # U5: every listed method decides who may use a file (owner, expiry,
+    # attached parent; security-design.md §3) before it touches anything.
+    # R-02: attachable_file / is_attachable are the one rule shared by a
+    # discussion's start and attach_all (the user's own, unexpired, unattached).
+    "FileAttachments": frozenset(
+        {
+            "attach_all",
+            "readable_file",
+            "can_read_file",
+            "attachable_file",
+            "is_attachable",
+        }
+    ),
+    # U5: the claim is one conditional update whose condition is the owner
+    # check (security-design.md §2); release / delete / mark_saved only act on
+    # items that hold the request's unguessable claim token.
+    # R-04: confirm_claim checks the same token (and "not saved") right before
+    # each candidate is saved.
+    "PersonaCandidateStore": frozenset(
+        {"claim", "release", "delete", "mark_saved", "confirm_claim"}
+    ),
 }
 
 #: ``pending_unit`` count per Unit. Lower it when a Unit adds its decisions.
 #: U4: PersonaManager の保存・更新・削除を CHECKS にし（3 件）、一覧・件数の古い
 #: メソッド 3 件を消した（32 → 26）。
-PENDING_BASELINE: dict[str, int] = {"U5": 26, "U6": 35, "U7": 55}
+#: U5: pending("U5") を 0 件にした（26 件を CHECKS にするか消した）。議論・インタビュー
+#: が使う PersonaManager.get_persona_unchecked を U6 に回し（35 → 36）、
+#: DatasetManager の紐付けの 5 メソッドを消した（55 → 50）。
+PENDING_BASELINE: dict[str, int] = {"U6": 36, "U7": 50}
 
 CLASSIFICATION: dict[str, Entry] = {
     # agent_discussion_manager.py
@@ -108,11 +132,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "DatasetManager.get_dataset": pending("U7"),
     "DatasetManager.update_dataset": pending("U7"),
     "DatasetManager.delete_dataset": pending("U7"),
-    "DatasetManager.save_binding": pending("U7"),
-    "DatasetManager.get_bindings_by_persona": pending("U7"),
-    "DatasetManager.delete_binding": pending("U7"),
-    "DatasetManager.set_persona_bindings": pending("U7"),
-    "DatasetManager.preview_binding_data": pending("U7"),
+    # 紐付けの 5 メソッドは U5 で PersonaManager へ移した（ADR-007）
     # discussion_manager.py
     "DiscussionManager.start_discussion": pending("U6"),
     "DiscussionManager.generate_insights": pending("U6"),
@@ -126,12 +146,12 @@ CLASSIFICATION: dict[str, Entry] = {
     "DiscussionManager.run_classic_discussion_streaming": pending("U6"),
     "DiscussionManager.run_classic_discussion": pending("U6"),
     "DiscussionManager.get_default_categories": NO_USER_DATA,  # 固定の既定値
-    # file_manager.py
-    "FileManager.validate_persona_source_file": pending("U5"),
-    "FileManager.convert_file_to_markdown": pending("U5"),
-    "FileManager.upload_discussion_document": pending("U5"),
-    "FileManager.upload_survey_image": pending("U5"),
-    "FileManager.upload_knowledge_file": pending("U5"),
+    # file_manager.py — U5（security-design.md §1）
+    "FileManager.validate_persona_source_file": NO_USER_DATA,  # 中身の検査だけ
+    "FileManager.convert_file_to_markdown": NO_USER_DATA,  # 変換だけで保存しない（BR5.9）
+    "FileManager.upload_discussion_document": CHECKS,  # resource:create、本人のキー
+    "FileManager.upload_survey_image": CHECKS,  # resource:create、本人のキー
+    "FileManager.preview_url_for_path": CHECKS,  # FileAttachments.readable_file（BR5.8）
     # interview_manager.py
     "InterviewManager.start_interview_session": pending("U6"),
     "InterviewManager.send_user_message": pending("U6"),
@@ -147,17 +167,19 @@ CLASSIFICATION: dict[str, Entry] = {
     # job_manager.py — U2（submit は ai:execute、get は投入者の照合）
     "JobManager.submit": CHECKS,
     "JobManager.get": CHECKS,
-    # persona_generation_manager.py
-    "PersonaGenerationManager.generate_and_cache": pending("U5"),
-    "PersonaGenerationManager.get_cached_persona": pending("U5"),
-    "PersonaGenerationManager.pop_cached_persona": pending("U5"),
-    "PersonaGenerationManager.get_cached_behavior_datasets": pending("U5"),
-    "PersonaGenerationManager.pop_cached_behavior_datasets": pending("U5"),
-    "PersonaGenerationManager.build_and_cache_behavior_datasets": pending("U5"),
+    # persona_generation_manager.py — U5（候補は PersonaCandidates、BR1.1〜BR1.9）
+    "PersonaGenerationManager.generate": CHECKS,  # ai:execute
+    "PersonaGenerationManager.claim_candidates": CHECKS,  # 本人の照合（条件付き更新）
+    "PersonaGenerationManager.finish_candidates": CHECKS,  # 押さえの印が一致するものだけ
     # persona_manager.py — U4 で所有・共有の判定を入れた分は CHECKS。
-    # get_persona は議論・インタビューが使う（U5・U6 が判定を入れる）
+    # U5: 紐付け・プレビュー・候補からの保存・エクスポート・アバターも CHECKS。
+    # get_persona_unchecked は議論・インタビューが使う（呼び出し側を U6 が直す）
     "PersonaManager.save_persona": CHECKS,  # resource:create（BR6.1）
-    "PersonaManager.get_persona": pending("U5"),
+    "PersonaManager.get_persona": CHECKS,  # ensure_readable（BR4.5）
+    "PersonaManager.get_persona_unchecked": pending("U6"),
+    "PersonaManager.save_generated_personas": CHECKS,  # resource:create（BR1.4）
+    "PersonaManager.preview_binding_data": CHECKS,  # ensure_readable + can_use_asset
+    "PersonaManager.export_persona": CHECKS,  # ensure_readable（BR7.1）
     "PersonaManager.list_personas": CHECKS,  # ResourceSharing + can_read（BR3.7）
     "PersonaManager.search_personas": CHECKS,
     "PersonaManager.list_accessible_personas": CHECKS,
@@ -167,21 +189,22 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaManager.delete_persona": CHECKS,  # delete_with_shares（BR4.1）
     "PersonaManager.update_persona": CHECKS,  # ensure_manageable（BR6.7）
     "PersonaManager.avatar_upload_enabled": NO_USER_DATA,  # 設定の有無だけ
-    "PersonaManager.set_avatar": pending("U5"),
-    "PersonaManager.delete_avatar": pending("U5"),
-    "PersonaManager.get_avatar_url": pending("U5"),
-    "PersonaManager.get_kb_binding": pending("U5"),
-    "PersonaManager.create_kb_binding": pending("U5"),
-    "PersonaManager.delete_kb_binding": pending("U5"),
-    "PersonaManager.get_dataset_bindings": pending("U5"),
-    "PersonaManager.create_dataset_binding": pending("U5"),
-    "PersonaManager.delete_dataset_binding": pending("U5"),
-    # persona_memory_manager.py
-    "PersonaMemoryManager.add_knowledge": pending("U5"),
-    "PersonaMemoryManager.get_memories": pending("U5"),
-    "PersonaMemoryManager.delete_memory": pending("U5"),
-    "PersonaMemoryManager.delete_all_memories": pending("U5"),
-    "PersonaMemoryManager.safe_get_memories": pending("U5"),
+    "PersonaManager.set_avatar": CHECKS,  # ensure_manageable（BR4.3）
+    "PersonaManager.delete_avatar": CHECKS,  # ensure_manageable（BR4.3）
+    "PersonaManager.get_avatar_url": CHECKS,  # ensure_readable（BR4.4）
+    "PersonaManager.get_kb_binding": CHECKS,  # ensure_readable（BR2.1）
+    "PersonaManager.create_kb_binding": CHECKS,  # ensure_manageable + can_use_asset
+    "PersonaManager.delete_kb_binding": CHECKS,  # ensure_manageable（BR2.2）
+    "PersonaManager.get_dataset_bindings": CHECKS,  # ensure_readable（BR2.1）
+    "PersonaManager.create_dataset_binding": CHECKS,  # ensure_manageable + can_use_asset
+    "PersonaManager.delete_dataset_binding": CHECKS,  # ensure_manageable（BR2.2）
+    # persona_memory_manager.py — U5（管理できる人だけ、BR4.1）
+    "PersonaMemoryManager.ensure_memory_manageable": CHECKS,
+    "PersonaMemoryManager.add_knowledge": CHECKS,
+    "PersonaMemoryManager.get_memories": CHECKS,
+    "PersonaMemoryManager.delete_memory": CHECKS,
+    "PersonaMemoryManager.delete_all_memories": CHECKS,
+    "PersonaMemoryManager.safe_get_memories": CHECKS,
     # report_manager.py
     "ReportManager.get_discussion": pending("U6"),
     "ReportManager.generate_report_streaming": pending("U6"),

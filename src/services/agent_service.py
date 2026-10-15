@@ -894,35 +894,39 @@ class AgentService:
             ) from e
 
     def get_kb_tools(
-        self, persona_id: str, db_service: Any
+        self, kb_binding: Any, knowledge_base: Any
     ) -> tuple[list[Any], Optional[Dict[str, Any]]]:
         """KB連携ツールとKBメタ情報を返す。プロンプト構築はしない。
+
+        U5: KB の紐付け（``PersonaBinding``）と KB は呼び出し側が読んで渡す
+        （この Service は別の Service を読まない）。
+
+        Args:
+            kb_binding: The persona's knowledge-base binding, or ``None``.
+            knowledge_base: The bound ``KnowledgeBase``, or ``None``.
 
         Returns:
             (tools, kb_info) — kb_infoは {"name": str, "description": str, "metadata_filters": dict|None}
             バインディング未設定時は ([], None)
         """
         tools: list[Any] = []
+        if kb_binding is None or knowledge_base is None:
+            return tools, None
 
-        kb_binding = db_service.get_kb_binding_by_persona(persona_id)
-        if kb_binding:
-            kb = db_service.get_knowledge_base(kb_binding.kb_id)
-            if kb:
-                from .knowledge_base.kb_tools import create_kb_retrieval_tool
+        from .knowledge_base.kb_tools import create_kb_retrieval_tool
 
-                kb_tool = create_kb_retrieval_tool(
-                    knowledge_base_id=kb.knowledge_base_id,
-                    metadata_filters=kb_binding.metadata_filters,
-                    region=config.AWS_REGION,
-                )
-                tools.append(kb_tool)
-                return tools, {
-                    "name": kb.name,
-                    "description": kb.description,
-                    "metadata_filters": kb_binding.metadata_filters,
-                }
-
-        return tools, None
+        filters = dict(kb_binding.metadata_filters or {})
+        kb_tool = create_kb_retrieval_tool(
+            knowledge_base_id=knowledge_base.knowledge_base_id,
+            metadata_filters=filters,
+            region=config.AWS_REGION,
+        )
+        tools.append(kb_tool)
+        return tools, {
+            "name": knowledge_base.name,
+            "description": knowledge_base.description,
+            "metadata_filters": filters,
+        }
 
     # --- Flexible Persona Generation ---
     #

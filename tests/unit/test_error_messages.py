@@ -272,6 +272,9 @@ _RESOURCE_NOT_FOUND = {
     ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
     ErrorCode.DATASET_NOT_FOUND,
     ErrorCode.JOB_NOT_FOUND,
+    # U5: アップロードファイルと KB の紐付け（security-design.md §5）
+    ErrorCode.FILE_NOT_FOUND,
+    ErrorCode.KB_BINDING_NOT_FOUND,
 }
 
 
@@ -345,3 +348,33 @@ class TestSharingWording:
             CodedError(code=ErrorCode.SHARE_TOO_MANY_GROUPS, context={"max_groups": 99})
         )
         assert "99" in message
+
+
+class TestPersonaU5Wording:
+    """U5 のコードがカタログの文言を返し、上限を補間すること。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.GENERATION_RESULT_TOO_LARGE,
+            ErrorCode.FILE_NOT_FOUND,
+            ErrorCode.KB_BINDING_NOT_FOUND,
+        ],
+    )
+    def test_codes_resolve_to_catalog_wording(self, code):
+        message = user_message_for(CodedError(code=code), default="既定")
+        assert message == error_messages._CATALOG[code]
+
+    def test_attach_limit_is_interpolated(self):
+        message = user_message_for(
+            CodedError(
+                code=ErrorCode.FILE_ATTACH_LIMIT_EXCEEDED, context={"max_files": 100}
+            )
+        )
+        assert "100" in message
+
+    @pytest.mark.parametrize(
+        "code", [ErrorCode.FILE_NOT_FOUND, ErrorCode.KB_BINDING_NOT_FOUND]
+    )
+    def test_missing_file_and_kb_binding_use_the_unified_toast(self, code):
+        assert _toast(code)["message"] == error_messages.NOT_FOUND_TOAST_MESSAGE

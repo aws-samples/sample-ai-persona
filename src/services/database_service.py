@@ -23,10 +23,10 @@ from ..models.message import Message
 from ..models.insight import Insight
 
 if TYPE_CHECKING:
-    from ..models.dataset import Dataset, PersonaDatasetBinding
+    from ..models.dataset import Dataset
     from ..models.survey_template import SurveyTemplate
     from ..models.survey import Survey
-    from ..models.knowledge_base import KnowledgeBase, PersonaKBBinding
+    from ..models.knowledge_base import KnowledgeBase
 
 
 class DatabaseError(CodedError):
@@ -113,11 +113,9 @@ class DatabaseService:
         self.discussions_table = name_of("Discussions")
         self.files_table = name_of("UploadedFiles")
         self.datasets_table = name_of("Datasets")
-        self.bindings_table = name_of("PersonaDatasetBindings")
         self.survey_templates_table = name_of("SurveyTemplates")
         self.surveys_table = name_of("Surveys")
         self.kb_table = name_of("KnowledgeBases")
-        self.persona_kb_bindings_table = name_of("PersonaKBBindings")
         self.jobs_table = name_of("Jobs")
 
     def _get_table_name(self, entity_type: str) -> str:
@@ -125,7 +123,7 @@ class DatabaseService:
         Get full table name for entity type.
 
         Args:
-            entity_type: Type of entity ('personas', 'discussions', 'files', 'datasets', 'bindings')
+            entity_type: Type of entity ('personas', 'discussions', 'files', 'datasets')
 
         Returns:
             Full table name with prefix
@@ -135,7 +133,6 @@ class DatabaseService:
             "discussions": self.discussions_table,
             "files": self.files_table,
             "datasets": self.datasets_table,
-            "bindings": self.bindings_table,
         }
         return table_map.get(entity_type, f"{self.table_prefix}_{entity_type}")
 
@@ -539,61 +536,6 @@ class DatabaseService:
 
         return serialized
 
-    def _serialize_file_info(
-        self,
-        file_id: str,
-        filename: str,
-        file_path: str,
-        file_size: Optional[int] = None,
-        file_hash: Optional[str] = None,
-        mime_type: Optional[str] = None,
-        uploaded_at: Optional[datetime] = None,
-        original_filename: Optional[str] = None,
-        file_type: str = "persona_interview",
-    ) -> Dict[str, Any]:
-        """
-        Serialize file metadata to DynamoDB format.
-
-        Args:
-            file_id: Unique file identifier
-            filename: Saved filename (with UUID prefix)
-            file_path: Path to stored file
-            file_size: File size in bytes (optional)
-            file_hash: File hash for integrity checking (optional)
-            mime_type: MIME type of file (optional)
-            uploaded_at: Upload timestamp (optional, defaults to now)
-            original_filename: Original filename before UUID prefix (optional)
-            file_type: File type ('persona_interview' or 'discussion_document')
-
-        Returns:
-            Dictionary in DynamoDB format with type descriptors
-        """
-        # Build file info dictionary
-        file_dict: Dict[str, Any] = {
-            "id": file_id,
-            "filename": filename,
-            "original_filename": original_filename if original_filename else filename,
-            "file_path": file_path,
-            "uploaded_at": (uploaded_at or datetime.now()).isoformat(),
-            "file_type": file_type,
-            "type": "file",  # For GSI queries
-        }
-
-        # Add optional fields if provided
-        if file_size is not None:
-            file_dict["file_size"] = file_size
-        if file_hash is not None:
-            file_dict["file_hash"] = file_hash
-        if mime_type is not None:
-            file_dict["mime_type"] = mime_type
-
-        # Use boto3 TypeSerializer to convert to DynamoDB format
-        serialized = {}
-        for key, value in file_dict.items():
-            serialized[key] = self.serializer.serialize(value)
-
-        return serialized
-
     # Deserialization methods for DynamoDB to Python type conversion
 
     def _deserialize_persona(self, item: Dict[str, Any]) -> Persona:
@@ -706,47 +648,6 @@ class DatabaseService:
             documents=deserialized.get("documents"),
             reports=reports,
         )
-
-    def _deserialize_file_info(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Deserialize DynamoDB item to file metadata dictionary.
-
-        Args:
-            item: DynamoDB item with type descriptors
-
-        Returns:
-            Dictionary with file metadata
-        """
-        # Use boto3 TypeDeserializer to convert from DynamoDB format
-        deserialized = {}
-        for key, value in item.items():
-            deserialized[key] = self.deserializer.deserialize(value)
-
-        # Convert ISO datetime string back to datetime object
-        uploaded_at = datetime.fromisoformat(deserialized["uploaded_at"])
-
-        # Build file info dictionary
-        file_info = {
-            "id": deserialized["id"],
-            "filename": deserialized.get(
-                "filename", deserialized.get("original_filename")
-            ),
-            "original_filename": deserialized.get(
-                "original_filename", deserialized.get("filename")
-            ),
-            "file_path": deserialized["file_path"],
-            "uploaded_at": uploaded_at,
-        }
-
-        # Add optional fields if present
-        if "file_size" in deserialized:
-            file_info["file_size"] = deserialized["file_size"]
-        if "file_hash" in deserialized:
-            file_info["file_hash"] = deserialized["file_hash"]
-        if "mime_type" in deserialized:
-            file_info["mime_type"] = deserialized["mime_type"]
-
-        return file_info
 
     # Persona CRUD operations
 
@@ -1045,238 +946,31 @@ class DatabaseService:
             code=ErrorCode.DATABASE_OPERATION_FAILED,
         )
 
-    def get_all_personas(
-        self,
-        limit: int = 20,
-        cursor: Optional[Dict[str, Any]] = None,
-        search_all: bool = False,
-    ) -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
+    def scan_all_personas(self) -> List[Persona]:
         """
-        Retrieve personas with cursor-based pagination via GSI 'CreatedAtIndex'.
+        Read every persona with a full table scan.
 
-        Args:
-            limit: Page size (default 20).
-            cursor: LastEvaluatedKey from a previous call for the next page.
-            search_all: If True, fall back to scan and return all items
-                (used when full-text search needs to span all records).
+        Only the admin's ``all`` tab search uses this (U4 BR3.5). The
+        type-fixed persona GSIs are no longer read (U5 BR8.2).
 
         Returns:
-            Tuple of (personas, next_cursor). next_cursor is None if no more pages.
+            Every persona, in scan order.
         """
 
-        def _query() -> Tuple[List[Persona], Optional[Dict[str, Any]]]:
-            if search_all:
-                # Full-table scan fallback for search that GSI cannot support.
-                personas: List[Persona] = []
-                scan_params: Dict[str, Any] = {"TableName": self.personas_table}
+        def _scan() -> List[Persona]:
+            personas: List[Persona] = []
+            scan_params: Dict[str, Any] = {"TableName": self.personas_table}
+            response = self.dynamodb_client.scan(**scan_params)
+            for item in response.get("Items", []):
+                personas.append(self._deserialize_persona(item))
+            while "LastEvaluatedKey" in response:
+                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
                 response = self.dynamodb_client.scan(**scan_params)
                 for item in response.get("Items", []):
                     personas.append(self._deserialize_persona(item))
-                while "LastEvaluatedKey" in response:
-                    scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                    response = self.dynamodb_client.scan(**scan_params)
-                    for item in response.get("Items", []):
-                        personas.append(self._deserialize_persona(item))
-                return personas, None
-
-            params: Dict[str, Any] = {
-                "TableName": self.personas_table,
-                "IndexName": "CreatedAtIndex",
-                "KeyConditionExpression": "#t = :t",
-                "ExpressionAttributeNames": {"#t": "type"},
-                "ExpressionAttributeValues": {":t": {"S": "persona"}},
-                "ScanIndexForward": False,
-                "Limit": limit,
-            }
-            if cursor:
-                params["ExclusiveStartKey"] = cursor
-            response = self.dynamodb_client.query(**params)
-            personas = [
-                self._deserialize_persona(item) for item in response.get("Items", [])
-            ]
-            return personas, response.get("LastEvaluatedKey")
-
-        return self._execute_with_retry(_query, operation_name="get_all_personas")
-
-    def persona_exists(self, persona_id: str) -> bool:
-        """
-        Check if a persona exists in DynamoDB.
-
-        Args:
-            persona_id: ID of persona to check
-
-        Returns:
-            True if persona exists, False otherwise
-
-        Raises:
-            DatabaseError: If check operation fails
-        """
-
-        def _exists() -> bool:
-            response = self.dynamodb_client.get_item(
-                TableName=self.personas_table,
-                Key={"id": self.serializer.serialize(persona_id)},
-                # Only retrieve the key to minimize data transfer
-                ProjectionExpression="id",
-            )
-
-            return "Item" in response
-
-        return self._execute_with_retry(
-            _exists, operation_name=f"persona_exists({persona_id})"
-        )
-
-    def get_persona_count(self) -> int:
-        """
-        Get the total count of personas in DynamoDB.
-
-        Returns:
-            Number of personas
-
-        Raises:
-            DatabaseError: If count operation fails
-        """
-
-        def _count() -> int:
-            # Use GSI Query with Select='COUNT' (more efficient than scan)
-            params: Dict[str, Any] = {
-                "TableName": self.personas_table,
-                "IndexName": "CreatedAtIndex",
-                "KeyConditionExpression": "#t = :t",
-                "ExpressionAttributeNames": {"#t": "type"},
-                "ExpressionAttributeValues": {":t": {"S": "persona"}},
-                "Select": "COUNT",
-            }
-            response = self.dynamodb_client.query(**params)
-            count: int = response.get("Count", 0)
-
-            while "LastEvaluatedKey" in response:
-                params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                response = self.dynamodb_client.query(**params)
-                count += int(response.get("Count", 0))
-
-            return count
-
-        return self._execute_with_retry(_count, operation_name="get_persona_count")
-
-    def get_personas_by_name(
-        self, name_pattern: str, limit: Optional[int] = None
-    ) -> List[Persona]:
-        """
-        Query personas by name pattern using Global Secondary Index.
-
-        Note: This implementation uses scan with filter since GSI requires exact matches.
-        For production, consider using begins_with or contains operators with GSI.
-
-        Args:
-            name_pattern: Name pattern to search for (case-insensitive substring match)
-            limit: Maximum number of personas to return (optional)
-
-        Returns:
-            List of Persona objects matching the name pattern
-
-        Raises:
-            DatabaseError: If query operation fails
-        """
-
-        def _query_by_name() -> list[Persona]:
-            personas = []
-
-            # Build scan parameters with filter expression
-            scan_params: Dict[str, Any] = {
-                "TableName": self.personas_table,
-                "FilterExpression": "contains(#name, :name_val)",
-                "ExpressionAttributeNames": {"#name": "name"},
-                "ExpressionAttributeValues": {
-                    ":name_val": self.serializer.serialize(name_pattern)
-                },
-            }
-
-            if limit:
-                scan_params["Limit"] = limit
-
-            # Scan with filter
-            response = self.dynamodb_client.scan(**scan_params)
-
-            # Deserialize all items
-            for item in response.get("Items", []):
-                persona = self._deserialize_persona(item)
-                personas.append(persona)
-
-            # Handle pagination if no limit was specified
-            while "LastEvaluatedKey" in response and not limit:
-                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                response = self.dynamodb_client.scan(**scan_params)
-
-                for item in response.get("Items", []):
-                    persona = self._deserialize_persona(item)
-                    personas.append(persona)
-
             return personas
 
-        return self._execute_with_retry(
-            _query_by_name, operation_name=f"get_personas_by_name({name_pattern})"
-        )
-
-    def get_personas_by_occupation(
-        self, occupation_pattern: str, limit: Optional[int] = None
-    ) -> List[Persona]:
-        """
-        Query personas by occupation pattern using Global Secondary Index.
-
-        Note: This implementation uses scan with filter since GSI requires exact matches.
-        For production, consider using begins_with or contains operators with GSI.
-
-        Args:
-            occupation_pattern: Occupation pattern to search for (case-insensitive substring match)
-            limit: Maximum number of personas to return (optional)
-
-        Returns:
-            List of Persona objects matching the occupation pattern
-
-        Raises:
-            DatabaseError: If query operation fails
-        """
-
-        def _query_by_occupation() -> list[Persona]:
-            personas = []
-
-            # Build scan parameters with filter expression
-            scan_params: Dict[str, Any] = {
-                "TableName": self.personas_table,
-                "FilterExpression": "contains(#occupation, :occupation_val)",
-                "ExpressionAttributeNames": {"#occupation": "occupation"},
-                "ExpressionAttributeValues": {
-                    ":occupation_val": self.serializer.serialize(occupation_pattern)
-                },
-            }
-
-            if limit:
-                scan_params["Limit"] = limit
-
-            # Scan with filter
-            response = self.dynamodb_client.scan(**scan_params)
-
-            # Deserialize all items
-            for item in response.get("Items", []):
-                persona = self._deserialize_persona(item)
-                personas.append(persona)
-
-            # Handle pagination if no limit was specified
-            while "LastEvaluatedKey" in response and not limit:
-                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                response = self.dynamodb_client.scan(**scan_params)
-
-                for item in response.get("Items", []):
-                    persona = self._deserialize_persona(item)
-                    personas.append(persona)
-
-            return personas
-
-        return self._execute_with_retry(
-            _query_by_occupation,
-            operation_name=f"get_personas_by_occupation({occupation_pattern})",
-        )
+        return self._execute_with_retry(_scan, operation_name="scan_all_personas")
 
     def save_discussion(self, discussion: Discussion) -> str:
         """
@@ -1856,92 +1550,8 @@ class DatabaseService:
             operation_name=f"get_insights_by_category({category})",
         )
 
-    def save_uploaded_file_info(
-        self,
-        file_id: str,
-        filename: str,
-        file_path: str,
-        file_size: Optional[int] = None,
-        file_hash: Optional[str] = None,
-        mime_type: Optional[str] = None,
-        uploaded_at: Optional[datetime] = None,
-        original_filename: Optional[str] = None,
-        file_type: str = "persona_interview",
-    ) -> str:
-        """
-        Save uploaded file metadata to DynamoDB.
-
-        Args:
-            file_id: Unique file identifier
-            filename: Saved filename (with UUID prefix)
-            file_path: Path to stored file
-            file_size: File size in bytes (optional)
-            file_hash: File hash for integrity checking (optional)
-            mime_type: MIME type of file (optional)
-            uploaded_at: Upload timestamp (optional, defaults to now)
-            original_filename: Original filename before UUID prefix (optional)
-            file_type: File type ('persona_interview' or 'discussion_document')
-
-        Returns:
-            File ID
-
-        Raises:
-            DatabaseError: If save operation fails
-        """
-
-        def _save() -> str:
-            serialized_file = self._serialize_file_info(
-                file_id=file_id,
-                filename=filename,
-                file_path=file_path,
-                file_size=file_size,
-                file_hash=file_hash,
-                mime_type=mime_type,
-                uploaded_at=uploaded_at,
-                original_filename=original_filename,
-                file_type=file_type,
-            )
-
-            self.dynamodb_client.put_item(
-                TableName=self.files_table, Item=serialized_file
-            )
-
-            return file_id
-
-        return self._execute_with_retry(
-            _save, operation_name=f"save_uploaded_file_info({file_id})"
-        )
-
-    def get_uploaded_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve uploaded file metadata from DynamoDB.
-
-        Args:
-            file_id: ID of file to retrieve
-
-        Returns:
-            Dictionary with file metadata if found, None otherwise
-
-        Raises:
-            DatabaseError: If retrieval operation fails
-        """
-
-        def _get() -> Optional[Dict[str, Any]]:
-            response = self.dynamodb_client.get_item(
-                TableName=self.files_table,
-                Key={"id": self.serializer.serialize(file_id)},
-            )
-
-            # Check if item was found
-            if "Item" not in response:
-                return None
-
-            # Deserialize and return file info
-            return self._deserialize_file_info(response["Item"])
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_uploaded_file_info({file_id})"
-        )
+    # Upload metadata (UploadedFiles) is read and written by UploadedFileStore
+    # with strong reads and transactional attach / detach (U5, BR5).
 
     # ==================== Dataset Operations ====================
 
@@ -1969,6 +1579,11 @@ class DatabaseService:
                 "updated_at": self.serializer.serialize(dataset.updated_at.isoformat()),
                 "notes": self.serializer.serialize(dataset.notes),
             }
+            # Persona-dedicated datasets only (U5 BR6.1); org assets have no column
+            if dataset.owner_persona_id:
+                item["owner_persona_id"] = self.serializer.serialize(
+                    dataset.owner_persona_id
+                )
             self.dynamodb_client.put_item(TableName=self.datasets_table, Item=item)
             return dataset
 
@@ -2000,21 +1615,36 @@ class DatabaseService:
         )
 
     def get_all_datasets(self) -> List["Dataset"]:
-        """Get all datasets."""
+        """Get every organization-asset dataset.
+
+        Persona-dedicated datasets (``owner_persona_id`` set) are left out in
+        the scan itself (U5 BR6.2). The table holds organization assets only,
+        so a scan stays small (not a per-user listing, NFR2).
+        """
         from ..models.dataset import Dataset, DatasetColumn
 
         def _get_all() -> List["Dataset"]:
             datasets = []
-            response = self.dynamodb_client.scan(TableName=self.datasets_table)
-            for raw_item in response.get("Items", []):
-                item = {
-                    k: self.deserializer.deserialize(v) for k, v in raw_item.items()
-                }
-                item["columns"] = [DatasetColumn(**c) for c in item.get("columns", [])]
-                item["created_at"] = datetime.fromisoformat(item["created_at"])
-                item["updated_at"] = datetime.fromisoformat(item["updated_at"])
-                datasets.append(Dataset(**item))
-            return datasets
+            params: Dict[str, Any] = {
+                "TableName": self.datasets_table,
+                "FilterExpression": "attribute_not_exists(owner_persona_id)",
+            }
+            while True:
+                response = self.dynamodb_client.scan(**params)
+                for raw_item in response.get("Items", []):
+                    item = {
+                        k: self.deserializer.deserialize(v) for k, v in raw_item.items()
+                    }
+                    item["columns"] = [
+                        DatasetColumn(**c) for c in item.get("columns", [])
+                    ]
+                    item["created_at"] = datetime.fromisoformat(item["created_at"])
+                    item["updated_at"] = datetime.fromisoformat(item["updated_at"])
+                    datasets.append(Dataset(**item))
+                last = response.get("LastEvaluatedKey")
+                if not last:
+                    return datasets
+                params["ExclusiveStartKey"] = last
 
         return self._execute_with_retry(_get_all, operation_name="get_all_datasets")
 
@@ -2031,72 +1661,6 @@ class DatabaseService:
         return self._execute_with_retry(
             _delete, operation_name=f"delete_dataset({dataset_id})"
         )
-
-    # ==================== PersonaDatasetBinding Operations ====================
-
-    def save_binding(self, binding: "PersonaDatasetBinding") -> "PersonaDatasetBinding":
-        """Save persona-dataset binding."""
-
-        def _save() -> "PersonaDatasetBinding":
-            item = {
-                "id": self.serializer.serialize(binding.id),
-                "persona_id": self.serializer.serialize(binding.persona_id),
-                "dataset_id": self.serializer.serialize(binding.dataset_id),
-                "binding_keys": self.serializer.serialize(binding.binding_keys),
-                "created_at": self.serializer.serialize(binding.created_at.isoformat()),
-            }
-            self.dynamodb_client.put_item(TableName=self.bindings_table, Item=item)
-            return binding
-
-        return self._execute_with_retry(
-            _save, operation_name=f"save_binding({binding.id})"
-        )
-
-    def get_bindings_by_persona(self, persona_id: str) -> List["PersonaDatasetBinding"]:
-        """Get all bindings for a persona."""
-        from ..models.dataset import PersonaDatasetBinding
-
-        def _get() -> List["PersonaDatasetBinding"]:
-            bindings = []
-            response = self.dynamodb_client.scan(
-                TableName=self.bindings_table,
-                FilterExpression="persona_id = :pid",
-                ExpressionAttributeValues={
-                    ":pid": self.serializer.serialize(persona_id)
-                },
-            )
-            for raw_item in response.get("Items", []):
-                item = {
-                    k: self.deserializer.deserialize(v) for k, v in raw_item.items()
-                }
-                item["created_at"] = datetime.fromisoformat(item["created_at"])
-                bindings.append(PersonaDatasetBinding(**item))
-            return bindings
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_bindings_by_persona({persona_id})"
-        )
-
-    def delete_binding(self, binding_id: str) -> bool:
-        """Delete binding by ID."""
-
-        def _delete() -> bool:
-            self.dynamodb_client.delete_item(
-                TableName=self.bindings_table,
-                Key={"id": self.serializer.serialize(binding_id)},
-            )
-            return True
-
-        return self._execute_with_retry(
-            _delete, operation_name=f"delete_binding({binding_id})"
-        )
-
-    def delete_bindings_by_persona(self, persona_id: str) -> int:
-        """Delete all bindings for a persona. Returns count of deleted items."""
-        bindings = self.get_bindings_by_persona(persona_id)
-        for b in bindings:
-            self.delete_binding(b.id)
-        return len(bindings)
 
     # ========== SurveyTemplate CRUD ==========
 
@@ -2337,74 +1901,8 @@ class DatabaseService:
             _delete, operation_name=f"delete_knowledge_base({kb_id})"
         )
 
-    # ==================== PersonaKBBinding Operations ====================
-
-    def save_kb_binding(self, binding: "PersonaKBBinding") -> "PersonaKBBinding":
-        """Save persona-KB binding. Overwrites existing binding for the persona."""
-
-        def _save() -> "PersonaKBBinding":
-            # 既存の紐付けを削除（1ペルソナ:1KB制約）
-            existing = self.get_kb_binding_by_persona(binding.persona_id)
-            if existing:
-                self.delete_kb_binding(existing.id)
-
-            item = {
-                k: self.serializer.serialize(v) for k, v in binding.to_dict().items()
-            }
-            self.dynamodb_client.put_item(
-                TableName=self.persona_kb_bindings_table, Item=item
-            )
-            return binding
-
-        return self._execute_with_retry(
-            _save, operation_name=f"save_kb_binding({binding.id})"
-        )
-
-    def get_kb_binding_by_persona(
-        self, persona_id: str
-    ) -> Optional["PersonaKBBinding"]:
-        """Get KB binding for a persona (at most one)."""
-        from ..models.knowledge_base import PersonaKBBinding
-
-        def _get() -> Optional["PersonaKBBinding"]:
-            response = self.dynamodb_client.scan(
-                TableName=self.persona_kb_bindings_table,
-                FilterExpression="persona_id = :pid",
-                ExpressionAttributeValues={
-                    ":pid": self.serializer.serialize(persona_id)
-                },
-            )
-            items = response.get("Items", [])
-            if not items:
-                return None
-            item = {k: self.deserializer.deserialize(v) for k, v in items[0].items()}
-            return PersonaKBBinding.from_dict(item)
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_kb_binding_by_persona({persona_id})"
-        )
-
-    def delete_kb_binding(self, binding_id: str) -> bool:
-        """Delete KB binding by ID."""
-
-        def _delete() -> bool:
-            self.dynamodb_client.delete_item(
-                TableName=self.persona_kb_bindings_table,
-                Key={"id": self.serializer.serialize(binding_id)},
-            )
-            return True
-
-        return self._execute_with_retry(
-            _delete, operation_name=f"delete_kb_binding({binding_id})"
-        )
-
-    def delete_kb_bindings_by_persona(self, persona_id: str) -> int:
-        """Delete KB binding for a persona. Returns count of deleted items."""
-        binding = self.get_kb_binding_by_persona(persona_id)
-        if binding:
-            self.delete_kb_binding(binding.id)
-            return 1
-        return 0
+    # Persona bindings (KB / datasets) live in PersonaBindings and are read and
+    # written by PersonaBindingStore (U5, ADR-007).
 
     # =========================================================================
     # Jobs CRUD

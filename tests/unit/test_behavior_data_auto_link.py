@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from src.models.persona import Persona
+from tests.conftest import MEMBER_A
 
 
 @pytest.fixture
@@ -27,7 +28,10 @@ class TestAutoLinkBehaviorFlag:
 
         mock_agent_service = Mock()
         mgr = PersonaGenerationManager(
-            agent_service=mock_agent_service, database_service=Mock()
+            agent_service=mock_agent_service,
+            database_service=Mock(),
+            candidate_store=Mock(),
+            s3_service=None,
         )
         mgr._determine_tools = Mock(return_value=[])
         return mgr, mock_agent_service
@@ -55,7 +59,8 @@ class TestAutoLinkBehaviorFlag:
             [],
         )
 
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER_A.principal(),
             file_contents=[],
             data_type="dwh",
             persona_count=5,
@@ -89,7 +94,8 @@ class TestAutoLinkBehaviorFlag:
             [],
         )
 
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER_A.principal(),
             file_contents=[],
             data_type="dwh",
             persona_count=1,
@@ -125,7 +131,8 @@ class TestAutoLinkBehaviorFlag:
             [],
         )
 
-        mgr.generate_and_cache(
+        mgr.generate(
+            MEMBER_A.principal(),
             file_contents=[],
             data_type="dwh",
             persona_count=3,

@@ -4,9 +4,12 @@ Persona Manager for AI Persona System.
 """
 
 import logging
+import re
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,8 +24,22 @@ from typing import (
 
 from ..config import config
 from ..models.authz import AccessTarget, Permission, Principal, ResourceType
-from ..models.errors import CodedError, ErrorCode
+from ..models.dataset import Dataset
+from ..models.errors import AccessDeniedError, CodedError, ErrorCode
+from ..models.knowledge_base import KnowledgeBase
 from ..models.persona import Persona
+from ..models.persona_binding import (
+    KB_TARGET_KEY,
+    BindingTargetType,
+    PersonaBinding,
+    dataset_target_key,
+)
+from ..models.persona_candidate import (
+    BehaviorDatasetCandidate,
+    CandidateClaim,
+    CandidateSaveResult,
+    PersonaCandidate,
+)
 from ..models.demographics import VALID_GENDERS
 from ..models.sharing import ListTab, TabbedList
 from ..services import country_service
@@ -30,8 +47,17 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
+from .components.resource_lookup import ResourceLookup
 from .components.resource_sharing import ResourceSharing
-from .components.sharing_runtime import SharingParts, build_sharing_parts, shared_parts
+from .components.sharing_runtime import (
+    SharingParts,
+    build_access_parts,
+    build_sharing_parts,
+    shared_access_parts,
+    shared_parts,
+)
+from .shared.persona_export import export_filename, render_persona_markdown
+from .shared.structured_log import log_event
 from .shared.image_normalize import (
     AVATAR_FILE_EXTENSION,
     AVATAR_MIME_TYPE,
@@ -41,7 +67,14 @@ from .shared.image_normalize import (
 )
 
 if TYPE_CHECKING:
+    from ..services.persona_binding_store import PersonaBindingStore
+    from ..services.persona_candidate_store import PersonaCandidateStore
     from ..services.s3_service import S3Service
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 #: S3 key prefix for avatar images: persona_avatars/{persona_id}/{uuid}.webp
 AVATAR_KEY_PREFIX = "persona_avatars"
@@ -78,6 +111,83 @@ class PersonaDetail:
     shared_with: list[str] = dataclass_field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class BindingRow:
+    """One binding as the detail page shows it (BR2.7, BR2.8).
+
+    Attributes:
+        target_id: The dataset or knowledge-base ID.
+        name: The target's name.
+        usable: Whether the viewer may use the target (``利用権限なし`` when
+            not); persona-dedicated datasets are always usable.
+        dedicated: A persona-dedicated dataset.
+        binding_keys: Dataset rows narrowed to this persona.
+        metadata_filters: Knowledge-base search filters.
+    """
+
+    target_id: str
+    name: str
+    usable: bool
+    dedicated: bool = False
+    binding_keys: Dict[str, str] = dataclass_field(default_factory=dict)
+    metadata_filters: Dict[str, str] = dataclass_field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KbBindingView:
+    """The knowledge-base binding of a persona (BR2.1, BR4.2).
+
+    Attributes:
+        persona_id: The persona.
+        manageable: Whether the viewer may change the binding.
+        binding: The current binding, or ``None``.
+        choices: Knowledge bases the viewer may bind (managers only).
+    """
+
+    persona_id: str
+    manageable: bool
+    binding: Optional[BindingRow]
+    choices: List[KnowledgeBase] = dataclass_field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DatasetBindingsView:
+    """The dataset bindings of a persona (BR2.1, BR4.2).
+
+    Attributes:
+        persona_id: The persona.
+        manageable: Whether the viewer may add or remove bindings.
+        bindings: The current bindings (vanished targets left out).
+        choices: Organization datasets the viewer may bind, not yet bound.
+    """
+
+    persona_id: str
+    manageable: bool
+    bindings: List[BindingRow]
+    choices: List[Dataset] = dataclass_field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PersonaExport:
+    """A persona as a Markdown file (entities.md PersonaExport, BR7.1).
+
+    Attributes:
+        filename: ``{name}.md`` with unusable characters replaced.
+        body: The Markdown document.
+    """
+
+    filename: str
+    body: str
+
+
+#: Deadline of the long-term memory deletion when a persona is deleted.
+MEMORY_DELETE_DEADLINE_SECONDS = 30.0
+#: Key prefix of persona-dedicated datasets: persona_datasets/{persona}/{dataset}.csv
+DEDICATED_DATASET_PREFIX = "persona_datasets"
+
+_UNSET: Any = object()
+
+
 class PersonaManager:
     """
     ペルソナのCRUD操作とバインディング管理を行うManager。
@@ -85,6 +195,9 @@ class PersonaManager:
 
     v1.0.0 U4: 保存した人を所有者にし（BR6.1）、一覧・検索・詳細・編集・削除は
     利用者（Principal）を受け取って ResourceSharing と AccessPolicy で判定する。
+
+    v1.0.0 U5: 紐付け（PersonaBindings）・プレビュー・候補からの保存・削除の後始末・
+    エクスポート・アバターの判定を持つ。
     """
 
     def __init__(
@@ -93,6 +206,12 @@ class PersonaManager:
         s3_service: Optional["S3Service"] = None,
         resource_sharing: Optional[ResourceSharing] = None,
         owners: Optional[OwnerDirectory] = None,
+        binding_store: Optional["PersonaBindingStore"] = None,
+        resource_lookup: Optional[ResourceLookup] = None,
+        memory_service: Any = _UNSET,
+        preview_service: Any = None,
+        candidate_store: Optional["PersonaCandidateStore"] = None,
+        clock: Callable[[], datetime] = _utc_now,
     ):
         """
         Args:
@@ -102,6 +221,17 @@ class PersonaManager:
             resource_sharing: Sharing component (optional; the per-task
                 instance shared with the other Managers, built on first use)
             owners: Owner-name copy (optional; the per-task instance)
+            binding_store: ``PersonaBindings`` (optional, built on first use)
+            resource_lookup: Decision reads of datasets and knowledge bases
+                (optional; the per-task instance)
+            memory_service: Long-term memory; ``None`` when the feature is
+                off (optional, from the factory when omitted)
+            preview_service: Runs dataset previews (``SurveyBatchService``;
+                optional, built on first use)
+            candidate_store: ``PersonaCandidates``; each candidate's hold is
+                confirmed right before it is saved (R-04; optional, built on
+                first use)
+            clock: UTC clock for the hold checks (tests pass a fake one)
         """
         self.logger = logging.getLogger(__name__)
         self.database_service = (
@@ -116,6 +246,48 @@ class PersonaManager:
                 self.s3_service = None
         self._sharing = resource_sharing
         self._owner_directory = owners
+        self._binding_store = binding_store
+        self._lookup = resource_lookup
+        self._memory = memory_service
+        self._preview = preview_service
+        self._candidate_store = candidate_store
+        self._clock = clock
+
+    @property
+    def _candidates(self) -> "PersonaCandidateStore":
+        if self._candidate_store is None:
+            self._candidate_store = service_factory.get_persona_candidate_store()
+        return self._candidate_store
+
+    @property
+    def _bindings(self) -> "PersonaBindingStore":
+        if self._binding_store is None:
+            self._binding_store = service_factory.get_persona_binding_store()
+        return self._binding_store
+
+    @property
+    def _resource_lookup(self) -> ResourceLookup:
+        if self._lookup is None:
+            self._lookup = shared_access_parts(
+                lambda: build_access_parts(
+                    service_factory.get_authz_lookup_service(),
+                    service_factory.get_uploaded_file_store(),
+                    service_factory.get_optional_s3_service(),
+                )
+            ).lookup
+        return self._lookup
+
+    @property
+    def _memory_service(self) -> Any:
+        if self._memory is _UNSET:
+            self._memory = service_factory.get_memory_service()
+        return self._memory
+
+    @property
+    def _preview_service(self) -> Any:
+        if self._preview is None:
+            self._preview = service_factory.get_survey_batch_service()
+        return self._preview
 
     # ------------------------------------------------------------------
     # Sharing parts (built lazily so that callers that never list or share
@@ -193,9 +365,27 @@ class PersonaManager:
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             ) from e
 
-    def get_persona(self, persona_id: str) -> Optional[Persona]:
+    def get_persona(self, principal: Principal, persona_id: str) -> Persona:
         """
-        Retrieve a persona by ID.
+        Read one persona the user may read (BR4.5).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            PersonaManagerError: When the persona cannot be read
+        """
+        persona = self._read_consistent(persona_id)
+        AccessPolicy.ensure_readable(
+            principal, self._target_of(persona, persona_id), ErrorCode.PERSONA_NOT_FOUND
+        )
+        assert persona is not None
+        return persona
+
+    def get_persona_unchecked(self, persona_id: str) -> Optional[Persona]:
+        """
+        Retrieve a persona by ID without an authorization decision.
+
+        Discussions and interviews still read personas this way; U6 moves
+        those callers to :meth:`get_persona` (classified ``pending("U6")``).
 
         Args:
             persona_id: ID of the persona to retrieve
@@ -432,10 +622,7 @@ class PersonaManager:
         ]
 
     def _scan_all(self) -> List[Persona]:
-        personas, _ = self._read_bodies(
-            lambda: self.database_service.get_all_personas(search_all=True)
-        )
-        return personas
+        return self._read_bodies(self.database_service.scan_all_personas)
 
     def _read_bodies(self, read: Callable[[], _T]) -> _T:
         """Run a body read; failures become ``PERSONA_OPERATION_FAILED``."""
@@ -566,10 +753,107 @@ class PersonaManager:
                 "nothing to delete", code=ErrorCode.PERSONA_NOT_FOUND
             )
         self.logger.info(f"Persona deleted successfully: {persona_id}")
+        self._clean_up_after_delete(persona_id.strip(), deleted)
+        return True
+
+    def _clean_up_after_delete(self, persona_id: str, deleted: Dict[str, Any]) -> None:
+        """Remove what belonged to a deleted persona (BR3.1〜BR3.3).
+
+        Bindings (after noting the dedicated datasets), long-term memory, the
+        dedicated datasets and the avatar, in that order. Every step runs even
+        when an earlier one failed; failures are ``persona.cleanup_failed``
+        lines, never errors to the user.
+        """
+        dedicated: List[Dataset] = []
+        bindings: Optional[List[PersonaBinding]] = None
+        try:
+            bindings = self._bindings.list_for_persona(persona_id)
+        except Exception as e:
+            self._cleanup_failed(persona_id, "bindings", e)
+        if bindings is not None:
+            try:
+                dedicated = self._dedicated_datasets(persona_id, bindings)
+            except Exception as e:
+                self._cleanup_failed(persona_id, "persona_datasets", e)
+            try:
+                self._bindings.delete_all(persona_id, bindings)
+            except Exception as e:
+                self._cleanup_failed(persona_id, "bindings", e)
+
+        memory = self._memory_service
+        if memory is None and config.ENABLE_LONG_TERM_MEMORY:
+            # R-03: memory is on but its service could not be built, so the
+            # records stay behind; make that visible (BR3.3)
+            self._cleanup_failed(persona_id, "memory", None, reason="error")
+        if memory is not None:
+            try:
+                result = memory.delete_all(
+                    persona_id,
+                    deadline=time.monotonic() + MEMORY_DELETE_DEADLINE_SECONDS,
+                )
+                if not result.complete:
+                    self._cleanup_failed(
+                        persona_id,
+                        "memory",
+                        None,
+                        reason="timeout" if result.timed_out else "error",
+                        error_type=result.error_type,
+                        remaining=result.remaining,
+                    )
+            except Exception as e:
+                self._cleanup_failed(persona_id, "memory", e)
+
+        for dataset in dedicated:
+            try:
+                self._delete_dedicated_dataset(dataset)
+            except Exception as e:
+                self._cleanup_failed(persona_id, "persona_datasets", e)
+
         avatar_path = deleted.get("avatar_path")
         if avatar_path:
-            self._delete_avatar_object(str(avatar_path))
-        return True
+            try:
+                self._delete_avatar_or_raise(str(avatar_path))
+            except Exception as e:
+                self._cleanup_failed(persona_id, "avatar", e)
+
+    def _dedicated_datasets(
+        self, persona_id: str, bindings: List[PersonaBinding]
+    ) -> List[Dataset]:
+        """The bound datasets whose ``owner_persona_id`` is this persona (BR6.4)."""
+        found: List[Dataset] = []
+        for binding in bindings:
+            if not binding.is_dataset:
+                continue
+            dataset = self.database_service.get_dataset(binding.target_id)
+            if dataset is not None and dataset.is_dedicated_to(persona_id):
+                found.append(dataset)
+        return found
+
+    def _delete_dedicated_dataset(self, dataset: Dataset) -> None:
+        """Delete a dedicated dataset's registration and CSV (raises on failure)."""
+        self.database_service.delete_dataset(dataset.id)
+        if self.s3_service is not None and dataset.s3_path.startswith("s3://"):
+            self.s3_service.delete_file(dataset.s3_path)
+
+    @staticmethod
+    def _cleanup_failed(
+        persona_id: str,
+        step: str,
+        error: Optional[BaseException],
+        *,
+        reason: str = "error",
+        error_type: Optional[str] = None,
+        remaining: Optional[int] = None,
+    ) -> None:
+        log_event(
+            "persona.cleanup_failed",
+            level="ERROR",
+            persona_id=persona_id,
+            step=step,
+            reason=reason,
+            error_type=error_type or (type(error).__name__ if error else None),
+            remaining=remaining,
+        )
 
     def update_persona(
         self,
@@ -675,15 +959,18 @@ class PersonaManager:
         """Return True if avatar images can be stored (S3 is configured)."""
         return self.s3_service is not None
 
-    def set_avatar(self, persona_id: str, content: bytes) -> Persona:
+    def set_avatar(
+        self, principal: Principal, persona_id: str, content: bytes
+    ) -> Persona:
         """
-        Normalize an uploaded image and set it as the persona's avatar.
+        Normalize an uploaded image and set it as the persona's avatar (BR4.3).
 
         The path is written with a compare-and-set condition (see
         ``_compare_and_set_avatar``). The previous avatar object is deleted only
         after that write succeeds; if it fails, the newly uploaded object is removed.
 
         Args:
+            principal: The user (must manage the persona)
             persona_id: ID of the persona
             content: Raw uploaded image bytes
 
@@ -691,7 +978,9 @@ class PersonaManager:
             Updated Persona
 
         Raises:
-            PersonaManagerError: On invalid input, missing persona, or storage failure
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: On invalid input or storage failure
         """
         s3_service = self._require_avatar_storage()
         if not content:
@@ -703,7 +992,7 @@ class PersonaManager:
                 code=ErrorCode.FILE_TOO_LARGE,
                 context={"max_size_mb": max_size / (1024 * 1024)},
             )
-        persona = self._get_existing_persona(persona_id)
+        persona = self._manageable_persona(principal, persona_id)
 
         try:
             normalized = normalize_avatar_image(content)
@@ -748,21 +1037,24 @@ class PersonaManager:
         self.logger.info(f"Avatar updated for persona {persona.id}")
         return updated
 
-    def delete_avatar(self, persona_id: str) -> Persona:
+    def delete_avatar(self, principal: Principal, persona_id: str) -> Persona:
         """
-        Remove the persona's avatar image and revert to the auto-generated avatar.
+        Remove the persona's avatar image and revert to the auto-generated avatar (BR4.3).
 
         Args:
+            principal: The user (must manage the persona)
             persona_id: ID of the persona
 
         Returns:
             Updated Persona (unchanged if no avatar was set)
 
         Raises:
-            PersonaManagerError: If the persona is missing or the update fails
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: If the update fails
         """
         self._require_avatar_storage()
-        persona = self._get_existing_persona(persona_id)
+        persona = self._manageable_persona(principal, persona_id)
         if not persona.avatar_path:
             return persona
 
@@ -773,16 +1065,18 @@ class PersonaManager:
         self.logger.info(f"Avatar removed for persona {persona.id}")
         return updated
 
-    def get_avatar_url(self, persona_id: str) -> str:
+    def get_avatar_url(self, principal: Principal, persona_id: str) -> str:
         """
-        Return a short-lived presigned URL of the persona's avatar image.
+        Return a short-lived presigned URL of the persona's avatar image (BR4.4).
 
         Raises:
-            PersonaManagerError: If the persona or its avatar is missing,
-                or the URL cannot be generated
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing (no
+                URL is made)
+            PersonaManagerError: If the avatar is missing, or the URL cannot
+                be generated
         """
         s3_service = self._require_avatar_storage()
-        persona = self._get_existing_persona(persona_id)
+        persona, _ = self._readable_target(principal, persona_id)
         if not persona.avatar_path:
             raise PersonaManagerError(
                 "persona has no avatar image",
@@ -830,7 +1124,7 @@ class PersonaManager:
         if written:
             return
 
-        if self.get_persona(current.id) is None:
+        if self.get_persona_unchecked(current.id) is None:
             self.logger.info(f"Persona {current.id} was deleted during avatar update")
             raise PersonaManagerError(
                 "persona deleted during avatar update",
@@ -851,24 +1145,32 @@ class PersonaManager:
             )
         return self.s3_service
 
-    def _get_existing_persona(self, persona_id: str) -> Persona:
-        """Return the persona, or raise PERSONA_NOT_FOUND."""
-        persona = self.get_persona(persona_id)
-        if persona is None:
-            raise PersonaManagerError(
-                "persona not found", code=ErrorCode.PERSONA_NOT_FOUND
-            )
+    def _manageable_persona(self, principal: Principal, persona_id: str) -> Persona:
+        """The persona read strongly; the user must manage it.
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+            AccessDeniedError: Readable but not manageable (403)
+        """
+        persona = self._read_consistent(persona_id)
+        AccessPolicy.ensure_manageable(
+            principal, self._target_of(persona, persona_id), ErrorCode.PERSONA_NOT_FOUND
+        )
+        assert persona is not None
         return persona
 
     def _delete_avatar_object(self, avatar_path: str) -> None:
         """Delete an avatar object on a best-effort basis (failures are logged)."""
+        try:
+            self._delete_avatar_or_raise(avatar_path)
+        except Exception:
+            self.logger.warning("Failed to delete avatar object", exc_info=True)
+
+    def _delete_avatar_or_raise(self, avatar_path: str) -> None:
         if self.s3_service is None:
             self.logger.warning("Avatar object left in place: S3 is not configured")
             return
-        try:
-            self.s3_service.delete_file(avatar_path)
-        except Exception:
-            self.logger.warning("Failed to delete avatar object", exc_info=True)
+        self.s3_service.delete_file(avatar_path)
 
     def _validate_generated_persona(self, persona: Persona) -> None:
         """
@@ -1018,131 +1320,565 @@ class PersonaManager:
                         code=ErrorCode.PERSONA_TAG_COMMA_NOT_ALLOWED,
                     )
 
-    # --- ナレッジベース紐付け操作 ---
+    # ------------------------------------------------------------------
+    # Bindings (U5, ADR-007, BR2)
+    # ------------------------------------------------------------------
 
-    def get_kb_binding(self, persona_id: str) -> Tuple[list, Any]:
+    def _readable_target(
+        self, principal: Principal, persona_id: str
+    ) -> Tuple[Persona, AccessTarget]:
+        persona = self._read_consistent(persona_id)
+        target = self._target_of(persona, persona_id)
+        AccessPolicy.ensure_readable(principal, target, ErrorCode.PERSONA_NOT_FOUND)
+        assert persona is not None
+        return persona, target
+
+    def _read_bindings(self, persona_id: str) -> List[PersonaBinding]:
+        try:
+            return self._bindings.list_for_persona(persona_id)
+        except Exception as e:
+            self.logger.error("Failed to read bindings", exc_info=True)
+            raise PersonaManagerError(
+                f"binding read failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
+
+    def _asset_targets(
+        self, resource_type: ResourceType, ids: List[str]
+    ) -> Dict[str, AccessTarget]:
+        """Decision columns of organization assets (one lookup, at most 500)."""
+        if not ids:
+            return {}
+        return self._resource_lookup.get_many(resource_type, ids[:500])
+
+    def get_kb_binding(self, principal: Principal, persona_id: str) -> KbBindingView:
+        """The knowledge-base binding of a persona the user may read (BR2.1).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
         """
-        ペルソナのナレッジベース紐付け情報を取得する。
-
-        Args:
-            persona_id: ペルソナID
-
-        Returns:
-            (knowledge_bases, binding) のタプル
-        """
-        knowledge_bases = self.database_service.get_all_knowledge_bases()
-        binding = self.database_service.get_kb_binding_by_persona(persona_id)
-
-        if binding:
-            kb = self.database_service.get_knowledge_base(binding.kb_id)
-            if not kb:
-                self.database_service.delete_kb_binding(binding.id)
-                binding = None
-
-        return knowledge_bases, binding
+        _, target = self._readable_target(principal, persona_id)
+        manageable = AccessPolicy.can_manage(principal, target)
+        binding = next(
+            (
+                b
+                for b in self._read_bindings(persona_id)
+                if b.target_type is BindingTargetType.KB
+            ),
+            None,
+        )
+        row: Optional[BindingRow] = None
+        if binding is not None:
+            found = self._asset_targets(
+                ResourceType.KNOWLEDGE_BASE, [binding.target_id]
+            )
+            kb_target = found.get(binding.target_id)
+            if kb_target is not None and kb_target.exists:  # BR2.8
+                row = BindingRow(
+                    target_id=binding.target_id,
+                    name=kb_target.display_name or "",
+                    usable=AccessPolicy.can_use_asset(principal, kb_target),
+                    metadata_filters=dict(binding.metadata_filters),
+                )
+        choices: List[KnowledgeBase] = []
+        if manageable:
+            kbs = self.database_service.get_all_knowledge_bases()
+            usable = self._asset_targets(
+                ResourceType.KNOWLEDGE_BASE, [kb.id for kb in kbs]
+            )
+            choices = [
+                kb
+                for kb in kbs
+                if (t := usable.get(kb.id)) is not None
+                and AccessPolicy.can_use_asset(principal, t)
+            ]
+        return KbBindingView(
+            persona_id=persona_id, manageable=manageable, binding=row, choices=choices
+        )
 
     def create_kb_binding(
         self,
+        principal: Principal,
         persona_id: str,
         kb_id: str,
         metadata_filters: Optional[Dict[str, Any]] = None,
-    ) -> Any:
+    ) -> PersonaBinding:
+        """Bind a knowledge base, replacing the previous one in one write (BR2.9).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: ``KB_BINDING_NOT_FOUND`` when the knowledge
+                base is missing or the user may not use it (BR2.3)
         """
-        ナレッジベース紐付けを作成する（既存があれば上書き）。
-
-        Args:
-            persona_id: ペルソナID
-            kb_id: ナレッジベースID
-            metadata_filters: メタデータフィルター
-
-        Returns:
-            作成されたバインディング
-        """
-        from ..models.knowledge_base import PersonaKBBinding
-
-        binding = PersonaKBBinding.create_new(
-            persona_id=persona_id,
-            kb_id=kb_id,
-            metadata_filters=metadata_filters or {},
+        self._manageable_persona(principal, persona_id)
+        kb_target = self._asset_targets(ResourceType.KNOWLEDGE_BASE, [kb_id]).get(kb_id)
+        if kb_target is None or not AccessPolicy.can_use_asset(principal, kb_target):
+            raise PersonaManagerError(
+                "knowledge base not usable", code=ErrorCode.KB_BINDING_NOT_FOUND
+            )
+        binding = PersonaBinding.for_kb(
+            persona_id,
+            kb_id,
+            metadata_filters={
+                str(k): str(v) for k, v in (metadata_filters or {}).items()
+            },
         )
-        self.database_service.save_kb_binding(binding)
-        self.logger.info(f"Created KB binding: persona={persona_id}, kb={kb_id}")
+        self._write_binding(binding)
+        self.logger.info(f"Created KB binding: persona={persona_id}")
         return binding
 
-    def delete_kb_binding(self, binding_id: str) -> None:
-        """ナレッジベース紐付けを解除する。"""
-        self.database_service.delete_kb_binding(binding_id)
-        self.logger.info(f"Deleted KB binding: {binding_id}")
+    def delete_kb_binding(self, principal: Principal, persona_id: str) -> None:
+        """Remove the persona's knowledge-base binding (BR2.2, BR2.5).
 
-    # --- データセット紐付け操作 ---
-
-    def get_dataset_bindings(self, persona_id: str) -> Tuple[list, Dict[str, Any]]:
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: ``KB_BINDING_NOT_FOUND`` when there is none
         """
-        ペルソナのデータセット紐付け一覧を取得する。
+        self._manageable_persona(principal, persona_id)
+        if not self._remove_binding(persona_id, KB_TARGET_KEY):
+            raise PersonaManagerError(
+                "no knowledge-base binding", code=ErrorCode.KB_BINDING_NOT_FOUND
+            )
+        self.logger.info(f"Deleted KB binding: persona={persona_id}")
 
-        Args:
-            persona_id: ペルソナID
+    def get_dataset_bindings(
+        self, principal: Principal, persona_id: str
+    ) -> DatasetBindingsView:
+        """The dataset bindings of a persona the user may read (BR2.1, BR2.7).
 
-        Returns:
-            (datasets, bindings_map) のタプル
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
         """
-        datasets = self.database_service.get_all_datasets()
-        bindings = self.database_service.get_bindings_by_persona(persona_id)
-        bindings_map = {b.dataset_id: b for b in bindings}
-        return datasets, bindings_map
+        _, target = self._readable_target(principal, persona_id)
+        manageable = AccessPolicy.can_manage(principal, target)
+        bindings = [b for b in self._read_bindings(persona_id) if b.is_dataset]
+        found = self._asset_targets(
+            ResourceType.DATASET, [b.target_id for b in bindings]
+        )
+        rows: List[BindingRow] = []
+        for b in bindings:
+            t = found.get(b.target_id)
+            if t is None or not t.exists:
+                continue  # the dataset is gone (BR2.8)
+            rows.append(
+                BindingRow(
+                    target_id=b.target_id,
+                    name=t.display_name or "",
+                    usable=b.dedicated or AccessPolicy.can_use_asset(principal, t),
+                    dedicated=b.dedicated,
+                    binding_keys=dict(b.binding_keys),
+                )
+            )
+        choices: List[Dataset] = []
+        if manageable:
+            bound = {b.target_id for b in bindings}
+            datasets = [
+                d for d in self.database_service.get_all_datasets() if d.id not in bound
+            ]
+            usable = self._asset_targets(ResourceType.DATASET, [d.id for d in datasets])
+            choices = [
+                d
+                for d in datasets
+                if (t := usable.get(d.id)) is not None
+                and AccessPolicy.can_use_asset(principal, t)
+            ]
+        return DatasetBindingsView(
+            persona_id=persona_id, manageable=manageable, bindings=rows, choices=choices
+        )
 
     def create_dataset_binding(
         self,
+        principal: Principal,
         persona_id: str,
         dataset_id: str,
         key_name: str = "",
         key_value: str = "",
-    ) -> Any:
-        """
-        データセット紐付けを作成する。
+    ) -> PersonaBinding:
+        """Bind a dataset to a persona the user manages (BR2.2〜BR2.4).
 
-        Args:
-            persona_id: ペルソナID
-            dataset_id: データセットID
-            key_name: キーカラム名
-            key_value: キー値
-
-        Returns:
-            作成されたバインディング
+        Organization assets must be usable by the user (``can_use_asset``;
+        admin only until U7). A persona-dedicated dataset binds only to its
+        own persona.
 
         Raises:
-            PersonaManagerError: バリデーション失敗時
+            CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: ``DATASET_NOT_FOUND`` (missing or not
+                usable), ``DATASET_COLUMN_NOT_FOUND`` (unknown key column)
         """
-        from ..models.dataset import PersonaDatasetBinding
+        self._manageable_persona(principal, persona_id)
+        dataset = self._read_dataset(dataset_id)
+        if dataset is None:
+            raise PersonaManagerError(
+                "dataset not found", code=ErrorCode.DATASET_NOT_FOUND
+            )
+        dedicated = False
+        if dataset.owner_persona_id:
+            if not dataset.is_dedicated_to(persona_id):
+                raise PersonaManagerError(
+                    "dataset belongs to another persona",
+                    code=ErrorCode.DATASET_NOT_FOUND,
+                )
+            dedicated = True
+        else:
+            asset = self._asset_targets(ResourceType.DATASET, [dataset_id]).get(
+                dataset_id
+            )
+            if asset is None or not AccessPolicy.can_use_asset(principal, asset):
+                raise PersonaManagerError(
+                    "dataset not usable", code=ErrorCode.DATASET_NOT_FOUND
+                )
 
         binding_keys: Dict[str, str] = {}
         if key_name and key_value:
-            dataset = self.database_service.get_dataset(dataset_id)
-            if dataset:
-                valid_columns = {col.name for col in dataset.columns}
-                if key_name not in valid_columns:
-                    raise PersonaManagerError(
-                        f"column {key_name!r} not in dataset columns",
-                        code=ErrorCode.DATASET_COLUMN_NOT_FOUND,
-                        context={"column": key_name},
-                    )
+            if key_name not in {col.name for col in dataset.columns}:
+                raise PersonaManagerError(
+                    f"column {key_name!r} not in dataset columns",
+                    code=ErrorCode.DATASET_COLUMN_NOT_FOUND,
+                    context={"column": key_name},
+                )
             binding_keys[key_name] = key_value
 
-        binding = PersonaDatasetBinding.create_new(
-            persona_id=persona_id,
-            dataset_id=dataset_id,
-            binding_keys=binding_keys,
+        binding = PersonaBinding.for_dataset(
+            persona_id, dataset_id, binding_keys=binding_keys, dedicated=dedicated
         )
-        self.database_service.save_binding(binding)
-        self.logger.info(
-            f"Created dataset binding: persona={persona_id}, dataset={dataset_id}"
-        )
+        self._write_binding(binding)
+        self.logger.info(f"Created dataset binding: persona={persona_id}")
         return binding
 
-    def delete_dataset_binding(self, binding_id: str) -> None:
-        """データセット紐付けを削除する。"""
-        self.database_service.delete_binding(binding_id)
-        self.logger.info(f"Deleted dataset binding: {binding_id}")
+    def delete_dataset_binding(
+        self, principal: Principal, persona_id: str, dataset_id: str
+    ) -> None:
+        """Remove one dataset binding; a dedicated dataset goes with it (BR6.4).
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
+            AccessDeniedError: Readable but not manageable (403)
+            PersonaManagerError: ``DATASET_BINDING_NOT_FOUND`` when there is
+                no binding to that dataset
+        """
+        self._manageable_persona(principal, persona_id)
+        if not self._remove_binding(persona_id, dataset_target_key(dataset_id)):
+            raise PersonaManagerError(
+                "no binding to this dataset",
+                code=ErrorCode.DATASET_BINDING_NOT_FOUND,
+            )
+        self.logger.info(f"Deleted dataset binding: persona={persona_id}")
+        try:
+            dataset = self.database_service.get_dataset(dataset_id)
+            if dataset is not None and dataset.is_dedicated_to(persona_id):
+                self._delete_dedicated_dataset(dataset)
+        except Exception as e:
+            self._cleanup_failed(persona_id, "persona_datasets", e)
+
+    def preview_binding_data(
+        self,
+        principal: Principal,
+        persona_id: str,
+        dataset_id: str,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """Rows of a bound dataset narrowed by the binding keys (BR2.6).
+
+        Returns:
+            ``{"columns": [...], "rows": [[...], ...], "total_count": int}``
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when the persona is unreadable
+            PersonaManagerError: ``DATASET_BINDING_NOT_FOUND`` (no binding, or
+                an organization asset the user may not use),
+                ``DATASET_NOT_FOUND``, ``DATASET_OPERATION_FAILED``
+        """
+        self._readable_target(principal, persona_id)
+        binding = next(
+            (
+                b
+                for b in self._read_bindings(persona_id)
+                if b.is_dataset and b.target_id == dataset_id
+            ),
+            None,
+        )
+        if binding is None:
+            raise PersonaManagerError(
+                "binding not found", code=ErrorCode.DATASET_BINDING_NOT_FOUND
+            )
+        dataset = self._read_dataset(dataset_id)
+        if dataset is None:
+            raise PersonaManagerError(
+                "dataset not found", code=ErrorCode.DATASET_NOT_FOUND
+            )
+        if not dataset.is_dedicated_to(persona_id):
+            asset = self._asset_targets(ResourceType.DATASET, [dataset_id]).get(
+                dataset_id
+            )
+            if asset is None or not AccessPolicy.can_use_asset(principal, asset):
+                raise PersonaManagerError(
+                    "dataset not usable", code=ErrorCode.DATASET_BINDING_NOT_FOUND
+                )
+        return self._run_preview(dataset, binding.binding_keys, limit)
+
+    def _run_preview(
+        self, dataset: Dataset, binding_keys: Dict[str, str], limit: int
+    ) -> Dict[str, Any]:
+        valid_columns = {col.name for col in dataset.columns}
+        where_clauses: List[str] = []
+        params: List[Any] = []
+        for key, value in binding_keys.items():
+            if key not in valid_columns or not re.fullmatch(r"[\w]+", key, re.UNICODE):
+                raise PersonaManagerError(
+                    "binding key is not a safe dataset column",
+                    code=ErrorCode.DATASET_OPERATION_FAILED,
+                )
+            where_clauses.append(f'"{key}" = ${len(params) + 1}')
+            params.append(value)
+        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        try:
+            total_count, columns, rows = self._preview_service.execute_dataset_preview(
+                s3_path=dataset.s3_path,
+                count_sql=f"SELECT COUNT(*) FROM dataset{where_sql}",
+                data_sql=f"SELECT * FROM dataset{where_sql} LIMIT {int(limit)}",
+                params=params if params else None,
+            )
+        except Exception as e:
+            self.logger.error("Dataset preview failed", exc_info=True)
+            raise PersonaManagerError(
+                f"dataset preview failed ({type(e).__name__})",
+                code=ErrorCode.DATASET_OPERATION_FAILED,
+            ) from e
+        return {"columns": columns, "rows": rows, "total_count": total_count}
+
+    def _read_dataset(self, dataset_id: str) -> Optional[Dataset]:
+        try:
+            return self.database_service.get_dataset(dataset_id)
+        except Exception as e:
+            self.logger.error("Failed to read a dataset", exc_info=True)
+            raise PersonaManagerError(
+                f"dataset read failed ({type(e).__name__})",
+                code=ErrorCode.DATASET_OPERATION_FAILED,
+            ) from e
+
+    def _write_binding(self, binding: PersonaBinding) -> None:
+        try:
+            self._bindings.put(binding)
+        except Exception as e:
+            self.logger.error("Failed to write a binding", exc_info=True)
+            raise PersonaManagerError(
+                f"binding write failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
+
+    def _remove_binding(self, persona_id: str, target_key: str) -> bool:
+        try:
+            return self._bindings.delete(persona_id, target_key)
+        except Exception as e:
+            self.logger.error("Failed to delete a binding", exc_info=True)
+            raise PersonaManagerError(
+                f"binding delete failed ({type(e).__name__})",
+                code=ErrorCode.PERSONA_OPERATION_FAILED,
+            ) from e
+
+    # ------------------------------------------------------------------
+    # Saving generated candidates (U5, BR1.4, BR1.5, BR1.9, BR6.1)
+    # ------------------------------------------------------------------
+
+    def save_generated_personas(
+        self,
+        principal: Principal,
+        claim: CandidateClaim,
+        *,
+        edited: Optional[Persona] = None,
+        selected_temp_ids: Iterable[str] = (),
+    ) -> CandidateSaveResult:
+        """Save claimed candidates as the user's personas.
+
+        One-by-one save (``edited`` given): the claim holds one candidate; the
+        persona is made from the edited fields under a new ID and keeps the
+        candidate's generation record. Selected behaviour CSVs that the
+        candidate really holds become datasets dedicated to the persona
+        (copy -> registration -> binding; a failure removes what was made).
+        A failed save raises, so the user can correct the form.
+
+        Bulk save (no ``edited``): every candidate is saved as generated; one
+        failure does not stop the others.
+
+        R-04: right before each candidate is saved, the request's hold on it is
+        confirmed (and renewed) with one conditional update; a hold that went
+        stale and was taken over by another request is not saved here (bulk:
+        it goes to the failed ones; one-by-one: ``GENERATION_PERSONA_CACHE_
+        EXPIRED``). Once saved, ``saved_at`` is written under the same hold
+        before the cleanup, so the candidate can never be saved twice.
+
+        Returns:
+            The outcome per candidate (``finish_candidates`` cleans up from it).
+
+        Raises:
+            AccessDeniedError: The user may not create resources.
+            PersonaManagerError: The one-by-one save failed.
+        """
+        AccessPolicy.require(
+            principal, Permission.RESOURCE_CREATE, resource_type=_PERSONA
+        )
+        saved_ids: List[str] = []
+        failed_ids: List[str] = []
+        persona_ids: List[str] = []
+        failed_names: List[str] = []
+        failed_datasets: List[str] = []
+        selected = set(selected_temp_ids)
+        for candidate in claim.candidates:
+            base = candidate.to_persona()
+            if edited is not None:
+                persona = replace(
+                    edited,
+                    id=base.id,
+                    generation_log=candidate.generation_log,
+                    generation_context=candidate.generation_context,
+                )
+            else:
+                persona = base
+            try:
+                self._confirm_hold(claim, candidate)
+                persona_id = self.save_persona(principal, persona)
+            except (PersonaManagerError, AccessDeniedError):
+                if edited is not None:
+                    raise
+                self.logger.warning("Saving a generated persona failed", exc_info=True)
+                failed_ids.append(candidate.candidate_id)
+                failed_names.append(candidate.persona_name)
+                continue
+            saved_ids.append(candidate.candidate_id)
+            persona_ids.append(persona_id)
+            self._mark_candidate_saved(claim, candidate)
+            if edited is None:
+                continue
+            for behavior in candidate.behavior_datasets:
+                if behavior.temp_id not in selected:
+                    continue  # only what the candidate holds (BR1.5)
+                if not self._make_dedicated_dataset(persona_id, behavior):
+                    failed_datasets.append(behavior.name)
+        return CandidateSaveResult(
+            saved_ids=tuple(saved_ids),
+            failed_ids=tuple(failed_ids),
+            saved_persona_ids=tuple(persona_ids),
+            failed_names=tuple(failed_names),
+            failed_datasets=tuple(failed_datasets),
+        )
+
+    def _confirm_hold(self, claim: CandidateClaim, candidate: PersonaCandidate) -> None:
+        """Check that ``claim`` still holds the candidate, right before its save.
+
+        Raises:
+            PersonaManagerError: ``GENERATION_PERSONA_CACHE_EXPIRED`` when the
+                hold was taken over or the candidate was saved meanwhile;
+                ``GENERATION_OPERATION_FAILED`` when the check itself failed.
+        """
+        try:
+            held = self._candidates.confirm_claim(
+                candidate.candidate_id, claim.token, self._clock()
+            )
+        except Exception as e:
+            raise PersonaManagerError(
+                f"hold check failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
+            ) from e
+        if not held:
+            # Not an authorization denial: the same INFO line as a failed claim
+            log_event("persona.candidate_unavailable", level="INFO", count=1)
+            raise PersonaManagerError(
+                "candidate hold lost", code=ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
+            )
+
+    def _mark_candidate_saved(
+        self, claim: CandidateClaim, candidate: PersonaCandidate
+    ) -> None:
+        """Write ``saved_at`` under the same hold right after the save (R-04).
+
+        A failure is only logged: the cleanup deletes the candidate anyway, and
+        its fallback marks it saved.
+        """
+        try:
+            if self._candidates.mark_saved(
+                candidate.candidate_id, claim.token, self._clock()
+            ):
+                return
+            error: Optional[BaseException] = None
+        except Exception as e:
+            error = e
+        log_event(
+            "persona.candidate_cleanup_failed",
+            level="WARNING",
+            candidate_id=candidate.candidate_id,
+            step="mark_saved",
+            error_type=type(error).__name__ if error else None,
+        )
+
+    def _make_dedicated_dataset(
+        self, persona_id: str, behavior: BehaviorDatasetCandidate
+    ) -> bool:
+        """Copy the CSV, register the dataset and bind it (BR6.1).
+
+        Returns:
+            Whether the dataset was made. On failure what was made is removed
+            right away (a removal failure is ``persona.cleanup_failed``).
+        """
+        if self.s3_service is None:
+            return False
+        dataset_id = str(uuid.uuid4())
+        dest_key = f"{DEDICATED_DATASET_PREFIX}/{persona_id}/{dataset_id}.csv"
+        copied: Optional[str] = None
+        registered = False
+        try:
+            copied = self.s3_service.copy_object(behavior.temp_s3_key, dest_key)
+            self.database_service.save_dataset(
+                Dataset.create_new(
+                    name=behavior.name,
+                    description=f"{behavior.data_type_label}（自動取得）",
+                    s3_path=copied,
+                    columns=list(behavior.columns),
+                    row_count=behavior.row_count,
+                    owner_persona_id=persona_id,
+                    dataset_id=dataset_id,
+                )
+            )
+            registered = True
+            self._bindings.put(
+                PersonaBinding.for_dataset(
+                    persona_id,
+                    dataset_id,
+                    binding_keys=behavior.binding_keys,
+                    dedicated=True,
+                )
+            )
+            return True
+        except Exception:
+            self.logger.warning("A dedicated dataset could not be made", exc_info=True)
+            try:
+                if registered:
+                    self.database_service.delete_dataset(dataset_id)
+                if copied:
+                    self.s3_service.delete_file(copied)
+            except Exception as cleanup_error:
+                self._cleanup_failed(persona_id, "persona_datasets", cleanup_error)
+            return False
+
+    # ------------------------------------------------------------------
+    # Export (U5, BR7)
+    # ------------------------------------------------------------------
+
+    def export_persona(self, principal: Principal, persona_id: str) -> PersonaExport:
+        """The persona as Markdown for anyone who may read it (BR7.1〜BR7.3).
+
+        Memory, bindings, the owner and the shares are never included.
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+        """
+        persona, _ = self._readable_target(principal, persona_id)
+        return PersonaExport(
+            filename=export_filename(persona.name),
+            body=render_persona_markdown(persona),
+        )
 
 
 def _matches(persona: Persona, query: str) -> bool:

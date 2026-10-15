@@ -133,7 +133,8 @@ def screens() -> Generator[dict[str, Mock]]:
     persona_manager.list_personas.side_effect = lambda _p, tab, _c: _persona_listing(
         personas, tab
     )
-    persona_manager.get_persona.side_effect = lambda pid: next(
+    # 議論の一覧は参加者を get_persona_unchecked で引く（判定は U6）
+    persona_manager.get_persona_unchecked.side_effect = lambda pid: next(
         (p for p in personas if p.id == pid), None
     )
     discussion_manager = Mock()
@@ -302,3 +303,57 @@ def test_list_part_is_wrapped_in_an_id(
     _open(ui, screen_client, path)
 
     assert ui.page.locator(f"main #{list_id}").count() == 1
+
+
+@pytest.mark.parametrize("manageable", [True, False], ids=["owner", "shared"])
+def test_persona_detail_has_no_axe_violations(
+    ui: UiHarness, screen_client: Any, screens: dict[str, Mock], manageable: bool
+) -> None:
+    """ペルソナの詳細（U5、M8）: 所有者と共有された人の見え方で違反 0 件。"""
+    from dataclasses import replace
+
+    from src.managers.persona_manager import (
+        BindingRow,
+        DatasetBindingsView,
+        KbBindingView,
+        PersonaDetail,
+    )
+    from tests.ui.conftest import render_page
+
+    persona = replace(_personas()[0], id="p1")
+    manager = screens["web.routers.persona.get_persona_manager"]
+    manager.get_persona_detail.side_effect = lambda _p, _pid: PersonaDetail(
+        persona,
+        manageable=manageable,
+        owner_label="自分" if manageable else "中村 由美",
+        shared_with=["企画部"],
+    )
+    manager.avatar_upload_enabled.return_value = True
+    rows = [
+        BindingRow(target_id="d1", name="行動データ", usable=True, dedicated=True),
+        BindingRow(target_id="d2", name="購買データ", usable=False),
+    ]
+    ui.respond(
+        "/persona/p1/dataset-bindings",
+        body=render_page(
+            "persona/partials/dataset_bindings.html",
+            persona_id="p1",
+            view=DatasetBindingsView("p1", manageable, rows),
+        ),
+    )
+    ui.respond(
+        "/persona/p1/kb-binding",
+        body=render_page(
+            "persona/partials/kb_binding.html",
+            persona_id="p1",
+            view=KbBindingView("p1", manageable, None),
+        ),
+    )
+
+    ui.load_screen(screen_client, "/persona/p1")
+    ui.page.wait_for_selector("[data-testid='dataset-binding-row']", state="attached")
+    ui.settle()
+
+    assert ui.page.locator("h1").count() == 1
+    assert (ui.page.locator("#memory-section-content").count() == 1) is manageable
+    ui.check_a11y()

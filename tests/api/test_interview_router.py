@@ -28,7 +28,7 @@ class TestCreateInterviewSessionEndpoint:
         """セッション作成が成功することを確認"""
         # ペルソナマネージャーのモック
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         # インタビューマネージャーのモック
@@ -72,7 +72,7 @@ class TestCreateInterviewSessionEndpoint:
     ):
         """ペルソナ数過多でエラーを返すことを確認（Manager層のバリデーションに委譲）"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         mock_interview_manager = Mock()
@@ -101,7 +101,7 @@ class TestCreateInterviewSessionEndpoint:
     ):
         """不正なmemory_modeでカタログ文言のエラーを返すことを確認（Manager層のバリデーションに委譲）"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         mock_interview_manager = Mock()
@@ -127,7 +127,7 @@ class TestCreateInterviewSessionEndpoint:
     def test_create_session_persona_not_found(self, mock_get_manager, client):
         """存在しないペルソナでエラーを返すことを確認"""
         mock_manager = Mock()
-        mock_manager.get_persona.return_value = None
+        mock_manager.get_persona_unchecked.return_value = None
         mock_get_manager.return_value = mock_manager
 
         response = client.post(
@@ -146,7 +146,7 @@ class TestCreateInterviewSessionEndpoint:
         """長期記憶を有効にしたセッション作成が成功することを確認"""
         # ペルソナマネージャーのモック
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         # インタビューマネージャーのモック
@@ -185,7 +185,7 @@ class TestCreateInterviewSessionEndpoint:
     ):
         """persona_models[<persona_id>]がManagerに辞書として渡ることを確認（Issue #107 R8）"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         mock_session = InterviewSession(
@@ -221,7 +221,7 @@ class TestCreateInterviewSessionEndpoint:
     ):
         """Mantle無効時のMantle系モデル選択がCONFIGエラー(400)を返すことを確認"""
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         mock_interview_manager = Mock()
@@ -524,7 +524,7 @@ class TestInterviewChatPage:
         mock_get_interview.return_value = mock_interview_manager
 
         mock_persona_manager = Mock()
-        mock_persona_manager.get_persona.return_value = sample_persona
+        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
         mock_get_persona.return_value = mock_persona_manager
 
         response = client.get("/interview/chat/test-session")
@@ -596,7 +596,9 @@ class TestSaveNameDialog:
             is_saved=False,
         )
         mock_get_interview.return_value.get_interview_session.return_value = session
-        mock_get_persona.return_value.get_persona.return_value = sample_persona
+        mock_get_persona.return_value.get_persona_unchecked.return_value = (
+            sample_persona
+        )
 
         html = client.get("/interview/chat/test-session").text
 

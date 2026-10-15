@@ -631,8 +631,12 @@ registerBlock('Dialog', function() {
             .filter((node) => node.tabIndex >= 0 && isUsable(node));
     }
 
+    // 既定のフォーカス: [data-dialog-initial-focus]（取り消せない操作の確認では
+    // ［キャンセル］、U5 M8）→ 最初の入力欄 → 見出し
     function focusInitial(el) {
-        const field = Array.from(panelOf(el).querySelectorAll(FIELDS)).find(isUsable);
+        const panel = panelOf(el);
+        const preferred = Array.from(panel.querySelectorAll('[data-dialog-initial-focus]')).find(isUsable);
+        const field = preferred || Array.from(panel.querySelectorAll(FIELDS)).find(isUsable);
         const target = field || document.getElementById(`${el.id}-title`);
         if (target) target.focus();
     }

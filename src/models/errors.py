@@ -161,14 +161,19 @@ class ErrorCode(StrEnum):
         ErrorKind.VALIDATION,
     )
     GENERATION_FILES_REQUIRED = ("generation_files_required", ErrorKind.VALIDATION)
-    # Generated personas live in a TTLCache pending user confirmation to save.
-    # Once the entry ages out, retrying "save" cannot recover it and no input
-    # fixes it either; the only path is regenerating, same treatment as
+    # Generated personas wait in PersonaCandidates (8 hours, U5 BR1.3) until
+    # the user who generated them saves them. An expired, someone else's or
+    # already-being-saved candidate all get this code (they are not told
+    # apart). Retrying "save" cannot recover it and no input fixes it either;
+    # the only path is regenerating, same treatment as
     # INTERVIEW_SESSION_AGENTS_MISSING.
     GENERATION_PERSONA_CACHE_EXPIRED = (
         "generation_persona_cache_expired",
         ErrorKind.NOT_FOUND,
     )
+    # One candidate would exceed the 350KB item limit (U5 BR1.6). The user
+    # generates fewer personas or changes the conditions.
+    GENERATION_RESULT_TOO_LARGE = ("generation_result_too_large", ErrorKind.CAPACITY)
     # Catch-all for generation failures that are not capacity-related (agent
     # setup, unexpected SDK errors).
     GENERATION_OPERATION_FAILED = (
@@ -200,6 +205,12 @@ class ErrorCode(StrEnum):
     FILE_BINARY_NOT_ALLOWED = ("file_binary_not_allowed", ErrorKind.VALIDATION)
     # Catch-all for file operations that failed for internal reasons.
     FILE_OPERATION_FAILED = ("file_operation_failed", ErrorKind.TRANSIENT)
+    # An upload that does not exist, is someone else's, has expired or is
+    # already attached (U5 BR5.3〜BR5.5, BR5.7). Not told apart (NFR1.14).
+    FILE_NOT_FOUND = ("file_not_found", ErrorKind.NOT_FOUND)
+    # More than 100 files attached to one parent (the transaction limit,
+    # security-design.md §3). The user attaches fewer files.
+    FILE_ATTACH_LIMIT_EXCEEDED = ("file_attach_limit_exceeded", ErrorKind.CAPACITY)
 
     # --- Surveys ---
     SURVEY_NOT_FOUND = ("survey_not_found", ErrorKind.NOT_FOUND)
@@ -355,6 +366,8 @@ class ErrorCode(StrEnum):
     DATASET_COLUMN_NOT_FOUND = ("dataset_column_not_found", ErrorKind.VALIDATION)
     DATASET_NOT_FOUND = ("dataset_not_found", ErrorKind.NOT_FOUND)
     DATASET_BINDING_NOT_FOUND = ("dataset_binding_not_found", ErrorKind.NOT_FOUND)
+    # The persona has no knowledge-base binding to remove (U5 BR2.5).
+    KB_BINDING_NOT_FOUND = ("kb_binding_not_found", ErrorKind.NOT_FOUND)
     # Catch-all for dataset operations that failed for internal reasons
     # (including a binding referencing a column that no longer passes the
     # server-side safety check -- not something the user can fix by re-entering

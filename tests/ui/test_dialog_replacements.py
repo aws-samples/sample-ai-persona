@@ -19,15 +19,19 @@ FAILURE_TOAST = {
 KB_BINDING = render_page(
     "persona/partials/kb_binding.html",
     persona_id="p1",
-    knowledge_bases=[
-        {
-            "id": "kb1",
-            "name": "社内ナレッジ",
-            "description": "",
-            "knowledge_base_id": "ABC",
-        }
-    ],
-    binding=None,
+    # U5: the template takes a KbBindingView (choices are shown to managers only)
+    view={
+        "manageable": True,
+        "binding": None,
+        "choices": [
+            {
+                "id": "kb1",
+                "name": "社内ナレッジ",
+                "description": "",
+                "knowledge_base_id": "ABC",
+            }
+        ],
+    },
 )
 INSIGHTS = render_page(
     "discussion/partials/insights.html",

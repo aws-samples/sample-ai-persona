@@ -6,6 +6,8 @@ REST API ルーター（api.py）のテスト
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 
 class TestHealthEndpoint:
     """ヘルスチェックエンドポイントのテスト"""
@@ -311,6 +313,56 @@ class TestJobEndpoint:
         assert data["error"] is None
 
     @patch("web.routers.api.get_job_manager")
+    def test_generation_job_keeps_result_a_list_and_adds_the_failures(
+        self, mock_get_jm, client
+    ):
+        """R-06: ``result`` stays the persona list (C12); the failures are added."""
+        from src.models.job import Job, JobStatus
+
+        job = Job(
+            id="job-3",
+            status=JobStatus.COMPLETED,
+            created_at=Mock(),
+            job_type="persona_generation",
+            result={
+                "personas": [{"id": "new-1", "name": "田中"}],
+                "failed_count": 1,
+                "failed_names": ["鈴木"],
+            },
+        )
+        mock_jm = Mock()
+        mock_jm.get.return_value = job
+        mock_get_jm.return_value = mock_jm
+
+        data = client.get("/api/jobs/job-3").json()
+
+        assert data["result"] == [{"id": "new-1", "name": "田中"}]
+        assert data["failed_count"] == 1
+        assert data["failed_names"] == ["鈴木"]
+        assert data["error"] is None
+
+    @patch("web.routers.api.get_job_manager")
+    def test_an_older_generation_job_is_returned_as_stored(self, mock_get_jm, client):
+        from src.models.job import Job, JobStatus
+
+        job = Job(
+            id="job-4",
+            status=JobStatus.COMPLETED,
+            created_at=Mock(),
+            job_type="persona_generation",
+            result=[{"id": "p-1"}],
+        )
+        mock_jm = Mock()
+        mock_jm.get.return_value = job
+        mock_get_jm.return_value = mock_jm
+
+        data = client.get("/api/jobs/job-4").json()
+
+        assert data["result"] == [{"id": "p-1"}]
+        assert data["failed_count"] is None
+        assert data["failed_names"] is None
+
+    @patch("web.routers.api.get_job_manager")
     def test_get_job_failed(self, mock_get_jm, client):
         """失敗ジョブの取得"""
         from src.models.job import Job, JobStatus
@@ -382,7 +434,7 @@ class TestRunDiscussionEndpoint:
     ):
         """議論実行が202を返す"""
         mock_pm = Mock()
-        mock_pm.get_persona.side_effect = [sample_persona, sample_persona_2]
+        mock_pm.get_persona_unchecked.side_effect = [sample_persona, sample_persona_2]
         mock_get_pm.return_value = mock_pm
 
         mock_jm = Mock()
@@ -407,7 +459,7 @@ class TestRunDiscussionEndpoint:
     def test_run_discussion_persona_not_found(self, mock_get_pm, client):
         """存在しないペルソナIDで404"""
         mock_pm = Mock()
-        mock_pm.get_persona.return_value = None
+        mock_pm.get_persona_unchecked.return_value = None
         mock_get_pm.return_value = mock_pm
 
         response = client.post(
@@ -420,3 +472,98 @@ class TestRunDiscussionEndpoint:
         )
 
         assert response.status_code == 404
+
+
+class TestGenerateJobSavesOwnCandidatesU5:
+    """U5: API の生成ジョブも押さえ → 保存 → 片付けを通す（BR1.3、BR1.4）"""
+
+    def _run(self, gen, pm):
+        from tests.conftest import MEMBER_A
+        from web.routers import api
+
+        with (
+            patch("web.routers.api.get_persona_generation_manager", return_value=gen),
+            patch("web.routers.api.get_persona_manager", return_value=pm),
+        ):
+            return api._run_generate_personas(
+                MEMBER_A.principal(),
+                [(b"data", "input_0.txt")],
+                "interview",
+                2,
+                None,
+                None,
+            )
+
+    def test_saves_the_generated_candidates_under_new_ids(
+        self, sample_persona, sample_persona_2
+    ):
+        from src.managers.persona_generation_manager import GenerationResult
+        from src.models.persona_candidate import CandidateSaveResult
+        from tests.conftest import MEMBER_A
+
+        gen = Mock()
+        gen.generate.return_value = GenerationResult(
+            [sample_persona, sample_persona_2], []
+        )
+        gen.claim_candidates.return_value = "the-claim"
+        pm = Mock()
+        result = CandidateSaveResult(
+            saved_ids=(sample_persona.id, sample_persona_2.id),
+            saved_persona_ids=("new-1", "new-2"),
+        )
+        pm.save_generated_personas.return_value = result
+
+        body = self._run(gen, pm)
+
+        principal = gen.generate.call_args.args[0]
+        assert principal.sub == MEMBER_A.sub
+        assert gen.claim_candidates.call_args.args == (
+            principal,
+            [sample_persona.id, sample_persona_2.id],
+        )
+        assert pm.save_generated_personas.call_args.args == (principal, "the-claim")
+        gen.finish_candidates.assert_called_once_with("the-claim", result)
+        # 返す ID は保存したペルソナの ID（候補の ID ではない）
+        assert [p["id"] for p in body["personas"]] == ["new-1", "new-2"]
+        assert body["personas"][0]["name"] == sample_persona.name
+        assert (body["failed_count"], body["failed_names"]) == (0, [])
+
+    def test_unsaved_candidates_are_counted_and_named(
+        self, sample_persona, sample_persona_2
+    ):
+        """R-06: a partial bulk save reports what was not saved (BR1.9, C12)."""
+        from src.managers.persona_generation_manager import GenerationResult
+        from src.models.persona_candidate import CandidateSaveResult
+
+        gen = Mock()
+        gen.generate.return_value = GenerationResult(
+            [sample_persona, sample_persona_2], []
+        )
+        gen.claim_candidates.return_value = "the-claim"
+        pm = Mock()
+        pm.save_generated_personas.return_value = CandidateSaveResult(
+            saved_ids=(sample_persona.id,),
+            failed_ids=(sample_persona_2.id,),
+            saved_persona_ids=("new-1",),
+            failed_names=(sample_persona_2.name,),
+        )
+
+        payload = self._run(gen, pm)
+
+        assert payload["failed_count"] == 1
+        assert payload["failed_names"] == [sample_persona_2.name]
+        assert [p["id"] for p in payload["personas"]] == ["new-1"]
+
+    def test_finishes_even_when_the_save_fails(self, sample_persona):
+        from src.managers.persona_generation_manager import GenerationResult
+
+        gen = Mock()
+        gen.generate.return_value = GenerationResult([sample_persona], [])
+        gen.claim_candidates.return_value = "the-claim"
+        pm = Mock()
+        pm.save_generated_personas.side_effect = RuntimeError("db down")
+
+        with pytest.raises(RuntimeError):
+            self._run(gen, pm)
+
+        gen.finish_candidates.assert_called_once_with("the-claim", None)

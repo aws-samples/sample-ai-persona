@@ -18,13 +18,13 @@ TABLE_NAME_SETTINGS: dict[str, str] = {
     "Discussions": "DISCUSSIONS_TABLE_NAME",
     "UploadedFiles": "UPLOADED_FILES_TABLE_NAME",
     "Datasets": "DATASETS_TABLE_NAME",
-    "PersonaDatasetBindings": "PERSONA_DATASET_BINDINGS_TABLE_NAME",
     "SurveyTemplates": "SURVEY_TEMPLATES_TABLE_NAME",
     "Surveys": "SURVEYS_TABLE_NAME",
     "KnowledgeBases": "KNOWLEDGE_BASES_TABLE_NAME",
-    "PersonaKBBindings": "PERSONA_KB_BINDINGS_TABLE_NAME",
     "Jobs": "JOBS_TABLE_NAME",
 }
+# U5: 古い 2 つの紐付けのテーブル（データセット・KB）は PersonaBindings にまとめたため
+# 読まない（テーブルは CDK に RETAIN で残し、外すのは U9）。
 
 
 @dataclass
@@ -103,8 +103,8 @@ class Config:
     # 同時実行数×データセットサイズに比例する。デプロイ先のメモリに応じて調整する。
     DATASET_ANALYSIS_MAX_CONCURRENT_QUERIES: int = 4
 
-    # ペルソナ生成キャッシュ設定
-    PERSONA_CACHE_TTL_SECONDS: int = 14400  # 4 hours
+    # 生成候補（PersonaCandidates）の保持時間。候補の expires_at の計算にだけ使う（U5）
+    PERSONA_CACHE_TTL_SECONDS: int = 28800  # 8 hours
 
     # --- ログイン（v1.0.0 U1） ---
     # ログイン方式。oidc（公開構成の Cognito Managed Login）か local（手元専用）。
@@ -130,15 +130,16 @@ class Config:
     DISCUSSIONS_TABLE_NAME: Optional[str] = None
     UPLOADED_FILES_TABLE_NAME: Optional[str] = None
     DATASETS_TABLE_NAME: Optional[str] = None
-    PERSONA_DATASET_BINDINGS_TABLE_NAME: Optional[str] = None
     SURVEY_TEMPLATES_TABLE_NAME: Optional[str] = None
     SURVEYS_TABLE_NAME: Optional[str] = None
     KNOWLEDGE_BASES_TABLE_NAME: Optional[str] = None
-    PERSONA_KB_BINDINGS_TABLE_NAME: Optional[str] = None
     JOBS_TABLE_NAME: Optional[str] = None
     # 部署ごとの共有の索引（U4）。TABLE_NAME_SETTINGS に入れないのは、App スタックの
     # 一括の権限付与（Scan を含む）と同じ扱いにしないため。未設定なら接頭辞から組み立てる
     RESOURCE_SHARES_TABLE_NAME: str = ""
+    # 生成候補と紐付け（U5）。ResourceShares と同じく操作を絞った専用の項目
+    PERSONA_CANDIDATES_TABLE_NAME: str = ""
+    PERSONA_BINDINGS_TABLE_NAME: str = ""
     # AUTH_MODE=local の開発用の利用者（ロール・部署はカンマ区切り）
     LOCAL_DEV_USER_NAME: str = "開発ユーザー"
     LOCAL_DEV_USER_EMAIL: str = "dev@example.com"
@@ -275,6 +276,14 @@ class Config:
             os.getenv("RESOURCE_SHARES_TABLE_NAME")
             or f"{self.DYNAMODB_TABLE_PREFIX}_ResourceShares"
         )
+        self.PERSONA_CANDIDATES_TABLE_NAME = (
+            os.getenv("PERSONA_CANDIDATES_TABLE_NAME")
+            or f"{self.DYNAMODB_TABLE_PREFIX}_PersonaCandidates"
+        )
+        self.PERSONA_BINDINGS_TABLE_NAME = (
+            os.getenv("PERSONA_BINDINGS_TABLE_NAME")
+            or f"{self.DYNAMODB_TABLE_PREFIX}_PersonaBindings"
+        )
         sample_rate = os.getenv("AUTH_TIMING_SAMPLE_RATE")
         if sample_rate:
             rate = float(sample_rate)
@@ -295,13 +304,13 @@ class Config:
             ``{DYNAMODB_TABLE_PREFIX}_{kind}`` for local development.
 
         Raises:
-            KeyError: ``kind`` is not one of the ten application tables.
+            KeyError: ``kind`` is not one of the eight bulk-granted tables.
         """
         explicit = getattr(self, TABLE_NAME_SETTINGS[kind])
         return explicit or f"{self.DYNAMODB_TABLE_PREFIX}_{kind}"
 
     def table_names(self) -> dict[str, str]:
-        """Physical names of the ten application tables, keyed by kind."""
+        """Physical names of the eight bulk-granted tables, keyed by kind."""
         return {kind: self.table_name(kind) for kind in TABLE_NAME_SETTINGS}
 
     def _ensure_directories(self) -> None:

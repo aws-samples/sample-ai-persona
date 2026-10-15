@@ -4,6 +4,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { AppParameter } from '../parameters';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
@@ -143,6 +144,9 @@ export class AppStack extends Stack {
       SESSIONS_TABLE_NAME: data.database.sessionsTable.tableName,
       // 部署ごとの共有の索引（U4、src/config.py の RESOURCE_SHARES_TABLE_NAME）
       RESOURCE_SHARES_TABLE_NAME: data.database.resourceSharesTable.tableName,
+      // 生成候補と紐付け（U5、src/config.py の PERSONA_CANDIDATES / PERSONA_BINDINGS）
+      PERSONA_CANDIDATES_TABLE_NAME: data.database.personaCandidatesTable.tableName,
+      PERSONA_BINDINGS_TABLE_NAME: data.database.personaBindingsTable.tableName,
       ...tableNames,
       S3_BUCKET_NAME: data.uploadBucket.bucket.bucketName,
       // Strategy ID はアプリが起動時に GetMemory で引く（手で書き写さない）
@@ -196,6 +200,35 @@ export class AppStack extends Stack {
     return client;
   }
 
+  /**
+   * アップロード用バケットの権限（U5、NFR1.33、infrastructure-specification.md）。
+   *
+   * grantReadWrite を明示的な文に置き換え、古いバージョンの操作（GetObjectVersion*・
+   * ListBucketVersions・DeleteObjectVersion）を付けない。消したものは古いバージョンとして
+   * 7 日残るが、アプリからは読めない。タグの操作は紐付けの印を付け外しする
+   * uploads/* と candidates/* だけ。
+   */
+  private grantUploadBucket(taskRole: iam.IRole, bucket: s3.IBucket): void {
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        's3:GetObject',
+        's3:PutObject',
+        's3:DeleteObject',
+        's3:AbortMultipartUpload',
+        's3:ListMultipartUploadParts',
+      ],
+      resources: [bucket.arnForObjects('*')],
+    }));
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObjectTagging', 's3:PutObjectTagging', 's3:DeleteObjectTagging'],
+      resources: [bucket.arnForObjects('uploads/*'), bucket.arnForObjects('candidates/*')],
+    }));
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:ListBucket', 's3:ListBucketMultipartUploads'],
+      resources: [bucket.bucketArn],
+    }));
+  }
+
   private grantTaskRole(
     taskRole: iam.IRole,
     parameter: AppParameter,
@@ -223,7 +256,28 @@ export class AppStack extends Stack {
       'dynamodb:DeleteItem',
       'dynamodb:ConditionCheckItem',
     );
-    data.uploadBucket.bucket.grantReadWrite(taskRole);
+    // 生成候補（U5、NFR1.40）。押さえは条件付きの UpdateItem。Scan・Query は付けない
+    data.database.personaCandidatesTable.grant(
+      taskRole,
+      'dynamodb:GetItem',
+      'dynamodb:BatchGetItem',
+      'dynamodb:PutItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:UpdateItem',
+      'dynamodb:DeleteItem',
+    );
+    // 紐付け（U5、ADR-007）。テーブルと TargetIndex に、Scan を除く 7 つの操作
+    data.database.personaBindingsTable.grant(
+      taskRole,
+      'dynamodb:GetItem',
+      'dynamodb:BatchGetItem',
+      'dynamodb:Query',
+      'dynamodb:PutItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:UpdateItem',
+      'dynamodb:DeleteItem',
+    );
+    this.grantUploadBucket(taskRole, data.uploadBucket.bucket);
     // 部署の一覧（DepartmentDirectory、ADR-009）と所有者の名前の写し（OwnerDirectory、U4）。
     // v1 の User Pool の ListGroups・ListUsers だけ（NFR3.8、NFR2.7）
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({

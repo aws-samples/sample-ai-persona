@@ -1,10 +1,63 @@
 <!-- データセット紐付け一覧パーシャル -->
 {% from "components/dialog.html" import dialog, dialog_open_button %}
-{% if not datasets %}
-<p class="text-gray-500 text-sm">利用可能なデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。</p>
+{% from "components/status_label.html" import status_label %}
+{#
+  引数:
+    persona_id ... 対象ペルソナ
+    view       ... DatasetBindingsView（bindings: 今の紐付け、manageable: 変えられるか、
+                   choices: 紐付けられる組織のデータセット。管理できる人にだけ入る）
+  追加・解除は管理できる人にだけ出す（BR4.2）。プレビューは読める人に出すが、使えない
+  組織資産は「利用権限なし」を文字で示してプレビューを出さない（BR2.6、BR2.7）。
+  解除・プレビューの URL はデータセットの ID（BR2.5）。
+#}
+{% if not view.bindings and not view.choices %}
+<p class="text-gray-500 text-sm">
+    {%- if view.manageable %}紐付けられるデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。
+    {%- else %}紐付けられたデータセットはありません。{% endif -%}
+</p>
 {% else %}
 <div class="space-y-3">
-    {% for dataset in datasets %}
+    {% for row in view.bindings %}
+    <div class="border border-gray-200 rounded-lg p-4" data-testid="dataset-binding-row">
+        <div class="flex items-center justify-between">
+            <div class="flex-1">
+                <h4 class="font-medium text-gray-900">{{ row.name }}
+                    {%- if row.dedicated %} {{ status_label("このペルソナ専用") }}{% endif %}
+                    {%- if not row.usable %} {{ status_label("利用権限なし") }}{% endif %}</h4>
+                {% if row.binding_keys %}
+                <p class="mt-2 text-xs text-gray-500">
+                    キー: {% for k, v in row.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </p>
+                {% else %}
+                <p class="mt-2 text-xs text-amber-600">全行対象（キー指定なし）</p>
+                {% endif %}
+            </div>
+            <div class="ml-4 flex items-center gap-2">
+                <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
+                {% if view.manageable %}
+                <button
+                    hx-delete="/persona/{{ persona_id }}/dataset-bindings/{{ row.target_id }}"
+                    hx-target="#dataset-binding-content"
+                    hx-swap="innerHTML"
+                    hx-confirm="{% if row.dedicated %}この紐付けを解除しますか？このペルソナ専用のデータセットも削除されます。{% else %}この紐付けを解除しますか？{% endif %}"
+                    class="text-red-500 hover:text-red-700 text-sm"
+                >解除</button>
+                {% endif %}
+                {% if row.usable %}
+                {{ dialog_open_button("dataset-preview-" ~ row.target_id, "プレビュー", classes="text-cyan-600 hover:text-cyan-800 text-sm font-medium") }}
+                {% endif %}
+            </div>
+        </div>
+        {% if row.usable %}
+        <!-- プレビューダイアログ（閲覧だけ。開くと中身を読み込み、背景のクリックで閉じる） -->
+        {{ dialog("dataset-preview-" ~ row.target_id, row.name ~ " - データプレビュー",
+                  content_url="/persona/" ~ persona_id ~ "/dataset-bindings/" ~ row.target_id ~ "/preview",
+                  close_on_backdrop=True, panel_class="max-w-4xl") }}
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    {% for dataset in view.choices %}
     <div class="border border-gray-200 rounded-lg p-4">
         <div class="flex items-center justify-between">
             <div class="flex-1">
@@ -15,43 +68,14 @@
                 <p class="text-xs text-gray-400 mt-1">{{ dataset.row_count }}行 / {{ dataset.columns|length }}列</p>
             </div>
             <div class="ml-4">
-                {% set binding = bindings_map.get(dataset.id) %}
-                {% if binding %}
-                <div class="flex items-center gap-2">
-                    <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
-                    <button
-                        hx-delete="/persona/{{ persona_id }}/dataset-bindings/{{ binding.id }}"
-                        hx-target="#dataset-binding-content"
-                        hx-swap="innerHTML"
-                        hx-confirm="この紐付けを解除しますか？"
-                        class="text-red-500 hover:text-red-700 text-sm"
-                    >解除</button>
-                    {{ dialog_open_button("dataset-preview-" ~ dataset.id, "プレビュー", classes="text-cyan-600 hover:text-cyan-800 text-sm font-medium") }}
-                </div>
-                {% if binding.binding_keys %}
-                <div class="mt-2 text-xs text-gray-500">
-                    キー: {% for k, v in binding.binding_keys.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
-                </div>
-                {% else %}
-                <div class="mt-2 text-xs text-amber-600">
-                    全行対象（キー指定なし）
-                </div>
-                {% endif %}
-                <!-- プレビューダイアログ（閲覧だけ。開くと中身を読み込み、背景のクリックで閉じる） -->
-                {{ dialog("dataset-preview-" ~ dataset.id, dataset.name ~ " - データプレビュー",
-                          content_url="/persona/" ~ persona_id ~ "/dataset-bindings/" ~ binding.id ~ "/preview",
-                          close_on_backdrop=True, panel_class="max-w-4xl") }}
-                {% else %}
                 {{ dialog_open_button("dataset-binding-" ~ dataset.id, "紐付ける", classes="text-cyan-600 hover:text-cyan-800 text-sm font-medium") }}
-                {% endif %}
             </div>
         </div>
 
         <!-- 紐付けダイアログ（保存に成功すると一覧の部分ごと差し替わり、そのとき閉じる） -->
-        {% if not bindings_map.get(dataset.id) %}
         {% call dialog("dataset-binding-" ~ dataset.id, dataset.name ~ " を紐付け") %}
                 <p class="text-sm text-gray-600 mb-4">このペルソナがデータセットにアクセスする際のキー値を設定してください。</p>
-                
+
                 <form id="binding-form-{{ dataset.id }}" x-data="{ useKey: true }">
                     <div class="space-y-3 mb-4">
                         <label class="flex items-center gap-2 text-sm text-gray-700">
@@ -59,13 +83,13 @@
                             <span>キー列で絞り込む</span>
                         </label>
                         <div x-show="useKey" class="flex gap-2">
-                            <select name="key_name" class="flex-1 border rounded px-3 py-2 text-sm bg-white" :disabled="!useKey">
+                            <select name="key_name" aria-label="キー列" class="flex-1 border rounded px-3 py-2 text-sm bg-white" :disabled="!useKey">
                                 <option value="">キー列を選択</option>
                                 {% for col in dataset.columns %}
                                 <option value="{{ col.name }}">{{ col.name }} ({{ col.data_type }})</option>
                                 {% endfor %}
                             </select>
-                            <input type="text" name="key_value" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm" :disabled="!useKey">
+                            <input type="text" name="key_value" aria-label="キーの値" placeholder="値 (例: 12345)" class="flex-1 border rounded px-3 py-2 text-sm" :disabled="!useKey">
                         </div>
                         <div x-show="!useKey" x-cloak class="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
                             データセットの全行がこのペルソナのデータとして読み込まれます。1ユーザー分のデータのみ含まれている場合に適しています。
@@ -73,7 +97,7 @@
                     </div>
                     <input type="hidden" name="dataset_id" value="{{ dataset.id }}">
                 </form>
-                
+
                 <div id="binding-error-{{ dataset.id }}"></div>
                 <div class="flex justify-end gap-2">
                     <button type="button" data-dialog-close class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
@@ -88,7 +112,6 @@
                     >紐付ける</button>
                 </div>
         {% endcall %}
-        {% endif %}
     </div>
     {% endfor %}
 </div>

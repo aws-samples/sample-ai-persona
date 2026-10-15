@@ -3,16 +3,29 @@
 import logging
 import re
 import uuid
-from datetime import datetime
-from typing import Any, TYPE_CHECKING
-
-from cachetools import TTLCache  # type: ignore[import-untyped]
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from ..models.authz import Permission, Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
+from ..models.persona_candidate import (
+    MAX_CANDIDATE_ITEM_BYTES,
+    BehaviorDatasetCandidate,
+    CandidateClaim,
+    CandidateSaveResult,
+    PersonaCandidate,
+)
 from ..config import config
+from ..services.persona_candidate_store import (
+    CandidateUnavailable,
+    PersonaCandidateStore,
+)
+from .components.access_policy import AccessPolicy
+from .shared.structured_log import log_event
 from ..services.agent_service import (
     AgentService,
     AgentServiceError,
@@ -87,15 +100,75 @@ class PersonaGenerationCapacityError(PersonaGenerationManagerError):
     code = ErrorCode.GENERATION_CAPACITY_EXCEEDED
 
 
+@dataclass(frozen=True)
+class GenerationResult:
+    """What one generation returns to the Router (WF1).
+
+    Attributes:
+        personas: The generated personas. Their ``id`` is the candidate ID the
+            screen sends back on save (never the saved persona's ID).
+        thinking_log: The generation's thinking log.
+        behavior_datasets: Behaviour CSV candidates of a single DWH persona.
+    """
+
+    personas: list[Persona]
+    thinking_log: list[dict[str, str]]
+    behavior_datasets: tuple[BehaviorDatasetCandidate, ...] = ()
+
+
+class _RecordingQueue:
+    """Forwards data-agent events and keeps the CSV URLs they report.
+
+    The data agent tool reports ``csv_url`` events right after the
+    ``tool_call`` that asked for the CSV; the call's detail is the CSV's label.
+    """
+
+    def __init__(self, inner: Any = None) -> None:
+        self._inner = inner
+        self._last_detail = ""
+        self.csv_urls: list[str] = []
+        self.csv_labels: list[str] = []
+
+    def put(self, event: dict[str, Any], *args: Any, **kwargs: Any) -> None:
+        kind = event.get("type")
+        if kind == "tool_call":
+            self._last_detail = str(event.get("detail", ""))
+        elif kind == "csv_url" and event.get("url"):
+            self.csv_urls.append(str(event["url"]))
+            self.csv_labels.append(self._last_detail)
+        if self._inner is not None:
+            self._inner.put(event, *args, **kwargs)
+
+
+_UNSET: Any = object()
+
+
 class PersonaGenerationManager:
-    """ペルソナ生成ワークフロー全体のオーケストレーション"""
+    """ペルソナ生成ワークフロー全体のオーケストレーション
+
+    v1.0.0 U5: 生成した候補はアプリの外（PersonaCandidates）に生成した人と一緒に
+    置き（BR1.1）、保存できるのは本人だけ（BR1.3）。アプリの中のキャッシュは持たない。
+    """
 
     def __init__(
         self,
         agent_service: AgentService | None = None,
         database_service: DatabaseService | None = None,
         dataset_analysis_service: "DatasetAnalysisService | None" = None,
+        candidate_store: "PersonaCandidateStore | None" = None,
+        s3_service: Any = _UNSET,
+        clock: Callable[[], datetime] | None = None,
     ):
+        """
+        Args:
+            agent_service: Generation agents (optional, singleton when omitted)
+            database_service: Kept for compatibility (optional)
+            dataset_analysis_service: CSV analysis tools (optional)
+            candidate_store: ``PersonaCandidates`` (optional, built on first use)
+            s3_service: The temporary CSV area; ``None`` disables behaviour
+                datasets (optional, the configured bucket when omitted)
+            clock: Aware-UTC clock (tests)
+        """
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
@@ -103,19 +176,32 @@ class PersonaGenerationManager:
         self.dataset_analysis_service = (
             dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
-        self._personas_cache: TTLCache = TTLCache(
-            maxsize=1000, ttl=config.PERSONA_CACHE_TTL_SECONDS
-        )
-        self._behavior_datasets_cache: TTLCache = TTLCache(
-            maxsize=100, ttl=config.PERSONA_CACHE_TTL_SECONDS
-        )
+        self._candidate_store = candidate_store
+        self._s3 = s3_service
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        #: The recording queue of the generation in progress (tests read it)
+        self._recording_queue = _RecordingQueue()
+
+    @property
+    def _persona_candidate_store(self) -> "PersonaCandidateStore":
+        if self._candidate_store is None:
+            self._candidate_store = service_factory.get_persona_candidate_store()
+        return self._candidate_store
+
+    @property
+    def _staging(self) -> Any:
+        if self._s3 is _UNSET:
+            self._s3 = service_factory.get_optional_s3_service()
+        return self._s3
 
     # ------------------------------------------------------------------
     # 公開API
     # ------------------------------------------------------------------
 
-    def generate_and_cache(
+    def generate(
         self,
+        principal: Principal,
+        *,
         file_contents: list[tuple[bytes, str]],
         data_type: str,
         persona_count: int,
@@ -123,15 +209,26 @@ class PersonaGenerationManager:
         custom_prompt: str | None = None,
         event_queue: Any = None,
         auto_link_behavior: bool = False,
-    ) -> tuple[list[Persona], list[dict[str, str]]]:
-        """ペルソナを生成し、一時キャッシュに格納する。
+    ) -> GenerationResult:
+        """Generate personas and store them as the user's candidates (BR1.1).
 
-        Returns:
-            (personas, thinking_log)
+        For a DWH generation with ``auto_link_behavior`` the behaviour CSVs the
+        data agent exported are staged under ``candidates/`` (BR1.2). Every
+        candidate is measured before anything is written; one over 350KB fails
+        the whole generation (BR1.6).
+
+        Raises:
+            AccessDeniedError: The user lacks ``ai:execute``.
+            PersonaGenerationManagerError: Validation, generation, size
+                (``GENERATION_RESULT_TOO_LARGE``) or the write
+                (``GENERATION_OPERATION_FAILED``) failed.
         """
+        AccessPolicy.require(principal, Permission.AI_EXECUTE)
         self._validate_generation_input(
             data_type, persona_count, file_contents, data_description
         )
+        recorder = _RecordingQueue(event_queue)
+        self._recording_queue = recorder
 
         if data_type == "dwh":
             if auto_link_behavior:
@@ -140,7 +237,7 @@ class PersonaGenerationManager:
                 analysis_angle=data_description or "",
                 persona_count=persona_count,
                 custom_prompt=custom_prompt,
-                event_queue=event_queue,
+                event_queue=recorder,
                 auto_link_behavior=auto_link_behavior,
             )
         else:
@@ -166,48 +263,219 @@ class PersonaGenerationManager:
         for persona in personas:
             persona.generation_log = thinking_log
             persona.generation_context = gen_ctx
-            self._personas_cache[persona.id] = persona
 
-        return personas, thinking_log
+        principal_sub = principal.sub
+        now = self._clock()
+        behavior: tuple[BehaviorDatasetCandidate, ...] = ()
+        if (
+            data_type == "dwh"
+            and auto_link_behavior
+            and len(personas) == 1
+            and recorder.csv_urls
+        ):
+            behavior = self._stage_behavior_datasets(
+                principal_sub, personas[0], thinking_log, recorder
+            )
 
-    def get_cached_persona(self, persona_id: str) -> Persona | None:
-        """一時キャッシュからペルソナを取得する"""
-        return self._personas_cache.get(persona_id)  # type: ignore[no-any-return]
+        generation_id = str(uuid.uuid4())
+        candidates = [
+            PersonaCandidate.from_persona(
+                persona,
+                owner_sub=principal_sub,
+                generation_id=generation_id,
+                ttl_seconds=config.PERSONA_CACHE_TTL_SECONDS,
+                now=now,
+                generation_log=thinking_log,
+                generation_context=gen_ctx,
+                behavior_datasets=behavior if len(personas) == 1 else (),
+            )
+            for persona in personas
+        ]
+        if any(
+            PersonaCandidateStore.item_size(c) > MAX_CANDIDATE_ITEM_BYTES
+            for c in candidates
+        ):
+            self._delete_temp_csvs(candidates, step="temp_csv")
+            raise PersonaGenerationManagerError(
+                "a generated candidate exceeds the item size limit",
+                code=ErrorCode.GENERATION_RESULT_TOO_LARGE,
+            )
+        try:
+            self._persona_candidate_store.put_all(candidates)
+        except Exception as e:
+            logger.error("Failed to store generated candidates", exc_info=True)
+            self._delete_temp_csvs(candidates, step="temp_csv")
+            raise PersonaGenerationManagerError(
+                f"candidate write failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
+            ) from e
 
-    def pop_cached_persona(self, persona_id: str) -> Persona | None:
-        """一時キャッシュからペルソナを取得し削除する"""
-        return self._personas_cache.pop(persona_id, None)  # type: ignore[no-any-return]
-
-    def get_cached_behavior_datasets(
-        self, persona_id: str
-    ) -> list[dict[str, Any]] | None:
-        """行動データセット候補キャッシュを取得する"""
-        return self._behavior_datasets_cache.get(persona_id)  # type: ignore[no-any-return]
-
-    def pop_cached_behavior_datasets(
-        self, persona_id: str
-    ) -> list[dict[str, Any]] | None:
-        """行動データセット候補キャッシュを取得し削除する"""
-        return self._behavior_datasets_cache.pop(persona_id, None)  # type: ignore[no-any-return]
-
-    def build_and_cache_behavior_datasets(
-        self,
-        persona_id: str,
-        persona_name: str,
-        csv_urls: list[str],
-        thinking_log: list[dict[str, str]],
-        csv_url_labels: list[str],
-    ) -> list[dict[str, Any]]:
-        """CSV URLリストからデータセット候補を構築しキャッシュする"""
-        candidates = self._build_behavior_dataset_candidates(
-            csv_urls=csv_urls,
-            persona_name=persona_name,
-            thinking_log=thinking_log,
-            csv_url_labels=csv_url_labels,
+        return GenerationResult(
+            personas=personas, thinking_log=thinking_log, behavior_datasets=behavior
         )
-        if candidates:
-            self._behavior_datasets_cache[persona_id] = candidates
-        return candidates
+
+    def claim_candidates(
+        self, principal: Principal, candidate_ids: list[str]
+    ) -> CandidateClaim:
+        """Hold the user's candidates for one save request (BR1.3).
+
+        Each candidate is claimed with one conditional update (owner, expiry,
+        not saved, no live claim). If any cannot be claimed, the ones already
+        claimed are released and nothing is saved. Someone else's, expired,
+        being-saved and missing candidates get the same answer.
+
+        Raises:
+            PersonaGenerationManagerError: ``PERSONA_SELECTION_REQUIRED`` (no
+                IDs), ``GENERATION_PERSONA_CACHE_EXPIRED`` (unavailable), or
+                ``GENERATION_OPERATION_FAILED`` (the store failed).
+        """
+        ids = list(dict.fromkeys(i for i in candidate_ids if i))
+        if not ids:
+            raise PersonaGenerationManagerError(
+                "no candidate selected", code=ErrorCode.PERSONA_SELECTION_REQUIRED
+            )
+        token = CandidateClaim.new_token()
+        now = self._clock()
+        claimed: list[PersonaCandidate] = []
+        try:
+            for candidate_id in ids:
+                claimed.append(
+                    self._persona_candidate_store.claim(
+                        candidate_id, principal.sub, token, now
+                    )
+                )
+        except CandidateUnavailable as e:
+            self._release_all(claimed, token)
+            # Not an authorization denial (NFR8.17): one INFO line, no IDs of others
+            log_event("persona.candidate_unavailable", level="INFO", count=len(ids))
+            raise PersonaGenerationManagerError(
+                "candidate unavailable", code=ErrorCode.GENERATION_PERSONA_CACHE_EXPIRED
+            ) from e
+        except Exception as e:
+            self._release_all(claimed, token)
+            logger.error("Failed to claim candidates", exc_info=True)
+            raise PersonaGenerationManagerError(
+                f"candidate claim failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
+            ) from e
+        return CandidateClaim(
+            token=token, owner_sub=principal.sub, candidates=tuple(claimed)
+        )
+
+    def finish_candidates(
+        self, claim: CandidateClaim, result: CandidateSaveResult | None
+    ) -> None:
+        """Clean up after a save, whatever its outcome (BR1.7). Never raises.
+
+        Saved candidates lose their item and every temporary CSV (selected or
+        not); when the item cannot be deleted it is marked saved so it cannot
+        be saved twice. Failed and unprocessed candidates are released. Every
+        cleanup failure is one WARNING line (NFR8.16); TTL, the lifecycle rule
+        and the 5-minute claim timeout clean up later.
+        """
+        saved = set(result.saved_ids) if result is not None else set()
+        for candidate in claim.candidates:
+            if candidate.candidate_id in saved:
+                self._delete_temp_csvs([candidate], step="temp_csv")
+                self._delete_saved(candidate, claim.token)
+            else:
+                self._release(candidate, claim.token)
+
+    # --- candidate cleanup helpers ------------------------------------------
+
+    def _release_all(self, candidates: list[PersonaCandidate], token: str) -> None:
+        for candidate in candidates:
+            self._release(candidate, token)
+
+    def _release(self, candidate: PersonaCandidate, token: str) -> None:
+        try:
+            self._persona_candidate_store.release(candidate.candidate_id, token)
+        except Exception as e:
+            self._cleanup_failed(candidate.candidate_id, "release", e)
+
+    def _delete_saved(self, candidate: PersonaCandidate, token: str) -> None:
+        try:
+            if self._persona_candidate_store.delete(candidate.candidate_id, token):
+                return
+        except Exception as e:
+            self._cleanup_failed(candidate.candidate_id, "delete", e)
+        try:
+            self._persona_candidate_store.mark_saved(
+                candidate.candidate_id, token, self._clock()
+            )
+        except Exception as e:
+            self._cleanup_failed(candidate.candidate_id, "mark_saved", e)
+
+    def _delete_temp_csvs(
+        self, candidates: list[PersonaCandidate], *, step: str
+    ) -> None:
+        s3 = self._staging
+        for candidate in candidates:
+            for dataset in candidate.behavior_datasets:
+                if s3 is None:
+                    continue
+                try:
+                    s3.delete_file(s3.path_of(dataset.temp_s3_key))
+                except Exception as e:
+                    self._cleanup_failed(candidate.candidate_id, step, e)
+
+    @staticmethod
+    def _cleanup_failed(candidate_id: str, step: str, error: BaseException) -> None:
+        log_event(
+            "persona.candidate_cleanup_failed",
+            level="WARNING",
+            candidate_id=candidate_id,
+            step=step,
+            error_type=type(error).__name__,
+        )
+
+    def _stage_behavior_datasets(
+        self,
+        owner_sub: str,
+        persona: Persona,
+        thinking_log: list[dict[str, str]],
+        recorder: _RecordingQueue,
+    ) -> tuple[BehaviorDatasetCandidate, ...]:
+        """Fetch the behaviour CSVs and place them under ``candidates/`` (BR1.2).
+
+        A CSV that cannot be fetched, parsed or placed is left out (logged);
+        the generation itself goes on.
+        """
+        s3 = self._staging
+        if s3 is None:
+            logger.warning("Behaviour datasets skipped: S3 is not configured")
+            return ()
+        parsed = self._build_behavior_dataset_candidates(
+            csv_urls=recorder.csv_urls,
+            persona_name=persona.name,
+            thinking_log=thinking_log,
+            csv_url_labels=recorder.csv_labels,
+        )
+        staged: list[BehaviorDatasetCandidate] = []
+        for item in parsed:
+            key = BehaviorDatasetCandidate.temp_key(
+                owner_sub, persona.id, item["temp_id"]
+            )
+            try:
+                s3.upload_file(item["csv_bytes"], key, content_type="text/csv")
+            except Exception as e:
+                logger.warning(
+                    "Behaviour CSV could not be staged: %s", type(e).__name__
+                )
+                continue
+            staged.append(
+                BehaviorDatasetCandidate(
+                    temp_id=item["temp_id"],
+                    name=item["name"],
+                    data_type_label=item["data_type_label"],
+                    temp_s3_key=key,
+                    columns=tuple(item["columns"]),
+                    row_count=int(item["row_count"]),
+                    binding_key_column=item.get("binding_key_column") or None,
+                    binding_key_value=item.get("binding_key_value") or None,
+                )
+            )
+        return tuple(staged)
 
     # ------------------------------------------------------------------
     # 生成ワークフロー内部

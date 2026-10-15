@@ -3,7 +3,7 @@
 """
 
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock
 import pytest
@@ -14,6 +14,10 @@ from src.managers.file_manager import (
     FileSecurityError,
 )
 from src.models.errors import ErrorCode
+from tests.conftest import MEMBER_A
+
+#: The uploader (U5: uploads take the user and need resource:create)
+PRINCIPAL = MEMBER_A.principal()
 
 
 class TestFileManager:
@@ -85,7 +89,9 @@ class TestFileManager:
             )
 
             # FileManagerを作成
-            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager = FileManager(
+                self.mock_db_service, file_store=Mock(), attachments=Mock()
+            )
 
     def teardown_method(self):
         """各テストメソッドの後に実行されるクリーンアップ処理"""
@@ -172,7 +178,9 @@ class TestFileManager:
         png_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         filename = "test_image.png"
 
-        metadata = self.file_manager.upload_discussion_document(png_content, filename)
+        metadata = self.file_manager.upload_discussion_document(
+            PRINCIPAL, png_content, filename
+        )
 
         assert metadata.file_id is not None
         assert metadata.original_filename == filename
@@ -185,7 +193,9 @@ class TestFileManager:
         pdf_content = b"%PDF-1.4\n" + b"\x00" * 100
         filename = "test_document.pdf"
 
-        metadata = self.file_manager.upload_discussion_document(pdf_content, filename)
+        metadata = self.file_manager.upload_discussion_document(
+            PRINCIPAL, pdf_content, filename
+        )
 
         assert metadata.file_id is not None
         assert metadata.original_filename == filename
@@ -198,7 +208,7 @@ class TestFileManager:
         filename = "test.txt"
 
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_discussion_document(content, filename)
+            self.file_manager.upload_discussion_document(PRINCIPAL, content, filename)
 
         assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
         assert ".pdf" in str(exc_info.value.context["allowed_formats"])
@@ -209,7 +219,9 @@ class TestFileManager:
         filename = "large.png"
 
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_discussion_document(large_content, filename)
+            self.file_manager.upload_discussion_document(
+                PRINCIPAL, large_content, filename
+            )
 
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 5.0
@@ -227,7 +239,9 @@ class TestFileManagerSurveyImage:
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager = FileManager(
+                self.mock_db_service, file_store=Mock(), attachments=Mock()
+            )
             self.file_manager.survey_images_dir = Path(self.temp_dir) / "survey_images"
             self.file_manager.survey_images_dir.mkdir(exist_ok=True)
 
@@ -239,69 +253,80 @@ class TestFileManagerSurveyImage:
     def test_upload_survey_image_success(self):
         # 最小限のPNG (1x1 pixel)
         png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        result = self.file_manager.upload_survey_image(png_header, "test.png")
+        result = self.file_manager.upload_survey_image(
+            PRINCIPAL, png_header, "test.png"
+        )
         assert result is not None
         assert result.mime_type == "image/png"
 
     def test_upload_survey_image_invalid_format(self):
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_survey_image(b"content", "test.txt")
+            self.file_manager.upload_survey_image(PRINCIPAL, b"content", "test.txt")
         assert exc_info.value.code is ErrorCode.FILE_FORMAT_NOT_ALLOWED
 
     def test_upload_survey_image_empty(self):
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_survey_image(b"", "test.png")
+            self.file_manager.upload_survey_image(PRINCIPAL, b"", "test.png")
         assert exc_info.value.code is ErrorCode.FILE_EMPTY
 
     def test_upload_survey_image_too_large(self):
         large_content = b"\x89PNG" + b"\x00" * (6 * 1024 * 1024)
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_survey_image(large_content, "test.png")
+            self.file_manager.upload_survey_image(PRINCIPAL, large_content, "test.png")
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 5.0
 
 
 class TestFileManagerKnowledgeFile:
-    """upload_knowledge_file のテスト"""
+    """記憶への取り込みのファイルは保存しない（U5 BR5.9）。
+
+    upload_knowledge_file はなくなり、プレビューは convert_file_to_markdown が
+    安全確認・大きさの確認をしたうえで変換だけを行う。
+    """
 
     def setup_method(self):
-        self.temp_dir = tempfile.mkdtemp()
         self.mock_db_service = Mock()
-        self.mock_db_service.save_uploaded_file_info.return_value = "f1"
-        with patch("src.managers.file_manager.config") as mock_config:
-            mock_config.upload_dir = Path(self.temp_dir)
-            mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
-            mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
-            mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(self.mock_db_service)
-            self.file_manager.knowledge_files_dir = (
-                Path(self.temp_dir) / "knowledge_files"
-            )
-            self.file_manager.knowledge_files_dir.mkdir(exist_ok=True)
+        self.file_store = Mock()
+        self.s3 = Mock()
+        self.file_manager = FileManager(
+            self.mock_db_service,
+            s3_service=self.s3,
+            file_store=self.file_store,
+            attachments=Mock(),
+        )
 
-    def teardown_method(self):
-        import shutil
+    def test_upload_knowledge_file_is_gone(self):
+        assert not hasattr(FileManager, "upload_knowledge_file")
 
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_upload_knowledge_file_txt(self):
+    def test_conversion_saves_nothing(self):
         content = ("テスト知識ファイルの内容です。" * 10).encode("utf-8")
-        metadata, markdown_text = self.file_manager.upload_knowledge_file(
+        markdown_text = self.file_manager.convert_file_to_markdown(
             content, "knowledge.txt"
         )
-        assert metadata is not None
         assert "テスト知識ファイル" in markdown_text
+        self.s3.upload_file.assert_not_called()
+        self.file_store.put.assert_not_called()
+        self.mock_db_service.assert_not_called()
 
-    def test_upload_knowledge_file_invalid_format(self):
+    def test_invalid_format(self):
         with pytest.raises(FileUploadError):
-            self.file_manager.upload_knowledge_file(b"content", "test.exe")
+            self.file_manager.convert_file_to_markdown(b"content", "test.exe")
 
-    def test_upload_knowledge_file_too_large(self):
+    def test_too_large(self):
         large_content = b"x" * (11 * 1024 * 1024)
         with pytest.raises(FileUploadError) as exc_info:
-            self.file_manager.upload_knowledge_file(large_content, "test.txt")
+            self.file_manager.convert_file_to_markdown(large_content, "test.txt")
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 10.0
+
+    def test_empty(self):
+        with pytest.raises(FileUploadError) as exc_info:
+            self.file_manager.convert_file_to_markdown(b"", "empty.txt")
+        assert exc_info.value.code is ErrorCode.FILE_EMPTY
+
+    def test_path_traversal_name(self):
+        with pytest.raises(FileSecurityError):
+            self.file_manager.convert_file_to_markdown(b"x", "../a.txt")
 
 
 class TestFileManagerConvertToMarkdown:
@@ -315,7 +340,9 @@ class TestFileManagerConvertToMarkdown:
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager = FileManager(
+                self.mock_db_service, file_store=Mock(), attachments=Mock()
+            )
 
     def test_convert_txt_to_markdown(self):
         content = "テストテキスト内容です。".encode("utf-8")
@@ -351,7 +378,9 @@ class TestFileManagerUtilities:
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(self.mock_db_service)
+            self.file_manager = FileManager(
+                self.mock_db_service, file_store=Mock(), attachments=Mock()
+            )
 
     def teardown_method(self):
         import shutil
@@ -385,3 +414,150 @@ class TestFileManagerUtilities:
             self.file_manager._validate_discussion_document("doc.pdf", content)
         assert exc_info.value.code is ErrorCode.FILE_TOO_LARGE
         assert exc_info.value.context["max_size_mb"] == 10.0
+
+
+# =============================================================================
+# U5: 所有者付きのキー・24 時間の期限・配信の判定（BR5.1、BR5.2、BR5.4、BR5.8）
+# =============================================================================
+
+_U5_REGION = "us-east-1"
+_U5_BUCKET = "u5-file-manager-bucket"
+_U5_TABLE = "UploadedFilesFM"
+_U5_NOW = datetime(2026, 10, 14, 3, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def u5_files(monkeypatch):
+    """FileManager on moto S3 / DynamoDB with the real FileAttachments."""
+    moto = pytest.importorskip("moto")
+    import boto3
+
+    from src.managers.components.file_attachments import FileAttachments
+    from src.services.s3_service import S3Service
+    from src.services.uploaded_file_store import UploadedFileStore
+
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        ddb = boto3.client("dynamodb", region_name=_U5_REGION)
+        ddb.create_table(
+            TableName=_U5_TABLE,
+            KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        boto3.client("s3", region_name=_U5_REGION).create_bucket(Bucket=_U5_BUCKET)
+        s3 = S3Service(_U5_BUCKET, _U5_REGION)
+        store = UploadedFileStore(region=_U5_REGION, table_name=_U5_TABLE, client=ddb)
+        clock = {"now": _U5_NOW.timestamp()}
+        attachments = FileAttachments(store, s3, clock=lambda: clock["now"])
+        manager = FileManager(
+            Mock(),
+            s3_service=s3,
+            file_store=store,
+            attachments=attachments,
+            clock=lambda: _U5_NOW,
+        )
+        yield manager, store, s3, attachments, clock
+
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+
+class TestFileManagerU5Uploads:
+    def test_upload_key_has_the_owner_and_a_pending_tag(self, u5_files):
+        manager, store, s3, _, _ = u5_files
+
+        metadata = manager.upload_discussion_document(PRINCIPAL, _PNG, "資料.png")
+
+        stored = store.get(metadata.file_id)
+        assert stored.owner_sub == PRINCIPAL.sub
+        assert stored.s3_key == (
+            f"uploads/{PRINCIPAL.sub}/discussion_document/{metadata.file_id}_資料.png"
+        )
+        assert stored.expires_at == int(_U5_NOW.timestamp()) + 24 * 3600
+        assert metadata.file_path == f"s3://{_U5_BUCKET}/{stored.s3_key}"
+        assert s3.get_object_tags(stored.s3_key) == {"pending": "true"}
+
+    def test_two_users_with_the_same_name_keep_both_files(self, u5_files):
+        from tests.conftest import MEMBER_B
+
+        manager, store, _, _, _ = u5_files
+        first = manager.upload_survey_image(PRINCIPAL, _PNG, "same.png")
+        second = manager.upload_survey_image(MEMBER_B.principal(), _PNG, "same.png")
+
+        assert first.file_path != second.file_path
+        assert store.get(first.file_id).owner_sub == PRINCIPAL.sub
+        assert store.get(second.file_id).owner_sub == MEMBER_B.sub
+
+    def test_uploads_need_resource_create(self, u5_files):
+        from src.models.errors import AccessDeniedError
+        from tests.conftest import NO_ROLE
+
+        manager, _, _, _, _ = u5_files
+        with pytest.raises(AccessDeniedError):
+            manager.upload_survey_image(NO_ROLE.principal(), _PNG, "a.png")
+
+    def test_a_failed_metadata_write_removes_the_object(self, u5_files, monkeypatch):
+        manager, store, s3, _, _ = u5_files
+        monkeypatch.setattr(store, "put", Mock(side_effect=RuntimeError("down")))
+        deleted = Mock(wraps=s3.delete_file)
+        monkeypatch.setattr(s3, "delete_file", deleted)
+
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        assert exc_info.value.code is ErrorCode.FILE_OPERATION_FAILED
+        deleted.assert_called_once()
+
+
+class TestFileManagerU5Preview:
+    def test_owner_gets_a_url_for_their_unattached_image(self, u5_files):
+        manager, _, _, _, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+
+        url = manager.preview_url_for_path(PRINCIPAL, metadata.file_path)
+
+        assert url.startswith("https://")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "s3://another-bucket/uploads/x/survey_image/00000000-0000-4000-8000-000000000000_a.png",
+            f"s3://{_U5_BUCKET}/survey_images/a.png",
+            f"s3://{_U5_BUCKET}/uploads/x/survey_image/not-a-uuid_a.png",
+            f"s3://{_U5_BUCKET}/persona_avatars/p/x.webp",
+            "/etc/passwd",
+            "",
+        ],
+    )
+    def test_any_other_path_is_not_found(self, u5_files, path):
+        manager, _, _, _, _ = u5_files
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.preview_url_for_path(PRINCIPAL, path)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
+
+    def test_someone_elses_image_is_not_found(self, u5_files):
+        from tests.conftest import MEMBER_B
+
+        manager, _, _, _, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.preview_url_for_path(MEMBER_B.principal(), metadata.file_path)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
+
+    def test_a_path_that_does_not_match_the_metadata_is_not_found(self, u5_files):
+        manager, _, _, _, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        forged = metadata.file_path.replace("_a.png", "_other.png")
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.preview_url_for_path(PRINCIPAL, forged)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
+
+    def test_expired_image_is_not_found(self, u5_files):
+        manager, _, _, _, clock = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        clock["now"] = _U5_NOW.timestamp() + 24 * 3600
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.preview_url_for_path(PRINCIPAL, metadata.file_path)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND

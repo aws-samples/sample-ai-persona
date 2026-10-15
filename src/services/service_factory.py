@@ -18,7 +18,10 @@ if TYPE_CHECKING:
     from .authz_lookup_service import AuthzLookupService
     from .cognito_groups_service import CognitoGroupsService
     from .oidc_service import OidcService
+    from .persona_binding_store import PersonaBindingStore
+    from .persona_candidate_store import PersonaCandidateStore
     from .resource_share_store import ResourceShareStore
+    from .uploaded_file_store import UploadedFileStore
     from .user_directory_service import UserDirectoryService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
@@ -64,6 +67,9 @@ class ServiceFactory:
         self._cognito_groups_service: Optional["CognitoGroupsService"] = None
         self._resource_share_store: Optional["ResourceShareStore"] = None
         self._user_directory_service: Optional["UserDirectoryService"] = None
+        self._persona_candidate_store: Optional["PersonaCandidateStore"] = None
+        self._persona_binding_store: Optional["PersonaBindingStore"] = None
+        self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -250,6 +256,12 @@ class ServiceFactory:
                     )
         return self._s3_service
 
+    def get_optional_s3_service(self) -> Optional["S3Service"]:
+        """The S3 service, or ``None`` when ``S3_BUCKET_NAME`` is not set (U5)."""
+        if not config.S3_BUCKET_NAME:
+            return None
+        return self.get_s3_service()
+
     def get_survey_batch_service(self) -> "SurveyBatchService":
         """SurveyBatchServiceのシングルトンインスタンスを取得"""
         if self._survey_batch_service is None:
@@ -412,6 +424,48 @@ class ServiceFactory:
                         shares_table=config.RESOURCE_SHARES_TABLE_NAME,
                     )
         return self._resource_share_store
+
+    def get_persona_candidate_store(self) -> "PersonaCandidateStore":
+        """Return the store of generated personas waiting to be saved (U5)."""
+        if self._persona_candidate_store is None:
+            with self._lock:
+                if self._persona_candidate_store is None:
+                    from .persona_candidate_store import PersonaCandidateStore
+
+                    self.logger.info("Creating new PersonaCandidateStore instance")
+                    self._persona_candidate_store = PersonaCandidateStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.PERSONA_CANDIDATES_TABLE_NAME,
+                    )
+        return self._persona_candidate_store
+
+    def get_persona_binding_store(self) -> "PersonaBindingStore":
+        """Return the store of persona bindings (U5, ADR-007)."""
+        if self._persona_binding_store is None:
+            with self._lock:
+                if self._persona_binding_store is None:
+                    from .persona_binding_store import PersonaBindingStore
+
+                    self.logger.info("Creating new PersonaBindingStore instance")
+                    self._persona_binding_store = PersonaBindingStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.PERSONA_BINDINGS_TABLE_NAME,
+                    )
+        return self._persona_binding_store
+
+    def get_uploaded_file_store(self) -> "UploadedFileStore":
+        """Return the store of upload metadata (U5)."""
+        if self._uploaded_file_store is None:
+            with self._lock:
+                if self._uploaded_file_store is None:
+                    from .uploaded_file_store import UploadedFileStore
+
+                    self.logger.info("Creating new UploadedFileStore instance")
+                    self._uploaded_file_store = UploadedFileStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.table_name("UploadedFiles"),
+                    )
+        return self._uploaded_file_store
 
     def get_user_directory_service(self) -> "UserDirectoryService":
         """Return the user-list reader for owner names (U4, BR5.1).

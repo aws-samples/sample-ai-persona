@@ -413,9 +413,11 @@ def reset_singletons():
         api._persona_manager = None
         api._discussion_manager = None
         api._job_manager = None
+        api._persona_generation_manager = None
         persona._persona_manager = None
         persona._persona_memory_manager = None
         persona._file_manager = None
+        persona._persona_generation_manager = None
         discussion._persona_manager = None
         discussion._discussion_manager = None
         discussion._agent_discussion_manager = None
@@ -432,6 +434,7 @@ def reset_singletons():
         survey._dataset_manager = None
         survey._execution_manager = None
         survey._analysis_manager = None
+        survey._file_manager = None
     except (ImportError, AttributeError):
         pass
     try:

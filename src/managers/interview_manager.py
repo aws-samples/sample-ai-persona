@@ -86,9 +86,13 @@ class InterviewManager:
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
+        binding_store: Any = None,
     ):
         """
         Initialize interview manager.
+
+        ``binding_store`` (U5): ``PersonaBindings`` for the KB / dataset tools
+        (optional, the singleton when omitted).
 
         Args:
             agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
@@ -109,6 +113,7 @@ class InterviewManager:
             database_service=self.database_service,
             agent_service=self.agent_service,
             dataset_analysis_service=self.dataset_analysis_service,
+            binding_store=binding_store or service_factory.get_persona_binding_store(),
         )
 
         # Active interview sessions (temporary storage)

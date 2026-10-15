@@ -111,7 +111,8 @@ async def create_interview_session(
 
         for persona_id in persona_ids:
             try:
-                persona = persona_manager.get_persona(persona_id)
+                # 参加者の判定は U6（PersonaManager.get_persona_unchecked）
+                persona = persona_manager.get_persona_unchecked(persona_id)
                 if persona:
                     personas.append(persona)
                 else:
@@ -230,7 +231,8 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
 
         for persona_id in session.participants:
             try:
-                persona = persona_manager.get_persona(persona_id)
+                # 参加者の判定は U6（PersonaManager.get_persona_unchecked）
+                persona = persona_manager.get_persona_unchecked(persona_id)
                 if persona:
                     participants.append(persona)
                 else:

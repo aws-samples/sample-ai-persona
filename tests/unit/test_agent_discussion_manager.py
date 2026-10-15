@@ -456,21 +456,32 @@ class TestStartAgentDiscussion:
         Gemma4（3.5MB上限）に上限超過のPDFを添付してサイズ検証を失敗させ、
         finally節でのcleanupを確認する。
         """
+        from datetime import datetime, timezone
+
+        from src.models.uploaded_file import UploadedFile
+        from tests.conftest import MEMBER_A
+
         mock_db_service = Mock()
         mock_db_service.initialize_database.return_value = None
-        mock_db_service.get_uploaded_file_info.return_value = {
-            "id": "doc-1",
-            "filename": "test.pdf",
-            "file_path": "path/to/test.pdf",
-            "file_size": 5 * 1024 * 1024,
-            "mime_type": "application/pdf",
-            "uploaded_at": None,
-        }
+        # U5: documents are read through FileAttachments (the uploader's own file)
+        files = Mock()
+        files.attachable_file.return_value = UploadedFile.create_new(
+            owner_sub=MEMBER_A.sub,
+            file_type="discussion_document",
+            original_filename="test.pdf",
+            file_size=5 * 1024 * 1024,
+            file_hash="h",
+            mime_type="application/pdf",
+            now=datetime.now(timezone.utc),
+        ).with_path("path/to/test.pdf")
 
         mock_agent_service = Mock()
 
         manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+            agent_service=mock_agent_service,
+            database_service=mock_db_service,
+            file_attachments=files,
+            binding_store=Mock(),
         )
 
         mock_persona_agent_1 = Mock(spec=PersonaAgent)
@@ -487,6 +498,7 @@ class TestStartAgentDiscussion:
                 facilitator=mock_facilitator,
                 document_ids=["doc-1"],
                 persona_models={sample_persona.id: "google.gemma-4-31b"},
+                principal=MEMBER_A.principal(),
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE

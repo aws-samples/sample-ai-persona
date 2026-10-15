@@ -23,10 +23,12 @@ from src.managers.agent_discussion_manager import (
 from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.config import config
-from src.models.errors import ErrorCode
+from src.models.authz import Principal
+from src.models.errors import ErrorCode, ErrorKind
 from src.models.insight_category import InsightCategory
 from src.models.model_registry import display_name_for, list_selectable_models
 from web.error_messages import (
+    error_kind_of,
     is_correctable,
     mark_renderable,
     toast_response,
@@ -112,13 +114,19 @@ def get_report_manager() -> ReportManager:
     return _report_manager
 
 
+def _principal(request: Request) -> Principal:
+    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    principal: Principal = request.state.principal
+    return principal
+
+
 def _get_participant_personas(participant_ids: List[str]) -> dict:
-    """参加者IDからペルソナ情報を取得してマップを返す"""
+    """参加者IDからペルソナ情報を取得してマップを返す（参加者の判定は U6）"""
     persona_manager = get_persona_manager()
     persona_map = {}
     for pid in participant_ids:
         try:
-            persona = persona_manager.get_persona(pid)
+            persona = persona_manager.get_persona_unchecked(pid)
             if persona:
                 persona_map[pid] = persona
         except Exception:
@@ -173,8 +181,10 @@ async def discussion_setup_page(request: Request) -> Any:
 
 
 @router.post("/upload-document")
-async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
-    """議論用ドキュメントをアップロード"""
+async def upload_discussion_document(
+    request: Request, file: UploadFile = File(...)
+) -> Any:
+    """議論用ドキュメントをアップロード（利用者のキーに置き、24 時間で使えなくなる、BR5.1）"""
     try:
         file_manager = get_file_manager()
 
@@ -182,9 +192,13 @@ async def upload_discussion_document(file: UploadFile = File(...)) -> Any:
         file_content = await file.read()
 
         # ファイルをアップロード
-        file_metadata = file_manager.upload_discussion_document(
-            file_content=file_content,
-            filename=file.filename,  # type: ignore[arg-type]
+        loop = asyncio.get_running_loop()
+        file_metadata = await loop.run_in_executor(
+            executor,
+            file_manager.upload_discussion_document,
+            _principal(request),
+            file_content,
+            file.filename or "",
         )
 
         # JSONレスポンスを返す
@@ -296,7 +310,10 @@ async def stream_discussion(
             )
 
         persona_manager = get_persona_manager()
-        personas_raw = [persona_manager.get_persona(pid.strip()) for pid in ids]
+        principal = _principal(request)
+        personas_raw = [
+            persona_manager.get_persona_unchecked(pid.strip()) for pid in ids
+        ]
         personas = [p for p in personas_raw if p is not None]
 
         if len(personas) < 2:
@@ -368,6 +385,7 @@ async def stream_discussion(
                             document_ids=doc_ids,
                             persona_models=persona_models,
                             facilitator_model=facilitator_model_id,
+                            principal=principal,
                         )
                     else:
                         dm = get_discussion_manager()
@@ -376,6 +394,7 @@ async def stream_discussion(
                             topic=topic,
                             categories=categories,
                             document_ids=doc_ids,
+                            principal=principal,
                         )
                     for event in gen:
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
@@ -548,7 +567,10 @@ async def start_discussion(
             )
 
         persona_manager = get_persona_manager()
-        personas_raw = [persona_manager.get_persona(pid) for pid in persona_ids]
+        principal = _principal(request)
+        personas_raw = [
+            persona_manager.get_persona_unchecked(pid) for pid in persona_ids
+        ]
         personas = [p for p in personas_raw if p is not None]
 
         if len(personas) < 2:
@@ -593,6 +615,7 @@ async def start_discussion(
                     document_ids=document_ids,
                     persona_models=persona_models,
                     facilitator_model=facilitator_model,
+                    principal=principal,
                 )
 
             discussion = await loop.run_in_executor(executor, _run_agent)
@@ -605,6 +628,7 @@ async def start_discussion(
                     topic=topic,
                     categories=categories,
                     document_ids=document_ids,
+                    principal=principal,
                 )
 
             discussion = await loop.run_in_executor(executor, _run_classic)
@@ -616,6 +640,9 @@ async def start_discussion(
         )
     except (DiscussionManagerError, AgentDiscussionManagerError) as e:
         logger.error("Failed to start discussion", exc_info=True)
+        if error_kind_of(e) is ErrorKind.NOT_FOUND:
+            # 他人の・期限切れの資料は、ないものと同じ 404 のトースト（BR5.3、BR5.4）
+            return toast_response(e, status_code=404)
         if is_correctable(e):
             # 入力を直せば解決するエラー（トピック文字数・ペルソナ数等）は
             # #discussion-result（フォーム自身の外側の専用領域）に表示する。

@@ -22,7 +22,7 @@ from botocore.exceptions import ClientError
 
 from src.models.memory import MemoryEntry
 
-from .strategy import MemoryStrategy
+from .strategy import MemoryStrategy, is_under_namespaces, record_namespaces
 
 logger = logging.getLogger(__name__)
 
@@ -65,14 +65,13 @@ class SummaryStrategy(MemoryStrategy):
             region: AWSリージョン（デフォルト: us-east-1）
             memory_strategy_id: namespaceで使用するmemoryStrategyId（デフォルト: configから取得）
         """
-        from src.config import Config
+        from src.config import config
 
         self.memory_id = memory_id
         self.region = region
 
         # memory_strategy_idが指定されていない場合はconfigから取得
         if memory_strategy_id is None:
-            config = Config()
             self.memory_strategy_id = config.SUMMARY_MEMORY_STRATEGY_ID
         else:
             self.memory_strategy_id = memory_strategy_id
@@ -117,6 +116,10 @@ class SummaryStrategy(MemoryStrategy):
             actorId=actor_id,
             sessionId=session_id,
         )
+
+    def namespaces_for(self, actor_id: str) -> List[str]:
+        """Namespaces that hold every summary record of ``actor_id`` (U5)."""
+        return [self._build_actor_namespace_prefix(actor_id)]
 
     def _build_actor_namespace_prefix(self, actor_id: str) -> str:
         """
@@ -281,6 +284,20 @@ class SummaryStrategy(MemoryStrategy):
             MemoryOperationError: 削除に失敗した場合
         """
         try:
+            # U5 R-01: only a record under this actor's namespace is deleted
+            found = self._client.get_memory_record(
+                memoryId=self.memory_id, memoryRecordId=memory_id
+            )
+            if not is_under_namespaces(
+                record_namespaces(found), self.namespaces_for(actor_id)
+            ):
+                logger.warning(
+                    "Memory record is not the actor's: actor=%s, memory_id=%s",
+                    actor_id,
+                    memory_id,
+                )
+                return False
+
             # Use delete_memory_record to delete a specific memory record
             self._client.delete_memory_record(
                 memoryId=self.memory_id, memoryRecordId=memory_id

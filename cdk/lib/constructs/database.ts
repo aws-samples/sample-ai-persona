@@ -7,6 +7,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
  * v1.0.0 の DynamoDB テーブル（Data スタック）。
  *
  * - 今と同じキー・GSI・PITR の 10 テーブルを TableV2 で新しく作る（形の作り直しは U4〜U7）
+ * - U5: 生成候補（PersonaCandidates）と紐付け（PersonaBindings）を足し、UploadedFiles に TTL を足す
  * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
  * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
  * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
@@ -29,6 +30,18 @@ export class Database extends Construct {
    * 一括付与（grantReadWriteData）は Scan を含むため、App スタックが 7 つの操作だけを付ける。
    */
   public readonly resourceSharesTable: dynamodb.TableV2;
+  /**
+   * 生成候補（U5、BR1.1）。8 時間の一時データで、TTL expires_at で消える。PITR と削除保護は
+   * 付けない（作り直しても失うものがない）。applicationTables には入れず、App スタックが
+   * 6 つの操作だけを付ける（Scan・Query なし）。
+   */
+  public readonly personaCandidatesTable: dynamodb.TableV2;
+  /**
+   * ペルソナと組織資産の紐付け（U5、ADR-007）。PK persona_id・SK target_key、逆引きの
+   * TargetIndex（KEYS_ONLY）。applicationTables には入れず、App スタックが Scan を除く
+   * 7 つの操作だけを付ける。
+   */
+  public readonly personaBindingsTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
@@ -61,8 +74,11 @@ export class Database extends Construct {
         gsi('ModeIndex', 'mode', 'created_at'),
       ],
     });
+    // U5: 紐付かなかったアップロードのメタデータは 24 時間後に TTL で消える（BR5.6）。
+    // TTL の設定はテーブルの属性の更新で、テーブルは置き換わらない
     this.uploadedFilesTable = this.table('UploadedFiles', {
       globalSecondaryIndexes: [gsi('UploadedAtIndex', 'type', 'uploaded_at')],
+      timeToLiveAttribute: 'expires_at',
     });
     this.datasetsTable = this.table('Datasets');
     this.bindingsTable = this.table('PersonaDatasetBindings', {
@@ -104,6 +120,29 @@ export class Database extends Construct {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // PersonaCandidates（U5、NFR1.40）: table() は PK を id に固定しているため直接作る
+    this.personaCandidatesTable = new dynamodb.TableV2(this, 'PersonaCandidates', {
+      partitionKey: { name: 'candidate_id', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
+    // PersonaBindings（U5、ADR-007）: 紐付けは消えると戻せないため PITR と削除保護を付ける
+    this.personaBindingsTable = new dynamodb.TableV2(this, 'PersonaBindings', {
+      partitionKey: { name: 'persona_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'target_key', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      globalSecondaryIndexes: [
+        gsi('TargetIndex', 'target_id', undefined, dynamodb.ProjectionType.KEYS_ONLY),
+      ],
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
   }
 
   private table(
@@ -129,18 +168,20 @@ export class Database extends Construct {
     });
   }
 
-  /** App スタックがタスクロールに権限を与え、環境変数に名前を渡す 10 テーブル。 */
+  /**
+   * App スタックがタスクロールに権限を与え、環境変数に名前を渡す 8 テーブル。
+   * U5: 古い紐付けの 2 テーブル（PersonaDatasetBindings・PersonaKBBindings）は外した
+   * （RETAIN のまま残し、テーブルを外すのは U9）。
+   */
   public get applicationTables(): Record<string, dynamodb.TableV2> {
     return {
       PERSONAS_TABLE_NAME: this.personasTable,
       DISCUSSIONS_TABLE_NAME: this.discussionsTable,
       UPLOADED_FILES_TABLE_NAME: this.uploadedFilesTable,
       DATASETS_TABLE_NAME: this.datasetsTable,
-      PERSONA_DATASET_BINDINGS_TABLE_NAME: this.bindingsTable,
       SURVEY_TEMPLATES_TABLE_NAME: this.surveyTemplatesTable,
       SURVEYS_TABLE_NAME: this.surveysTable,
       KNOWLEDGE_BASES_TABLE_NAME: this.knowledgeBasesTable,
-      PERSONA_KB_BINDINGS_TABLE_NAME: this.personaKBBindingsTable,
       JOBS_TABLE_NAME: this.jobsTable,
     };
   }

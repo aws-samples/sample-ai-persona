@@ -13,6 +13,27 @@ from typing import Any, Dict, List, Optional
 from src.models.memory import MemoryEntry
 
 
+def is_under_namespaces(record_namespaces: List[str], prefixes: List[str]) -> bool:
+    """Tell whether a memory record lives under one of ``prefixes`` (U5, R-01).
+
+    A namespace matches a prefix when it equals the prefix or continues it
+    with ``/``, so ``.../actors/p1`` never matches ``.../actors/p10/...``.
+    """
+    for namespace in record_namespaces:
+        for prefix in prefixes:
+            base = prefix.rstrip("/")
+            if namespace == base or namespace.startswith(base + "/"):
+                return True
+    return False
+
+
+def record_namespaces(response: Dict[str, Any]) -> List[str]:
+    """The namespaces of a ``GetMemoryRecord`` response (empty when absent)."""
+    record = response.get("memoryRecord") or {}
+    namespaces = record.get("namespaces") or []
+    return [n for n in namespaces if isinstance(n, str)]
+
+
 class MemoryStrategy(ABC):
     """
     記憶戦略の抽象基底クラス

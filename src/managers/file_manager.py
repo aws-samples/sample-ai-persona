@@ -1,22 +1,44 @@
 """
 ファイル管理マネージャー
 ファイルアップロード、検証、保存機能を提供
+
+v1.0.0 U5（BR5.1〜BR5.9）:
+
+- アップロード（議論の資料・テンプレートの画像）は利用者を受け取り、S3 のキーを
+  ``uploads/{owner_sub}/{file_type}/{file_id}_{元の名前}`` にして ``pending=true`` の
+  タグを付けて置き、メタデータ（``UploadedFiles``）に ``owner_sub`` と 24 時間の
+  ``expires_at`` を書く
+- 親への紐付けと配信の判定は Component ``FileAttachments`` が持つ
+- 記憶への取り込みのファイルは保存しない（``convert_file_to_markdown`` が確認と変換だけ）
+- ``preview_url_for_path`` は形・メタデータの一致・``can_read_file`` を満たすパスにだけ
+  配信 URL を出す（任意の S3 パスを受け付けない、BR5.8）
 """
 
-import uuid
 import hashlib
+import logging
 import mimetypes
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, TYPE_CHECKING
-from datetime import datetime
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from ..config import config
+from ..models.authz import Permission, Principal
 from ..models.errors import CodedError, ErrorCode
-from ..services.database_service import DatabaseService, DatabaseError
+from ..models.uploaded_file import PENDING_TAG, UploadedFile, file_id_from_key
+from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
+from .components.access_policy import AccessPolicy
+from .components.file_attachments import FileAttachments
+from .components.sharing_runtime import build_access_parts, shared_access_parts
 
 if TYPE_CHECKING:
     from ..services.s3_service import S3Service
+    from ..services.uploaded_file_store import UploadedFileStore
+
+logger = logging.getLogger(__name__)
+
+#: Lifetime of the presigned URL of a template image preview
+PREVIEW_URL_EXPIRATION_SECONDS = 3600
 
 
 class FileUploadError(CodedError):
@@ -98,11 +120,21 @@ class FileManager:
         self,
         db_service: Optional[DatabaseService] = None,
         s3_service: Optional["S3Service"] = None,
+        file_store: Optional["UploadedFileStore"] = None,
+        attachments: Optional[FileAttachments] = None,
+        clock: Optional[Callable[[], datetime]] = None,
     ):
-        """ファイルマネージャーの初期化"""
+        """ファイルマネージャーの初期化
+
+        Args:
+            db_service: 互換のため受け取る（U5 からメタデータは UploadedFileStore）
+            s3_service: S3（未設定ならローカルに保存する）
+            file_store: Upload metadata (optional, built on first use)
+            attachments: The per-task ``FileAttachments`` (optional)
+            clock: Aware-UTC clock (tests)
+        """
         self.upload_dir = config.upload_dir
         self.discussion_doc_dir = Path("discussion_documents")
-        self.knowledge_files_dir = Path("knowledge_files")
         self.survey_images_dir = Path("survey_images")
         if s3_service is not None:
             self.s3_service = s3_service
@@ -114,13 +146,33 @@ class FileManager:
 
         # Use singleton database service if not provided
         self.db_service = db_service or service_factory.get_database_service()
+        self._file_store = file_store
+        self._attachments = attachments
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
         # アップロードディレクトリの作成（ローカルストレージ使用時のみ）
         if not self.s3_service:
             self.upload_dir.mkdir(parents=True, exist_ok=True)
             self.discussion_doc_dir.mkdir(parents=True, exist_ok=True)
-            self.knowledge_files_dir.mkdir(parents=True, exist_ok=True)
             self.survey_images_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def _store(self) -> "UploadedFileStore":
+        if self._file_store is None:
+            self._file_store = service_factory.get_uploaded_file_store()
+        return self._file_store
+
+    @property
+    def _file_attachments(self) -> FileAttachments:
+        if self._attachments is None:
+            self._attachments = shared_access_parts(
+                lambda: build_access_parts(
+                    service_factory.get_authz_lookup_service(),
+                    service_factory.get_uploaded_file_store(),
+                    service_factory.get_optional_s3_service(),
+                )
+            ).files
+        return self._attachments
 
     def validate_persona_source_file(self, filename: str, file_content: bytes) -> None:
         """Validate a persona-generation source file before text extraction.
@@ -212,7 +264,7 @@ class FileManager:
 
     def convert_file_to_markdown(self, file_content: bytes, filename: str) -> str:
         """
-        ファイルをマークダウンに変換する
+        知識ファイルを安全確認のうえマークダウンに変換する（何も保存しない、BR5.9）
 
         Args:
             file_content: ファイル内容（バイト）
@@ -222,10 +274,13 @@ class FileManager:
             str: マークダウン化されたテキスト
 
         Raises:
-            FileUploadError: 変換に失敗した場合
+            FileSecurityError: ファイル名・内容の安全確認に通らない場合
+            FileUploadError: 形式・大きさ・空、または変換に失敗した場合
         """
         from markitdown import MarkItDown
         import io
+
+        self._security_check(filename, file_content, allow_binary=True)
 
         # ファイル拡張子チェック
         file_ext = Path(filename).suffix.lower()
@@ -235,6 +290,16 @@ class FileManager:
                 code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
                 context={"allowed_formats": ", ".join(self.KNOWLEDGE_FILE_FORMATS)},
             )
+
+        if len(file_content) > self.KNOWLEDGE_FILE_MAX_SIZE:
+            raise FileUploadError(
+                f"file size {len(file_content)} exceeds limit "
+                f"{self.KNOWLEDGE_FILE_MAX_SIZE}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={"max_size_mb": self.KNOWLEDGE_FILE_MAX_SIZE / (1024 * 1024)},
+            )
+        if len(file_content) == 0:
+            raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
         try:
             md = MarkItDown()
@@ -253,12 +318,13 @@ class FileManager:
             ) from e
 
     def upload_discussion_document(
-        self, file_content: bytes, filename: str
+        self, principal: Principal, file_content: bytes, filename: str
     ) -> FileMetadata:
         """
-        議論用ドキュメントをアップロードする
+        議論用ドキュメントをアップロードする（本人のキー、24 時間の期限、BR5.1、BR5.2）
 
         Args:
+            principal: アップロードする人（resource:create が要る）
             file_content: ファイル内容（バイト）
             filename: 元のファイル名
 
@@ -266,8 +332,10 @@ class FileManager:
             FileMetadata: ファイルメタデータ
 
         Raises:
+            AccessDeniedError: resource:create がない
             FileUploadError: アップロード処理でエラーが発生した場合
         """
+        AccessPolicy.require(principal, Permission.RESOURCE_CREATE)
         try:
             # セキュリティチェック（バイナリファイルを許可）
             self._security_check(filename, file_content, allow_binary=True)
@@ -275,23 +343,9 @@ class FileManager:
             # 議論用ドキュメント形式検証
             self._validate_discussion_document(filename, file_content)
 
-            # ファイルメタデータを生成
-            file_metadata = self._create_file_metadata(
-                filename, file_content, file_type="discussion_document"
+            return self._store_upload(
+                principal, file_content, filename, file_type="discussion_document"
             )
-
-            # ファイルを安全に保存
-            saved_file_path = self._save_file_securely(
-                file_content,
-                file_metadata.saved_filename,
-                file_type="discussion_document",
-            )
-            file_metadata.file_path = saved_file_path
-
-            # メタデータをデータベースに保存
-            self._save_file_metadata(file_metadata, file_type="discussion_document")
-
-            return file_metadata
 
         except (FileUploadError, FileSecurityError):
             raise
@@ -301,11 +355,14 @@ class FileManager:
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
-    def upload_survey_image(self, file_content: bytes, filename: str) -> FileMetadata:
+    def upload_survey_image(
+        self, principal: Principal, file_content: bytes, filename: str
+    ) -> FileMetadata:
         """
-        アンケート用画像をアップロードする
+        アンケート用画像をアップロードする（本人のキー、24 時間の期限、BR5.1、BR5.2）
 
         Args:
+            principal: アップロードする人（resource:create が要る）
             file_content: ファイル内容（バイト）
             filename: 元のファイル名
 
@@ -313,8 +370,10 @@ class FileManager:
             FileMetadata: ファイルメタデータ
 
         Raises:
+            AccessDeniedError: resource:create がない
             FileUploadError: アップロード処理でエラーが発生した場合
         """
+        AccessPolicy.require(principal, Permission.RESOURCE_CREATE)
         try:
             self._security_check(filename, file_content, allow_binary=True)
             # 形式・サイズ検証
@@ -335,15 +394,9 @@ class FileManager:
             if len(file_content) == 0:
                 raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
 
-            file_metadata = self._create_file_metadata(
-                filename, file_content, file_type="survey_image"
+            return self._store_upload(
+                principal, file_content, filename, file_type="survey_image"
             )
-            saved_file_path = self._save_file_securely(
-                file_content, file_metadata.saved_filename, file_type="survey_image"
-            )
-            file_metadata.file_path = saved_file_path
-            self._save_file_metadata(file_metadata, file_type="survey_image")
-            return file_metadata
         except (FileUploadError, FileSecurityError):
             raise
         except Exception as e:
@@ -352,68 +405,97 @@ class FileManager:
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
-    def upload_knowledge_file(
-        self, file_content: bytes, filename: str
-    ) -> Tuple[FileMetadata, str]:
-        """
-        知識ファイルをアップロードしてマークダウンに変換する
+    def preview_url_for_path(self, principal: Principal, file_path: str) -> str:
+        """A presigned URL of a template image the user may read (BR5.8).
 
-        Args:
-            file_content: ファイル内容（バイト）
-            filename: 元のファイル名
-
-        Returns:
-            Tuple[FileMetadata, str]: (ファイルメタデータ, マークダウン化した内容)
+        Only ``s3://{bucket}/uploads/{owner}/survey_image/{file_id}_{name}`` is
+        accepted, where ``file_id`` is a UUID whose metadata holds exactly that
+        key and ``FileAttachments.can_read_file`` passes. Anything else gets
+        ``FILE_NOT_FOUND`` and no URL is made.
 
         Raises:
-            FileUploadError: アップロード処理でエラーが発生した場合
+            FileUploadError: ``FILE_NOT_FOUND`` (or ``FILE_OPERATION_FAILED``
+                when the URL cannot be signed)
         """
+        not_found = FileUploadError(
+            "preview path is not a readable upload", code=ErrorCode.FILE_NOT_FOUND
+        )
+        if self.s3_service is None:
+            raise not_found
+        key = self.s3_service.key_of(file_path or "")
+        file_id = file_id_from_key(key or "")
+        if not key or not file_id or key.split("/")[2] != "survey_image":
+            raise not_found
         try:
-            # セキュリティチェック（バイナリファイルを許可）
-            self._security_check(filename, file_content, allow_binary=True)
-
-            # ファイルサイズチェック
-            if len(file_content) > self.KNOWLEDGE_FILE_MAX_SIZE:
-                max_size_mb = self.KNOWLEDGE_FILE_MAX_SIZE / (1024 * 1024)
-                raise FileUploadError(
-                    f"file size {len(file_content)} exceeds limit "
-                    f"{self.KNOWLEDGE_FILE_MAX_SIZE}",
-                    code=ErrorCode.FILE_TOO_LARGE,
-                    context={"max_size_mb": max_size_mb},
-                )
-
-            # ファイル内容が空でないかチェック
-            if len(file_content) == 0:
-                raise FileUploadError("file is empty", code=ErrorCode.FILE_EMPTY)
-
-            # マークダウンに変換
-            markdown_content = self.convert_file_to_markdown(file_content, filename)
-
-            # ファイルメタデータを生成
-            file_metadata = self._create_file_metadata(
-                filename, file_content, file_type="knowledge_file"
-            )
-
-            # ファイルを安全に保存
-            saved_file_path = self._save_file_securely(
-                file_content, file_metadata.saved_filename, file_type="knowledge_file"
-            )
-            file_metadata.file_path = saved_file_path
-
-            # メタデータをデータベースに保存
-            self._save_file_metadata(file_metadata, file_type="knowledge_file")
-
-            return file_metadata, markdown_content
-
-        except (FileUploadError, FileSecurityError):
+            uploaded = self._file_attachments.readable_file(principal, file_id)
+        except CodedError as e:
+            if e.code is ErrorCode.FILE_NOT_FOUND:
+                raise not_found from e
             raise
+        if uploaded.s3_key != key:
+            raise not_found
+        try:
+            return self.s3_service.generate_presigned_url(
+                file_path, PREVIEW_URL_EXPIRATION_SECONDS
+            )
         except Exception as e:
+            logger.warning("Preview URL could not be signed: %s", type(e).__name__)
             raise FileUploadError(
-                f"knowledge file upload failed ({type(e).__name__})",
+                f"preview url failed ({type(e).__name__})",
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
     # プライベートメソッド
+
+    def _store_upload(
+        self,
+        principal: Principal,
+        file_content: bytes,
+        filename: str,
+        *,
+        file_type: str,
+    ) -> FileMetadata:
+        """Place the bytes and write the metadata (owner, 24-hour expiry)."""
+        uploaded = UploadedFile.create_new(
+            owner_sub=principal.sub,
+            file_type=file_type,
+            original_filename=filename,
+            file_size=len(file_content),
+            file_hash=hashlib.sha256(file_content).hexdigest(),
+            mime_type=mimetypes.guess_type(filename)[0] or "text/plain",
+            now=self._clock(),
+        )
+        path = self._save_file_securely(file_content, uploaded)
+        uploaded = uploaded.with_path(path)
+        try:
+            self._store.put(uploaded)
+        except Exception as e:
+            logger.error("Failed to write upload metadata", exc_info=True)
+            self._remove_object(path)
+            raise FileUploadError(
+                f"file metadata save failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
+        return FileMetadata(
+            file_id=uploaded.id,
+            original_filename=uploaded.original_filename,
+            saved_filename=f"{uploaded.id}_{uploaded.original_filename}",
+            file_path=path,
+            file_size=uploaded.file_size,
+            file_hash=uploaded.file_hash,
+            mime_type=uploaded.mime_type,
+            uploaded_at=uploaded.uploaded_at,
+            file_type=file_type,
+        )
+
+    def _remove_object(self, path: str) -> None:
+        try:
+            if self.s3_service is not None and path.startswith("s3://"):
+                self.s3_service.delete_file(path)
+            elif path:
+                Path(path).unlink(missing_ok=True)
+        except Exception:
+            logger.warning("Uploaded object left in place", exc_info=True)
 
     def _security_check(
         self, filename: str, file_content: bytes, allow_binary: bool = False
@@ -457,78 +539,32 @@ class FileManager:
                 code=ErrorCode.FILE_BINARY_NOT_ALLOWED,
             )
 
-    def _create_file_metadata(
-        self,
-        original_filename: str,
-        file_content: bytes,
-        file_type: str = "persona_interview",
-    ) -> FileMetadata:
-        """
-        ファイルメタデータを作成する
-
-        Args:
-            original_filename: 元のファイル名
-            file_content: ファイル内容
-            file_type: ファイルタイプ ('persona_interview' or 'discussion_document')
-
-        Returns:
-            FileMetadata: ファイルメタデータ
-        """
-        file_id = str(uuid.uuid4())
-        saved_filename = f"{file_id}_{original_filename}"
-        file_size = len(file_content)
-        file_hash = hashlib.sha256(file_content).hexdigest()
-        mime_type = mimetypes.guess_type(original_filename)[0] or "text/plain"
-        uploaded_at = datetime.now()
-
-        metadata = FileMetadata(
-            file_id=file_id,
-            original_filename=original_filename,
-            saved_filename=saved_filename,
-            file_path="",  # 後で設定
-            file_size=file_size,
-            file_hash=file_hash,
-            mime_type=mime_type,
-            uploaded_at=uploaded_at,
-            file_type=file_type,
-        )
-        return metadata
-
-    def _save_file_securely(
-        self, file_content: bytes, filename: str, file_type: str = "persona_interview"
-    ) -> str:
+    def _save_file_securely(self, file_content: bytes, uploaded: UploadedFile) -> str:
         """
         ファイルを安全に保存する
 
-        Args:
-            file_content: ファイル内容
-            filename: 保存するファイル名
-            file_type: ファイルタイプ ('persona_interview', 'discussion_document', 'knowledge_file')
+        S3 では所有者ごとのキー（``uploaded.s3_key``）に ``pending=true`` のタグを付けて
+        置く。S3 がない手元の開発では、種類ごとのディレクトリに保存する（タグも
+        ライフサイクルもないため、期限はメタデータの ``expires_at`` だけで効く）。
 
         Returns:
             str: 保存されたファイルのパス（ローカルパスまたはS3パス）
         """
-        # S3を使用する場合
         if self.s3_service:
-            if file_type == "discussion_document":
-                s3_key = f"discussion_documents/{filename}"
-            elif file_type == "knowledge_file":
-                s3_key = f"knowledge_files/{filename}"
-            elif file_type == "survey_image":
-                s3_key = f"survey_images/{filename}"
-            else:
-                s3_key = f"uploads/{filename}"
-            return self.s3_service.upload_file(file_content, s3_key)
+            key, value = PENDING_TAG
+            return self.s3_service.upload_file(
+                file_content,
+                uploaded.s3_key,
+                content_type=uploaded.mime_type,
+                tags={key: value},
+            )
 
-        # ローカルストレージを使用する場合
-        if file_type == "discussion_document":
-            file_path = self.discussion_doc_dir / filename
-        elif file_type == "knowledge_file":
-            file_path = self.knowledge_files_dir / filename
-        elif file_type == "survey_image":
-            file_path = self.survey_images_dir / filename
-        else:
-            file_path = self.upload_dir / filename
+        directory = (
+            self.discussion_doc_dir
+            if uploaded.file_type == "discussion_document"
+            else self.survey_images_dir
+        )
+        file_path = directory / f"{uploaded.id}_{uploaded.original_filename}"
 
         # 一時ファイルに書き込み後、アトミックに移動
         temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
@@ -551,33 +587,5 @@ class FileManager:
                 temp_path.unlink()
             raise FileUploadError(
                 f"file save failed ({type(e).__name__})",
-                code=ErrorCode.FILE_OPERATION_FAILED,
-            ) from e
-
-    def _save_file_metadata(
-        self, metadata: FileMetadata, file_type: str = "persona_interview"
-    ) -> None:
-        """
-        ファイルメタデータをデータベースに保存する
-
-        Args:
-            metadata: ファイルメタデータ
-            file_type: ファイルタイプ ('persona_interview' or 'discussion_document')
-        """
-        try:
-            self.db_service.save_uploaded_file_info(
-                file_id=metadata.file_id,
-                filename=metadata.saved_filename,
-                file_path=metadata.file_path,
-                file_size=metadata.file_size,
-                file_hash=metadata.file_hash,
-                mime_type=metadata.mime_type,
-                uploaded_at=metadata.uploaded_at,
-                original_filename=metadata.original_filename,
-                file_type=file_type,
-            )
-        except Exception as e:
-            raise DatabaseError(
-                f"file metadata save failed ({type(e).__name__})",
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e

@@ -8,7 +8,7 @@ from PIL import Image
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.authz import Principal, Role
-from src.models.errors import ErrorCode
+from src.models.errors import CodedError, ErrorCode
 from src.models.persona import Persona
 from tests.error_helpers import raises_code
 from web.routers._persona_avatar import persona_avatar_url
@@ -27,7 +27,11 @@ def _persona(avatar_path: str | None = None) -> Persona:
         pain_points=["p"],
         goals=["g"],
     )
-    return persona.with_avatar(avatar_path)
+    return persona.with_avatar(avatar_path).owned_by(OWNER.sub)
+
+
+#: The persona's owner: avatar changes need manage, the URL needs read (U5 BR4.3, BR4.4)
+OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
 
 
 def _png() -> bytes:
@@ -98,7 +102,7 @@ class TestSetAvatar:
         persona = _persona()
         db.get_persona.return_value = persona
 
-        updated = manager.set_avatar(persona.id, _png())
+        updated = manager.set_avatar(OWNER, persona.id, _png())
 
         assert updated.avatar_path == NEW_PATH
         content, key = s3.upload_file.call_args.args
@@ -119,7 +123,7 @@ class TestSetAvatar:
     def test_replacing_deletes_previous_object(self, manager, db, s3):
         db.get_persona.return_value = _persona(OLD_PATH)
 
-        manager.set_avatar("p1", _png())
+        manager.set_avatar(OWNER, "p1", _png())
 
         assert db.update_persona_avatar.call_args.kwargs["expected_path"] == OLD_PATH
         s3.delete_file.assert_called_once_with(OLD_PATH)
@@ -129,7 +133,7 @@ class TestSetAvatar:
         db.update_persona_avatar.side_effect = RuntimeError("boom")
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_UPDATE_FAILED):
-            manager.set_avatar("p1", _png())
+            manager.set_avatar(OWNER, "p1", _png())
 
         s3.delete_file.assert_called_once_with(NEW_PATH)
 
@@ -139,7 +143,7 @@ class TestSetAvatar:
         db.update_persona_avatar.return_value = False
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
-            manager.set_avatar("p1", _png())
+            manager.set_avatar(OWNER, "p1", _png())
 
         db.update_persona.assert_not_called()
         db.save_persona.assert_not_called()
@@ -151,7 +155,7 @@ class TestSetAvatar:
         db.update_persona_avatar.return_value = False
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_CONFLICT):
-            manager.set_avatar("p1", _png())
+            manager.set_avatar(OWNER, "p1", _png())
 
         s3.delete_file.assert_called_once_with(NEW_PATH)
 
@@ -159,13 +163,13 @@ class TestSetAvatar:
         db.get_persona.return_value = _persona()
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_INVALID_IMAGE):
-            manager.set_avatar("p1", b"<svg></svg>")
+            manager.set_avatar(OWNER, "p1", b"<svg></svg>")
 
         s3.upload_file.assert_not_called()
 
     def test_empty_file_is_rejected(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.FILE_EMPTY):
-            manager.set_avatar("p1", b"")
+            manager.set_avatar(OWNER, "p1", b"")
 
     def test_oversized_file_is_rejected(self, manager, monkeypatch):
         from src.config import config
@@ -173,20 +177,20 @@ class TestSetAvatar:
         monkeypatch.setattr(config, "MAX_IMAGE_SIZE", 10)
 
         with raises_code(PersonaManagerError, ErrorCode.FILE_TOO_LARGE):
-            manager.set_avatar("p1", b"x" * 11)
+            manager.set_avatar(OWNER, "p1", b"x" * 11)
 
     def test_missing_persona_is_not_found(self, manager, db):
         db.get_persona.return_value = None
 
-        with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
-            manager.set_avatar("missing", _png())
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.set_avatar(OWNER, "missing", _png())
 
     def test_upload_failure_is_transient(self, manager, db, s3):
         db.get_persona.return_value = _persona()
         s3.upload_file.side_effect = RuntimeError("s3 down")
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
-            manager.set_avatar("p1", _png())
+            manager.set_avatar(OWNER, "p1", _png())
 
         db.update_persona.assert_not_called()
 
@@ -195,7 +199,7 @@ class TestDeleteAvatar:
     def test_clears_path_and_deletes_object(self, manager, db, s3):
         db.get_persona.return_value = _persona(OLD_PATH)
 
-        updated = manager.delete_avatar("p1")
+        updated = manager.delete_avatar(OWNER, "p1")
 
         assert updated.avatar_path is None
         call = db.update_persona_avatar.call_args
@@ -206,7 +210,7 @@ class TestDeleteAvatar:
     def test_noop_without_avatar(self, manager, db, s3):
         db.get_persona.return_value = _persona()
 
-        manager.delete_avatar("p1")
+        manager.delete_avatar(OWNER, "p1")
 
         db.update_persona_avatar.assert_not_called()
         s3.delete_file.assert_not_called()
@@ -216,7 +220,7 @@ class TestDeleteAvatar:
         db.update_persona_avatar.side_effect = RuntimeError("boom")
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_UPDATE_FAILED):
-            manager.delete_avatar("p1")
+            manager.delete_avatar(OWNER, "p1")
 
         s3.delete_file.assert_not_called()
 
@@ -226,7 +230,7 @@ class TestDeleteAvatar:
         db.update_persona_avatar.return_value = False
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_CONFLICT):
-            manager.delete_avatar("p1")
+            manager.delete_avatar(OWNER, "p1")
 
         s3.delete_file.assert_not_called()
 
@@ -235,14 +239,14 @@ class TestGetAvatarUrl:
     def test_returns_presigned_url(self, manager, db, s3):
         db.get_persona.return_value = _persona(OLD_PATH)
 
-        assert manager.get_avatar_url("p1") == "https://signed.example/x"
+        assert manager.get_avatar_url(OWNER, "p1") == "https://signed.example/x"
         s3.generate_presigned_url.assert_called_once_with(OLD_PATH, 3600)
 
     def test_without_avatar_is_not_found(self, manager, db):
         db.get_persona.return_value = _persona()
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_NOT_FOUND):
-            manager.get_avatar_url("p1")
+            manager.get_avatar_url(OWNER, "p1")
 
 
 class TestDeletePersonaCleansUpAvatar:
@@ -256,8 +260,14 @@ class TestDeletePersonaCleansUpAvatar:
 
     @pytest.fixture
     def deleter(self, db, s3, sharing) -> PersonaManager:
+        bindings = Mock()
+        bindings.list_for_persona.return_value = []
         return PersonaManager(
-            database_service=db, s3_service=s3, resource_sharing=sharing
+            database_service=db,
+            s3_service=s3,
+            resource_sharing=sharing,
+            binding_store=bindings,
+            memory_service=None,
         )
 
     def test_deletes_avatar_of_deleted_record(self, deleter, db, s3, sharing):
@@ -296,7 +306,7 @@ class TestAvatarStorageUnavailable:
     def test_upload_is_disabled(self, manager_without_s3):
         assert manager_without_s3.avatar_upload_enabled() is False
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_UNAVAILABLE):
-            manager_without_s3.set_avatar("p1", _png())
+            manager_without_s3.set_avatar(OWNER, "p1", _png())
 
 
 class TestAvatarPixelLimit:
@@ -309,7 +319,7 @@ class TestAvatarPixelLimit:
         with raises_code(
             PersonaManagerError, ErrorCode.PERSONA_AVATAR_TOO_MANY_PIXELS
         ) as exc_info:
-            manager.set_avatar("p1", _png())
+            manager.set_avatar(OWNER, "p1", _png())
 
         assert exc_info.value.context["max_pixels_10k"] == "0"
         s3.upload_file.assert_not_called()

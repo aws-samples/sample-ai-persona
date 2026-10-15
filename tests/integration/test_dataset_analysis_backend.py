@@ -234,3 +234,33 @@ class TestSoftTimeout:
         # スロットが解放され、後続の acquire が即成功すること。
         assert backend._sem.acquire(timeout=0.1) is True
         backend._sem.release()
+
+
+class TestDefaultS3Prefixes:
+    """The default allowlist covers every place a registered dataset lives."""
+
+    def test_persona_dedicated_dataset_accepted(self):
+        # 行動データの専用データセットは PersonaManager がこの接頭辞に写す（U5、BR6.1）
+        from src.managers.persona_manager import DEDICATED_DATASET_PREFIX
+
+        b = DuckDBQueryBackend(bucket_name="b")
+        spec = b._resolve(f"s3://b/{DEDICATED_DATASET_PREFIX}/p-1/d-1.csv")
+        assert spec.is_s3 is True
+
+    @pytest.mark.parametrize("key", ["datasets/x.csv", "persona-dataset/x.parquet"])
+    def test_existing_prefixes_still_accepted(self, key):
+        b = DuckDBQueryBackend(bucket_name="b")
+        assert b._resolve(f"s3://b/{key}").is_s3 is True
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "uploads/u/document/x.csv",
+            "candidates/u/c/x.csv",
+            "persona_datasets_x/a.csv",
+        ],
+    )
+    def test_other_prefixes_rejected(self, key):
+        b = DuckDBQueryBackend(bucket_name="b")
+        with pytest.raises(DatasetAccessError):
+            b._resolve(f"s3://b/{key}")

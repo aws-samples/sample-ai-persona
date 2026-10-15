@@ -9,7 +9,6 @@ from dataclasses import replace
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.authz import Principal, Role
-from src.models.dataset import Dataset, DatasetColumn
 from src.models.errors import AccessDeniedError, CodedError
 from src.models.persona import Persona
 
@@ -38,7 +37,7 @@ def manager(mock_db):
 
 
 class TestGeneratePersonas:
-    """PersonaGenerationManager.generate_and_cache のバリデーションテスト"""
+    """PersonaGenerationManager.generate のバリデーションテスト"""
 
     @pytest.fixture
     def gen_manager(self):
@@ -54,7 +53,9 @@ class TestGeneratePersonas:
         with raises_code(
             PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
         ):
-            gen_manager.generate_and_cache([], "interview", 0)
+            gen_manager.generate(
+                OWNER, file_contents=[], data_type="interview", persona_count=0
+            )
 
     def test_invalid_count_over_10(self, gen_manager):
         from src.managers.persona_generation_manager import (
@@ -64,7 +65,9 @@ class TestGeneratePersonas:
         with raises_code(
             PersonaGenerationManagerError, ErrorCode.GENERATION_PERSONA_COUNT_INVALID
         ):
-            gen_manager.generate_and_cache([], "interview", 11)
+            gen_manager.generate(
+                OWNER, file_contents=[], data_type="interview", persona_count=11
+            )
 
     def test_no_files_raises(self, gen_manager):
         from src.managers.persona_generation_manager import (
@@ -74,7 +77,9 @@ class TestGeneratePersonas:
         with raises_code(
             PersonaGenerationManagerError, ErrorCode.GENERATION_FILES_REQUIRED
         ):
-            gen_manager.generate_and_cache([], "interview", 3)
+            gen_manager.generate(
+                OWNER, file_contents=[], data_type="interview", persona_count=3
+            )
 
     def test_dwh_empty_angle_raises(self, gen_manager):
         from src.managers.persona_generation_manager import (
@@ -85,7 +90,13 @@ class TestGeneratePersonas:
             PersonaGenerationManagerError,
             ErrorCode.GENERATION_DATA_DESCRIPTION_REQUIRED,
         ):
-            gen_manager.generate_and_cache([], "dwh", 3, data_description="")
+            gen_manager.generate(
+                OWNER,
+                file_contents=[],
+                data_type="dwh",
+                persona_count=3,
+                data_description="",
+            )
 
     def test_capacity_error_converted(self):
         """Service層のGenerationCapacityErrorはPersonaGenerationCapacityErrorに変換される"""
@@ -105,8 +116,11 @@ class TestGeneratePersonas:
         )
 
         with pytest.raises(PersonaGenerationCapacityError):
-            gen_manager.generate_and_cache(
-                [(b"sample interview text", "interview.txt")], "interview", 10
+            gen_manager.generate(
+                OWNER,
+                file_contents=[(b"sample interview text", "interview.txt")],
+                data_type="interview",
+                persona_count=10,
             )
 
 
@@ -198,11 +212,16 @@ class TestSavePersona:
 
 
 class TestGetPersona:
-    """get_persona のテスト"""
+    """get_persona_unchecked のテスト（議論・インタビューが U6 まで使う読み出し）
+
+    利用者を受け取る get_persona の判定は test_persona_manager_bindings.py が確かめる。
+    """
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(database_service=Mock())
+        manager = PersonaManager(database_service=Mock())
+        manager.get_persona = manager.get_persona_unchecked  # type: ignore[method-assign]
+        return manager
 
     def test_empty_id_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
@@ -587,165 +606,5 @@ class TestValidatePersonaForSave:
         assert result == "id-123"
 
 
-@pytest.mark.unit
-class TestGetKBBinding:
-    """get_kb_binding のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_binding_exists_and_kb_exists(self, manager):
-        mock_binding = Mock(id="b1", kb_id="kb1")
-        mock_kb = Mock(id="kb1")
-        manager.database_service.get_all_knowledge_bases.return_value = [mock_kb]
-        manager.database_service.get_kb_binding_by_persona.return_value = mock_binding
-        manager.database_service.get_knowledge_base.return_value = mock_kb
-
-        kbs, binding = manager.get_kb_binding("p1")
-        assert kbs == [mock_kb]
-        assert binding == mock_binding
-        manager.database_service.delete_kb_binding.assert_not_called()
-
-    def test_binding_exists_but_kb_missing_deletes_binding(self, manager):
-        mock_binding = Mock(id="b1", kb_id="kb-gone")
-        manager.database_service.get_all_knowledge_bases.return_value = []
-        manager.database_service.get_kb_binding_by_persona.return_value = mock_binding
-        manager.database_service.get_knowledge_base.return_value = None
-
-        kbs, binding = manager.get_kb_binding("p1")
-        assert kbs == []
-        assert binding is None
-        manager.database_service.delete_kb_binding.assert_called_once_with("b1")
-
-    def test_no_binding(self, manager):
-        manager.database_service.get_all_knowledge_bases.return_value = [Mock()]
-        manager.database_service.get_kb_binding_by_persona.return_value = None
-
-        kbs, binding = manager.get_kb_binding("p1")
-        assert len(kbs) == 1
-        assert binding is None
-
-
-@pytest.mark.unit
-class TestCreateKBBinding:
-    """create_kb_binding のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_creates_binding_without_filters(self, manager):
-        result = manager.create_kb_binding("p1", "kb1")
-        assert result.persona_id == "p1"
-        assert result.kb_id == "kb1"
-        assert result.metadata_filters == {}
-        manager.database_service.save_kb_binding.assert_called_once()
-
-    def test_creates_binding_with_filters(self, manager):
-        filters = {"category": "tech"}
-        result = manager.create_kb_binding("p1", "kb1", metadata_filters=filters)
-        assert result.metadata_filters == {"category": "tech"}
-        manager.database_service.save_kb_binding.assert_called_once()
-
-
-@pytest.mark.unit
-class TestDeleteKBBinding:
-    """delete_kb_binding のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_delegates_to_db(self, manager):
-        manager.delete_kb_binding("b1")
-        manager.database_service.delete_kb_binding.assert_called_once_with("b1")
-
-
-@pytest.mark.unit
-class TestGetDatasetBindings:
-    """get_dataset_bindings のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_returns_datasets_and_bindings_map(self, manager):
-        mock_ds = Mock(id="ds1")
-        mock_binding = Mock(dataset_id="ds1")
-        manager.database_service.get_all_datasets.return_value = [mock_ds]
-        manager.database_service.get_bindings_by_persona.return_value = [mock_binding]
-
-        datasets, bindings_map = manager.get_dataset_bindings("p1")
-        assert datasets == [mock_ds]
-        assert bindings_map == {"ds1": mock_binding}
-
-    def test_empty_bindings(self, manager):
-        manager.database_service.get_all_datasets.return_value = [Mock()]
-        manager.database_service.get_bindings_by_persona.return_value = []
-
-        datasets, bindings_map = manager.get_dataset_bindings("p1")
-        assert len(datasets) == 1
-        assert bindings_map == {}
-
-
-@pytest.mark.unit
-class TestCreateDatasetBinding:
-    """create_dataset_binding のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_invalid_column_raises(self, manager):
-        dataset = Dataset.create_new(
-            name="テストDS",
-            description="テスト",
-            s3_path="s3://bucket/key",
-            columns=[DatasetColumn(name="user_id", data_type="string")],
-        )
-        manager.database_service.get_dataset.return_value = dataset
-
-        with raises_code(PersonaManagerError, ErrorCode.DATASET_COLUMN_NOT_FOUND):
-            manager.create_dataset_binding(
-                "p1", "ds1", key_name="invalid_col", key_value="v1"
-            )
-
-    def test_valid_column_saves_binding(self, manager):
-        dataset = Dataset.create_new(
-            name="テストDS",
-            description="テスト",
-            s3_path="s3://bucket/key",
-            columns=[DatasetColumn(name="user_id", data_type="string")],
-        )
-        manager.database_service.get_dataset.return_value = dataset
-
-        result = manager.create_dataset_binding(
-            "p1", "ds1", key_name="user_id", key_value="U123"
-        )
-        assert result.persona_id == "p1"
-        assert result.dataset_id == "ds1"
-        assert result.binding_keys == {"user_id": "U123"}
-        manager.database_service.save_binding.assert_called_once()
-
-    def test_no_key_saves_with_empty_binding_keys(self, manager):
-        result = manager.create_dataset_binding("p1", "ds1")
-        assert result.binding_keys == {}
-        manager.database_service.save_binding.assert_called_once()
-
-    def test_empty_key_name_saves_with_empty_binding_keys(self, manager):
-        result = manager.create_dataset_binding("p1", "ds1", key_name="", key_value="")
-        assert result.binding_keys == {}
-
-
-@pytest.mark.unit
-class TestDeleteDatasetBinding:
-    """delete_dataset_binding のテスト"""
-
-    @pytest.fixture
-    def manager(self):
-        return PersonaManager(database_service=Mock())
-
-    def test_delegates_to_db(self, manager):
-        manager.delete_dataset_binding("b1")
-        manager.database_service.delete_binding.assert_called_once_with("b1")
+# 紐付けの作成・一覧・削除（U5、PersonaBindings）は
+# tests/unit/test_persona_manager_bindings.py が判定と一緒に確かめる。

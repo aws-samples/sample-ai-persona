@@ -4,7 +4,7 @@ Dataset data model for external data integration.
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 import uuid
 
 
@@ -30,6 +30,9 @@ class Dataset:
     created_at: datetime
     updated_at: datetime
     notes: str = ""
+    # U5（Q3 A）: ペルソナ専用のデータセットなら持ち主のペルソナ ID。組織資産は None。
+    # 作成後は変えない
+    owner_persona_id: Optional[str] = None
 
     @classmethod
     def create_new(
@@ -40,10 +43,12 @@ class Dataset:
         columns: List[DatasetColumn],
         row_count: int = 0,
         notes: str = "",
+        owner_persona_id: Optional[str] = None,
+        dataset_id: Optional[str] = None,
     ) -> "Dataset":
         now = datetime.now()
         return cls(
-            id=str(uuid.uuid4()),
+            id=dataset_id or str(uuid.uuid4()),
             name=name,
             description=description,
             s3_path=s3_path,
@@ -52,9 +57,20 @@ class Dataset:
             created_at=now,
             updated_at=now,
             notes=notes,
+            owner_persona_id=owner_persona_id,
         )
 
+    def is_dedicated_to(self, persona_id: str) -> bool:
+        """Whether this dataset belongs to ``persona_id`` (BR2.4, BR6.1)."""
+        return bool(self.owner_persona_id) and self.owner_persona_id == persona_id
+
     def to_dict(self) -> Dict[str, Any]:
+        data = self._base_dict()
+        if self.owner_persona_id:
+            data["owner_persona_id"] = self.owner_persona_id
+        return data
+
+    def _base_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "name": self.name,
@@ -84,46 +100,9 @@ class Dataset:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             notes=data.get("notes", ""),
+            owner_persona_id=data.get("owner_persona_id") or None,
         )
 
 
-@dataclass
-class PersonaDatasetBinding:
-    """ペルソナとデータセットの紐付け情報"""
-
-    id: str
-    persona_id: str
-    dataset_id: str
-    binding_keys: Dict[str, str]  # {"user_id": "U12345"}
-    created_at: datetime
-
-    @classmethod
-    def create_new(
-        cls, persona_id: str, dataset_id: str, binding_keys: Dict[str, str]
-    ) -> "PersonaDatasetBinding":
-        return cls(
-            id=str(uuid.uuid4()),
-            persona_id=persona_id,
-            dataset_id=dataset_id,
-            binding_keys=binding_keys,
-            created_at=datetime.now(),
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "persona_id": self.persona_id,
-            "dataset_id": self.dataset_id,
-            "binding_keys": self.binding_keys,
-            "created_at": self.created_at.isoformat(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PersonaDatasetBinding":
-        return cls(
-            id=data["id"],
-            persona_id=data["persona_id"],
-            dataset_id=data["dataset_id"],
-            binding_keys=data.get("binding_keys", {}),
-            created_at=datetime.fromisoformat(data["created_at"]),
-        )
+# ペルソナとデータセットの紐付けは U5 から src/models/persona_binding.py の
+# PersonaBinding（PersonaBindings テーブル）が持つ。

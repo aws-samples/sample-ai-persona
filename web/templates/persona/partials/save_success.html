@@ -1,7 +1,9 @@
-<!-- 保存成功メッセージパーシャル -->
+<!-- 保存結果パーシャル（一括保存、BR1.9）
+     引数: saved_count ... 保存できた件数、failed_names ... 保存できなかった候補の名前 -->
+{% if saved_count %}
 <div class="bg-green-50 border border-green-200 rounded-lg p-4">
     <div class="flex items-center gap-2">
-        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
         </svg>
         <p class="text-green-800 font-medium">{{ saved_count }}人のペルソナを保存しました</p>
@@ -10,3 +12,14 @@
         <a href="/persona/management" class="underline hover:text-green-900">ペルソナ管理ページ</a>で確認できます
     </p>
 </div>
+{% endif %}
+{% if failed_names %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4 mt-4" role="alert" data-testid="save-failed-names">
+    <p class="text-red-800 text-sm">次のペルソナは保存できませんでした。</p>
+    <ul class="list-disc pl-5 mt-2 text-sm text-red-800">
+        {% for name in failed_names %}
+        <li>{{ name }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}

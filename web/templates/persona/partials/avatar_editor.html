@@ -6,6 +6,7 @@
   引数:
     persona ... 対象ペルソナ
     avatar_upload_enabled ... 画像の保存先（S3）が設定されているか
+    manageable ... 画像を変えられるか（管理できる人だけ、BR4.3）
 #}
 <div class="flex flex-col items-center gap-1">
     <div class="persona-detail-avatar shadow-md"
@@ -14,7 +15,7 @@
          data-avatar-name="{{ persona.name }}"
          data-avatar-size="64"
          data-avatar-eager></div>
-    {% if avatar_upload_enabled %}
+    {% if avatar_upload_enabled and manageable %}
     <form hx-post="/persona/{{ persona.id }}/avatar"
           hx-encoding="multipart/form-data"
           hx-trigger="change"

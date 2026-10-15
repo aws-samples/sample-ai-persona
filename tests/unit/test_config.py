@@ -381,9 +381,11 @@ class TestTableNames:
 
         with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
             names = Config().table_names()
-        assert len(names) == 10
+        # U5: 古い 2 つの紐付けのテーブルは読まない（PersonaBindings にまとめた）
+        assert len(names) == 8
         assert names["Jobs"] == "Local_Jobs"
-        assert names["PersonaKBBindings"] == "Local_PersonaKBBindings"
+        assert "PersonaKBBindings" not in names
+        assert "PersonaDatasetBindings" not in names
 
     def test_unknown_table_kind_is_an_error(self):
         from src.config import Config
@@ -417,3 +419,50 @@ class TestResourceSharesTableName:
         assert "ResourceShares" not in TABLE_NAME_SETTINGS
         with patch.dict(os.environ, {}, clear=True):
             assert "ResourceShares" not in Config().table_names()
+
+
+class TestPersonaU5Tables:
+    """U5 の 2 テーブルの物理名と候補の保持時間（infrastructure-specification.md）。"""
+
+    @pytest.mark.parametrize(
+        ("setting", "suffix"),
+        [
+            ("PERSONA_CANDIDATES_TABLE_NAME", "PersonaCandidates"),
+            ("PERSONA_BINDINGS_TABLE_NAME", "PersonaBindings"),
+        ],
+    )
+    def test_falls_back_to_the_prefix(self, setting, suffix):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
+            config = Config()
+        assert getattr(config, setting) == f"Local_{suffix}"
+
+    @pytest.mark.parametrize(
+        "setting", ["PERSONA_CANDIDATES_TABLE_NAME", "PERSONA_BINDINGS_TABLE_NAME"]
+    )
+    def test_reads_the_cdk_name(self, setting):
+        from src.config import Config
+
+        with patch.dict(os.environ, {setting: "Data-TableXYZ"}, clear=True):
+            config = Config()
+        assert getattr(config, setting) == "Data-TableXYZ"
+
+    def test_new_tables_are_not_bulk_granted(self):
+        from src.config import TABLE_NAME_SETTINGS
+
+        assert "PersonaCandidates" not in TABLE_NAME_SETTINGS
+        assert "PersonaBindings" not in TABLE_NAME_SETTINGS
+
+    def test_old_binding_table_settings_are_gone(self):
+        from src.config import Config
+
+        config = Config()
+        assert not hasattr(config, "PERSONA_DATASET_BINDINGS_TABLE_NAME")
+        assert not hasattr(config, "PERSONA_KB_BINDINGS_TABLE_NAME")
+
+    def test_candidates_live_eight_hours_by_default(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {}, clear=True):
+            assert Config().PERSONA_CACHE_TTL_SECONDS == 28800

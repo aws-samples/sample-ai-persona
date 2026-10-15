@@ -1,10 +1,47 @@
 <!-- ナレッジベース紐付けパーシャル（データセット紐付けUIと統一） -->
 {% from "components/dialog.html" import dialog, dialog_open_button %}
-{% if not knowledge_bases %}
-<p class="text-gray-500 text-sm">利用可能なナレッジベースがありません。<a href="/settings" class="text-indigo-600 hover:underline">設定</a>からナレッジベースを登録してください。</p>
+{% from "components/status_label.html" import status_label %}
+{#
+  引数:
+    persona_id ... 対象ペルソナ
+    view       ... KbBindingView（binding: 今の紐付け、manageable: 変えられるか、
+                   choices: 紐付けられる KB。管理できる人にだけ入る）
+  紐付けの操作は管理できる人にだけ出す（BR4.2）。使えない KB は「利用権限なし」を文字で示す（BR2.7）。
+#}
+{% set binding = view.binding %}
+{% if binding %}
+<div class="border border-gray-200 rounded-lg p-4" data-testid="kb-binding-row">
+    <div class="flex items-center justify-between">
+        <div class="flex-1">
+            <h4 class="font-medium text-gray-900">{{ binding.name }}
+                {%- if not binding.usable %} {{ status_label("利用権限なし") }}{% endif %}</h4>
+            {% if binding.metadata_filters %}
+            <p class="mt-2 text-xs text-gray-500">
+                フィルタ: {% for k, v in binding.metadata_filters.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            {% endif %}
+        </div>
+        <div class="ml-4 flex items-center gap-2">
+            <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
+            {% if view.manageable %}
+            <button
+                hx-delete="/persona/{{ persona_id }}/kb-binding"
+                hx-target="#kb-binding-content"
+                hx-swap="innerHTML"
+                hx-confirm="この紐付けを解除しますか？"
+                class="text-red-500 hover:text-red-700 text-sm"
+            >解除</button>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% elif not view.manageable %}
+<p class="text-gray-500 text-sm">紐付けられたナレッジベースはありません。</p>
+{% elif not view.choices %}
+<p class="text-gray-500 text-sm">紐付けられるナレッジベースがありません。</p>
 {% else %}
 <div class="space-y-3">
-    {% for kb in knowledge_bases %}
+    {% for kb in view.choices %}
     <div class="border border-gray-200 rounded-lg p-4" x-data="{ filters: [], addFilter() { this.filters.push({key:'',value:''}); }, removeFilter(i) { this.filters.splice(i,1); } }">
         <div class="flex items-center justify-between">
             <div class="flex-1">
@@ -15,33 +52,14 @@
                 <p class="text-xs text-gray-400 mt-1">ナレッジベースID: {{ kb.knowledge_base_id }}</p>
             </div>
             <div class="ml-4">
-                {% if binding and binding.kb_id == kb.id %}
-                <div class="flex items-center gap-2">
-                    <span class="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">紐付け済み</span>
-                    <button
-                        hx-delete="/persona/{{ persona_id }}/kb-binding/{{ binding.id }}"
-                        hx-target="#kb-binding-content"
-                        hx-swap="innerHTML"
-                        hx-confirm="この紐付けを解除しますか？"
-                        class="text-red-500 hover:text-red-700 text-sm"
-                    >解除</button>
-                </div>
-                {% if binding.metadata_filters %}
-                <div class="mt-2 text-xs text-gray-500">
-                    フィルタ: {% for k, v in binding.metadata_filters.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
-                </div>
-                {% endif %}
-                {% elif not binding %}
                 {{ dialog_open_button("kb-binding-" ~ kb.id, "紐付ける", classes="text-indigo-600 hover:text-indigo-800 text-sm font-medium") }}
-                {% endif %}
             </div>
         </div>
 
         <!-- 紐付けダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま） -->
-        {% if not binding %}
         {% call dialog("kb-binding-" ~ kb.id, kb.name ~ " を紐付け", close_on_success=True) %}
                 <p class="text-sm text-gray-600 mb-4">ナレッジベース検索時に適用するメタデータフィルタを設定してください（オプション）。</p>
-                
+
                 <form id="kb-binding-form-{{ kb.id }}">
                     <div class="mb-4">
                         <div class="flex items-center justify-between mb-2">
@@ -50,10 +68,10 @@
                         </div>
                         <template x-for="(filter, i) in filters" :key="i">
                             <div class="flex gap-2 mb-2">
-                                <input type="text" x-model="filter.key" placeholder="キー名" class="flex-1 border rounded px-3 py-2 text-sm">
-                                <input type="text" x-model="filter.value" placeholder="値" class="flex-1 border rounded px-3 py-2 text-sm">
-                                <button type="button" @click="removeFilter(i)" class="text-red-400 hover:text-red-600">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                <input type="text" x-model="filter.key" placeholder="キー名" aria-label="キー名" class="flex-1 border rounded px-3 py-2 text-sm">
+                                <input type="text" x-model="filter.value" placeholder="値" aria-label="値" class="flex-1 border rounded px-3 py-2 text-sm">
+                                <button type="button" @click="removeFilter(i)" aria-label="フィルタを削除" class="text-red-400 hover:text-red-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                                 </button>
                             </div>
                         </template>
@@ -62,7 +80,7 @@
                     <input type="hidden" name="kb_id" value="{{ kb.id }}">
                     <input type="hidden" name="metadata_filters_json" :value="JSON.stringify(filters.reduce((acc, f) => { if(f.key.trim()) acc[f.key.trim()] = f.value.trim(); return acc; }, {}))">
                 </form>
-                
+
                 <div class="flex justify-end gap-2">
                     <button type="button" data-dialog-close class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
                     <button
@@ -76,7 +94,6 @@
                     >紐付ける</button>
                 </div>
         {% endcall %}
-        {% endif %}
     </div>
     {% endfor %}
 </div>

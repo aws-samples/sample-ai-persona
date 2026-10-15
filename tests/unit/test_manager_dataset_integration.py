@@ -14,18 +14,15 @@ import pytest
 from src.managers import agent_discussion_manager, interview_manager
 from src.managers.components import persona_agent_integration as pai_module
 from src.managers.components.persona_agent_integration import PersonaAgentIntegration
-from src.models.dataset import Dataset, DatasetColumn, PersonaDatasetBinding
+from src.models.dataset import Dataset, DatasetColumn
+from src.models.persona_binding import PersonaBinding
 
 pytestmark = pytest.mark.unit
 
 
 def _binding(persona_id, dataset_id, keys=None):
-    return PersonaDatasetBinding(
-        id=f"b-{dataset_id}-{hash(str(keys)) & 0xFFFF}",
-        persona_id=persona_id,
-        dataset_id=dataset_id,
-        binding_keys=keys or {},
-        created_at=datetime.now(),
+    return PersonaBinding.for_dataset(
+        persona_id, dataset_id, binding_keys=keys or {}, now=datetime.now()
     )
 
 
@@ -44,17 +41,23 @@ def _dataset(dataset_id):
 
 
 def _component(db, ds_service, agent_service=None):
+    # U5: bindings come from PersonaBindingStore (a persona_id query)
+    binding_store = Mock()
+    binding_store.list_for_persona.side_effect = lambda pid: list(
+        getattr(db, "bindings", [])
+    )
     return PersonaAgentIntegration(
         database_service=db,
         agent_service=agent_service or Mock(),
         dataset_analysis_service=ds_service,
+        binding_store=binding_store,
     )
 
 
 class TestResolveDatasetBindings:
     def test_duplicate_dataset_excluded_wholesale(self):
         db = Mock()
-        db.get_bindings_by_persona.return_value = [
+        db.bindings = [
             _binding("p1", "ds-dup", {"user_id": "U1"}),
             _binding("p1", "ds-dup", {"user_id": "U2"}),  # 同 dataset に2 binding
             _binding("p1", "ds-ok", {"user_id": "U9"}),
@@ -71,7 +74,7 @@ class TestResolveDatasetBindings:
 
     def test_unique_empty_binding_keys_allowed(self):
         db = Mock()
-        db.get_bindings_by_persona.return_value = [_binding("p1", "ds-all", {})]
+        db.bindings = [_binding("p1", "ds-all", {})]
         db.get_dataset.side_effect = _dataset
         comp = _component(db, Mock())
 
@@ -80,7 +83,7 @@ class TestResolveDatasetBindings:
 
     def test_no_bindings_returns_empty(self):
         db = Mock()
-        db.get_bindings_by_persona.return_value = []
+        db.bindings = []
         comp = _component(db, Mock())
         assert comp._resolve_dataset_bindings("p1") == ([], [])
 
@@ -88,9 +91,7 @@ class TestResolveDatasetBindings:
 class TestKillSwitchAndGate:
     def _db_with_binding(self):
         db = Mock()
-        db.get_bindings_by_persona.return_value = [
-            _binding("p1", "ds-ok", {"user_id": "U1"})
-        ]
+        db.bindings = [_binding("p1", "ds-ok", {"user_id": "U1"})]
         db.get_dataset.side_effect = _dataset
         return db
 
