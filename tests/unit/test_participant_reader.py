@@ -179,3 +179,43 @@ class TestStatuses:
         participants, _, _ = _world(reader_error=LookupFailed())
         with pytest.raises(LookupUnavailableError):
             participants.statuses(MEMBER_A, ["own"])
+
+
+class TestStatusesWithBodies:
+    """議論の詳細の参加者のカード: 読めるペルソナだけ本体を読む（BR7.3）。"""
+
+    def test_reads_bodies_of_readable_participants_only(self):
+        participants, reader, bodies = _world()
+        statuses, personas = participants.statuses_with_bodies(
+            MEMBER_A, ["own", "shared", "other", "gone"]
+        )
+        assert statuses == {
+            "own": "readable",
+            "shared": "readable",
+            "other": "no_access",
+            "gone": "deleted",
+        }
+        assert set(personas) == {"own", "shared"}
+        assert len(reader.calls) == 1
+        assert bodies.calls == [["own", "shared"]]
+
+    def test_no_readable_participant_reads_no_body(self):
+        participants, _, bodies = _world()
+        statuses, personas = participants.statuses_with_bodies(
+            MEMBER_C, ["own", "shared"]
+        )
+        assert statuses == {"own": "no_access", "shared": "no_access"}
+        assert personas == {}
+        assert bodies.calls == []
+
+    def test_body_read_failure_keeps_the_statuses(self):
+        participants, _, _ = _world(bodies_error=RuntimeError("boom"))
+        statuses, personas = participants.statuses_with_bodies(MEMBER_A, ["own"])
+        assert statuses == {"own": "readable"}
+        assert personas == {}
+
+    def test_lookup_failure_is_503(self):
+        participants, _, bodies = _world(reader_error=LookupFailed())
+        with pytest.raises(LookupUnavailableError):
+            participants.statuses_with_bodies(MEMBER_A, ["own"])
+        assert bodies.calls == []

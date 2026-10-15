@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Mapping, Optional
 import uuid
 
 from .discussion_report import DiscussionReport
+from .persona import Persona
 from .insight import Insight
 from .message import Message
 
@@ -80,15 +81,20 @@ class ParticipantView:
         persona_id: The persona.
         display_name: The name kept when the discussion was saved.
         status: ``readable``, ``no_access`` or ``deleted``.
+        persona: The current body, for the participant card. Only a readable
+            participant carries one (BR7.3).
     """
 
     persona_id: str
     display_name: str
     status: str
+    persona: Optional[Persona] = None
 
     def __post_init__(self) -> None:
         if self.status not in PARTICIPANT_STATUSES:
             raise ValueError(f"unknown participant status {self.status!r}")
+        if self.persona is not None and self.status != "readable":
+            raise ValueError("only a readable participant carries its body")
 
     @property
     def linkable(self) -> bool:

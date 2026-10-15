@@ -24,6 +24,7 @@ from src.managers.components.resource_sharing import (
     ResourceSharing,
     default_sharing_tables,
 )
+from src.models.persona import Persona
 from src.models.authz import AccessTarget, Principal, ResourceType, Role
 from src.models.discussion import Discussion, DocumentRef
 from src.models.discussion_report import DiscussionReport
@@ -232,14 +233,37 @@ def records(store, files) -> DiscussionRecords:
         [(PERSONA, PersonaReader()), (DISCUSSION, DiscussionReader(store))],
         sample_rate=0.0,
     )
-    participants = ParticipantReader(lookup, Mock())
-    return DiscussionRecords(
+    bodies = Mock()
+    # 参加者のカード（BR7.3）: 読めるペルソナの本体だけを返す
+    bodies.get_personas_by_ids.side_effect = lambda ids: {
+        i: _participant_persona(i) for i in ids if i in ("p1", "p2")
+    }
+    participants = ParticipantReader(lookup, bodies)
+    records = DiscussionRecords(
         store,
         sharing,
         files,
         participants,
         clock=lambda: NOW,
         sleep=lambda _s: None,
+    )
+    records.persona_bodies = bodies  # type: ignore[attr-defined]
+    return records
+
+
+def _participant_persona(pid: str) -> Persona:
+    return Persona(
+        id=pid,
+        name=f"本体{pid}",
+        age=41,
+        occupation="会社員",
+        background="背景",
+        values=["価値"],
+        pain_points=[],
+        goals=[],
+        created_at=NOW,
+        updated_at=NOW,
+        owner_sub="owner",
     )
 
 
@@ -374,6 +398,26 @@ class TestGet:
             ("p2", "鈴木", "readable"),
             ("p3", "田中", "deleted"),
         ]
+
+    def test_readable_participants_carry_their_bodies(self, records, store):
+        saved = _saved(records)
+        view = records.get(OWNER, saved.id)
+        cards = {p.persona_id: p.persona for p in view.participants}
+        assert cards["p1"] is not None and cards["p1"].occupation == "会社員"
+        assert cards["p2"] is not None
+        assert cards["p3"] is None
+        records.persona_bodies.get_personas_by_ids.assert_called_once_with(["p1", "p2"])
+
+    def test_unreadable_participants_bodies_are_not_read(self, records, store):
+        saved = _saved(records)
+        _share(store, saved.id, "sales")
+        view = records.get(PEER, saved.id)
+        readable = [p.persona_id for p in view.participants if p.status == "readable"]
+        assert "p1" not in readable
+        for p in view.participants:
+            assert (p.persona is not None) == (p.status == "readable")
+        (ids,), _ = records.persona_bodies.get_personas_by_ids.call_args
+        assert ids == readable
 
     def test_shared_reader_sees_it_but_cannot_manage(self, records, store):
         saved = _saved(records)

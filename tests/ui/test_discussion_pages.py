@@ -69,7 +69,7 @@ def _view(manageable: bool) -> DiscussionView:
         Message.create_new("p2", "鈴木 一郎", "価格は 3,000 円以下でないと..."),
     ]
     participants = [
-        ParticipantView("p1", "佐藤 太郎", "readable"),
+        ParticipantView("p1", "佐藤 太郎", "readable", SATO),
         ParticipantView("p2", "鈴木 一郎", "no_access"),
         ParticipantView("p3", "田中 美咲", "deleted"),
     ]
@@ -100,6 +100,10 @@ def test_detail_marks_participants_in_text_and_has_no_axe_violations(
     participants = ui.page.locator("[data-testid='discussion-participant']")
     texts = [t.replace("\n", " ") for t in participants.all_inner_texts()]
     assert "〔参照権限なし〕" in texts[1] and "〔削除済み〕" in texts[2]
+    # 読めるペルソナだけ、これまでどおり属性とプロフィールを出す（BR7.3）
+    assert "会社員 / 30歳" in texts[0] and "東京で働いている。" in texts[0]
+    assert "効率" in texts[0]
+    assert "会社員" not in texts[1] and "会社員" not in texts[2]
     assert ui.page.locator("a[href='/persona/p1']").count() == 1
     assert ui.page.locator("a[href='/persona/p2']").count() == 0
     assert ui.page.locator("a[href='/persona/p3']").count() == 0

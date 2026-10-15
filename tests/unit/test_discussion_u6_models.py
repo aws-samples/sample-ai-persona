@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.models.persona import Persona
 from src.models.authz import (
     AccessTarget,
     ExecutionContext,
@@ -304,6 +305,21 @@ class TestParticipantView:
     def test_unknown_status_is_refused(self):
         with pytest.raises(ValueError):
             ParticipantView("p1", "佐藤", "hidden")
+
+    @pytest.mark.parametrize("status", ["no_access", "deleted"])
+    def test_only_a_readable_participant_carries_its_body(self, status):
+        body = Persona.create_new(
+            name="佐藤",
+            age=30,
+            occupation="会社員",
+            background="背景",
+            values=[],
+            pain_points=[],
+            goals=[],
+        )
+        assert ParticipantView("p1", "佐藤", "readable", body).persona is body
+        with pytest.raises(ValueError):
+            ParticipantView("p1", "佐藤", status, body)
 
     def test_view_bundles_the_parts(self):
         d = _discussion()

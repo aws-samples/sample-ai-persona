@@ -138,6 +138,30 @@ class ParticipantReader:
         targets = self.targets(persona_ids)
         return {pid: _status(principal, targets[pid]) for pid in persona_ids}
 
+    def statuses_with_bodies(
+        self, principal: Principal, persona_ids: Sequence[str]
+    ) -> tuple[dict[str, str], dict[str, Persona]]:
+        """The states, plus the bodies of the participants the reader can read.
+
+        Unreadable and deleted participants' bodies are never read (BR7.3).
+        The bodies are display-only: when their batch read fails the states
+        are still returned with no bodies.
+
+        Raises:
+            LookupUnavailableError: The decision columns could not be read.
+        """
+        statuses = self.statuses(principal, persona_ids)
+        readable = [pid for pid, s in statuses.items() if s == "readable"]
+        if not readable:
+            return statuses, {}
+        try:
+            bodies = self._bodies.get_personas_by_ids(readable)
+        except Exception as e:
+            # 表示用だけなので、読めなくても参加者の状態は出す
+            logger.warning("Reading participant bodies failed: %s", type(e).__name__)
+            return statuses, {}
+        return statuses, {pid: bodies[pid] for pid in readable if pid in bodies}
+
 
 def _status(principal: Principal, target: AccessTarget) -> str:
     if not target.exists:

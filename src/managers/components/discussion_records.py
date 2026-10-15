@@ -369,7 +369,9 @@ class DiscussionRecords:
     def _participant_views(
         self, principal: Principal, discussion: Discussion, messages: Sequence[Message]
     ) -> list[ParticipantView]:
-        statuses = self._participants.statuses(principal, discussion.participants)
+        statuses, bodies = self._participants.statuses_with_bodies(
+            principal, discussion.participants
+        )
         spoken = {m.persona_id: m.persona_name for m in messages}
         return [
             ParticipantView(
@@ -378,6 +380,7 @@ class DiscussionRecords:
                 or spoken.get(pid)
                 or pid[:8],
                 status=statuses.get(pid, "deleted"),
+                persona=bodies.get(pid) if statuses.get(pid) == "readable" else None,
             )
             for pid in discussion.participants
         ]
