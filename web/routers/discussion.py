@@ -1,17 +1,23 @@
 """
 議論関連のルーター
+
+v1.0.0 U6: Router は判定しない。``request.state.principal`` を Manager に渡し、
+判定の例外（``*_NOT_FOUND``・``ACCESS_DENIED``・``LOOKUP_UNAVAILABLE``）は
+共通の例外ハンドラ（約束 C13）に任せる。議論の開始で参加者が読めなければ
+M12 の枠（``discussion/partials/conversation_stopped.html``）を返す。
 """
 
 import logging
 import asyncio
 import json
-from datetime import datetime
-from typing import Any, Optional, List
+import queue as queue_mod
+from typing import Any, Callable, Optional, List
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
-from fastapi import APIRouter, Request, Form, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import APIRouter, Request, Form, UploadFile, File
+from fastapi.responses import HTMLResponse, Response, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from src.managers.persona_manager import PersonaManager
@@ -24,7 +30,13 @@ from src.managers.report_manager import ReportManager
 from src.managers.file_manager import FileManager, FileUploadError
 from src.config import config
 from src.models.authz import Principal
-from src.models.errors import ErrorCode, ErrorKind
+from src.models.discussion_report import REPORT_TEMPLATE_TYPES, DiscussionReport
+from src.models.errors import (
+    CodedError,
+    ErrorCode,
+    ErrorKind,
+    ParticipantNotFoundError,
+)
 from src.models.insight_category import InsightCategory
 from src.models.model_registry import display_name_for, list_selectable_models
 from web.error_messages import (
@@ -36,7 +48,6 @@ from web.error_messages import (
     user_message_for_code,
 )
 from ._form_parsing import parse_persona_models
-from ._pagination import decode_cursor, encode_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +75,13 @@ templates.env.globals["model_display_name"] = display_name_for
 
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
+
+#: The tab panel of the results page (``list_tabpanel``); tab switches and
+#: ``listReload`` target it and get only the panel content back.
+LIST_PANEL_ID = "discussion-list"
+
+#: Where the stop panel (M12) of a discussion leads back to.
+_SETUP_URL = "/discussion/setup"
 
 
 # シングルトンマネージャーインスタンス（モジュールレベルで共有）
@@ -120,18 +138,42 @@ def _principal(request: Request) -> Principal:
     return principal
 
 
-def _get_participant_personas(participant_ids: List[str]) -> dict:
-    """参加者IDからペルソナ情報を取得してマップを返す（参加者の判定は U6）"""
-    persona_manager = get_persona_manager()
-    persona_map = {}
-    for pid in participant_ids:
-        try:
-            persona = persona_manager.get_persona_unchecked(pid)
-            if persona:
-                persona_map[pid] = persona
-        except Exception:
-            pass
-    return persona_map
+async def _run(func: Callable[..., Any], *args: Any) -> Any:
+    """Run a synchronous Manager call (DynamoDB / AI) in the worker pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, func, *args)
+
+
+def _sse(data: dict[str, Any], event: str | None = None) -> str:
+    prefix = f"event: {event}\n" if event else ""
+    return f"{prefix}data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _sse_error(message: str) -> str:
+    return _sse({"type": "error", "message": message})
+
+
+def _attachment(filename: str) -> str:
+    """``Content-Disposition`` of a download (the name may be Japanese)."""
+    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def _conversation_stopped(request: Request) -> Response:
+    """M12: a participant can no longer be read; the setup form is kept."""
+    return mark_renderable(
+        templates.TemplateResponse(
+            request,
+            "discussion/partials/conversation_stopped.html",
+            {
+                "request": request,
+                "kind": "discussion",
+                "back_url": _SETUP_URL,
+                "back_label": "議論の設定へ",
+            },
+            status_code=404,
+        )
+    )
 
 
 def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  # type: ignore[no-untyped-def]
@@ -187,21 +229,13 @@ async def upload_discussion_document(
     """議論用ドキュメントをアップロード（利用者のキーに置き、24 時間で使えなくなる、BR5.1）"""
     try:
         file_manager = get_file_manager()
-
-        # ファイル内容を読み込み
         file_content = await file.read()
-
-        # ファイルをアップロード
-        loop = asyncio.get_running_loop()
-        file_metadata = await loop.run_in_executor(
-            executor,
+        file_metadata = await _run(
             file_manager.upload_discussion_document,
             _principal(request),
             file_content,
             file.filename or "",
         )
-
-        # JSONレスポンスを返す
         return JSONResponse(
             {
                 "file_id": file_metadata.file_id,
@@ -236,33 +270,14 @@ async def upload_discussion_document(
 
 @router.get("/result-partial/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_result_partial(request: Request, discussion_id: str) -> Any:
-    """議論結果パーシャルを取得（リアルタイム表示完了後に使用）"""
+    """議論結果パーシャルを取得（リアルタイム表示完了後に使用）。読める人だけ（BR2.4）"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion = discussion_manager.get_discussion(discussion_id)
-
-        if not discussion:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_banner.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-                        "back_url": "/discussion/results",
-                        "back_label": "議論一覧に戻る",
-                    },
-                    status_code=404,
-                )
-            )
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/discussion_result.html",
-            {"request": request, "discussion": discussion},
+        view = await _run(
+            get_discussion_manager().get_discussion, _principal(request), discussion_id
         )
-    except Exception as e:
-        logger.error(f"Failed to get discussion result partial: {e}")
+    except CodedError as e:
+        logger.info("Discussion result partial not shown", exc_info=True)
+        status = 404 if error_kind_of(e) is ErrorKind.NOT_FOUND else 503
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -272,13 +287,21 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
                     "error": user_message_for(
                         e, default="議論結果の取得に失敗しました"
                     ),
+                    "back_url": "/discussion/results",
+                    "back_label": "議論一覧に戻る",
                 },
-                status_code=500,
+                status_code=status,
             )
         )
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/discussion_result.html",
+        {"request": request, "discussion": view},
+    )
 
 
 # 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
+# GET で AI を動かすため web/middleware.py が Sec-Fetch-Site を確かめる（NFR4.13）
 @router.get("/stream")
 async def stream_discussion(
     request: Request,
@@ -297,229 +320,193 @@ async def stream_discussion(
     facilitator_model: str = "",
 ) -> Any:
     """議論ストリーミングエンドポイント（SSE）- 簡易モード・エージェントモード両対応"""
+    principal = _principal(request)
+    ids = [pid.strip() for pid in persona_ids.split(",") if pid.strip()]
+
+    def single(event: str) -> StreamingResponse:
+        return StreamingResponse(iter([event]), media_type="text/event-stream")
+
+    if len(ids) < 2:
+        return single(
+            _sse_error(
+                user_message_for_code(
+                    ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {"min_personas": 2}
+                )
+            )
+        )
     try:
-        ids = persona_ids.split(",")
-        if len(ids) < 2:
-            return StreamingResponse(
-                iter(
-                    [
-                        f"data: {json.dumps({'type': 'error', 'message': user_message_for_code(ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {'min_personas': 2})}, ensure_ascii=False)}\n\n"
-                    ]
-                ),
-                media_type="text/event-stream",
+        personas = await _run(
+            get_persona_manager().get_personas_for_use, principal, ids
+        )
+    except CodedError as e:
+        if isinstance(e, ParticipantNotFoundError):
+            # M12: 読めない参加者を含む。理由は出さず、画面が枠を出す
+            return single(_sse({"type": "stopped"}))
+        logger.warning("Discussion stream not started", exc_info=True)
+        return single(
+            _sse_error(
+                user_message_for(e, default="議論の実行中にエラーが発生しました")
             )
+        )
 
-        persona_manager = get_persona_manager()
-        principal = _principal(request)
-        personas_raw = [
-            persona_manager.get_persona_unchecked(pid.strip()) for pid in ids
-        ]
-        personas = [p for p in personas_raw if p is not None]
+    # カテゴリー情報を解析
+    categories = None
+    if categories_json:
+        try:
+            categories = [
+                InsightCategory(name=c["name"], description=c["description"])
+                for c in json.loads(categories_json)
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to parse category: {type(e).__name__}")
 
-        if len(personas) < 2:
-            return StreamingResponse(
-                iter(
-                    [
-                        f"data: {json.dumps({'type': 'error', 'message': user_message_for_code(ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {'min_personas': 2})}, ensure_ascii=False)}\n\n"
-                    ]
-                ),
-                media_type="text/event-stream",
-            )
+    doc_ids = [d.strip() for d in document_ids.split(",") if d.strip()] or None
 
-        # カテゴリー情報を解析
-        categories = None
-        if categories_json:
+    # per-persona モデル選択を解析（URLエンコードしたJSON文字列1個で受ける）
+    persona_models = None
+    if persona_models_json:
+        try:
+            persona_models = json.loads(persona_models_json) or None
+        except Exception as e:
+            logger.warning(f"Failed to parse persona_models_json: {type(e).__name__}")
+
+    facilitator_model_id = facilitator_model.strip() or None
+
+    participants_data = {
+        "type": "participants",
+        "personas": [
+            {"id": p.id, "name": p.name, "avatar_url": persona_avatar_url(p)}
+            for p in personas
+        ],
+        "mode": mode,
+    }
+
+    async def event_generator() -> Any:
+        yield _sse(participants_data)
+
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def run_sync_generator() -> None:
             try:
-                categories_data = json.loads(categories_json)
-                categories = [
-                    InsightCategory(name=c["name"], description=c["description"])
-                    for c in categories_data
-                ]
-            except Exception as e:
-                logger.warning(f"Failed to parse category: {e}")
-
-        # ドキュメントIDを解析
-        doc_ids = None
-        if document_ids:
-            doc_ids = [did.strip() for did in document_ids.split(",") if did.strip()]
-
-        # per-persona モデル選択を解析（URLエンコードしたJSON文字列1個で受ける）
-        persona_models = None
-        if persona_models_json:
-            try:
-                persona_models = json.loads(persona_models_json) or None
-            except Exception as e:
-                logger.warning(f"Failed to parse persona_models_json: {e}")
-
-        facilitator_model_id = facilitator_model.strip() or None
-
-        # 参加者情報を最初に送信
-        participants_data = {
-            "type": "participants",
-            "personas": [
-                {"id": p.id, "name": p.name, "avatar_url": persona_avatar_url(p)}  # type: ignore[union-attr]
-                for p in personas
-            ],
-            "mode": mode,
-        }
-
-        async def event_generator() -> Any:
-            yield f"data: {json.dumps(participants_data, ensure_ascii=False)}\n\n"
-
-            queue: asyncio.Queue[Any] = asyncio.Queue()
-
-            def run_sync_generator() -> Any:
-                try:
-                    if mode == "agent":
-                        manager = get_agent_discussion_manager()
-                        gen = manager.run_agent_discussion_streaming(
-                            personas=personas,
-                            topic=topic,
-                            rounds=rounds,
-                            additional_instructions=additional_instructions,
-                            enable_memory=enable_memory,
-                            memory_mode=memory_mode,
-                            enable_dataset=enable_dataset,
-                            enable_kb=enable_kb,
-                            categories=categories,
-                            document_ids=doc_ids,
-                            persona_models=persona_models,
-                            facilitator_model=facilitator_model_id,
-                            principal=principal,
-                        )
-                    else:
-                        dm = get_discussion_manager()
-                        gen = dm.run_classic_discussion_streaming(
-                            personas=personas,
-                            topic=topic,
-                            categories=categories,
-                            document_ids=doc_ids,
-                            principal=principal,
-                        )
-                    for event in gen:
-                        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
-                except Exception as e:
-                    logger.error("Streaming processing error", exc_info=True)
-                    message = user_message_for(
-                        e, default="議論の実行中にエラーが発生しました"
+                if mode == "agent":
+                    gen = get_agent_discussion_manager().run_agent_discussion_streaming(
+                        principal,
+                        personas,
+                        topic,
+                        rounds=rounds,
+                        additional_instructions=additional_instructions,
+                        enable_memory=enable_memory,
+                        memory_mode=memory_mode,
+                        enable_dataset=enable_dataset,
+                        enable_kb=enable_kb,
+                        categories=categories,
+                        document_ids=doc_ids,
+                        persona_models=persona_models,
+                        facilitator_model=facilitator_model_id,
                     )
-                    error_event = f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                    asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
-                finally:
-                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                else:
+                    gen = get_discussion_manager().run_classic_discussion_streaming(
+                        principal,
+                        personas,
+                        topic,
+                        categories=categories,
+                        document_ids=doc_ids,
+                    )
+                for event in gen:
+                    asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+            except Exception as e:
+                logger.error("Streaming processing error", exc_info=True)
+                if isinstance(e, ParticipantNotFoundError):
+                    error_event = _sse({"type": "stopped"})
+                else:
+                    error_event = _sse_error(
+                        user_message_for(
+                            e, default="議論の実行中にエラーが発生しました"
+                        )
+                    )
+                asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-            loop = asyncio.get_event_loop()
-            executor.submit(run_sync_generator)
+        executor.submit(run_sync_generator)
 
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
-                    if event is None:
-                        break
-                    yield event
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=15)
+                if event is None:
+                    break
+                yield event
+            except asyncio.TimeoutError:
+                yield _sse({"type": "keepalive"})
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-    except Exception as e:
-        logger.error(f"Streaming discussion error: {e}")
-        return StreamingResponse(
-            iter(
-                [
-                    f"data: {json.dumps({'type': 'error', 'message': '議論の実行中にエラーが発生しました'}, ensure_ascii=False)}\n\n"
-                ]
-            ),
-            media_type="text/event-stream",
-        )
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/results", response_class=HTMLResponse)
 async def discussion_results_page(
     request: Request,
+    tab: Optional[str] = None,
     mode: Optional[str] = None,
     search: Optional[str] = None,
-    sort: Optional[str] = "newest",
     cursor: Optional[str] = None,
     append: bool = False,
 ) -> Any:
-    """議論結果一覧ページ（インタビューセッションを含む）"""
+    """議論・インタビュー結果の一覧（タブ別、M6、BR2.1）。
+
+    タブの切り替え・検索・絞り込み・読み直し（HX-Target が一覧部分）と
+    「もっと見る」には一覧部分だけを返す。member の tab=all は「自分のもの」。
+    """
+    panel_only = request.headers.get("HX-Target") == LIST_PANEL_ID or append
+    search_query = (search or "").strip()
+    current_mode = mode if mode in ("agent", "classic", "interview") else None
     try:
-        discussion_manager = get_discussion_manager()
-        search_query = (search or "").strip()
-
-        if search_query:
-            # 検索時は全件 scan フォールバック + Python フィルタ
-            discussions, _ = discussion_manager.get_discussion_history(search_all=True)
-            search_lower = search_query.lower()
-            discussions = [d for d in discussions if search_lower in d.topic.lower()]
-            # mode フィルタも Python 側で適用
-            if mode and mode in ["agent", "classic", "interview"]:
-                discussions = [d for d in discussions if d.mode == mode]
-            # ソート
-            discussions = sorted(
-                discussions,
-                key=lambda d: d.created_at or datetime.min,
-                reverse=(sort != "oldest"),
-            )[:100]
-            next_cursor_encoded: Optional[str] = None
-        else:
-            # GSI Query（mode 指定時は ModeIndex）
-            discussions, next_cursor = discussion_manager.get_discussion_history(
-                limit=21,
-                cursor=decode_cursor(cursor),
-                mode=mode if mode in ("agent", "classic", "interview") else None,
-                sort_ascending=(sort == "oldest"),
-            )
-            next_cursor_encoded = encode_cursor(next_cursor)
-
-        # 参加ペルソナ情報を取得
-        all_participant_ids = set()
-        for d in discussions:
-            if d.participants:
-                all_participant_ids.update(d.participants)
-        participant_personas = (
-            _get_participant_personas(list(all_participant_ids))
-            if all_participant_ids
-            else {}
+        listing = await _run(
+            get_discussion_manager().list_discussions,
+            _principal(request),
+            tab,
+            cursor,
+            current_mode,
+            search_query or None,
         )
-    except Exception as e:
-        logger.error(f"Failed to get discussion list: {e}")
-        discussions = []
-        participant_personas = {}
-        next_cursor_encoded = None
+        error = None
+    except CodedError as e:
+        logger.warning("Discussion list fetch error", exc_info=True)
+        listing = None
+        error = user_message_for(e, default="議論一覧の取得に失敗しました")
 
-    ctx = {
+    context = {
         "request": request,
-        "discussions": discussions,
-        "participant_personas": participant_personas,
-        "current_mode": mode,
-        "current_search": search,
-        "current_sort": sort,
-        "next_cursor": next_cursor_encoded,
+        "title": "議論結果",
+        "listing": listing,
+        "tab": tab,
+        "current_mode": current_mode,
+        "current_search": search_query,
         "is_append": append,
+        "error": error,
     }
-
-    # htmxリクエストの場合はパーシャルを返す
-    if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/discussion_list.html",
-            ctx,
+    if listing is None and panel_only:
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_banner.html",
+                {"request": request, "error": error},
+                status_code=503,
+            )
         )
-
-    return templates.TemplateResponse(
-        request,
-        "discussion/results.html",
-        {**ctx, "title": "議論結果"},
-    )
+    if panel_only:
+        return templates.TemplateResponse(
+            request, "discussion/partials/discussion_list.html", context
+        )
+    return templates.TemplateResponse(request, "discussion/results.html", context)
 
 
 @router.post("/start", response_class=HTMLResponse)
@@ -535,58 +522,28 @@ async def start_discussion(
     document_ids: Optional[List[str]] = Form(None),
 ) -> Any:
     """議論開始処理（htmx対応）"""
+    if mode == "interview" or len(persona_ids) < 2:
+        code = (
+            ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED
+            if mode == "interview"
+            else ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
+        )
+        return mark_renderable(
+            templates.TemplateResponse(
+                request,
+                "partials/error_inline.html",
+                {
+                    "request": request,
+                    "error": user_message_for_code(code, {"min_personas": 2}),
+                },
+                status_code=400,
+            )
+        )
+    principal = _principal(request)
     try:
-        if mode == "interview":
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(
-                            ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
-
-        if len(persona_ids) < 2:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(
-                            ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {"min_personas": 2}
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
-
-        persona_manager = get_persona_manager()
-        principal = _principal(request)
-        personas_raw = [
-            persona_manager.get_persona_unchecked(pid) for pid in persona_ids
-        ]
-        personas = [p for p in personas_raw if p is not None]
-
-        if len(personas) < 2:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(
-                            ErrorCode.DISCUSSION_TOO_FEW_PERSONAS, {"min_personas": 2}
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
+        personas = await _run(
+            get_persona_manager().get_personas_for_use, principal, persona_ids
+        )
 
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
@@ -598,15 +555,13 @@ async def start_discussion(
             else ""
         ) or None
 
-        loop = asyncio.get_event_loop()
-
         if mode == "agent":
 
             def _run_agent() -> Any:
-                manager = get_agent_discussion_manager()
-                return manager.run_agent_discussion_full(
-                    personas=personas,
-                    topic=topic,
+                return get_agent_discussion_manager().run_agent_discussion_full(
+                    principal,
+                    personas,
+                    topic,
                     rounds=rounds,
                     additional_instructions=additional_instructions,
                     enable_memory=enable_memory,
@@ -615,38 +570,38 @@ async def start_discussion(
                     document_ids=document_ids,
                     persona_models=persona_models,
                     facilitator_model=facilitator_model,
-                    principal=principal,
                 )
 
-            discussion = await loop.run_in_executor(executor, _run_agent)
+            saved = await _run(_run_agent)
         else:
 
             def _run_classic() -> Any:
-                manager = get_discussion_manager()
-                return manager.run_classic_discussion(
-                    personas=personas,
-                    topic=topic,
+                return get_discussion_manager().run_classic_discussion(
+                    principal,
+                    personas,
+                    topic,
                     categories=categories,
                     document_ids=document_ids,
-                    principal=principal,
                 )
 
-            discussion = await loop.run_in_executor(executor, _run_classic)
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/discussion_result.html",
-            {"request": request, "discussion": discussion},
-        )
-    except (DiscussionManagerError, AgentDiscussionManagerError) as e:
+            saved = await _run(_run_classic)
+        # 発言は本体の外にあるため、保存した議論を読む人として読み直して表示する
+        view = await _run(get_discussion_manager().get_discussion, principal, saved.id)
+    except CodedError as e:
+        if isinstance(e, ParticipantNotFoundError):
+            logger.info("Discussion not started: a participant is unreadable")
+            return _conversation_stopped(request)
         logger.error("Failed to start discussion", exc_info=True)
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
             # 他人の・期限切れの資料は、ないものと同じ 404 のトースト（BR5.3、BR5.4）
             return toast_response(e, status_code=404)
-        if is_correctable(e):
+        if error_kind_of(e) is ErrorKind.FORBIDDEN:
+            return toast_response(e, status_code=403)
+        if is_correctable(e) and isinstance(
+            e, (DiscussionManagerError, AgentDiscussionManagerError)
+        ):
             # 入力を直せば解決するエラー（トピック文字数・ペルソナ数等）は
             # #discussion-result（フォーム自身の外側の専用領域）に表示する。
-            # フォームの入力値は破棄されない。
             return mark_renderable(
                 templates.TemplateResponse(
                     request,
@@ -672,95 +627,69 @@ async def start_discussion(
             e, default="議論の開始中にエラーが発生しました", status_code=500
         )
 
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/discussion_result.html",
+        {"request": request, "discussion": view},
+    )
+
+
+@router.get("/{discussion_id}/export")
+async def export_discussion(request: Request, discussion_id: str) -> Any:
+    """議論を Markdown でエクスポートする（読める人だけ、BR9.1）"""
+    filename, text = await _run(
+        get_discussion_manager().export_discussion, _principal(request), discussion_id
+    )
+    return Response(
+        content=text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": _attachment(filename)},
+    )
+
 
 @router.get("/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
-    """議論詳細ページ（インタビューセッションを含む）"""
-    try:
-        discussion_manager = get_discussion_manager()
-        discussion = discussion_manager.get_discussion(discussion_id)
+    """議論詳細ページ（インタビューを含む）。読める人だけ（BR2.4）、操作は管理できる人だけ"""
+    from src.managers.settings_manager import SettingsManager
 
-        if not discussion:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-            )
-
-        # 参加ペルソナの詳細情報を取得
-        participant_personas = _get_participant_personas(discussion.participants)
-
-        # デフォルトカテゴリーを取得（再生成モーダル用）
-        default_categories = discussion_manager.get_default_categories()
-
-        # カスタムカテゴリーを取得（agent_configから）
-        custom_categories = None
-        if discussion.agent_config and "insight_categories" in discussion.agent_config:
-            custom_categories = discussion.agent_config["insight_categories"]
-
-        # ドキュメントの署名付きURLを生成
-        document_urls = {}
-        if discussion.documents:
-            disc_manager = get_discussion_manager()
-            document_urls = disc_manager.get_document_presigned_urls(
-                discussion.documents
-            )
-
-        # インタビューセッションの場合はタイトルを調整
-        if discussion.mode == "interview":
-            title = "インタビューセッション"
-        else:
-            title = f"議論: {discussion.topic}"
-
-        from src.managers.settings_manager import SettingsManager
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/detail.html",
-            {
-                "request": request,
-                "title": title,
-                "discussion": discussion,
-                "participant_personas": participant_personas,
-                "insights": discussion.insights,
-                "discussion_id": discussion_id,
-                "default_categories": default_categories,
-                "custom_categories": custom_categories,
-                "document_urls": document_urls,
-                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
-            },
-        )
-    except HTTPException:
-        raise
+    principal = _principal(request)
+    manager = get_discussion_manager()
+    view = await _run(manager.get_discussion, principal, discussion_id)
+    document_urls = await _run(manager.get_document_urls, principal, view)
+    custom_categories = (view.agent_config or {}).get("insight_categories")
+    title = (
+        "インタビューセッション" if view.mode == "interview" else f"議論: {view.topic}"
+    )
+    return templates.TemplateResponse(
+        request,
+        "discussion/detail.html",
+        {
+            "request": request,
+            "title": title,
+            "discussion": view,
+            "manageable": view.manageable,
+            "insights": view.insights,
+            "discussion_id": discussion_id,
+            "default_categories": manager.get_default_categories(),
+            "custom_categories": custom_categories,
+            "document_urls": document_urls,
+            "enable_data_driven_report": SettingsManager.is_data_agent_available(),
+        },
+    )
 
 
 @router.post("/{discussion_id}/regenerate-insights", response_class=HTMLResponse)
 async def regenerate_insights(request: Request, discussion_id: str) -> Any:
-    """インサイト再生成エンドポイント（htmx対応）"""
+    """インサイト再生成エンドポイント（htmx対応、管理できる人だけ、BR2.5）"""
+    discussion_manager = get_discussion_manager()
     try:
         form_data = await request.form()
         categories = _parse_categories_from_form(form_data)
-
-        discussion_manager = get_discussion_manager()
-
-        loop = asyncio.get_event_loop()
-        new_insights = await loop.run_in_executor(
-            executor,
+        new_insights = await _run(
             discussion_manager.regenerate_insights,
+            _principal(request),
             discussion_id,
             categories,
-        )
-
-        default_categories = discussion_manager.get_default_categories()
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/insights.html",
-            {
-                "request": request,
-                "insights": new_insights,
-                "discussion_id": discussion_id,
-                "default_categories": default_categories,
-            },
         )
     except DiscussionManagerError as e:
         logger.error("Failed to regenerate insight", exc_info=True)
@@ -786,6 +715,9 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             default="インサイトの再生成中にエラーが発生しました",
             status_code=500,
         )
+    except CodedError:
+        # 読めない（404）・管理できない（403）・ai:execute がない（403）は共通のハンドラ
+        raise
     except Exception as e:
         logger.error("Failed to regenerate insight (unclassified)", exc_info=True)
         return toast_response(
@@ -794,94 +726,57 @@ async def regenerate_insights(request: Request, discussion_id: str) -> Any:
             status_code=500,
         )
 
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/insights.html",
+        {
+            "request": request,
+            "insights": new_insights,
+            "discussion_id": discussion_id,
+            "manageable": True,
+            "default_categories": discussion_manager.get_default_categories(),
+        },
+    )
+
 
 @router.delete("/{discussion_id}", response_class=HTMLResponse)
 async def delete_discussion(request: Request, discussion_id: str) -> Any:
-    """議論削除処理（htmx対応）"""
+    """議論削除処理（htmx対応、管理できる人だけ、BR1.5）"""
     try:
-        discussion_manager = get_discussion_manager()
-        success = discussion_manager.delete_discussion(discussion_id)
-
-        if success:
-            referer = request.headers.get("hx-current-url", "")
-            if f"/discussion/{discussion_id}" in referer:
-                return HTMLResponse(
-                    content="",
-                    headers={"HX-Redirect": "/discussion/results"},
-                )
-            return templates.TemplateResponse(
-                request,
-                "partials/success.html",
-                {"request": request, "message": "議論を削除しました"},
-            )
-        else:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(
-                            ErrorCode.DISCUSSION_OPERATION_FAILED
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
+        await _run(
+            get_discussion_manager().delete_discussion,
+            _principal(request),
+            discussion_id,
+        )
     except DiscussionManagerError as e:
         logger.error("Failed to delete discussion", exc_info=True)
-        if is_correctable(e):
-            # 削除操作自体に入力欄はないため、既存の「削除失敗」分岐と同じ
-            # error_inline を返す（success 分岐と同じ2つの hx-target を想定）。
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_inline.html",
-                    {
-                        "request": request,
-                        "error": user_message_for(
-                            e, default="議論の削除に失敗しました"
-                        ),
-                    },
-                    status_code=400,
-                )
-            )
-        # 再試行で解決しうるエラーは議論一覧を消さずトーストで通知する
         return toast_response(e, default="議論の削除に失敗しました", status_code=500)
+    except CodedError:
+        raise
     except Exception as e:
         logger.error("Failed to delete discussion (unclassified)", exc_info=True)
         return toast_response(e, default="議論の削除に失敗しました", status_code=500)
 
+    referer = request.headers.get("hx-current-url", "")
+    if f"/discussion/{discussion_id}" in referer:
+        return HTMLResponse(content="", headers={"HX-Redirect": "/discussion/results"})
+    return templates.TemplateResponse(
+        request,
+        "partials/success.html",
+        {"request": request, "message": "議論を削除しました"},
+    )
+
 
 @router.get("/insights/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
-    """議論インサイト取得（htmx対応）"""
+    """議論インサイト取得（htmx対応、読める人だけ）"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussion = discussion_manager.get_discussion(discussion_id)
-
-        if not discussion:
-            return mark_renderable(
-                templates.TemplateResponse(
-                    request,
-                    "partials/error_banner.html",
-                    {
-                        "request": request,
-                        "error": user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-                        "back_url": "/discussion/results",
-                        "back_label": "議論一覧に戻る",
-                    },
-                    status_code=404,
-                )
-            )
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/insights.html",
-            {"request": request, "insights": discussion.insights},
+        view = await _run(
+            get_discussion_manager().get_discussion, _principal(request), discussion_id
         )
-    except Exception as e:
-        logger.error(f"Failed to get insight: {e}")
+    except CodedError as e:
+        logger.info("Discussion insights not shown", exc_info=True)
+        status = 404 if error_kind_of(e) is ErrorKind.NOT_FOUND else 503
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -891,10 +786,22 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
                     "error": user_message_for(
                         e, default="インサイトの取得に失敗しました"
                     ),
+                    "back_url": "/discussion/results",
+                    "back_label": "議論一覧に戻る",
                 },
-                status_code=500,
+                status_code=status,
             )
         )
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/insights.html",
+        {
+            "request": request,
+            "insights": view.insights,
+            "discussion_id": discussion_id,
+            "manageable": view.manageable,
+        },
+    )
 
 
 # =============================================================================
@@ -902,6 +809,55 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
 # =============================================================================
 
 
+def _agent_event_sse(evt: dict[str, Any]) -> str | None:
+    """One event of the data-driven report agent as SSE (``None`` to skip)."""
+    evt_type = evt.get("type", "")
+    content = evt.get("content", "")
+    if evt_type == "tool_call":
+        return _sse(
+            {"type": "tool_call", "content": content, "detail": evt.get("detail", "")},
+            event="thinking",
+        )
+    if evt_type == "tool_result" and content:
+        return _sse({"type": "tool_result", "content": content}, event="thinking")
+    if evt_type == "csv_url" and evt.get("url"):
+        return _sse({"type": "csv_url", "url": evt.get("url", "")})
+    if evt_type in ("thinking", "result") and content:
+        return _sse({"type": "chunk", "content": content})
+    if evt_type == "error":
+        return _sse_error(content)
+    return None
+
+
+def _stream_agent_events(run: Callable[[Any], None], default: str) -> Any:
+    """Run ``run(event_queue)`` in the pool and relay its events as SSE."""
+    eq: queue_mod.Queue = queue_mod.Queue()
+    future = executor.submit(run, eq)
+    while True:
+        try:
+            evt = eq.get(timeout=0.3)
+        except queue_mod.Empty:
+            if future.done():
+                break
+            yield _sse({"type": "keepalive"})
+            continue
+        if evt.get("type") == "_done":
+            break
+        sse = _agent_event_sse(evt)
+        if sse is not None:
+            yield sse
+            if evt.get("type") == "error":
+                return
+    exc = future.exception() if future.done() else None
+    if exc is not None:
+        # 容量超過など種別が判る例外はカタログの文言を返す。診断情報はログにだけ残す
+        logger.error("Failed to generate report", exc_info=exc)
+        yield _sse_error(user_message_for(exc, default=default))
+        return
+    yield _sse({"type": "done"})
+
+
+# GET で AI を動かすため web/middleware.py が Sec-Fetch-Site を確かめる（NFR4.13）
 @router.get("/{discussion_id}/report/generate")
 async def generate_report_stream(
     request: Request,
@@ -909,106 +865,41 @@ async def generate_report_stream(
     template_type: str = "summary",
     custom_prompt: Optional[str] = None,
 ) -> Any:
-    """レポートをSSEストリーミングで生成する"""
-    if template_type not in ("summary", "review", "custom", "data_driven"):
-
-        def error_gen() -> Any:
-            yield f"data: {json.dumps({'type': 'error', 'message': '無効なテンプレート種別です'}, ensure_ascii=False)}\n\n"
-
-        return StreamingResponse(error_gen(), media_type="text/event-stream")
+    """レポートをSSEストリーミングで生成する（読める人、BR4.1）"""
+    principal = _principal(request)
+    if template_type not in REPORT_TEMPLATE_TYPES:
+        return StreamingResponse(
+            iter([_sse_error("無効なテンプレート種別です")]),
+            media_type="text/event-stream",
+        )
+    report_manager = get_report_manager()
 
     def stream_generator() -> Any:
+        default = "レポートの生成に失敗しました"
         try:
-            report_manager = get_report_manager()
-
             if template_type == "data_driven":
-                import queue as queue_mod
 
-                eq: queue_mod.Queue = queue_mod.Queue()
-
-                def _run() -> None:
+                def run(eq: Any) -> None:
                     for _ in report_manager.generate_report_streaming(
-                        discussion_id=discussion_id,
-                        template_type=template_type,
-                        custom_prompt=custom_prompt or None,
-                        event_queue=eq,
+                        principal,
+                        discussion_id,
+                        template_type,
+                        custom_prompt or None,
+                        eq,
                     ):
                         pass
 
-                future = executor.submit(_run)
-                full_content = ""
-
-                while True:
-                    try:
-                        evt = eq.get(timeout=0.3)
-                    except queue_mod.Empty:
-                        if future.done():
-                            break
-                        yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
-                        continue
-
-                    evt_type = evt.get("type", "")
-                    content = evt.get("content", "")
-
-                    if evt_type == "_done":
-                        break
-                    elif evt_type == "session_id":
-                        yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "tool_call":
-                        yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "tool_result" and content:
-                        yield f"event: thinking\ndata: {json.dumps({'type': 'tool_result', 'content': content}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "csv_url":
-                        url = evt.get("url", "")
-                        if url:
-                            yield f"data: {json.dumps({'type': 'csv_url', 'url': url}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "thinking" and content:
-                        full_content += content
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "result":
-                        full_content = content
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
-                    elif evt_type == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'message': content}, ensure_ascii=False)}\n\n"
-                        return
-
-                if future.done() and future.exception():
-                    # 容量超過など種別が判る例外はカタログの文言を返す。
-                    # 診断情報は exc_info でログにのみ残す。
-                    exc = future.exception()
-                    logger.error("Failed to generate report", exc_info=exc)
-                    message = user_message_for(
-                        exc, default="レポートの生成に失敗しました"
-                    )
-                    yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                    return
-
-                yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                yield from _stream_agent_events(run, default)
                 return
 
             for chunk in report_manager.generate_report_streaming(
-                discussion_id=discussion_id,
-                template_type=template_type,
-                custom_prompt=custom_prompt or None,
+                principal, discussion_id, template_type, custom_prompt or None
             ):
-                data = json.dumps(
-                    {"type": "chunk", "content": chunk}, ensure_ascii=False
-                )
-                yield f"data: {data}\n\n"
-
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "chunk", "content": chunk})
+            yield _sse({"type": "done"})
         except Exception as e:
             logger.error("Failed to generate report", exc_info=True)
-            data = json.dumps(
-                {
-                    "type": "error",
-                    "message": user_message_for(
-                        e, default="レポートの生成に失敗しました"
-                    ),
-                },
-                ensure_ascii=False,
-            )
-            yield f"data: {data}\n\n"
+            yield _sse_error(user_message_for(e, default=default))
 
     return StreamingResponse(
         stream_generator(),
@@ -1023,80 +914,23 @@ async def generate_followup_report_stream(
     discussion_id: str,
     followup_prompt: str = Form(...),
     previous_report: str = Form(...),
-    session_id: Optional[str] = Form(None),
 ) -> Any:
-    """フォローアップ分析をPOST SSEストリーミングで生成する"""
+    """フォローアップ分析をPOST SSEストリーミングで生成する。
 
-    def stream_generator() -> Any:
-        try:
-            report_manager = get_report_manager()
-            import queue as queue_mod
+    短期記憶のセッションは議論と利用者の組からサーバーが決める（BR4.3。画面から
+    送られたセッション ID は使わない）。
+    """
+    principal = _principal(request)
+    report_manager = get_report_manager()
 
-            eq: queue_mod.Queue = queue_mod.Queue()
-
-            def _run() -> None:
-                for _ in report_manager.generate_followup_report_streaming(
-                    discussion_id=discussion_id,
-                    followup_prompt=followup_prompt,
-                    previous_report=previous_report,
-                    event_queue=eq,
-                    session_id=session_id or None,
-                ):
-                    pass
-
-            future = executor.submit(_run)
-
-            while True:
-                try:
-                    evt = eq.get(timeout=0.3)
-                except queue_mod.Empty:
-                    if future.done():
-                        break
-                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
-                    continue
-
-                evt_type = evt.get("type", "")
-                content = evt.get("content", "")
-
-                if evt_type == "_done":
-                    break
-                elif evt_type == "session_id":
-                    yield f"data: {json.dumps({'type': 'session_id', 'session_id': evt.get('session_id', '')}, ensure_ascii=False)}\n\n"
-                elif evt_type == "tool_call":
-                    yield f"event: thinking\ndata: {json.dumps({'type': 'tool_call', 'content': content, 'detail': evt.get('detail', '')}, ensure_ascii=False)}\n\n"
-                elif evt_type == "tool_result" and content:
-                    yield f"event: thinking\ndata: {json.dumps({'type': 'tool_result', 'content': content}, ensure_ascii=False)}\n\n"
-                elif evt_type == "csv_url":
-                    url = evt.get("url", "")
-                    if url:
-                        yield f"data: {json.dumps({'type': 'csv_url', 'url': url}, ensure_ascii=False)}\n\n"
-                elif evt_type == "thinking" and content:
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
-                elif evt_type == "result":
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
-                elif evt_type == "error":
-                    yield f"data: {json.dumps({'type': 'error', 'message': content}, ensure_ascii=False)}\n\n"
-                    return
-
-            if future.done() and future.exception():
-                exc = future.exception()
-                logger.error("Failed to generate follow-up report", exc_info=exc)
-                message = user_message_for(
-                    exc, default="フォローアップ分析の生成に失敗しました"
-                )
-                yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                return
-
-            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.error("Failed to generate follow-up report", exc_info=True)
-            message = user_message_for(
-                e, default="フォローアップ分析の生成に失敗しました"
-            )
-            yield f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
+    def run(eq: Any) -> None:
+        for _ in report_manager.generate_followup_report_streaming(
+            principal, discussion_id, followup_prompt, previous_report, eq
+        ):
+            pass
 
     return StreamingResponse(
-        stream_generator(),
+        _stream_agent_events(run, "フォローアップ分析の生成に失敗しました"),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1106,65 +940,80 @@ async def generate_followup_report_stream(
 async def save_report(
     request: Request,
     discussion_id: str,
-    report_id: str = Form(...),
     template_type: str = Form(...),
     content: str = Form(...),
     custom_prompt: Optional[str] = Form(None),
 ) -> Any:
-    """プレビュー済みレポートをDBに保存する"""
+    """プレビュー済みレポートを保存する（管理できる人、ID はサーバーが振る、BR4.2、BR4.4）"""
+    from src.managers.settings_manager import SettingsManager
+
+    principal = _principal(request)
+    report_manager = get_report_manager()
     try:
-        from src.models.discussion_report import DiscussionReport
-
-        report = DiscussionReport(
-            id=report_id,
-            template_type=template_type,
-            content=content,
-            created_at=datetime.now(),
-            custom_prompt=custom_prompt or None,
+        await _run(
+            report_manager.save_report,
+            principal,
+            discussion_id,
+            template_type,
+            content,
+            custom_prompt or None,
         )
-
-        report_manager = get_report_manager()
-        report_manager.save_report(discussion_id=discussion_id, report=report)
-
-        # 保存後、reportsセクション全体を再描画
-        from src.managers.settings_manager import SettingsManager
-
-        discussion = report_manager.get_discussion(discussion_id)
-        response = templates.TemplateResponse(
-            request,
-            "discussion/partials/reports.html",
-            {
-                "request": request,
-                "discussion": discussion,
-                "discussion_id": discussion_id,
-                "enable_data_driven_report": SettingsManager.is_data_agent_available(),
-            },
+        view = await _run(report_manager.get_discussion, principal, discussion_id)
+    except CodedError as e:
+        if error_kind_of(e) in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
+            raise
+        logger.warning("Failed to save report", exc_info=True)
+        message = user_message_for(e, default="レポートの保存に失敗しました")
+        return _report_preview(
+            request, discussion_id, template_type, content, custom_prompt, message
         )
-        response.headers["HX-Retarget"] = "#reports-container"
-        return response
     except Exception as e:
         logger.error("Failed to save report", exc_info=True)
-        from src.models.discussion_report import DiscussionReport as DR
+        message = user_message_for(e, default="レポートの保存に失敗しました")
+        return _report_preview(
+            request, discussion_id, template_type, content, custom_prompt, message
+        )
 
-        report = DR(
-            id=report_id,
-            template_type=template_type,
-            content=content,
-            created_at=datetime.now(),
-            custom_prompt=custom_prompt or None,
-        )
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/report_preview.html",
-            {
-                "request": request,
-                "report": report,
-                "discussion_id": discussion_id,
-                "save_error": user_message_for(
-                    e, default="レポートの保存に失敗しました"
-                ),
-            },
-        )
+    response = templates.TemplateResponse(
+        request,
+        "discussion/partials/reports.html",
+        {
+            "request": request,
+            "discussion": view,
+            "discussion_id": discussion_id,
+            "manageable": view.manageable,
+            "enable_data_driven_report": SettingsManager.is_data_agent_available(),
+        },
+    )
+    response.headers["HX-Retarget"] = "#reports-container"
+    return response
+
+
+def _report_preview(
+    request: Request,
+    discussion_id: str,
+    template_type: str,
+    content: str,
+    custom_prompt: Optional[str],
+    save_error: str,
+) -> Response:
+    """The unsaved report again, with why it was not saved (the input is kept)."""
+    preview = DiscussionReport.create_new(
+        discussion_id,
+        template_type if template_type in REPORT_TEMPLATE_TYPES else "custom",
+        content,
+        custom_prompt or None,
+    )
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/report_preview.html",
+        {
+            "request": request,
+            "report": preview,
+            "discussion_id": discussion_id,
+            "save_error": save_error,
+        },
+    )
 
 
 @router.post("/{discussion_id}/report/{report_id}/update-content")
@@ -1174,24 +1023,34 @@ async def update_report_content(
     report_id: str,
     content: str = Form(...),
 ) -> Any:
-    """レポート内容を更新する"""
+    """レポート内容を更新する（管理できる人だけ）"""
+    from markupsafe import escape
+
     try:
-        report_manager = get_report_manager()
-        report_manager.update_report_content(
-            discussion_id=discussion_id,
-            report_id=report_id,
-            content=content,
+        await _run(
+            get_report_manager().update_report_content,
+            _principal(request),
+            discussion_id,
+            report_id,
+            content,
         )
-        return HTMLResponse(
-            '<div class="text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2 mt-2">レポートを更新しました</div>'
-        )
-    except Exception as e:
-        logger.error(f"Failed to update report: {e}")
+    except CodedError as e:
+        if error_kind_of(e) in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
+            raise
+        logger.warning("Failed to update report", exc_info=True)
+        # 再試行で直る失敗はトースト（画面を書き換えない）。直せる失敗は印を付けて本文を出す
+        if not is_correctable(e):
+            return toast_response(e)
         message = user_message_for(e, default="更新に失敗しました")
-        return HTMLResponse(
-            f'<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">{message}</div>',
-            status_code=400,
+        return mark_renderable(
+            HTMLResponse(
+                f'<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2 mt-2">{escape(message)}</div>',
+                status_code=400,
+            )
         )
+    return HTMLResponse(
+        '<div class="text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2 mt-2">レポートを更新しました</div>'
+    )
 
 
 @router.get("/{discussion_id}/report/{report_id}")
@@ -1200,84 +1059,43 @@ async def get_report(
     discussion_id: str,
     report_id: str,
 ) -> Any:
-    """レポート内容を取得する"""
-    try:
-        report_manager = get_report_manager()
-        discussion = report_manager.get_discussion(discussion_id)
-        if not discussion:
-            return HTMLResponse(
-                content=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-                status_code=404,
-            )
-
-        report = next((r for r in discussion.reports if r.id == report_id), None)
-        if not report:
-            return HTMLResponse(
-                content=user_message_for_code(ErrorCode.REPORT_NOT_FOUND),
-                status_code=404,
-            )
-
-        return templates.TemplateResponse(
-            request,
-            "discussion/partials/report_content.html",
-            {"request": request, "report": report, "discussion_id": discussion_id},
-        )
-    except Exception as e:
-        logger.error(f"Failed to get report: {e}")
-        return HTMLResponse(
-            content=user_message_for(e, default="レポートの取得に失敗しました"),
-            status_code=500,
-        )
+    """レポート内容を取得する（読める人だけ）"""
+    principal = _principal(request)
+    report_manager = get_report_manager()
+    report = await _run(report_manager.get_report, principal, discussion_id, report_id)
+    manageable = await _run(report_manager.can_manage, principal, discussion_id)
+    return templates.TemplateResponse(
+        request,
+        "discussion/partials/report_content.html",
+        {
+            "request": request,
+            "report": report,
+            "discussion_id": discussion_id,
+            "manageable": manageable,
+        },
+    )
 
 
 @router.get("/{discussion_id}/report/{report_id}/export")
 async def export_report(
+    request: Request,
     discussion_id: str,
     report_id: str,
     format: str = "md",
 ) -> Any:
-    """レポートをファイルエクスポートする"""
-    try:
-        report_manager = get_report_manager()
-        discussion = report_manager.get_discussion(discussion_id)
-        if not discussion:
-            return HTMLResponse(
-                content=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-                status_code=404,
-            )
-
-        report = next((r for r in discussion.reports if r.id == report_id), None)
-        if not report:
-            return HTMLResponse(
-                content=user_message_for_code(ErrorCode.REPORT_NOT_FOUND),
-                status_code=404,
-            )
-
-        content = report.content
-        if format == "txt":
-            # Markdown記法を除去
-            import re
-
-            content = re.sub(r"#{1,6}\s*", "", content)
-            content = re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", content)
-            content = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", content)
-
-        timestamp = report.created_at.strftime("%Y%m%d_%H%M%S")
-        filename = f"report_{report.template_type}_{timestamp}.{format}"
-
-        from fastapi.responses import Response
-
-        return Response(
-            content=content,
-            media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except Exception as e:
-        logger.error(f"Failed to export report: {e}")
-        return HTMLResponse(
-            content=user_message_for(e, default="エクスポートに失敗しました"),
-            status_code=500,
-        )
+    """レポートをファイルエクスポートする（読める人だけ）"""
+    filename, content = await _run(
+        get_report_manager().export_report,
+        _principal(request),
+        discussion_id,
+        report_id,
+        format,
+    )
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": _attachment(filename)},
+    )
 
 
 @router.delete("/{discussion_id}/report/{report_id}")
@@ -1286,20 +1104,28 @@ async def delete_report(
     discussion_id: str,
     report_id: str,
 ) -> Any:
-    """レポートを削除する"""
-    try:
-        report_manager = get_report_manager()
-        report_manager.delete_report(
-            discussion_id=discussion_id,
-            report_id=report_id,
-        )
-        return HTMLResponse(content="<div>レポートを削除しました</div>")
-    except Exception as e:
-        logger.error("Failed to delete report", exc_info=True)
-        from markupsafe import escape
+    """レポートを削除する（管理できる人だけ）"""
+    from markupsafe import escape
 
-        message = user_message_for(e, default="レポートの削除に失敗しました")
-        return HTMLResponse(
-            content=f"<div class='text-red-600'>{escape(message)}</div>",
-            status_code=400,
+    try:
+        await _run(
+            get_report_manager().delete_report,
+            _principal(request),
+            discussion_id,
+            report_id,
         )
+    except CodedError as e:
+        if error_kind_of(e) in (ErrorKind.NOT_FOUND, ErrorKind.FORBIDDEN):
+            raise
+        logger.error("Failed to delete report", exc_info=True)
+        # 再試行で直る失敗はトースト（行を消さない）。直せる失敗は印を付けて本文を出す
+        if not is_correctable(e):
+            return toast_response(e)
+        message = user_message_for(e, default="レポートの削除に失敗しました")
+        return mark_renderable(
+            HTMLResponse(
+                content=f"<div class='text-red-600'>{escape(message)}</div>",
+                status_code=400,
+            )
+        )
+    return HTMLResponse(content="<div>レポートを削除しました</div>")

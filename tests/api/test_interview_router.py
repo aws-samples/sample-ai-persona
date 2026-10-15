@@ -1,609 +1,461 @@
 """
 インタビュールーター（interview.py）のテスト
 
-インタビューセッション作成、メッセージ送信、保存、SSEストリーミングをテストします。
+U6: セッションはアプリの外（moto の InterviewSessionStore）に置き、持ち主だけが
+使える。Router は利用者と添付の ID を Manager に渡すだけ。BR3.1〜BR3.8、BR7.2、
+NFR1.48、NFR1.54、NFR1.56、NFR1.60、AC2.4.1〜AC2.4.3。
 """
 
+import json
+from contextlib import ExitStack
+from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import Mock, patch
-from datetime import datetime
 
-from src.models.errors import ErrorCode
-from src.models.message import Message
-from src.managers.interview_manager import (
-    InterviewSession,
-    InterviewSessionNotFoundError,
-    InterviewValidationError,
-)
-from tests.dialog_helpers import dialog_markup
+import pytest
+
+moto = pytest.importorskip("moto", reason="moto is required for DynamoDB tests")
+
+import boto3  # noqa: E402
+
+from src.managers.interview_manager import InterviewManager  # noqa: E402
+from src.managers.persona_manager import PersonaManager  # noqa: E402
+from src.models.errors import ErrorCode  # noqa: E402
+from src.models.interview_session import InterviewMessage  # noqa: E402
+from src.services.interview_session_store import InterviewSessionStore  # noqa: E402
+from tests.api.u6_world import ME, ApiWorld, _agent  # noqa: E402
+from tests.conftest import MEMBER_B  # noqa: E402
+from tests.dialog_helpers import dialog_markup  # noqa: E402
+
+REGION = "ap-northeast-1"
+SESSIONS = "InterviewSessionsApi"
+MESSAGES = "InterviewMessagesApi"
 
 
-class TestCreateInterviewSessionEndpoint:
-    """インタビューセッション作成エンドポイントのテスト"""
+def _tables(client: Any) -> None:
+    client.create_table(
+        TableName=SESSIONS,
+        KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+        AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    client.create_table(
+        TableName=MESSAGES,
+        KeySchema=[
+            {"AttributeName": "session_id", "KeyType": "HASH"},
+            {"AttributeName": "seq", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "session_id", "AttributeType": "S"},
+            {"AttributeName": "seq", "AttributeType": "N"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
 
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_success(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """セッション作成が成功することを確認"""
-        # ペルソナマネージャーのモック
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
 
-        # インタビューマネージャーのモック
-        mock_session = InterviewSession(
-            id="test-session-id",
-            participants=[sample_persona.id],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
+class InterviewWorld:
+    def __init__(self, ddb: Any) -> None:
+        self.api = ApiWorld()
+        self.store = InterviewSessionStore(
+            region=REGION, sessions_table=SESSIONS, messages_table=MESSAGES, client=ddb
         )
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.return_value = mock_session
-        mock_get_interview.return_value = mock_interview_manager
+        self.agent_service = Mock()
+        self.agent_service.create_persona_agent.side_effect = _agent
+        w = self.api.world
+        self.manager = InterviewManager(
+            agent_service=self.agent_service,
+            database_service=Mock(),
+            dataset_analysis_service=Mock(),
+            binding_store=Mock(list_for_persona=Mock(return_value=[])),
+            session_store=self.store,
+            discussion_records=w.records,
+            participants=w.participants,
+            file_attachments=w.files,
+            resource_lookup=w.lookup,
+        )
+        self.personas = PersonaManager(
+            database_service=Mock(), participants=w.participants
+        )
+        self.files = Mock()
 
-        response = client.post(
-            "/interview/create", data={"persona_ids": [sample_persona.id]}
+    def start(self, *persona_ids: str):
+        return self.manager.start_interview_session(
+            ME.principal(), [self.api.world.persona_bodies[p] for p in persona_ids]
         )
 
+
+@pytest.fixture
+def iw(client, monkeypatch):
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    ME.login(client)
+    with moto.mock_aws():
+        ddb = boto3.client("dynamodb", region_name=REGION)
+        _tables(ddb)
+        world = InterviewWorld(ddb)
+        with ExitStack() as stack:
+            for target, value in [
+                ("web.routers.interview.get_interview_manager", world.manager),
+                ("web.routers.interview.get_persona_manager", world.personas),
+                ("web.routers.interview.get_file_manager", world.files),
+            ]:
+                stack.enter_context(patch(target, return_value=value))
+            yield world
+
+
+def _sse(response) -> list[dict]:
+    return [
+        json.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+# =============================================================================
+# 開始（BR3.1）
+# =============================================================================
+
+
+class TestCreate:
+    def test_owner_starts_a_session(self, iw, client):
+        response = client.post("/interview/create", data={"persona_ids": ["p1", "p2"]})
         assert response.status_code == 200
         data = response.json()
-        assert "session_id" in data
-        assert data["session_id"] == "test-session-id"
+        stored = iw.store.get(data["session_id"])
+        assert stored.owner_sub == ME.sub
+        assert [p["id"] for p in data["participants"]] == ["p1", "p2"]
 
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_no_personas(self, mock_get_manager, client):
-        """ペルソナなしでエラーを返すことを確認"""
-        # FastAPIのForm(...)は空リストを許可するが、ルーター内で400を返す
-        # 空のpersona_idsパラメータを送信
-        response = client.post(
-            "/interview/create",
-            data={},  # persona_idsを送信しない
-        )
-
-        # FastAPIはForm(...)で必須パラメータがない場合422を返す
-        assert response.status_code == 422
-
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_too_many_personas(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """ペルソナ数過多でエラーを返すことを確認（Manager層のバリデーションに委譲）"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.side_effect = (
-            InterviewValidationError(
-                "persona count 6 exceeds max 5",
-                code=ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
-                context={"max_personas": 5, "field": "persona_ids"},
-            )
-        )
-        mock_get_interview.return_value = mock_interview_manager
-
-        response = client.post(
-            "/interview/create",
-            data={"persona_ids": ["p1", "p2", "p3", "p4", "p5", "p6"]},
-        )
-
-        assert response.status_code == 400
-        data = response.json()
-        assert "最大5つのペルソナまで" in data["error"]
-
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_invalid_memory_mode(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """不正なmemory_modeでカタログ文言のエラーを返すことを確認（Manager層のバリデーションに委譲）"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.side_effect = (
-            InterviewValidationError(
-                "invalid memory_mode 'bogus'",
-                code=ErrorCode.INTERVIEW_MEMORY_MODE_INVALID,
-                context={"field": "memory_mode"},
-            )
-        )
-        mock_get_interview.return_value = mock_interview_manager
-
-        response = client.post(
-            "/interview/create",
-            data={"persona_ids": [sample_persona.id], "memory_mode": "bogus"},
-        )
-
-        assert response.status_code == 400
-        data = response.json()
-        assert "無効な記憶モードです" in data["error"]
-
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_persona_not_found(self, mock_get_manager, client):
-        """存在しないペルソナでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_persona_unchecked.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/interview/create", data={"persona_ids": ["non-existent-id"]}
-        )
-
+    def test_unreadable_persona_is_not_found(self, iw, client):
+        response = client.post("/interview/create", data={"persona_ids": ["p1", "p3"]})
         assert response.status_code == 404
-        data = response.json()
-        assert data["error_type"] == "persona_not_found"
+        assert response.json()["error_type"] == "persona_not_found"
+        iw.agent_service.create_persona_agent.assert_not_called()
 
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_with_memory_enabled(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """長期記憶を有効にしたセッション作成が成功することを確認"""
-        # ペルソナマネージャーのモック
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
+    def test_too_many_personas(self, iw, client):
+        from src.models.authz import AccessTarget, ResourceType
+        from tests.unit.discussion_world import persona
 
-        # インタビューマネージャーのモック
-        mock_session = InterviewSession(
-            id="test-session-id",
-            participants=[sample_persona.id],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            enable_memory=True,
-        )
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.return_value = mock_session
-        mock_get_interview.return_value = mock_interview_manager
+        world = iw.api.world
+        ids = [f"x{i}" for i in range(6)]
+        for pid in ids:
+            world.personas.targets[pid] = AccessTarget(
+                ResourceType.PERSONA, pid, owner_sub=ME.sub
+            )
+            world.persona_bodies[pid] = persona(pid, ME.sub)
+        response = client.post("/interview/create", data={"persona_ids": ids})
+        assert response.status_code == 400
+        assert response.json()["error_type"] == "validation_error"
 
+    def test_invalid_memory_mode(self, iw, client):
         response = client.post(
             "/interview/create",
-            data={"persona_ids": [sample_persona.id], "enable_memory": "true"},
+            data={"persona_ids": ["p1"], "enable_memory": "true", "memory_mode": "x"},
         )
+        assert response.status_code == 400
+        assert response.json()["error_type"] == "validation_error"
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "session_id" in data
-        assert data["session_id"] == "test-session-id"
-        assert data["enable_memory"] is True
-
-        # start_interview_sessionがenable_memory=Trueで呼ばれたことを確認
-        mock_interview_manager.start_interview_session.assert_called_once()
-        call_kwargs = mock_interview_manager.start_interview_session.call_args
-        assert call_kwargs.kwargs.get("enable_memory") is True
-
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_passes_persona_models(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """persona_models[<persona_id>]がManagerに辞書として渡ることを確認（Issue #107 R8）"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_session = InterviewSession(
-            id="test-session-id",
-            participants=[sample_persona.id],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.return_value = mock_session
-        mock_get_interview.return_value = mock_interview_manager
-
+    def test_persona_models_are_passed(self, iw, client):
         response = client.post(
             "/interview/create",
             data={
-                "persona_ids": [sample_persona.id],
-                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
+                "persona_ids": ["p1"],
+                "persona_models[p1]": "global.anthropic.claude-sonnet-5",
             },
         )
-
         assert response.status_code == 200
-        mock_interview_manager.start_interview_session.assert_called_once()
-        call_kwargs = mock_interview_manager.start_interview_session.call_args.kwargs
-        assert call_kwargs["persona_models"] == {
-            sample_persona.id: "openai.gpt-5.6-terra"
-        }
+        stored = iw.store.get(response.json()["session_id"])
+        assert stored.persona_models == {"p1": "global.anthropic.claude-sonnet-5"}
 
-    @patch("web.routers.interview.get_interview_manager")
-    @patch("web.routers.interview.get_persona_manager")
-    def test_create_session_mantle_disabled_returns_config_error(
-        self, mock_get_persona, mock_get_interview, client, sample_persona
-    ):
-        """Mantle無効時のMantle系モデル選択がCONFIGエラー(400)を返すことを確認"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
+    def test_role_is_required(self, iw, client):
+        from tests.conftest import NO_ROLE
 
-        mock_interview_manager = Mock()
-        mock_interview_manager.start_interview_session.side_effect = (
-            InterviewValidationError(
-                "model 'openai.gpt-5.6-terra' requires Mantle but "
-                "ENABLE_ADDITIONAL_PERSONA_MODELS is disabled",
-                code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
+        NO_ROLE.login(client)
+        response = client.post("/interview/create", data={"persona_ids": ["p1"]})
+        # ロールのない利用者は AuthMiddleware が止める（U2 BR2.8）
+        assert response.status_code == 403
+        iw.agent_service.create_persona_agent.assert_not_called()
+
+
+# =============================================================================
+# 持ち主だけ（BR3.2）
+# =============================================================================
+
+
+class TestOwnerOnly:
+    def test_others_get_not_found_everywhere(self, iw, client):
+        session = iw.start("p1")
+        MEMBER_B.login(client)
+        for method, path, data in [
+            ("get", f"/interview/chat/{session.id}", None),
+            ("get", f"/interview/{session.id}/messages", None),
+            ("get", f"/interview/{session.id}/status", None),
+            ("post", f"/interview/{session.id}/message", {"message": "こんにちは"}),
+            ("post", f"/interview/{session.id}/save", {"session_name": "名前"}),
+            ("delete", f"/interview/{session.id}", None),
+        ]:
+            response = (
+                getattr(client, method)(path, data=data)
+                if data
+                else getattr(client, method)(path)
             )
-        )
-        mock_get_interview.return_value = mock_interview_manager
+            assert response.status_code == 404, path
+        assert iw.store.get(session.id).last_seq == 0
 
+    def test_others_stream_gets_the_stop_event(self, iw, client):
+        session = iw.start("p1")
+        MEMBER_B.login(client)
         response = client.post(
-            "/interview/create",
-            data={
-                "persona_ids": [sample_persona.id],
-                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
-            },
+            f"/interview/{session.id}/message/stream", data={"message": "横取り"}
         )
+        events = _sse(response)
+        assert events[-1]["type"] == "error"
+        assert events[-1]["error_type"] == "conversation_stopped"
+        assert iw.store.get(session.id).last_seq == 0
 
-        assert response.status_code == 400
-        data = response.json()
-        assert "無効化されています" in data["error"]
+    def test_manual_cleanup_is_gone(self, iw, client):
+        assert client.post("/interview/cleanup").status_code in (404, 405)
 
 
-class TestSendMessageEndpoint:
-    """メッセージ送信エンドポイントのテスト"""
+# =============================================================================
+# 送信（BR3.3、BR3.6、BR7.2、NFR1.54、NFR1.60）
+# =============================================================================
 
-    @patch("web.routers.interview.get_interview_manager")
-    def test_send_message_success(self, mock_get_manager, client):
-        """メッセージ送信が成功することを確認"""
-        mock_response = Message.create_new(
-            persona_id="persona-1",
-            persona_name="田中花子",
-            content="ご質問にお答えします。",
-            message_type="statement",
-        )
 
-        mock_manager = Mock()
-        mock_manager.send_user_message_with_files.return_value = [mock_response]
-        mock_get_manager.return_value = mock_manager
-
+class TestSend:
+    def test_send_and_read_back(self, iw, client):
+        session = iw.start("p1", "p2")
         response = client.post(
-            "/interview/test-session/message",
-            data={"message": "こんにちは、質問があります"},
+            f"/interview/{session.id}/message", data={"message": "こんにちは"}
         )
-
         assert response.status_code == 200
         data = response.json()
-        assert "responses" in data
-        assert len(data["responses"]) == 1
-        assert data["responses"][0]["persona_name"] == "田中花子"
+        assert [r["persona_id"] for r in data["responses"]] == ["p1", "p2"]
+        assert data["excluded_files"] == []
 
-    @patch("web.routers.interview.get_interview_manager")
-    def test_send_message_empty(self, mock_get_manager, client):
-        """空メッセージでエラーを返すことを確認"""
-        # FastAPIのForm(...)は空文字列を許可するが、ルーター内で400を返す
-        # ただし、空文字列の場合FastAPIが422を返す場合がある
-        response = client.post("/interview/test-session/message", data={"message": ""})
+        messages = client.get(f"/interview/{session.id}/messages").json()["messages"]
+        assert [m["message_type"] for m in messages] == [
+            "user_message",
+            "statement",
+            "statement",
+        ]
 
-        # FastAPIは空文字列を422で拒否する場合がある
-        assert response.status_code in [400, 422]
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_send_message_whitespace_only(self, mock_get_manager, client):
-        """空白のみのメッセージでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.send_user_message_with_files.side_effect = (
-            InterviewValidationError(
-                "message is blank", code=ErrorCode.INTERVIEW_MESSAGE_REQUIRED
-            )
-        )
-        mock_get_manager.return_value = mock_manager
-
+    def test_stream_sends_each_reply_and_completes(self, iw, client):
+        session = iw.start("p1", "p2")
         response = client.post(
-            "/interview/test-session/message", data={"message": "   "}
+            f"/interview/{session.id}/message/stream", data={"message": "こんにちは"}
         )
+        kinds = [e["type"] for e in _sse(response)]
+        assert kinds.count("message_end") == 2
+        assert kinds[-1] == "complete"
+        assert iw.store.get(session.id).last_seq == 3
 
+    def test_empty_message(self, iw, client):
+        session = iw.start("p1")
+        response = client.post(
+            f"/interview/{session.id}/message", data={"message": "   "}
+        )
         assert response.status_code == 400
-        data = response.json()
-        assert data["error_type"] == "validation_error"
 
-    @patch("web.routers.interview.get_interview_manager")
-    def test_send_message_too_long(self, mock_get_manager, client):
-        """長すぎるメッセージでエラーを返すことを確認"""
-        long_message = "あ" * 2001
-
-        mock_manager = Mock()
-        mock_manager.send_user_message_with_files.side_effect = (
-            InterviewValidationError("メッセージが長すぎます（最大2000文字）")
-        )
-        mock_get_manager.return_value = mock_manager
-
+    def test_unreadable_participant_stops_the_conversation(self, iw, client):
+        session = iw.start("p1", "p2")
+        iw.api.world.unshare("p2")
         response = client.post(
-            "/interview/test-session/message", data={"message": long_message}
+            f"/interview/{session.id}/message", data={"message": "こんにちは"}
         )
-
-        assert response.status_code == 400
-        data = response.json()
-        assert data["error"] == "入力内容に問題があります"
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_send_message_session_not_found(self, mock_get_manager, client):
-        """存在しないセッションでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.send_user_message_with_files.side_effect = (
-            InterviewSessionNotFoundError(
-                "session not found", code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND
-            )
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/interview/non-existent-session/message",
-            data={"message": "テストメッセージ"},
-        )
-
         assert response.status_code == 404
-        data = response.json()
-        assert data["error_type"] == "session_not_found"
+        assert response.json()["error_type"] == "conversation_stopped"
+        assert iw.store.get(session.id).last_seq == 0
 
-
-class TestGetMessagesEndpoint:
-    """メッセージ履歴取得エンドポイントのテスト"""
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_get_messages_success(self, mock_get_manager, client):
-        """メッセージ履歴取得が成功することを確認"""
-        mock_session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[
-                Message.create_new("user", "User", "質問です", "user_message"),
-                Message.create_new("persona-1", "田中花子", "回答です", "statement"),
-            ],
-            created_at=datetime.now(),
-            is_saved=False,
+    def test_a_reply_in_progress_is_a_concurrent_update(self, iw, client):
+        session = iw.start("p1")
+        stored = iw.store.get(session.id)
+        now = datetime.now(timezone.utc)
+        iw.store.append_user_message(
+            stored,
+            InterviewMessage.create_new(
+                session_id=session.id,
+                seq=1,
+                speaker="user",
+                persona_id="user",
+                persona_name_at_time="ユーザー",
+                content="別の送信",
+                now=now,
+            ),
+            token="other",
+            now=now,
         )
-
-        mock_manager = Mock()
-        mock_manager.get_interview_session.return_value = mock_session
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/interview/test-session/messages")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "messages" in data
-        assert len(data["messages"]) == 2
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_get_messages_session_not_found(self, mock_get_manager, client):
-        """存在しないセッションでエラーを返すことを確認"""
-        from src.managers.interview_manager import InterviewManagerError
-
-        mock_manager = Mock()
-        mock_manager.get_interview_session.side_effect = InterviewManagerError(
-            "セッションが見つかりません"
+        sent = client.post(
+            f"/interview/{session.id}/message", data={"message": "こんにちは"}
         )
-        mock_get_manager.return_value = mock_manager
+        assert sent.status_code == 503
+        assert sent.json()["error_type"] == "concurrent_update"
 
-        response = client.get("/interview/non-existent-session/messages")
-
-        assert response.status_code == 404
-
-
-class TestSaveInterviewSessionEndpoint:
-    """インタビューセッション保存エンドポイントのテスト"""
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_save_session_success(self, mock_get_manager, client):
-        """セッション保存が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.get_session_status.return_value = {
-            "is_saved": False,
-            "message_count": 2,
-            "has_user_messages": True,
-            "has_persona_responses": True,
-        }
-        mock_manager.save_interview_session.return_value = "discussion-id-123"
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/interview/test-session/save", data={"session_name": "テストセッション"}
+        saved = client.post(
+            f"/interview/{session.id}/save", data={"session_name": "名前"}
         )
+        assert saved.status_code == 503
+        assert saved.json()["error_type"] == "concurrent_update"
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "discussion_id" in data
-        assert data["discussion_id"] == "discussion-id-123"
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_save_session_already_saved(self, mock_get_manager, client):
-        """既に保存済みのセッションで適切なレスポンスを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_session_status.return_value = {
-            "is_saved": True,
-            "message_count": 2,
-        }
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/interview/test-session/save", data={"session_name": "テストセッション"}
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["already_saved"] is True
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_save_session_no_messages(self, mock_get_manager, client):
-        """メッセージなしでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_session_status.return_value = {
-            "is_saved": False,
-            "message_count": 0,
-        }
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/interview/test-session/save", data={"session_name": "テストセッション"}
-        )
-
-        assert response.status_code == 400
-        data = response.json()
-        assert "メッセージがありません" in data["error"]
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_save_session_empty_name(self, mock_get_manager, client):
-        """空のセッション名でエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_session_status.return_value = {
-            "is_saved": False,
-            "message_count": 2,
-            "has_user_messages": True,
-            "has_persona_responses": True,
-        }
-        mock_get_manager.return_value = mock_manager
-
-        # 空文字列のセッション名を送信
-        response = client.post(
-            "/interview/test-session/save", data={"session_name": ""}
-        )
-
-        # FastAPIは空文字列を422で拒否する場合がある
-        assert response.status_code in [400, 422]
-
-
-class TestEndInterviewSessionEndpoint:
-    """インタビューセッション終了エンドポイントのテスト"""
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_end_session_success(self, mock_get_manager, client):
-        """セッション終了が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.end_interview_session.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete("/interview/test-session")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "終了されました" in data["message"]
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_end_session_not_found(self, mock_get_manager, client):
-        """存在しないセッションでエラーを返すことを確認"""
-        from src.managers.interview_manager import InterviewManagerError
-
-        mock_manager = Mock()
-        mock_manager.end_interview_session.side_effect = InterviewManagerError(
-            "セッションが見つかりません"
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete("/interview/non-existent-session")
-
-        assert response.status_code == 400
-
-
-class TestInterviewChatPage:
-    """インタビューチャットページのテスト"""
-
-    @patch("web.routers.interview.get_persona_manager")
-    @patch("web.routers.interview.get_interview_manager")
-    def test_chat_page_loads(
-        self, mock_get_interview, mock_get_persona, client, sample_persona
+    def test_attachments_are_uploaded_first_and_passed_by_id(
+        self, iw, client, tmp_path
     ):
-        """チャットページが正常に読み込まれることを確認"""
-        mock_session = InterviewSession(
-            id="test-session",
-            participants=[sample_persona.id],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
+        from src.managers.file_manager import FileMetadata
+        from src.models.uploaded_file import UploadedFile
+
+        path = tmp_path / "memo.txt"
+        path.write_bytes(b"hello")
+        uploaded = UploadedFile.create_new(
+            owner_sub=ME.sub,
+            file_type="discussion_document",
+            original_filename="memo.txt",
+            file_size=5,
+            file_hash="h",
+            mime_type="text/plain",
+            now=datetime.now(timezone.utc),
+            file_id="11111111-1111-4111-8111-111111111111",
+        ).with_path(str(path))
+        iw.files.upload_interview_attachment.return_value = FileMetadata(
+            file_id=uploaded.id,
+            original_filename="memo.txt",
+            saved_filename="x",
+            file_path=str(path),
+            file_size=5,
+            file_hash="h",
+            mime_type="text/plain",
+            uploaded_at=uploaded.uploaded_at,
+        )
+        iw.api.world.files.attachable_file.side_effect = lambda p, i: uploaded
+        session = iw.start("p1")
+
+        response = client.post(
+            f"/interview/{session.id}/message/stream",
+            data={"message": "見てください"},
+            files=[("files", ("memo.txt", b"hello", "text/plain"))],
         )
 
-        mock_interview_manager = Mock()
-        mock_interview_manager.get_interview_session.return_value = mock_session
-        mock_get_interview.return_value = mock_interview_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get("/interview/chat/test-session")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_chat_page_session_not_found(self, mock_get_manager, client):
-        """存在しないセッションで404エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_interview_session.side_effect = InterviewSessionNotFoundError(
-            "セッションが見つかりません"
+        assert _sse(response)[-1]["type"] == "complete"
+        principal, content, filename, mime = (
+            iw.files.upload_interview_attachment.call_args.args
         )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/interview/chat/non-existent-session")
-
-        assert response.status_code == 404
-
-
-class TestInterviewStatsEndpoint:
-    """インタビュー統計エンドポイントのテスト"""
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_get_stats_success(self, mock_get_manager, client):
-        """統計取得が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.get_active_sessions_count.return_value = 5
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/interview/stats")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "active_sessions" in data
-        assert data["active_sessions"] == 5
-
-
-class TestCleanupEndpoint:
-    """セッションクリーンアップエンドポイントのテスト"""
-
-    @patch("web.routers.interview.get_interview_manager")
-    def test_cleanup_success(self, mock_get_manager, client):
-        """クリーンアップが成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.cleanup_inactive_sessions.return_value = 3
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post("/interview/cleanup")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["cleaned_sessions"] == 3
-
-
-class TestSaveNameDialog:
-    """U3 WF3: the session-name prompt is a shared dialog drawn in chat.html."""
-
-    @patch("web.routers.interview.get_persona_manager")
-    @patch("web.routers.interview.get_interview_manager")
-    def test_save_name_dialog_keeps_e2e_selectors_and_fetch(
-        self, mock_get_interview, mock_get_persona, client, sample_persona
-    ):
-        session = InterviewSession(
-            id="test-session",
-            participants=[sample_persona.id],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
+        assert (principal.sub, content, filename, mime) == (
+            ME.sub,
+            b"hello",
+            "memo.txt",
+            "text/plain",
         )
-        mock_get_interview.return_value.get_interview_session.return_value = session
-        mock_get_persona.return_value.get_persona_unchecked.return_value = (
-            sample_persona
+        assert iw.store.get(session.id).document_ids == [uploaded.id]
+
+    def test_an_upload_error_is_shown_before_sending(self, iw, client):
+        from src.managers.file_manager import FileUploadError
+
+        iw.files.upload_interview_attachment.side_effect = FileUploadError(
+            "unsupported (ClientError) s3://secret",
+            code=ErrorCode.FILE_MIME_UNSUPPORTED,
+        )
+        session = iw.start("p1")
+        response = client.post(
+            f"/interview/{session.id}/message/stream",
+            data={"message": "見て"},
+            files=[("files", ("a.zip", b"PK", "application/zip"))],
+        )
+        events = _sse(response)
+        assert events[-1]["type"] == "error"
+        assert events[-1]["error_type"] == "validation_error"
+        assert "secret" not in response.text
+        assert iw.store.get(session.id).last_seq == 0
+
+
+# =============================================================================
+# 保存・終了・状態（BR3.7、BR3.8）
+# =============================================================================
+
+
+class TestSaveAndEnd:
+    def test_save_twice_writes_to_one_discussion(self, iw, client):
+        session = iw.start("p1", "p2")
+        client.post(f"/interview/{session.id}/message", data={"message": "質問1"})
+        first = client.post(
+            f"/interview/{session.id}/save", data={"session_name": "保存名"}
+        )
+        assert first.status_code == 200
+        discussion_id = first.json()["discussion_id"]
+        assert first.json()["excluded_files"] == []
+
+        client.post(f"/interview/{session.id}/message", data={"message": "質問2"})
+        again = client.post(
+            f"/interview/{session.id}/save", data={"session_name": "保存名"}
+        )
+        assert again.json()["discussion_id"] == discussion_id
+        body = iw.api.world.store.bodies[discussion_id]
+        assert body["mode"] == "interview" and body["message_count"] == 6
+
+    def test_nothing_to_save(self, iw, client):
+        session = iw.start("p1")
+        response = client.post(
+            f"/interview/{session.id}/save", data={"session_name": "保存名"}
+        )
+        assert response.status_code == 400
+
+    def test_name_is_required_and_bounded(self, iw, client):
+        session = iw.start("p1")
+        assert (
+            client.post(
+                f"/interview/{session.id}/save", data={"session_name": "  "}
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                f"/interview/{session.id}/save", data={"session_name": "あ" * 101}
+            ).status_code
+            == 400
         )
 
-        html = client.get("/interview/chat/test-session").text
+    def test_end_makes_the_session_unusable(self, iw, client):
+        session = iw.start("p1")
+        assert client.delete(f"/interview/{session.id}").status_code == 200
+        assert client.get(f"/interview/{session.id}/status").status_code == 404
+
+    def test_status(self, iw, client):
+        session = iw.start("p1")
+        status = client.get(f"/interview/{session.id}/status").json()["session_status"]
+        assert status["session_id"] == session.id
+        assert status["message_count"] == 0
+
+    def test_stats_are_this_tasks_agents(self, iw, client):
+        iw.start("p1")
+        assert client.get("/interview/stats").json()["active_sessions"] == 1
+
+
+# =============================================================================
+# チャット画面
+# =============================================================================
+
+
+class TestChatPage:
+    def test_chat_page_loads_with_the_messages(self, iw, client):
+        session = iw.start("p1")
+        client.post(f"/interview/{session.id}/message", data={"message": "質問1"})
+        html = client.get(f"/interview/chat/{session.id}").text
+        assert "質問1" in html
+        assert "佐藤" in html
+
+    def test_missing_session_is_not_found(self, iw, client):
+        assert client.get("/interview/chat/nonexistent").status_code == 404
+
+    def test_unreadable_participant_shows_the_stop_panel(self, iw, client):
+        session = iw.start("p1", "p2")
+        iw.api.world.unshare("p2")
+        html = client.get(f"/interview/chat/{session.id}").text
+        assert "data-conversation-stopped" in html
+        assert "ページが見つかりません" in html
+
+    def test_save_name_dialog_keeps_e2e_selectors_and_fetch(self, iw, client):
+        session = iw.start("p1")
+        html = client.get(f"/interview/chat/{session.id}").text
 
         dialog_markup(html, "save-name-dialog")
-        # E2E（tests/e2e/test_interview.py）が使う要素
         for selector in (
             'id="save-session-btn"',
             'id="session-name-input"',
@@ -612,7 +464,5 @@ class TestSaveNameDialog:
             assert selector in html
         assert 'data-dialog-close="confirm"' in html
         assert "openDialog('save-name-dialog')" in html
-        # 送信は今どおり X-Requested-With 付きの fetch()
         assert "fetch(`/interview/${sessionId}/save`" in html
         assert "'X-Requested-With': 'XMLHttpRequest'" in html
-        assert 'id="save-name-modal"' not in html

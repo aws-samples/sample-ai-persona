@@ -5,11 +5,11 @@ Tests the complete flow from session creation to message exchange.
 
 import pytest
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from src.models.persona import Persona
 from src.models.message import Message
-from src.managers.interview_manager import InterviewManager, InterviewSession
+from src.managers.interview_manager import InterviewManager
 
 
 class TestInterviewChatIntegration:
@@ -38,65 +38,80 @@ class TestInterviewChatIntegration:
             goals=["スキル向上", "独立"],
         )
 
-    @patch("src.services.service_factory.service_factory")
-    def test_interview_session_creation_and_messaging(self, mock_service_factory):
-        """Test complete interview session creation and messaging flow."""
-        # Setup service mocks
-        mock_agent_service = Mock()
-        mock_database_service = Mock()
+    def test_interview_session_creation_and_messaging(self, monkeypatch):
+        """Test complete interview session creation and messaging flow (U6, moto)."""
+        moto = pytest.importorskip("moto")
+        import boto3
 
-        mock_service_factory.get_agent_service.return_value = mock_agent_service
-        mock_service_factory.get_database_service.return_value = mock_database_service
+        from src.services.interview_session_store import InterviewSessionStore
+        from tests.unit.discussion_world import OWNER, World
 
-        # Setup agent mocks
-        mock_agent1 = Mock()
-        mock_agent1.get_persona_id.return_value = self.persona1.id
-        mock_agent1.get_persona_name.return_value = self.persona1.name
-        mock_agent1.respond.return_value = "こんにちは！エンジニアの田中です。"
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        world = World()
+        persona1 = world.persona_bodies["p1"]
+        persona2 = world.persona_bodies["p2"]
+        replies = {
+            persona1.id: "こんにちは！佐藤です。",
+            persona2.id: "はじめまして！鈴木です。",
+        }
 
-        mock_agent2 = Mock()
-        mock_agent2.get_persona_id.return_value = self.persona2.id
-        mock_agent2.get_persona_name.return_value = self.persona2.name
-        mock_agent2.respond.return_value = "はじめまして！デザイナーの佐藤です。"
+        def make_agent(**kw):
+            agent = Mock()
+            agent.get_persona_id.return_value = kw["persona"].id
+            agent.get_persona_name.return_value = kw["persona"].name
+            agent.respond.return_value = replies[kw["persona"].id]
+            return agent
 
-        # Mock agent service methods
-        mock_agent_service.create_persona_agent.side_effect = [mock_agent1, mock_agent2]
-        mock_agent_service.create_persona_agent_with_integrations.side_effect = [
-            mock_agent1,
-            mock_agent2,
-        ]
+        with moto.mock_aws():
+            client = boto3.client("dynamodb", region_name="ap-northeast-1")
+            client.create_table(
+                TableName="Sessions",
+                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            client.create_table(
+                TableName="Messages",
+                KeySchema=[
+                    {"AttributeName": "session_id", "KeyType": "HASH"},
+                    {"AttributeName": "seq", "KeyType": "RANGE"},
+                ],
+                AttributeDefinitions=[
+                    {"AttributeName": "session_id", "AttributeType": "S"},
+                    {"AttributeName": "seq", "AttributeType": "N"},
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            agent_service = Mock()
+            agent_service.create_persona_agent.side_effect = make_agent
+            manager = InterviewManager(
+                agent_service=agent_service,
+                database_service=Mock(),
+                dataset_analysis_service=Mock(),
+                binding_store=Mock(list_for_persona=Mock(return_value=[])),
+                session_store=InterviewSessionStore(
+                    region="ap-northeast-1",
+                    sessions_table="Sessions",
+                    messages_table="Messages",
+                    client=client,
+                ),
+                discussion_records=world.records,
+                participants=world.participants,
+                file_attachments=world.files,
+                resource_lookup=world.lookup,
+            )
 
-        # Create interview manager with mocked services
-        manager = InterviewManager(mock_agent_service, mock_database_service)
-        # Manually set the attributes since __init__ is mocked
-        manager.agent_service = mock_agent_service
-        manager.database_service = mock_database_service
+            session = manager.start_interview_session(OWNER, [persona1, persona2])
+            assert session.persona_ids == [persona1.id, persona2.id]
+            assert session.last_seq == 0 and session.saved_discussion_id is None
 
-        # Start interview session
-        session = manager.start_interview_session([self.persona1, self.persona2])
+            reply = manager.send_user_message(OWNER, session.id, "こんにちは、皆さん！")
+            assert [m.persona_name for m in reply.responses] == ["佐藤", "鈴木"]
 
-        # Verify session creation
-        assert session.id is not None
-        assert len(session.participants) == 2
-        assert self.persona1.id in session.participants
-        assert self.persona2.id in session.participants
-        assert len(session.messages) == 0
-        assert not session.is_saved
-
-        # Send user message
-        user_message = "こんにちは、皆さん！"
-        responses = manager.send_user_message(session.id, user_message)
-
-        # Verify responses
-        assert len(responses) == 2
-        assert responses[0].persona_name == self.persona1.name
-        assert responses[1].persona_name == self.persona2.name
-        assert "田中" in responses[0].content
-        assert "佐藤" in responses[1].content
-
-        # Verify session state
-        updated_session = manager.get_interview_session(session.id)
-        assert len(updated_session.messages) == 3  # 1 user + 2 persona responses
+            updated_session = manager.get_interview_session(OWNER, session.id)
+            assert len(updated_session.messages) == 3  # 1 user + 2 persona responses
 
         # Check message types
         messages = updated_session.messages
@@ -157,25 +172,33 @@ class TestInterviewChatIntegration:
 
     def test_session_persistence_requirements(self):
         """Test session persistence and data integrity."""
-        # Create session with messages
-        session = InterviewSession(
-            id="test-session",
-            participants=[self.persona1.id, self.persona2.id],
-            messages=[
-                Message.create_new("user", "User", "質問です", "user_message"),
-                Message.create_new(
-                    self.persona1.id, self.persona1.name, "回答1", "statement"
-                ),
-                Message.create_new(
-                    self.persona2.id, self.persona2.name, "回答2", "statement"
-                ),
-            ],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
+        # U6: the stored messages come back in seq order with their timestamps
+        from datetime import timedelta, timezone
 
-        # Verify message order and timestamps are maintained
-        messages = session.messages
+        from src.models.interview_session import InterviewMessage
+
+        start = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        stored = [
+            InterviewMessage.create_new(
+                session_id="test-session",
+                seq=i + 1,
+                speaker="user" if pid == "user" else "persona",
+                persona_id=pid,
+                persona_name_at_time=name,
+                content=text,
+                now=start + timedelta(seconds=i),
+            )
+            for i, (pid, name, text) in enumerate(
+                [
+                    ("user", "ユーザー", "質問です"),
+                    (self.persona1.id, self.persona1.name, "回答1"),
+                    (self.persona2.id, self.persona2.name, "回答2"),
+                ]
+            )
+        ]
+        messages = [
+            InterviewMessage.from_dict(m.to_dict()).to_message() for m in stored
+        ]
         assert len(messages) == 3
 
         # Messages should maintain chronological order

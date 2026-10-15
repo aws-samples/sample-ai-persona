@@ -133,5 +133,7 @@ class JobManager:
             self._db.update_job_completed(job_id, result_json)
             logger.info(f"Job {job_id} completed")
         except Exception as e:
-            self._db.update_job_failed(job_id, str(e))
-            logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+            # U6 BR8.3: 保存するのはエラーコードだけ（例外文は画面・API に出さない）
+            code = e.code if isinstance(e, CodedError) else ErrorCode.UNKNOWN
+            self._db.update_job_failed(job_id, code.value)
+            logger.error(f"Job {job_id} failed: {type(e).__name__}", exc_info=True)

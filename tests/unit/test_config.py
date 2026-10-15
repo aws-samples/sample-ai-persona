@@ -466,3 +466,50 @@ class TestPersonaU5Tables:
 
         with patch.dict(os.environ, {}, clear=True):
             assert Config().PERSONA_CACHE_TTL_SECONDS == 28800
+
+
+class TestDiscussionInterviewTables:
+    """U6 の 4 テーブルの物理名（infrastructure-specification.md）。"""
+
+    @pytest.mark.parametrize(
+        ("setting", "suffix"),
+        [
+            ("DISCUSSION_MESSAGES_TABLE_NAME", "DiscussionMessages"),
+            ("DISCUSSION_REPORTS_TABLE_NAME", "DiscussionReports"),
+            ("INTERVIEW_SESSIONS_TABLE_NAME", "InterviewSessions"),
+            ("INTERVIEW_MESSAGES_TABLE_NAME", "InterviewMessages"),
+        ],
+    )
+    def test_falls_back_to_the_prefix(self, setting, suffix):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
+            config = Config()
+        assert getattr(config, setting) == f"Local_{suffix}"
+
+    @pytest.mark.parametrize(
+        "setting",
+        [
+            "DISCUSSION_MESSAGES_TABLE_NAME",
+            "DISCUSSION_REPORTS_TABLE_NAME",
+            "INTERVIEW_SESSIONS_TABLE_NAME",
+            "INTERVIEW_MESSAGES_TABLE_NAME",
+        ],
+    )
+    def test_reads_the_cdk_name(self, setting):
+        from src.config import Config
+
+        with patch.dict(os.environ, {setting: "Data-TableXYZ"}, clear=True):
+            config = Config()
+        assert getattr(config, setting) == "Data-TableXYZ"
+
+    def test_new_tables_are_not_bulk_granted(self):
+        from src.config import TABLE_NAME_SETTINGS
+
+        for kind in (
+            "DiscussionMessages",
+            "DiscussionReports",
+            "InterviewSessions",
+            "InterviewMessages",
+        ):
+            assert kind not in TABLE_NAME_SETTINGS

@@ -21,7 +21,7 @@ from src.managers.job_manager import JobManager
 from src.managers.persona_generation_manager import PersonaGenerationManager
 from src.models.authz import Principal
 from src.models.persona_candidate import CandidateSaveResult
-from src.models.errors import CodedError, ErrorCode
+from src.models.errors import CodedError
 from src.models.insight_category import InsightCategory
 from web.error_messages import user_message_for, user_message_for_code
 
@@ -145,6 +145,8 @@ class JobResponse(BaseModel):
     status: str
     result: Any = None
     error: Optional[str] = None
+    #: U6 BR8.3 (C12 additive): the stable code of a failed job (never its text)
+    error_code: Optional[str] = None
     #: Persona generation only (R-06, C12 additive): candidates not saved
     failed_count: Optional[int] = None
     failed_names: Optional[List[str]] = None
@@ -295,11 +297,12 @@ async def get_persona(request: Request, persona_id: str) -> Any:
 
 
 @router.get("/discussions")
-async def list_discussions() -> Any:
-    """議論一覧取得API"""
+async def list_discussions(request: Request) -> Any:
+    """議論一覧取得API（自分のものと共有されたもの、admin は全件、U6 BR2.1）"""
     try:
-        discussion_manager = get_discussion_manager()
-        discussions, _ = discussion_manager.get_discussion_history(search_all=True)
+        discussions = await anyio.to_thread.run_sync(
+            get_discussion_manager().list_accessible_discussions, _principal(request)
+        )
 
         return [
             {
@@ -310,8 +313,11 @@ async def list_discussions() -> Any:
             }
             for d in discussions
         ]
+    except CodedError:
+        # 照合の障害（503）などは共通の例外ハンドラに任せる
+        raise
     except Exception as e:
-        logger.error(f"Failed to fetch discussion list: {e}")
+        logger.error(f"Failed to fetch discussion list: {type(e).__name__}")
         raise HTTPException(
             status_code=500,
             detail=user_message_for(e, default="議論一覧の取得に失敗しました"),
@@ -342,19 +348,15 @@ def _persona_to_response(p: Any) -> PersonaResponse:
     )
 
 
-def _resolve_personas(persona_ids: List[str]) -> list:
-    """persona_ids からペルソナオブジェクトを取得。見つからなければ HTTPException"""
-    pm = get_persona_manager()
-    personas = []
-    for pid in persona_ids:
-        # 参加者の判定は U6（get_persona_unchecked）
-        p = pm.get_persona_unchecked(pid)
-        if not p:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-            )
-        personas.append(p)
+async def _resolve_personas(principal: Principal, persona_ids: List[str]) -> list:
+    """参加者を判定してから読む（U6 BR2.8）。
+
+    ``ai:execute`` がなければ 403、1 体でも読めなければ 404（C12 の順。共通の
+    例外ハンドラが ``{detail, error_code}`` にする）。
+    """
+    personas: list = await anyio.to_thread.run_sync(
+        get_persona_manager().get_personas_for_use, principal, persona_ids
+    )
     return personas
 
 
@@ -451,17 +453,15 @@ def _run_classic_discussion(
     categories: list | None,
     rounds: int = 3,
 ) -> dict:
-    """Classic議論をバックグラウンドで実行"""
+    """Classic議論をバックグラウンドで実行（投入した人として実行し保存する）"""
     dm = get_discussion_manager()
     cats = (
         [InsightCategory.from_dict(c.model_dump()) for c in categories]
         if categories
         else None
     )
-    discussion = dm.run_classic_discussion(
-        personas=personas, topic=topic, categories=cats
-    )
-    return _discussion_detail(discussion)
+    discussion = dm.run_classic_discussion(principal, personas, topic, categories=cats)
+    return _discussion_detail(dm.get_discussion(principal, discussion.id))
 
 
 def _run_agent_discussion(
@@ -479,20 +479,20 @@ def _run_agent_discussion(
         else None
     )
     discussion = adm.run_agent_discussion_full(
-        personas=personas,
-        topic=topic,
-        rounds=rounds,
-        categories=cats,
+        principal, personas, topic, rounds=rounds, categories=cats
     )
-    return _discussion_detail(discussion)
+    return _discussion_detail(
+        get_discussion_manager().get_discussion(principal, discussion.id)
+    )
 
 
 def _discussion_detail(discussion: Any) -> dict:
+    """``DiscussionView`` -> the JSON of ``DiscussionDetailResponse``."""
     return DiscussionDetailResponse(
         id=discussion.id,
         topic=discussion.topic,
         mode=discussion.mode,
-        participants=discussion.participants,
+        participants=discussion.participant_ids,
         messages=[
             MessageResponse(
                 persona_id=m.persona_id,
@@ -525,13 +525,14 @@ def _discussion_detail(discussion: Any) -> dict:
 )
 async def run_discussion(request: Request, req: RunDiscussionRequest) -> Any:
     try:
-        personas = _resolve_personas(req.persona_ids)
+        principal = _principal(request)
+        personas = await _resolve_personas(principal, req.persona_ids)
         jm = get_job_manager()
         runner = (
             _run_classic_discussion if req.mode == "classic" else _run_agent_discussion
         )
         job_id = jm.submit(
-            _principal(request),
+            principal,
             "discussion",
             runner,
             personas,
@@ -559,20 +560,17 @@ async def run_discussion(request: Request, req: RunDiscussionRequest) -> Any:
     summary="議論結果を取得する",
     description="指定されたIDの議論結果（メッセージ、インサイト含む）を取得します。",
 )
-async def get_discussion_detail(discussion_id: str) -> Any:
+async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
+    # 読めない・存在しないは DISCUSSION_NOT_FOUND（共通の例外ハンドラが 404 にする）
     try:
-        dm = get_discussion_manager()
-        discussion = dm.get_discussion(discussion_id)
-        if not discussion:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-            )
-        return _discussion_detail(discussion)
-    except HTTPException:
+        view = await anyio.to_thread.run_sync(
+            get_discussion_manager().get_discussion, _principal(request), discussion_id
+        )
+        return _discussion_detail(view)
+    except CodedError:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch discussion: {e}")
+        logger.error(f"Failed to fetch discussion: {type(e).__name__}")
         raise HTTPException(
             status_code=500,
             detail=user_message_for(e, default="議論の取得に失敗しました"),
@@ -594,12 +592,11 @@ async def generate_insights(
 ) -> Any:
     try:
         dm = get_discussion_manager()
-        discussion = dm.get_discussion(discussion_id)
-        if not discussion:
-            raise HTTPException(
-                status_code=404,
-                detail=user_message_for_code(ErrorCode.DISCUSSION_NOT_FOUND),
-            )
+        principal = _principal(request)
+        # 投入の前に ai:execute と管理できるかを確かめる（403 / 404、C12）
+        await anyio.to_thread.run_sync(
+            dm.check_insights_allowed, principal, discussion_id
+        )
 
         cats = (
             [InsightCategory.from_dict(c.model_dump()) for c in req.categories]
@@ -608,7 +605,8 @@ async def generate_insights(
         )
 
         def _run(principal: Principal) -> list[dict]:
-            insights = dm.generate_insights(discussion, categories=cats)
+            # 生成したインサイトを議論に保存する（再生成と同じ。レポート・資料は残る）
+            insights = dm.regenerate_insights(principal, discussion_id, cats)
             return [
                 InsightResponse(
                     category=i.category,
@@ -620,7 +618,7 @@ async def generate_insights(
             ]
 
         jm = get_job_manager()
-        job_id = jm.submit(_principal(request), "insights", _run)
+        job_id = jm.submit(principal, "insights", _run)
         return JobResponse(job_id=job_id, status="pending")
     except (HTTPException, CodedError):
         raise
@@ -641,14 +639,17 @@ async def generate_insights(
     summary="ペルソナにインタビューする",
     description="指定されたペルソナに質問を送り、回答を取得します。1回の呼び出しで1ターン（質問→回答）のみ実行され、会話コンテキストは保持されません。",
 )
-async def run_interview(req: RunInterviewRequest) -> Any:
+async def run_interview(request: Request, req: RunInterviewRequest) -> Any:
     try:
-        personas = _resolve_personas(req.persona_ids)
+        principal = _principal(request)
+        personas = await _resolve_personas(principal, req.persona_ids)
         im = get_interview_manager()
-        session = im.start_interview_session(personas=personas)
+        session = await anyio.to_thread.run_sync(
+            im.start_interview_session, principal, personas
+        )
         try:
-            responses = im.send_user_message(
-                session_id=session.id, message=req.question
+            reply = await anyio.to_thread.run_sync(
+                im.send_user_message, principal, session.id, req.question
             )
             return [
                 MessageResponse(
@@ -658,14 +659,16 @@ async def run_interview(req: RunInterviewRequest) -> Any:
                     timestamp=m.timestamp.isoformat(),
                     message_type=m.message_type,
                 )
-                for m in responses
+                for m in reply.responses
             ]
         finally:
-            im.end_interview_session(session.id)
-    except HTTPException:
+            await anyio.to_thread.run_sync(
+                im.end_interview_session, principal, session.id
+            )
+    except (HTTPException, CodedError):
         raise
     except Exception as e:
-        logger.error(f"Interview error: {e}")
+        logger.error(f"Interview error: {type(e).__name__}")
         raise HTTPException(
             status_code=500,
             detail=user_message_for(e, default="インタビューの実行に失敗しました"),
@@ -692,7 +695,9 @@ async def get_job(request: Request, job_id: str) -> Any:
         job_id=job.id,
         status=job.status.value,
         result=job.result,
-        error="処理中にエラーが発生しました" if job.error else None,
+        # U6 BR8.3: 失敗はコードで持ち、文言はカタログから引く（例外文は返さない）
+        error=user_message_for_code(job.error_code) if job.error_code else None,
+        error_code=job.error_code,
     )
     stored = job.result
     if (

@@ -528,6 +528,34 @@ class TestServiceFactoryAuthzServices:
         assert bindings.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
+    def test_u6_stores_use_their_tables(self, mock_config, monkeypatch):
+        """U6 の 2 つの Service（議論・インタビュー）。"""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.table_name.return_value = "Discussions-physical"
+        mock_config.DISCUSSION_MESSAGES_TABLE_NAME = "Messages-physical"
+        mock_config.DISCUSSION_REPORTS_TABLE_NAME = "Reports-physical"
+        mock_config.INTERVIEW_SESSIONS_TABLE_NAME = "Sessions-physical"
+        mock_config.INTERVIEW_MESSAGES_TABLE_NAME = "IMessages-physical"
+
+        factory = ServiceFactory()
+        discussions = factory.get_discussion_store()
+        interviews = factory.get_interview_session_store()
+
+        assert discussions is factory.get_discussion_store()
+        assert interviews is factory.get_interview_session_store()
+        assert discussions.discussions_table == "Discussions-physical"
+        assert discussions.messages_table == "Messages-physical"
+        assert discussions.reports_table == "Reports-physical"
+        mock_config.table_name.assert_called_with("Discussions")
+        assert interviews.sessions_table == "Sessions-physical"
+        assert interviews.messages_table == "IMessages-physical"
+        assert interviews.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
     def test_user_directory_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory

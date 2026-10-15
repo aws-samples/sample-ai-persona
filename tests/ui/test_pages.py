@@ -12,7 +12,6 @@ from src.models.sharing import ListTab, TabbedList
 from src.models.survey import Survey
 from src.models.survey_template import Question, SurveyTemplate
 from tests.ui.conftest import UiHarness
-from web.routers._pagination import encode_cursor
 
 NOW = datetime(2026, 10, 1, 9, 30)
 NEXT = {"id": "next-page"}
@@ -76,10 +75,34 @@ def _discussions(personas: list[Persona]) -> list[Discussion]:
     return [
         Discussion.create_new(
             topic=topic,
-            participants=[p.id for p in personas[:2]] + ["unknown-persona-id"],
+            participants=[p.id for p in personas[:2]],
+            participant_names={p.id: p.name for p in personas[:2]},
         )
         for topic in topics
     ]
+
+
+#: The cursor the discussion list hands to 「もっと見る」.
+DISCUSSION_NEXT = "discussion-next"
+
+
+def _discussion_listing(discussions: list[Discussion], tab: str | None) -> TabbedList:
+    """What DiscussionManager.list_discussions returns for the admin (U6, M6)."""
+    active = ListTab.parse(tab) or ListTab.MINE
+    return TabbedList(
+        tab=active,
+        items=discussions,
+        next_cursor=DISCUSSION_NEXT,
+        counts={"mine": 12, "shared": 1, "all": 20},
+        show_all=True,
+        owners={}
+        if active is ListTab.MINE
+        else {d.id: "中村 由美" for d in discussions},
+        shared_with={discussions[0].id: ["企画部"]},
+        manageable=frozenset()
+        if active is ListTab.SHARED
+        else frozenset(d.id for d in discussions),
+    )
 
 
 def _surveys() -> list[Survey]:
@@ -133,14 +156,11 @@ def screens() -> Generator[dict[str, Mock]]:
     persona_manager.list_personas.side_effect = lambda _p, tab, _c: _persona_listing(
         personas, tab
     )
-    # 議論の一覧は参加者を get_persona_unchecked で引く（判定は U6）
-    persona_manager.get_persona_unchecked.side_effect = lambda pid: next(
-        (p for p in personas if p.id == pid), None
-    )
+    discussions = _discussions(personas)
     discussion_manager = Mock()
-    discussion_manager.get_discussion_history.return_value = (
-        _discussions(personas),
-        NEXT,
+    # U6: 議論の一覧もタブ別。参加者は保存したときの名前（participant_names）で出す
+    discussion_manager.list_discussions.side_effect = (
+        lambda _p, tab, _c, *_a: _discussion_listing(discussions, tab)
     )
     execution_manager = Mock()
     execution_manager.get_all_surveys.return_value = _surveys()
@@ -196,6 +216,24 @@ def test_list_screen_has_no_axe_violations(
 
     assert ui.page.locator("h1").count() == 1
     assert ui.page.locator("main h2").count() >= 1
+    ui.check_a11y()
+
+
+@pytest.mark.parametrize("tab", ["mine", "shared", "all"])
+def test_discussion_tabs_have_no_axe_violations(
+    ui: UiHarness, screen_client: Any, screens: dict[str, Mock], tab: str
+) -> None:
+    """議論・インタビュー結果の 3 つのタブ（U6、M6、BR2.1）。"""
+    _open(ui, screen_client, f"/discussion/results?tab={tab}")
+
+    selected = ui.page.locator("[role=tab][aria-selected=true]")
+    assert selected.get_attribute("data-tab") == tab
+    assert (ui.page.locator("[data-testid='bulk-select-bar']").count() == 0) is (
+        tab == "shared"
+    )
+    assert (
+        ui.page.locator("[data-testid='discussion-share-button']").count() == 0
+    ) is (tab == "shared")
     ui.check_a11y()
 
 
@@ -263,7 +301,7 @@ def test_icon_only_delete_buttons_are_named(
         ),
         (
             "/discussion/results",
-            f"/discussion/results?cursor={encode_cursor(NEXT)}&sort=newest&append=1",
+            f"/discussion/results?tab=mine&cursor={DISCUSSION_NEXT}&append=1",
             "#discussion-grid",
         ),
     ],

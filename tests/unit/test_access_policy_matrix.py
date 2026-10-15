@@ -519,7 +519,10 @@ def test_u5_unattached_file(actor, expected):
     ("actor", "expected"), [("member", "ok"), ("admin", "ok"), ("stranger", "404")]
 )
 def test_u5_attached_file_before_parent_registration(actor, expected):
-    """U6 / U7 が親の判定を登録するまでは、アップロードした本人と admin だけ（BR5.7）。"""
+    """U7 がテンプレートの判定を登録するまでは、アップロードした本人と admin だけ（BR5.7）。
+
+    U6 で議論の判定は登録した（下の ``test_u6_discussion_documents``）。
+    """
     from datetime import datetime, timezone
     from unittest.mock import Mock
 
@@ -528,15 +531,238 @@ def test_u5_attached_file_before_parent_registration(actor, expected):
 
     uploaded = UploadedFile.create_new(
         owner_sub=ACTORS["member"].sub,
-        file_type="discussion_document",
-        original_filename="a.pdf",
+        file_type="survey_image",
+        original_filename="a.png",
         file_size=1,
         file_hash="h",
-        mime_type="application/pdf",
+        mime_type="image/png",
         now=datetime.now(timezone.utc),
-    ).attached_to("discussion", "d1")
+    ).attached_to("survey_template", "t1")
     store = Mock()
     store.get.return_value = uploaded
     files = FileAttachments(store, None)
     allowed = files.can_read_file(U5_ACTORS[actor], uploaded.id)
     assert ("ok" if allowed else "404") == expected
+
+
+# =============================================================================
+# U6: 議論（読む・管理する・実行する）・レポート・資料・インタビューのセッション
+# security-design.md §1・§2、BR1〜BR5、BR8.1、NFR1.55、AC4.4.5
+# =============================================================================
+
+#: The member (``a``, ``sales``) sees: ``own`` (a's), ``shared`` (b's, shared
+#: with ``sales``), ``unrelated`` (c's, not shared), ``deleted`` (no body).
+U6_KINDS = ("own", "shared", "unrelated", "deleted")
+
+#: (operation, actor, kind, outcome)
+U6_MATRIX: list[tuple[str, str, str, Outcome]] = []
+for _op, _member, _admin, _no_role in [
+    # 読む: 共有された人も読める。無関係・削除済みは同じ 404
+    ("read", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "404"),
+    # 管理する（削除）: 共有された人は 403
+    ("manage", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "404"),
+    # 実行する（インサイトの再生成）: ai:execute のあとに管理できる人
+    ("run", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "403"),
+    # レポートの生成: ai:execute のあとに読める人（共有された人も生成できる）
+    ("report_generate", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "403"),
+    # レポートの保存: 管理できる人
+    ("report_save", ("ok", "403", "404", "404"), ("ok", "ok", "404"), "404"),
+    # 資料: 親の議論を読める人に配信（BR5.1）
+    ("document", ("ok", "ok", "404", "404"), ("ok", "ok", "404"), "404"),
+]:
+    U6_MATRIX += [(_op, "member", k, o) for k, o in zip(U6_KINDS, _member)]
+    U6_MATRIX += [
+        (_op, "admin", k, o) for k, o in zip(("shared", "unrelated", "deleted"), _admin)
+    ]
+    U6_MATRIX.append((_op, "no_role", "own", _no_role))
+
+
+def _u6_world():
+    from unittest.mock import Mock
+
+    from src.models.discussion import Discussion
+    from src.models.message import Message
+    from tests.unit.discussion_world import OWNER, PEER, STRANGER, World
+
+    world = World()
+    ids: dict[str, str] = {"deleted": "nonexistent"}
+    for kind, saver in (("own", OWNER), ("shared", PEER), ("unrelated", STRANGER)):
+        discussion = Discussion.create_new(
+            topic=f"{kind}の議論",
+            participants=["p1", "p2"],
+            mode="classic",
+            participant_names={"p1": "佐藤", "p2": "鈴木"},
+        )
+        saved = world.records.save_new(
+            saver,
+            discussion,
+            [Message.create_new("p1", "佐藤", "十分に長い発言です" * 3)] * 2,
+        )
+        ids[kind] = saved.id
+    world.share(ids["shared"], "sales")
+    world.files = Mock()
+    return world, ids
+
+
+def _u6_principal(actor: str) -> Principal:
+    from tests.unit.discussion_world import ADMIN, NO_ROLE, OWNER
+
+    return {"member": OWNER, "admin": ADMIN, "no_role": NO_ROLE}[actor]
+
+
+def _u6_call(op: str, world, principal: Principal, discussion_id: str) -> None:
+    from unittest.mock import Mock
+
+    from src.managers.discussion_manager import DiscussionManager
+    from src.managers.report_manager import ReportManager
+
+    ai = Mock()
+    ai.extract_insights.return_value = [
+        {
+            "category": "c",
+            "description": "十分に長いインサイトです",
+            "confidence_score": 0.5,
+        }
+    ]
+    ai.generate_standard_report_streaming.side_effect = lambda **kw: iter(["r"])
+    discussions = DiscussionManager(
+        ai_service=ai,
+        database_service=Mock(),
+        file_attachments=Mock(),
+        discussion_records=world.records,
+        participants=world.participants,
+        resource_sharing=world.sharing,
+        owners=world.owners,
+        s3_service=Mock(),
+    )
+    reports = ReportManager(
+        ai_service=ai,
+        agent_service=Mock(),
+        database_service=Mock(),
+        discussion_records=world.records,
+        participants=world.participants,
+    )
+    if op == "read":
+        discussions.get_discussion(principal, discussion_id)
+    elif op == "manage":
+        discussions.delete_discussion(principal, discussion_id)
+    elif op == "run":
+        discussions.regenerate_insights(principal, discussion_id)
+    elif op == "report_generate":
+        list(reports.generate_report_streaming(principal, discussion_id, "summary"))
+    elif op == "report_save":
+        reports.save_report(principal, discussion_id, "summary", "内容")
+    elif op == "document":
+        _u6_document(world, principal, discussion_id)
+    else:
+        raise AssertionError(op)
+
+
+def _u6_document(world, principal: Principal, discussion_id: str) -> None:
+    """A document attached to the discussion, read through the real wiring."""
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+
+    from src.managers.components.sharing_runtime import build_access_parts
+    from src.models.uploaded_file import UploadedFile
+    from tests.unit.discussion_world import AssetReader, DiscussionReader
+
+    class _Readers:
+        def reader(self, table):
+            return {
+                ResourceType.PERSONA: world.personas,
+                ResourceType.DISCUSSION: DiscussionReader(world.store),
+            }.get(table.resource_type, AssetReader())
+
+    uploaded = UploadedFile.create_new(
+        owner_sub="uploader",
+        file_type="discussion_document",
+        original_filename="資料.pdf",
+        file_size=1,
+        file_hash="h",
+        mime_type="application/pdf",
+        now=datetime.now(timezone.utc),
+    ).attached_to("discussion", discussion_id)
+    store = Mock()
+    store.get.return_value = uploaded
+    files = build_access_parts(_Readers(), store, None).files
+    files.readable_file(principal, uploaded.id)
+
+
+@pytest.mark.parametrize(
+    ("op", "actor", "kind", "expected"),
+    U6_MATRIX,
+    ids=[f"{op}-{actor}-{kind}" for op, actor, kind, _ in U6_MATRIX],
+)
+def test_u6_discussions(op, actor, kind, expected):
+    world, ids = _u6_world()
+    try:
+        _u6_call(op, world, _u6_principal(actor), ids[kind])
+    except AccessDeniedError:
+        assert expected == "403"
+        return
+    except CodedError as e:
+        assert e.code in (ErrorCode.DISCUSSION_NOT_FOUND, ErrorCode.FILE_NOT_FOUND)
+        assert expected == "404"
+        return
+    assert expected == "ok"
+
+
+#: Interview sessions belong to the one who started them; admin included (BR3.2).
+U6_INTERVIEW_ROWS: list[tuple[str, str, Outcome]] = [
+    ("owner", "live", "ok"),
+    ("same_department", "live", "404"),
+    ("admin", "live", "404"),
+    ("no_role", "live", "404"),
+    ("owner", "expired", "404"),
+    ("owner", "missing", "404"),
+]
+
+
+@pytest.mark.parametrize(("actor", "state", "expected"), U6_INTERVIEW_ROWS)
+def test_u6_interview_sessions(actor, state, expected):
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import Mock
+
+    from src.managers.interview_manager import InterviewManager
+    from src.models.interview_session import InterviewSession
+    from tests.unit.discussion_world import ADMIN, NO_ROLE, OWNER, PEER, World
+
+    start = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    now = start + (timedelta(hours=9) if state == "expired" else timedelta(hours=1))
+    session = InterviewSession.create_new(
+        owner_sub=OWNER.sub,
+        persona_ids=["p1"],
+        persona_names={"p1": "佐藤"},
+        memory_mode="disabled",
+        now=start,
+    )
+    store = Mock()
+    store.get.return_value = None if state == "missing" else session
+    store.query_messages.return_value = []
+    world = World()
+    manager = InterviewManager(
+        agent_service=Mock(),
+        database_service=Mock(),
+        dataset_analysis_service=Mock(),
+        binding_store=Mock(),
+        session_store=store,
+        discussion_records=world.records,
+        participants=world.participants,
+        file_attachments=world.files,
+        resource_lookup=world.lookup,
+        clock=lambda: now,
+    )
+    principal = {
+        "owner": OWNER,
+        "same_department": PEER,
+        "admin": ADMIN,
+        "no_role": NO_ROLE,
+    }[actor]
+    try:
+        manager.get_interview_session(principal, session.id)
+    except CodedError as e:
+        assert e.code is ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        assert expected == "404"
+        return
+    assert expected == "ok"

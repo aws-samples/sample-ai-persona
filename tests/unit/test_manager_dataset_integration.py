@@ -14,6 +14,8 @@ import pytest
 from src.managers import agent_discussion_manager, interview_manager
 from src.managers.components import persona_agent_integration as pai_module
 from src.managers.components.persona_agent_integration import PersonaAgentIntegration
+from src.managers.components.resource_lookup import build_resource_lookup
+from src.models.authz import AccessTarget, Principal, ResourceType, Role
 from src.models.dataset import Dataset, DatasetColumn
 from src.models.persona_binding import PersonaBinding
 
@@ -40,6 +42,15 @@ def _dataset(dataset_id):
     )
 
 
+#: U6: 組織資産を使える人（U7 までは admin だけ）
+ADMIN = Principal(sub="admin", roles=frozenset({Role.ADMIN}))
+
+
+class _AnyAsset:
+    def read(self, ids, deadline):
+        return {i: AccessTarget(ResourceType.DATASET, i) for i in ids}
+
+
 def _component(db, ds_service, agent_service=None):
     # U5: bindings come from PersonaBindingStore (a persona_id query)
     binding_store = Mock()
@@ -51,6 +62,13 @@ def _component(db, ds_service, agent_service=None):
         agent_service=agent_service or Mock(),
         dataset_analysis_service=ds_service,
         binding_store=binding_store,
+        resource_lookup=build_resource_lookup(
+            [
+                (ResourceType.DATASET, _AnyAsset()),
+                (ResourceType.KNOWLEDGE_BASE, _AnyAsset()),
+            ],
+            sample_rate=0.0,
+        ),
     )
 
 
@@ -113,7 +131,9 @@ class TestKillSwitchAndGate:
         )
         comp = _component(self._db_with_binding(), ds_service)
 
-        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
+        bundle = comp.prepare(
+            "p1", "BASE", enable_kb=False, enable_dataset=True, principal=ADMIN
+        )
         ds_service.build_binding_tools.assert_called_once()
         assert "analyze_dataset" in bundle.enhanced_prompt
         assert bundle.additional_tools
@@ -124,7 +144,9 @@ class TestKillSwitchAndGate:
         ds_service = Mock()
         comp = _component(self._db_with_binding(), ds_service)
 
-        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
+        bundle = comp.prepare(
+            "p1", "BASE", enable_kb=False, enable_dataset=True, principal=ADMIN
+        )
         ds_service.build_binding_tools.assert_not_called()
         assert bundle.enhanced_prompt == "BASE"
         assert bundle.additional_tools is None
@@ -135,7 +157,9 @@ class TestKillSwitchAndGate:
         ds_service = Mock()
         comp = _component(self._db_with_binding(), ds_service)
 
-        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=False)
+        bundle = comp.prepare(
+            "p1", "BASE", enable_kb=False, enable_dataset=False, principal=ADMIN
+        )
         ds_service.build_binding_tools.assert_not_called()
         assert bundle.enhanced_prompt == "BASE"
 
@@ -148,7 +172,9 @@ class TestKillSwitchAndGate:
         ds_service.build_binding_tools.return_value = ([], [])
         comp = _component(self._db_with_binding(), ds_service)
 
-        bundle = comp.prepare("p1", "BASE", enable_kb=False, enable_dataset=True)
+        bundle = comp.prepare(
+            "p1", "BASE", enable_kb=False, enable_dataset=True, principal=ADMIN
+        )
         assert "analyze_dataset" not in bundle.enhanced_prompt
         assert bundle.additional_tools is None
 

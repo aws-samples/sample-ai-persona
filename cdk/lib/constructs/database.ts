@@ -8,6 +8,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
  *
  * - 今と同じキー・GSI・PITR の 10 テーブルを TableV2 で新しく作る（形の作り直しは U4〜U7）
  * - U5: 生成候補（PersonaCandidates）と紐付け（PersonaBindings）を足し、UploadedFiles に TTL を足す
+ * - U6: 議論の発言・レポートとインタビューの 4 テーブルを足し、Discussions に OwnerIndex を足す
  * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
  * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
  * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
@@ -42,6 +43,21 @@ export class Database extends Construct {
    * 7 つの操作だけを付ける。
    */
   public readonly personaBindingsTable: dynamodb.TableV2;
+  /**
+   * 議論の発言（U6、ADR-002）。PK discussion_id・SK seq（数値）。本体の判定を通ったあとにだけ読む。
+   * 以下の U6 の 4 テーブルは applicationTables に入れず、App スタックが Scan を除く
+   * 8 つの操作を 1 つの文で付ける（タスクロールのポリシーの大きさ、NFR1.64）。
+   */
+  public readonly discussionMessagesTable: dynamodb.TableV2;
+  /** 議論のレポート（U6、ADR-002）。PK discussion_id・SK report_id。 */
+  public readonly discussionReportsTable: dynamodb.TableV2;
+  /**
+   * 実行中のインタビュー（U6、ADR-004）。最長 7 日の一時データで TTL expires_at で消える。
+   * PITR と削除保護は付けない（PersonaCandidates と同じ扱い）。
+   */
+  public readonly interviewSessionsTable: dynamodb.TableV2;
+  /** 実行中のインタビューの発言（U6）。PK session_id・SK seq（数値）、TTL expires_at。 */
+  public readonly interviewMessagesTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
@@ -72,6 +88,9 @@ export class Database extends Construct {
         gsi('CreatedAtIndex', 'type', 'created_at'),
         gsi('TopicIndex', 'type', 'topic'),
         gsi('ModeIndex', 'mode', 'created_at'),
+        // 「自分のもの」の一覧と件数（U6、BR2.1）。テーブルは置き換えない（NFR1.65）。
+        // 型固定の 3 つは U9 で外す
+        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     // U5: 紐付かなかったアップロードのメタデータは 24 時間後に TTL で消える（BR5.6）。
@@ -143,6 +162,59 @@ export class Database extends Construct {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // U6: 議論の発言とレポート（ADR-002）。消えると戻せないため PITR と削除保護を付ける
+    const seq = { name: 'seq', type: dynamodb.AttributeType.NUMBER };
+    this.discussionMessagesTable = this.childTable('DiscussionMessages', 'discussion_id', seq);
+    this.discussionReportsTable = this.childTable('DiscussionReports', 'discussion_id', {
+      name: 'report_id',
+      type: dynamodb.AttributeType.STRING,
+    });
+
+    // U6: 実行中のインタビュー（ADR-004）。最長 7 日の一時データ
+    this.interviewSessionsTable = new dynamodb.TableV2(this, 'InterviewSessions', {
+      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    // TTL はセッションの最長より長い（created_at + 8 日）
+    this.interviewMessagesTable = new dynamodb.TableV2(this, 'InterviewMessages', {
+      partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      sortKey: seq,
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      timeToLiveAttribute: 'expires_at',
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+  }
+
+  /** A table keyed by its parent's ID and a sort key, with PITR and deletion protection. */
+  private childTable(
+    id: string,
+    partitionKey: string,
+    sortKey: dynamodb.Attribute,
+  ): dynamodb.TableV2 {
+    return new dynamodb.TableV2(this, id, {
+      partitionKey: { name: partitionKey, type: dynamodb.AttributeType.STRING },
+      sortKey,
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      deletionProtection: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+  }
+
+  /** U6 の 4 テーブル（App スタックが 1 つの文で絞った操作を付ける）。 */
+  public get discussionChildTables(): Record<string, dynamodb.TableV2> {
+    return {
+      DISCUSSION_MESSAGES_TABLE_NAME: this.discussionMessagesTable,
+      DISCUSSION_REPORTS_TABLE_NAME: this.discussionReportsTable,
+      INTERVIEW_SESSIONS_TABLE_NAME: this.interviewSessionsTable,
+      INTERVIEW_MESSAGES_TABLE_NAME: this.interviewMessagesTable,
+    };
   }
 
   private table(

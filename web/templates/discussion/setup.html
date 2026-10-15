@@ -34,6 +34,7 @@
               streamingMode: true,
               customizeCategories: false,
               uploadedDocuments: [],
+              documentsSavedNote: false,
               totalSize: 0,
               uploading: false,
               categories: [
@@ -502,7 +503,7 @@
                       // 完了/エラーは受信した時点で即座に接続を閉じる。
                       // 一時停止・低速でキュー処理(close)が遅れると、サーバ側ストリーム終了後に
                       // EventSource が自動再接続し議論が再実行されるため、表示(キュー)とは分離して即閉じる。
-                      if (data.type === 'complete' || data.type === 'error') {
+                      if (data.type === 'complete' || data.type === 'error' || data.type === 'stopped') {
                           discussionComplete = true;
                           eventSource.close();
                           self._eventSource = null;
@@ -639,6 +640,12 @@
                           flushPendingSpeaker();
                           clearActiveBubble();
                           clearSpeaking();
+                          // U6 BR5.3: 資料は保存した議論に紐付いた。次の議論ではアップロードし直す
+                          if (self.uploadedDocuments.length > 0) {
+                              self.uploadedDocuments = [];
+                              self.totalSize = 0;
+                              self.documentsSavedNote = true;
+                          }
                           // 従来の議論完了画面を取得して表示
                           loading.innerHTML = `
                               <div class='text-center py-4'>
@@ -677,6 +684,18 @@
                           clearActiveBubble();
                           clearSpeaking();
                           loading.innerHTML = `<p class='text-red-600'>エラー: ${escapeHtml(data.message || '')}</p>`;
+                      } else if (data.type === 'stopped') {
+                          // M12（U6 BR7.5）: 参加者を読めなくなった。保存されていない
+                          discussionComplete = true;
+                          eventSource.close();
+                          self._eventSource = null;
+                          self._streamingActive = false;
+                          flushPendingSpeaker();
+                          clearActiveBubble();
+                          clearSpeaking();
+                          loading.innerHTML = '';
+                          loading.classList.remove('flex', 'items-center', 'justify-center');
+                          window.showConversationStopped(loading);
                       }
                   }  // end handleStreamEvent
 
@@ -706,7 +725,7 @@
 
         <!-- ステップガイド -->
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8">
-            <h3 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h3>
+            <h2 class="font-semibold text-blue-900 mb-2 flex items-center gap-2">{{ icon_document("w-5 h-5") }} 議論設定の流れ</h2>
             <ol class="list-decimal list-inside text-blue-800 text-sm space-y-1">
                 <li>議論モードを選択</li>
                 <li>議論に参加させるペルソナを選択</li>
@@ -716,10 +735,13 @@
         </div>
     </div>
 
+    <!-- 議論開始後も画面の見出し（h1）を 1 つ保つ（設定の見出しは隠れる） -->
+    <h1 x-show="discussionStarted" x-cloak class="sr-only">議論</h1>
+
     <!-- 設定サマリ（議論開始後のみ表示） -->
     <div x-show="discussionStarted" x-cloak class="bg-white rounded-lg shadow-md p-5 mb-4">
         <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold text-gray-900 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論設定</h3>
+            <h2 class="font-semibold text-gray-900 flex items-center gap-2">{{ icon_cog("w-5 h-5 text-purple-600") }} 議論設定</h2>
             <button type="button" @click="backToSetup()"
                     class="text-sm text-blue-600 hover:text-blue-800 font-medium">設定に戻る</button>
         </div>
@@ -752,7 +774,7 @@
                                         <span class="truncate" x-text="p.occupation" :title="p.occupation"></span>
                                         <span class="flex-shrink-0" x-show="p.age">/ <span x-text="p.age"></span>歳</span>
                                     </p>
-                                    <p class="text-xs text-gray-400 mt-1 line-clamp-3"
+                                    <p class="text-xs text-gray-600 mt-1 line-clamp-3"
                                        x-show="p.background" x-text="p.background" :title="p.background"></p>
                                     <div class="flex flex-wrap gap-1 mt-1" x-show="p.values && p.values.length">
                                         <template x-for="(value, idx) in (p.values || []).slice(0, 2)" :key="'sumval-' + p.id + '-' + idx">
@@ -794,13 +816,18 @@
                                     </svg>
                                 </template>
                                 <span class="text-sm text-gray-700 truncate flex-1" x-text="doc.filename"></span>
-                                <span class="text-xs text-gray-400 flex-shrink-0" x-text="formatSize(doc.file_size)"></span>
+                                <span class="text-xs text-gray-600 flex-shrink-0" x-text="formatSize(doc.file_size)"></span>
                             </li>
                         </template>
                     </ul>
                 </dd>
             </div>
         </dl>
+        <!-- U6 BR5.3: 保存した議論に紐付いた資料は、次の議論では使えない -->
+        <p x-show="documentsSavedNote" x-cloak data-testid="documents-reupload-note"
+           class="text-sm text-gray-700 mt-3">
+            資料はこの議論に保存しました。次の議論で使うときは、もう一度アップロードしてください
+        </p>
     </div>
 
     <!-- 設定フォーム本体（議論開始後は非表示） -->
@@ -826,10 +853,10 @@
                     <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 transition-all h-full">
                         <div class="flex items-center gap-2 mb-2">
                             {{ icon_bolt("w-5 h-5 text-blue-600") }}
-                            <h4 class="font-semibold text-gray-900">簡易議論</h4>
+                            <h3 class="font-semibold text-gray-900">簡易議論</h3>
                         </div>
-                        <p class="text-xs text-gray-500 mb-2">高速: 3-5分</p>
-                        <p class="text-xs text-gray-400">単一のAI呼び出しで全ペルソナの発言を生成。高速で効率的。</p>
+                        <p class="text-xs text-gray-600 mb-2">高速: 3-5分</p>
+                        <p class="text-xs text-gray-600">単一のAI呼び出しで全ペルソナの発言を生成。高速で効率的。</p>
                     </div>
                 </label>
                 
@@ -843,10 +870,10 @@
                     <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-green-300 peer-checked:border-green-500 peer-checked:bg-green-50 transition-all h-full">
                         <div class="flex items-center gap-2 mb-2">
                             {{ icon_cpu_chip("w-5 h-5 text-green-600") }}
-                            <h4 class="font-semibold text-gray-900">しっかり議論</h4>
+                            <h3 class="font-semibold text-gray-900">しっかり議論</h3>
                         </div>
-                        <p class="text-xs text-gray-500 mb-2">詳細: 5-15分</p>
-                        <p class="text-xs text-gray-400">各ペルソナが独立したAIエージェントとして対話。より自然で深い議論。</p>
+                        <p class="text-xs text-gray-600 mb-2">詳細: 5-15分</p>
+                        <p class="text-xs text-gray-600">各ペルソナが独立したAIエージェントとして対話。より自然で深い議論。</p>
                     </div>
                 </label>
                 
@@ -860,10 +887,10 @@
                     <div class="border-2 border-gray-200 rounded-lg p-4 hover:border-purple-300 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition-all h-full">
                         <div class="flex items-center gap-2 mb-2">
                             {{ icon_chat("w-5 h-5 text-purple-600") }}
-                            <h4 class="font-semibold text-gray-900">インタビュー</h4>
+                            <h3 class="font-semibold text-gray-900">インタビュー</h3>
                         </div>
-                        <p class="text-xs text-gray-500 mb-2">対話型: リアルタイム</p>
-                        <p class="text-xs text-gray-400">ユーザーがペルソナと直接チャットでインタビュー。</p>
+                        <p class="text-xs text-gray-600 mb-2">対話型: リアルタイム</p>
+                        <p class="text-xs text-gray-600">ユーザーがペルソナと直接チャットでインタビュー。</p>
                     </div>
                 </label>
             </div>
@@ -892,7 +919,7 @@
                     </div>
                 </div>
                 <div>
-                    <label class="block text-xs text-gray-500 mb-1">性別</label>
+                    <label for="filter-gender" class="block text-xs text-gray-600 mb-1">性別</label>
                     <select id="filter-gender" onchange="applyPersonaFilters()"
                             class="px-2 py-1 border border-gray-300 rounded text-sm">
                         <option value="">すべて</option>
@@ -902,7 +929,7 @@
                     </select>
                 </div>
                 <div>
-                    <label class="block text-xs text-gray-500 mb-1">居住国</label>
+                    <label for="filter-country" class="block text-xs text-gray-600 mb-1">居住国</label>
                     <select id="filter-country" onchange="applyPersonaFilters()"
                             class="px-2 py-1 border border-gray-300 rounded text-sm">
                         <option value="">すべて</option>
@@ -938,11 +965,11 @@
 
             <!-- 選択中ペルソナのチップエリア -->
             <template x-if="$store.discussionSetup.selectedPersonas.length > 0">
-                <div class="flex flex-wrap gap-2 mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+                <div class="flex flex-wrap gap-2 mt-4 p-3 bg-blue-50 rounded-md border border-blue-200" data-testid="selected-personas">
                     <template x-for="p in $store.discussionSetup.selectedPersonas" :key="p.id">
                         <span class="inline-flex items-center gap-1 px-3 py-1 bg-white text-blue-800 text-sm rounded-full shadow-sm border border-blue-200">
                             <span x-text="p.name" class="font-medium"></span>
-                            <span class="text-xs text-blue-500" x-text="'(' + p.occupation + ')'"></span>
+                            <span class="text-xs text-blue-700" x-text="'(' + p.occupation + ')'"></span>
                             <!-- しっかり議論・インタビューモードのみ: ペルソナ毎のモデル選択（既定=Haiku） -->
                             <select x-show="mode === 'agent' || mode === 'interview'"
                                     x-init="personaModels[p.id] = personaModels[p.id] || defaultModelId"
@@ -955,11 +982,23 @@
                             </select>
                             <button type="button"
                                     @click="$store.discussionSetup.remove(p.id)"
-                                    class="ml-1 text-blue-400 hover:text-blue-700 font-bold">×</button>
+                                    :aria-label="p.name + ' を選択から外す'"
+                                    :data-testid="'selected-persona-remove-' + p.id"
+                                    class="ml-1 text-blue-700 hover:text-blue-900 font-bold">×</button>
                         </span>
                     </template>
                 </div>
             </template>
+
+            <!-- M13（U6）: 共有されたペルソナの記憶と、使えない組織資産の注意 -->
+            <p x-show="$store.discussionSetup.selectedPersonas.some(p => p.shared)" x-cloak
+               data-testid="shared-memory-note" class="text-sm text-gray-700 mt-3">
+                共有されたペルソナとの会話は、ペルソナの記憶に書き込まれません
+            </p>
+            <p x-show="$store.discussionSetup.selectedPersonas.length > 0" x-cloak
+               data-testid="unusable-assets-note" class="text-sm text-gray-700 mt-1">
+                〔利用権限なし〕のナレッジベース・データセットは使われません
+            </p>
 
             <!-- フォーム送信用: 選択中ペルソナ ID を hidden input として動的生成 -->
             <template x-for="p in $store.discussionSetup.selectedPersonas" :key="'hidden-' + p.id">
@@ -983,6 +1022,8 @@
                 議論トピック
             </h2>
             <textarea name="topic"
+                      id="topic"
+                      aria-label="議論トピック"
                       x-model="topic"
                       rows="3"
                       placeholder="例: サブスクリプション型フィットネスアプリの価格設定について。20-30代の働く女性が継続利用したくなる価格帯と機能の組み合わせを探りたい。"
@@ -1345,7 +1386,7 @@
                        class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500">
                 <div>
                     <span class="font-medium text-gray-900">リアルタイム表示</span>
-                    <p class="text-xs text-gray-500">各ペルソナの発言を順次表示します</p>
+                    <p class="text-xs text-gray-600">各ペルソナの発言を順次表示します</p>
                 </div>
             </label>
         </div>
@@ -1408,6 +1449,13 @@
     </div>
 </div>
 
+{# M12（U6）: 実行中に参加者を読めなくなったときの枠。app.js の showConversationStopped が差し込む #}
+<template id="conversation-stopped-template">
+{% with kind="discussion", back_url="/discussion/setup", back_label="議論の設定へ" %}
+{% include "discussion/partials/conversation_stopped.html" %}
+{% endwith %}
+</template>
+
 <!-- 議論中のローディング表示（ダイアログにはしない。表示中であることを aria-busy と読み上げで伝える。U3 WF3） -->
 <p id="discussion-loading-status" role="status" class="sr-only"></p>
 <div id="discussion-loading" aria-busy="true" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1449,6 +1497,8 @@ document.addEventListener('alpine:init', () => {
                 const splitField = (v, sep) => (v ? v.split(sep).filter(Boolean) : []);
                 this.selectedPersonas.push({
                     id: id,
+                    // 共有されたペルソナ（M13）。記憶には書き込まれない旨を出す
+                    shared: el.dataset.personaShared === 'true',
                     name: el.dataset.personaName,
                     occupation: el.dataset.personaOccupation,
                     age: el.dataset.personaAge,

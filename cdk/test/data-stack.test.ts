@@ -21,7 +21,8 @@ const template = synth();
 const EXISTING_TABLES: { pk: string; gsis: string[]; pitr: boolean; ttl?: string }[] = [
   // Personas（U4 で OwnerIndex を足した。既存の 3 つは今と同じ）
   { pk: 'id', gsis: ['CreatedAtIndex', 'NameIndex', 'OccupationIndex', 'OwnerIndex'], pitr: true },
-  { pk: 'id', gsis: ['CreatedAtIndex', 'TopicIndex', 'ModeIndex'], pitr: true }, // Discussions
+  // Discussions（U6 で OwnerIndex を足した。型固定の 3 つは U9 まで残す）
+  { pk: 'id', gsis: ['CreatedAtIndex', 'TopicIndex', 'ModeIndex', 'OwnerIndex'], pitr: true },
   // UploadedFiles（U5 で TTL expires_at を足した。キー・GSI・PITR は今のまま）
   { pk: 'id', gsis: ['UploadedAtIndex'], pitr: true, ttl: 'expires_at' },
   { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaDatasetBindings
@@ -148,6 +149,85 @@ describe('DataStack: PersonaCandidates と PersonaBindings（U5、NFR1.40、NFR9
   });
 });
 
+describe('DataStack: 議論の発言・レポートとインタビュー（U6、ADR-002、ADR-004、NFR1.65、NFR2.20）', () => {
+  const resources = () => template.findResources('AWS::DynamoDB::GlobalTable');
+  const byLogicalId = (prefix: string): any => {
+    const found = Object.entries(resources()).filter(([id]) => id.startsWith(prefix));
+    expect(found).toHaveLength(1);
+    return found[0][1];
+  };
+  const attributeTypes = (table: any): Record<string, string> =>
+    Object.fromEntries(
+      table.Properties.AttributeDefinitions.map((a: any) => [a.AttributeName, a.AttributeType]),
+    );
+
+  test.each([
+    { id: 'DatabaseDiscussionMessages', keys: ['discussion_id', 'seq'], sk: 'N' },
+    { id: 'DatabaseDiscussionReports', keys: ['discussion_id', 'report_id'], sk: 'S' },
+  ])('$id は PK・SK、PITR、削除保護、RETAIN、TTL なし、GSI なし', ({ id, keys, sk }) => {
+    const table = byLogicalId(id);
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.KeySchema).toEqual([
+      { AttributeName: keys[0], KeyType: 'HASH' },
+      { AttributeName: keys[1], KeyType: 'RANGE' },
+    ]);
+    expect(attributeTypes(table)).toEqual({ [keys[0]]: 'S', [keys[1]]: sk });
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    const replica = table.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+
+  test.each([
+    { id: 'DatabaseInterviewSessions', keys: ['id'], types: { id: 'S' } },
+    { id: 'DatabaseInterviewMessages', keys: ['session_id', 'seq'], types: { session_id: 'S', seq: 'N' } },
+  ])('$id は TTL expires_at、PITR なし、削除保護なし、RETAIN（最長 7 日の一時データ）', ({ id, keys, types }) => {
+    const table = byLogicalId(id);
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.KeySchema.map((k: any) => k.AttributeName)).toEqual(keys);
+    expect(attributeTypes(table)).toEqual(types);
+    expect(table.Properties.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expires_at',
+      Enabled: true,
+    });
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    const replica = table.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toBeUndefined();
+    expect(replica.DeletionProtectionEnabled).toBeUndefined();
+  });
+
+  test('Discussions は論理 ID が変わらず（置き換えない）、OwnerIndex（KEYS_ONLY）を足して既存の 3 つの GSI が残る', () => {
+    const discussions = resources().DatabaseDiscussions02268B7D;
+    expect(discussions).toBeDefined();
+    expect(discussions.DeletionPolicy).toBe('Retain');
+    expect(discussions.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
+    const indexes = Object.fromEntries(
+      discussions.Properties.GlobalSecondaryIndexes.map((g: any) => [g.IndexName, g]),
+    );
+    expect(Object.keys(indexes).sort()).toEqual([
+      'CreatedAtIndex',
+      'ModeIndex',
+      'OwnerIndex',
+      'TopicIndex',
+    ]);
+    expect(indexes.OwnerIndex.KeySchema).toEqual([
+      { AttributeName: 'owner_sub', KeyType: 'HASH' },
+      { AttributeName: 'created_at', KeyType: 'RANGE' },
+    ]);
+    expect(indexes.OwnerIndex.Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
+    for (const name of ['CreatedAtIndex', 'TopicIndex', 'ModeIndex']) {
+      expect(indexes[name].Projection).toEqual({ ProjectionType: 'ALL' });
+    }
+    const replica = discussions.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+});
+
 describe('DataStack: アップロード用バケットのライフサイクル（U5、NFR1.33、NFR1.41）', () => {
   function rules(): any[] {
     const bucket = Object.values(template.findResources('AWS::S3::Bucket'))[0];
@@ -190,9 +270,9 @@ describe('DataStack: アップロード用バケットのライフサイクル�
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つを含めて 14 テーブル。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つを含めて 18 テーブル。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(14);
+    expect(Object.keys(tables)).toHaveLength(18);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

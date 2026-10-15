@@ -1,7 +1,20 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_chat, icon_arrow_left, icon_cpu_chip, icon_bolt, icon_users, icon_persona, icon_lightbulb, icon_refresh, icon_trash %}
+{% from "components/status_label.html" import status_label %}
+{#
+  議論の詳細（U6）。
+  引数:
+    discussion    ... DiscussionView（本体の項目・発言・レポート・参加者の状態）
+    manageable    ... 削除・共有・再生成・レポートの保存と編集を出すか
+    document_urls ... 資料の ID -> 配信 URL（読める資料だけ）
+#}
 
 {% block content %}
+{#- 参加者 ID -> 状態（発言の話者にも同じ文字を付ける、M9） #}
+{%- set participant_status = {} %}
+{%- for participant in discussion.participants %}
+{%- set _ = participant_status.update({participant.persona_id: participant.status}) %}
+{%- endfor %}
 <div class="max-w-6xl mx-auto">
     <!-- ヘッダー -->
     <div class="mb-8">
@@ -64,46 +77,37 @@
     </div>
     {% endif %}
     
-    <!-- 参加ペルソナ -->
+    <!-- 参加ペルソナ（M9: 読めない・削除済みは文字で示し、リンクにしない。BR7.3） -->
     {% if discussion.participants %}
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
         <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">{{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ discussion.participants|length }}名)</h2>
         <div class="grid md:grid-cols-2 gap-4">
-            {% for participant_id in discussion.participants %}
-            {% set persona = participant_personas.get(participant_id) if participant_personas else None %}
-            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                {% if persona %}
+            {% for participant in discussion.participants %}
+            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200" data-testid="discussion-participant">
                 <div class="flex items-start justify-between">
                     <div class="flex items-center gap-3 min-w-0">
                         <div class="persona-list-avatar"
-                             data-avatar-seed="{{ persona.id }}"
-                             data-avatar-url="{{ persona_avatar_url(persona) }}"
-                             data-avatar-name="{{ persona.name }}"
+                             data-avatar-seed="{{ participant.persona_id }}"
+                             data-avatar-name="{{ participant.display_name or 'P' }}"
                              data-avatar-size="48"></div>
                         <div class="min-w-0">
-                            <h4 class="font-semibold text-gray-900 text-lg truncate">{{ persona.name }}</h4>
-                            <p class="text-sm text-blue-600 font-medium truncate">{{ persona.occupation }} / {{ persona.age }}歳</p>
+                            <h3 class="font-semibold text-gray-900 text-lg truncate">{{ participant.display_name or "名前なし" }}</h3>
+                            {%- if participant.status == "no_access" %}
+                            <p class="mt-1">{{ status_label("参照権限なし") }}</p>
+                            {%- elif participant.status == "deleted" %}
+                            <p class="mt-1">{{ status_label("削除済み") }}</p>
+                            {%- endif %}
                         </div>
                     </div>
-                    <a href="/persona/{{ persona.id }}" class="text-xs text-gray-500 hover:text-blue-600 flex-shrink-0">詳細</a>
+                    {%- if participant.linkable %}
+                    <a href="/persona/{{ participant.persona_id }}" class="text-xs text-gray-700 hover:text-blue-600 flex-shrink-0">詳細</a>
+                    {%- endif %}
                 </div>
-                <p class="text-sm text-gray-600 mt-2 line-clamp-2">{{ persona.background[:100] }}{% if persona.background|length > 100 %}...{% endif %}</p>
                 {% if discussion.mode in ('agent', 'interview') %}
                 <div class="mt-2">
                     <span class="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">
-                        {{ model_display_name(((discussion.agent_config or {}).get('persona_models') or {}).get(participant_id)) }}
+                        {{ model_display_name(((discussion.agent_config or {}).get('persona_models') or {}).get(participant.persona_id)) }}
                     </span>
-                </div>
-                {% endif %}
-                <div class="mt-2 flex flex-wrap gap-1">
-                    {% for value in persona.values[:2] %}
-                    <span class="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{{ value[:15] }}{% if value|length > 15 %}...{% endif %}</span>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="text-gray-500">
-                    <h4 class="font-semibold">ペルソナ情報なし</h4>
-                    <p class="text-xs text-gray-400">ID: {{ participant_id[:8] }}...</p>
                 </div>
                 {% endif %}
             </div>
@@ -211,19 +215,19 @@
         <!-- タブヘッダー -->
         <div class="flex border-b border-gray-200 bg-white rounded-t-lg shadow-md px-2">
             <button @click="activeTab = 'discussion'"
-                    :class="activeTab === 'discussion' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    :class="activeTab === 'discussion' ? 'border-green-500 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
                     class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
                 {{ icon_chat("w-4 h-4") }} 議論内容
                 <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">{{ discussion.messages|length }}</span>
             </button>
             <button @click="activeTab = 'insights'"
-                    :class="activeTab === 'insights' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    :class="activeTab === 'insights' ? 'border-yellow-500 text-yellow-800' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
                     class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
                 {{ icon_lightbulb("w-4 h-4") }} インサイト
                 <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">{{ discussion.insights|length }}</span>
             </button>
             <button @click="activeTab = 'reports'"
-                    :class="activeTab === 'reports' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    :class="activeTab === 'reports' ? 'border-emerald-500 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
                     class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -270,9 +274,8 @@
                     </div>
                 </div>
                 {% else %}
-                {% set color_index = discussion.participants.index(message.persona_id) if message.persona_id in discussion.participants else 0 %}
+                {% set color_index = discussion.participant_ids.index(message.persona_id) if message.persona_id in discussion.participant_ids else 0 %}
                 {% set color = persona_colors[color_index % persona_colors|length] %}
-                {% set persona = participant_personas.get(message.persona_id) if participant_personas else None %}
                 <div class="flex gap-2.5 message-item">
                     <div class="flex-shrink-0">
                         <div class="persona-list-avatar shadow-md"
@@ -284,10 +287,11 @@
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="flex items-baseline gap-2 mb-1">
-                            <span class="font-semibold persona-name-{{ color }}">{{ message.persona_name if message.persona_name else 'ペルソナ' }}</span>
-                            {% if persona %}
-                            <span class="text-xs text-gray-500">{{ persona.occupation }} / {{ persona.age }}歳</span>
-                            {% endif %}
+                            {%- set speaker_status = participant_status.get(message.persona_id) %}
+                            <span class="font-semibold persona-name-{{ color }}" data-testid="message-speaker">{{ message.persona_name if message.persona_name else 'ペルソナ' }}
+                                {%- if speaker_status == "no_access" %} {{ status_label("参照権限なし") }}
+                                {%- elif speaker_status == "deleted" %} {{ status_label("削除済み") }}
+                                {%- endif %}</span>
                             {% if message.round_number %}
                             <span class="text-xs text-gray-400 ml-auto">R{{ message.round_number }}</span>
                             {% endif %}
@@ -335,19 +339,34 @@
         </div>
     </div>
     
-    <!-- アクション -->
-    <div class="flex gap-4">
-        <a href="/discussion/setup" 
+    <!-- アクション（削除・共有は管理できる人だけ、エクスポートは読める人、BR2.4、BR9.1） -->
+    <div class="flex flex-wrap gap-4">
+        <a href="/discussion/setup"
            class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
             {{ icon_refresh("w-4 h-4") }} 新しい議論を開始
         </a>
+        <a href="/discussion/{{ discussion.id }}/export" download data-testid="discussion-export-button"
+           class="bg-gray-100 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5">
+            Markdown でエクスポート
+        </a>
+        {%- if manageable %}
+        <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                data-share-url="/share/discussion/{{ discussion.id }}/dialog"
+                data-testid="discussion-share-button"
+                class="bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200 transition-colors flex items-center gap-1.5">
+            共有
+        </button>
         <button hx-delete="/discussion/{{ discussion.id }}"
-                hx-confirm="この議論を削除しますか？"
+                hx-confirm="この議論を削除しますか？発言・レポート・添付資料も一緒に削除されます"
                 hx-target="body"
                 class="bg-red-100 text-red-700 px-4 py-2 rounded-md hover:bg-red-200 transition-colors flex items-center gap-1.5">
             {{ icon_trash("w-4 h-4") }} この議論を削除
         </button>
+        {%- endif %}
     </div>
+    {%- if manageable %}
+    {% include "sharing/partials/share_dialog.html" %}
+    {%- endif %}
 </div>
 {% endblock %}
 

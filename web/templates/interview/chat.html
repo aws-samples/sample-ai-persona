@@ -39,9 +39,9 @@
     
     <!-- 参加者情報 -->
     <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h3 class="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+        <h2 class="font-semibold text-gray-900 mb-4 flex items-center gap-2">
             {{ icon_users("w-5 h-5 text-indigo-600") }} 参加ペルソナ ({{ participants|length }}名)
-        </h3>
+        </h2>
         <div class="grid md:grid-cols-2 gap-4">
             {% for participant in participants %}
             <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -53,7 +53,7 @@
                              data-avatar-name="{{ participant.name }}"
                              data-avatar-size="48"></div>
                         <div class="min-w-0">
-                            <h4 class="font-semibold text-gray-900 text-lg truncate">{{ participant.name }}</h4>
+                            <h3 class="font-semibold text-gray-900 text-lg truncate">{{ participant.name }}</h3>
                             <p class="text-sm text-blue-600 font-medium truncate">{{ participant.occupation }} / {{ participant.age }}歳</p>
                         </div>
                     </div>
@@ -86,7 +86,7 @@
                         {% if message.timestamp %}
                         <div class="flex justify-end mt-1">
                             <span class="text-xs text-gray-500 bg-white px-2 py-1 rounded-full shadow-sm">
-                                <time datetime="{{ message.timestamp.isoformat() }}Z" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time>
+                                <time datetime="{{ message.timestamp.isoformat() }}{% if not message.timestamp.tzinfo %}Z{% endif %}" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time>
                             </span>
                         </div>
                         {% endif %}
@@ -107,7 +107,7 @@
                             <span class="font-semibold text-gray-900 text-sm">{{ message.persona_name }}</span>
                             <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">ペルソナ</span>
                             {% if message.timestamp %}
-                            <span class="text-xs text-gray-400"><time datetime="{{ message.timestamp.isoformat() }}Z" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time></span>
+                            <span class="text-xs text-gray-400"><time datetime="{{ message.timestamp.isoformat() }}{% if not message.timestamp.tzinfo %}Z{% endif %}" data-fmt="time">{{ message.timestamp.strftime('%H:%M') }}</time></span>
                             {% endif %}
                         </div>
                         <div class="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
@@ -164,11 +164,12 @@
                                rows="1"
                                maxlength="500"></textarea>
                         <div class="absolute right-3 bottom-3">
-                            <span id="char-counter" class="text-xs text-gray-400">0/500</span>
+                            <span id="char-counter" class="text-xs text-gray-600">0/500</span>
                         </div>
                     </div>
                     <button type="button" 
                             id="send-button"
+                            aria-label="送信"
                             class="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-3 rounded-2xl hover:from-purple-700 hover:to-purple-800 transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none">
                         <span id="send-button-text">{{ icon_paper_airplane("w-4 h-4") }} </span>
                         <div id="send-button-loading" class="hidden flex items-center gap-2">
@@ -218,23 +219,20 @@
     <!-- エラー表示エリア -->
     <div id="error-container" class="hidden mb-6"></div>
     
-    <!-- 警告表示（見つからないペルソナがある場合） -->
-    {% if missing_persona_count %}
-    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-        <div class="flex items-start">
-            <span class="text-yellow-600 mr-3">⚠️</span>
-            <div>
-                <h3 class="font-semibold text-yellow-900">一部のペルソナが見つかりません</h3>
-                <p class="text-yellow-800 text-sm mt-1">
-                    {{ missing_persona_count }}件のペルソナが見つかりませんでした。
-                </p>
-                <p class="text-yellow-700 text-xs mt-2">
-                    インタビューは利用可能なペルソナで続行できますが、一部の応答が得られない可能性があります。
-                </p>
-            </div>
-        </div>
+    <!-- 会話を続けられなくなったとき（M12、U6 BR7.5）。読み込み時に参加者を読めなければ出す -->
+    <div id="conversation-stopped-container">
+    {%- if stopped %}
+    {% with kind="interview", back_label="インタビュー一覧へ" %}
+    {% include "discussion/partials/conversation_stopped.html" %}
+    {% endwith %}
+    {%- endif %}
     </div>
-    {% endif %}
+    {# 送信の途中で続けられなくなったときに app.js の showConversationStopped が差し込む #}
+    <template id="conversation-stopped-template">
+    {% with kind="interview", back_label="インタビュー一覧へ" %}
+    {% include "discussion/partials/conversation_stopped.html" %}
+    {% endwith %}
+    </template>
 </div>
 
 {# 保存名の入力（U3 WF3）。JavaScript から openDialog('save-name-dialog') で開き、
@@ -271,6 +269,31 @@
 let messageForm, messageInput, sendButton, chatMessages, loadingIndicator, charCounter, sendButtonText, sendButtonLoading, saveButton;
 let fileInput, attachButton, filePreviewContainer, filePreviewList;
 let selectedFiles = []; // 選択されたファイルを保持
+// M12（U6）: 会話を続けられなくなった（送信と保存を無効にしたまま）
+let conversationStopped = {{ 'true' if stopped else 'false' }};
+
+// 会話を続けられなくなったとき（M12）: 枠を出し、入力欄の文字を残して送信と保存を無効にする
+function stopConversation(unsentMessage) {
+    conversationStopped = true;
+    if (messageInput && unsentMessage) messageInput.value = unsentMessage;
+    if (messageInput) messageInput.disabled = false;
+    if (sendButton) sendButton.disabled = true;
+    if (saveButton) saveButton.disabled = true;
+    if (window.showConversationStopped) {
+        window.showConversationStopped(document.getElementById('conversation-stopped-container'));
+    }
+}
+
+// 送信の失敗（SSE の error）を表示の区分ごとに扱う
+function handleSendFailure(data, unsentMessage) {
+    if (data.error_type === 'conversation_stopped') {
+        stopConversation(unsentMessage);
+        return;
+    }
+    // 応答中の別の送信（CONCURRENT_UPDATE）などは入力を残して知らせる
+    if (messageInput && unsentMessage && !messageInput.value) messageInput.value = unsentMessage;
+    showDetailedError(data.message, data.error_type || 'agent_error');
+}
 
 // サポートするファイルタイプ
 const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
@@ -279,7 +302,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB（Claude(Bedrock)モデルの画像1枚あたり上限。src/config.py MAX_IMAGE_SIZE と一致させること）
 
 // 参加者リストとペルソナ色マッピング
-const sessionParticipants = {{ session.participants | tojson | safe }};
+const sessionParticipants = {{ session.persona_ids | tojson | safe }};
 const personaColors = ['bg-purple-500', 'bg-indigo-500', 'bg-pink-500', 'bg-emerald-500', 'bg-orange-500', 'bg-cyan-500', 'bg-amber-500', 'bg-rose-500'];
 
 // ペルソナIDから一貫した色を取得する関数
@@ -374,10 +397,10 @@ function initializeChat() {
             
             if (length > 450) {
                 charCounter.classList.add('text-red-500');
-                charCounter.classList.remove('text-gray-400');
+                charCounter.classList.remove('text-gray-600');
             } else {
                 charCounter.classList.remove('text-red-500');
-                charCounter.classList.add('text-gray-400');
+                charCounter.classList.add('text-gray-600');
             }
         });
     }
@@ -388,7 +411,13 @@ function initializeChat() {
             await saveInterviewSession();
         });
     }
-    
+
+    // 読み込み時に続けられないと分かっている（参加者を読めない）
+    if (conversationStopped) {
+        if (sendButton) sendButton.disabled = true;
+        if (saveButton) saveButton.disabled = true;
+    }
+
     // フォーカス設定
     if (messageInput) {
         messageInput.focus();
@@ -615,9 +644,12 @@ async function sendMessage(message) {
                     currentAccumulatedText = '';
                 } else if (data.type === 'complete') {
                     // ストリーミング完了
+                } else if (data.type === 'files_excluded') {
+                    // 使えなくなった添付（24 時間を過ぎた等）は外して会話を続ける（BR3.6）
+                    showErrorMessage('次の添付は使えなくなったため外しました: ' + (data.names || []).join('、'));
                 } else if (data.type === 'error') {
                     receivedResponse = true;
-                    showDetailedError(data.message, 'agent_error');
+                    handleSendFailure(data, message);
                 }
             }
         }
@@ -701,9 +733,12 @@ function createStreamingBubble(personaName, personaId) {
 
 // UI状態管理関数
 function setSendingState(sending) {
-    if (sendButton) sendButton.disabled = sending;
+    // 続けられなくなった会話は、送信の終わりでも送信・保存を有効に戻さない（M12）
+    if (sendButton) sendButton.disabled = sending || conversationStopped;
     if (messageInput) messageInput.disabled = sending;
-    
+    // 応答中は保存できない（U6 NFR1.60。サーバーも CONCURRENT_UPDATE で断る）
+    if (saveButton) saveButton.disabled = sending || conversationStopped;
+
     if (sendButtonText && sendButtonLoading) {
         if (sending) {
             sendButtonText.classList.add('hidden');

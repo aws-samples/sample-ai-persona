@@ -221,7 +221,7 @@ def test_nothing_is_pending_after_the_final_unit():
 
 def test_the_final_unit_mark():
     assert FINAL_UNIT == "U7"
-    assert CURRENT_UNIT == "U5"
+    assert CURRENT_UNIT == "U6"
 
 
 # =============================================================================

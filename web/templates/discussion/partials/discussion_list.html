@@ -1,78 +1,106 @@
-{% from "components/icons.html" import icon_chat, icon_cpu_chip, icon_bolt, icon_persona, icon_lightbulb, icon_cog %}
+{% from "components/icons.html" import icon_chat, icon_cpu_chip, icon_bolt, icon_persona, icon_cog %}
+{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
+{% from "components/status_label.html" import status_label %}
+{#
+  議論の一覧パーシャル（M6、U6）。タブ（list_tabpanel）の中身。
+
+  引数:
+    listing        ... src/models/sharing.py の TabbedList（items は Discussion の本体。
+                       発言は読まない。件数は message_count、名前は participant_names）
+    current_mode   ... mode の絞り込み
+    current_search ... 検索語
+    is_append      ... 「もっと見る」の追加分
+#}
+{%- set tab = listing.tab.value -%}
+{%- set discussions = listing.items -%}
+{%- set total = listing.counts.get(tab) -%}
+{%- set bulk = tab != "shared" -%}
+{%- set extra = ("&mode=" ~ current_mode if current_mode else "") ~ ("&search=" ~ (current_search | urlencode) if current_search else "") -%}
+
+{%- if not is_append %}
+{# 絞り込みと検索がタブの中で動くよう、今のタブを持たせる（BR2.2） #}
+<input type="hidden" name="tab" value="{{ tab }}" data-discussion-tab>
+{%- if listing.search_truncated %}
+<p class="text-sm text-gray-700 mb-3" data-testid="discussion-search-truncated">新しい順に 500 件までを検索しました</p>
+{%- endif %}
+{%- if discussions and bulk and listing.manageable %}
+{{ bulk_select_bar("discussion", True, "共有先を設定", "share-dialog") }}
+{%- endif %}
+{%- endif %}
 
 {% if discussions %}
-<!-- 議論一覧 -->
 {% if not is_append %}
 <div class="space-y-6" id="discussion-grid" data-busy-target>
 {% endif %}
     {% for discussion in discussions %}
+    {%- set manageable = discussion.id in listing.manageable %}
     <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow" id="discussion-card-{{ discussion.id }}">
         <div class="flex items-start justify-between mb-4">
-            <div>
-                <h2 class="text-lg font-semibold text-gray-900">
-                    {{ discussion.topic }}
-                </h2>
-                <div class="flex items-center gap-4 mt-2">
-                    <span class="text-sm text-gray-500">
-                        {% if discussion.created_at %}<time datetime="{{ discussion.created_at.isoformat() }}Z">{{ discussion.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
-                    </span>
-                    <span data-testid="discussion-mode" class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
-                        {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
-                    </span>
-                    <span class="text-sm text-gray-500">
-                        {{ discussion.messages|length if discussion.messages else 0 }}件の発言
-                    </span>
+            <div class="flex items-start gap-3">
+                {%- if bulk and manageable %}
+                <div class="pt-1">{{ bulk_select_row(discussion.id, discussion.topic) }}</div>
+                {%- endif %}
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900">{{ discussion.topic }}</h2>
+                    <div class="flex flex-wrap items-center gap-4 mt-2">
+                        <span class="text-sm text-gray-500">
+                            {% if discussion.created_at %}<time datetime="{{ discussion.created_at.isoformat() }}Z">{{ discussion.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
+                        </span>
+                        <span data-testid="discussion-mode" class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                            {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
+                        </span>
+                        {%- if discussion.message_count is not none %}
+                        <span class="text-sm text-gray-500">{{ discussion.message_count }}件の発言</span>
+                        {%- endif %}
+                    </div>
+                    {%- if tab != "mine" %}
+                    {%- set label = listing.owners.get(discussion.id) %}
+                    <p class="text-xs text-gray-700 mt-1">所有者: {% if label is none %}-{% elif label == "所有者不明" %}{{ status_label("所有者不明") }}{% else %}{{ label }}{% endif %}</p>
+                    {%- endif %}
+                    {%- set names = listing.shared_with.get(discussion.id, []) %}
+                    {%- if tab == "shared" %}
+                    <p class="text-xs text-gray-700 mt-1">共有元: {{ names | join("、") or "-" }}</p>
+                    {%- elif names %}
+                    <p class="text-xs text-gray-700 mt-1">共有: {{ names | join("、") }}</p>
+                    {%- else %}
+                    <p class="text-xs text-gray-700 mt-1">{{ status_label("共有なし") }}</p>
+                    {%- endif %}
                 </div>
             </div>
-            <div class="flex gap-2">
-                <a href="/discussion/{{ discussion.id }}" 
+            <div class="flex gap-2 flex-shrink-0">
+                <a href="/discussion/{{ discussion.id }}"
                    class="bg-blue-100 text-blue-700 px-3 py-1 rounded-md hover:bg-blue-200 transition-colors text-sm">
                     詳細を見る
                 </a>
+                {%- if manageable %}
+                <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                        aria-label="{{ discussion.topic }} を共有"
+                        data-share-url="/share/discussion/{{ discussion.id }}/dialog"
+                        data-testid="discussion-share-button"
+                        class="bg-blue-100 text-blue-700 px-3 py-1 rounded-md hover:bg-blue-200 transition-colors text-sm">
+                    共有
+                </button>
                 <button hx-delete="/discussion/{{ discussion.id }}"
                         hx-target="#discussion-card-{{ discussion.id }}"
                         hx-swap="outerHTML"
-                        hx-confirm="この議論を削除しますか？"
+                        hx-confirm="この議論を削除しますか？発言・レポート・添付資料も一緒に削除されます"
                         class="bg-red-100 text-red-700 px-3 py-1 rounded-md hover:bg-red-200 transition-colors text-sm">
                     削除
                 </button>
+                {%- endif %}
             </div>
         </div>
-        
-        <!-- 参加ペルソナ -->
+
+        <!-- 参加ペルソナ（保存したときの名前） -->
         {% if discussion.participants %}
-        <div class="mb-4">
+        <div>
             <p class="text-sm text-gray-500 mb-2">参加ペルソナ ({{ discussion.participants|length }}名):</p>
             <div class="flex flex-wrap gap-2">
                 {% for participant_id in discussion.participants %}
-                {% set persona = participant_personas.get(participant_id) if participant_personas else None %}
-                {% if persona %}
                 <span class="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm border border-blue-200 flex items-center gap-1">
-                    {{ icon_persona("w-3.5 h-3.5") }} {{ persona.name }} <span class="text-blue-700 text-xs">({{ persona.occupation }})</span>
+                    {{ icon_persona("w-3.5 h-3.5") }} {{ discussion.participant_names.get(participant_id) or "名前なし" }}
                 </span>
-                {% else %}
-                <span class="bg-gray-100 text-gray-600 px-2 py-1 rounded-full text-xs">
-                    ID: {{ participant_id[:8] }}...
-                </span>
-                {% endif %}
                 {% endfor %}
-            </div>
-        </div>
-        {% endif %}
-        
-        <!-- インサイトプレビュー -->
-        {% if discussion.insights %}
-        <div class="border-t pt-4">
-            <p class="text-sm text-gray-500 mb-2 flex items-center gap-1">{{ icon_lightbulb("w-4 h-4 text-yellow-500") }} インサイト ({{ discussion.insights|length }}件):</p>
-            <div class="space-y-2">
-                {% for insight in discussion.insights[:2] %}
-                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-3">
-                    <p class="text-sm text-gray-700">{{ insight.description[:150] }}{% if insight.description|length > 150 %}...{% endif %}</p>
-                </div>
-                {% endfor %}
-                {% if discussion.insights|length > 2 %}
-                <p class="text-sm text-gray-500">他 {{ discussion.insights|length - 2 }}件のインサイト...</p>
-                {% endif %}
             </div>
         </div>
         {% endif %}
@@ -83,13 +111,13 @@
 {% endif %}
 <p id="discussion-count-footer" class="text-sm text-gray-500 mt-4 text-center"
    {% if is_append %}hx-swap-oob="true"{% endif %}>
-    {% if next_cursor %}次あり{% else %}これで全て{% endif %}
+    {% if total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
 </p>
 
-{% if next_cursor %}
+{% if listing.next_cursor %}
 <div id="load-more-discussion" class="text-center mt-6"
      {% if is_append %}hx-swap-oob="true"{% endif %}>
-    <button hx-get="/discussion/results?cursor={{ next_cursor }}{% if current_mode %}&mode={{ current_mode }}{% endif %}{% if current_sort %}&sort={{ current_sort }}{% endif %}{% if current_search %}&search={{ current_search|urlencode }}{% endif %}&append=1"
+    <button hx-get="/discussion/results?tab={{ tab }}&cursor={{ listing.next_cursor }}{{ extra }}&append=1"
             hx-target="#discussion-grid"
             hx-swap="beforeend"
             class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">
@@ -102,20 +130,23 @@
 
 {% else %}
 {% if not is_append %}
-<!-- 議論がない場合 -->
-<div class="bg-gray-50 rounded-lg p-12 text-center">
+<div class="bg-gray-50 rounded-lg p-12 text-center" data-testid="discussion-list-empty">
     <div class="flex justify-center mb-4 text-gray-400">{{ icon_chat("w-16 h-16") }}</div>
     {% if current_mode or current_search %}
     <h2 class="text-xl font-semibold text-gray-700 mb-2">該当する議論がありません</h2>
     <p class="text-gray-500 mb-6">検索条件を変更してください。</p>
-    <a href="/discussion/results" 
+    <a href="/discussion/results"
        class="inline-flex items-center gap-2 bg-gray-600 text-white px-6 py-2 rounded-md hover:bg-gray-700 transition-colors">
         フィルタをリセット
     </a>
+    {% elif tab == "shared" and listing.no_department %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">所属グループがないため、共有された議論はありません</h2>
+    {% elif tab == "shared" %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">共有された議論はありません。所属グループに共有されると、ここに表示されます</h2>
     {% else %}
     <h2 class="text-xl font-semibold text-gray-700 mb-2">議論がありません</h2>
     <p class="text-gray-500 mb-6">ペルソナを選択して議論を開始してください。</p>
-    <a href="/discussion/setup" 
+    <a href="/discussion/setup"
        class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
         {{ icon_cog("w-4 h-4") }} 議論を設定する
     </a>

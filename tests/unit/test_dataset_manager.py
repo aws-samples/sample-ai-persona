@@ -128,80 +128,45 @@ class TestDatasetModels:
 class TestInterviewManagerDataset:
     """InterviewManagerデータセット連携テスト"""
 
-    def test_interview_session_enable_dataset_field(self):
-        """InterviewSessionのenable_datasetフィールドテスト"""
-        from src.managers.interview_manager import InterviewSession
+    """U6: セッションはアプリの外に置き、発言は別のテーブルに書く（設定は保たれる）。"""
 
-        session = InterviewSession(
-            id="session-001",
-            participants=["p1", "p2"],
-            messages=[],
-            created_at=datetime.now(),
-            enable_dataset=True,
+    @staticmethod
+    def _session(**kwargs):
+        from datetime import timezone
+
+        from src.models.interview_session import InterviewSession
+
+        return InterviewSession.create_new(
+            owner_sub="a",
+            persona_ids=["p1", "p2"],
+            persona_names={"p1": "P1", "p2": "P2"},
+            memory_mode="disabled",
+            now=datetime(2026, 10, 15, tzinfo=timezone.utc),
+            **kwargs,
         )
 
-        assert session.enable_dataset is True
+    def test_interview_session_enable_dataset_field(self):
+        """InterviewSessionのenable_datasetフィールドテスト"""
+        assert self._session(enable_dataset=True).enable_dataset is True
 
     def test_interview_session_enable_dataset_default(self):
         """InterviewSessionのenable_datasetデフォルト値テスト"""
-        from src.managers.interview_manager import InterviewSession
+        assert self._session().enable_dataset is False
 
-        session = InterviewSession(
-            id="session-002",
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now(),
-        )
+    def test_enable_dataset_survives_storage(self):
+        """保存した形から読み直しても enable_dataset が保たれる"""
+        from src.models.interview_session import InterviewSession
 
-        assert session.enable_dataset is False
+        session = self._session(enable_dataset=True)
+        assert InterviewSession.from_dict(session.to_dict()).enable_dataset is True
 
-    def test_interview_session_add_message_preserves_enable_dataset(self):
-        """add_user_messageでenable_datasetが保持されるテスト"""
-        from src.managers.interview_manager import InterviewSession
+    def test_touching_preserves_enable_dataset(self):
+        """操作のたびの期限の延長で enable_dataset が変わらない"""
+        from datetime import timedelta
 
-        session = InterviewSession(
-            id="session-003",
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now(),
-            enable_dataset=True,
-        )
-
-        new_session = session.add_user_message("テストメッセージ")
-
-        assert new_session.enable_dataset is True
-
-    def test_interview_session_add_response_preserves_enable_dataset(self):
-        """add_persona_responseでenable_datasetが保持されるテスト"""
-        from src.managers.interview_manager import InterviewSession
-
-        session = InterviewSession(
-            id="session-004",
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now(),
-            enable_dataset=True,
-        )
-
-        new_session = session.add_persona_response("p1", "Persona1", "応答")
-
-        assert new_session.enable_dataset is True
-
-    def test_interview_session_add_document_preserves_enable_dataset(self):
-        """add_documentでenable_datasetが保持されるテスト"""
-        from src.managers.interview_manager import InterviewSession
-
-        session = InterviewSession(
-            id="session-005",
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now(),
-            enable_dataset=True,
-        )
-
-        new_session = session.add_document({"filename": "test.pdf"})
-
-        assert new_session.enable_dataset is True
+        session = self._session(enable_dataset=True)
+        later = session.touched(session.created_at + timedelta(hours=1))
+        assert later.enable_dataset is True
 
 
 class TestDatasetManagerSchemaAnalysis:

@@ -6,9 +6,10 @@ state (NFR9.29). Attaching and detaching are single transactions of at most
 100 items (the ``TransactWriteItems`` limit, security-design.md §3):
 
 - attach: every item ``owner_sub = :owner AND attribute_not_exists(parent_id)
-  AND expires_at > :now``; ``SET parent_type, parent_id REMOVE expires_at``
+  AND expires_at > :now``; ``SET parent_type, parent_id, attached_at
+  REMOVE expires_at``
 - detach: every item ``parent_type = :pt AND parent_id = :pid``;
-  ``REMOVE parent_type, parent_id SET expires_at = :original``
+  ``REMOVE parent_type, parent_id, attached_at SET expires_at = :original``
 
 Failures are classified (``reliability-design.md`` §4): a failed condition ->
 :class:`AttachConditionFailed`, ``TransactionConflict`` ->
@@ -84,6 +85,52 @@ class UploadedFileStore:
         item = response.get("Item")
         return self._file(item) if item else None
 
+    def delete(self, file_id: str, parent_type: str, parent_id: str) -> None:
+        """Delete the metadata of a file attached to the given parent (U6 BR1.5).
+
+        Raises:
+            AttachConditionFailed: The file is not attached to that parent.
+        """
+        try:
+            self.client.delete_item(
+                TableName=self.table_name,
+                Key={"id": {"S": file_id}},
+                ConditionExpression="parent_type = :pt AND parent_id = :pid",
+                ExpressionAttributeValues={
+                    ":pt": {"S": parent_type},
+                    ":pid": {"S": parent_id},
+                },
+            )
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "ConditionalCheckFailedException":
+                raise AttachConditionFailed("not attached to this parent") from e
+            logger.warning("DeleteItem on files failed: %s", code)
+            raise UploadedFileStoreError(f"delete_item failed: {code}") from e
+        except BotoCoreError as e:
+            raise UploadedFileStoreError(
+                f"delete_item unreachable: {type(e).__name__}"
+            ) from e
+
+    def scan_attached(self, parent_type: str) -> list[UploadedFile]:
+        """Every file attached to a parent of ``parent_type`` (the cleanup script).
+
+        Run with an operator's credentials; the task role has no ``Scan``.
+        """
+        files: list[UploadedFile] = []
+        params: dict[str, Any] = {
+            "TableName": self.table_name,
+            "FilterExpression": "parent_type = :pt",
+            "ExpressionAttributeValues": {":pt": {"S": parent_type}},
+        }
+        while True:
+            response = self._call("scan", **params)
+            files += [self._file(item) for item in response.get("Items", [])]
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                return files
+            params["ExclusiveStartKey"] = start
+
     def get_many(self, file_ids: Sequence[str]) -> dict[str, UploadedFile]:
         """Read files with strongly consistent ``BatchGetItem`` calls.
 
@@ -146,8 +193,10 @@ class UploadedFileStore:
                 "Update": {
                     "TableName": self.table_name,
                     "Key": {"id": {"S": file_id}},
+                    # attached_at: 後始末のスクリプトが保存の途中の議論を見分ける時刻
                     "UpdateExpression": (
-                        "SET parent_type = :pt, parent_id = :pid REMOVE expires_at"
+                        "SET parent_type = :pt, parent_id = :pid, attached_at = :now"
+                        " REMOVE expires_at"
                     ),
                     "ConditionExpression": (
                         "owner_sub = :owner AND attribute_not_exists(parent_id)"
@@ -186,7 +235,8 @@ class UploadedFileStore:
                     "TableName": self.table_name,
                     "Key": {"id": {"S": file_id}},
                     "UpdateExpression": (
-                        "REMOVE parent_type, parent_id SET expires_at = :original"
+                        "REMOVE parent_type, parent_id, attached_at"
+                        " SET expires_at = :original"
                     ),
                     "ConditionExpression": "parent_type = :pt AND parent_id = :pid",
                     "ExpressionAttributeValues": {

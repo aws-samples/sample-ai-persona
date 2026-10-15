@@ -264,8 +264,13 @@ class TestStatusLabelMacro:
 
 
 def _list_screen_managers() -> dict[str, Mock]:
+    from src.models.sharing import ListTab, TabbedList
+
     discussion = Mock()
-    discussion.get_discussion_history.return_value = ([], None)
+    # U6: 議論の一覧もタブ別（TabbedList）
+    discussion.list_discussions.return_value = TabbedList(
+        tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
+    )
     execution = Mock()
     execution.get_all_surveys.return_value = []
     template = Mock()

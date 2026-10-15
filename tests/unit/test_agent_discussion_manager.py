@@ -2,18 +2,20 @@
 AgentDiscussionManager の単体テスト
 
 エージェントモードでの議論管理をテストします。
+U6 からは実行する人（Principal）を受け取り、保存は DiscussionRecords を通す。
 """
+
+import json
 
 import pytest
 
-from src.models.errors import ErrorCode
+from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from unittest.mock import Mock, patch
 
 from src.managers.agent_discussion_manager import (
     AgentDiscussionManager,
     AgentDiscussionManagerError,
 )
-from src.models.discussion import Discussion
 from src.models.persona import Persona
 from src.services.agent_service import (
     AgentConfigurationError,
@@ -22,6 +24,7 @@ from src.services.agent_service import (
     FacilitatorAgent,
 )
 from tests.error_helpers import raises_code
+from tests.unit.discussion_world import NO_ROLE, OWNER, World
 
 
 def _persona(name="p"):
@@ -36,6 +39,36 @@ def _persona(name="p"):
     )
 
 
+def _readable_participants() -> Mock:
+    """A ParticipantReader that always finds everyone readable."""
+    return Mock(can_read_all=Mock(return_value=True))
+
+
+def _manager(**kwargs) -> AgentDiscussionManager:
+    kwargs.setdefault("agent_service", Mock())
+    kwargs.setdefault("database_service", Mock())
+    kwargs.setdefault("dataset_analysis_service", Mock())
+    kwargs.setdefault("binding_store", Mock())
+    kwargs.setdefault("participants", _readable_participants())
+    kwargs.setdefault("resource_lookup", Mock())
+    kwargs.setdefault("discussion_records", Mock())
+    return AgentDiscussionManager(**kwargs)
+
+
+def _run_rounds(manager, personas, topic, agents, facilitator, **kwargs) -> list:
+    return list(
+        manager._rounds(
+            OWNER,
+            personas,
+            topic,
+            agents,
+            facilitator,
+            streaming=kwargs.pop("streaming", False),
+            **kwargs,
+        )
+    )
+
+
 class TestAgentInputValidationUnifiedWithClassic:
     """エージェント議論も非エージェントと同じ入力ルール（上限5・重複）を課すことの回帰。
 
@@ -43,15 +76,8 @@ class TestAgentInputValidationUnifiedWithClassic:
     DiscussionValidation Component への集約で両モード統一されたことを保証する。
     """
 
-    def _manager(self):
-        return AgentDiscussionManager(
-            agent_service=Mock(),
-            database_service=Mock(),
-            dataset_analysis_service=Mock(),
-        )
-
     def test_rejects_more_than_5_personas(self):
-        mgr = self._manager()
+        mgr = _manager()
         personas = [_persona(f"p{i}") for i in range(6)]
         with raises_code(
             AgentDiscussionManagerError,
@@ -61,7 +87,7 @@ class TestAgentInputValidationUnifiedWithClassic:
             mgr._validate_discussion_input(personas, "有効なトピック", [Mock()], Mock())
 
     def test_rejects_duplicate_personas(self):
-        mgr = self._manager()
+        mgr = _manager()
         p = _persona()
         with raises_code(
             AgentDiscussionManagerError, ErrorCode.DISCUSSION_PERSONA_DUPLICATED
@@ -91,9 +117,8 @@ class TestAgentDiscussionManagerInitialization:
         """カスタムサービスでの初期化を確認"""
         mock_agent_service = Mock()
         mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
 
-        manager = AgentDiscussionManager(
+        manager = _manager(
             agent_service=mock_agent_service, database_service=mock_db_service
         )
 
@@ -106,79 +131,105 @@ class TestCreatePersonaAgents:
 
     def test_create_persona_agents_success(self, sample_persona, sample_persona_2):
         """ペルソナエージェント作成が成功することを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
         mock_persona_agent = Mock(spec=PersonaAgent)
-        mock_persona_agent.get_persona_id.return_value = sample_persona.id
-        mock_agent_service.create_persona_agent.return_value = mock_persona_agent
+        manager = _manager()
+        # agent 生成は Component (_agent_integration.build_agent) に委譲するためモック
+        manager._agent_integration.build_agent = Mock(return_value=mock_persona_agent)
 
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+        agents = manager._create_persona_agents(
+            [sample_persona, sample_persona_2], {}, principal=OWNER
         )
-        # agent 生成は Component (_agent_integration.create_agent) に委譲するためモック
-        manager._agent_integration.create_agent = Mock(return_value=mock_persona_agent)
-
-        personas = [sample_persona, sample_persona_2]
-        system_prompts = {}
-
-        agents = manager.create_persona_agents(personas, system_prompts)
 
         assert len(agents) == 2
-        assert manager._agent_integration.create_agent.call_count == 2
+        assert manager._agent_integration.build_agent.call_count == 2
 
     def test_create_persona_agents_with_custom_prompts(
         self, sample_persona, sample_persona_2
     ):
-        """カスタムプロンプトでのエージェント作成を確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-        mock_persona_agent = Mock(spec=PersonaAgent)
-        mock_agent_service.create_persona_agent.return_value = mock_persona_agent
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+        """カスタムプロンプトがそのまま渡ることを確認"""
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock(
+            return_value=Mock(spec=PersonaAgent)
         )
-        manager._agent_integration.create_agent = Mock(return_value=mock_persona_agent)
 
         custom_prompt = "カスタムシステムプロンプト"
-        system_prompts = {sample_persona.id: custom_prompt}
-
-        # 最低2つのペルソナが必要
-        manager.create_persona_agents(
-            [sample_persona, sample_persona_2], system_prompts
+        manager._create_persona_agents(
+            [sample_persona, sample_persona_2],
+            {sample_persona.id: custom_prompt},
+            principal=OWNER,
         )
 
-        # エージェント作成が2回呼ばれたことを確認
-        assert manager._agent_integration.create_agent.call_count == 2
+        prompts = [
+            c.args[2] for c in manager._agent_integration.build_agent.call_args_list
+        ]
+        assert prompts[0] == custom_prompt
+        assert prompts[1] != custom_prompt
+
+    def test_execution_context_is_built_per_persona(
+        self, sample_persona, sample_persona_2
+    ):
+        """BR6.1: 記憶を書くのは実行する人が持ち主のペルソナだけ。"""
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock(
+            return_value=Mock(spec=PersonaAgent)
+        )
+        mine = Persona.from_dict({**sample_persona.to_dict(), "owner_sub": OWNER.sub})
+        theirs = Persona.from_dict({**sample_persona_2.to_dict(), "owner_sub": "b"})
+
+        manager._create_persona_agents([mine, theirs], {}, principal=OWNER)
+
+        contexts = [
+            c.args[0] for c in manager._agent_integration.build_agent.call_args_list
+        ]
+        assert [c.write_memory for c in contexts] == [True, False]
+
+    def test_memory_without_a_session_is_turned_off(
+        self, sample_persona, sample_persona_2
+    ):
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock(
+            return_value=Mock(spec=PersonaAgent)
+        )
+        manager._create_persona_agents(
+            [sample_persona, sample_persona_2],
+            {},
+            enable_memory=True,
+            session_id=None,
+            principal=OWNER,
+        )
+        flags = [
+            c.kwargs["enable_memory"]
+            for c in manager._agent_integration.build_agent.call_args_list
+        ]
+        assert flags == [False, False]
+
+    def test_empty_and_single_persona_lists_are_refused(self, sample_persona):
+        manager = _manager()
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_PERSONAS_REQUIRED
+        ):
+            manager._create_persona_agents([], {}, principal=OWNER)
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
+        ):
+            manager._create_persona_agents([sample_persona], {}, principal=OWNER)
 
 
 class TestModelSelectionValidation:
     """persona_models / facilitator_model のバリデーションテスト"""
 
-    def _make_manager(self):
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-        mock_agent_service = Mock()
-        return AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        ), mock_agent_service
-
     def test_create_persona_agents_unsupported_model_raises_validation(
         self, sample_persona, sample_persona_2
     ):
-        manager, _ = self._make_manager()
-        manager._agent_integration.create_agent = Mock()
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.create_persona_agents(
+            manager._create_persona_agents(
                 [sample_persona, sample_persona_2],
                 {},
                 persona_models={sample_persona.id: "unknown.model-id"},
+                principal=OWNER,
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_UNSUPPORTED
@@ -188,14 +239,15 @@ class TestModelSelectionValidation:
         self, mock_config, sample_persona, sample_persona_2
     ):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
-        manager, _ = self._make_manager()
-        manager._agent_integration.create_agent = Mock()
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.create_persona_agents(
+            manager._create_persona_agents(
                 [sample_persona, sample_persona_2],
                 {},
                 persona_models={sample_persona.id: "openai.gpt-5.6-terra"},
+                principal=OWNER,
             )
 
         assert (
@@ -203,10 +255,10 @@ class TestModelSelectionValidation:
         )
 
     def test_create_facilitator_agent_unsupported_model_raises_validation(self):
-        manager, _ = self._make_manager()
+        manager = _manager()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.create_facilitator_agent(
+            manager._create_facilitator_agent(
                 rounds=3, facilitator_model="unknown.model-id"
             )
 
@@ -215,17 +267,19 @@ class TestModelSelectionValidation:
     def test_create_persona_agents_config_error_not_squashed(
         self, sample_persona, sample_persona_2
     ):
-        """_create_agent_with_integrationsがAgentConfigurationErrorを投げた場合、
+        """build_agentがAgentConfigurationErrorを投げた場合、
         個別ペルソナ失敗として握り潰さずCONFIGコードのまま伝播する。"""
-        manager, _ = self._make_manager()
-        manager._agent_integration.create_agent = Mock(
+        manager = _manager()
+        manager._agent_integration.build_agent = Mock(
             side_effect=AgentConfigurationError(
                 "mantle disabled", code=ErrorCode.AGENT_MODEL_ADDITIONAL_MODELS_DISABLED
             )
         )
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+            manager._create_persona_agents(
+                [sample_persona, sample_persona_2], {}, principal=OWNER
+            )
 
         assert (
             exc_info.value.code is ErrorCode.DISCUSSION_MODEL_ADDITIONAL_MODELS_DISABLED
@@ -239,10 +293,10 @@ class TestModelSelectionValidation:
         Issue #107再レビュー: raise前にcleanup_agentsを呼ばないと、既に作成済みの
         persona_agentがどこにも渡らずリークしていた。
         """
-        manager, _ = self._make_manager()
+        manager = _manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
 
-        manager._agent_integration.create_agent = Mock(
+        manager._agent_integration.build_agent = Mock(
             side_effect=[
                 mock_agent_1,
                 AgentConfigurationError(
@@ -253,7 +307,9 @@ class TestModelSelectionValidation:
         )
 
         with pytest.raises(AgentDiscussionManagerError):
-            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+            manager._create_persona_agents(
+                [sample_persona, sample_persona_2], {}, principal=OWNER
+            )
 
         mock_agent_1.dispose.assert_called_once()
 
@@ -261,10 +317,10 @@ class TestModelSelectionValidation:
         self, sample_persona, sample_persona_2
     ):
         """作成できたエージェントが最低数(2)未満の場合も、作成済みのagentを解放すること。"""
-        manager, _ = self._make_manager()
+        manager = _manager()
         mock_agent_1 = Mock(spec=PersonaAgent)
 
-        manager._agent_integration.create_agent = Mock(
+        manager._agent_integration.build_agent = Mock(
             side_effect=[
                 mock_agent_1,
                 AgentInitializationError("boom"),
@@ -272,7 +328,9 @@ class TestModelSelectionValidation:
         )
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.create_persona_agents([sample_persona, sample_persona_2], {})
+            manager._create_persona_agents(
+                [sample_persona, sample_persona_2], {}, principal=OWNER
+            )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_AGENT_SETUP_FAILED
         mock_agent_1.dispose.assert_called_once()
@@ -281,72 +339,68 @@ class TestModelSelectionValidation:
 class TestRunAgentDiscussionFacilitatorFailureCleanup:
     """facilitator作成失敗時にpersona_agentsが解放されることのテスト
 
-    Issue #107再レビュー: create_persona_agents成功後にcreate_facilitator_agentが
-    失敗すると、start_agent_discussion(_streaming)のfinallyに到達せず
-    persona_agentsがリークしていた。
+    Issue #107再レビュー: ペルソナのエージェント作成後にファシリテータの作成が
+    失敗すると、ラウンド実行のfinallyに到達せずpersona_agentsがリークしていた。
     """
 
-    def _make_manager(self):
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-        mock_agent_service = Mock()
-        return AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+    def _prepared(self):
+        manager = _manager()
+        agents = [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)]
+        manager._create_persona_agents = Mock(return_value=agents)
+        manager._create_facilitator_agent = Mock(
+            side_effect=AgentDiscussionManagerError(
+                "rounds too many", code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
+            )
         )
+        return manager, agents
 
     def test_run_agent_discussion_full_disposes_personas_on_facilitator_failure(
         self, sample_persona, sample_persona_2
     ):
-        manager = self._make_manager()
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        manager.create_persona_agents = Mock(
-            return_value=[mock_persona_agent_1, mock_persona_agent_2]
-        )
-        manager.create_facilitator_agent = Mock(
-            side_effect=AgentDiscussionManagerError(
-                "rounds too many", code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
-            )
-        )
+        manager, agents = self._prepared()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             manager.run_agent_discussion_full(
-                personas=[sample_persona, sample_persona_2],
-                topic="テストトピック",
-                rounds=99,
+                OWNER, [sample_persona, sample_persona_2], "テストトピック", rounds=99
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
-        mock_persona_agent_1.dispose.assert_called_once()
-        mock_persona_agent_2.dispose.assert_called_once()
+        for agent in agents:
+            agent.dispose.assert_called_once()
 
     def test_run_agent_discussion_streaming_disposes_personas_on_facilitator_failure(
         self, sample_persona, sample_persona_2
     ):
-        manager = self._make_manager()
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        manager.create_persona_agents = Mock(
-            return_value=[mock_persona_agent_1, mock_persona_agent_2]
-        )
-        manager.create_facilitator_agent = Mock(
-            side_effect=AgentDiscussionManagerError(
-                "rounds too many", code=ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
-            )
-        )
+        manager, agents = self._prepared()
 
         with pytest.raises(AgentDiscussionManagerError) as exc_info:
             list(
                 manager.run_agent_discussion_streaming(
-                    personas=[sample_persona, sample_persona_2],
-                    topic="テストトピック",
+                    OWNER,
+                    [sample_persona, sample_persona_2],
+                    "テストトピック",
                     rounds=99,
                 )
             )
 
         assert exc_info.value.code is ErrorCode.DISCUSSION_ROUNDS_TOO_MANY
-        mock_persona_agent_1.dispose.assert_called_once()
-        mock_persona_agent_2.dispose.assert_called_once()
+        for agent in agents:
+            agent.dispose.assert_called_once()
+
+    def test_invalid_memory_mode_is_refused_before_agents(
+        self, sample_persona, sample_persona_2
+    ):
+        manager, _ = self._prepared()
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_MEMORY_MODE_INVALID
+        ):
+            manager.run_agent_discussion_full(
+                OWNER,
+                [sample_persona, sample_persona_2],
+                "テストトピック",
+                memory_mode="everything",
+            )
+        manager._create_persona_agents.assert_not_called()
 
 
 class TestCreateFacilitatorAgent:
@@ -354,119 +408,111 @@ class TestCreateFacilitatorAgent:
 
     def test_create_facilitator_agent_success(self):
         """ファシリテーターエージェント作成が成功することを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
         mock_agent_service = Mock()
         mock_facilitator = Mock(spec=FacilitatorAgent)
         mock_agent_service.create_facilitator_agent.return_value = mock_facilitator
 
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
+        manager = _manager(agent_service=mock_agent_service)
 
-        facilitator = manager.create_facilitator_agent(
+        facilitator = manager._create_facilitator_agent(
             rounds=3, additional_instructions="テスト指示"
         )
 
-        assert facilitator is not None
+        assert facilitator is mock_facilitator
         mock_agent_service.create_facilitator_agent.assert_called_once_with(
             3, "テスト指示", model_id=None
         )
 
+    @pytest.mark.parametrize(
+        "rounds, code",
+        [
+            (0, ErrorCode.DISCUSSION_ROUNDS_TOO_FEW),
+            (11, ErrorCode.DISCUSSION_ROUNDS_TOO_MANY),
+        ],
+    )
+    def test_rounds_are_bounded(self, rounds, code):
+        with raises_code(AgentDiscussionManagerError, code):
+            _manager()._create_facilitator_agent(rounds=rounds)
 
-class TestStartAgentDiscussion:
-    """エージェント議論開始のテスト"""
+    def test_service_failure_becomes_setup_failed(self):
+        agent_service = Mock()
+        agent_service.create_facilitator_agent.side_effect = RuntimeError("boom")
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_AGENT_SETUP_FAILED
+        ):
+            _manager(agent_service=agent_service)._create_facilitator_agent(rounds=2)
 
-    def test_start_discussion_success(self, sample_persona, sample_persona_2):
-        """議論開始が成功することを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
 
-        mock_agent_service = Mock()
+class TestRounds:
+    """ラウンド実行（_rounds）のテスト"""
 
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+    def _agents(self, *personas):
+        agents = []
+        for i, persona in enumerate(personas, 1):
+            agent = Mock(spec=PersonaAgent)
+            agent.get_persona_id.return_value = persona.id
+            agent.get_persona_name.return_value = persona.name
+            agent.respond.return_value = f"テスト応答{i}"
+            agents.append(agent)
+        return agents
+
+    def _facilitator(self, rounds=1):
+        facilitator = Mock(spec=FacilitatorAgent)
+        facilitator.invoke.return_value = "ラウンドのまとめ"
+        facilitator.rounds = rounds
+        facilitator.additional_instructions = ""
+        return facilitator
+
+    def test_rounds_complete_with_statements_and_summary(
+        self, sample_persona, sample_persona_2
+    ):
+        """議論が完了し、発言と要約が返ることを確認"""
+        manager = _manager()
+        events = _run_rounds(
+            manager,
+            [sample_persona, sample_persona_2],
+            "テストトピック",
+            self._agents(sample_persona, sample_persona_2),
+            self._facilitator(),
         )
 
-        # ペルソナエージェントのモック
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_1.get_persona_id.return_value = sample_persona.id
-        mock_persona_agent_1.get_persona_name.return_value = sample_persona.name
-        mock_persona_agent_1.respond.return_value = "テスト応答1"
+        kind, messages = events[-1]
+        assert kind == "complete"
+        assert [m.message_type for m in messages] == [
+            "statement",
+            "statement",
+            "summary",
+        ]
 
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2.get_persona_id.return_value = sample_persona_2.id
-        mock_persona_agent_2.get_persona_name.return_value = sample_persona_2.name
-        mock_persona_agent_2.respond.return_value = "テスト応答2"
-
-        persona_agents = [mock_persona_agent_1, mock_persona_agent_2]
-
-        # ファシリテーターのモック
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-        mock_facilitator.start_discussion.return_value = "議論を開始します"
-        mock_facilitator.invoke.return_value = "ラウンドのまとめ"
-        mock_facilitator.rounds = 1
-        mock_facilitator.additional_instructions = ""
-        mock_facilitator.clear_conversation_history = Mock()
-
-        discussion = manager.start_agent_discussion(
-            personas=[sample_persona, sample_persona_2],
-            topic="テストトピック",
-            persona_agents=persona_agents,
-            facilitator=mock_facilitator,
-        )
-
-        assert discussion is not None
-        assert discussion.topic == "テストトピック"
-        assert discussion.mode == "agent"
-        assert len(discussion.messages) > 0
-
-    def test_start_discussion_insufficient_personas(self, sample_persona):
+    def test_insufficient_personas(self, sample_persona):
         """ペルソナ数不足でエラーを返すことを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        mock_persona_agent = Mock(spec=PersonaAgent)
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.start_agent_discussion(
-                personas=[sample_persona],
-                topic="テストトピック",
-                persona_agents=[mock_persona_agent],
-                facilitator=mock_facilitator,
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
+        ):
+            _run_rounds(
+                _manager(),
+                [sample_persona],
+                "テストトピック",
+                [Mock(spec=PersonaAgent)],
+                Mock(spec=FacilitatorAgent),
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
-
-    def test_start_discussion_document_validation_failure_disposes_agents(
+    def test_document_validation_failure_disposes_agents(
         self, sample_persona, sample_persona_2
     ):
         """ドキュメント検証が失敗した場合もagentが解放されること。
 
         Issue #107レビュー: ドキュメント読み込みがtryブロックの外にあったため、
         検証失敗時にfinally節のcleanup_agentsが実行されずリソースがリークしていた。
-        Gemma4（3.5MB上限）に上限超過のPDFを添付してサイズ検証を失敗させ、
-        finally節でのcleanupを確認する。
+        Gemma4（3.5MB上限）に上限超過のPDFを添付してサイズ検証を失敗させる。
         """
         from datetime import datetime, timezone
 
         from src.models.uploaded_file import UploadedFile
-        from tests.conftest import MEMBER_A
 
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-        # U5: documents are read through FileAttachments (the uploader's own file)
         files = Mock()
         files.attachable_file.return_value = UploadedFile.create_new(
-            owner_sub=MEMBER_A.sub,
+            owner_sub=OWNER.sub,
             file_type="discussion_document",
             original_filename="test.pdf",
             file_size=5 * 1024 * 1024,
@@ -474,176 +520,96 @@ class TestStartAgentDiscussion:
             mime_type="application/pdf",
             now=datetime.now(timezone.utc),
         ).with_path("path/to/test.pdf")
+        manager = _manager(file_attachments=files)
+        agents = [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)]
+        facilitator = Mock(spec=FacilitatorAgent)
 
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service,
-            database_service=mock_db_service,
-            file_attachments=files,
-            binding_store=Mock(),
-        )
-
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        persona_agents = [mock_persona_agent_1, mock_persona_agent_2]
-
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.start_agent_discussion(
-                personas=[sample_persona, sample_persona_2],
-                topic="テストトピック",
-                persona_agents=persona_agents,
-                facilitator=mock_facilitator,
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE
+        ):
+            _run_rounds(
+                manager,
+                [sample_persona, sample_persona_2],
+                "テストトピック",
+                agents,
+                facilitator,
                 document_ids=["doc-1"],
                 persona_models={sample_persona.id: "google.gemma-4-31b"},
-                principal=MEMBER_A.principal(),
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_MODEL_INPUT_TOO_LARGE
-        mock_persona_agent_1.dispose.assert_called_once()
-        mock_persona_agent_2.dispose.assert_called_once()
-        mock_facilitator.dispose.assert_called_once()
+        for agent in agents:
+            agent.dispose.assert_called_once()
+        facilitator.dispose.assert_called_once()
 
-    def test_start_discussion_empty_topic(self, sample_persona, sample_persona_2):
+    def test_someone_elses_document_is_not_found(
+        self, sample_persona, sample_persona_2
+    ):
+        files = Mock()
+        files.attachable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
+        )
+        with raises_code(AgentDiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
+            _run_rounds(
+                _manager(file_attachments=files),
+                [sample_persona, sample_persona_2],
+                "テストトピック",
+                [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)],
+                Mock(spec=FacilitatorAgent),
+                document_ids=["doc-1"],
+            )
+
+    def test_empty_topic(self, sample_persona, sample_persona_2):
         """空のトピックでエラーを返すことを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        mock_persona_agents = [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)]
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.start_agent_discussion(
-                personas=[sample_persona, sample_persona_2],
-                topic="",
-                persona_agents=mock_persona_agents,
-                facilitator=mock_facilitator,
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOPIC_REQUIRED
+        ):
+            _run_rounds(
+                _manager(),
+                [sample_persona, sample_persona_2],
+                "",
+                [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)],
+                Mock(spec=FacilitatorAgent),
             )
 
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_REQUIRED
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_topic_too_short_disposes_agents(
+        self, streaming, sample_persona, sample_persona_2
+    ):
+        """トピックが短すぎる（入力検証失敗）場合もagentが解放されること（#107）。"""
+        agents = [Mock(spec=PersonaAgent), Mock(spec=PersonaAgent)]
+        facilitator = Mock(spec=FacilitatorAgent)
 
-    def test_start_discussion_topic_too_short_disposes_agents(
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
+        ):
+            _run_rounds(
+                _manager(),
+                [sample_persona, sample_persona_2],
+                "短い",
+                agents,
+                facilitator,
+                streaming=streaming,
+            )
+
+        for agent in agents:
+            agent.dispose.assert_called_once()
+        facilitator.dispose.assert_called_once()
+
+    def test_unexpected_error_becomes_operation_failed(
         self, sample_persona, sample_persona_2
     ):
-        """トピックが短すぎる（入力検証失敗）場合もagentが解放されること。
-
-        Issue #107再レビュー: _validate_discussion_inputがtry/finallyの外にあり、
-        トピック長等の通常の入力検証エラーではcleanup_agentsが実行されずagentが
-        リークしていた。
-        """
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.start_agent_discussion(
-                personas=[sample_persona, sample_persona_2],
-                topic="短い",  # 5文字未満
-                persona_agents=[mock_persona_agent_1, mock_persona_agent_2],
-                facilitator=mock_facilitator,
+        facilitator = self._facilitator()
+        facilitator.start_discussion.side_effect = RuntimeError("boom")
+        with raises_code(
+            AgentDiscussionManagerError, ErrorCode.DISCUSSION_OPERATION_FAILED
+        ):
+            _run_rounds(
+                _manager(),
+                [sample_persona, sample_persona_2],
+                "テストトピック",
+                self._agents(sample_persona, sample_persona_2),
+                facilitator,
             )
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
-        mock_persona_agent_1.dispose.assert_called_once()
-        mock_persona_agent_2.dispose.assert_called_once()
-        mock_facilitator.dispose.assert_called_once()
-
-    def test_start_discussion_streaming_topic_too_short_disposes_agents(
-        self, sample_persona, sample_persona_2
-    ):
-        """ストリーミング版でも入力検証失敗時にagentが解放されること。"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        mock_persona_agent_1 = Mock(spec=PersonaAgent)
-        mock_persona_agent_2 = Mock(spec=PersonaAgent)
-        mock_facilitator = Mock(spec=FacilitatorAgent)
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            list(
-                manager.start_agent_discussion_streaming(
-                    personas=[sample_persona, sample_persona_2],
-                    topic="短い",
-                    persona_agents=[mock_persona_agent_1, mock_persona_agent_2],
-                    facilitator=mock_facilitator,
-                )
-            )
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
-        mock_persona_agent_1.dispose.assert_called_once()
-        mock_persona_agent_2.dispose.assert_called_once()
-        mock_facilitator.dispose.assert_called_once()
-
-
-class TestSaveAgentDiscussion:
-    """エージェント議論保存のテスト"""
-
-    def test_save_discussion_success(self, sample_discussion):
-        """議論保存が成功することを確認"""
-        # sample_discussionのmodeをagentに変更
-        agent_discussion = Discussion(
-            id=sample_discussion.id,
-            topic=sample_discussion.topic,
-            participants=sample_discussion.participants,
-            messages=sample_discussion.messages,
-            insights=sample_discussion.insights,
-            created_at=sample_discussion.created_at,
-            mode="agent",
-        )
-
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-        mock_db_service.save_discussion.return_value = agent_discussion.id
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        result_id = manager.save_agent_discussion(agent_discussion)
-
-        assert result_id == agent_discussion.id
-        mock_db_service.save_discussion.assert_called_once_with(agent_discussion)
-
-    def test_save_discussion_invalid(self):
-        """無効な議論でエラーを返すことを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        with pytest.raises(AgentDiscussionManagerError) as exc_info:
-            manager.save_agent_discussion(None)
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_OPERATION_FAILED
 
 
 class TestDisposeAgents:
@@ -651,50 +617,28 @@ class TestDisposeAgents:
 
     def test_dispose_agents_success(self):
         """エージェントリソース解放が成功することを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # モックエージェント
+        manager = _manager()
         mock_persona_agent_1 = Mock(spec=PersonaAgent)
         mock_persona_agent_2 = Mock(spec=PersonaAgent)
         mock_facilitator = Mock(spec=FacilitatorAgent)
 
-        persona_agents = [mock_persona_agent_1, mock_persona_agent_2]
+        manager._cleanup_agents(
+            [mock_persona_agent_1, mock_persona_agent_2], mock_facilitator
+        )
 
-        manager.cleanup_agents(persona_agents, mock_facilitator)
-
-        # 全てのエージェントのdisposeが呼ばれたことを確認
         mock_persona_agent_1.dispose.assert_called_once()
         mock_persona_agent_2.dispose.assert_called_once()
         mock_facilitator.dispose.assert_called_once()
 
     def test_dispose_agents_handles_errors(self):
         """エージェント解放中のエラーが適切に処理されることを確認"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
-
-        mock_agent_service = Mock()
-
-        manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
-        )
-
-        # エラーを発生させるモックエージェント
+        manager = _manager()
         mock_persona_agent = Mock(spec=PersonaAgent)
         mock_persona_agent.dispose.side_effect = Exception("Dispose error")
-
         mock_facilitator = Mock(spec=FacilitatorAgent)
 
-        # エラーが発生しても例外が伝播しないことを確認
-        manager.cleanup_agents([mock_persona_agent], mock_facilitator)
+        manager._cleanup_agents([mock_persona_agent], mock_facilitator)
 
-        # ファシリテーターのdisposeも呼ばれることを確認
         mock_facilitator.dispose.assert_called_once()
 
 
@@ -829,3 +773,164 @@ class TestPrepareDocumentContents:
         assert len(result) == 2
         assert "image" in result[0]
         assert "document" in result[1]
+
+
+# =============================================================================
+# U6: 実行する人・実行中の確かめ直し・記憶（BR2.8、BR6.1、BR6.2、BR7.1、NFR1.46、
+# NFR1.47、NFR1.50、NFR2.17、AC4.2.1、AC4.2.2、AC4.2.5）
+# =============================================================================
+
+U6_TOPIC = "新商品のマーケティングについて"
+
+
+def _agent_for(persona, created: list) -> Mock:
+    agent = Mock(spec=PersonaAgent)
+    agent.get_persona_id.return_value = persona.id
+    agent.get_persona_name.return_value = persona.name
+    agent.respond.return_value = f"{persona.name}の発言です"
+    agent.respond_streaming.side_effect = lambda *a, **k: iter(["発言", "です"])
+    created.append(agent)
+    return agent
+
+
+@pytest.fixture
+def u6_world() -> World:
+    return World()
+
+
+@pytest.fixture
+def u6_manager(u6_world):
+    created: list = []
+    agent_service = Mock()
+    agent_service.create_persona_agent.side_effect = lambda **kw: _agent_for(
+        kw["persona"], created
+    )
+    agent_service.get_kb_tools.return_value = ([], None)
+    facilitator = Mock(spec=FacilitatorAgent)
+    facilitator.rounds = 2
+    facilitator.additional_instructions = ""
+    facilitator.start_discussion.return_value = "始めます"
+    facilitator.invoke.return_value = "ラウンドのまとめ"
+    facilitator.invoke_streaming.side_effect = lambda *a, **k: iter(["まとめ"])
+    agent_service.create_facilitator_agent.return_value = facilitator
+    ai = Mock()
+    ai.extract_insights.return_value = [
+        {
+            "category": "c",
+            "description": "十分に長いインサイトです",
+            "confidence_score": 0.7,
+        }
+    ]
+    manager = AgentDiscussionManager(
+        agent_service=agent_service,
+        database_service=Mock(),
+        dataset_analysis_service=Mock(),
+        file_attachments=u6_world.files,
+        binding_store=Mock(list_for_persona=Mock(return_value=[])),
+        discussion_records=u6_world.records,
+        participants=u6_world.participants,
+        resource_lookup=u6_world.lookup,
+        ai_service=ai,
+    )
+    manager.created_agents = created  # type: ignore[attr-defined]
+    return manager
+
+
+def _personas(world):
+    return [world.persona_bodies["p1"], world.persona_bodies["p2"]]
+
+
+class TestU6AgentDiscussion:
+    def test_ai_execute_is_required(self, u6_manager, u6_world):
+        with pytest.raises(AccessDeniedError):
+            u6_manager.run_agent_discussion_full(
+                NO_ROLE, _personas(u6_world), U6_TOPIC, rounds=2
+            )
+        u6_manager.agent_service.create_persona_agent.assert_not_called()
+
+    def test_memory_session_is_the_saved_discussion_and_peers_only_retrieve(
+        self, u6_manager, u6_world
+    ):
+        discussion = u6_manager.run_agent_discussion_full(
+            OWNER,
+            _personas(u6_world),
+            U6_TOPIC,
+            rounds=2,
+            enable_memory=True,
+            memory_mode="full",
+        )
+        calls = {
+            c.kwargs["persona"].id: c.kwargs
+            for c in u6_manager.agent_service.create_persona_agent.call_args_list
+        }
+        assert {c["session_id"] for c in calls.values()} == {discussion.id}
+        assert calls["p1"]["memory_mode"] == "full"
+        assert calls["p2"]["memory_mode"] == "retrieve_only"
+        assert discussion.id in u6_world.store.bodies
+        assert u6_world.store.bodies[discussion.id]["owner_sub"] == OWNER.sub
+        assert u6_world.store.bodies[discussion.id]["mode"] == "agent"
+
+    def test_one_participant_check_per_statement(self, u6_manager, u6_world):
+        before = u6_world.personas.calls
+        u6_manager.run_agent_discussion_full(
+            OWNER, _personas(u6_world), U6_TOPIC, rounds=2
+        )
+        # 2 体 × 2 ラウンド = 4 発言。保存の直前には読み直さない
+        assert u6_world.personas.calls - before == 4
+
+    def test_unshared_mid_run_stops_before_the_next_statement(
+        self, u6_manager, u6_world
+    ):
+        def respond(prompt, context=None):
+            u6_world.unshare("p2")
+            return "最初の発言"
+
+        def make(**kw):
+            agent = _agent_for(kw["persona"], u6_manager.created_agents)
+            agent.respond.side_effect = respond
+            return agent
+
+        u6_manager.agent_service.create_persona_agent.side_effect = make
+        with pytest.raises(CodedError) as info:
+            u6_manager.run_agent_discussion_full(
+                OWNER, _personas(u6_world), U6_TOPIC, rounds=2
+            )
+        assert info.value.code is ErrorCode.PERSONA_NOT_FOUND
+        assert u6_world.store.bodies == {}
+        spoken = sum(a.respond.call_count for a in u6_manager.created_agents)
+        assert spoken == 1
+        assert all(a.dispose.called for a in u6_manager.created_agents)
+
+    def test_streaming_sends_stopped_and_saves_nothing(self, u6_manager, u6_world):
+        def make(**kw):
+            agent = _agent_for(kw["persona"], u6_manager.created_agents)
+
+            def streaming(*_a, **_k):
+                u6_world.unshare("p2")
+                yield "発言"
+
+            agent.respond_streaming.side_effect = streaming
+            return agent
+
+        u6_manager.agent_service.create_persona_agent.side_effect = make
+        lines = list(
+            u6_manager.run_agent_discussion_streaming(
+                OWNER, _personas(u6_world), U6_TOPIC, rounds=2
+            )
+        )
+        events = [json.loads(line[len("data: ") :]) for line in lines]
+        assert events[-1]["type"] == "stopped"
+        assert u6_world.store.bodies == {}
+
+    def test_streaming_completes_with_the_saved_id(self, u6_manager, u6_world):
+        lines = list(
+            u6_manager.run_agent_discussion_streaming(
+                OWNER, _personas(u6_world), U6_TOPIC, rounds=2
+            )
+        )
+        events = [json.loads(line[len("data: ") :]) for line in lines]
+        kinds = {e["type"] for e in events}
+        assert {"message_start", "message_delta", "message_end"} <= kinds
+        complete = events[-1]
+        assert complete["type"] == "complete"
+        assert complete["discussion_id"] in u6_world.store.bodies

@@ -29,8 +29,9 @@
         ];
     }
 }">
-    <!-- 再生成ボタン -->
-    {% if discussion_id is defined and discussion_id %}
+    <!-- 再生成ボタン（管理できる人だけ、U6 BR2.5） -->
+    {%- set can_regenerate = discussion_id is defined and discussion_id and manageable is defined and manageable %}
+    {% if can_regenerate %}
     <div class="mb-4 flex justify-end">
         <button type="button" aria-haspopup="dialog"
                 data-dialog-open="regenerate-insights-dialog" data-testid="regenerate-insights-dialog-open-button"
@@ -81,6 +82,7 @@
     {% endif %}
 
     <!-- 再生成ダイアログ（要求が成功したときだけ閉じる。失敗したら開いたまま。背景のクリックでは閉じない） -->
+    {% if can_regenerate %}
     {% call dialog("regenerate-insights-dialog", "インサイトカテゴリーを変更", close_on_success=True, panel_class="max-w-3xl") %}
 
                 <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
@@ -168,4 +170,5 @@
                     </div>
                 </form>
     {% endcall %}
+    {% endif %}
 </div>

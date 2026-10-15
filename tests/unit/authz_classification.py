@@ -46,7 +46,7 @@ NO_USER_DATA = Entry(Kind.EXEMPT, Reason.NO_USER_DATA)
 #: Units in build order. ``pending_unit`` must name one after ``CURRENT_UNIT``.
 UNIT_ORDER: tuple[str, ...] = ("U1", "U2", "U3", "U4", "U5", "U6", "U7")
 #: The Unit being built. Each Unit's Code Generation moves it forward.
-CURRENT_UNIT = "U5"
+CURRENT_UNIT = "U6"
 #: At this Unit's Build and Test no ``pending_unit`` may remain (NFR1.8).
 FINAL_UNIT = "U7"
 
@@ -93,6 +93,33 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
     "PersonaCandidateStore": frozenset(
         {"claim", "release", "delete", "mark_saved", "confirm_claim"}
     ),
+    # U6: every listed method decides on the discussion (ensure_readable /
+    # ensure_manageable / can_manage / can_read on each body) before it reads
+    # messages or reports or writes anything (security-design.md §2, ADR-006).
+    "DiscussionRecords": frozenset(
+        {
+            "save_new",
+            "get",
+            "get_manageable",
+            "ensure_manageable",
+            "can_manage",
+            "list_bodies",
+            "update_insights",
+            "append_messages",
+            "delete",
+            "save_report",
+            "update_report",
+            "delete_report",
+            "get_report",
+            "export_markdown",
+        }
+    ),
+    # U6: every listed method reads the participants' decision columns
+    # (ResourceLookup.get_many) and judges them with AccessPolicy.can_read
+    # before any persona body is read (BR2.8, BR7.1〜BR7.3).
+    "ParticipantReader": frozenset(
+        {"ensure_all_readable", "read_for_use", "can_read_all", "statuses"}
+    ),
 }
 
 #: ``pending_unit`` count per Unit. Lower it when a Unit adds its decisions.
@@ -101,18 +128,14 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
 #: U5: pending("U5") を 0 件にした（26 件を CHECKS にするか消した）。議論・インタビュー
 #: が使う PersonaManager.get_persona_unchecked を U6 に回し（35 → 36）、
 #: DatasetManager の紐付けの 5 メソッドを消した（55 → 50）。
-PENDING_BASELINE: dict[str, int] = {"U6": 36, "U7": 50}
+#: U6: pending("U6") を 0 件にした（36 件を CHECKS にするか、消すか非公開にした）。
+PENDING_BASELINE: dict[str, int] = {"U7": 50}
 
 CLASSIFICATION: dict[str, Entry] = {
-    # agent_discussion_manager.py
-    "AgentDiscussionManager.create_persona_agents": pending("U6"),
-    "AgentDiscussionManager.create_facilitator_agent": pending("U6"),
-    "AgentDiscussionManager.start_agent_discussion": pending("U6"),
-    "AgentDiscussionManager.save_agent_discussion": pending("U6"),
-    "AgentDiscussionManager.start_agent_discussion_streaming": pending("U6"),
-    "AgentDiscussionManager.cleanup_agents": pending("U6"),
-    "AgentDiscussionManager.run_agent_discussion_streaming": pending("U6"),
-    "AgentDiscussionManager.run_agent_discussion_full": pending("U6"),
+    # agent_discussion_manager.py — U6（security-design.md §1。エージェントの組み立て・
+    # 開始・保存・解放は非公開にし、Router が呼ぶ 2 つだけを残した）
+    "AgentDiscussionManager.run_agent_discussion_streaming": CHECKS,  # ai:execute（BR2.8）
+    "AgentDiscussionManager.run_agent_discussion_full": CHECKS,  # ai:execute（BR2.8）
     # auth_manager.py — ログインそのもの。利用者のリソースを扱わない
     "AuthManager.mode": NO_USER_DATA,
     "AuthManager.secure_cookies": NO_USER_DATA,
@@ -133,37 +156,34 @@ CLASSIFICATION: dict[str, Entry] = {
     "DatasetManager.update_dataset": pending("U7"),
     "DatasetManager.delete_dataset": pending("U7"),
     # 紐付けの 5 メソッドは U5 で PersonaManager へ移した（ADR-007）
-    # discussion_manager.py
-    "DiscussionManager.start_discussion": pending("U6"),
-    "DiscussionManager.generate_insights": pending("U6"),
-    "DiscussionManager.save_discussion": pending("U6"),
-    "DiscussionManager.get_discussion": pending("U6"),
-    "DiscussionManager.get_discussion_history": pending("U6"),
-    "DiscussionManager.delete_discussion": pending("U6"),
-    "DiscussionManager.regenerate_insights": pending("U6"),
-    "DiscussionManager.facilitate_discussion_streaming": pending("U6"),
-    "DiscussionManager.get_document_presigned_urls": pending("U6"),
-    "DiscussionManager.run_classic_discussion_streaming": pending("U6"),
-    "DiscussionManager.run_classic_discussion": pending("U6"),
+    # discussion_manager.py — U6（security-design.md §1）
+    "DiscussionManager.run_classic_discussion_streaming": CHECKS,  # ai:execute（BR2.8）
+    "DiscussionManager.run_classic_discussion": CHECKS,  # ai:execute（BR2.8）
+    "DiscussionManager.list_discussions": CHECKS,  # ResourceSharing + can_read（BR2.1）
+    "DiscussionManager.list_accessible_discussions": CHECKS,  # 同上（API）
+    "DiscussionManager.get_discussion": CHECKS,  # DiscussionRecords.get（BR2.4）
+    "DiscussionManager.export_discussion": CHECKS,  # DiscussionRecords（BR9.1）
+    "DiscussionManager.get_document_urls": CHECKS,  # FileAttachments.readable_file（BR5.1）
+    "DiscussionManager.delete_discussion": CHECKS,  # DiscussionRecords.delete（BR1.5）
+    "DiscussionManager.regenerate_insights": CHECKS,  # ai:execute + 管理できる人（BR2.5）
+    "DiscussionManager.check_insights_allowed": CHECKS,  # 同上（API のジョブの前）
     "DiscussionManager.get_default_categories": NO_USER_DATA,  # 固定の既定値
     # file_manager.py — U5（security-design.md §1）
     "FileManager.validate_persona_source_file": NO_USER_DATA,  # 中身の検査だけ
     "FileManager.convert_file_to_markdown": NO_USER_DATA,  # 変換だけで保存しない（BR5.9）
     "FileManager.upload_discussion_document": CHECKS,  # resource:create、本人のキー
     "FileManager.upload_survey_image": CHECKS,  # resource:create、本人のキー
+    "FileManager.upload_interview_attachment": CHECKS,  # resource:create（U6 BR3.6）
     "FileManager.preview_url_for_path": CHECKS,  # FileAttachments.readable_file（BR5.8）
-    # interview_manager.py
-    "InterviewManager.start_interview_session": pending("U6"),
-    "InterviewManager.send_user_message": pending("U6"),
-    "InterviewManager.send_user_message_streaming": pending("U6"),
-    "InterviewManager.save_interview_session": pending("U6"),
-    "InterviewManager.get_interview_session": pending("U6"),
-    "InterviewManager.end_interview_session": pending("U6"),
-    "InterviewManager.get_session_status": pending("U6"),
-    "InterviewManager.cleanup_inactive_sessions": pending("U6"),
-    "InterviewManager.get_active_sessions_count": NO_USER_DATA,  # 件数だけ
-    "InterviewManager.send_user_message_with_files": pending("U6"),
-    "InterviewManager.send_user_message_streaming_with_files": pending("U6"),
+    # interview_manager.py — U6（持ち主だけ、BR3.2。手で呼ぶ掃除・生のファイルの経路はなくした）
+    "InterviewManager.start_interview_session": CHECKS,  # ai:execute（BR3.1）
+    "InterviewManager.send_user_message": CHECKS,  # is_owner + 参加者の確かめ直し
+    "InterviewManager.send_user_message_streaming": CHECKS,  # 同上
+    "InterviewManager.save_interview_session": CHECKS,  # is_owner + 参加者（BR3.7）
+    "InterviewManager.get_interview_session": CHECKS,  # is_owner（BR3.2）
+    "InterviewManager.end_interview_session": CHECKS,  # is_owner（BR3.2）
+    "InterviewManager.get_session_status": CHECKS,  # is_owner（BR3.2）
+    "InterviewManager.get_active_sessions_count": NO_USER_DATA,  # 手元の件数だけ
     # job_manager.py — U2（submit は ai:execute、get は投入者の照合）
     "JobManager.submit": CHECKS,
     "JobManager.get": CHECKS,
@@ -173,10 +193,10 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaGenerationManager.finish_candidates": CHECKS,  # 押さえの印が一致するものだけ
     # persona_manager.py — U4 で所有・共有の判定を入れた分は CHECKS。
     # U5: 紐付け・プレビュー・候補からの保存・エクスポート・アバターも CHECKS。
-    # get_persona_unchecked は議論・インタビューが使う（呼び出し側を U6 が直す）
+    # U6: get_persona_unchecked をなくし、議論・インタビューは get_personas_for_use で読む
     "PersonaManager.save_persona": CHECKS,  # resource:create（BR6.1）
     "PersonaManager.get_persona": CHECKS,  # ensure_readable（BR4.5）
-    "PersonaManager.get_persona_unchecked": pending("U6"),
+    "PersonaManager.get_personas_for_use": CHECKS,  # ParticipantReader（U6 BR2.8）
     "PersonaManager.save_generated_personas": CHECKS,  # resource:create（BR1.4）
     "PersonaManager.preview_binding_data": CHECKS,  # ensure_readable + can_use_asset
     "PersonaManager.export_persona": CHECKS,  # ensure_readable（BR7.1）
@@ -205,13 +225,16 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaMemoryManager.delete_memory": CHECKS,
     "PersonaMemoryManager.delete_all_memories": CHECKS,
     "PersonaMemoryManager.safe_get_memories": CHECKS,
-    # report_manager.py
-    "ReportManager.get_discussion": pending("U6"),
-    "ReportManager.generate_report_streaming": pending("U6"),
-    "ReportManager.generate_followup_report_streaming": pending("U6"),
-    "ReportManager.save_report": pending("U6"),
-    "ReportManager.update_report_content": pending("U6"),
-    "ReportManager.delete_report": pending("U6"),
+    # report_manager.py — U6（生成は読める人、変更は管理できる人、BR4.1・BR4.2）
+    "ReportManager.get_discussion": CHECKS,  # DiscussionRecords.get
+    "ReportManager.generate_report_streaming": CHECKS,  # ai:execute + 読める人
+    "ReportManager.generate_followup_report_streaming": CHECKS,  # 同上
+    "ReportManager.get_report": CHECKS,  # DiscussionRecords.get_report（読める人）
+    "ReportManager.export_report": CHECKS,  # 同上
+    "ReportManager.can_manage": CHECKS,  # DiscussionRecords.can_manage（操作の出し分け）
+    "ReportManager.save_report": CHECKS,  # DiscussionRecords（管理できる人）
+    "ReportManager.update_report_content": CHECKS,  # 同上
+    "ReportManager.delete_report": CHECKS,  # 同上
     # sharing_manager.py — U4（判定は ResourceSharing に任せる）
     "SharingManager.resource_type_of": NO_USER_DATA,  # 登録された種類の照合だけ
     "SharingManager.dialog": CHECKS,

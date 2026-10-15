@@ -191,7 +191,7 @@ class TestPersonaManagerIntegration:
         assert result_id == persona.id
 
         # Verify persona was saved to database
-        saved_persona = persona_manager.get_persona_unchecked(persona.id)
+        saved_persona = persona_manager.get_persona(OWNER, persona.id)
         assert saved_persona is not None
         assert saved_persona.name == persona.name
         assert saved_persona.age == persona.age
@@ -266,7 +266,7 @@ class TestPersonaManagerIntegration:
         persona_manager.save_persona(OWNER, persona)
 
         # Retrieve persona
-        result = persona_manager.get_persona_unchecked(persona.id)
+        result = persona_manager.get_persona(OWNER, persona.id)
 
         # Verify result
         assert result is not None
@@ -276,16 +276,16 @@ class TestPersonaManagerIntegration:
 
     def test_get_persona_not_found(self, persona_manager):
         """Test persona retrieval when persona doesn't exist."""
-        result = persona_manager.get_persona_unchecked("non-existent-id")
-        assert result is None
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            persona_manager.get_persona(OWNER, "non-existent-id")
 
     def test_get_persona_invalid_id(self, persona_manager):
         """Test persona retrieval with invalid ID."""
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
-            persona_manager.get_persona_unchecked("")
+            persona_manager.get_persona(OWNER, "")
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
-            persona_manager.get_persona_unchecked("   ")
+            persona_manager.get_persona(OWNER, "   ")
 
     def test_saved_persona_is_owned_by_the_saver(
         self, persona_manager, sample_persona_data
@@ -293,7 +293,7 @@ class TestPersonaManagerIntegration:
         """BR6.1: 保存した人が所有者になる。"""
         persona = Persona.create_new(**sample_persona_data)
         persona_manager.save_persona(OWNER, persona)
-        assert persona_manager.get_persona_unchecked(persona.id).owner_sub == OWNER.sub
+        assert persona_manager.get_persona(OWNER, persona.id).owner_sub == OWNER.sub
 
     def test_update_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona update via update_persona (partial update)."""
@@ -329,14 +329,15 @@ class TestPersonaManagerIntegration:
         persona_manager.save_persona(OWNER, persona)
 
         # Verify persona exists
-        assert persona_manager.get_persona_unchecked(persona.id) is not None
+        assert persona_manager.get_persona(OWNER, persona.id) is not None
 
         # Delete persona
         result = persona_manager.delete_persona(OWNER, persona.id)
 
         # Verify deletion was successful
         assert result is True
-        assert persona_manager.get_persona_unchecked(persona.id) is None
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            persona_manager.get_persona(OWNER, persona.id)
 
     def test_delete_persona_not_found(self, persona_manager):
         """Test deleting non-existent persona (the same answer as unreadable)."""

@@ -119,6 +119,36 @@ class AccessTarget:
 
 
 @dataclass(frozen=True)
+class ExecutionContext:
+    """Who runs one persona's agent, and whether its memory is written (C1, C9).
+
+    Built per participant of a discussion or an interview (U6, BR6.1).
+
+    Attributes:
+        principal: The user running the agent.
+        persona_target: The persona's owner and shares (read by ``ResourceLookup``).
+        write_memory: ``True`` only when the user owns the persona; otherwise
+            long-term memory is only retrieved, never written (admins included).
+    """
+
+    principal: Principal
+    persona_target: AccessTarget
+    write_memory: bool
+
+    @classmethod
+    def for_persona(
+        cls, principal: Principal, persona_target: AccessTarget
+    ) -> "ExecutionContext":
+        """The context of ``principal`` running ``persona_target`` (BR6.1)."""
+        owner = persona_target.owner_sub
+        return cls(
+            principal=principal,
+            persona_target=persona_target,
+            write_memory=bool(principal.sub) and bool(owner) and owner == principal.sub,
+        )
+
+
+@dataclass(frozen=True)
 class Department:
     """A department, made from a Cognito ``group:`` group (ADR-009, C4).
 

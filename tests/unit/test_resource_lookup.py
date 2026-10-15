@@ -212,3 +212,61 @@ class TestTimingLog:
     def test_rate_zero_logs_nothing(self, capsys):
         _lookup(StubReader(), FakeClock(), sample_rate=0.0).get(PERSONA, "p-1")
         assert _events(capsys, "authz.lookup") == []
+
+
+class TestDiscussionRegistration:
+    """U6: 議論を ResourceLookup に登録する（表示名は topic、約束 C3・C8）。"""
+
+    def test_discussions_are_registered_with_their_topic(self):
+        from src.managers.components.sharing_runtime import lookup_tables
+
+        tables = {t.resource_type: t for t in lookup_tables()}
+        discussion = tables[ResourceType.DISCUSSION]
+        assert discussion.display_name_attribute == "topic"
+        assert discussion.table_name.endswith("Discussions")
+
+    def test_old_discussion_without_owner_reads_as_ownerless(self, monkeypatch):
+        moto = pytest.importorskip("moto")
+        import boto3
+
+        from src.managers.components.sharing_runtime import lookup_tables
+        from src.services.authz_lookup_service import AuthzLookupService
+
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        table = next(
+            t for t in lookup_tables() if t.resource_type is ResourceType.DISCUSSION
+        )
+        with moto.mock_aws():
+            client = boto3.client("dynamodb", region_name="us-east-1")
+            client.create_table(
+                TableName=table.table_name,
+                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            client.put_item(
+                TableName=table.table_name,
+                Item={"id": {"S": "old"}, "topic": {"S": "古い議論"}},
+            )
+            client.put_item(
+                TableName=table.table_name,
+                Item={
+                    "id": {"S": "new"},
+                    "topic": {"S": "新しい議論"},
+                    "owner_sub": {"S": "a"},
+                    "shared_group_ids": {"L": [{"S": "sales"}]},
+                },
+            )
+            service = AuthzLookupService(
+                region="us-east-1", jobs_table_name="Jobs", client=client
+            )
+            lookup = build_resource_lookup(
+                [(ResourceType.DISCUSSION, service.reader(table))], sample_rate=0.0
+            )
+            found = lookup.get_many(ResourceType.DISCUSSION, ["old", "new", "gone"])
+        assert found["old"].owner_sub is None
+        assert found["old"].display_name == "古い議論"
+        assert found["new"].shared_group_ids == frozenset({"sales"})
+        assert found["gone"].exists is False

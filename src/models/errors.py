@@ -120,6 +120,11 @@ class ErrorCode(StrEnum):
     ACCESS_DENIED = ("access_denied", ErrorKind.FORBIDDEN)
     # The JSON API request did not match its schema (422, contract C13).
     REQUEST_INVALID = ("request_invalid", ErrorKind.VALIDATION)
+    # Another send (another task, or a double click) is answering in the same
+    # interview session, or a save arrived while a reply is in progress. Waiting
+    # for the reply and trying again resolves it (contract C5, ADR-004, U6
+    # NFR1.59 / NFR1.60). The input is kept (toast).
+    CONCURRENT_UPDATE = ("concurrent_update", ErrorKind.TRANSIENT)
     # FastAPI's own HTTPException (unknown URL 404, 405, ...) carried in the
     # JSON API body. The HTTP status stays as raised (contract C13).
     HTTP_ERROR = ("http_error", ErrorKind.NOT_FOUND)
@@ -422,6 +427,9 @@ class ErrorCode(StrEnum):
         ErrorKind.CAPACITY,
     )
     DISCUSSION_NOT_FOUND = ("discussion_not_found", ErrorKind.NOT_FOUND)
+    # The body of the discussion would exceed 350KB (BR2.7, U6). Fewer
+    # insights or attachments make it fit; nothing was written.
+    DISCUSSION_TOO_LARGE = ("discussion_too_large", ErrorKind.CAPACITY)
     DISCUSSION_ROUNDS_TOO_FEW = ("discussion_rounds_too_few", ErrorKind.VALIDATION)
     DISCUSSION_ROUNDS_TOO_MANY = ("discussion_rounds_too_many", ErrorKind.VALIDATION)
     DISCUSSION_AGENT_SETUP_FAILED = (
@@ -689,3 +697,20 @@ class RoleRequiredError(CodedError):
     """Signed in without any role (403 on the JSON API, BR2.8)."""
 
     code = ErrorCode.ROLE_REQUIRED
+
+
+class ConcurrentUpdateError(CodedError):
+    """A reply is in progress in the same interview session (C5, ADR-004)."""
+
+    code = ErrorCode.CONCURRENT_UPDATE
+
+
+class ParticipantNotFoundError(CodedError):
+    """A participant of a discussion or interview can no longer be read (U6).
+
+    The same ``PERSONA_NOT_FOUND`` as an unreadable persona (NFR1.56); the
+    type lets the screen show the stop panel (M12, BR7.5) without reading
+    the code of the exception.
+    """
+
+    code = ErrorCode.PERSONA_NOT_FOUND

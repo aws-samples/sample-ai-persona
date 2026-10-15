@@ -1,862 +1,450 @@
+"""DiscussionManager（簡易議論の実行・一覧・詳細・削除・インサイト）の単体テスト（U6）。
+
+BR1.4、BR2.1〜BR2.6、BR2.8、BR5.1、BR7.1、NFR1.43〜NFR1.47、NFR2.15〜NFR2.17、
+AC2.1.2、AC2.1.3、AC4.1.1〜AC4.1.3、AC4.1.5、AC4.2.1、AC4.2.5、AC4.4.1、AC4.4.2、
+AC5.1.1〜AC5.1.3。
+
+DiscussionRecords・ParticipantReader・ResourceSharing・AccessPolicy は本物を使い、
+テーブルは tests/unit/discussion_world.py の偽物、AI はモック。
 """
-Unit tests for Discussion Manager.
-"""
+
+import json
+from datetime import datetime
+from unittest.mock import Mock, patch
 
 import pytest
 
-from src.models.errors import ErrorCode
-from unittest.mock import Mock
-from datetime import datetime
-
 from src.managers.discussion_manager import DiscussionManager, DiscussionManagerError
-from src.models.persona import Persona
-from src.models.discussion import Discussion
+from src.models.errors import AccessDeniedError, CodedError, ErrorCode
+from src.models.insight_category import InsightCategory
 from src.models.message import Message
-from src.models.insight import Insight
-from src.services.ai_service import AIServiceError
-from src.services.database_service import DatabaseError
-from tests.conftest import MEMBER_A
+from src.models.uploaded_file import UploadedFile
+from tests.error_helpers import raises_code
+from tests.unit.discussion_world import (
+    ADMIN,
+    NO_ROLE,
+    OWNER,
+    PEER,
+    STRANGER,
+    World,
+)
 
-#: The uploader of the documents (U5: documents are read through can_read_file)
-PRINCIPAL = MEMBER_A.principal()
+pytestmark = pytest.mark.unit
+
+TOPIC = "新商品のマーケティングについて"
 
 
-class TestDiscussionManager:
-    """Test cases for DiscussionManager class."""
+def _messages(world: World) -> list[Message]:
+    p1, p2 = world.persona_bodies["p1"], world.persona_bodies["p2"]
+    return [
+        Message.create_new(
+            p1.id, p1.name, "顧客のニーズを深く理解することが大切です。" * 3
+        ),
+        Message.create_new(
+            p2.id, p2.name, "品質と価格の釣り合いも考えたいところです。" * 3
+        ),
+    ]
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        # Create mock services
-        self.mock_ai_service = Mock()
-        self.mock_database_service = Mock()
 
-        # Create discussion manager with mocked services
-        self.discussion_manager = DiscussionManager(
-            ai_service=self.mock_ai_service, database_service=self.mock_database_service
+def _insights(count: int = 3) -> list[dict]:
+    return [
+        {
+            "category": "顧客",
+            "description": f"十分に長いインサイトの説明 {i}",
+            "confidence_score": 0.8,
+        }
+        for i in range(count)
+    ]
+
+
+@pytest.fixture
+def world() -> World:
+    return World()
+
+
+@pytest.fixture
+def ai(world) -> Mock:
+    ai = Mock()
+    ai.facilitate_discussion.side_effect = lambda *a, **k: _messages(world)
+    ai.facilitate_discussion_streaming.side_effect = lambda *a, **k: iter(
+        _messages(world)
+    )
+    ai.extract_insights.return_value = _insights()
+    return ai
+
+
+@pytest.fixture
+def manager(world, ai) -> DiscussionManager:
+    return DiscussionManager(
+        ai_service=ai,
+        database_service=Mock(),
+        file_attachments=world.files,
+        discussion_records=world.records,
+        participants=world.participants,
+        resource_sharing=world.sharing,
+        owners=world.owners,
+        s3_service=Mock(),
+    )
+
+
+def _participants(world: World) -> list:
+    return [world.persona_bodies["p1"], world.persona_bodies["p2"]]
+
+
+def _events(lines) -> list[dict]:
+    return [json.loads(line[len("data: ") :]) for line in lines]
+
+
+def _run(manager, world, principal=OWNER, **kwargs):
+    return manager.run_classic_discussion(
+        principal, _participants(world), kwargs.pop("topic", TOPIC), **kwargs
+    )
+
+
+# =============================================================================
+# 実行（BR2.8、BR7.1、BR2.6、BR1.1）
+# =============================================================================
+
+
+class TestRun:
+    def test_saved_discussion_is_owned_by_the_runner(self, manager, world):
+        discussion = _run(manager, world)
+        body = world.store.bodies[discussion.id]
+        assert body["owner_sub"] == OWNER.sub
+        assert body["message_count"] == 2
+        assert body["participant_names"] == {"p1": "佐藤", "p2": "鈴木"}
+        assert len(body["insights"]) == 3
+
+    def test_ai_execute_is_required_first(self, manager, world, ai):
+        with pytest.raises(AccessDeniedError):
+            _run(manager, world, principal=NO_ROLE)
+        ai.facilitate_discussion.assert_not_called()
+
+    def test_input_is_still_validated(self, manager, world):
+        with raises_code(DiscussionManagerError, ErrorCode.DISCUSSION_TOPIC_TOO_SHORT):
+            _run(manager, world, topic="短い")
+
+    def test_participants_are_checked_again_before_saving(self, manager, world, ai):
+        def unshare_while_running(*_a, **_k):
+            world.unshare("p2")
+            return _messages(world)
+
+        ai.facilitate_discussion.side_effect = unshare_while_running
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            _run(manager, world)
+        assert world.store.bodies == {}
+
+    def test_insights_are_cut_at_100(self, manager, world, ai):
+        ai.extract_insights.return_value = _insights(130)
+        discussion = _run(manager, world)
+        assert len(world.store.bodies[discussion.id]["insights"]) == 100
+
+    def test_categories_are_kept_in_the_config(self, manager, world):
+        categories = [InsightCategory(name="価格", description="価格への反応")]
+        discussion = _run(manager, world, categories=categories)
+        config = world.store.bodies[discussion.id]["agent_config"]
+        assert config["insight_categories"][0]["name"] == "価格"
+
+    def test_documents_are_read_as_the_users_and_attached(self, manager, world):
+        world.files.attachable_file.return_value = UploadedFile(
+            id="11111111-1111-1111-1111-111111111111",
+            owner_sub=OWNER.sub,
+            file_type="discussion_document",
+            s3_key="uploads/a/discussion_document/x_資料.pdf",
+            original_filename="資料.pdf",
+            file_size=10,
+            file_hash="h",
+            mime_type="application/pdf",
+            uploaded_at=datetime(2026, 10, 15),
+            file_path="s3://bucket/uploads/a/x",
         )
-
-        # Create test personas
-        self.persona1 = Persona.create_new(
-            name="田中花子",
-            age=30,
-            occupation="マーケティング担当",
-            background="東京在住のマーケティング担当者",
-            values=["効率性", "革新性"],
-            pain_points=["時間不足", "情報過多"],
-            goals=["キャリアアップ", "スキル向上"],
+        discussion = _run(
+            manager, world, document_ids=["11111111-1111-1111-1111-111111111111"]
         )
+        documents = world.store.bodies[discussion.id]["documents"]
+        assert documents[0]["filename"] == "資料.pdf"
+        assert "file_path" not in documents[0]
+        world.files.attach_all.assert_called_once()
 
-        self.persona2 = Persona.create_new(
-            name="佐藤太郎",
-            age=35,
-            occupation="商品開発者",
-            background="大阪在住の商品開発者",
-            values=["品質", "顧客満足"],
-            pain_points=["予算制約", "技術的課題"],
-            goals=["新商品開発", "市場拡大"],
+    def test_someone_elses_document_stops_before_the_ai(self, manager, world, ai):
+        world.files.attachable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
         )
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            _run(manager, world, document_ids=["11111111-1111-1111-1111-111111111111"])
+        ai.facilitate_discussion.assert_not_called()
 
-        # Create test messages (longer content for validation)
-        self.test_messages = [
-            Message.create_new(
-                persona_id=self.persona1.id,
-                persona_name=self.persona1.name,
-                content="私はマーケティングの観点から考えると、顧客のニーズを深く理解することが重要だと思います。特に効率性を重視する顧客層に対しては、時間短縮や作業効率化につながる機能を前面に押し出すべきです。",
-            ),
-            Message.create_new(
-                persona_id=self.persona2.id,
-                persona_name=self.persona2.name,
-                content="商品開発の立場では、品質と顧客満足を最優先に考えています。マーケティング部門が提案する効率性の訴求は理解できますが、それと同時に製品の信頼性や耐久性も重要な要素として伝える必要があります。",
-            ),
-        ]
-
-        # Create test insights
-        self.test_insights = [
-            Insight.create_new(
-                category="顧客ニーズ",
-                description="効率性を重視する顧客層が存在する",
-                supporting_messages=[],
-                confidence_score=0.8,
-            ),
-            Insight.create_new(
-                category="市場機会",
-                description="品質と効率性を両立した商品の需要がある",
-                supporting_messages=[],
-                confidence_score=0.9,
-            ),
-        ]
-
-    def test_init_success(self):
-        fresh_ai_service = Mock()
-        fresh_database_service = Mock()
-        manager = DiscussionManager(
-            ai_service=fresh_ai_service, database_service=fresh_database_service
+    def test_local_document_must_exist(self, manager, world):
+        world.files.attachable_file.return_value = UploadedFile(
+            id="11111111-1111-1111-1111-111111111111",
+            owner_sub=OWNER.sub,
+            file_type="discussion_document",
+            s3_key="k",
+            original_filename="a.pdf",
+            file_size=10,
+            file_hash="h",
+            mime_type="application/pdf",
+            uploaded_at=datetime(2026, 10, 15),
+            file_path="/nonexistent/a.pdf",
         )
-        assert manager is not None
-        assert manager.ai_service == fresh_ai_service
-        assert manager.database_service == fresh_database_service
+        with raises_code(CodedError, ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND):
+            _run(manager, world, document_ids=["11111111-1111-1111-1111-111111111111"])
 
-    def test_start_discussion_success(self):
-        """Test successful discussion start."""
-        topic = "新商品のマーケティング戦略について"
-        personas = [self.persona1, self.persona2]
-
-        # Mock AI service response
-        self.mock_ai_service.facilitate_discussion.return_value = self.test_messages
-
-        result = self.discussion_manager.start_discussion(personas, topic)
-
-        # Verify result
-        assert isinstance(result, Discussion)
-        assert result.topic == topic
-        assert result.participants == [self.persona1.id, self.persona2.id]
-        assert len(result.messages) == 2
-
-        # Verify AI service was called correctly (with documents=None)
-        self.mock_ai_service.facilitate_discussion.assert_called_once_with(
-            personas, topic, documents=None
+    def test_total_document_size_is_limited(self, manager, world):
+        world.files.attachable_file.return_value = UploadedFile(
+            id="11111111-1111-1111-1111-111111111111",
+            owner_sub=OWNER.sub,
+            file_type="discussion_document",
+            s3_key="k",
+            original_filename="a.pdf",
+            file_size=33 * 1024 * 1024,
+            file_hash="h",
+            mime_type="application/pdf",
+            uploaded_at=datetime(2026, 10, 15),
+            file_path="/tmp/a.pdf",
         )
+        with patch("pathlib.Path.exists", return_value=True):
+            with raises_code(CodedError, ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE):
+                _run(
+                    manager,
+                    world,
+                    document_ids=["11111111-1111-1111-1111-111111111111"],
+                )
 
-    def test_start_discussion_invalid_personas(self):
-        """Test discussion start with invalid personas."""
-        topic = "テストトピック"
 
-        # Test with empty personas list
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion([], topic)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_PERSONAS_REQUIRED
-
-        # Test with single persona
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion([self.persona1], topic)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_FEW_PERSONAS
-
-        # Test with too many personas
-        personas = [self.persona1] * 6
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, topic)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOO_MANY_PERSONAS
-
-    def test_start_discussion_invalid_topic(self):
-        """Test discussion start with invalid topic."""
-        personas = [self.persona1, self.persona2]
-
-        # Test with empty topic
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, "")
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_REQUIRED
-
-        # Test with short topic
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, "短い")
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_SHORT
-
-        # Test with long topic
-        long_topic = "a" * 201
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, long_topic)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_TOPIC_TOO_LONG
-
-    def test_start_discussion_duplicate_personas(self):
-        """Test discussion start with duplicate personas."""
-        topic = "テストトピック"
-        personas = [self.persona1, self.persona1]  # Duplicate persona
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, topic)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_PERSONA_DUPLICATED
-
-    def test_start_discussion_ai_service_error(self):
-        """Test discussion start with AI service error."""
-        topic = "テストトピック"
-        personas = [self.persona1, self.persona2]
-
-        # Mock AI service error
-        self.mock_ai_service.facilitate_discussion.side_effect = AIServiceError(
-            "AI error"
-        )
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.start_discussion(personas, topic)
-
-        assert "AI service error during discussion" in str(exc_info.value)
-
-    def test_generate_insights_success(self):
-        """Test successful insight generation."""
-        # Create discussion with messages
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-        for message in self.test_messages:
-            discussion = discussion.add_message(message)
-
-        # Mock AI service response (now returns structured data)
-        insight_data = [
-            {
-                "category": "顧客ニーズ",
-                "description": "効率性を重視する顧客層が存在する",
-                "confidence_score": 0.8,
-            },
-            {
-                "category": "市場機会",
-                "description": "品質と効率性を両立した商品の需要がある",
-                "confidence_score": 0.75,
-            },
-        ]
-        self.mock_ai_service.extract_insights.return_value = insight_data
-
-        result = self.discussion_manager.generate_insights(discussion)
-
-        # Verify result
-        assert isinstance(result, list)
-        assert len(result) == 2
-        assert isinstance(result[0], Insight)
-        assert result[0].category == "顧客ニーズ"
-        assert result[0].confidence_score == 0.8
-        assert result[1].category == "市場機会"
-        assert result[1].confidence_score == 0.75
-
-        # Verify AI service was called correctly
-        self.mock_ai_service.extract_insights.assert_called_once_with(
-            discussion.messages, categories=None, topic=discussion.topic
-        )
-
-    def test_generate_insights_with_custom_categories(self):
-        """Test insight generation with custom categories."""
-        from src.models.insight_category import InsightCategory
-
-        # Create discussion with messages
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-        for message in self.test_messages:
-            discussion = discussion.add_message(message)
-
-        # Custom categories
-        custom_categories = [
-            InsightCategory(name="技術トレンド", description="技術的なトレンド"),
-            InsightCategory(name="ユーザー体験", description="UX関連の洞察"),
-        ]
-
-        # Mock AI service response
-        insight_data = [
-            {
-                "category": "技術トレンド",
-                "description": "AIの活用が重要になっており、パーソナライズされた体験を提供できる",
-                "confidence_score": 0.9,
-            },
-            {
-                "category": "ユーザー体験",
-                "description": "シンプルなUIが求められており、特にシニア層への配慮が必要",
-                "confidence_score": 0.85,
-            },
-            {
-                "category": "技術トレンド",
-                "description": "セキュリティとプライバシー保護の機能が重要視されている",
-                "confidence_score": 0.88,
-            },
-        ]
-        self.mock_ai_service.extract_insights.return_value = insight_data
-
-        result = self.discussion_manager.generate_insights(
-            discussion, categories=custom_categories
-        )
-
-        # Verify result
-        assert len(result) == 3
-        assert result[0].category == "技術トレンド"
-        assert result[1].category == "ユーザー体験"
-        assert result[2].category == "技術トレンド"
-
-        # Verify AI service was called with custom categories
-        self.mock_ai_service.extract_insights.assert_called_once_with(
-            discussion.messages, categories=custom_categories, topic=discussion.topic
-        )
-
-    def test_generate_insights_invalid_discussion(self):
-        """Test insight generation with invalid discussion."""
-        # Test with None discussion
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.generate_insights(None)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-        # Test with discussion without messages
-        empty_discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.generate_insights(empty_discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_RESULT_INVALID
-
-    def test_generate_insights_ai_service_error(self):
-        """Test insight generation with AI service error."""
-        # Create discussion with messages
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-        for message in self.test_messages:
-            discussion = discussion.add_message(message)
-
-        # Mock AI service error
-        self.mock_ai_service.extract_insights.side_effect = AIServiceError("AI error")
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.generate_insights(discussion)
-
-        assert "AI service error during insight generation" in str(exc_info.value)
-
-    def test_regenerate_insights_success(self):
-        """Test successful insight regeneration."""
-        from src.models.insight_category import InsightCategory
-
-        # Create existing discussion with old insights
-        discussion_id = "test-discussion-123"
-        old_insights = [
-            Insight.create_new(
-                category="顧客ニーズ",
-                description="古いインサイト1です。これは十分な長さがあります。",
-                supporting_messages=[],
-                confidence_score=0.7,
+class TestRunStreaming:
+    def _stream(self, manager, world, principal=OWNER):
+        return list(
+            manager.run_classic_discussion_streaming(
+                principal, _participants(world), TOPIC
             )
+        )
+
+    def test_messages_then_complete(self, manager, world):
+        events = _events(self._stream(manager, world))
+        assert [e["type"] for e in events] == ["message", "message", "complete"]
+        assert events[-1]["discussion_id"] in world.store.bodies
+
+    def test_unreadable_participant_stops_without_saving(self, manager, world, ai):
+        def unshare_while_running(*_a, **_k):
+            yield from _messages(world)
+            world.unshare("p2")
+
+        ai.facilitate_discussion_streaming.side_effect = unshare_while_running
+        events = _events(self._stream(manager, world))
+        assert events[-1]["type"] == "stopped"
+        assert world.store.bodies == {}
+
+    def test_ai_execute_is_required(self, manager, world):
+        with pytest.raises(AccessDeniedError):
+            self._stream(manager, world, principal=NO_ROLE)
+
+
+# =============================================================================
+# 一覧（BR2.1〜BR2.3、NFR1.43、NFR2.15）
+# =============================================================================
+
+
+def _seed(manager, world, principal=OWNER, mode="classic", topic=TOPIC):
+    """A saved discussion of ``principal`` (written through DiscussionRecords)."""
+    from src.models.discussion import Discussion
+
+    discussion = Discussion.create_new(
+        topic=topic,
+        participants=["p1", "p2"],
+        mode=mode,
+        participant_names={"p1": "佐藤", "p2": "鈴木"},
+    )
+    return world.records.save_new(principal, discussion, _messages(world))
+
+
+class TestList:
+    def test_mine_shared_and_counts(self, manager, world):
+        mine = _seed(manager, world)
+        theirs = _seed(manager, world, principal=PEER)
+        world.share(theirs.id, "sales")
+        _seed(manager, world, principal=STRANGER)
+        listing = manager.list_discussions(OWNER, "mine", None)
+        assert [d.id for d in listing.items] == [mine.id]
+        assert listing.counts == {"mine": 1, "shared": 1}
+        shared = manager.list_discussions(OWNER, "shared", None)
+        assert [d.id for d in shared.items] == [theirs.id]
+        assert shared.owners[theirs.id] == f"利用者{PEER.sub}"
+        assert theirs.id not in shared.manageable
+
+    def test_member_asking_for_all_gets_mine_without_a_scan(self, manager, world):
+        _seed(manager, world, principal=STRANGER)
+        listing = manager.list_discussions(OWNER, "all", None)
+        assert listing.tab.value == "mine" and listing.items == []
+        assert "scan_page" not in world.share_store.calls
+
+    def test_admin_sees_all(self, manager, world):
+        a = _seed(manager, world)
+        b = _seed(manager, world, principal=STRANGER)
+        listing = manager.list_discussions(ADMIN, "all", None)
+        assert {d.id for d in listing.items} == {a.id, b.id}
+        assert listing.show_all
+
+    def test_mode_filter(self, manager, world):
+        _seed(manager, world, mode="classic")
+        interview = _seed(manager, world, mode="interview")
+        listing = manager.list_discussions(OWNER, "mine", None, mode="interview")
+        assert [d.id for d in listing.items] == [interview.id]
+
+    def test_unreadable_rows_are_dropped_on_reread(self, manager, world):
+        theirs = _seed(manager, world, principal=PEER)
+        world.share(theirs.id, "sales")
+        listing_ids = manager.list_discussions(OWNER, "shared", None)
+        assert listing_ids.items
+        world.store.bodies[theirs.id]["shared_group_ids"] = []
+        assert manager.list_discussions(OWNER, "shared", None).items == []
+
+    def test_search_inside_the_tab(self, manager, world):
+        hit = _seed(manager, world, topic="価格の見直しについて")
+        _seed(manager, world, topic="広告の出し方について")
+        result = manager.list_discussions(OWNER, "mine", None, search="価格")
+        assert [d.id for d in result.items] == [hit.id]
+        assert result.counts == {"mine": 2}
+
+    def test_api_list_is_mine_and_shared(self, manager, world):
+        mine = _seed(manager, world)
+        theirs = _seed(manager, world, principal=PEER)
+        world.share(theirs.id, "sales")
+        _seed(manager, world, principal=STRANGER)
+        found = manager.list_accessible_discussions(OWNER)
+        assert {d.id for d in found} == {mine.id, theirs.id}
+
+
+# =============================================================================
+# 詳細・エクスポート・資料・削除・インサイト（BR2.4、BR2.5、BR5.1、NFR1.44、NFR1.45）
+# =============================================================================
+
+
+class TestDetail:
+    def test_reader_gets_the_view(self, manager, world):
+        discussion = _seed(manager, world)
+        view = manager.get_discussion(OWNER, discussion.id)
+        assert len(view.messages) == 2 and view.manageable
+
+    def test_stranger_gets_not_found(self, manager, world):
+        discussion = _seed(manager, world)
+        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
+            manager.get_discussion(STRANGER, discussion.id)
+
+    def test_export_is_markdown_for_readers(self, manager, world):
+        discussion = _seed(manager, world)
+        world.share(discussion.id, "sales")
+        filename, text = manager.export_discussion(PEER, discussion.id)
+        assert filename.endswith(".md") and TOPIC in text
+        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
+            manager.export_discussion(STRANGER, discussion.id)
+
+    def test_document_urls_go_through_file_attachments(self, manager, world):
+        discussion = _seed(manager, world)
+        world.store.bodies[discussion.id]["documents"] = [
+            {
+                "id": "f1",
+                "filename": "a.png",
+                "mime_type": "image/png",
+                "file_size": 1,
+                "uploaded_at": "2026",
+            },
+            {
+                "id": "f2",
+                "filename": "b.png",
+                "mime_type": "image/png",
+                "file_size": 1,
+                "uploaded_at": "2026",
+            },
         ]
-
-        existing_discussion = Discussion(
-            id=discussion_id,
-            topic="テストトピック",
-            participants=[self.persona1.id, self.persona2.id],
-            messages=self.test_messages,
-            insights=old_insights,
-            created_at=datetime.now(),
-            mode="classic",
-            agent_config=None,
-        )
-
-        # Mock get_discussion to return existing discussion
-        self.mock_database_service.get_discussion.return_value = existing_discussion
-
-        # Mock AI service to return new insights
-        new_insight_data = [
-            {
-                "category": "技術トレンド",
-                "description": "新しいインサイト1です。これは十分な長さがあります。",
-                "confidence_score": 0.9,
-            },
-            {
-                "category": "ユーザー体験",
-                "description": "新しいインサイト2です。これは十分な長さがあります。",
-                "confidence_score": 0.85,
-            },
-            {
-                "category": "技術トレンド",
-                "description": "新しいインサイト3です。これは十分な長さがあります。",
-                "confidence_score": 0.88,
-            },
-        ]
-        self.mock_ai_service.extract_insights.return_value = new_insight_data
-
-        # Custom categories for regeneration
-        custom_categories = [
-            InsightCategory(name="技術トレンド", description="技術的なトレンド"),
-            InsightCategory(name="ユーザー体験", description="UX関連の洞察"),
-        ]
-
-        # Regenerate insights
-        result = self.discussion_manager.regenerate_insights(
-            discussion_id, categories=custom_categories
-        )
-
-        # Verify result
-        assert len(result) == 3
-        assert result[0].category == "技術トレンド"
-        assert result[1].category == "ユーザー体験"
-
-        # Verify get_discussion was called
-        self.mock_database_service.get_discussion.assert_called_once_with(discussion_id)
-
-        # Verify AI service was called with custom categories
-        self.mock_ai_service.extract_insights.assert_called_once()
-
-        # Verify save_discussion was called
-        self.mock_database_service.save_discussion.assert_called_once()
-
-        # Verify the saved discussion has new insights
-        saved_discussion = self.mock_database_service.save_discussion.call_args[0][0]
-        assert len(saved_discussion.insights) == 3
-        assert saved_discussion.insights[0].description != old_insights[0].description
-
-    def test_regenerate_insights_discussion_not_found(self):
-        """Test insight regeneration when discussion not found."""
-        # Mock get_discussion to return None
-        self.mock_database_service.get_discussion.return_value = None
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.regenerate_insights("nonexistent-id")
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_NOT_FOUND
-
-    def test_regenerate_insights_with_default_categories(self):
-        """Test insight regeneration with default categories."""
-        # Create existing discussion
-        discussion_id = "test-discussion-456"
-        existing_discussion = Discussion(
-            id=discussion_id,
-            topic="テストトピック",
-            participants=[self.persona1.id],
-            messages=self.test_messages,
-            insights=[],
-            created_at=datetime.now(),
-            mode="classic",
-            agent_config=None,
-        )
-
-        self.mock_database_service.get_discussion.return_value = existing_discussion
-
-        # Mock AI service
-        new_insight_data = [
-            {
-                "category": "顧客ニーズ",
-                "description": "デフォルトカテゴリーでのインサイトです。十分な長さがあります。",
-                "confidence_score": 0.8,
-            },
-            {
-                "category": "市場機会",
-                "description": "もう一つのインサイトです。十分な長さがあります。",
-                "confidence_score": 0.75,
-            },
-            {
-                "category": "商品開発",
-                "description": "三つ目のインサイトです。十分な長さがあります。",
-                "confidence_score": 0.82,
-            },
-        ]
-        self.mock_ai_service.extract_insights.return_value = new_insight_data
-
-        # Regenerate with default categories (None)
-        result = self.discussion_manager.regenerate_insights(discussion_id)
-
-        # Verify result
-        assert len(result) == 3
-
-        # Verify AI service was called with None categories (will use default)
-        call_args = self.mock_ai_service.extract_insights.call_args
-        assert call_args[1].get("categories") is None
-
-    def test_save_discussion_success(self):
-        """Test successful discussion save."""
-        # Create discussion
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-
-        # Mock database service response
-        self.mock_database_service.save_discussion.return_value = discussion.id
-
-        result = self.discussion_manager.save_discussion(discussion)
-
-        # Verify result
-        assert result == discussion.id
-
-        # Verify database service was called correctly
-        self.mock_database_service.save_discussion.assert_called_once_with(discussion)
-
-    def test_save_discussion_invalid_discussion(self):
-        """Test discussion save with invalid discussion."""
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.save_discussion(None)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_save_discussion_database_error(self):
-        """Test discussion save with database error."""
-        discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-
-        # Mock database error
-        self.mock_database_service.save_discussion.side_effect = DatabaseError(
-            "Database error"
-        )
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.save_discussion(discussion)
-
-        assert "Database error while saving discussion" in str(exc_info.value)
-
-    def test_get_discussion_success(self):
-        """Test successful discussion retrieval."""
-        discussion_id = "test-id"
-        expected_discussion = Discussion.create_new(
-            topic="テストトピック", participants=[self.persona1.id, self.persona2.id]
-        )
-
-        # Mock database service response
-        self.mock_database_service.get_discussion.return_value = expected_discussion
-
-        result = self.discussion_manager.get_discussion(discussion_id)
-
-        # Verify result
-        assert result == expected_discussion
-
-        # Verify database service was called correctly
-        self.mock_database_service.get_discussion.assert_called_once_with(discussion_id)
-
-    def test_get_discussion_invalid_id(self):
-        """Test discussion retrieval with invalid ID."""
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.get_discussion("")
-        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID
-
-    def test_get_discussion_database_error(self):
-        """Test discussion retrieval with database error."""
-        discussion_id = "test-id"
-
-        # Mock database error
-        self.mock_database_service.get_discussion.side_effect = DatabaseError(
-            "Database error"
-        )
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager.get_discussion(discussion_id)
-
-        assert "Database error while retrieving discussion" in str(exc_info.value)
-
-    def test_get_discussion_history_success(self):
-        """Test successful discussion history retrieval."""
-        expected_discussions = [
-            Discussion.create_new(topic="トピック1", participants=[self.persona1.id]),
-            Discussion.create_new(topic="トピック2", participants=[self.persona2.id]),
-        ]
-
-        # Mock database service response
-        self.mock_database_service.get_discussions.return_value = (
-            expected_discussions,
-            None,
-        )
-
-        result, _ = self.discussion_manager.get_discussion_history()
-
-        # Verify result
-        assert result == expected_discussions
-
-        # Verify database service was called correctly
-        self.mock_database_service.get_discussions.assert_called_once()
-
-    def test_delete_discussion_success(self):
-        """Test successful discussion deletion."""
-        discussion_id = "test-id"
-
-        # Mock database service response
-        self.mock_database_service.delete_discussion.return_value = True
-
-        result = self.discussion_manager.delete_discussion(discussion_id)
-
-        # Verify result
-        assert result
-
-        # Verify database service was called correctly
-        self.mock_database_service.delete_discussion.assert_called_once_with(
-            discussion_id
-        )
-
-
-class TestDiscussionManagerWithDocuments:
-    """Test cases for DiscussionManager with document support."""
-
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.mock_ai_service = Mock()
-        self.mock_database_service = Mock()
-        # U5: documents are read through FileAttachments.attachable_file (R-02);
-        # the metadata each test sets below is served as the uploader's own file.
-        self.uploads: dict = {}
+        uploaded = Mock(file_path="s3://bucket/k")
 
         def readable(principal, file_id):
-            from src.models.errors import CodedError
-            from src.models.uploaded_file import UploadedFile
+            if file_id == "f2":
+                raise CodedError("no", code=ErrorCode.FILE_NOT_FOUND)
+            return uploaded
 
-            info = self.uploads.get(file_id)
-            if not info or principal is not PRINCIPAL:
-                raise CodedError("not readable", code=ErrorCode.FILE_NOT_FOUND)
-            return UploadedFile(
-                id=file_id,
-                owner_sub=PRINCIPAL.sub,
-                file_type="discussion_document",
-                s3_key="uploads/k",
-                original_filename=info.get("original_filename", "unknown"),
-                file_size=info.get("file_size", 0),
-                file_hash="h",
-                mime_type=info.get("mime_type", "application/octet-stream"),
-                uploaded_at=datetime(2024, 1, 1),
-                file_path=info["file_path"],
-            )
+        world.files.readable_file.side_effect = readable
+        manager._s3.generate_presigned_url.return_value = "https://signed"
+        view = manager.get_discussion(OWNER, discussion.id)
+        urls = manager.get_document_urls(OWNER, view)
+        assert urls == {"f1": "https://signed"}
 
-        files = Mock()
-        files.attachable_file.side_effect = readable
 
-        self.discussion_manager = DiscussionManager(
-            ai_service=self.mock_ai_service,
-            database_service=self.mock_database_service,
-            file_attachments=files,
-        )
+class TestDelete:
+    def test_owner_deletes(self, manager, world):
+        discussion = _seed(manager, world)
+        assert manager.delete_discussion(OWNER, discussion.id)
+        assert discussion.id not in world.store.bodies
 
-        self.persona1 = Persona.create_new(
-            name="田中花子",
-            age=30,
-            occupation="マーケター",
-            background="東京在住",
-            values=["効率性"],
-            pain_points=["時間不足"],
-            goals=["成長"],
-        )
-        self.persona2 = Persona.create_new(
-            name="佐藤太郎",
-            age=35,
-            occupation="開発者",
-            background="大阪在住",
-            values=["品質"],
-            pain_points=["予算"],
-            goals=["革新"],
-        )
+    def test_shared_reader_is_denied(self, manager, world):
+        discussion = _seed(manager, world)
+        world.share(discussion.id, "sales")
+        with pytest.raises(AccessDeniedError):
+            manager.delete_discussion(PEER, discussion.id)
 
-    def test_start_discussion_with_documents(self):
-        """Test starting discussion with documents."""
-        # Mock file info
-        self.uploads["doc1"] = {
-            "file_id": "doc1",
-            "original_filename": "test.pdf",
-            "file_path": "/tmp/test.pdf",
-            "file_size": 1024,
-            "mime_type": "application/pdf",
-            "uploaded_at": "2024-01-01T00:00:00",
+    def test_admin_deletes_anyones(self, manager, world):
+        discussion = _seed(manager, world, principal=STRANGER)
+        assert manager.delete_discussion(ADMIN, discussion.id)
+
+
+class TestRegenerateInsights:
+    def test_owner_regenerates_and_keeps_reports_and_documents(
+        self, manager, world, ai
+    ):
+        discussion = _seed(manager, world)
+        world.records.save_report(OWNER, discussion.id, "summary", "内容", None)
+        ai.extract_insights.return_value = _insights(5)
+        insights = manager.regenerate_insights(OWNER, discussion.id)
+        assert len(insights) == 5
+        body = world.store.bodies[discussion.id]
+        assert len(body["insights"]) == 5 and body["report_count"] == 1
+
+    def test_shared_reader_is_denied_before_the_ai(self, manager, world, ai):
+        discussion = _seed(manager, world)
+        world.share(discussion.id, "sales")
+        ai.extract_insights.reset_mock()
+        with pytest.raises(AccessDeniedError):
+            manager.regenerate_insights(PEER, discussion.id)
+        ai.extract_insights.assert_not_called()
+
+    def test_needs_ai_execute(self, manager, world):
+        discussion = _seed(manager, world)
+        with pytest.raises(AccessDeniedError):
+            manager.regenerate_insights(NO_ROLE, discussion.id)
+
+    def test_no_insights_is_a_failure(self, manager, world, ai):
+        discussion = _seed(manager, world)
+        ai.extract_insights.return_value = []
+        with raises_code(
+            DiscussionManagerError, ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
+        ):
+            manager.regenerate_insights(OWNER, discussion.id)
+
+    def test_insight_job_is_refused_before_it_is_queued(self, manager, world):
+        discussion = _seed(manager, world)
+        manager.check_insights_allowed(OWNER, discussion.id)
+        world.share(discussion.id, "sales")
+        with pytest.raises(AccessDeniedError):
+            manager.check_insights_allowed(PEER, discussion.id)
+        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
+            manager.check_insights_allowed(STRANGER, discussion.id)
+        with pytest.raises(AccessDeniedError):
+            manager.check_insights_allowed(NO_ROLE, discussion.id)
+
+    def test_a_legacy_discussion_is_refused_before_the_job(self, manager, world):
+        """v1.0.0 より前の議論（読むだけ）は、ジョブを積む前に断る。"""
+        world.store.bodies["old"] = {
+            "id": "old",
+            "topic": "古い議論",
+            "participants": [],
+            "insights": [],
+            "created_at": "2026-01-01T00:00:00",
+            "messages": [],
         }
+        assert manager._discussion_records.can_manage(ADMIN, "old")
+        with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
+            manager.check_insights_allowed(ADMIN, "old")
 
-        # Mock Path.exists
-        from unittest.mock import patch
-
-        with patch("pathlib.Path.exists", return_value=True):
-            # Mock AI service with longer messages (total > 100 chars)
-            self.mock_ai_service.facilitate_discussion.return_value = [
-                Message.create_new(
-                    self.persona1.id,
-                    self.persona1.name,
-                    "このドキュメントを見ると、顧客のニーズが明確に表れています。特に効率性を重視する傾向が強く、時間的な制約も大きな課題となっているようです。",
-                ),
-                Message.create_new(
-                    self.persona2.id,
-                    self.persona2.name,
-                    "そうですね。品質も重要ですが、時間的な制約も考慮する必要があります。両立させるための工夫が求められますね。",
-                ),
-            ]
-
-            # Execute
-            discussion = self.discussion_manager.start_discussion(
-                [self.persona1, self.persona2],
-                "テストトピック",
-                document_ids=["doc1"],
-                principal=PRINCIPAL,
-            )
-
-            # Verify
-            assert discussion is not None
-            assert len(discussion.messages) == 2
-            assert discussion.documents is not None
-            assert len(discussion.documents) == 1
-            assert discussion.documents[0]["filename"] == "test.pdf"
-
-            # Verify AI service was called with documents
-            call_args = self.mock_ai_service.facilitate_discussion.call_args
-            assert call_args[1].get("documents") is not None
-
-    def test_load_documents_not_found(self):
-        """Test loading non-existent document."""
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager._load_documents(["invalid_id"], PRINCIPAL)
-
-        # R-02: the same code as the save's attach_all
-        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
-
-    def test_load_documents_file_not_exists(self):
-        """Test loading document with missing file."""
-        self.uploads["doc1"] = {
-            "file_id": "doc1",
-            "file_path": "/nonexistent/file.pdf",
-            "file_size": 1024,
-            "mime_type": "application/pdf",
-        }
-
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.discussion_manager._load_documents(["doc1"], PRINCIPAL)
-
-        assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
-
-    def test_load_documents_size_limit(self):
-        """Test document total size limit."""
-        self.uploads["doc1"] = {
-            "file_id": "doc1",
-            "file_path": "/tmp/large.pdf",
-            "file_size": 33 * 1024 * 1024,  # 33MB
-            "mime_type": "application/pdf",
-        }
-
-        from unittest.mock import patch
-
-        with patch("pathlib.Path.exists", return_value=True):
-            with pytest.raises(DiscussionManagerError) as exc_info:
-                self.discussion_manager._load_documents(["doc1"], PRINCIPAL)
-
-            assert exc_info.value.code is ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE
-
-
-class TestDiscussionManagerValidation:
-    """追加バリデーションテスト"""
-
-    def setup_method(self):
-        self.mock_ai_service = Mock()
-        self.mock_db = Mock()
-        self.manager = DiscussionManager(
-            ai_service=self.mock_ai_service, database_service=self.mock_db
-        )
-
-    def test_validate_discussion_for_save_no_id(self):
-        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
-        discussion = Discussion(
-            id="",
-            topic=discussion.topic,
-            participants=discussion.participants,
-            messages=discussion.messages,
-            insights=discussion.insights,
-            created_at=discussion.created_at,
-            mode=discussion.mode,
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.save_discussion(discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_validate_discussion_for_save_no_topic(self):
-        discussion = Discussion.create_new(topic="テスト", participants=["p1", "p2"])
-        discussion = Discussion(
-            id=discussion.id,
-            topic="",
-            participants=discussion.participants,
-            messages=discussion.messages,
-            insights=discussion.insights,
-            created_at=discussion.created_at,
-            mode=discussion.mode,
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.save_discussion(discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_validate_discussion_for_save_insufficient_participants(self):
-        discussion = Discussion(
-            id="d1",
-            topic="テスト",
-            participants=["p1"],
-            messages=[],
-            insights=[],
-            created_at=datetime.now(),
-            mode="classic",
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.save_discussion(discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_validate_discussion_for_save_invalid_message(self):
-        bad_msg = Message(
-            persona_id="",
-            persona_name="X",
-            content="hello",
-            timestamp=datetime.now(),
-        )
-        discussion = Discussion(
-            id="d1",
-            topic="テストトピック",
-            participants=["p1", "p2"],
-            messages=[bad_msg],
-            insights=[],
-            created_at=datetime.now(),
-            mode="classic",
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.save_discussion(discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_validate_discussion_for_save_invalid_insight(self):
-        bad_insight = Insight(
-            category="",
-            description="valid",
-            supporting_messages=[],
-            confidence_score=0.5,
-        )
-        discussion = Discussion(
-            id="d1",
-            topic="テストトピック",
-            participants=["p1", "p2"],
-            messages=[],
-            insights=[bad_insight],
-            created_at=datetime.now(),
-            mode="classic",
-        )
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.save_discussion(discussion)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INVALID
-
-    def test_validate_generated_insights_empty(self):
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager._validate_generated_insights([])
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
-
-    def test_validate_generated_insights_short_description(self):
-        insights = [
-            Insight.create_new(
-                category="テスト",
-                description="短い",
-                supporting_messages=[],
-                confidence_score=0.8,
-            )
-        ]
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager._validate_generated_insights(insights)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
-
-    def test_validate_generated_insights_no_category(self):
-        insights = [
-            Insight(
-                category="",
-                description="十分な長さの説明です。十分な長さの説明です。",
-                supporting_messages=[],
-                confidence_score=0.8,
-            )
-        ]
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager._validate_generated_insights(insights)
-        assert exc_info.value.code is ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
-
-    def test_parse_insights_from_structured_data_skips_invalid(self):
-        data = [
-            {"category": "A", "description": "valid insight", "confidence_score": 0.9},
-            "not a dict",
-            {"category": "B"},  # missing description
-        ]
-        result = self.manager._parse_insights_from_structured_data(data)
-        assert len(result) == 1
-        assert result[0].category == "A"
-
-    def test_delete_discussion_invalid_id(self):
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.delete_discussion("")
-        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID
-
-    def test_get_discussion_history_database_error(self):
-        self.mock_db.get_discussions.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.get_discussion_history()
-
-    def test_delete_discussion_database_error(self):
-        self.mock_db.delete_discussion.side_effect = DatabaseError("db error")
-        with pytest.raises(DiscussionManagerError):
-            self.manager.delete_discussion("d1")
-
-    def test_regenerate_insights_invalid_id(self):
-        with pytest.raises(DiscussionManagerError) as exc_info:
-            self.manager.regenerate_insights("")
-        assert exc_info.value.code is ErrorCode.DISCUSSION_ID_INVALID
+    def test_default_categories_need_no_user(self, manager):
+        assert manager.get_default_categories()

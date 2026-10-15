@@ -502,12 +502,86 @@ class TestAssembly:
             }
             assert registered == {
                 ResourceType.PERSONA: "name",
+                ResourceType.DISCUSSION: "topic",
                 ResourceType.DATASET: "name",
                 ResourceType.KNOWLEDGE_BASE: "name",
             }
             assert isinstance(parts.files, FileAttachments)
         finally:
             reset_shared_parts()
+
+    def test_discussion_parent_is_registered_with_the_discussion_readers(
+        self, store, s3, clock
+    ):
+        """U6 BR5.1: 議論を親とする資料は、議論を読める人に配信する（NFR1.53）。"""
+        from src.managers.components.sharing_runtime import build_access_parts
+        from src.models.authz import AccessTarget, ResourceType
+
+        def reader(table: Any) -> Any:
+            class _Reader:
+                def read(self, ids: Any, deadline: float) -> dict:
+                    if table.resource_type is not ResourceType.DISCUSSION:
+                        return {}
+                    return {
+                        i: AccessTarget(
+                            ResourceType.DISCUSSION,
+                            i,
+                            owner_sub=A.sub,
+                            shared_group_ids=frozenset({"sales"}),
+                        )
+                        for i in ids
+                        if i == "d1"
+                    }
+
+            return _Reader()
+
+        lookup_service = Mock()
+        lookup_service.reader.side_effect = reader
+        parts = build_access_parts(lookup_service, store, s3, clock=clock)
+        f = _upload(store, s3)
+        g = _upload(store, s3)
+        parts.files.attach_all(A, [f.id], "discussion", "d1")
+        parts.files.attach_all(A, [g.id], "discussion", "gone")
+        sales_peer = Principal(sub="peer", roles=A.roles, group_ids=A.group_ids)
+
+        assert parts.files.can_read_file(A, f.id)
+        assert parts.files.can_read_file(sales_peer, f.id)
+        assert not parts.files.can_read_file(B, f.id)
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            parts.files.readable_file(B, f.id)
+        assert not parts.files.can_read_file(A, g.id)
+
+
+class TestDeleteAttached:
+    """U6 BR1.5 (3): 議論の削除で、紐付いた資料（項目と S3 のオブジェクト）を消す。"""
+
+    def test_deletes_the_metadata_and_the_object(self, files, store, s3):
+        f = _upload(store, s3)
+        files.attach_all(A, [f.id], "discussion", "d1")
+        assert files.delete_attached("discussion", "d1", [f.id]) == []
+        assert store.get(f.id) is None
+        with pytest.raises(S3ServiceError):
+            s3.download_file(f.file_path)
+
+    def test_files_of_another_parent_are_left_alone(self, files, store, s3):
+        f = _upload(store, s3)
+        files.attach_all(A, [f.id], "discussion", "other")
+        unattached = _upload(store, s3)
+        assert files.delete_attached("discussion", "d1", [f.id, unattached.id]) == []
+        assert store.get(f.id) is not None
+        assert store.get(unattached.id) is not None
+
+    def test_failures_are_returned(self, store, s3, clock):
+        failing = Mock(wraps=s3)
+        failing.delete_file.side_effect = RuntimeError("s3 down")
+        files = FileAttachments(store, failing, clock=clock)
+        f = _upload(store, s3)
+        files.attach_all(A, [f.id], "discussion", "d1")
+        assert files.delete_attached("discussion", "d1", [f.id]) == [f.id]
+        assert store.get(f.id) is not None
+
+    def test_nothing_to_delete(self, files):
+        assert files.delete_attached("discussion", "d1", []) == []
 
     def test_reset_forgets_the_parts(self):
         from src.managers.components.sharing_runtime import (

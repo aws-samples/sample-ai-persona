@@ -184,7 +184,17 @@ def default_sharing_tables() -> list[SharingTable]:
             not_found=ErrorCode.PERSONA_NOT_FOUND,
             delete_failed=ErrorCode.PERSONA_OPERATION_FAILED,
             cleanup_attributes=("avatar_path",),
-        )
+        ),
+        # U6: 議論（インタビュー結果を含む）。後始末の列を削除の条件に入れ、読んだときと
+        # 同じ発言・レポート・資料を消す（logical-components.md「共有するもの」）
+        SharingTable(
+            resource_type=ResourceType.DISCUSSION,
+            table=config.table_name("Discussions"),
+            name_attribute="topic",
+            not_found=ErrorCode.DISCUSSION_NOT_FOUND,
+            delete_failed=ErrorCode.DISCUSSION_OPERATION_FAILED,
+            cleanup_attributes=("documents", "message_count", "report_count"),
+        ),
     ]
 
 

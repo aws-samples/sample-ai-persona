@@ -6,7 +6,7 @@ Strands Agent SDKを使用したエージェント管理サービス
 import queue
 import logging
 import threading
-from typing import List, Dict, Any, Optional, Generator
+from typing import List, Dict, Any, Optional, Generator, cast
 
 try:
     from strands import Agent
@@ -713,6 +713,7 @@ class AgentService:
         # 後方互換性のため残すが使用しない
         memory_service: Optional[Any] = None,
         model_id: Optional[str] = None,
+        initial_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> PersonaAgent:
         """
         ペルソナエージェントを作成
@@ -732,6 +733,10 @@ class AgentService:
                 - "disabled": メモリ機能無効
             memory_service: 非推奨（後方互換性のため残す、使用しない）
             model_id: 使用するモデルID（Noneの場合は既定モデル。後方互換）
+            initial_messages: 会話の初期の履歴（Strands の会話の形）。指定すると、
+                セッション管理の初期化（短期記憶からの復元）のあとに履歴をこの値で
+                置き換える。直接入れるため、セッション管理の保存の経路を通らない
+                （インタビューの作り直し、U6 BR3.4）
 
         Returns:
             PersonaAgent: 作成されたペルソナエージェント
@@ -820,6 +825,10 @@ class AgentService:
                 agent_kwargs["session_manager"] = session_manager
 
             agent = Agent(**agent_kwargs)
+            if initial_messages is not None:
+                # 復元された短期記憶の履歴を、保存した発言からの履歴で置き換える
+                # Strands の Messages（TypedDict の list）と同じ形の dict を入れる
+                agent.messages = cast(Any, [dict(m) for m in initial_messages])
 
             # PersonaAgentを作成
             persona_agent = PersonaAgent(

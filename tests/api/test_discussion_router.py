@@ -1,53 +1,69 @@
 """
 議論ルーター（discussion.py）のテスト
 
-議論設定、開始、ストリーミング、結果取得エンドポイントをテストします。
+U6: Router は利用者を Manager に渡すだけで判定しない。判定は本物の Manager・
+Component（tests/api/u6_world.py）で確かめる。BR2.1〜BR2.5、BR4.1、BR4.2、
+BR5.1、BR7.5、BR9.1、NFR1.43〜NFR1.47、NFR1.53、NFR1.56、NFR4.13、AC2.1.2、
+AC2.1.3、AC4.1.1〜AC4.1.3、AC4.1.5、AC4.4.1、AC4.4.2、AC5.1.1〜AC5.1.3。
 """
 
+import json
 import re
+from contextlib import ExitStack
 from unittest.mock import Mock, patch
 
+import pytest
+
+from src.models.authz import AccessTarget, ResourceType
+from src.models.discussion import Discussion
+from src.models.errors import CodedError, ErrorCode
+from tests.api.u6_world import ME, PEER, STRANGER, ApiWorld, _messages
 from tests.dialog_helpers import dialog_markup
+
+#: A full-page request (the client sends ``HX-Request`` by default).
+PAGE = {"HX-Request": ""}
+#: The browser's own ``EventSource`` / fetch (NFR4.13).
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
+
+
+@pytest.fixture
+def aw(client):
+    """ME signed in, with the real U6 Managers behind the routers."""
+    ME.login(client)
+    world = ApiWorld()
+    with ExitStack() as stack:
+        world.patch_routers(stack)
+        yield world
+
+
+def _sse(response) -> list[dict]:
+    return [
+        json.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+# =============================================================================
+# 設定画面・資料のアップロード（今のまま）
+# =============================================================================
 
 
 class TestDiscussionSetupPage:
     """議論設定ページのテスト"""
 
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_setup_page_loads(self, mock_get_manager, client):
-        """議論設定ページが正常に読み込まれることを確認"""
-        mock_manager = Mock()
-        # personas no longer fetched in setup (htmx lazy load)
-        mock_get_manager.return_value = mock_manager
-
+    def test_setup_page_loads(self, client):
         response = client.get("/discussion/setup")
-
         assert response.status_code == 200
-        assert "議論設定" in response.text or "議論" in response.text
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_setup_page_with_personas(
-        self, mock_get_manager, client, sample_persona, sample_persona_2
-    ):
-        """ペルソナが存在する場合、選択肢として表示されることを確認"""
-        mock_manager = Mock()
-        # personas no longer fetched in setup (htmx lazy load)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/setup")
-
-        assert response.status_code == 200
+        assert "議論" in response.text
 
     @patch("web.routers.discussion.list_selectable_models")
-    @patch("web.routers.discussion.get_persona_manager")
     def test_setup_page_passes_selectable_models_to_template(
-        self, mock_get_manager, mock_list_selectable_models, client
+        self, mock_list_selectable_models, client
     ):
-        """discussion_setup_pageがlist_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS)の
-        結果をテンプレートコンテキストに渡すことを確認（Issue #107 R8）"""
+        """list_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS) の結果を渡す（#107 R8）"""
         from src.models.model_registry import DEFAULT_MODEL_ID, SUPPORTED_MODELS
 
-        mock_get_manager.return_value = Mock()
         mock_list_selectable_models.return_value = [SUPPORTED_MODELS[DEFAULT_MODEL_ID]]
 
         response = client.get("/discussion/setup")
@@ -56,1047 +72,13 @@ class TestDiscussionSetupPage:
         mock_list_selectable_models.assert_called_once()
 
     @patch("web.routers.discussion.config")
-    @patch("web.routers.discussion.get_persona_manager")
     def test_setup_page_uses_enable_additional_persona_models_config(
-        self, mock_get_manager, mock_config, client
+        self, mock_config, client
     ):
-        """discussion_setup_pageがconfig.ENABLE_ADDITIONAL_PERSONA_MODELSをlist_selectable_modelsに渡すこと"""
-        mock_get_manager.return_value = Mock()
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+        assert client.get("/discussion/setup").status_code == 200
 
-        response = client.get("/discussion/setup")
-
-        assert response.status_code == 200
-
-
-class TestDiscussionResultsPage:
-    """議論結果一覧ページのテスト"""
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_results_page_loads(self, mock_get_manager, client):
-        """議論結果ページが正常に読み込まれることを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/results")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_results_page_with_discussions(
-        self, mock_get_manager, client, sample_discussion
-    ):
-        """議論が存在する場合、一覧が表示されることを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/results")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_results_page_filter_by_mode(
-        self, mock_get_manager, client, sample_discussion
-    ):
-        """モードでフィルタリングできることを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/results?mode=classic")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_results_page_search(self, mock_get_manager, client, sample_discussion):
-        """検索機能が動作することを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/results?search=マーケティング")
-
-        assert response.status_code == 200
-
-
-class TestDiscussionStartEndpoint:
-    """議論開始エンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_insufficient_personas(self, mock_get_manager, client):
-        """ペルソナ数が不足している場合、エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": ["persona-1"],
-                "mode": "traditional",
-            },
-        )
-
-        assert response.status_code == 400
-        assert "error-inline" in response.text or 'role="alert"' in response.text
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_invalid_personas(self, mock_get_manager, client):
-        """無効なペルソナIDでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_persona_unchecked.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": ["invalid-1", "invalid-2"],
-                "mode": "traditional",
-            },
-        )
-
-        assert response.status_code == 400
-        assert "error-inline" in response.text or 'role="alert"' in response.text
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_traditional_mode_success(
-        self,
-        mock_get_persona,
-        mock_get_discussion,
-        client,
-        sample_persona,
-        sample_persona_2,
-        sample_discussion,
-    ):
-        """従来モードでの議論開始が成功することを確認"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.run_classic_discussion.return_value = sample_discussion
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": [sample_persona.id, sample_persona_2.id],
-                "mode": "traditional",
-                "rounds": 3,
-            },
-        )
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_interview_mode_rejected(self, mock_get_manager, client):
-        """インタビューモードが拒否されることを確認"""
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": ["p1", "p2"],
-                "mode": "interview",
-            },
-        )
-
-        assert response.status_code == 400
-        assert "インタビューモードは別のエンドポイント" in response.text
-
-    @patch("web.routers.discussion.get_agent_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_agent_mode_passes_persona_models_and_facilitator_model(
-        self,
-        mock_get_persona,
-        mock_get_agent_manager,
-        client,
-        sample_persona,
-        sample_persona_2,
-        sample_discussion,
-    ):
-        """agentモードでpersona_models[id]・facilitator_modelがManagerに渡ることを確認"""
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_agent_manager = Mock()
-        mock_agent_manager.run_agent_discussion_full.return_value = sample_discussion
-        mock_get_agent_manager.return_value = mock_agent_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": [sample_persona.id, sample_persona_2.id],
-                "mode": "agent",
-                "rounds": 3,
-                f"persona_models[{sample_persona.id}]": "openai.gpt-5.6-terra",
-                "facilitator_model": "global.anthropic.claude-sonnet-5",
-            },
-        )
-
-        assert response.status_code == 200
-        mock_agent_manager.run_agent_discussion_full.assert_called_once()
-        call_kwargs = mock_agent_manager.run_agent_discussion_full.call_args.kwargs
-        assert call_kwargs["persona_models"] == {
-            sample_persona.id: "openai.gpt-5.6-terra"
-        }
-        assert call_kwargs["facilitator_model"] == "global.anthropic.claude-sonnet-5"
-
-
-class TestDiscussionDetailEndpoint:
-    """議論詳細エンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_persona_manager")
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_detail_success(
-        self,
-        mock_get_discussion,
-        mock_get_persona,
-        client,
-        sample_discussion,
-        sample_persona,
-    ):
-        """議論詳細ページが正常に表示されることを確認"""
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.get_discussion.return_value = sample_discussion
-        mock_discussion_manager.get_default_categories.return_value = []
-        mock_discussion_manager.get_document_presigned_urls.return_value = {}
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get(f"/discussion/{sample_discussion.id}")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_persona_manager")
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_detail_shows_persona_models_and_facilitator_model(
-        self,
-        mock_get_discussion,
-        mock_get_persona,
-        client,
-        sample_persona,
-        sample_persona_2,
-    ):
-        """agent_config.persona_models / facilitator_modelがモデル表示名で表示されることを確認"""
-        from src.models.discussion import Discussion
-
-        discussion = Discussion.create_new(
-            topic="モデル選択のテスト",
-            participants=[sample_persona.id, sample_persona_2.id],
-            mode="agent",
-            agent_config={
-                "rounds": 3,
-                "persona_models": {sample_persona.id: "openai.gpt-5.6-terra"},
-                "facilitator_model": "global.anthropic.claude-sonnet-5",
-            },
-        )
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.get_discussion.return_value = discussion
-        mock_discussion_manager.get_default_categories.return_value = []
-        mock_discussion_manager.get_document_presigned_urls.return_value = {}
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get(f"/discussion/{discussion.id}")
-
-        assert response.status_code == 200
-        assert "GPT-5.6 Terra" in response.text
-        assert "Claude Sonnet 5" in response.text
-
-    @patch("web.routers.discussion.get_persona_manager")
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_detail_legacy_discussion_falls_back_to_default_model(
-        self,
-        mock_get_discussion,
-        mock_get_persona,
-        client,
-        sample_persona,
-        sample_persona_2,
-    ):
-        """persona_models無しの旧agent議論はデフォルトモデル表示にフォールバックすることを確認"""
-        from src.models.discussion import Discussion
-
-        legacy_discussion = Discussion.create_new(
-            topic="旧議論（persona_models無し）",
-            participants=[sample_persona.id, sample_persona_2.id],
-            mode="agent",
-            agent_config={"rounds": 3},
-        )
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.get_discussion.return_value = legacy_discussion
-        mock_discussion_manager.get_default_categories.return_value = []
-        mock_discussion_manager.get_document_presigned_urls.return_value = {}
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get(f"/discussion/{legacy_discussion.id}")
-
-        assert response.status_code == 200
-        assert "Claude Haiku 4.5" in response.text
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_detail_not_found(self, mock_get_manager, client):
-        """存在しない議論で404エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/non-existent-id")
-
-        assert response.status_code == 404
-
-
-class TestDiscussionDeleteEndpoint:
-    """議論削除エンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_delete_success(self, mock_get_manager, client):
-        """議論削除が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.delete_discussion.return_value = True
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete("/discussion/test-id")
-
-        assert response.status_code == 200
-        assert "削除しました" in response.text
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_delete_failure(self, mock_get_manager, client):
-        """削除失敗時にエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.delete_discussion.return_value = False
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete("/discussion/non-existent-id")
-
-        assert response.status_code == 400
-        assert 'role="alert"' in response.text
-
-
-class TestDiscussionInsightsEndpoint:
-    """議論インサイト取得エンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_insights_success(
-        self, mock_get_manager, client, sample_discussion, sample_insight
-    ):
-        """インサイト取得が成功することを確認"""
-        discussion_with_insights = sample_discussion.add_insight(sample_insight)
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = discussion_with_insights
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(f"/discussion/insights/{sample_discussion.id}")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_get_insights_not_found(self, mock_get_manager, client):
-        """存在しない議論で404エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/insights/non-existent-id")
-
-        assert response.status_code == 404
-
-
-class TestDiscussionStreamEndpoint:
-    """議論ストリーミングエンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_stream_insufficient_personas(self, mock_get_manager, client):
-        """ペルソナ数が不足している場合、エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/stream?topic=test&persona_ids=p1")
-
-        assert response.status_code == 200  # SSEなので200を返す
-        # エラーイベントがストリームに含まれることを確認（文言はカタログの責務）
-        assert '"type": "error"' in response.text
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_stream_invalid_personas(self, mock_get_manager, client):
-        """無効なペルソナIDでエラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_persona_unchecked.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            "/discussion/stream?topic=test&persona_ids=invalid1,invalid2"
-        )
-
-        assert response.status_code == 200  # SSEなので200を返す
-        assert '"type": "error"' in response.text
-
-    @patch("web.routers.discussion.get_agent_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_stream_agent_mode_passes_persona_models_json(
-        self,
-        mock_get_persona,
-        mock_get_agent_manager,
-        client,
-        sample_persona,
-        sample_persona_2,
-    ):
-        """persona_models_json（URLエンコードしたJSON文字列）がManagerに辞書として渡ることを確認"""
-        import json as json_module
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_agent_manager = Mock()
-        mock_agent_manager.run_agent_discussion_streaming.return_value = iter([])
-        mock_get_agent_manager.return_value = mock_agent_manager
-
-        persona_models_json = json_module.dumps(
-            {sample_persona.id: "openai.gpt-5.6-terra"}
-        )
-
-        response = client.get(
-            "/discussion/stream",
-            params={
-                "topic": "test",
-                "persona_ids": f"{sample_persona.id},{sample_persona_2.id}",
-                "mode": "agent",
-                "persona_models_json": persona_models_json,
-                "facilitator_model": "global.anthropic.claude-sonnet-5",
-            },
-        )
-
-        assert response.status_code == 200
-        mock_agent_manager.run_agent_discussion_streaming.assert_called_once()
-        call_kwargs = mock_agent_manager.run_agent_discussion_streaming.call_args.kwargs
-        assert call_kwargs["persona_models"] == {
-            sample_persona.id: "openai.gpt-5.6-terra"
-        }
-        assert call_kwargs["facilitator_model"] == "global.anthropic.claude-sonnet-5"
-
-
-class TestDiscussionDocumentUploadEndpoint:
-    """議論用ドキュメントアップロードエンドポイントのテスト (Task 6)"""
-
-    @patch("web.routers.discussion.get_file_manager")
-    def test_upload_document_success(self, mock_get_manager, client):
-        """ドキュメントアップロードが成功することを確認"""
-        from src.managers.file_manager import FileMetadata
-        from datetime import datetime
-
-        mock_manager = Mock()
-        mock_metadata = FileMetadata(
-            file_id="doc-123",
-            original_filename="test_image.png",
-            saved_filename="uuid_test_image.png",
-            file_path="discussion_documents/uuid_test_image.png",
-            file_size=1024,
-            file_hash="abc123",
-            mime_type="image/png",
-            uploaded_at=datetime.now(),
-        )
-        mock_manager.upload_discussion_document.return_value = mock_metadata
-        mock_get_manager.return_value = mock_manager
-
-        # PNG画像のシミュレーション
-        png_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-
-        response = client.post(
-            "/discussion/upload-document",
-            files={"file": ("test_image.png", png_content, "image/png")},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["file_id"] == "doc-123"
-        assert data["filename"] == "test_image.png"
-        assert data["mime_type"] == "image/png"
-
-    @patch("web.routers.discussion.get_file_manager")
-    def test_upload_document_pdf_success(self, mock_get_manager, client):
-        """PDFドキュメントアップロードが成功することを確認"""
-        from src.managers.file_manager import FileMetadata
-        from datetime import datetime
-
-        mock_manager = Mock()
-        mock_metadata = FileMetadata(
-            file_id="doc-456",
-            original_filename="document.pdf",
-            saved_filename="uuid_document.pdf",
-            file_path="discussion_documents/uuid_document.pdf",
-            file_size=2048,
-            file_hash="def456",
-            mime_type="application/pdf",
-            uploaded_at=datetime.now(),
-        )
-        mock_manager.upload_discussion_document.return_value = mock_metadata
-        mock_get_manager.return_value = mock_manager
-
-        # PDFのシミュレーション
-        pdf_content = b"%PDF-1.4\n" + b"\x00" * 100
-
-        response = client.post(
-            "/discussion/upload-document",
-            files={"file": ("document.pdf", pdf_content, "application/pdf")},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["file_id"] == "doc-456"
-        assert data["mime_type"] == "application/pdf"
-
-    @patch("web.routers.discussion.get_file_manager")
-    def test_upload_document_invalid_format(self, mock_get_manager, client):
-        """無効なファイル形式でエラーを返すことを確認"""
-        from src.managers.file_manager import FileUploadError
-        from src.models.errors import ErrorCode
-
-        mock_manager = Mock()
-        mock_manager.upload_discussion_document.side_effect = FileUploadError(
-            "extension '.txt' not in discussion document formats",
-            code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
-            context={"allowed_formats": ".png, .jpg, .jpeg, .pdf"},
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/upload-document",
-            files={"file": ("test.txt", b"text content", "text/plain")},
-        )
-
-        assert response.status_code == 400
-        assert "許可されていないファイル形式" in response.text
-        assert ".png, .jpg, .jpeg, .pdf" in response.text
-
-    @patch("web.routers.discussion.get_file_manager")
-    def test_upload_document_oversized(self, mock_get_manager, client):
-        """サイズ超過でエラーを返すことを確認"""
-        from src.managers.file_manager import FileUploadError
-        from src.models.errors import ErrorCode
-
-        mock_manager = Mock()
-        mock_manager.upload_discussion_document.side_effect = FileUploadError(
-            "file size 10485761 exceeds limit 10485760",
-            code=ErrorCode.FILE_TOO_LARGE,
-            context={"max_size_mb": 10.0},
-        )
-        mock_get_manager.return_value = mock_manager
-
-        # 大きなファイルのシミュレーション
-        large_content = b"\x89PNG\r\n\x1a\n" + b"\x00" * 1000
-
-        response = client.post(
-            "/discussion/upload-document",
-            files={"file": ("large.png", large_content, "image/png")},
-        )
-
-        assert response.status_code == 400
-        assert "ファイルサイズが制限を超えています" in response.text
-        assert "10.0MB" in response.text
-
-    @patch("web.routers.discussion.get_file_manager")
-    def test_upload_document_does_not_expose_internal_detail(
-        self, mock_get_manager, client
-    ):
-        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
-        from src.managers.file_manager import FileUploadError
-        from src.models.errors import ErrorCode
-
-        mock_manager = Mock()
-        mock_manager.upload_discussion_document.side_effect = FileUploadError(
-            "discussion document upload failed (ClientError): "
-            "arn:aws:s3:::internal-bucket/secret-path",
-            code=ErrorCode.FILE_OPERATION_FAILED,
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/upload-document",
-            files={"file": ("document.pdf", b"%PDF-1.4\n", "application/pdf")},
-        )
-
-        assert response.status_code == 400
-        assert "arn:aws:s3" not in response.text
-        assert "ClientError" not in response.text
-
-
-class TestDiscussionStartWithDocuments:
-    """ドキュメント付き議論開始のテスト (Task 7)"""
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_with_documents_success(
-        self,
-        mock_get_persona,
-        mock_get_discussion,
-        client,
-        sample_persona,
-        sample_persona_2,
-        sample_discussion,
-    ):
-        """ドキュメント付き議論開始が成功することを確認"""
-        # ペルソナマネージャーのモック
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        # 議論マネージャーのモック（ドキュメント付き）
-        discussion_with_docs = sample_discussion
-        discussion_with_docs = discussion_with_docs.__class__(
-            id=sample_discussion.id,
-            topic=sample_discussion.topic,
-            participants=sample_discussion.participants,
-            messages=sample_discussion.messages,
-            insights=sample_discussion.insights,
-            created_at=sample_discussion.created_at,
-            mode=sample_discussion.mode,
-            agent_config=sample_discussion.agent_config,
-            documents=[{"filename": "test.png", "mime_type": "image/png"}],
-        )
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.run_classic_discussion.return_value = (
-            discussion_with_docs
-        )
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "ドキュメントを参考に議論してください",
-                "persona_ids": [sample_persona.id, sample_persona_2.id],
-                "mode": "traditional",
-                "document_ids": ["doc-123"],
-            },
-        )
-
-        assert response.status_code == 200
-
-        # run_classic_discussionがdocument_idsパラメータで呼ばれたことを確認
-        call_args = mock_discussion_manager.run_classic_discussion.call_args
-        assert "document_ids" in call_args[1]
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_without_documents_success(
-        self,
-        mock_get_persona,
-        mock_get_discussion,
-        client,
-        sample_persona,
-        sample_persona_2,
-        sample_discussion,
-    ):
-        """ドキュメントなし議論開始が従来通り動作することを確認"""
-        # ペルソナマネージャーのモック
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.side_effect = [
-            sample_persona,
-            sample_persona_2,
-        ]
-        mock_get_persona.return_value = mock_persona_manager
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.run_classic_discussion.return_value = sample_discussion
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "通常の議論トピック",
-                "persona_ids": [sample_persona.id, sample_persona_2.id],
-                "mode": "traditional",
-            },
-        )
-
-        assert response.status_code == 200
-
-
-class TestDiscussionDetailWithDocuments:
-    """ドキュメント付き議論詳細表示のテスト (Task 8)"""
-
-    @patch("web.routers.discussion.get_persona_manager")
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_detail_with_documents(
-        self,
-        mock_get_discussion,
-        mock_get_persona,
-        client,
-        sample_discussion,
-        sample_persona,
-    ):
-        """ドキュメント付き議論詳細が正常に表示されることを確認"""
-        from src.models.discussion import Discussion
-
-        # ドキュメント付き議論を作成
-        discussion_with_docs = Discussion(
-            id=sample_discussion.id,
-            topic=sample_discussion.topic,
-            participants=sample_discussion.participants,
-            messages=sample_discussion.messages,
-            insights=sample_discussion.insights,
-            created_at=sample_discussion.created_at,
-            mode=sample_discussion.mode,
-            agent_config=sample_discussion.agent_config,
-            documents=[
-                {
-                    "id": "doc1",
-                    "filename": "image.png",
-                    "mime_type": "image/png",
-                    "file_size": 1024,
-                },
-                {
-                    "id": "doc2",
-                    "filename": "document.pdf",
-                    "mime_type": "application/pdf",
-                    "file_size": 2048,
-                },
-            ],
-        )
-
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.get_discussion.return_value = discussion_with_docs
-        mock_discussion_manager.get_default_categories.return_value = []
-        mock_discussion_manager.get_document_presigned_urls.return_value = {}
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get(f"/discussion/{sample_discussion.id}")
-
-        assert response.status_code == 200
-
-    @patch("web.routers.discussion.get_persona_manager")
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_detail_without_documents(
-        self,
-        mock_get_discussion,
-        mock_get_persona,
-        client,
-        sample_discussion,
-        sample_persona,
-    ):
-        """ドキュメントなし議論詳細が正常に表示されることを確認"""
-        mock_discussion_manager = Mock()
-        mock_discussion_manager.get_discussion.return_value = sample_discussion
-        mock_discussion_manager.get_default_categories.return_value = []
-        mock_discussion_manager.get_document_presigned_urls.return_value = {}
-        mock_get_discussion.return_value = mock_discussion_manager
-
-        mock_persona_manager = Mock()
-        mock_persona_manager.get_persona_unchecked.return_value = sample_persona
-        mock_get_persona.return_value = mock_persona_manager
-
-        response = client.get(f"/discussion/{sample_discussion.id}")
-
-        assert response.status_code == 200
-
-
-class TestDiscussionReportEndpoints:
-    """議論レポートエンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_generate_report_success(self, mock_get_manager, client):
-        """レポートSSEストリーミングが成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.generate_report_streaming.return_value = iter(
-            ["# サマリ", "レポート"]
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            "/discussion/test-id/report/generate?template_type=summary",
-        )
-
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
-        mock_manager.generate_report_streaming.assert_called_once()
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_generate_report_custom(self, mock_get_manager, client):
-        """カスタムプロンプトでSSEストリーミングできることを確認"""
-        mock_manager = Mock()
-        mock_manager.generate_report_streaming.return_value = iter(["カスタム結果"])
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            "/discussion/test-id/report/generate?template_type=custom&custom_prompt=箇条書きで",
-        )
-
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_generate_report_failure(self, mock_get_manager, client):
-        """レポート生成失敗時にSSEでエラーを返すことを確認"""
-        from src.managers.discussion_manager import DiscussionManagerError
-
-        mock_manager = Mock()
-        mock_manager.generate_report_streaming.side_effect = DiscussionManagerError(
-            "議論が見つかりません"
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            "/discussion/test-id/report/generate?template_type=summary",
-        )
-
-        assert response.status_code == 200
-        assert "error" in response.text
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_delete_report_success(self, mock_get_manager, client):
-        """レポート削除が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.delete_report.return_value = True
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete("/discussion/test-id/report/report-123")
-
-        assert response.status_code == 200
-        mock_manager.delete_report.assert_called_once_with(
-            discussion_id="test-id",
-            report_id="report-123",
-        )
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_export_report_md(self, mock_get_manager, client):
-        """Markdownエクスポートが成功することを確認"""
-        from src.models.discussion_report import DiscussionReport
-
-        mock_report = DiscussionReport.create_new(
-            template_type="summary", content="# レポート内容"
-        )
-        discussion = Mock()
-        discussion.topic = "テスト議論"
-        discussion.reports = [mock_report]
-
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            f"/discussion/test-id/report/{mock_report.id}/export?format=md"
-        )
-
-        assert response.status_code == 200
-        assert "# レポート内容" in response.text
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_export_report_txt(self, mock_get_manager, client):
-        """テキストエクスポートが成功することを確認"""
-        from src.models.discussion_report import DiscussionReport
-
-        mock_report = DiscussionReport.create_new(
-            template_type="summary", content="# レポート内容\n\n**太字**テスト"
-        )
-        discussion = Mock()
-        discussion.topic = "テスト議論"
-        discussion.reports = [mock_report]
-
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(
-            f"/discussion/test-id/report/{mock_report.id}/export?format=txt"
-        )
-
-        assert response.status_code == 200
-        # Markdown記法が除去されていること
-        assert "#" not in response.text or "レポート内容" in response.text
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_save_report_success(self, mock_get_manager, client):
-        """レポート保存が成功することを確認"""
-        from src.models.discussion import Discussion
-
-        mock_discussion = Discussion.create_new(topic="テスト", participants=["p1"])
-        mock_manager = Mock()
-        mock_manager.save_report.return_value = None
-        mock_manager.get_discussion.return_value = mock_discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/test-id/report/save",
-            data={
-                "report_id": "r1",
-                "template_type": "summary",
-                "content": "# テスト",
-            },
-        )
-
-        assert response.status_code == 200
-        mock_manager.save_report.assert_called_once()
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_get_report_success(self, mock_get_manager, client):
-        """保存済みレポート取得が成功することを確認"""
-        from src.models.discussion_report import DiscussionReport
-
-        mock_report = DiscussionReport.create_new(
-            template_type="summary", content="# 保存済みレポート"
-        )
-        discussion = Mock()
-        discussion.reports = [mock_report]
-
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(f"/discussion/test-id/report/{mock_report.id}")
-
-        assert response.status_code == 200
-        assert "保存済みレポート" in response.text
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_get_report_not_found(self, mock_get_manager, client):
-        """存在しないレポートの取得で404を返すことを確認"""
-        discussion = Mock()
-        discussion.reports = []
-
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/discussion/test-id/report/nonexistent")
-
-        assert response.status_code == 404
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_generate_report_invalid_template_type(self, mock_get_manager, client):
-        """無効なtemplate_typeが拒否されることを確認"""
-        response = client.get(
-            "/discussion/test-id/report/generate?template_type=invalid",
-        )
-
-        assert response.status_code == 200
-        assert "error" in response.text
-
-
-class TestDiscussionFollowupReportEndpoint:
-    """フォローアップ分析エンドポイントのテスト"""
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_followup_report_success(self, mock_get_manager, client):
-        """フォローアップSSEストリーミングが成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.generate_followup_report_streaming.return_value = iter(
-            ["追加分析結果"]
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/test-id/report/generate-followup",
-            data={
-                "followup_prompt": "顧客セグメントをCSVで出力して",
-                "previous_report": "# 初回分析レポート\n分析内容...",
-            },
-        )
-
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
-        call_kwargs = mock_manager.generate_followup_report_streaming.call_args[1]
-        assert call_kwargs["discussion_id"] == "test-id"
-        assert call_kwargs["followup_prompt"] == "顧客セグメントをCSVで出力して"
-        assert "初回分析レポート" in call_kwargs["previous_report"]
-
-    @patch("web.routers.discussion.get_report_manager")
-    def test_followup_report_failure(self, mock_get_manager, client):
-        """フォローアップ生成失敗時にSSEでエラーを返すことを確認"""
-        from src.managers.discussion_manager import DiscussionManagerError
-
-        mock_manager = Mock()
-        mock_manager.generate_followup_report_streaming.side_effect = (
-            DiscussionManagerError("議論が見つかりません")
-        )
-        mock_get_manager.return_value = mock_manager
-
-        response = client.post(
-            "/discussion/test-id/report/generate-followup",
-            data={
-                "followup_prompt": "追加分析",
-                "previous_report": "レポート内容",
-            },
-        )
-
-        assert response.status_code == 200
-        assert "error" in response.text
-
-
-class TestDiscussionDialogs:
-    """U3 WF3: insight categories dialog and the discussion-start indicator."""
-
-    @patch("web.routers.discussion.get_discussion_manager")
-    def test_regenerate_insights_is_a_dialog_that_closes_on_success(
-        self, mock_get_manager, client
-    ):
-        manager = mock_get_manager.return_value
-        manager.regenerate_insights.return_value = []
-        manager.get_default_categories.return_value = [
-            {"name": "顧客ニーズ", "description": "ニーズ"}
-        ]
-
-        html = client.post(
-            "/discussion/d1/regenerate-insights",
-            data={
-                "categories[0][name]": "顧客ニーズ",
-                "categories[0][description]": "ニーズ",
-            },
-        ).text
-
-        outer = dialog_markup(html, "regenerate-insights-dialog")
-        assert "data-dialog-close-on-success" in outer
-        assert "data-dialog-backdrop-close" not in outer
-        assert 'data-dialog-open="regenerate-insights-dialog"' in html
-        assert 'hx-post="/discussion/d1/regenerate-insights"' in html
-        assert "showRegenerateModal" not in html
-
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_start_indicator_is_busy_and_announced(self, mock_get_manager, client):
+    def test_start_indicator_is_busy_and_announced(self, client):
         html = client.get("/discussion/setup").text
 
         loading = re.search(r'<div id="discussion-loading"[^>]*>', html)
@@ -1105,25 +87,31 @@ class TestDiscussionDialogs:
         assert "議論を開始しています" in html
 
 
-class TestDiscussionDocumentsU5:
-    """U5: 資料は利用者のキーで置き、他人の資料では議論を始めない（BR5.1、BR5.3）"""
+def _metadata(file_id: str, filename: str, mime_type: str):
+    from datetime import datetime
+
+    from src.managers.file_manager import FileMetadata
+
+    return FileMetadata(
+        file_id=file_id,
+        original_filename=filename,
+        saved_filename=f"{file_id}_{filename}",
+        file_path=f"s3://b/uploads/x/discussion_document/{file_id}_{filename}",
+        file_size=1024,
+        file_hash="abc123",
+        mime_type=mime_type,
+        uploaded_at=datetime.now(),
+    )
+
+
+class TestDiscussionDocumentUploadEndpoint:
+    """議論用ドキュメントのアップロード（U5 のまま）"""
 
     @patch("web.routers.discussion.get_file_manager")
     def test_upload_passes_the_signed_in_user(self, mock_get_manager, client):
-        from datetime import datetime
-
-        from src.managers.file_manager import FileMetadata
-
         manager = mock_get_manager.return_value
-        manager.upload_discussion_document.return_value = FileMetadata(
-            file_id="doc-1",
-            original_filename="a.pdf",
-            saved_filename="doc-1_a.pdf",
-            file_path="s3://b/uploads/local:dev@example.com/discussion_document/doc-1_a.pdf",
-            file_size=10,
-            file_hash="h",
-            mime_type="application/pdf",
-            uploaded_at=datetime.now(),
+        manager.upload_discussion_document.return_value = _metadata(
+            "doc-1", "a.pdf", "application/pdf"
         )
 
         response = client.post(
@@ -1135,7 +123,6 @@ class TestDiscussionDocumentsU5:
         principal, content, filename = manager.upload_discussion_document.call_args.args
         assert principal.sub == "local:dev@example.com"
         assert (content, filename) == (b"%PDF-1.4\n", "a.pdf")
-        # 応答の項目は今のまま（キーは返さない）
         assert set(response.json()) == {
             "file_id",
             "filename",
@@ -1144,64 +131,590 @@ class TestDiscussionDocumentsU5:
             "uploaded_at",
         }
 
-    @patch("web.routers.discussion.get_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_someone_elses_document_is_not_found(
-        self, mock_get_persona, mock_get_discussion, client, sample_persona
-    ):
-        from src.managers.discussion_manager import DiscussionManagerError
-        from src.models.errors import ErrorCode
+    @patch("web.routers.discussion.get_file_manager")
+    def test_upload_document_invalid_format(self, mock_get_manager, client):
+        from src.managers.file_manager import FileUploadError
 
-        mock_get_persona.return_value.get_persona_unchecked.return_value = (
-            sample_persona
-        )
-        manager = mock_get_discussion.return_value
-        manager.run_classic_discussion.side_effect = DiscussionManagerError(
-            "document not readable", code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND
+        mock_get_manager.return_value.upload_discussion_document.side_effect = (
+            FileUploadError(
+                "extension '.txt' not in discussion document formats",
+                code=ErrorCode.FILE_FORMAT_NOT_ALLOWED,
+                context={"allowed_formats": ".png, .jpg, .jpeg, .pdf"},
+            )
         )
 
         response = client.post(
-            "/discussion/start",
-            data={
-                "topic": "テストトピック",
-                "persona_ids": ["p1", "p2"],
-                "mode": "traditional",
-                "document_ids": ["someone-elses"],
-            },
+            "/discussion/upload-document",
+            files={"file": ("test.txt", b"text content", "text/plain")},
         )
 
+        assert response.status_code == 400
+        assert "許可されていないファイル形式" in response.text
+        assert ".png, .jpg, .jpeg, .pdf" in response.text
+
+    @patch("web.routers.discussion.get_file_manager")
+    def test_upload_document_does_not_expose_internal_detail(
+        self, mock_get_manager, client
+    ):
+        """内部例外の詳細がレスポンスに出ないことを確認（#112）"""
+        from src.managers.file_manager import FileUploadError
+
+        mock_get_manager.return_value.upload_discussion_document.side_effect = (
+            FileUploadError(
+                "upload failed (ClientError): arn:aws:s3:::internal-bucket/secret",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            )
+        )
+
+        response = client.post(
+            "/discussion/upload-document",
+            files={"file": ("document.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+
+        assert response.status_code == 400
+        assert "arn:aws:s3" not in response.text
+        assert "ClientError" not in response.text
+
+
+# =============================================================================
+# 一覧（BR2.1〜BR2.3、NFR1.43、AC4.1.1）
+# =============================================================================
+
+
+class TestResultsList:
+    def test_tabs_counts_and_only_readable_rows(self, aw, client):
+        aw.discussion(topic="自分の議論について")
+        aw.discussion(PEER, topic="共有された議論について", shared_with=("sales",))
+        aw.discussion(STRANGER, topic="無関係な議論について")
+
+        html = client.get("/discussion/results", headers=PAGE).text
+        assert "自分の議論について" in html
+        assert "共有された議論について" not in html
+        assert "無関係な議論について" not in html
+        assert 'role="tablist"' in html
+        assert "自分のもの" in html and "共有されたもの" in html
+
+        shared = client.get(
+            "/discussion/results?tab=shared", headers={"HX-Target": "discussion-list"}
+        ).text
+        assert "共有された議論について" in shared
+        assert "自分の議論について" not in shared
+        assert "無関係な議論について" not in shared
+
+    def test_member_asking_for_all_gets_mine(self, aw, client):
+        aw.discussion(STRANGER, topic="無関係な議論について")
+        html = client.get("/discussion/results?tab=all", headers=PAGE).text
+        assert "無関係な議論について" not in html
+
+    def test_zero_rows(self, aw, client):
+        html = client.get("/discussion/results", headers=PAGE).text
+        assert "議論がありません" in html
+
+    def test_search_and_mode_inside_the_tab(self, aw, client):
+        aw.discussion(topic="価格の見直しについて")
+        aw.discussion(topic="広告の出し方について", mode="interview")
+
+        found = client.get(
+            "/discussion/results?search=価格", headers={"HX-Target": "discussion-list"}
+        ).text
+        assert "価格の見直しについて" in found
+        assert "広告の出し方について" not in found
+
+        interviews = client.get(
+            "/discussion/results?mode=interview",
+            headers={"HX-Target": "discussion-list"},
+        ).text
+        assert "広告の出し方について" in interviews
+        assert "価格の見直しについて" not in interviews
+
+    def test_rows_show_the_stored_names_and_counts(self, aw, client):
+        aw.discussion(topic="自分の議論について")
+        html = client.get("/discussion/results", headers=PAGE).text
+        assert "佐藤" in html and "鈴木" in html
+        assert "2件の発言" in html
+
+    def test_only_manageable_rows_offer_delete_and_share(self, aw, client):
+        aw.discussion(PEER, topic="共有された議論について", shared_with=("sales",))
+        shared = client.get(
+            "/discussion/results?tab=shared", headers={"HX-Target": "discussion-list"}
+        ).text
+        assert "hx-delete" not in shared
+        assert "data-share-url" not in shared
+
+
+# =============================================================================
+# 詳細・部分表示・資料・エクスポート（BR2.4、BR5.1、BR7.3、BR9.1、NFR1.44）
+# =============================================================================
+
+
+class TestDetail:
+    def test_owner_sees_the_operations(self, aw, client):
+        discussion = aw.discussion()
+        html = client.get(f"/discussion/{discussion.id}", headers=PAGE).text
+        assert discussion.topic in html
+        assert f'hx-delete="/discussion/{discussion.id}"' in html
+        assert f'data-share-url="/share/discussion/{discussion.id}/dialog"' in html
+        assert "regenerate-insights-dialog-open-button" in html
+        assert f"/discussion/{discussion.id}/export" in html
+
+    def test_shared_reader_sees_no_operations(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        html = client.get(f"/discussion/{discussion.id}", headers=PAGE).text
+        assert discussion.topic in html
+        assert "hx-delete" not in html
+        assert "data-share-url" not in html
+        assert "regenerate-insights-dialog-open-button" not in html
+        assert "var reportManageable = false;" in html
+        # 読める人はエクスポートできる
+        assert f"/discussion/{discussion.id}/export" in html
+
+    def test_unrelated_user_gets_not_found_everywhere(self, aw, client):
+        discussion = aw.discussion(STRANGER)
+        assert (
+            client.get(f"/discussion/{discussion.id}", headers=PAGE).status_code == 404
+        )
+        for path in (
+            f"/discussion/result-partial/{discussion.id}",
+            f"/discussion/insights/{discussion.id}",
+            f"/discussion/{discussion.id}/export",
+        ):
+            assert client.get(path).status_code == 404, path
+
+    def test_participant_states_are_text_not_links(self, aw, client):
+        world = aw.world
+        discussion = Discussion.create_new(
+            topic="参加者の状態について",
+            participants=["p1", "p2", "p3"],
+            mode="classic",
+            participant_names={"p1": "佐藤", "p2": "鈴木", "p3": "田中"},
+        )
+        saved = world.records.save_new(ME.principal(), discussion, _messages(world))
+        world.personas.targets["p2"] = AccessTarget(
+            ResourceType.PERSONA, "p2", owner_sub="b", exists=False
+        )
+
+        html = client.get(f"/discussion/{saved.id}", headers=PAGE).text
+
+        assert 'href="/persona/p1"' in html
+        assert "〔削除済み〕" in html
+        assert "〔参照権限なし〕" in html
+        assert 'href="/persona/p2"' not in html
+        assert 'href="/persona/p3"' not in html
+
+    def test_models_are_shown_by_name(self, aw, client):
+        world = aw.world
+        discussion = Discussion.create_new(
+            topic="モデル選択のテストです",
+            participants=["p1", "p2"],
+            mode="agent",
+            participant_names={"p1": "佐藤", "p2": "鈴木"},
+            agent_config={
+                "rounds": 3,
+                "persona_models": {"p1": "openai.gpt-5.6-terra"},
+                "facilitator_model": "global.anthropic.claude-sonnet-5",
+            },
+        )
+        saved = world.records.save_new(ME.principal(), discussion, _messages(world))
+
+        html = client.get(f"/discussion/{saved.id}", headers=PAGE).text
+
+        assert "GPT-5.6 Terra" in html
+        assert "Claude Sonnet 5" in html
+
+    def test_document_urls_come_through_file_attachments(self, aw, client):
+        from src.models.discussion import DocumentRef
+
+        discussion = aw.discussion()
+        aw.world.store.bodies[discussion.id]["documents"] = [
+            DocumentRef("f1", "a.png", "image/png", 1, "2026-10-15").to_dict()
+        ]
+        aw.world.files.readable_file.return_value = Mock(file_path="s3://b/k")
+
+        html = client.get(f"/discussion/{discussion.id}", headers=PAGE).text
+
+        assert "https://signed" in html
+        principal, file_id = aw.world.files.readable_file.call_args.args
+        assert (principal.sub, file_id) == (ME.sub, "f1")
+
+    def test_result_partial_and_insights_for_readers(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        assert (
+            client.get(f"/discussion/result-partial/{discussion.id}").status_code == 200
+        )
+        insights = client.get(f"/discussion/insights/{discussion.id}")
+        assert insights.status_code == 200
+        assert "regenerate-insights-dialog-open-button" not in insights.text
+
+
+class TestExport:
+    def test_readers_get_markdown_as_an_attachment(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        response = client.get(f"/discussion/{discussion.id}/export")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert response.headers["content-disposition"].startswith("attachment;")
+        assert discussion.topic in response.text
+        assert PEER.sub not in response.text
+
+
+# =============================================================================
+# 開始（BR2.8、BR7.5、NFR1.46、M12）
+# =============================================================================
+
+
+def _start(client, *persona_ids, **data):
+    form = {
+        "topic": "新商品のマーケティングについて",
+        "persona_ids": list(persona_ids),
+        "mode": "traditional",
+    }
+    form.update(data)
+    return client.post("/discussion/start", data=form)
+
+
+class TestStart:
+    def test_classic_discussion_is_saved_as_mine(self, aw, client):
+        response = _start(client, "p1", "p2")
+        assert response.status_code == 200
+        (body,) = aw.world.store.bodies.values()
+        assert body["owner_sub"] == ME.sub
+        assert body["topic"] in response.text
+
+    def test_unreadable_persona_shows_the_stop_panel(self, aw, client):
+        response = _start(client, "p1", "p3")
+        assert response.status_code == 404
+        assert response.headers.get("X-Render-Response") == "true"
+        assert 'role="alert"' in response.text
+        assert "ページが見つかりません" in response.text
+        aw.ai.facilitate_discussion.assert_not_called()
+        assert aw.world.store.bodies == {}
+
+    def test_too_few_personas(self, aw, client):
+        response = _start(client, "p1")
+        assert response.status_code == 400
+
+    def test_interview_mode_is_refused(self, aw, client):
+        response = _start(client, "p1", "p2", mode="interview")
+        assert response.status_code == 400
+
+    def test_agent_mode_passes_models(self, aw, client):
+        from src.config import config
+
+        run = Mock(wraps=aw.agent_discussions.run_agent_discussion_full)
+        with (
+            patch.object(aw.agent_discussions, "run_agent_discussion_full", run),
+            patch.object(config, "ENABLE_ADDITIONAL_PERSONA_MODELS", True),
+        ):
+            response = _start(
+                client,
+                "p1",
+                "p2",
+                mode="agent",
+                rounds=1,
+                **{
+                    "persona_models[p1]": "openai.gpt-5.6-terra",
+                    "facilitator_model": "global.anthropic.claude-sonnet-5",
+                },
+            )
+        assert response.status_code == 200, response.text
+        principal, personas, topic = run.call_args.args
+        assert principal.sub == ME.sub
+        assert [p.id for p in personas] == ["p1", "p2"]
+        assert run.call_args.kwargs["persona_models"] == {"p1": "openai.gpt-5.6-terra"}
+        assert (
+            run.call_args.kwargs["facilitator_model"]
+            == "global.anthropic.claude-sonnet-5"
+        )
+
+    def test_someone_elses_document_is_not_found(self, aw, client):
+        from src.models.errors import CodedError
+
+        aw.world.files.attachable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
+        )
+        response = _start(client, "p1", "p2", document_ids=["someone-elses"])
         assert response.status_code == 404
         assert "showToast" in response.headers["HX-Trigger"]
-        kwargs = manager.run_classic_discussion.call_args.kwargs
-        assert kwargs["document_ids"] == ["someone-elses"]
-        assert kwargs["principal"].sub == "local:dev@example.com"
+        aw.ai.facilitate_discussion.assert_not_called()
 
-    @patch("web.routers.discussion.get_agent_discussion_manager")
-    @patch("web.routers.discussion.get_persona_manager")
-    def test_agent_discussion_gets_the_user(
-        self,
-        mock_get_persona,
-        mock_get_agent,
-        client,
-        sample_persona,
-        sample_discussion,
-    ):
-        mock_get_persona.return_value.get_persona_unchecked.return_value = (
-            sample_persona
+
+class TestStream:
+    def _params(self, **extra):
+        params = {
+            "topic": "新商品のマーケティングについて",
+            "persona_ids": "p1,p2",
+        }
+        params.update(extra)
+        return params
+
+    @pytest.mark.parametrize("site", [None, "cross-site", "same-site", "none"])
+    def test_other_sites_are_refused(self, aw, client, site):
+        headers = {"Sec-Fetch-Site": site} if site else {}
+        response = client.get(
+            "/discussion/stream", params=self._params(), headers=headers
         )
-        manager = mock_get_agent.return_value
-        manager.run_agent_discussion_full.return_value = sample_discussion
+        assert response.status_code == 403
+        assert response.json()["error_code"] == ErrorCode.CSRF_FAILED.value
+        aw.ai.facilitate_discussion_streaming.assert_not_called()
 
-        response = client.post(
-            "/discussion/start",
+    def test_same_origin_runs_and_saves(self, aw, client):
+        response = client.get(
+            "/discussion/stream", params=self._params(), headers=SAME_ORIGIN
+        )
+        assert response.status_code == 200
+        events = _sse(response)
+        assert events[-1]["type"] == "complete"
+        assert events[-1]["discussion_id"] in aw.world.store.bodies
+
+    def test_unreadable_persona_stops(self, aw, client):
+        response = client.get(
+            "/discussion/stream",
+            params=self._params(persona_ids="p1,p3"),
+            headers=SAME_ORIGIN,
+        )
+        assert [e["type"] for e in _sse(response)] == ["stopped"]
+        aw.ai.facilitate_discussion_streaming.assert_not_called()
+
+    def test_agent_mode_passes_persona_models_json(self, aw, client):
+        run = Mock(return_value=iter([]))
+        with patch.object(aw.agent_discussions, "run_agent_discussion_streaming", run):
+            response = client.get(
+                "/discussion/stream",
+                params=self._params(
+                    mode="agent",
+                    persona_models_json=json.dumps({"p1": "openai.gpt-5.6-terra"}),
+                    facilitator_model="global.anthropic.claude-sonnet-5",
+                ),
+                headers=SAME_ORIGIN,
+            )
+        assert response.status_code == 200
+        assert run.call_args.kwargs["persona_models"] == {"p1": "openai.gpt-5.6-terra"}
+        assert (
+            run.call_args.kwargs["facilitator_model"]
+            == "global.anthropic.claude-sonnet-5"
+        )
+
+
+# =============================================================================
+# 管理できる人だけの操作（BR2.5、BR4.2、NFR1.45）
+# =============================================================================
+
+
+class TestManageOnly:
+    def test_shared_reader_cannot_delete(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        response = client.delete(f"/discussion/{discussion.id}")
+        assert response.status_code == 403
+        assert discussion.id in aw.world.store.bodies
+
+    def test_owner_deletes(self, aw, client):
+        discussion = aw.discussion()
+        assert client.delete(f"/discussion/{discussion.id}").status_code == 200
+        assert discussion.id not in aw.world.store.bodies
+
+    def test_unrelated_delete_is_not_found(self, aw, client):
+        discussion = aw.discussion(STRANGER)
+        assert client.delete(f"/discussion/{discussion.id}").status_code == 404
+
+    def test_shared_reader_cannot_regenerate(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        response = client.post(f"/discussion/{discussion.id}/regenerate-insights")
+        assert response.status_code == 403
+        aw.ai.extract_insights.reset_mock()
+        aw.ai.extract_insights.assert_not_called()
+
+    def test_regenerate_is_a_dialog_that_closes_on_success(self, aw, client):
+        discussion = aw.discussion()
+        html = client.post(
+            f"/discussion/{discussion.id}/regenerate-insights",
             data={
-                "topic": "テストトピック",
-                "persona_ids": ["p1", "p2"],
-                "mode": "agent",
-                "document_ids": ["doc-1"],
+                "categories[0][name]": "顧客ニーズ",
+                "categories[0][description]": "ニーズ",
+            },
+        ).text
+
+        outer = dialog_markup(html, "regenerate-insights-dialog")
+        assert "data-dialog-close-on-success" in outer
+        assert "data-dialog-backdrop-close" not in outer
+        assert 'data-dialog-open="regenerate-insights-dialog"' in html
+        assert f'hx-post="/discussion/{discussion.id}/regenerate-insights"' in html
+
+    def test_shared_reader_cannot_save_edit_or_delete_reports(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        report = aw.world.records.save_report(
+            PEER, discussion.id, "summary", "内容", None
+        )
+        base = f"/discussion/{discussion.id}/report"
+        assert (
+            client.post(
+                f"{base}/save", data={"template_type": "summary", "content": "x"}
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"{base}/{report.report_id}/update-content", data={"content": "x"}
+            ).status_code
+            == 403
+        )
+        assert client.delete(f"{base}/{report.report_id}").status_code == 403
+        assert aw.world.store.bodies[discussion.id]["report_count"] == 1
+
+    @pytest.mark.parametrize("operation", ["update", "delete"])
+    def test_a_failed_report_change_is_a_toast(
+        self, aw, client, monkeypatch, operation
+    ):
+        """再試行で直る失敗は、画面を書き換えずにトーストで知らせる（error-catalog.md）。"""
+        discussion = aw.discussion()
+        report = aw.world.records.save_report(
+            ME.principal(), discussion.id, "summary", "内容", None
+        )
+
+        def failed(*_a, **_k):
+            raise CodedError("store down", code=ErrorCode.REPORT_OPERATION_FAILED)
+
+        monkeypatch.setattr(aw.world.records, f"{operation}_report", failed)
+        url = f"/discussion/{discussion.id}/report/{report.report_id}"
+        if operation == "update":
+            response = client.post(f"{url}/update-content", data={"content": "x"})
+        else:
+            response = client.delete(url)
+
+        assert response.status_code == 400
+        assert "showToast" in response.headers["HX-Trigger"]
+        assert "store down" not in response.text
+
+    @pytest.mark.parametrize("operation", ["update", "delete"])
+    def test_a_correctable_report_error_reaches_the_screen(
+        self, aw, client, monkeypatch, operation
+    ):
+        """直せる失敗の 400 の本文は mark_renderable の印付き（htmx が差し替える）。"""
+        discussion = aw.discussion()
+        report = aw.world.records.save_report(
+            ME.principal(), discussion.id, "summary", "内容", None
+        )
+
+        def too_big(*_a, **_k):
+            raise CodedError("too big", code=ErrorCode.REPORT_CAPACITY_EXCEEDED)
+
+        monkeypatch.setattr(aw.world.records, f"{operation}_report", too_big)
+        url = f"/discussion/{discussion.id}/report/{report.report_id}"
+        if operation == "update":
+            response = client.post(f"{url}/update-content", data={"content": "x"})
+        else:
+            response = client.delete(url)
+
+        assert response.status_code == 400
+        assert response.headers.get("X-Render-Response") == "true"
+        assert "too big" not in response.text
+
+    def test_report_ids_are_assigned_by_the_server(self, aw, client):
+        discussion = aw.discussion()
+        response = client.post(
+            f"/discussion/{discussion.id}/report/save",
+            data={
+                "report_id": "chosen-by-the-client",
+                "template_type": "summary",
+                "content": "レポートの内容",
             },
         )
-
         assert response.status_code == 200
-        kwargs = manager.run_agent_discussion_full.call_args.kwargs
-        assert kwargs["principal"].sub == "local:dev@example.com"
+        (report_id,) = aw.world.store.reports[discussion.id]
+        assert report_id != "chosen-by-the-client"
+        assert "chosen-by-the-client" not in response.text
+
+    def test_fourth_report_is_refused_with_the_preview(self, aw, client):
+        discussion = aw.discussion()
+        for i in range(3):
+            aw.world.records.save_report(
+                ME.principal(), discussion.id, "summary", f"r{i}", None
+            )
+        response = client.post(
+            f"/discussion/{discussion.id}/report/save",
+            data={"template_type": "summary", "content": "4件目"},
+        )
+        # 入力したレポートは消さず、プレビューのまま保存できなかったことを示す
+        assert response.status_code == 200
+        assert "4件目" in response.text
+        assert "data-report-save-error" in response.text
+        assert aw.world.store.bodies[discussion.id]["report_count"] == 3
+
+
+# =============================================================================
+# レポートの参照・生成（BR4.1、BR4.3）
+# =============================================================================
+
+
+class TestReports:
+    def test_readers_open_and_export_reports(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        report = aw.world.records.save_report(
+            PEER, discussion.id, "summary", "# 見出し\n本文", None
+        )
+        base = f"/discussion/{discussion.id}/report/{report.report_id}"
+
+        opened = client.get(base)
+        assert opened.status_code == 200
+        assert "saved-update-btn" not in opened.text
+
+        exported = client.get(f"{base}/export?format=txt")
+        assert exported.status_code == 200
+        assert exported.text == "見出し\n本文"
+        assert exported.headers["content-disposition"].startswith("attachment;")
+
+    def test_missing_report_is_not_found(self, aw, client):
+        discussion = aw.discussion()
+        response = client.get(f"/discussion/{discussion.id}/report/nonexistent")
+        assert response.status_code == 404
+
+    def test_generate_needs_same_origin(self, aw, client):
+        discussion = aw.discussion()
+        url = f"/discussion/{discussion.id}/report/generate"
+        assert client.get(url).status_code == 403
+        response = client.get(url, headers=SAME_ORIGIN)
+        assert [e["type"] for e in _sse(response)][-1] == "done"
+
+    def test_shared_reader_may_generate(self, aw, client):
+        discussion = aw.discussion(PEER, shared_with=("sales",))
+        response = client.get(
+            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        )
+        events = _sse(response)
+        assert [e["content"] for e in events if e["type"] == "chunk"] == [
+            "レポート",
+            "本文",
+        ]
+
+    def test_unrelated_user_cannot_generate(self, aw, client):
+        discussion = aw.discussion(STRANGER)
+        response = client.get(
+            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        )
+        assert _sse(response)[-1]["type"] == "error"
+        aw.ai.generate_standard_report_streaming.assert_not_called()
+
+    def test_invalid_template_type(self, aw, client):
+        discussion = aw.discussion()
+        response = client.get(
+            f"/discussion/{discussion.id}/report/generate?template_type=poem",
+            headers=SAME_ORIGIN,
+        )
+        assert _sse(response)[-1]["type"] == "error"
+
+    def test_followup_uses_the_users_own_session(self, aw, client):
+        from src.managers.report_manager import report_session_id
+
+        discussion = aw.discussion()
+        with patch("src.managers.report_manager.service_factory") as factory:
+            factory.check_stm_session_exists.return_value = False
+            response = client.post(
+                f"/discussion/{discussion.id}/report/generate-followup",
+                data={
+                    "followup_prompt": "追加で分析して",
+                    "previous_report": "前回",
+                    "session_id": "someone-elses-session",
+                },
+            )
+        assert response.status_code == 200
+        kwargs = aw.agent_service.run_report_agent_streaming.call_args.kwargs
+        assert kwargs["session_id"] == report_session_id(discussion.id, ME.sub)

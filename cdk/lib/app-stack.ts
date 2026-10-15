@@ -147,6 +147,13 @@ export class AppStack extends Stack {
       // 生成候補と紐付け（U5、src/config.py の PERSONA_CANDIDATES / PERSONA_BINDINGS）
       PERSONA_CANDIDATES_TABLE_NAME: data.database.personaCandidatesTable.tableName,
       PERSONA_BINDINGS_TABLE_NAME: data.database.personaBindingsTable.tableName,
+      // 議論の発言・レポートとインタビュー（U6、src/config.py の DISCUSSION_* / INTERVIEW_*）
+      ...Object.fromEntries(
+        Object.entries(data.database.discussionChildTables).map(([name, table]) => [
+          name,
+          table.tableName,
+        ]),
+      ),
       ...tableNames,
       S3_BUCKET_NAME: data.uploadBucket.bucket.bucketName,
       // Strategy ID はアプリが起動時に GetMemory で引く（手で書き写さない）
@@ -277,6 +284,23 @@ export class AppStack extends Stack {
       'dynamodb:UpdateItem',
       'dynamodb:DeleteItem',
     );
+    // 議論の発言・レポートとインタビュー（U6、NFR1.64）。Scan を除く 8 つの操作を 4 テーブル
+    // （とそのインデックス）を並べた 1 つの文で付ける。ポリシーの上限（10,240 文字）に近いため
+    // テーブルごとに文を足さない。後始末のスクリプトはタスクロールでは動かさない
+    const childTables = Object.values(data.database.discussionChildTables);
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:BatchGetItem',
+        'dynamodb:Query',
+        'dynamodb:PutItem',
+        'dynamodb:BatchWriteItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem',
+        'dynamodb:ConditionCheckItem',
+      ],
+      resources: childTables.flatMap((table) => [table.tableArn, `${table.tableArn}/index/*`]),
+    }));
     this.grantUploadBucket(taskRole, data.uploadBucket.bucket);
     // 部署の一覧（DepartmentDirectory、ADR-009）と所有者の名前の写し（OwnerDirectory、U4）。
     // v1 の User Pool の ListGroups・ListUsers だけ（NFR3.8、NFR2.7）

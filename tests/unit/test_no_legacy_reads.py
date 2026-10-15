@@ -1,9 +1,12 @@
-"""古い 2 つの紐付けのテーブルを読むコードが残っていないこと（U5）。
+"""古い読み手が残っていないこと（U5・U6）。
 
-infrastructure-specification.md「古いテーブルの読み手の付け替え」: U5 で古い
+U5（infrastructure-specification.md「古いテーブルの読み手の付け替え」）: 古い
 PersonaDatasetBindings・PersonaKBBindings の権限と環境変数を外すため、それらを読む
-コードが 1 つでも残ると、新しいタスクで紐付けの読み出しが失敗する。デプロイの前に
-src/ と web/ に名前が残っていないことを確かめる。
+コードが 1 つでも残ると、新しいタスクで紐付けの読み出しが失敗する。
+
+U6（BR8.2、NFR2.15）: Discussions の型固定の GSI（CreatedAtIndex・TopicIndex・
+ModeIndex）を読むコードを残さない（CDK から外すのは U9）。判定を通らずにペルソナを
+読む ``get_persona_unchecked`` もなくす（BR2.8、NFR1.46）。
 """
 
 from pathlib import Path
@@ -18,6 +21,11 @@ _LEGACY_NAMES = (
     "PERSONA_KB_BINDINGS_TABLE_NAME",
     "get_bindings_by_persona",
     "get_kb_binding_by_persona",
+    # U6
+    "CreatedAtIndex",
+    "TopicIndex",
+    "ModeIndex",
+    "get_persona_unchecked",
 )
 
 
@@ -33,7 +41,7 @@ def _sources() -> list[Path]:
 
 
 @pytest.mark.parametrize("name", _LEGACY_NAMES)
-def test_no_source_names_the_legacy_binding_tables(name):
+def test_no_source_names_the_legacy_readers(name):
     offenders = [
         str(p.relative_to(_ROOT))
         for p in _sources()

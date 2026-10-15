@@ -75,6 +75,7 @@
            data-persona-tags="{{ persona.tags | join(',') }}">
         <input type="checkbox"
                data-persona-id="{{ persona.id }}"
+               data-persona-shared="{{ 'true' if tab == 'shared' else 'false' }}"
                data-persona-name="{{ persona.name }}"
                data-persona-occupation="{{ persona.occupation }}"
                data-persona-age="{{ persona.age }}"
@@ -94,11 +95,15 @@
                          data-avatar-name="{{ persona.name }}"
                          data-avatar-size="40"></div>
                     <div class="min-w-0">
-                        <h4 class="font-semibold text-gray-900 truncate" title="{{ persona.name }}">{{ persona.name }}</h4>
+                        <h3 class="font-semibold text-gray-900 truncate" title="{{ persona.name }}">{{ persona.name }}</h3>
                         <p class="text-sm text-gray-500 flex items-center gap-1 min-w-0">
                             <span class="truncate" title="{{ persona.occupation }}">{{ persona.occupation }}</span>
                             <span class="flex-shrink-0">/ {{ persona.age }}歳</span>
                         </p>
+                        {%- if tab == "shared" %}
+                        {#- M13: 共有されたペルソナは文字で示す（選んで使える。記憶には書き込まれない） #}
+                        <p class="mt-1">{{ status_label("共有") }}</p>
+                        {%- endif %}
                         {{ owner_line(persona, tab, listing) }}
                     </div>
                 </div>
@@ -118,7 +123,7 @@
                 </div>
             </div>
             <!-- プロフィール（背景）。flex-1 で余白を吸収しカード高さをグリッドで統一 -->
-            <p class="text-xs text-gray-400 mt-2 line-clamp-3 flex-1">
+            <p class="text-xs text-gray-600 mt-2 line-clamp-3 flex-1">
                 {{ persona.background }}
             </p>
             {% if persona.tags %}

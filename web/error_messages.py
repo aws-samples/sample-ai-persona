@@ -71,6 +71,10 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.ACCESS_DENIED: "この操作の権限がありません",
     ErrorCode.REQUEST_INVALID: "入力内容を確認してください",
     ErrorCode.HTTP_ERROR: "お探しのページまたは操作が見つかりません",
+    # 同じインタビューで応答の途中（v1.0.0 U6、約束 C5。送信と保存の両方）
+    ErrorCode.CONCURRENT_UPDATE: (
+        "応答の途中です。応答が終わってからもう一度操作してください"
+    ),
     # --- 部署への共有（v1.0.0 U4） ---
     ErrorCode.SHARE_SCOPE_INVALID: "選べないグループが含まれています",
     ErrorCode.SHARE_NO_DEPARTMENT: "所属グループがないため共有できません",
@@ -234,6 +238,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "ドキュメントの合計サイズが制限を超えています（最大{max_size_mb:.0f}MB）"
     ),
     ErrorCode.DISCUSSION_NOT_FOUND: "議論が見つかりません",
+    ErrorCode.DISCUSSION_TOO_LARGE: (
+        "議論が大きすぎるため保存できません。資料やインサイトを減らしてください"
+    ),
     ErrorCode.DISCUSSION_ROUNDS_TOO_FEW: (
         "ラウンド数は{min_rounds}以上で指定してください"
     ),

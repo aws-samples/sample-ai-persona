@@ -211,47 +211,59 @@ class TestSavePersona:
             manager.save_persona(OWNER, persona)
 
 
-class TestGetPersona:
-    """get_persona_unchecked のテスト（議論・インタビューが U6 まで使う読み出し）
+class TestGetPersonasForUse:
+    """get_personas_for_use（議論・インタビューの開始、U6 BR2.8）
 
-    利用者を受け取る get_persona の判定は test_persona_manager_bindings.py が確かめる。
+    参加者は ParticipantReader が判定してから本体を読む。判定を通らない読み出し
+    （get_persona_unchecked）はなくした。利用者を受け取る get_persona の判定は
+    test_persona_manager_bindings.py が確かめる。
     """
 
     @pytest.fixture
-    def manager(self):
-        manager = PersonaManager(database_service=Mock())
-        manager.get_persona = manager.get_persona_unchecked  # type: ignore[method-assign]
-        return manager
+    def world(self):
+        from tests.unit.discussion_world import World
 
-    def test_empty_id_raises(self, manager):
+        return World()
+
+    @pytest.fixture
+    def manager(self, world):
+        return PersonaManager(database_service=Mock(), participants=world.participants)
+
+    def test_readable_personas_in_order(self, manager, world):
+        from tests.unit.discussion_world import OWNER as RUNNER
+
+        personas = manager.get_personas_for_use(RUNNER, ["p2", "p1"])
+        assert [p.id for p in personas] == ["p2", "p1"]
+
+    def test_one_unreadable_persona_stops_all(self, manager, world):
+        from tests.unit.discussion_world import OWNER as RUNNER
+
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.get_personas_for_use(RUNNER, ["p1", "p3"])
+        world.bodies.get_personas_by_ids.assert_not_called()
+
+    def test_missing_persona_is_not_found(self, manager):
+        from tests.unit.discussion_world import OWNER as RUNNER
+
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.get_personas_for_use(RUNNER, ["p1", "nonexistent"])
+
+    def test_no_ids_is_invalid(self, manager):
+        from tests.unit.discussion_world import OWNER as RUNNER
+
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
-            manager.get_persona("")
+            manager.get_personas_for_use(RUNNER, ["", " "])
 
-    def test_found(self, manager):
-        persona = Persona.create_new(
-            name="X",
-            age=20,
-            occupation="Y",
-            background="Z",
-            values=[],
-            pain_points=[],
-            goals=[],
-        )
-        manager.database_service.get_persona.return_value = persona
-        result = manager.get_persona("p1")
-        assert result == persona
+    def test_ai_execute_comes_before_the_personas(self, manager, world):
+        """C12: 権限がなければ、ペルソナの有無を知らせず 403。"""
+        from tests.unit.discussion_world import NO_ROLE
 
-    def test_not_found(self, manager):
-        manager.database_service.get_persona.return_value = None
-        result = manager.get_persona("p1")
-        assert result is None
+        with pytest.raises(AccessDeniedError):
+            manager.get_personas_for_use(NO_ROLE, ["nonexistent"])
+        assert world.personas.calls == 0
 
-    def test_db_error(self, manager):
-        from src.services.database_service import DatabaseError
-
-        manager.database_service.get_persona.side_effect = DatabaseError("fail")
-        with pytest.raises(PersonaManagerError):
-            manager.get_persona("p1")
+    def test_the_unchecked_read_is_gone(self, manager):
+        assert not hasattr(manager, "get_persona_unchecked")
 
 
 class TestEditPersona:

@@ -238,6 +238,22 @@ class TestManagerBuildSummaryPrompt:
         assert "これまでの議論の流れ" not in prompt
 
 
+def _run(manager, personas, persona_agents, facilitator, streaming=False) -> list:
+    """Consume the round loop (U6: the runner is a member who may read everyone)."""
+    from tests.unit.discussion_world import OWNER
+
+    return list(
+        manager._rounds(
+            OWNER,
+            personas,
+            "テストトピック",
+            persona_agents,
+            facilitator,
+            streaming=streaming,
+        )
+    )
+
+
 class TestAgentDiscussionContextManagement:
     """AgentDiscussionManager のコンテキスト管理テスト
 
@@ -251,7 +267,10 @@ class TestAgentDiscussionContextManagement:
         mock_agent_service = Mock()
 
         manager = AgentDiscussionManager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+            agent_service=mock_agent_service,
+            database_service=mock_db_service,
+            # U6: 発言の直前の確かめ直しは常に通す
+            participants=Mock(can_read_all=Mock(return_value=True)),
         )
 
         # ペルソナエージェント（messages属性をリストで持つ）
@@ -294,12 +313,7 @@ class TestAgentDiscussionContextManagement:
             sample_persona, sample_persona_2, rounds=2
         )
 
-        manager.start_agent_discussion(
-            personas=[sample_persona, sample_persona_2],
-            topic="テストトピック",
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
+        _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
         # ラウンド2開始時にクリアが呼ばれること
         for agent in persona_agents:
@@ -312,12 +326,7 @@ class TestAgentDiscussionContextManagement:
             sample_persona, sample_persona_2, rounds=1
         )
 
-        manager.start_agent_discussion(
-            personas=[sample_persona, sample_persona_2],
-            topic="テストトピック",
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
+        _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
         for agent in persona_agents:
             agent.clear_conversation_history.assert_not_called()
@@ -329,12 +338,7 @@ class TestAgentDiscussionContextManagement:
             sample_persona, sample_persona_2, rounds=2
         )
 
-        manager.start_agent_discussion(
-            personas=[sample_persona, sample_persona_2],
-            topic="テストトピック",
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
+        _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
         # ラウンド2でrespond()に渡されたプロンプトにラウンド1の要約が含まれること
         round2_respond_calls = persona_agents[0].respond.call_args_list[1:]
@@ -348,12 +352,7 @@ class TestAgentDiscussionContextManagement:
             sample_persona, sample_persona_2, rounds=1
         )
 
-        manager.start_agent_discussion(
-            personas=[sample_persona, sample_persona_2],
-            topic="テストトピック",
-            persona_agents=persona_agents,
-            facilitator=facilitator,
-        )
+        _run(manager, [sample_persona, sample_persona_2], persona_agents, facilitator)
 
         # 全てのrespond呼び出しでcontext=Noneであること
         for agent in persona_agents:
@@ -371,13 +370,12 @@ class TestAgentDiscussionContextManagement:
         )
 
         # ストリーミング版はジェネレータなので全て消費する
-        results = list(
-            manager.start_agent_discussion_streaming(
-                personas=[sample_persona, sample_persona_2],
-                topic="テストトピック",
-                persona_agents=persona_agents,
-                facilitator=facilitator,
-            )
+        results = _run(
+            manager,
+            [sample_persona, sample_persona_2],
+            persona_agents,
+            facilitator,
+            streaming=True,
         )
 
         # ラウンド2開始時にクリアが呼ばれること

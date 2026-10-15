@@ -1,27 +1,68 @@
 """
 Discussion Manager for AI Persona System.
-Handles discussion setup, progress management, and insight generation functionality.
+
+Runs classic discussions and owns the discussion lists, detail, export,
+delete and insight regeneration (v1.0.0 U6).
+
+Every entry point takes the signed-in user (``Principal``) and decides with
+``AccessPolicy``; bodies, messages and reports are saved and read through the
+shared ``DiscussionRecords`` component, the participants through
+``ParticipantReader`` (``.claude/rules/architecture.md``: Managers never import
+each other).
+
+Rules (``functional-design/rules.md``):
+
+- BR2.8: running needs ``ai:execute``; the participants were read with the
+  decision (``PersonaManager.get_personas_for_use``) and are checked again right
+  before the save (BR7.1). An unreadable participant stops the run without a
+  save (``PERSONA_NOT_FOUND``, the streaming run sends ``stopped``).
+- BR2.1〜BR2.3: lists are tabbed (``ResourceSharing``) and re-read strongly;
+  search reads the newest 500 of the tab.
+- BR2.4 / BR2.5: detail and export need read; delete and regeneration need
+  manage (regeneration also needs ``ai:execute``).
+- BR2.6: at most 100 insights.
 """
 
 import json
 import logging
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional
 
 from ..config import config
-from ..models.authz import Principal
+from ..models.authz import Permission, Principal, ResourceType
+from ..models.discussion import Discussion, DiscussionView, DocumentRef
 from ..models.errors import CodedError, ErrorCode
-from ..models.persona import Persona
-from ..models.discussion import Discussion
 from ..models.insight import Insight
 from ..models.insight_category import InsightCategory
+from ..models.message import Message
+from ..models.persona import Persona
+from ..models.sharing import ListTab, TabbedList
 from ..services.ai_service import AIService, AIServiceError
-from ..services.database_service import DatabaseService, DatabaseError
+from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from .components import discussion_validation
+from .components.access_policy import AccessPolicy
+from .components.discussion_records import DiscussionRecords
 from .components.file_attachments import FileAttachments
-from .components.sharing_runtime import build_access_parts, shared_access_parts
+from .components.owner_directory import OwnerDirectory
+from .components.participant_reader import ParticipantReader
+from .components.resource_sharing import SEARCH_LIMIT, ResourceSharing
+from .components.sharing_runtime import (
+    DiscussionParts,
+    SharingParts,
+    access_parts_from,
+    discussion_parts_from,
+    sharing_parts_from,
+)
+
+_DISCUSSION = ResourceType.DISCUSSION
+#: Owner label of a discussion without owner (before v1.0.0).
+OWNER_UNKNOWN = "所有者不明"
+#: Most rows a search returns.
+SEARCH_RESULT_LIMIT = 100
+#: SSE event when a participant became unreadable (M12, BR7.5).
+STOPPED_EVENT = f"data: {json.dumps({'type': 'stopped'}, ensure_ascii=False)}\n\n"
 
 
 class DiscussionManagerError(CodedError):
@@ -30,518 +71,528 @@ class DiscussionManagerError(CodedError):
     pass
 
 
+def _sse(data: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def discussion_parts() -> DiscussionParts:
+    """The per-task ``DiscussionRecords`` / ``ParticipantReader`` (U6)."""
+    return discussion_parts_from(service_factory)
+
+
 class DiscussionManager:
-    """
-    Manager class for handling discussion-related operations.
-    Orchestrates discussion setup, progress management, and insight generation.
-    """
+    """Classic discussions and the discussion lists / detail / delete (U6)."""
 
     def __init__(
         self,
         ai_service: AIService | None = None,
         database_service: Optional[DatabaseService] = None,
         file_attachments: Optional[FileAttachments] = None,
+        discussion_records: Optional[DiscussionRecords] = None,
+        participants: Optional[ParticipantReader] = None,
+        resource_sharing: Optional[ResourceSharing] = None,
+        owners: Optional[OwnerDirectory] = None,
+        s3_service: Any = None,
     ):
         """
         Initialize discussion manager.
 
         Args:
-            ai_service: AI service instance for discussion facilitation (optional, uses singleton if not provided)
-            database_service: Database service instance for persistence (optional, uses singleton if not provided)
-            file_attachments: The per-task ``FileAttachments`` (optional, U5)
+            ai_service: AI service (the singleton when omitted)
+            database_service: Database service (the singleton when omitted)
+            file_attachments: The per-task ``FileAttachments`` (U5)
+            discussion_records: The per-task ``DiscussionRecords`` (U6)
+            participants: The per-task ``ParticipantReader`` (U6)
+            resource_sharing: The per-task ``ResourceSharing`` (U6 lists)
+            owners: The owner-name copy (display only)
+            s3_service: Signs document URLs (``None`` without S3)
         """
         self.logger = logging.getLogger(__name__)
-
-        # Use singleton services if not provided
         self.ai_service = ai_service or service_factory.get_ai_service()
         self.database_service = (
             database_service or service_factory.get_database_service()
         )
         self._attachments = file_attachments
+        self._records = discussion_records
+        self._reader = participants
+        self._sharing = resource_sharing
+        self._owner_directory = owners
+        self._s3 = s3_service
+
+    # --- parts (built lazily) -------------------------------------------------------
 
     @property
-    def _files(self) -> FileAttachments:
+    def _file_attachments(self) -> FileAttachments:
         if self._attachments is None:
-            self._attachments = shared_access_parts(
-                lambda: build_access_parts(
-                    service_factory.get_authz_lookup_service(),
-                    service_factory.get_uploaded_file_store(),
-                    service_factory.get_optional_s3_service(),
-                )
-            ).files
+            self._attachments = access_parts_from(service_factory).files
         return self._attachments
 
-    def _save_with_files(
-        self,
-        discussion: Discussion,
-        principal: Optional[Principal],
-        write: Callable[[], str],
-    ) -> str:
-        """Attach the discussion's documents, then save it (U5 BR5.3).
+    @property
+    def _discussion_records(self) -> DiscussionRecords:
+        if self._records is None:
+            self._records = discussion_parts().records
+        return self._records
 
-        The documents are attached first; if the save fails they are
-        detached again (back to unattached with their expiry). Documents can
-        only be attached by their uploader, so without a user nothing is saved.
+    @property
+    def _participant_reader(self) -> ParticipantReader:
+        if self._reader is None:
+            self._reader = discussion_parts().participants
+        return self._reader
+
+    @property
+    def _resource_sharing(self) -> ResourceSharing:
+        if self._sharing is None:
+            self._sharing = self._sharing_parts().sharing
+        return self._sharing
+
+    @property
+    def _owners(self) -> OwnerDirectory:
+        if self._owner_directory is None:
+            self._owner_directory = self._sharing_parts().owners
+        return self._owner_directory
+
+    @staticmethod
+    def _sharing_parts() -> SharingParts:
+        return sharing_parts_from(service_factory)
+
+    @property
+    def _s3_service(self) -> Any:
+        if self._s3 is None:
+            self._s3 = service_factory.get_optional_s3_service()
+        return self._s3
+
+    # =========================================================================
+    # 実行（BR2.8、BR7.1）
+    # =========================================================================
+
+    def run_classic_discussion_streaming(
+        self,
+        principal: Principal,
+        personas: List[Persona],
+        topic: str,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Generator[str, None, None]:
+        """Run a classic discussion and stream it as SSE lines.
+
+        ``personas`` were read with the decision; they are checked again
+        right before the save. An unreadable participant ends the stream with
+        a ``stopped`` event and nothing is saved (BR7.1, M12).
+
+        Yields:
+            str: ``data: {...}`` lines (``message``, ``complete`` / ``stopped``).
 
         Raises:
-            DiscussionManagerError: The documents could not be attached
-                (``FILE_NOT_FOUND`` etc.); the discussion is not saved.
+            AccessDeniedError: The user lacks ``ai:execute``.
+            DiscussionManagerError: Validation, AI or save failures.
         """
-        file_ids = [str(d["id"]) for d in (discussion.documents or []) if d.get("id")]
-        attached = None
-        if file_ids:
-            if principal is None:
-                raise DiscussionManagerError(
-                    "documents need the uploader", code=ErrorCode.FILE_NOT_FOUND
-                )
-            try:
-                attached = self._files.attach_all(
-                    principal, file_ids, "discussion", discussion.id
-                )
-            except CodedError as e:
-                raise DiscussionManagerError(
-                    f"documents could not be attached ({type(e).__name__})",
-                    code=e.code,
-                    context=e.context,
-                ) from e
-        try:
-            return write()
-        except Exception:
-            if attached is not None:
-                self._files.detach(attached)
-            raise
+        self._require_ai(principal)
+        self._validate_discussion_input(personas, topic)
+        documents_data, documents = self._load_documents(document_ids, principal)
 
-    def start_discussion(
+        messages: List[Message] = []
+        for message in self.ai_service.facilitate_discussion_streaming(
+            personas, topic, documents=documents_data
+        ):
+            messages.append(message)
+            yield _sse(
+                {
+                    "type": "message",
+                    "persona_id": message.persona_id,
+                    "persona_name": message.persona_name,
+                    "content": message.content,
+                }
+            )
+
+        if not self._participant_reader.can_read_all(
+            principal, [p.id for p in personas]
+        ):
+            self.logger.info("Classic discussion stopped: a participant is gone")
+            yield STOPPED_EVENT
+            return
+
+        discussion = self._save(
+            principal, personas, topic, documents, messages, categories
+        )
+        yield _sse(
+            {
+                "type": "complete",
+                "discussion_id": discussion.id,
+                "message_count": len(messages),
+                "insight_count": len(discussion.insights),
+            }
+        )
+
+    def run_classic_discussion(
+        self,
+        principal: Principal,
+        personas: List[Persona],
+        topic: str,
+        categories: Optional[List[InsightCategory]] = None,
+        document_ids: Optional[List[str]] = None,
+    ) -> Discussion:
+        """Run, add insights and save a classic discussion (BR2.8, BR7.1).
+
+        Raises:
+            AccessDeniedError: The user lacks ``ai:execute``.
+            CodedError: ``PERSONA_NOT_FOUND`` when a participant became
+                unreadable before the save (nothing saved).
+            DiscussionManagerError: Validation, AI or save failures.
+        """
+        self._require_ai(principal)
+        self._validate_discussion_input(personas, topic)
+        documents_data, documents = self._load_documents(document_ids, principal)
+        messages = self._facilitate(personas, topic, documents_data)
+        self._participant_reader.ensure_all_readable(
+            principal, [p.id for p in personas]
+        )
+        return self._save(principal, personas, topic, documents, messages, categories)
+
+    def _facilitate(
         self,
         personas: List[Persona],
         topic: str,
-        document_ids: Optional[List[str]] = None,
-        principal: Optional[Principal] = None,
-    ) -> Discussion:
-        """
-        Start a discussion between selected personas on a given topic.
-
-        This method implements the complete discussion workflow:
-        1. Validates input parameters (personas and topic)
-        2. Loads document files if document_ids provided
-        3. Creates a new discussion instance
-        4. Uses AI service to facilitate discussion between personas
-        5. Returns the discussion with generated messages
-
-        Args:
-            personas: List of Persona objects participating in the discussion
-            topic: Discussion topic string
-            document_ids: Optional list of document IDs to include in discussion
-
-        Returns:
-            Discussion: Discussion object with generated messages
-
-        Raises:
-            DiscussionManagerError: If discussion start fails
-        """
-        # Validate input parameters
-        self._validate_discussion_input(personas, topic)
-
-        # Load and validate documents if provided
-        documents_data = None
-        documents_metadata = None
-        if document_ids:
-            documents_data, documents_metadata = self._load_documents(
-                document_ids, principal
-            )
-
-        self.logger.info(
-            f"Starting discussion with {len(personas)} personas on topic: '{topic[:50]}...'"
-        )
-
+        documents_data: Optional[List[Dict[str, Any]]],
+    ) -> List[Message]:
+        self.logger.info(f"Starting classic discussion with {len(personas)} personas")
         try:
-            # Create new discussion instance with documents metadata
-            discussion = Discussion.create_new(
-                topic=topic.strip(),
-                participants=[persona.id for persona in personas],
-                documents=documents_metadata,
-            )
-
-            # Generate discussion messages using AI service
-            messages = self.ai_service.facilitate_discussion(
-                personas, topic.strip(), documents=documents_data
-            )
-
-            # Add messages to discussion
-            for message in messages:
-                discussion = discussion.add_message(message)
-
-            # Validate discussion results
-            self._validate_discussion_results(discussion, personas)
-
-            self.logger.info(
-                f"Discussion started successfully: {discussion.id} with {len(messages)} messages"
-            )
-            return discussion
-
-        except AIServiceError as e:
-            error_msg = f"AI service error during discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error during discussion start: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-
-    def generate_insights(
-        self, discussion: Discussion, categories: Optional[List[InsightCategory]] = None
-    ) -> List[Insight]:
-        """
-        Generate insights from discussion messages.
-
-        Args:
-            discussion: Discussion object containing messages
-            categories: Optional list of insight categories (uses default if None)
-
-        Returns:
-            List[Insight]: Generated insights from the discussion
-
-        Raises:
-            DiscussionManagerError: If insight generation fails
-        """
-        if not discussion:
-            raise DiscussionManagerError(
-                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
-            )
-
-        if not discussion.messages or len(discussion.messages) < 2:
-            raise DiscussionManagerError(
-                f"discussion has {len(discussion.messages)} messages, minimum is 2",
-                code=ErrorCode.DISCUSSION_RESULT_INVALID,
-            )
-
-        self.logger.info(
-            f"Generating insights for discussion: {discussion.id} with {len(discussion.messages)} messages"
-        )
-
-        try:
-            # Extract insights using AI service (now returns structured data)
-            insight_data_list = self.ai_service.extract_insights(
-                discussion.messages, categories=categories, topic=discussion.topic
-            )
-
-            # Convert structured data to Insight objects
-            insights = self._parse_insights_from_structured_data(insight_data_list)
-
-            # Validate generated insights
-            self._validate_generated_insights(insights)
-
-            self.logger.info(
-                f"Generated {len(insights)} insights for discussion: {discussion.id}"
-            )
-            return insights
-
-        except AIServiceError as e:
-            error_msg = f"AI service error during insight generation: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error during insight generation: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
-            ) from e
-
-    def save_discussion(
-        self, discussion: Discussion, principal: Optional[Principal] = None
-    ) -> str:
-        """
-        Save a discussion to the database.
-
-        U5: its documents are attached to it first (``FileAttachments``);
-        a failed save detaches them again.
-
-        Args:
-            discussion: Discussion object to save
-            principal: The user who started it (the documents' uploader)
-
-        Returns:
-            str: The discussion ID
-
-        Raises:
-            DiscussionManagerError: If save operation fails, or a document
-                cannot be attached (``FILE_NOT_FOUND``)
-        """
-        if not discussion:
-            raise DiscussionManagerError(
-                "discussion is falsy", code=ErrorCode.DISCUSSION_INVALID
-            )
-
-        # Validate discussion before saving
-        self._validate_discussion_for_save(discussion)
-
-        try:
-            discussion_id = self._save_with_files(
-                discussion,
-                principal,
-                lambda: self.database_service.save_discussion(discussion),
-            )
-            self.logger.info(
-                f"Discussion saved successfully: {discussion.topic} (ID: {discussion_id})"
-            )
-            return discussion_id
-
-        except DiscussionManagerError:
-            raise
-        except DatabaseError as e:
-            error_msg = f"Database error while saving discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error while saving discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-
-    def get_discussion(self, discussion_id: str) -> Optional[Discussion]:
-        """
-        Retrieve a discussion by ID.
-
-        Args:
-            discussion_id: ID of the discussion to retrieve
-
-        Returns:
-            Discussion object if found, None otherwise
-
-        Raises:
-            DiscussionManagerError: If retrieval operation fails
-        """
-        if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError(
-                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
-            )
-
-        try:
-            discussion = self.database_service.get_discussion(discussion_id.strip())
-            if discussion:
-                self.logger.debug(
-                    f"Discussion retrieved successfully: {discussion.topic} (ID: {discussion_id})"
+            messages = list(
+                self.ai_service.facilitate_discussion(
+                    personas, topic.strip(), documents=documents_data
                 )
-            else:
-                self.logger.debug(f"Discussion not found: {discussion_id}")
-            return discussion
-
-        except DatabaseError as e:
-            error_msg = f"Database error while retrieving discussion: {e}"
-            self.logger.error(error_msg)
+            )
+        except AIServiceError as e:
+            self.logger.error("AI service error during discussion", exc_info=True)
             raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
+                f"discussion failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error while retrieving discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
+        discussion_validation.validate_results(
+            messages,
+            personas,
+            error_cls=DiscussionManagerError,
+            require_min_content=True,
+            count_statements_only=False,
+        )
+        return messages
 
-    def get_discussion_history(
+    def _save(
         self,
-        limit: int = 21,
-        cursor: Optional[Dict[str, Any]] = None,
+        principal: Principal,
+        personas: List[Persona],
+        topic: str,
+        documents: Optional[List[DocumentRef]],
+        messages: List[Message],
+        categories: Optional[List[InsightCategory]],
+    ) -> Discussion:
+        discussion = Discussion.create_new(
+            topic=topic.strip(),
+            participants=[p.id for p in personas],
+            documents=documents,
+            participant_names={p.id: p.name for p in personas},
+        )
+        discussion = self._attach_insights(discussion, messages, categories)
+        discussion_validation.validate_for_save(
+            discussion,
+            error_cls=DiscussionManagerError,
+            code=ErrorCode.DISCUSSION_INVALID,
+            messages=messages,
+        )
+        return self._discussion_records.save_new(principal, discussion, messages)
+
+    @staticmethod
+    def _require_ai(principal: Principal) -> None:
+        AccessPolicy.require(
+            principal, Permission.AI_EXECUTE, resource_type=_DISCUSSION
+        )
+
+    # =========================================================================
+    # 一覧（BR2.1〜BR2.3）
+    # =========================================================================
+
+    def list_discussions(
+        self,
+        principal: Principal,
+        tab: Optional[str],
+        cursor: Optional[str],
         mode: Optional[str] = None,
-        sort_ascending: bool = False,
-        search_all: bool = False,
-    ) -> Tuple[List[Discussion], Optional[Dict[str, Any]]]:
-        """
-        Retrieve discussions with cursor-based pagination.
+        search: Optional[str] = None,
+    ) -> TabbedList[Discussion]:
+        """One page of a tab, or a search inside the tab (BR2.1, BR2.2).
 
-        Args:
-            limit: Page size.
-            cursor: LastEvaluatedKey from previous call.
-            mode: Filter by mode ('classic', 'agent', 'interview').
-            sort_ascending: If True, oldest first.
-            search_all: If True, fall back to full scan (for topic search).
-
-        Returns:
-            Tuple of (discussions, next_cursor).
-        """
-        try:
-            discussions, next_cursor = self.database_service.get_discussions(
-                limit=limit,
-                cursor=cursor,
-                mode=mode,
-                sort_ascending=sort_ascending,
-                search_all=search_all,
-            )
-            self.logger.info(
-                f"Retrieved {len(discussions)} discussions (next_cursor={'yes' if next_cursor else 'no'})"
-            )
-            return discussions, next_cursor
-
-        except DatabaseError as e:
-            error_msg = f"Database error while retrieving discussion history: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error while retrieving discussion history: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-
-    def delete_discussion(self, discussion_id: str) -> bool:
-        """
-        Delete a discussion from the database.
-
-        Args:
-            discussion_id: ID of the discussion to delete
-
-        Returns:
-            True if deletion was successful, False if discussion not found
+        ``all`` without ``resource:read_all`` is ``mine``; rows are read again
+        strongly and checked with ``can_read`` (NFR1.43).
 
         Raises:
-            DiscussionManagerError: If deletion operation fails
+            CodedError: ``LOOKUP_UNAVAILABLE`` when the index or bodies cannot be read.
         """
-        if not discussion_id or not discussion_id.strip():
-            raise DiscussionManagerError(
-                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
+        sharing = self._resource_sharing
+        active = sharing.effective_tab(principal, ListTab.parse(tab) or ListTab.MINE)
+        mode = mode if mode in ("classic", "agent", "interview") else None
+        query = (search or "").strip()
+        if query:
+            return self._search(principal, active, query, mode)
+        page = sharing.list_page(principal, _DISCUSSION, active, cursor)
+        discussions = self._discussion_records.list_bodies(
+            principal, [t.resource_id for t in page.items], mode=mode
+        )
+        counts = self._counts(principal, {active: page.total}) if cursor is None else {}
+        return self._listing(
+            principal, active, discussions, next_cursor=page.next_cursor, counts=counts
+        )
+
+    def _search(
+        self,
+        principal: Principal,
+        active: ListTab,
+        query: str,
+        mode: Optional[str],
+    ) -> TabbedList[Discussion]:
+        ids, truncated = self._tab_ids(principal, active)
+        found = self._discussion_records.list_bodies(principal, ids, mode=mode)
+        needle = query.lower()
+        matched = [d for d in found if needle in d.topic.lower()][:SEARCH_RESULT_LIMIT]
+        return self._listing(
+            principal,
+            active,
+            matched,
+            counts={active.value: None if truncated else len(ids)},
+            search_truncated=truncated,
+        )
+
+    def _tab_ids(self, principal: Principal, active: ListTab) -> tuple[List[str], bool]:
+        sharing = self._resource_sharing
+        if active is not ListTab.ALL:
+            return sharing.collect_ids(principal, _DISCUSSION, active)
+        ids: List[str] = []
+        cursor: Optional[str] = None
+        while len(ids) <= SEARCH_LIMIT:
+            page = sharing.list_page(principal, _DISCUSSION, ListTab.ALL, cursor)
+            ids += [t.resource_id for t in page.items]
+            cursor = page.next_cursor
+            if not cursor:
+                break
+        return ids[:SEARCH_LIMIT], len(ids) > SEARCH_LIMIT or bool(cursor)
+
+    def list_accessible_discussions(self, principal: Principal) -> List[Discussion]:
+        """The user's own and shared discussions; admins get all (``/api/discussions``)."""
+        sharing = self._resource_sharing
+        if sharing.effective_tab(principal, ListTab.ALL) is ListTab.ALL:
+            ids, _ = self._tab_ids(principal, ListTab.ALL)
+        else:
+            ids = []
+            for tab in (ListTab.MINE, ListTab.SHARED):
+                tab_ids, _ = sharing.collect_ids(principal, _DISCUSSION, tab)
+                ids += tab_ids
+        return self._discussion_records.list_bodies(principal, list(dict.fromkeys(ids)))
+
+    def _counts(
+        self, principal: Principal, known: Dict[ListTab, Optional[int]]
+    ) -> Dict[str, Optional[int]]:
+        sharing = self._resource_sharing
+        tabs = [ListTab.MINE, ListTab.SHARED]
+        if sharing.effective_tab(principal, ListTab.ALL) is ListTab.ALL:
+            tabs.append(ListTab.ALL)
+        return {
+            tab.value: known[tab]
+            if known.get(tab) is not None
+            else sharing.count(principal, _DISCUSSION, tab)
+            for tab in tabs
+        }
+
+    def _listing(
+        self,
+        principal: Principal,
+        active: ListTab,
+        discussions: List[Discussion],
+        *,
+        next_cursor: Optional[str] = None,
+        counts: Dict[str, Optional[int]],
+        search_truncated: bool = False,
+    ) -> TabbedList[Discussion]:
+        sharing = self._resource_sharing
+        owners: Dict[str, Optional[str]] = {}
+        if active is not ListTab.MINE and discussions:
+            labels = self._owners.labels(
+                {d.owner_sub for d in discussions if d.owner_sub}
             )
-
-        try:
-            success = self.database_service.delete_discussion(discussion_id.strip())
-            if success:
-                self.logger.info(f"Discussion deleted successfully: {discussion_id}")
-            else:
-                self.logger.warning(
-                    f"Discussion not found for deletion: {discussion_id}"
+            owners = {
+                d.id: None
+                if labels is None
+                else (
+                    labels.get(d.owner_sub, OWNER_UNKNOWN)
+                    if d.owner_sub
+                    else OWNER_UNKNOWN
                 )
-            return success
+                for d in discussions
+            }
+        shared_with = {
+            d.id: sharing.department_names(
+                sorted(
+                    d.shared_group_ids & principal.group_ids
+                    if active is ListTab.SHARED
+                    else d.shared_group_ids
+                )
+            )
+            for d in discussions
+        }
+        return TabbedList(
+            tab=active,
+            items=discussions,
+            next_cursor=next_cursor,
+            counts=counts,
+            show_all=sharing.effective_tab(principal, ListTab.ALL) is ListTab.ALL,
+            owners=owners,
+            shared_with=shared_with,
+            manageable=frozenset(
+                d.id
+                for d in discussions
+                if not d.is_legacy
+                and sharing.can_manage_body(principal, _DISCUSSION, _list_body(d))
+            ),
+            no_department=not principal.group_ids,
+            search_truncated=search_truncated,
+        )
 
-        except DatabaseError as e:
-            error_msg = f"Database error while deleting discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"Unexpected error while deleting discussion: {e}"
-            self.logger.error(error_msg)
-            raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_OPERATION_FAILED
-            ) from e
+    # =========================================================================
+    # 詳細・エクスポート・資料・削除（BR2.4、BR2.5、BR5.1、BR9.1）
+    # =========================================================================
+
+    def get_discussion(
+        self, principal: Principal, discussion_id: str
+    ) -> DiscussionView:
+        """The discussion for a reader (BR2.4).
+
+        Raises:
+            CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable or missing).
+        """
+        return self._discussion_records.get(principal, discussion_id)
+
+    def export_discussion(
+        self, principal: Principal, discussion_id: str
+    ) -> tuple[str, str]:
+        """``(filename, markdown)`` of a discussion the user may read (BR9.1)."""
+        return self._discussion_records.export_markdown(principal, discussion_id)
+
+    def get_document_urls(
+        self, principal: Principal, view: DiscussionView
+    ) -> Dict[str, str]:
+        """Signed URLs of the documents the user may be served (BR5.1, NFR1.53).
+
+        Every document is read through ``FileAttachments.readable_file`` (the
+        parent discussion's readers); the stored metadata never yields a URL.
+        """
+        urls: Dict[str, str] = {}
+        if not view.discussion.documents or self._s3_service is None:
+            return urls
+        for doc in view.discussion.documents:
+            try:
+                uploaded = self._file_attachments.readable_file(principal, doc.id)
+                if uploaded.file_path.startswith("s3://"):
+                    urls[doc.id] = self._s3_service.generate_presigned_url(
+                        uploaded.file_path
+                    )
+            except CodedError:
+                continue
+            except Exception:
+                self.logger.warning("Signing a document URL failed", exc_info=True)
+        return urls
+
+    def delete_discussion(self, principal: Principal, discussion_id: str) -> bool:
+        """Delete a discussion the user manages, then clean up (BR1.5, BR2.5).
+
+        Raises:
+            CodedError: ``DISCUSSION_NOT_FOUND`` / ``DISCUSSION_OPERATION_FAILED``.
+            AccessDeniedError: Readable but not manageable.
+        """
+        return self._discussion_records.delete(principal, discussion_id)
+
+    # =========================================================================
+    # インサイト（BR1.4、BR2.5、BR2.6）
+    # =========================================================================
 
     def regenerate_insights(
-        self, discussion_id: str, categories: Optional[List[InsightCategory]] = None
+        self,
+        principal: Principal,
+        discussion_id: str,
+        categories: Optional[List[InsightCategory]] = None,
     ) -> List[Insight]:
-        """
-        Regenerate insights for an existing discussion with new categories.
-
-        This method:
-        1. Retrieves the existing discussion
-        2. Generates new insights with the specified categories
-        3. Updates the discussion with new insights (replacing old ones)
-        4. Saves categories to discussion config if provided
-        5. Saves the updated discussion to database
-
-        Args:
-            discussion_id: ID of the discussion to regenerate insights for
-            categories: Optional list of insight categories (uses default if None)
-
-        Returns:
-            List[Insight]: Newly generated insights
+        """Generate the insights again and save only them (BR1.4, BR2.5).
 
         Raises:
-            DiscussionManagerError: If regeneration fails or discussion not found
+            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
+            CodedError: ``DISCUSSION_NOT_FOUND``.
+            DiscussionManagerError: ``DISCUSSION_INSIGHT_GENERATION_FAILED``.
         """
-        if not discussion_id or not discussion_id.strip():
+        self._require_ai(principal)
+        view = self._discussion_records.get_manageable(principal, discussion_id)
+        insights = self._generate_insights(view, categories)
+        updated = self._discussion_records.update_insights(
+            principal, discussion_id, insights
+        )
+        return updated.insights
+
+    def check_insights_allowed(self, principal: Principal, discussion_id: str) -> None:
+        """Refuse an insight job before it is queued (``POST /api/discussions/{id}/insights``).
+
+        The job decides again when it runs (:meth:`regenerate_insights`); this
+        answers 403 / 404 to the caller at once (C12).
+
+        Raises:
+            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
+            CodedError: ``DISCUSSION_NOT_FOUND``, or ``DISCUSSION_OPERATION_FAILED``
+                for a discussion before v1.0.0 (read-only; the job would fail).
+        """
+        self._require_ai(principal)
+        # 読めなければ 404、読めるが管理できなければ 403、v1.0.0 より前の議論は断る
+        self._discussion_records.ensure_manageable(principal, discussion_id)
+
+    def _generate_insights(
+        self, view: DiscussionView, categories: Optional[List[InsightCategory]]
+    ) -> List[Insight]:
+        from .shared.insight_utils import generate_insights
+
+        if len(view.messages) < 2:
             raise DiscussionManagerError(
-                "discussion_id is blank", code=ErrorCode.DISCUSSION_ID_INVALID
+                f"discussion has {len(view.messages)} messages, minimum is 2",
+                code=ErrorCode.DISCUSSION_RESULT_INVALID,
             )
-
-        self.logger.info(f"Regenerating insights for discussion: {discussion_id}")
-
         try:
-            # Retrieve existing discussion
-            discussion = self.get_discussion(discussion_id.strip())
-            if not discussion:
-                raise DiscussionManagerError(
-                    f"discussion {discussion_id!r} not found",
-                    code=ErrorCode.DISCUSSION_NOT_FOUND,
-                )
-
-            # Generate new insights with specified categories
-            new_insights = self.generate_insights(discussion, categories=categories)
-
-            # Create new discussion with updated insights (replacing old ones)
-            updated_discussion = Discussion(
-                id=discussion.id,
-                topic=discussion.topic,
-                participants=discussion.participants,
-                messages=discussion.messages,
-                insights=new_insights,  # Replace with new insights
-                created_at=discussion.created_at,
-                mode=discussion.mode,
-                agent_config=discussion.agent_config,
+            insights = generate_insights(
+                view.messages, view.discussion.topic, categories, self.ai_service
             )
-
-            # Save categories to config if provided
-            if categories:
-                updated_discussion = self._save_categories_to_config(
-                    updated_discussion, categories
-                )
-
-            # Save updated discussion to database
-            self.database_service.save_discussion(updated_discussion)
-
-            self.logger.info(
-                f"Insights regenerated successfully: {discussion_id} with {len(new_insights)} insights"
-            )
-            return new_insights
-
-        except DiscussionManagerError:
-            # Re-raise DiscussionManagerError
-            raise
         except Exception as e:
-            error_msg = f"Unexpected error during insight regeneration: {e}"
-            self.logger.error(error_msg)
+            self.logger.error("Insight generation failed", exc_info=True)
             raise DiscussionManagerError(
-                error_msg, code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED
+                f"insight generation failed ({type(e).__name__})",
+                code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
             ) from e
+        if not insights:
+            raise DiscussionManagerError(
+                "no insights were generated",
+                code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
+            )
+        return insights
+
+    def get_default_categories(self) -> List[Dict[str, Any]]:
+        """デフォルトインサイトカテゴリーを取得する。"""
+        from .shared.insight_utils import get_default_insight_categories
+
+        return [cat.to_dict() for cat in get_default_insight_categories()]
+
+    # =========================================================================
+    # 入力・資料
+    # =========================================================================
 
     def _validate_discussion_input(self, personas: List[Persona], topic: str) -> None:
-        """
-        Validate input parameters for discussion start.
-
-        Args:
-            personas: List of personas to validate
-            topic: Topic string to validate
-
-        Raises:
-            DiscussionManagerError: If validation fails
-        """
         discussion_validation.validate_personas_and_topic(
             personas, topic, error_cls=DiscussionManagerError
         )
 
-    def _readable_document(
-        self, principal: Optional[Principal], doc_id: str
-    ) -> Dict[str, Any]:
-        """The metadata of a document the user may still attach (U5, R-02).
-
-        The same rule as ``attach_all`` at the save (WF6 step 5): the user's
-        own, unexpired, not yet attached upload. Anything else stops the
-        discussion before the AI runs with ``FILE_NOT_FOUND``.
-        """
+    def _readable_document(self, principal: Principal, doc_id: str) -> Any:
+        """A document the user may still attach (U5, R-02)."""
         try:
-            if principal is None:
-                raise CodedError("no user", code=ErrorCode.FILE_NOT_FOUND)
-            uploaded = self._files.attachable_file(principal, doc_id)
+            return self._file_attachments.attachable_file(principal, doc_id)
         except CodedError as e:
             if e.code is not ErrorCode.FILE_NOT_FOUND:
                 raise DiscussionManagerError(
@@ -551,458 +602,83 @@ class DiscussionManager:
             raise DiscussionManagerError(
                 "document not attachable", code=ErrorCode.FILE_NOT_FOUND
             ) from e
-        return {
-            "id": uploaded.id,
-            "original_filename": uploaded.original_filename,
-            "file_path": uploaded.file_path,
-            "file_size": uploaded.file_size,
-            "mime_type": uploaded.mime_type,
-            "uploaded_at": uploaded.uploaded_at,
-        }
 
     def _load_documents(
-        self, document_ids: List[str], principal: Optional[Principal] = None
-    ) -> tuple[Optional[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]:
-        """
-        Load document files and metadata the user may still attach (U5, R-02).
-
-        Args:
-            document_ids: List of document IDs to load
-            principal: The user starting the discussion
+        self, document_ids: Optional[List[str]], principal: Principal
+    ) -> tuple[Optional[List[Dict[str, Any]]], Optional[List[DocumentRef]]]:
+        """The documents' contents for the AI and their references (U5, R-02).
 
         Returns:
-            Tuple of (documents_data, documents_metadata):
-                - documents_data: List of dicts with file_path and mime_type for AI service
-                - documents_metadata: List of dicts with metadata for Discussion model
+            ``(documents_data, documents)``; ``(None, None)`` without documents.
 
         Raises:
-            DiscussionManagerError: If document loading fails (someone else's,
-                expired or already attached documents are ``FILE_NOT_FOUND``)
+            DiscussionManagerError: ``FILE_NOT_FOUND`` (someone else's, expired
+                or attached), ``DISCUSSION_DOCUMENT_NOT_FOUND``,
+                ``DISCUSSION_DOCUMENTS_TOO_LARGE``.
         """
         if not document_ids:
             return None, None
-
-        documents_data = []
-        documents_metadata = []
+        documents_data: List[Dict[str, Any]] = []
+        documents: List[DocumentRef] = []
         total_size = 0
-        # リクエストペイロード全体（PDF含む全コンテンツ合算）の上限。Claude(Bedrock)の制約
-        max_total_size = config.MAX_REQUEST_PAYLOAD_SIZE  # 32MB total request payload
-
+        max_total_size = config.MAX_REQUEST_PAYLOAD_SIZE
         for doc_id in document_ids:
-            file_info = self._readable_document(principal, doc_id)
-
-            # Validate file path exists
-            file_path = file_info.get("file_path")
-            if not file_path:
+            uploaded = self._readable_document(principal, doc_id)
+            file_path = uploaded.file_path
+            if not file_path or (
+                not file_path.startswith("s3://") and not Path(file_path).exists()
+            ):
                 raise DiscussionManagerError(
-                    f"document {doc_id!r} has no file_path",
+                    "document file is missing",
                     code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
                 )
-
-            # S3パスの場合はファイル存在確認をスキップ（S3に保存されている前提）
-            if not file_path.startswith("s3://"):
-                # ローカルファイルの場合のみ存在確認
-                if not Path(file_path).exists():
-                    raise DiscussionManagerError(
-                        f"document file does not exist: {doc_id}",
-                        code=ErrorCode.DISCUSSION_DOCUMENT_NOT_FOUND,
-                    )
-
-            # Check total size
-            file_size = file_info.get("file_size", 0)
-            total_size += file_size
+            total_size += uploaded.file_size
             if total_size > max_total_size:
                 raise DiscussionManagerError(
                     f"total document size {total_size} exceeds {max_total_size}",
                     code=ErrorCode.DISCUSSION_DOCUMENTS_TOO_LARGE,
                     context={"max_size_mb": max_total_size / (1024 * 1024)},
                 )
-
-            # Add to documents_data for AI service
             documents_data.append(
-                {
-                    "file_path": file_path,
-                    "mime_type": file_info.get("mime_type", "application/octet-stream"),
-                }
+                {"file_path": file_path, "mime_type": uploaded.mime_type}
             )
-
-            # Get uploaded_at and convert to string if needed
-            uploaded_at = file_info.get("uploaded_at", datetime.now())
-            if isinstance(uploaded_at, datetime):
-                uploaded_at = uploaded_at.isoformat()
-
-            # Add to documents_metadata for Discussion model
-            documents_metadata.append(
-                {
-                    "id": doc_id,
-                    "filename": file_info.get("original_filename", "unknown"),
-                    "file_path": file_path,
-                    "file_size": file_size,
-                    "mime_type": file_info.get("mime_type", "application/octet-stream"),
-                    "uploaded_at": uploaded_at,
-                }
+            uploaded_at = uploaded.uploaded_at
+            documents.append(
+                DocumentRef(
+                    id=uploaded.id,
+                    filename=uploaded.original_filename,
+                    mime_type=uploaded.mime_type,
+                    file_size=uploaded.file_size,
+                    uploaded_at=uploaded_at.isoformat()
+                    if isinstance(uploaded_at, datetime)
+                    else str(uploaded_at),
+                )
             )
-
-        self.logger.info(
-            f"Loaded {len(documents_data)} documents (total size: {total_size} bytes)"
-        )
-        return documents_data, documents_metadata
-
-    def _validate_discussion_results(
-        self, discussion: Discussion, original_personas: List[Persona]
-    ) -> None:
-        """
-        Validate discussion results after AI generation.
-
-        Args:
-            discussion: Generated discussion to validate
-            original_personas: Original personas that participated
-
-        Raises:
-            DiscussionManagerError: If validation fails
-        """
-        discussion_validation.validate_results(
-            discussion,
-            original_personas,
-            error_cls=DiscussionManagerError,
-            require_min_content=True,
-            count_statements_only=False,
-        )
-
-    def _validate_discussion_for_save(self, discussion: Discussion) -> None:
-        """
-        Validate a discussion object before saving.
-
-        Args:
-            discussion: Discussion object to validate
-
-        Raises:
-            DiscussionManagerError: If validation fails
-        """
-        discussion_validation.validate_for_save(
-            discussion,
-            error_cls=DiscussionManagerError,
-            code=ErrorCode.DISCUSSION_INVALID,
-        )
-
-        # Validate insights if present (discussion モード固有: エージェント議論には無い)
-        if discussion.insights:
-            for i, insight in enumerate(discussion.insights):
-                if not insight.category or not insight.description:
-                    raise DiscussionManagerError(
-                        f"insight at index {i} has no category or description",
-                        code=ErrorCode.DISCUSSION_INVALID,
-                    )
-
-    def _parse_insights_from_structured_data(
-        self, insight_data_list: List[Dict[str, Any]]
-    ) -> List[Insight]:
-        """
-        Parse structured insight data into Insight objects.
-
-        Args:
-            insight_data_list: List of structured insight data dictionaries
-
-        Returns:
-            List[Insight]: Parsed Insight objects
-
-        Raises:
-            DiscussionManagerError: If parsing fails
-        """
-        insights = []
-
-        for i, insight_data in enumerate(insight_data_list):
-            try:
-                # Validate required fields
-                if not isinstance(insight_data, dict):
-                    self.logger.warning(
-                        f"Invalid insight data at index {i}: not a dictionary"
-                    )
-                    continue
-
-                required_fields = ["category", "description", "confidence_score"]
-                for field in required_fields:
-                    if field not in insight_data:
-                        raise ValueError(f"Missing required field: {field}")
-
-                # Create insight object with AI-provided confidence score
-                insight = Insight.create_new(
-                    category=insight_data["category"],
-                    description=insight_data["description"],
-                    supporting_messages=[],  # Will be populated later if needed
-                    confidence_score=float(insight_data["confidence_score"]),
-                )
-
-                insights.append(insight)
-
-            except Exception as e:
-                self.logger.warning(f"Failed to parse insight at index {i}: {e}")
-                # Continue with other insights instead of failing completely
-                continue
-
-        return insights
-
-    def _validate_generated_insights(self, insights: List[Insight]) -> None:
-        """
-        Validate generated insights.
-
-        Args:
-            insights: List of insights to validate
-
-        Raises:
-            DiscussionManagerError: If validation fails
-        """
-        if not insights:
-            raise DiscussionManagerError(
-                "no insights were generated",
-                code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
-            )
-
-        if len(insights) < 3:
-            self.logger.warning(
-                f"生成されたインサイト数が少なすぎます: {len(insights)}"
-            )
-            # Warning only, don't fail
-
-        for i, insight in enumerate(insights):
-            if not insight:
-                raise DiscussionManagerError(
-                    f"insight at index {i} is falsy",
-                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
-                )
-
-            if not insight.category or not insight.category.strip():
-                raise DiscussionManagerError(
-                    f"insight at index {i} has no category",
-                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
-                )
-
-            if not insight.description or not insight.description.strip():
-                raise DiscussionManagerError(
-                    f"insight at index {i} has no description",
-                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
-                )
-
-            if len(insight.description.strip()) < 10:
-                raise DiscussionManagerError(
-                    f"insight at index {i} description length "
-                    f"{len(insight.description.strip())} below minimum 10",
-                    code=ErrorCode.DISCUSSION_INSIGHT_GENERATION_FAILED,
-                )
-
-    def _save_categories_to_config(
-        self, discussion: Discussion, categories: List[InsightCategory]
-    ) -> Discussion:
-        """
-        Save insight categories to discussion's agent_config.
-
-        Args:
-            discussion: Discussion object to update
-            categories: List of insight categories to save
-
-        Returns:
-            Discussion: Updated discussion with categories in agent_config
-        """
-        if not categories:
-            return discussion
-
-        # Convert categories to dict format for storage
-        categories_data = [cat.to_dict() for cat in categories]
-
-        # Update or create agent_config
-        agent_config = discussion.agent_config or {}
-        agent_config["insight_categories"] = categories_data
-
-        # Create new discussion instance with updated config
-        return Discussion(
-            id=discussion.id,
-            topic=discussion.topic,
-            participants=discussion.participants,
-            messages=discussion.messages,
-            insights=discussion.insights,
-            created_at=discussion.created_at,
-            mode=discussion.mode,
-            agent_config=agent_config,
-            documents=discussion.documents,
-        )
-
-    def facilitate_discussion_streaming(  # type: ignore[return]
-        self,
-        personas: List[Persona],
-        topic: str,
-        documents: Optional[List[Dict[str, Any]]] = None,
-    ) -> Any:
-        """
-        簡易モードの議論ストリーミングを実行する。
-
-        Args:
-            personas: 参加ペルソナリスト
-            topic: 議論トピック
-            documents: ドキュメントデータ（オプション）
-
-        Yields:
-            Message: 生成されたメッセージ
-
-        Raises:
-            DiscussionManagerError: バリデーション失敗時
-        """
-        self._validate_discussion_input(personas, topic)
-        return self.ai_service.facilitate_discussion_streaming(
-            personas, topic, documents=documents
-        )
-
-    def get_document_presigned_urls(
-        self, documents: List[Dict[str, Any]]
-    ) -> Dict[str, str]:
-        """
-        ドキュメントの署名付きURLを生成する。
-
-        Args:
-            documents: ドキュメントメタデータのリスト
-
-        Returns:
-            {doc_id: presigned_url} の辞書
-        """
-        document_urls: Dict[str, str] = {}
-        if not documents or not config.S3_BUCKET_NAME:
-            return document_urls
-
-        s3_service = service_factory.get_s3_service()
-
-        for doc in documents:
-            file_path = doc.get("file_path")
-            if file_path and file_path.startswith("s3://"):
-                try:
-                    presigned_url = s3_service.generate_presigned_url(file_path)
-                    document_urls[doc.get("id", file_path)] = presigned_url
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to generate presigned URL for {file_path}: {e}"
-                    )
-
-        return document_urls
-
-    # =========================================================================
-    # フルフローAPI（Router層のワークフローロジックをManager層に統合）
-    # =========================================================================
-
-    def run_classic_discussion_streaming(
-        self,
-        personas: List[Persona],
-        topic: str,
-        categories: Optional[List[InsightCategory]] = None,
-        document_ids: Optional[List[str]] = None,
-        principal: Optional[Principal] = None,
-    ) -> Generator[str, None, None]:
-        """classicモード議論のフルフロー（ストリーミング）。
-
-        1. 入力バリデーション
-        2. ドキュメント読み込み
-        3. 議論実行（メッセージをSSEイベント文字列としてyield）
-        4. Discussionオブジェクト構築
-        5. インサイト生成
-        6. カテゴリー保存
-        7. DB保存
-        8. 完了イベントをyield
-
-        Yields:
-            str: SSE data行（"data: {...}\\n\\n" 形式）
-
-        Raises:
-            DiscussionManagerError: バリデーション失敗、AI/DB例外
-        """
-        self._validate_discussion_input(personas, topic)
-
-        documents_data, documents_metadata = (
-            self._load_documents(document_ids, principal)
-            if document_ids
-            else (None, None)
-        )
-
-        messages = []
-        for message in self.ai_service.facilitate_discussion_streaming(
-            personas, topic, documents=documents_data
-        ):
-            messages.append(message)
-            msg_data = {
-                "type": "message",
-                "persona_id": message.persona_id,
-                "persona_name": message.persona_name,
-                "content": message.content,
-            }
-            yield f"data: {json.dumps(msg_data, ensure_ascii=False)}\n\n"
-
-        discussion = Discussion.create_new(
-            topic=topic,
-            participants=[p.id for p in personas],
-            documents=documents_metadata,
-        )
-        for msg in messages:
-            discussion = discussion.add_message(msg)
-
-        discussion = self._attach_insights(discussion, categories)
-
-        self._save_with_files(
-            discussion,
-            principal,
-            lambda: self.database_service.save_discussion(discussion),
-        )
-
-        complete_data = {
-            "type": "complete",
-            "discussion_id": discussion.id,
-            "message_count": len(messages),
-            "insight_count": len(discussion.insights) if discussion.insights else 0,
-        }
-        yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
-
-    def run_classic_discussion(
-        self,
-        personas: List[Persona],
-        topic: str,
-        categories: Optional[List[InsightCategory]] = None,
-        document_ids: Optional[List[str]] = None,
-        principal: Optional[Principal] = None,
-    ) -> Discussion:
-        """classicモード議論のフルフロー（非ストリーミング）。
-
-        start_discussion() + generate_insights() + save_discussion() を一括実行。
-
-        Returns:
-            Discussion: インサイト付き保存済み議論オブジェクト
-
-        Raises:
-            DiscussionManagerError: バリデーション失敗、AI/DB例外
-        """
-        discussion = self.start_discussion(
-            personas=personas,
-            topic=topic,
-            document_ids=document_ids,
-            principal=principal,
-        )
-
-        discussion = self._attach_insights(discussion, categories)
-
-        self.save_discussion(discussion, principal=principal)
-        return discussion
-
-    def get_default_categories(self) -> List[Dict[str, Any]]:
-        """デフォルトインサイトカテゴリーを取得する。"""
-        from .shared.insight_utils import get_default_insight_categories
-
-        return [cat.to_dict() for cat in get_default_insight_categories()]
+        return documents_data, documents
 
     def _attach_insights(
         self,
         discussion: Discussion,
+        messages: List[Message],
         categories: Optional[List[InsightCategory]],
     ) -> Discussion:
-        """インサイト生成・カテゴリー保存の共通処理。"""
+        """インサイト生成・カテゴリー保存の共通処理（100 件まで、BR2.6）。"""
         from .shared.insight_utils import attach_insights_to_discussion
 
         return attach_insights_to_discussion(
             discussion=discussion,
+            messages=messages,
             categories=categories,
             ai_service=self.ai_service,
             logger=self.logger,
         )
+
+
+def _list_body(discussion: Discussion) -> Dict[str, Any]:
+    """The decision columns of a listed discussion, as a body."""
+    body: Dict[str, Any] = {"id": discussion.id, "topic": discussion.topic}
+    if discussion.owner_sub:
+        body["owner_sub"] = discussion.owner_sub
+    if discussion.shared_group_ids:
+        body["shared_group_ids"] = sorted(discussion.shared_group_ids)
+    return body

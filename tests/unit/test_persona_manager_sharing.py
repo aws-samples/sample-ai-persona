@@ -410,8 +410,8 @@ class TestDetail:
         assert manager.get_persona(MEMBER_A, "p1").id == "p1"
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
             manager.get_persona(MEMBER_B, "p1")
-        # discussions and interviews still read without a decision until U6
-        assert manager.get_persona_unchecked("p1").id == "p1"
+        # U6: the read without a decision is gone
+        assert not hasattr(manager, "get_persona_unchecked")
 
 
 class TestUpdate:

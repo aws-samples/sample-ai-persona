@@ -355,6 +355,69 @@ class FileManager:
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
+    def upload_interview_attachment(
+        self,
+        principal: Principal,
+        file_content: bytes,
+        filename: str,
+        mime_type: Optional[str] = None,
+    ) -> FileMetadata:
+        """
+        インタビューの添付をアップロードする（議論の資料と同じ仕組み、U6 BR3.6）
+
+        本人のキー・``pending`` のタグ・24 時間の期限で置き、セッションには ID だけを持つ。
+        種類と大きさの検査はインタビューのこれまでの検査（画像は ``MAX_IMAGE_SIZE``、
+        それ以外は ``MAX_FILE_SIZE``）のまま。
+
+        Args:
+            principal: アップロードする人（resource:create が要る）
+            file_content: ファイル内容（バイト）
+            filename: 元のファイル名
+            mime_type: ブラウザが送った種類（ファイル名から判らないときに使う）
+
+        Returns:
+            FileMetadata: ファイルメタデータ
+
+        Raises:
+            AccessDeniedError: resource:create がない
+            FileUploadError: ``FILE_MIME_UNSUPPORTED``・``FILE_TOO_LARGE``・
+                ``FILE_OPERATION_FAILED``
+        """
+        from .shared.document_loader import is_image_type, is_supported_mime_type
+
+        AccessPolicy.require(principal, Permission.RESOURCE_CREATE)
+        kind = mimetypes.guess_type(filename)[0] or mime_type or ""
+        if not is_supported_mime_type(kind):
+            raise FileUploadError(
+                f"mime type {kind!r} not supported for interview attachments",
+                code=ErrorCode.FILE_MIME_UNSUPPORTED,
+            )
+        size_limit = (
+            config.MAX_IMAGE_SIZE if is_image_type(kind) else config.MAX_FILE_SIZE
+        )
+        if len(file_content) > size_limit:
+            raise FileUploadError(
+                f"attachment size {len(file_content)} exceeds limit {size_limit}",
+                code=ErrorCode.FILE_TOO_LARGE,
+                context={"max_size_mb": size_limit / (1024 * 1024)},
+            )
+        try:
+            self._security_check(filename, file_content, allow_binary=True)
+            return self._store_upload(
+                principal,
+                file_content,
+                filename,
+                file_type="discussion_document",
+                mime_type=kind,
+            )
+        except (FileUploadError, FileSecurityError):
+            raise
+        except Exception as e:
+            raise FileUploadError(
+                f"interview attachment upload failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
+
     def upload_survey_image(
         self, principal: Principal, file_content: bytes, filename: str
     ) -> FileMetadata:
@@ -454,6 +517,7 @@ class FileManager:
         filename: str,
         *,
         file_type: str,
+        mime_type: Optional[str] = None,
     ) -> FileMetadata:
         """Place the bytes and write the metadata (owner, 24-hour expiry)."""
         uploaded = UploadedFile.create_new(
@@ -462,7 +526,7 @@ class FileManager:
             original_filename=filename,
             file_size=len(file_content),
             file_hash=hashlib.sha256(file_content).hexdigest(),
-            mime_type=mimetypes.guess_type(filename)[0] or "text/plain",
+            mime_type=mime_type or mimetypes.guess_type(filename)[0] or "text/plain",
             now=self._clock(),
         )
         path = self._save_file_securely(file_content, uploaded)

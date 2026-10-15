@@ -5,11 +5,13 @@ DiscussionManager, AgentDiscussionManager から共通利用される
 """
 
 import logging
+from dataclasses import replace
 from typing import Dict, List, Optional
 
-from ...models.discussion import Discussion
+from ...models.discussion import MAX_INSIGHTS, Discussion
 from ...models.insight import Insight
 from ...models.insight_category import InsightCategory
+from ...models.message import Message
 
 
 def normalize_and_deduplicate_insights(
@@ -85,6 +87,7 @@ def _deduplicate_by_description(insights: List[Dict]) -> List[Dict]:
 
 def attach_insights_to_discussion(
     discussion: Discussion,
+    messages: List[Message],
     categories: Optional[List[InsightCategory]],
     ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
     logger: logging.Logger,
@@ -93,12 +96,13 @@ def attach_insights_to_discussion(
 
     1. AIServiceでインサイト抽出（生データ）
     2. Manager層で正規化・重複除去
-    3. 議論オブジェクトにインサイト追加
+    3. 議論オブジェクトにインサイト追加（先頭の 100 件まで、U6 BR2.6）
     4. カテゴリーをagent_configに保存
     5. 失敗時はインサイトなしの議論をそのまま返す（例外を握りつぶし警告ログ）
 
     Args:
         discussion: インサイトを付与する議論オブジェクト
+        messages: 議論の発言（U6: 発言は本体の外に置く）
         categories: カスタムカテゴリー（Noneならデフォルト使用）
         ai_service: AIServiceインスタンス
         logger: ロガー
@@ -107,14 +111,14 @@ def attach_insights_to_discussion(
         Discussion: インサイト付き議論オブジェクト
     """
     try:
-        raw_insights = ai_service.extract_insights(
-            discussion.messages, categories=categories, topic=discussion.topic
+        insights = generate_insights(messages, discussion.topic, categories, ai_service)
+        if len(insights) > MAX_INSIGHTS:
+            logger.info(
+                f"Insights cut from {len(insights)} to {MAX_INSIGHTS}: {discussion.id}"
+            )
+        discussion = discussion.with_insights(
+            discussion.insights + insights[: MAX_INSIGHTS - len(discussion.insights)]
         )
-        normalized = normalize_and_deduplicate_insights(raw_insights, categories)
-        insights = _parse_insights(normalized)
-
-        for insight in insights:
-            discussion = discussion.add_insight(insight)
 
         if categories:
             discussion = save_categories_to_config(discussion, categories)
@@ -123,9 +127,22 @@ def attach_insights_to_discussion(
             f"Generated {len(insights)} insights for discussion: {discussion.id}"
         )
     except Exception as e:
-        logger.warning(f"インサイト生成に失敗しました: {e}")
+        logger.warning(f"インサイト生成に失敗しました: {type(e).__name__}")
 
     return discussion
+
+
+def generate_insights(
+    messages: List[Message],
+    topic: str,
+    categories: Optional[List[InsightCategory]],
+    ai_service: "AIService",  # type: ignore[name-defined]  # noqa: F821
+) -> List[Insight]:
+    """発言からインサイトを抽出し、正規化・重複除去したものを返す（打ち切りなし）。"""
+    raw_insights = ai_service.extract_insights(
+        messages, categories=categories, topic=topic
+    )
+    return _parse_insights(normalize_and_deduplicate_insights(raw_insights, categories))
 
 
 def save_categories_to_config(
@@ -141,20 +158,10 @@ def save_categories_to_config(
 
     categories_data = [cat.to_dict() for cat in categories]
 
-    agent_config = discussion.agent_config or {}
+    agent_config = dict(discussion.agent_config or {})
     agent_config["insight_categories"] = categories_data
 
-    return Discussion(
-        id=discussion.id,
-        topic=discussion.topic,
-        participants=discussion.participants,
-        messages=discussion.messages,
-        insights=discussion.insights,
-        created_at=discussion.created_at,
-        mode=discussion.mode,
-        agent_config=agent_config,
-        documents=discussion.documents,
-    )
+    return replace(discussion, agent_config=agent_config)
 
 
 def get_default_insight_categories() -> List[InsightCategory]:

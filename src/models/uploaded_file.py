@@ -85,6 +85,8 @@ class UploadedFile:
         expires_at: Epoch seconds; only while unattached (TTL attribute).
         parent_type: ``discussion`` or ``survey_template`` once attached.
         parent_id: The parent's ID once attached.
+        attached_at: Epoch seconds of the attach (written by the store; the
+            cleanup script leaves files attached within the last hour alone).
     """
 
     id: str
@@ -100,6 +102,7 @@ class UploadedFile:
     expires_at: int | None = None
     parent_type: str | None = None
     parent_id: str | None = None
+    attached_at: int | None = None
 
     def __post_init__(self) -> None:
         if self.file_type not in FILE_TYPES:
@@ -185,11 +188,14 @@ class UploadedFile:
             data["parent_type"] = self.parent_type
         if self.parent_id is not None:
             data["parent_id"] = self.parent_id
+        if self.attached_at is not None:
+            data["attached_at"] = int(self.attached_at)
         return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "UploadedFile":
         expires = data.get("expires_at")
+        attached = data.get("attached_at")
         return cls(
             id=str(data["id"]),
             owner_sub=str(data.get("owner_sub", "")),
@@ -204,6 +210,7 @@ class UploadedFile:
             expires_at=None if expires is None else int(expires),
             parent_type=data.get("parent_type"),
             parent_id=data.get("parent_id"),
+            attached_at=None if attached is None else int(attached),
         )
 
 

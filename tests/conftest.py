@@ -414,6 +414,8 @@ def reset_singletons():
         api._discussion_manager = None
         api._job_manager = None
         api._persona_generation_manager = None
+        api._agent_discussion_manager = None
+        api._interview_manager = None
         persona._persona_manager = None
         persona._persona_memory_manager = None
         persona._file_manager = None
@@ -425,6 +427,7 @@ def reset_singletons():
         discussion._file_manager = None
         interview._persona_manager = None
         interview._interview_manager = None
+        interview._file_manager = None
     except (ImportError, AttributeError):
         pass
     try:

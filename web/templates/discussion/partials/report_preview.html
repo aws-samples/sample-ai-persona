@@ -32,7 +32,7 @@
         </form>
     </div>
     {% if save_error is defined and save_error %}
-    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm mt-3">
+    <div data-report-save-error role="alert" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm mt-3">
         {{ save_error }}
     </div>
     {% endif %}

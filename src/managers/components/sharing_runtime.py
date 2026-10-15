@@ -23,8 +23,11 @@ from typing import Any, Callable, Protocol
 from ...config import config
 from ...models.authz import LookupReader, ResourceType
 from ...services.authz_lookup_service import LookupTable
+from .access_policy import AccessPolicy
 from .department_directory import DepartmentDirectory, DepartmentSource
+from .discussion_records import DiscussionRecords, DiscussionStorePort
 from .file_attachments import FileAttachments, FileMetadataStore, ObjectTags
+from .participant_reader import ParticipantReader, PersonaBodies
 from .owner_directory import OwnerDirectory, UserSource
 from .resource_lookup import ResourceLookup, build_resource_lookup
 from .resource_sharing import ResourceSharing, ShareStore, default_sharing_tables
@@ -71,10 +74,11 @@ def shared_parts(build: Callable[[], SharingParts]) -> SharingParts:
 
 def reset_shared_parts() -> None:
     """Forget the parts (tests isolate their caches with this)."""
-    global _parts, _access_parts
+    global _parts, _access_parts, _discussion_parts
     with _lock:
         _parts = None
         _access_parts = None
+        _discussion_parts = None
 
 
 # --- U5: decision reads and file attachments --------------------------------------
@@ -111,6 +115,8 @@ def lookup_tables() -> list[LookupTable]:
     """
     return [
         LookupTable(ResourceType.PERSONA, config.table_name("Personas"), "name"),
+        # U6: 議論（表示名は topic。所有者のない古い議論は owner_sub が空）
+        LookupTable(ResourceType.DISCUSSION, config.table_name("Discussions"), "topic"),
         LookupTable(ResourceType.DATASET, config.table_name("Datasets"), "name"),
         LookupTable(
             ResourceType.KNOWLEDGE_BASE, config.table_name("KnowledgeBases"), "name"
@@ -136,7 +142,13 @@ def build_access_parts(
         (table.resource_type, lookup_service.reader(table)) for table in lookup_tables()
     )
     files = FileAttachments(file_store, tags, **file_options)
-    # U6: files.register_parent("discussion", ...)
+    # U6 BR5.1: 議論を親とする資料は、議論を読める人に配信する
+    files.register_parent(
+        "discussion",
+        lambda principal, discussion_id: AccessPolicy.can_read(
+            principal, lookup.get(ResourceType.DISCUSSION, discussion_id)
+        ),
+    )
     # U7: files.register_parent("survey_template", ...)
     return AccessParts(lookup=lookup, files=files)
 
@@ -149,3 +161,110 @@ def shared_access_parts(build: Callable[[], AccessParts]) -> AccessParts:
             if _access_parts is None:
                 _access_parts = build()
     return _access_parts
+
+
+# --- U6: discussions -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DiscussionParts:
+    """The per-task discussion parts (U6, ADR-006).
+
+    Attributes:
+        records: Saves, reads and deletes discussions (the four Managers).
+        participants: Decision-first reads of participant personas.
+    """
+
+    records: DiscussionRecords
+    participants: ParticipantReader
+
+
+_discussion_parts: DiscussionParts | None = None
+
+
+def build_discussion_parts(
+    store: DiscussionStorePort,
+    persona_bodies: PersonaBodies,
+    sharing: ResourceSharing,
+    access: AccessParts,
+) -> DiscussionParts:
+    """Assemble ``DiscussionRecords`` and ``ParticipantReader`` from shared parts.
+
+    Args:
+        store: ``DiscussionStore``.
+        persona_bodies: Batch reads of persona bodies (``DatabaseService``).
+        sharing: The per-task ``ResourceSharing``.
+        access: The per-task lookup and file attachments.
+    """
+    participants = ParticipantReader(access.lookup, persona_bodies)
+    records = DiscussionRecords(store, sharing, access.files, participants)
+    return DiscussionParts(records=records, participants=participants)
+
+
+def shared_discussion_parts(build: Callable[[], DiscussionParts]) -> DiscussionParts:
+    """The discussion parts of this task; ``build`` runs only for the first caller."""
+    global _discussion_parts
+    if _discussion_parts is None:
+        with _lock:
+            if _discussion_parts is None:
+                _discussion_parts = build()
+    return _discussion_parts
+
+
+class PartsSources(Protocol):
+    """The services the per-task parts are built from (``service_factory``).
+
+    The Managers pass the factory in; this module never imports it.
+    """
+
+    def get_authz_lookup_service(self) -> Any: ...
+
+    def get_uploaded_file_store(self) -> Any: ...
+
+    def get_optional_s3_service(self) -> Any: ...
+
+    def get_resource_share_store(self) -> Any: ...
+
+    def get_department_source(self) -> Any: ...
+
+    def get_user_source(self) -> Any: ...
+
+    def get_discussion_store(self) -> Any: ...
+
+    def get_database_service(self) -> Any: ...
+
+
+def access_parts_from(sources: PartsSources) -> AccessParts:
+    """The per-task access parts, built from ``sources`` on first use."""
+    return shared_access_parts(
+        lambda: build_access_parts(
+            sources.get_authz_lookup_service(),
+            sources.get_uploaded_file_store(),
+            sources.get_optional_s3_service(),
+        )
+    )
+
+
+def sharing_parts_from(sources: PartsSources) -> SharingParts:
+    """The per-task sharing parts, built from ``sources`` on first use."""
+    return shared_parts(
+        lambda: build_sharing_parts(
+            sources.get_resource_share_store(),
+            sources.get_department_source(),
+            sources.get_user_source(),
+        )
+    )
+
+
+def discussion_parts_from(sources: PartsSources) -> DiscussionParts:
+    """The per-task discussion parts (and the parts they use) from ``sources``."""
+    access = access_parts_from(sources)
+    sharing = sharing_parts_from(sources)
+    return shared_discussion_parts(
+        lambda: build_discussion_parts(
+            sources.get_discussion_store(),
+            sources.get_database_service(),
+            sharing.sharing,
+            access,
+        )
+    )

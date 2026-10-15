@@ -1,1607 +1,811 @@
+"""InterviewManager の単体テスト（U6: アプリの外に置いたセッション）。
+
+BR3.1〜BR3.8、BR6.1、BR7.2、NFR1.48〜NFR1.50、NFR1.54、NFR1.59〜NFR1.61、
+NFR2.18、NFR8.19、NFR8.20、NFR9.31〜NFR9.33、AC2.4.1〜AC2.4.3、AC4.2.2、AC4.2.5。
+
+``InterviewSessionStore`` は moto の上の本物、``DiscussionRecords``・
+``ParticipantReader``・``AccessPolicy`` も本物（tests/unit/discussion_world.py）、
+AI はモック。時計は差し替える。
 """
-Interview Manager の単体テスト
-"""
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from unittest.mock import Mock, patch
 
 import pytest
-from unittest.mock import Mock, patch
-from datetime import datetime
 
-from src.managers.interview_manager import (
+moto = pytest.importorskip("moto", reason="moto is required for DynamoDB tests")
+
+import boto3  # noqa: E402
+
+from src.managers.interview_manager import (  # noqa: E402
     InterviewManager,
     InterviewManagerError,
-    InterviewSession,
     InterviewValidationError,
 )
-from src.models.errors import ErrorCode
-from src.models.persona import Persona
-from src.models.message import Message
-from src.services.database_service import DatabaseError
-from tests.error_helpers import raises_code
+from src.models.errors import AccessDeniedError, CodedError, ErrorCode  # noqa: E402
+from src.models.interview_session import InterviewMessage  # noqa: E402
+from src.models.uploaded_file import UploadedFile  # noqa: E402
+from src.services.agent_service import (  # noqa: E402
+    AgentCommunicationError,
+    PersonaAgent,
+)
+from src.services.interview_session_store import InterviewSessionStore  # noqa: E402
+from tests.error_helpers import raises_code  # noqa: E402
+from tests.unit.discussion_world import (  # noqa: E402
+    ADMIN,
+    NO_ROLE,
+    OWNER,
+    PEER,
+    World,
+    persona,
+)
+
+pytestmark = pytest.mark.unit
+
+REGION = "ap-northeast-1"
+SESSIONS = "InterviewSessionsUnit"
+MESSAGES = "InterviewMessagesUnit"
+START = datetime(2026, 10, 15, 9, 0, tzinfo=timezone.utc)
+FILE_1 = "11111111-1111-4111-8111-111111111111"
+FILE_2 = "22222222-2222-4222-8222-222222222222"
 
 
-class TestInterviewSession:
-    """InterviewSession のテストクラス"""
+@dataclass
+class Clock:
+    now: datetime = START
 
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        self.session = InterviewSession(
-            id="test-session-1",
-            participants=["persona-1", "persona-2"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **kwargs: Any) -> None:
+        self.now = self.now + timedelta(**kwargs)
+
+
+def _create_tables(client: Any) -> None:
+    client.create_table(
+        TableName=SESSIONS,
+        KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+        AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    client.create_table(
+        TableName=MESSAGES,
+        KeySchema=[
+            {"AttributeName": "session_id", "KeyType": "HASH"},
+            {"AttributeName": "seq", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "session_id", "AttributeType": "S"},
+            {"AttributeName": "seq", "AttributeType": "N"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+@pytest.fixture
+def client(monkeypatch) -> Any:
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        c = boto3.client("dynamodb", region_name=REGION)
+        _create_tables(c)
+        yield c
+
+
+@pytest.fixture
+def store(client) -> InterviewSessionStore:
+    return InterviewSessionStore(
+        region=REGION, sessions_table=SESSIONS, messages_table=MESSAGES, client=client
+    )
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+def world() -> World:
+    return World()
+
+
+class Agents:
+    """Records every agent the AgentService mock makes."""
+
+    def __init__(self) -> None:
+        self.made: list[Mock] = []
+        self.calls: list[dict[str, Any]] = []
+        self.respond: Any = None
+
+    def make(self, **kw: Any) -> Mock:
+        p = kw["persona"]
+        agent = Mock(spec=PersonaAgent)
+        agent.get_persona_id.return_value = p.id
+        agent.get_persona_name.return_value = p.name
+        agent.respond.side_effect = self.respond or (
+            lambda prompt, context=None: f"{p.name}の回答です"
         )
-
-    def test_interview_session_initialization(self):
-        """InterviewSession の初期化テスト"""
-        assert self.session.id == "test-session-1"
-        assert self.session.participants == ["persona-1", "persona-2"]
-        assert self.session.messages == []
-        assert self.session.is_saved is False
-        assert self.session.enable_memory is False  # デフォルト値
-
-    def test_interview_session_with_memory_enabled(self):
-        """長期記憶を有効にしたInterviewSession の初期化テスト"""
-        session = InterviewSession(
-            id="test-session-memory",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            enable_memory=True,
+        agent.respond_streaming.side_effect = lambda prompt, context=None: iter(
+            [f"{p.name}の", "回答です"]
         )
-        assert session.enable_memory is True
-
-    def test_add_user_message(self):
-        """ユーザーメッセージ追加テスト"""
-        content = "こんにちは、質問があります"
-        new_session = self.session.add_user_message(content)
-
-        # 新しいセッションが返されることを確認
-        assert new_session is not self.session
-        assert len(new_session.messages) == 1
-
-        # メッセージの内容を確認
-        message = new_session.messages[0]
-        assert message.persona_id == "user"
-        assert message.persona_name == "User"
-        assert message.content == content
-        assert message.message_type == "user_message"
-
-    def test_add_user_message_preserves_enable_memory(self):
-        """ユーザーメッセージ追加時にenable_memoryが保持されることを確認"""
-        session = InterviewSession(
-            id="test-session-memory",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            enable_memory=True,
-        )
-        new_session = session.add_user_message("テストメッセージ")
-        assert new_session.enable_memory is True
-
-    def test_add_persona_response(self):
-        """ペルソナ応答追加テスト"""
-        persona_id = "persona-1"
-        persona_name = "田中太郎"
-        content = "ご質問にお答えします"
-
-        new_session = self.session.add_persona_response(
-            persona_id, persona_name, content
-        )
-
-        # 新しいセッションが返されることを確認
-        assert new_session is not self.session
-        assert len(new_session.messages) == 1
-
-        # メッセージの内容を確認
-        message = new_session.messages[0]
-        assert message.persona_id == persona_id
-        assert message.persona_name == persona_name
-        assert message.content == content
-        assert message.message_type == "statement"
-
-    def test_add_persona_response_preserves_enable_memory(self):
-        """ペルソナ応答追加時にenable_memoryが保持されることを確認"""
-        session = InterviewSession(
-            id="test-session-memory",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            enable_memory=True,
-        )
-        new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
-        assert new_session.enable_memory is True
-
-    def test_add_user_message_preserves_persona_models(self):
-        """ユーザーメッセージ追加時にpersona_modelsが保持されることを確認"""
-        session = InterviewSession(
-            id="test-session-models",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "openai.gpt-5.6-terra"},
-        )
-        new_session = session.add_user_message("テストメッセージ")
-        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
-
-    def test_add_persona_response_preserves_persona_models(self):
-        """ペルソナ応答追加時にpersona_modelsが保持されることを確認"""
-        session = InterviewSession(
-            id="test-session-models",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "openai.gpt-5.6-terra"},
-        )
-        new_session = session.add_persona_response("persona-1", "田中太郎", "応答")
-        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
-
-    def test_add_document_preserves_persona_models(self):
-        """ドキュメント追加時にpersona_modelsが保持されることを確認"""
-        session = InterviewSession(
-            id="test-session-models",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "openai.gpt-5.6-terra"},
-        )
-        new_session = session.add_document({"filename": "test.pdf"})
-        assert new_session.persona_models == {"persona-1": "openai.gpt-5.6-terra"}
+        self.made.append(agent)
+        self.calls.append(kw)
+        return agent
 
 
-class TestInterviewManager:
-    """InterviewManager のテストクラス"""
+@pytest.fixture
+def agents() -> Agents:
+    return Agents()
 
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        # テスト用ペルソナデータ
-        self.test_personas = [
-            Persona(
-                id="persona-1",
-                name="田中太郎",
-                age=35,
-                occupation="会社員",
-                background="IT企業で働く中堅社員",
-                values=["効率性", "品質"],
-                pain_points=["時間不足"],
-                goals=["キャリアアップ"],
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            ),
-            Persona(
-                id="persona-2",
-                name="佐藤花子",
-                age=28,
-                occupation="デザイナー",
-                background="フリーランスデザイナー",
-                values=["創造性", "美しさ"],
-                pain_points=["収入の不安定さ"],
-                goals=["独立"],
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            ),
-        ]
 
-        # モックサービスを作成
-        self.mock_agent_service = Mock()
-        self.mock_database_service = Mock()
+def _manager(store, world, clock, agents, **kwargs) -> InterviewManager:
+    agent_service = Mock()
+    agent_service.create_persona_agent.side_effect = agents.make
+    return InterviewManager(
+        agent_service=agent_service,
+        database_service=Mock(),
+        dataset_analysis_service=Mock(build_binding_tools=Mock(return_value=([], []))),
+        binding_store=Mock(list_for_persona=Mock(return_value=[])),
+        session_store=store,
+        discussion_records=world.records,
+        participants=world.participants,
+        file_attachments=world.files,
+        resource_lookup=world.lookup,
+        s3_service=None,
+        clock=clock,
+        **kwargs,
+    )
 
-        # InterviewManager を初期化
-        self.interview_manager = InterviewManager(
-            self.mock_agent_service, self.mock_database_service
-        )
 
-    def test_interview_manager_initialization(self):
-        """InterviewManager の初期化テスト"""
-        assert self.interview_manager is not None
-        assert self.interview_manager._active_sessions == {}
-        assert self.interview_manager._session_agents == {}
+@pytest.fixture
+def manager(store, world, clock, agents) -> InterviewManager:
+    return _manager(store, world, clock, agents)
 
-    @patch("src.managers.interview_manager.uuid.uuid4")
-    def test_start_interview_session_success(self, mock_uuid):
-        """インタビューセッション開始成功テスト"""
-        # モックの設定
-        mock_uuid.return_value = "test-session-id"
 
-        # ペルソナエージェントのモックを作成
-        mock_persona_agents = [
-            Mock(get_persona_id=Mock(return_value="persona-1")),
-            Mock(get_persona_id=Mock(return_value="persona-2")),
-        ]
+def _personas(world: World, *ids: str) -> list:
+    return [world.persona_bodies[i] for i in ids or ("p1", "p2")]
 
-        # _create_interview_persona_agents メソッドをモック
-        self.interview_manager._create_interview_persona_agents = Mock(
-            return_value=mock_persona_agents
-        )
 
-        # インタビューセッションを開始
-        session = self.interview_manager.start_interview_session(self.test_personas)
+def _start(manager, world, principal=OWNER, **kwargs):
+    return manager.start_interview_session(principal, _personas(world), **kwargs)
 
-        # セッションが正しく作成されたことを確認
-        assert session.id == "test-session-id"
-        assert session.participants == ["persona-1", "persona-2"]
-        assert session.messages == []
-        assert session.is_saved is False
 
-        # アクティブセッションに追加されたことを確認
-        assert "test-session-id" in self.interview_manager._active_sessions
-        assert "test-session-id" in self.interview_manager._session_agents
+def _upload(tmp_path, file_id=FILE_1, name="資料.txt", size=None) -> UploadedFile:
+    path = tmp_path / f"{file_id}.txt"
+    path.write_bytes(b"hello")
+    uploaded = UploadedFile.create_new(
+        owner_sub=OWNER.sub,
+        file_type="discussion_document",
+        original_filename=name,
+        file_size=size or 5,
+        file_hash="h",
+        mime_type="text/plain",
+        now=START,
+        file_id=file_id,
+    )
+    return uploaded.with_path(str(path))
 
-    def test_start_interview_session_no_personas(self):
-        """ペルソナなしでのインタビューセッション開始エラーテスト"""
-        with raises_code(InterviewManagerError, ErrorCode.INTERVIEW_PERSONAS_REQUIRED):
-            self.interview_manager.start_interview_session([])
 
-    def test_start_interview_session_too_many_personas(self):
-        """ペルソナ数過多でのインタビューセッション開始エラーテスト"""
-        # 6つのペルソナを作成（上限は5つ）
-        too_many_personas = [Mock(id=f"persona-{i}") for i in range(6)]
+def _events(capsys, name: str) -> list[dict]:
+    out = capsys.readouterr().out
+    lines = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    return [line for line in lines if line.get("event") == name]
 
+
+# =============================================================================
+# 開始（BR3.1、BR6.1）
+# =============================================================================
+
+
+class TestStart:
+    def test_session_is_owned_by_the_starter(self, manager, world, store):
+        session = _start(manager, world)
+        stored = store.get(session.id)
+        assert stored.owner_sub == OWNER.sub
+        assert stored.last_seq == 0
+        assert stored.persona_names == {"p1": "佐藤", "p2": "鈴木"}
+
+    def test_ai_execute_is_required(self, manager, world, agents, client):
+        with pytest.raises(AccessDeniedError):
+            _start(manager, world, principal=NO_ROLE)
+        assert agents.made == []
+        assert client.scan(TableName=SESSIONS)["Count"] == 0
+
+    def test_only_owned_personas_write_memory(self, manager, world, agents):
+        session = _start(manager, world, enable_memory=True, memory_mode="full")
+        modes = {c["persona"].id: c["memory_mode"] for c in agents.calls}
+        assert modes == {"p1": "full", "p2": "retrieve_only"}
+        assert {c["session_id"] for c in agents.calls} == {session.id}
+
+    def test_memory_off_is_disabled(self, manager, world, store):
+        session = _start(manager, world, enable_memory=False)
+        assert store.get(session.id).memory_mode == "disabled"
+
+    def test_no_personas(self, manager):
         with raises_code(
-            InterviewManagerError,
-            ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
-            max_personas=5,
+            InterviewValidationError, ErrorCode.INTERVIEW_PERSONAS_REQUIRED
         ):
-            self.interview_manager.start_interview_session(too_many_personas)
+            manager.start_interview_session(OWNER, [])
 
-    def test_send_user_message_success(self):
-        """ユーザーメッセージ送信成功テスト"""
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        # ペルソナエージェントのモックを作成
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "こんにちは！ご質問をどうぞ。"
-
-        # アクティブセッションに追加
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        # ユーザーメッセージを送信
-        message = "こんにちは、質問があります"
-        responses = self.interview_manager.send_user_message("test-session", message)
-
-        # 応答が正しく生成されたことを確認
-        assert len(responses) == 1
-        assert responses[0].persona_id == "persona-1"
-        assert responses[0].persona_name == "田中太郎"
-        assert responses[0].content == "こんにちは！ご質問をどうぞ。"
-
-        # セッションが更新されたことを確認
-        updated_session = self.interview_manager._active_sessions["test-session"]
-        assert len(updated_session.messages) == 2  # ユーザーメッセージ + ペルソナ応答
-
-    def test_send_user_message_session_not_found(self):
-        """存在しないセッションへのメッセージ送信エラーテスト"""
-        from src.managers.interview_manager import InterviewSessionNotFoundError
-
+    def test_too_many_personas(self, manager):
+        many = [persona(f"x{i}", "a") for i in range(6)]
         with raises_code(
-            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+            InterviewValidationError, ErrorCode.INTERVIEW_TOO_MANY_PERSONAS
         ):
-            self.interview_manager.send_user_message(
-                "nonexistent-session", "test message"
-            )
+            manager.start_interview_session(OWNER, many)
 
-    def test_send_user_message_empty_message(self):
-        """空メッセージ送信エラーテスト"""
-        from src.managers.interview_manager import InterviewValidationError
-
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-        self.interview_manager._active_sessions["test-session"] = session
-
-        with raises_code(
-            InterviewValidationError, ErrorCode.INTERVIEW_MESSAGE_REQUIRED
-        ):
-            self.interview_manager.send_user_message("test-session", "")
-
-    def test_save_interview_session_success(self):
-        """インタビューセッション保存成功テスト"""
-        # メッセージを含むセッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[
-                Message.create_new("user", "User", "質問です", "user_message"),
-                Message.create_new("persona-1", "田中太郎", "回答です", "statement"),
-            ],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        self.interview_manager._active_sessions["test-session"] = session
-
-        # データベースサービスのモック設定
-        self.mock_database_service.save_discussion.return_value = "discussion-id-123"
-
-        # セッションを保存
-        discussion_id = self.interview_manager.save_interview_session("test-session")
-
-        # 保存が成功したことを確認
-        assert discussion_id == "discussion-id-123"
-
-        # データベースサービスが呼ばれたことを確認
-        self.mock_database_service.save_discussion.assert_called_once()
-
-        # セッションが保存済みとしてマークされたことを確認
-        updated_session = self.interview_manager._active_sessions["test-session"]
-        assert updated_session.is_saved is True
-
-    def test_save_interview_session_not_found(self):
-        """存在しないセッションの保存エラーテスト"""
-        from src.managers.interview_manager import InterviewSessionNotFoundError
-
-        with raises_code(
-            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
-        ):
-            self.interview_manager.save_interview_session("nonexistent-session")
-
-    def test_save_interview_session_no_messages(self):
-        """メッセージなしセッションの保存エラーテスト"""
-        # メッセージなしのセッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        self.interview_manager._active_sessions["test-session"] = session
-
-        with raises_code(
-            InterviewManagerError, ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET
-        ):
-            self.interview_manager.save_interview_session("test-session")
-
-    def test_get_interview_session_success(self):
-        """インタビューセッション取得成功テスト"""
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        self.interview_manager._active_sessions["test-session"] = session
-
-        # セッションを取得
-        retrieved_session = self.interview_manager.get_interview_session("test-session")
-
-        # 正しいセッションが取得されたことを確認
-        assert retrieved_session == session
-
-    def test_get_interview_session_not_found(self):
-        """存在しないセッションの取得エラーテスト"""
-        from src.managers.interview_manager import InterviewSessionNotFoundError
-
-        with raises_code(
-            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
-        ):
-            self.interview_manager.get_interview_session("nonexistent-session")
-
-    def test_end_interview_session_success(self):
-        """インタビューセッション終了成功テスト"""
-        # セッションとエージェントを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.dispose = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        # セッションを終了
-        self.interview_manager.end_interview_session("test-session")
-
-        # エージェントのdisposeが呼ばれたことを確認
-        mock_persona_agent.dispose.assert_called_once()
-
-        # セッションが削除されたことを確認
-        assert "test-session" not in self.interview_manager._active_sessions
-        assert "test-session" not in self.interview_manager._session_agents
-
-    def test_end_interview_session_not_found(self):
-        """存在しないセッションの終了エラーテスト"""
-        from src.managers.interview_manager import InterviewSessionNotFoundError
-
-        with raises_code(
-            InterviewSessionNotFoundError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
-        ):
-            self.interview_manager.end_interview_session("nonexistent-session")
-
-    def test_generate_interview_system_prompt(self):
-        """インタビュー用システムプロンプト生成テスト"""
-        prompt = self.interview_manager._generate_interview_system_prompt(
-            self.test_personas[0]
-        )
-
-        # ベースプロンプト（ペルソナ情報）が含まれていることを確認
-        assert self.test_personas[0].name in prompt
-
-        # インタビュー固有の指示が含まれていることを確認
-        assert "インタビュー" in prompt
-        assert "ユーザー" in prompt
-        assert "質問" in prompt
-
-    def test_create_interview_prompt_first_interaction(self):
-        """初回インタラクション用プロンプト生成テスト"""
-        # ペルソナエージェントのモック
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-
-        user_message = "こんにちは、質問があります"
-        context = []
-
-        # プロンプトを生成
-        prompt = self.interview_manager._create_interview_prompt(
-            mock_persona_agent, user_message, context
-        )
-
-        # 必要な要素が含まれていることを確認
-        assert user_message in prompt
-        assert "田中太郎" in prompt
-        assert "質問" in prompt
-
-    def test_create_interview_prompt_with_context(self):
-        """コンテキスト付きプロンプト生成テスト"""
-        # ペルソナエージェントのモック
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-
-        user_message = "追加の質問です"
-        context = [
-            Message.create_new("user", "User", "最初の質問", "user_message"),
-            Message.create_new("persona-1", "田中太郎", "最初の回答", "statement"),
-        ]
-
-        # プロンプトを生成
-        prompt = self.interview_manager._create_interview_prompt(
-            mock_persona_agent, user_message, context
-        )
-
-        # 必要な要素が含まれていることを確認
-        assert user_message in prompt
-        assert "田中太郎" in prompt
-        assert "会話" in prompt
-        assert "最初の質問" in prompt or "最初の回答" in prompt
-
-
-class TestInterviewManagerModelSelectionValidation:
-    """persona_models のバリデーションテスト"""
-
-    def setup_method(self):
-        self.test_personas = [
-            Persona(
-                id="persona-1",
-                name="田中太郎",
-                age=35,
-                occupation="会社員",
-                background="IT企業で働く中堅社員",
-                values=["効率性", "品質"],
-                pain_points=["時間不足"],
-                goals=["キャリアアップ"],
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            ),
-        ]
-        self.mock_agent_service = Mock()
-        self.mock_database_service = Mock()
-        self.interview_manager = InterviewManager(
-            self.mock_agent_service, self.mock_database_service
-        )
-
-    def test_start_interview_session_unsupported_model_raises_validation(self):
-        with pytest.raises(InterviewManagerError) as exc_info:
-            self.interview_manager.start_interview_session(
-                self.test_personas,
-                persona_models={"persona-1": "unknown.model-id"},
-            )
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_UNSUPPORTED
-
-    @patch("src.managers.shared.model_validation.config")
-    def test_start_interview_session_mantle_disabled_raises_config(self, mock_config):
-        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
-        with pytest.raises(InterviewManagerError) as exc_info:
-            self.interview_manager.start_interview_session(
-                self.test_personas,
-                persona_models={"persona-1": "openai.gpt-5.6-terra"},
-            )
-        assert (
-            exc_info.value.code is ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED
-        )
-
-    @patch("src.managers.interview_manager.uuid.uuid4")
-    def test_start_interview_session_stores_persona_models(self, mock_uuid):
-        mock_uuid.return_value = "test-session-id"
-        mock_persona_agents = [
-            Mock(get_persona_id=Mock(return_value="persona-1")),
-        ]
-        self.interview_manager._create_interview_persona_agents = Mock(
-            return_value=mock_persona_agents
-        )
-
-        session = self.interview_manager.start_interview_session(
-            self.test_personas,
-            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
-        )
-
-        assert session.persona_models == {
-            "persona-1": "global.anthropic.claude-sonnet-5"
-        }
-
-
-class TestInterviewManagerMultimodal:
-    """InterviewManagerのマルチモーダル機能テストクラス"""
-
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        # モックサービスを作成
-        self.mock_agent_service = Mock()
-        self.mock_db_service = Mock()
-        self.mock_db_service.initialize_database.return_value = None
-
-        # InterviewManagerを初期化
-        self.interview_manager = InterviewManager(
-            agent_service=self.mock_agent_service, database_service=self.mock_db_service
-        )
-
-        # テスト用ペルソナ
-        self.test_persona = Persona(
-            id="persona-1",
-            name="田中太郎",
-            age=35,
-            occupation="会社員",
-            background="IT企業で働く中堅社員",
-            values=["効率性"],
-            pain_points=["時間不足"],
-            goals=["キャリアアップ"],
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-        )
-
-    def test_send_user_message_with_documents(self):
-        """ドキュメント付きメッセージ送信テスト"""
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        # モックペルソナエージェント
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "画像を見て回答します"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        # ドキュメントコンテンツを準備
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
-        ]
-
-        # メッセージを送信
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "この画像について教えてください",
-            document_contents=document_contents,
-        )
-
-        # ドキュメントコンテンツがエージェントに設定されたことを確認
-        mock_persona_agent.set_document_contents.assert_called_once()
-
-        # 応答が返されたことを確認
-        assert len(responses) == 1
-        assert responses[0].content == "画像を見て回答します"
-
-    def test_send_user_message_without_documents(self):
-        """ドキュメントなしメッセージ送信テスト"""
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        # モックペルソナエージェント
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "通常の回答です"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        # メッセージを送信（ドキュメントなし）
-        responses = self.interview_manager.send_user_message(
-            "test-session", "質問があります"
-        )
-
-        # ドキュメントコンテンツが設定されていないことを確認
-        mock_persona_agent.set_document_contents.assert_not_called()
-
-        # 応答が返されたことを確認
-        assert len(responses) == 1
-        assert responses[0].content == "通常の回答です"
-
-    def test_send_user_message_with_multiple_documents(self):
-        """複数ドキュメント付きメッセージ送信テスト（Claude系モデル選択時）
-
-        実環境のAGENT_MODEL_ID環境変数がMantle系モデルに設定されている場合、
-        persona_models未指定だと環境既定モデルが適用されPDF添付が拒否されるため、
-        Claude系モデルを明示指定して環境変数から独立させる。
-        """
-        # セッションを準備
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1", "persona-2"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={
-                "persona-1": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-                "persona-2": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-            },
-        )
-
-        # モックペルソナエージェント（2人）
-        mock_persona_agent_1 = Mock()
-        mock_persona_agent_1.get_persona_id.return_value = "persona-1"
-        mock_persona_agent_1.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent_1.respond.return_value = "田中の回答"
-        mock_persona_agent_1.set_document_contents = Mock()
-
-        mock_persona_agent_2 = Mock()
-        mock_persona_agent_2.get_persona_id.return_value = "persona-2"
-        mock_persona_agent_2.get_persona_name.return_value = "佐藤花子"
-        mock_persona_agent_2.respond.return_value = "佐藤の回答"
-        mock_persona_agent_2.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [
-            mock_persona_agent_1,
-            mock_persona_agent_2,
-        ]
-
-        # 複数ドキュメントコンテンツを準備
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image_1"}}},
-            {
-                "document": {
-                    "name": "test_doc",
-                    "format": "pdf",
-                    "source": {"bytes": b"fake_pdf"},
-                }
-            },
-        ]
-
-        # メッセージを送信
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "これらのファイルについて教えてください",
-            document_contents=document_contents,
-        )
-
-        # 両方のエージェントにドキュメントコンテンツが設定されたことを確認
-        mock_persona_agent_1.set_document_contents.assert_called_once()
-        mock_persona_agent_2.set_document_contents.assert_called_once()
-
-        # 両方から応答が返されたことを確認
-        assert len(responses) == 2
-
-    def test_send_user_message_with_pdf_mantle_model_passes(self):
-        """Mantle系モデル（GPT/Gemma）選択時でもPDF添付が許可される。
-
-        Strands SDK 1.52.0でOpenAIResponsesModelがfilename付きでdocumentを送信する
-        よう修正され、Mantle側もPDFを正しく受理するようになった（Issue #122）。
-        """
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "openai.gpt-5.6-terra"},
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "PDFを読んで回答します"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {
-                "document": {
-                    "name": "test.pdf",
-                    "format": "pdf",
-                    "source": {"bytes": b"fake_pdf_data"},
-                }
-            }
-        ]
-
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "このPDFについて教えてください",
-            document_contents=document_contents,
-        )
-
-        mock_persona_agent.set_document_contents.assert_called_once()
-        assert len(responses) == 1
-
-    def test_send_user_message_with_image_mantle_model_passes(self):
-        """Mantle系モデル選択時でも画像添付は許可される。"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "openai.gpt-5.6-terra"},
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "画像を見て回答します"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
-        ]
-
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "この画像について教えてください",
-            document_contents=document_contents,
-        )
-
-        mock_persona_agent.set_document_contents.assert_called_once()
-        assert len(responses) == 1
-
-    def test_send_user_message_with_documents_claude_model_passes(self):
-        """Claude系モデル選択時はドキュメント添付が通ることを確認。"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "global.anthropic.claude-sonnet-5"},
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "画像を見て回答します"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
-        ]
-
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "この画像について教えてください",
-            document_contents=document_contents,
-        )
-
-        mock_persona_agent.set_document_contents.assert_called_once()
-        assert len(responses) == 1
-
-    def test_send_user_message_with_oversized_image_gemma4_raises_capacity_error(
-        self,
-    ):
-        """Gemma4選択時、画像がリクエスト全体の上限(3.5MB)を超えるとCAPACITYエラーになる。
-
-        画像自体はMantle経由で許可されるが、Gemma4はリクエストボディ合計3.5MBという
-        別次元の上限を持つ（AWS公式モデルカード実測）。アップロード検証（5MB/枚）は
-        通過してもGemma4選択時はより厳しい上限で拒否される必要がある。
-        """
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "google.gemma-4-31b"},
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "large.png",
-                "mime_type": "image/png",
-                "file_size": 4 * 1024 * 1024,  # 4MB > Gemma4の実効上限(3.5MB*3/4)
-            }
-        ]
-
-        with pytest.raises(InterviewValidationError) as exc_info:
-            self.interview_manager.send_user_message(
-                "test-session",
-                "この画像について教えてください",
-                document_contents=document_contents,
-                document_metadata=document_metadata,
-            )
-
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
-        mock_persona_agent.set_document_contents.assert_not_called()
-
-    def test_send_user_message_with_small_image_gemma4_passes(self):
-        """Gemma4選択時でも上限内の画像は通ることを確認。"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models={"persona-1": "google.gemma-4-31b"},
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "画像を見て回答します"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "small.png",
-                "mime_type": "image/png",
-                "file_size": 1 * 1024 * 1024,  # 1MB < Gemma4の実効上限
-            }
-        ]
-
-        responses = self.interview_manager.send_user_message(
-            "test-session",
-            "この画像について教えてください",
-            document_contents=document_contents,
-            document_metadata=document_metadata,
-        )
-
-        mock_persona_agent.set_document_contents.assert_called_once()
-        assert len(responses) == 1
-
-    def test_send_user_message_unselected_persona_uses_env_default_gemma4(self):
-        """persona_models未選択（config.AGENT_MODEL_IDがGemma4）でもサイズ制限が効くこと。
-
-        Issue #107再レビュー: persona_models=Noneの場合に検証を丸ごとスキップしていたため、
-        環境既定モデル（config.AGENT_MODEL_ID）をGemma4にした運用でサイズ制限を回避できた。
-        """
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            persona_models=None,  # モデル未選択（フォームでモデルを選ばなかった場合）
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "large.png",
-                "mime_type": "image/png",
-                "file_size": 4 * 1024 * 1024,  # 4MB > Gemma4の実効上限
-            }
-        ]
-
-        with patch("src.managers.shared.model_validation.config") as mock_config:
-            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
-            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
-
-            with pytest.raises(InterviewValidationError) as exc_info:
-                self.interview_manager.send_user_message(
-                    "test-session",
-                    "この画像について教えてください",
-                    document_contents=document_contents,
-                    document_metadata=document_metadata,
-                )
-
-        assert exc_info.value.code is ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
-        mock_persona_agent.set_document_contents.assert_not_called()
-
-
-class TestInterviewSessionDocuments:
-    """InterviewSessionのドキュメント追跡機能テストクラス"""
-
-    def test_session_with_documents_field(self):
-        """ドキュメントフィールド付きセッション初期化テスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            enable_memory=False,
-            documents=None,
-        )
-
-        assert session.documents is None
-
-    def test_add_document_to_session(self):
-        """セッションへのドキュメント追加テスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        doc_metadata = {
-            "filename": "test.png",
-            "mime_type": "image/png",
-            "file_size": 1024,
-            "uploaded_at": "2025-01-27T10:00:00",
-        }
-
-        new_session = session.add_document(doc_metadata)
-
-        # 元のセッションは変更されていない
-        assert session.documents is None
-
-        # 新しいセッションにドキュメントが追加されている
-        assert new_session.documents is not None
-        assert len(new_session.documents) == 1
-        assert new_session.documents[0]["filename"] == "test.png"
-
-    def test_add_multiple_documents(self):
-        """複数ドキュメント追加テスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        doc1 = {"filename": "image.png", "mime_type": "image/png", "file_size": 1024}
-        doc2 = {
-            "filename": "document.pdf",
-            "mime_type": "application/pdf",
-            "file_size": 2048,
-        }
-
-        session = session.add_document(doc1)
-        session = session.add_document(doc2)
-
-        assert len(session.documents) == 2
-        assert session.documents[0]["filename"] == "image.png"
-        assert session.documents[1]["filename"] == "document.pdf"
-
-    def test_add_user_message_preserves_documents(self):
-        """ユーザーメッセージ追加時にドキュメントが保持されるテスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            documents=[{"filename": "test.png", "mime_type": "image/png"}],
-        )
-
-        new_session = session.add_user_message("テストメッセージ")
-
-        assert new_session.documents is not None
-        assert len(new_session.documents) == 1
-        assert new_session.documents[0]["filename"] == "test.png"
-
-    def test_add_persona_response_preserves_documents(self):
-        """ペルソナ応答追加時にドキュメントが保持されるテスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            documents=[{"filename": "test.pdf", "mime_type": "application/pdf"}],
-        )
-
-        new_session = session.add_persona_response("persona-1", "田中太郎", "回答です")
-
-        assert new_session.documents is not None
-        assert len(new_session.documents) == 1
-        assert new_session.documents[0]["filename"] == "test.pdf"
-
-
-class TestInterviewManagerDocumentMetadata:
-    """InterviewManagerのドキュメントメタデータ機能テストクラス"""
-
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        self.mock_agent_service = Mock()
-        self.mock_db_service = Mock()
-        self.mock_db_service.initialize_database.return_value = None
-
-        self.interview_manager = InterviewManager(
-            agent_service=self.mock_agent_service, database_service=self.mock_db_service
-        )
-
-    def test_send_user_message_with_document_metadata(self):
-        """ドキュメントメタデータ付きメッセージ送信テスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "回答です"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image"}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "test.png",
-                "mime_type": "image/png",
-                "file_size": 1024,
-                "uploaded_at": "2025-01-27T10:00:00",
-            }
-        ]
-
-        self.interview_manager.send_user_message(
-            "test-session",
-            "画像について教えてください",
-            document_contents=document_contents,
-            document_metadata=document_metadata,
-        )
-
-        # セッションにドキュメントメタデータが追加されていることを確認
-        updated_session = self.interview_manager._active_sessions["test-session"]
-        assert updated_session.documents is not None
-        assert len(updated_session.documents) == 1
-        assert updated_session.documents[0]["filename"] == "test.png"
-
-    def test_send_user_message_avoids_duplicate_documents(self):
-        """重複ドキュメントが追加されないテスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=False,
-            documents=[
-                {"filename": "test.png", "mime_type": "image/png", "file_size": 1024}
-            ],
-        )
-
-        mock_persona_agent = Mock()
-        mock_persona_agent.get_persona_id.return_value = "persona-1"
-        mock_persona_agent.get_persona_name.return_value = "田中太郎"
-        mock_persona_agent.respond.return_value = "回答です"
-        mock_persona_agent.set_document_contents = Mock()
-
-        self.interview_manager._active_sessions["test-session"] = session
-        self.interview_manager._session_agents["test-session"] = [mock_persona_agent]
-
-        # 同じファイル名とサイズのドキュメントを再度送信
-        document_metadata = [
-            {"filename": "test.png", "mime_type": "image/png", "file_size": 1024}
-        ]
-
-        self.interview_manager.send_user_message(
-            "test-session", "同じ画像について", document_metadata=document_metadata
-        )
-
-        # 重複が追加されていないことを確認
-        updated_session = self.interview_manager._active_sessions["test-session"]
-        assert len(updated_session.documents) == 1
-
-    def test_create_discussion_from_session_includes_documents(self):
-        """セッションからDiscussion作成時にドキュメントが含まれるテスト"""
-        session = InterviewSession(
-            id="test-session",
-            participants=["persona-1"],
-            messages=[
-                Message.create_new("user", "User", "質問", "user_message"),
-                Message.create_new("persona-1", "田中太郎", "回答", "statement"),
-            ],
-            created_at=datetime.now(),
-            is_saved=False,
-            documents=[
-                {"filename": "test.png", "mime_type": "image/png", "file_size": 1024},
-                {
-                    "filename": "doc.pdf",
-                    "mime_type": "application/pdf",
-                    "file_size": 2048,
-                },
-            ],
-        )
-
-        discussion = self.interview_manager._create_discussion_from_session(
-            session, "テストセッション"
-        )
-
-        assert discussion.documents is not None
-        assert len(discussion.documents) == 2
-        assert discussion.documents[0]["filename"] == "test.png"
-        assert discussion.documents[1]["filename"] == "doc.pdf"
-
-
-class TestInterviewManagerSessionStatus:
-    """get_session_status, cleanup_inactive_sessions, get_active_sessions_count のテスト"""
-
-    def setup_method(self):
-        self.mock_agent_service = Mock()
-        self.mock_database_service = Mock()
-        self.interview_manager = InterviewManager(
-            self.mock_agent_service, self.mock_database_service
-        )
-
-    def _create_session(self, session_id="s1", age_hours=0):
-        from datetime import timedelta
-
-        session = InterviewSession(
-            id=session_id,
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now() - timedelta(hours=age_hours),
-            is_saved=False,
-        )
-        self.interview_manager._active_sessions[session_id] = session
-        return session
-
-    def test_get_session_status_success(self):
-        self._create_session("s1")
-        status = self.interview_manager.get_session_status("s1")
-        assert status["session_id"] == "s1"
-        assert status["message_count"] == 0
-        assert status["agents_active"] is False
-        assert status["has_user_messages"] is False
-
-    def test_get_session_status_not_found(self):
-        with pytest.raises(InterviewManagerError):
-            self.interview_manager.get_session_status("nonexistent")
-
-    def test_get_session_status_with_messages(self):
-        session = self._create_session("s1")
-        msg = Message.create_new("user", "User", "質問", message_type="user_message")
-        session.messages.append(msg)
-        status = self.interview_manager.get_session_status("s1")
-        assert status["message_count"] == 1
-        assert status["has_user_messages"] is True
-        assert status["last_activity"] is not None
-
-    def test_get_active_sessions_count_empty(self):
-        assert self.interview_manager.get_active_sessions_count() == 0
-
-    def test_get_active_sessions_count(self):
-        self._create_session("s1")
-        self._create_session("s2")
-        assert self.interview_manager.get_active_sessions_count() == 2
-
-    def test_cleanup_inactive_sessions_removes_old(self):
-        self._create_session("old", age_hours=48)
-        self._create_session("new", age_hours=1)
-        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
-        assert cleaned == 1
-        assert "old" not in self.interview_manager._active_sessions
-        assert "new" in self.interview_manager._active_sessions
-
-    def test_cleanup_inactive_sessions_skips_saved(self):
-        session = self._create_session("old", age_hours=48)
-        session.is_saved = True
-        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
-        assert cleaned == 0
-
-    def test_cleanup_inactive_sessions_none_to_clean(self):
-        self._create_session("new", age_hours=1)
-        cleaned = self.interview_manager.cleanup_inactive_sessions(max_age_hours=24)
-        assert cleaned == 0
-
-
-class TestInterviewManagerErrorPaths:
-    """InterviewManager のエラーパス・ストリーミングテスト"""
-
-    def setup_method(self):
-        self.mock_agent_service = Mock()
-        self.mock_database_service = Mock()
-        self.interview_manager = InterviewManager(
-            self.mock_agent_service, self.mock_database_service
-        )
-
-    def _create_active_session(
-        self, session_id="s1", is_saved=False, persona_models=None
-    ):
-        session = InterviewSession(
-            id=session_id,
-            participants=["p1"],
-            messages=[],
-            created_at=datetime.now(),
-            is_saved=is_saved,
-            persona_models=persona_models,
-        )
-        self.interview_manager._active_sessions[session_id] = session
-        return session
-
-    def _add_agents(self, session_id, agents):
-        self.interview_manager._session_agents[session_id] = agents
-
-    # --- memory_mode validation ---
-
-    def test_start_session_invalid_memory_mode(self):
-        from src.managers.interview_manager import InterviewValidationError
-
-        persona = Persona(
-            id="p1",
-            name="X",
-            age=30,
-            occupation="Y",
-            background="Z",
-            values=[],
-            pain_points=[],
-            goals=[],
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-        )
+    def test_invalid_memory_mode(self, manager, world):
         with raises_code(
             InterviewValidationError, ErrorCode.INTERVIEW_MEMORY_MODE_INVALID
         ):
-            self.interview_manager.start_interview_session(
-                [persona], memory_mode="invalid_mode"
-            )
+            _start(manager, world, enable_memory=True, memory_mode="everything")
 
-    # --- send_user_message: saved session guard ---
-
-    def test_send_message_to_saved_session_raises(self):
-        from src.managers.interview_manager import InterviewSessionError
-
-        self._create_active_session("s1", is_saved=True)
+    def test_unsupported_model(self, manager, world):
         with raises_code(
-            InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+            InterviewValidationError, ErrorCode.INTERVIEW_MODEL_UNSUPPORTED
         ):
-            self.interview_manager.send_user_message("s1", "hello")
+            _start(manager, world, persona_models={"p1": "unknown.model-id"})
 
-    # --- send_user_message: no agents ---
-
-    def test_send_message_no_agents_raises(self):
-        from src.managers.interview_manager import InterviewAgentError
-
-        self._create_active_session("s1")
-        self._add_agents("s1", [])
+    @patch("src.managers.shared.model_validation.config")
+    def test_additional_models_disabled(self, mock_config, manager, world):
+        mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
         with raises_code(
-            InterviewAgentError, ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
+            InterviewValidationError,
+            ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
         ):
-            self.interview_manager.send_user_message("s1", "hello")
+            _start(manager, world, persona_models={"p1": "openai.gpt-5.6-terra"})
 
-    # --- send_user_message: agent failure (all fail) ---
-
-    def test_send_message_all_agents_fail(self):
-        from src.managers.interview_manager import InterviewAgentError
-        from src.services.agent_service import AgentCommunicationError
-
-        self._create_active_session("s1")
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.respond.side_effect = AgentCommunicationError("timeout")
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
-
-        with raises_code(InterviewAgentError, ErrorCode.INTERVIEW_AGENT_UNAVAILABLE):
-            self.interview_manager.send_user_message("s1", "質問")
-
-    # --- send_user_message: partial agent failure (some succeed) ---
-
-    def test_send_message_partial_agent_failure(self):
-        from src.services.agent_service import AgentCommunicationError
-
-        self._create_active_session("s1")
-        self._active_sessions_update_participants("s1", ["p1", "p2"])
-
-        agent_ok = Mock()
-        agent_ok.get_persona_id.return_value = "p1"
-        agent_ok.get_persona_name.return_value = "田中"
-        agent_ok.respond.return_value = "回答です"
-        agent_ok.set_document_contents = Mock()
-
-        agent_fail = Mock()
-        agent_fail.get_persona_id.return_value = "p2"
-        agent_fail.get_persona_name.return_value = "佐藤"
-        agent_fail.respond.side_effect = AgentCommunicationError("error")
-        agent_fail.set_document_contents = Mock()
-
-        self._add_agents("s1", [agent_ok, agent_fail])
-
-        responses = self.interview_manager.send_user_message("s1", "質問")
-        assert len(responses) == 1
-        assert responses[0].persona_name == "田中"
-
-    def _active_sessions_update_participants(self, session_id, participants):
-        session = self.interview_manager._active_sessions[session_id]
-        self.interview_manager._active_sessions[session_id] = InterviewSession(
-            id=session.id,
-            participants=participants,
-            messages=session.messages,
-            created_at=session.created_at,
-            is_saved=session.is_saved,
+    def test_persona_models_are_kept(self, manager, world, store):
+        session = _start(
+            manager, world, persona_models={"p1": "global.anthropic.claude-sonnet-5"}
         )
+        assert store.get(session.id).persona_models == {
+            "p1": "global.anthropic.claude-sonnet-5"
+        }
 
-    # --- send_user_message_streaming: basic flow ---
 
-    def test_streaming_basic_flow(self):
-        self._create_active_session("s1")
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.respond_streaming.return_value = iter(["Hello", " World"])
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
+# =============================================================================
+# 持ち主と期限（BR3.2、BR3.5）
+# =============================================================================
 
-        events = list(self.interview_manager.send_user_message_streaming("s1", "質問"))
 
-        event_types = [e[0] for e in events]
-        assert "message_start" in event_types
-        assert "message_delta" in event_types
-        assert "message_end" in event_types
-        assert events[0][0] == "message_start"
-        assert events[-1][0] == "message_end"
-
-    # --- send_user_message_streaming: saved session ---
-
-    def test_streaming_saved_session_raises(self):
-        from src.managers.interview_manager import InterviewSessionError
-
-        self._create_active_session("s1", is_saved=True)
-        with raises_code(
-            InterviewSessionError, ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+class TestOwnerAndExpiry:
+    @pytest.mark.parametrize("principal", [PEER, ADMIN])
+    def test_others_see_nothing(self, manager, world, principal):
+        session = _start(manager, world)
+        for call in (
+            lambda: manager.send_user_message(principal, session.id, "こんにちは"),
+            lambda: manager.get_interview_session(principal, session.id),
+            lambda: manager.get_session_status(principal, session.id),
+            lambda: manager.save_interview_session(principal, session.id, "名前"),
+            lambda: manager.end_interview_session(principal, session.id),
         ):
-            list(self.interview_manager.send_user_message_streaming("s1", "hello"))
+            with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+                call()
 
-    # --- send_user_message_streaming: mantle model + documents ---
+    def test_missing_session(self, manager):
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.get_interview_session(OWNER, "nonexistent")
 
-    def test_streaming_mantle_model_with_pdf_passes(self):
-        """ストリーミング送信でもMantle系モデルでPDF添付が許可される（Issue #122）。"""
-        self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.respond_streaming.return_value = iter(["PDF", "を読みました"])
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
+    def test_idle_for_8_hours_expires(self, manager, world, clock):
+        session = _start(manager, world)
+        clock.advance(hours=8)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.send_user_message(OWNER, session.id, "こんにちは")
 
-        document_contents = [
-            {
-                "document": {
-                    "name": "test.pdf",
-                    "format": "pdf",
-                    "source": {"bytes": b"fake_pdf_data"},
-                }
-            }
-        ]
+    def test_seven_days_is_the_longest(self, manager, world, clock):
+        session = _start(manager, world)
+        for _ in range(23):
+            clock.advance(hours=7)
+            manager.send_user_message(OWNER, session.id, "続けます")
+        # 最後の操作から 7 時間（8 時間未満）でも、始めてから 7 日で無効
+        clock.advance(hours=7)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.get_interview_session(OWNER, session.id)
 
+    def test_sending_extends_the_session(self, manager, world, clock, store):
+        session = _start(manager, world)
+        clock.advance(hours=7)
+        manager.send_user_message(OWNER, session.id, "こんにちは")
+        clock.advance(hours=7)
+        assert manager.get_interview_session(OWNER, session.id).id == session.id
+
+
+# =============================================================================
+# 送信（BR3.3、BR7.2、NFR1.59〜NFR1.61）
+# =============================================================================
+
+
+class TestSend:
+    def test_messages_are_saved_in_order(self, manager, world, store):
+        session = _start(manager, world)
+        reply = manager.send_user_message(OWNER, session.id, "好きな食べ物は？")
+        assert [m.persona_id for m in reply.responses] == ["p1", "p2"]
+        stored = store.get(session.id)
+        assert stored.last_seq == 3 and stored.reply_token is None
+        messages = store.query_messages(session.id, up_to=3)
+        assert [m.speaker for m in messages] == ["user", "persona", "persona"]
+        assert messages[0].content == "好きな食べ物は？"
+
+    def test_unreadable_participant_stops_before_writing(
+        self, manager, world, store, agents
+    ):
+        session = _start(manager, world)
+        world.unshare("p2")
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.send_user_message(OWNER, session.id, "こんにちは")
+        assert store.get(session.id).last_seq == 0
+        assert all(not a.respond.called for a in agents.made)
+
+    def test_empty_and_long_messages(self, manager, world):
+        session = _start(manager, world)
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MESSAGE_REQUIRED
+        ):
+            manager.send_user_message(OWNER, session.id, "   ")
+        with raises_code(
+            InterviewValidationError, ErrorCode.INTERVIEW_MESSAGE_TOO_LONG
+        ):
+            manager.send_user_message(OWNER, session.id, "あ" * 2001)
+
+    def _hold_mark(self, store, session_id, now):
+        session = store.get(session_id)
+        message = InterviewMessage.create_new(
+            session_id=session_id,
+            seq=session.last_seq + 1,
+            speaker="user",
+            persona_id="user",
+            persona_name_at_time="ユーザー",
+            content="別の送信",
+            now=now,
+        )
+        store.append_user_message(session, message, token="other", now=now)
+
+    def test_a_reply_in_progress_refuses_send_and_save(
+        self, manager, world, store, clock, capsys
+    ):
+        session = _start(manager, world)
+        self._hold_mark(store, session.id, clock())
+        with raises_code(CodedError, ErrorCode.CONCURRENT_UPDATE):
+            manager.send_user_message(OWNER, session.id, "こんにちは")
+        with raises_code(CodedError, ErrorCode.CONCURRENT_UPDATE):
+            manager.save_interview_session(OWNER, session.id, "名前")
+        (event, *_) = _events(capsys, "interview.message_conflict")
+        assert event["interview_session_id"] == session.id
+
+    def test_a_stale_mark_is_ignored(self, manager, world, store, clock):
+        session = _start(manager, world)
+        self._hold_mark(store, session.id, clock())
+        clock.advance(minutes=6)
+        reply = manager.send_user_message(OWNER, session.id, "こんにちは")
+        assert len(reply.responses) == 2
+
+    def test_all_agents_failing_releases_the_mark(self, store, world, clock, agents):
+        def boom(prompt, context=None):
+            raise AgentCommunicationError("down")
+
+        agents.respond = boom
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_AGENT_UNAVAILABLE):
+            manager.send_user_message(OWNER, session.id, "こんにちは")
+        stored = store.get(session.id)
+        assert stored.reply_token is None and stored.last_seq == 1
+        # すぐ次の送信と保存の判定が通る（印が残っていない）
+        agents.respond = None
+        for agent in agents.made:
+            agent.respond.side_effect = lambda prompt, context=None: "回答です"
+        assert manager.send_user_message(OWNER, session.id, "もう一度").responses
+
+    def test_one_agent_failing_keeps_the_others(self, store, world, clock, agents):
+        def p2_fails(prompt, context=None):
+            raise AgentCommunicationError("down")
+
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
+        agents.made[1].respond.side_effect = p2_fails
+        reply = manager.send_user_message(OWNER, session.id, "こんにちは")
+        assert [m.persona_id for m in reply.responses] == ["p1"]
+        stored = store.get(session.id)
+        assert stored.last_seq == 2 and stored.reply_token is None
+
+    def test_closing_the_stream_releases_the_mark(self, manager, world, store):
+        session = _start(manager, world)
+        stream = manager.send_user_message_streaming(OWNER, session.id, "こんにちは")
+        next(stream)
+        stream.close()
+        assert store.get(session.id).reply_token is None
+        assert manager.send_user_message(OWNER, session.id, "もう一度").responses
+
+    def test_streaming_sends_each_reply(self, manager, world, store):
+        session = _start(manager, world)
         events = list(
-            self.interview_manager.send_user_message_streaming(
-                "s1",
-                "このPDFについて教えてください",
-                document_contents=document_contents,
-            )
+            manager.send_user_message_streaming(OWNER, session.id, "こんにちは")
         )
+        kinds = [kind for kind, _ in events]
+        assert kinds.count("message_end") == 2
+        assert kinds[0] == "message_start"
+        assert store.get(session.id).last_seq == 3
 
-        mock_agent.set_document_contents.assert_called_once()
-        assert any(e[0] == "message_end" for e in events)
+    def test_a_mark_taken_over_saves_no_reply(
+        self, store, world, clock, agents, client, capsys
+    ):
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
 
-    def test_streaming_mantle_model_with_image_passes(self):
-        self._create_active_session("s1", persona_models={"p1": "openai.gpt-5.6-terra"})
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.respond_streaming.return_value = iter(["赤色", "です"])
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
-
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"fake_image_data"}}}
-        ]
-
-        events = list(
-            self.interview_manager.send_user_message_streaming(
-                "s1",
-                "この画像について教えてください",
-                document_contents=document_contents,
+        def taken_over(prompt, context=None):
+            client.update_item(
+                TableName=SESSIONS,
+                Key={"id": {"S": session.id}},
+                UpdateExpression="SET reply_token = :t",
+                ExpressionAttributeValues={":t": {"S": "someone-else"}},
             )
+            return "回答"
+
+        agents.made[0].respond.side_effect = taken_over
+        with raises_code(CodedError, ErrorCode.CONCURRENT_UPDATE):
+            manager.send_user_message(OWNER, session.id, "こんにちは")
+        assert store.get(session.id).last_seq == 1
+        assert all(a.dispose.called for a in agents.made[:2])
+        assert _events(capsys, "interview.message_conflict")
+
+    def test_later_personas_see_earlier_replies_of_the_same_send(
+        self, store, world, clock, agents
+    ):
+        """BR3.4「今の会話の進め方と同じく」: 2 体目の prompt に 1 体目の今回の応答が入る。"""
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        manager.send_user_message(OWNER, session.id, "質問2")
+
+        (_, second_p1_prompt) = [
+            c.args[0] for c in agents.made[0].respond.call_args_list
+        ]
+        (_, second_p2_prompt) = [
+            c.args[0] for c in agents.made[1].respond.call_args_list
+        ]
+        # 1 体目の今回の応答（2 回目の送信の 佐藤の回答）は 2 体目にだけ見える
+        assert second_p2_prompt.count("佐藤: 佐藤の回答です") == 2
+        assert second_p1_prompt.count("佐藤: 佐藤の回答です") == 1
+        # これまでの会話は最新の 5 件まで（質問1・佐藤・鈴木・質問2・佐藤）
+        context = second_p2_prompt.split("\n\n")[0].splitlines()[1:]
+        assert len(context) == 5
+        assert context[-1] == "佐藤: 佐藤の回答です"
+
+    def test_an_overlapping_send_keeps_the_agents_in_use(
+        self, store, world, clock, agents, monkeypatch
+    ):
+        """同じ台で送信が重なっても、応答中の送信のエージェントを捨てない。"""
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
+        stale = store.get(session.id)
+        real_get = store.get
+        overlapping: list = []
+
+        def stale_once(session_id):
+            # 後の送信は、先の送信が (a) を書く前のセッションを読んだとする
+            monkeypatch.setattr(store, "get", real_get)
+            return stale
+
+        def first_reply(prompt, context=None):
+            monkeypatch.setattr(store, "get", stale_once)
+            with raises_code(CodedError, ErrorCode.CONCURRENT_UPDATE):
+                manager.send_user_message(OWNER, session.id, "割り込み")
+            overlapping.append(True)
+            return "佐藤の回答です"
+
+        agents.made[0].respond.side_effect = first_reply
+        reply = manager.send_user_message(OWNER, session.id, "こんにちは")
+
+        assert overlapping == [True]
+        assert [m.persona_id for m in reply.responses] == ["p1", "p2"]
+        assert len(agents.made) == 2
+        assert not any(a.dispose.called for a in agents.made)
+        assert store.get(session.id).last_seq == 3
+
+    def test_mark_is_renewed_after_each_reply(self, store, world, clock, agents):
+        manager = _manager(store, world, clock, agents)
+        session = _start(manager, world)
+        seen: list = []
+
+        def slow(prompt, context=None):
+            clock.advance(minutes=4)
+            seen.append(store.get(session.id).reply_started_at)
+            return "回答"
+
+        for agent in agents.made:
+            agent.respond.side_effect = slow
+        manager.send_user_message(OWNER, session.id, "こんにちは")
+        # 2 体目の応答の時点で、印は 1 体目の応答のあとに更新されている
+        assert seen[0] == START
+        assert seen[1] == START + timedelta(minutes=4)
+
+
+# =============================================================================
+# 作り直し（BR3.4、NFR9.31〜NFR9.33）
+# =============================================================================
+
+
+class TestRebuild:
+    def test_two_tasks_carry_one_conversation(
+        self, store, world, clock, agents, capsys
+    ):
+        first = _manager(store, world, clock, agents)
+        second = _manager(store, world, clock, agents)
+        session = _start(first, world)
+        first.send_user_message(OWNER, session.id, "質問1")
+        second.send_user_message(OWNER, session.id, "質問2")
+        first.send_user_message(OWNER, session.id, "質問3")
+
+        messages = store.query_messages(session.id, up_to=9)
+        assert [m.seq for m in messages] == list(range(1, 10))
+        assert [m.content for m in messages if m.speaker == "user"] == [
+            "質問1",
+            "質問2",
+            "質問3",
+        ]
+        rebuilt = _events(capsys, "interview.agents_rebuilt")
+        assert [e["reason"] for e in rebuilt] == ["missing", "seq_mismatch"]
+
+    def test_history_is_the_user_and_the_persona_itself(
+        self, store, world, clock, agents
+    ):
+        first = _manager(store, world, clock, agents)
+        second = _manager(store, world, clock, agents)
+        session = _start(first, world)
+        first.send_user_message(OWNER, session.id, "質問1")
+        agents.calls.clear()
+        second.send_user_message(OWNER, session.id, "質問2")
+
+        history = {c["persona"].id: c["initial_messages"] for c in agents.calls}
+        assert [m["role"] for m in history["p1"]] == ["user", "assistant"]
+        assert history["p1"][0]["content"] == [{"text": "質問1"}]
+        assert history["p1"][1]["content"] == [{"text": "佐藤の回答です"}]
+        assert "鈴木の回答です" not in json.dumps(history["p1"], ensure_ascii=False)
+
+    def test_a_gap_stops_the_send(self, store, world, clock, agents, client):
+        first = _manager(store, world, clock, agents)
+        session = _start(first, world)
+        first.send_user_message(OWNER, session.id, "質問1")
+        client.delete_item(
+            TableName=MESSAGES,
+            Key={"session_id": {"S": session.id}, "seq": {"N": "2"}},
         )
+        second = _manager(store, world, clock, agents)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED):
+            second.send_user_message(OWNER, session.id, "質問2")
+        assert store.get(session.id).last_seq == 3
 
-        mock_agent.set_document_contents.assert_called_once()
-        assert any(e[0] == "message_end" for e in events)
+    def test_local_agents_are_dropped_after_8_idle_hours(
+        self, manager, world, clock, agents
+    ):
+        _start(manager, world)
+        assert manager.get_active_sessions_count() == 1
+        clock.advance(hours=8, minutes=1)
+        _start(manager, world)
+        assert manager.get_active_sessions_count() == 1
+        assert all(a.dispose.called for a in agents.made[:2])
 
-    def test_streaming_gemma4_oversized_image_raises_capacity_error(self):
-        """ストリーミング送信でもGemma4の実効サイズ上限超過はCAPACITYエラーになる。"""
-        from src.managers.interview_manager import InterviewValidationError
+    def test_local_agents_belong_to_the_owner(self, manager, world, store):
+        session = _start(manager, world)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.send_user_message(PEER, session.id, "横取り")
+        assert store.get(session.id).last_seq == 0
 
-        self._create_active_session("s1", persona_models={"p1": "google.gemma-4-31b"})
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
 
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "large.png",
-                "mime_type": "image/png",
-                "file_size": 4 * 1024 * 1024,
-            }
-        ]
+# =============================================================================
+# 添付（BR3.6、NFR1.54）
+# =============================================================================
 
+
+class TestAttachments:
+    def test_files_are_kept_by_id(self, manager, world, store, tmp_path, agents):
+        world.files.attachable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "見てください", [FILE_1])
+        stored = store.get(session.id)
+        assert stored.document_ids == [FILE_1]
+        assert stored.documents[0].filename == "資料.txt"
+        (first, *_) = store.query_messages(session.id, up_to=1)
+        assert first.document_ids == (FILE_1,)
+        agents.made[0].set_document_contents.assert_called()
+
+    def test_an_unreadable_new_file_stops_the_send(self, manager, world, store):
+        world.files.attachable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
+        )
+        session = _start(manager, world)
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            manager.send_user_message(OWNER, session.id, "見て", [FILE_1])
+        assert store.get(session.id).last_seq == 0
+
+    def test_rebuild_drops_unreadable_files_and_names_them(
+        self, store, world, clock, agents, tmp_path
+    ):
+        world.files.attachable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        first = _manager(store, world, clock, agents)
+        session = _start(first, world)
+        first.send_user_message(OWNER, session.id, "見て", [FILE_1])
+
+        world.files.attachable_file.side_effect = CodedError(
+            "expired", code=ErrorCode.FILE_NOT_FOUND
+        )
+        world.files.readable_file.side_effect = CodedError(
+            "expired", code=ErrorCode.FILE_NOT_FOUND
+        )
+        second = _manager(store, world, clock, agents)
+        reply = second.send_user_message(OWNER, session.id, "続き")
+        assert reply.excluded_files == ["資料.txt"]
+
+    def test_saved_files_are_read_through_the_discussion(
+        self, store, world, clock, agents, tmp_path
+    ):
+        world.files.attachable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        first = _manager(store, world, clock, agents)
+        session = _start(first, world)
+        first.send_user_message(OWNER, session.id, "見て", [FILE_1])
+        first.save_interview_session(OWNER, session.id, "保存名")
+
+        world.files.attachable_file.side_effect = CodedError(
+            "attached", code=ErrorCode.FILE_NOT_FOUND
+        )
+        world.files.readable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        second = _manager(store, world, clock, agents)
+        reply = second.send_user_message(OWNER, session.id, "続き")
+        assert reply.excluded_files == []
+        world.files.readable_file.assert_called_with(OWNER, FILE_1)
+
+    def test_size_is_checked_for_the_models(self, manager, world, tmp_path):
+        from src.config import config
+
+        world.files.attachable_file.side_effect = lambda p, i: _upload(
+            tmp_path, i, size=5 * 1024 * 1024
+        )
+        with patch.object(config, "ENABLE_ADDITIONAL_PERSONA_MODELS", True):
+            session = _start(
+                manager, world, persona_models={"p1": "google.gemma-4-31b"}
+            )
         with raises_code(
             InterviewValidationError, ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
         ):
-            list(
-                self.interview_manager.send_user_message_streaming(
-                    "s1",
-                    "この画像について教えてください",
-                    document_contents=document_contents,
-                    document_metadata=document_metadata,
-                )
-            )
+            manager.send_user_message(OWNER, session.id, "見て", [FILE_1])
 
-        mock_agent.set_document_contents.assert_not_called()
 
-    def test_streaming_unselected_persona_uses_env_default_gemma4(self):
-        """ストリーミング送信でもpersona_models未選択時に環境既定(Gemma4)が適用されること。"""
-        from src.managers.interview_manager import InterviewValidationError
+# =============================================================================
+# 保存（BR3.7、BR3.8）
+# =============================================================================
 
-        self._create_active_session("s1", persona_models=None)
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
 
-        document_contents = [
-            {"image": {"format": "png", "source": {"bytes": b"x" * 100}}}
-        ]
-        document_metadata = [
-            {
-                "filename": "large.png",
-                "mime_type": "image/png",
-                "file_size": 4 * 1024 * 1024,
-            }
-        ]
+class TestSave:
+    def test_first_save_makes_an_interview_discussion(self, manager, world, store):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        result = manager.save_interview_session(OWNER, session.id, "保存名")
 
-        with patch("src.managers.shared.model_validation.config") as mock_config:
-            mock_config.AGENT_MODEL_ID = "google.gemma-4-31b"
-            mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
+        body = world.store.bodies[result.discussion_id]
+        assert body["mode"] == "interview" and body["topic"] == "保存名"
+        assert body["message_count"] == 3
+        assert body["owner_sub"] == OWNER.sub
+        assert body.get("insights", []) == []
+        assert store.get(session.id).saved_discussion_id == result.discussion_id
 
-            with raises_code(
-                InterviewValidationError, ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE
-            ):
-                list(
-                    self.interview_manager.send_user_message_streaming(
-                        "s1",
-                        "この画像について教えてください",
-                        document_contents=document_contents,
-                        document_metadata=document_metadata,
-                    )
-                )
+    def test_saving_again_appends_to_the_same_discussion(self, manager, world, store):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        first = manager.save_interview_session(OWNER, session.id, "保存名")
+        manager.send_user_message(OWNER, session.id, "質問2")
+        again = manager.save_interview_session(OWNER, session.id, "保存名")
 
-        mock_agent.set_document_contents.assert_not_called()
+        assert again.discussion_id == first.discussion_id
+        assert world.store.bodies[first.discussion_id]["message_count"] == 6
+        assert len(world.store.bodies) == 1
 
-    # --- send_user_message_streaming: all agents fail ---
+    def test_unusable_files_are_left_out_and_named(self, manager, world, tmp_path):
+        uploads = {
+            i: _upload(tmp_path, i, name=f"{i[:2]}.txt") for i in (FILE_1, FILE_2)
+        }
+        world.files.attachable_file.side_effect = lambda p, i: uploads[i]
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "見て", [FILE_1, FILE_2])
 
-    def test_streaming_all_agents_fail(self):
-        from src.managers.interview_manager import InterviewAgentError
-        from src.services.agent_service import AgentCommunicationError
+        def only_first(p, i):
+            if i == FILE_2:
+                raise CodedError("expired", code=ErrorCode.FILE_NOT_FOUND)
+            return uploads[i]
 
-        self._create_active_session("s1")
-        mock_agent = Mock()
-        mock_agent.get_persona_id.return_value = "p1"
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.respond_streaming.side_effect = AgentCommunicationError("fail")
-        mock_agent.set_document_contents = Mock()
-        self._add_agents("s1", [mock_agent])
-
-        with raises_code(InterviewAgentError, ErrorCode.INTERVIEW_AGENT_UNAVAILABLE):
-            list(self.interview_manager.send_user_message_streaming("s1", "質問"))
-
-    # --- save_interview_session: DB error ---
-
-    def test_save_session_db_error(self):
-        from src.managers.interview_manager import InterviewPersistenceError
-
-        session = self._create_active_session("s1")
-        session.messages = [
-            Message.create_new("user", "User", "質問", "user_message"),
-            Message.create_new("p1", "田中", "回答", "statement"),
-        ]
-        self._add_agents("s1", [Mock()])
-        self.mock_database_service.save_discussion.side_effect = DatabaseError(
-            "DB down"
+        world.files.attachable_file.side_effect = only_first
+        world.files.readable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
+        )
+        result = manager.save_interview_session(OWNER, session.id, "保存名")
+        assert result.excluded_files == ["22.txt"]
+        world.files.attach_all.assert_called_once_with(
+            OWNER, [FILE_1], "discussion", result.discussion_id
         )
 
-        with raises_code(InterviewPersistenceError, ErrorCode.INTERVIEW_SAVE_FAILED):
-            self.interview_manager.save_interview_session("s1")
+    def test_unreadable_participant_saves_nothing(self, manager, world):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        world.unshare("p2")
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            manager.save_interview_session(OWNER, session.id, "保存名")
+        assert world.store.bodies == {}
 
-    # --- end_interview_session: agent dispose error (continues) ---
+    def test_an_empty_session_cannot_be_saved(self, manager, world):
+        session = _start(manager, world)
+        with raises_code(
+            InterviewManagerError, ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET
+        ):
+            manager.save_interview_session(OWNER, session.id, "保存名")
 
-    def test_end_session_agent_dispose_error_continues(self):
-        self._create_active_session("s1")
-        mock_agent = Mock()
-        mock_agent.get_persona_name.return_value = "田中"
-        mock_agent.dispose.side_effect = Exception("dispose failed")
-        self._add_agents("s1", [mock_agent])
 
-        self.interview_manager.end_interview_session("s1")
-        assert "s1" not in self.interview_manager._active_sessions
+# =============================================================================
+# 参照・状態・終了
+# =============================================================================
+
+
+class TestReadAndEnd:
+    def test_view_has_the_messages(self, manager, world):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        view = manager.get_interview_session(OWNER, session.id)
+        assert [m.message_type for m in view.messages] == [
+            "user_message",
+            "statement",
+            "statement",
+        ]
+        assert not view.is_saved
+
+    def test_status(self, manager, world):
+        session = _start(manager, world, enable_dataset=True)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        status = manager.get_session_status(OWNER, session.id)
+        assert status["message_count"] == 3
+        assert status["has_user_messages"] and status["has_persona_responses"]
+        assert status["enable_dataset"] is True
+        assert status["agents_active"] is True
+
+    def test_end_removes_the_session(self, manager, world, agents):
+        session = _start(manager, world)
+        agents.made[0].dispose.side_effect = RuntimeError("dispose error")
+        manager.end_interview_session(OWNER, session.id)
+        assert agents.made[1].dispose.called
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.get_interview_session(OWNER, session.id)
+        assert manager.get_active_sessions_count() == 0
+
+    def test_no_manual_cleanup(self, manager):
+        assert not hasattr(manager, "cleanup_inactive_sessions")
+
+
+# =============================================================================
+# 文面
+# =============================================================================
+
+
+class TestPrompts:
+    def test_system_prompt(self, manager, world):
+        prompt = manager._generate_interview_system_prompt(world.persona_bodies["p1"])
+        assert "佐藤" in prompt
+
+    def test_first_interaction(self, manager):
+        agent = Mock(spec=PersonaAgent)
+        agent.get_persona_name.return_value = "佐藤"
+        prompt = manager._create_interview_prompt(agent, "質問", [])
+        assert "ユーザーからの質問: 「質問」" in prompt
+
+    def test_with_context(self, manager):
+        from src.models.message import Message
+
+        agent = Mock(spec=PersonaAgent)
+        agent.get_persona_name.return_value = "佐藤"
+        context = [
+            Message.create_new("user", "ユーザー", "前の質問", "user_message"),
+            Message.create_new("p2", "鈴木", "鈴木の答え"),
+        ]
+        prompt = manager._create_interview_prompt(agent, "新しい質問", context)
+        assert "ユーザー: 前の質問" in prompt and "鈴木: 鈴木の答え" in prompt

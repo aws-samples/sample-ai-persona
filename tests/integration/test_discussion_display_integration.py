@@ -15,7 +15,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.discussion import Discussion  # noqa: E402
+from src.models.discussion import Discussion, DiscussionView  # noqa: E402
 from src.models.message import Message  # noqa: E402
 from src.models.persona import Persona  # noqa: E402
 
@@ -107,18 +107,18 @@ class TestDiscussionDisplayIntegration:
             ),
         ]
 
-        # メッセージを議論に追加
-        for persona_index, content, time_offset in messages_data:
-            message_time = base_time + timedelta(seconds=time_offset)
-            message = Message(
+        # U6: 発言は本体の外に置き、表示は DiscussionView で受け取る
+        messages = [
+            Message(
                 persona_id=self.personas[persona_index].id,
                 persona_name=self.personas[persona_index].name,
                 content=content,
-                timestamp=message_time,
+                timestamp=base_time + timedelta(seconds=time_offset),
             )
-            discussion = discussion.add_message(message)
+            for persona_index, content, time_offset in messages_data
+        ]
 
-        return discussion
+        return DiscussionView(discussion, messages, [], [])
 
     def test_discussion_statistics_calculation(self):
         """議論統計の計算をテスト"""
@@ -232,12 +232,12 @@ class TestDiscussionDisplayIntegration:
         # 議論の基本属性を確認
         assert self.discussion.id is not None
         assert self.discussion.topic is not None
-        assert len(self.discussion.participants) == 3
+        assert len(self.discussion.participant_ids) == 3
         assert len(self.discussion.messages) == 5
 
         # 参加者IDが正しいことを確認
         for persona in self.personas:
-            assert persona.id in self.discussion.participants
+            assert persona.id in self.discussion.participant_ids
 
     def test_message_filtering_logic(self):
         """メッセージフィルタリングロジックをテスト"""

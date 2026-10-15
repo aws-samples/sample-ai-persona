@@ -10,8 +10,12 @@ CSRF保護ミドルウェア
 - ログイン関連のフォーム送信（``POST /signout``）はカスタムヘッダーを付けられない
   ため、``Origin`` がアプリ自身（設定 ``APP_BASE_URL`` のスキーム・ホスト・ポート）
   と一致することで通す（Functional Design レビュー R-12）
+- v1.0.0 U6: SSE のため GET で AI を動かす入口（:data:`SAME_ORIGIN_GET_PATHS`）は
+  ``Sec-Fetch-Site: same-origin`` を確かめる（他サイトからの最上位の遷移で
+  ``SameSite=Lax`` の cookie が付いて動くのを防ぐ）
 """
 
+import re
 from typing import Any, TextIO
 from urllib.parse import urlsplit
 
@@ -29,6 +33,13 @@ UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 EXEMPT_PATHS = {"/health"}
 #: カスタムヘッダーの代わりに Origin で確かめるフォーム送信（U8 で POST /login 等を足す）
 ORIGIN_CHECKED_PATHS = {"/signout"}
+#: SSE のため GET で AI を動かす入口（U6、security-design.md §4、NFR4.13）。
+#: ``Sec-Fetch-Site`` が ``same-origin`` でなければ（ない場合も）断る。
+#: ``EventSource`` / ``fetch`` は同じオリジンへの要求でこの値を送る
+SAME_ORIGIN_GET_PATHS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/discussion/stream"),
+    re.compile(r"/discussion/[^/]+/report/generate"),
+)
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -70,12 +81,20 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return origin is not None and origin == self._allowed_origin
         return False
 
+    @staticmethod
+    def _same_origin_get_refused(request: Request) -> bool:
+        return (
+            request.method == "GET"
+            and any(p.fullmatch(request.url.path) for p in SAME_ORIGIN_GET_PATHS)
+            and request.headers.get("Sec-Fetch-Site") != "same-origin"
+        )
+
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         if (
             request.method in UNSAFE_METHODS
             and request.url.path not in EXEMPT_PATHS
             and not self._passes(request)
-        ):
+        ) or self._same_origin_get_refused(request):
             record_event(
                 "auth.csrf_rejected",
                 stream=self._log_stream,

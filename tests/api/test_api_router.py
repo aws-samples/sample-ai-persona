@@ -172,99 +172,26 @@ class TestPersonaDetailAPIEndpoint:
         assert "ペルソナの取得に失敗しました" in response.json()["detail"]
 
 
-class TestDiscussionsAPIEndpoint:
-    """議論一覧APIエンドポイントのテスト"""
-
-    @patch("web.routers.api.get_discussion_manager")
-    def test_list_discussions_empty(self, mock_get_manager, client):
-        """議論が存在しない場合、空のリストを返す"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/api/discussions")
-
-        assert response.status_code == 200
-        assert response.json() == []
-
-    @patch("web.routers.api.get_discussion_manager")
-    def test_list_discussions_with_data(
-        self, mock_get_manager, client, sample_discussion
-    ):
-        """議論が存在する場合、正しいデータを返す"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.return_value = ([sample_discussion], None)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/api/discussions")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 1
-        assert data[0]["id"] == sample_discussion.id
-        assert data[0]["topic"] == "新商品のマーケティング戦略について"
-        assert "mode" in data[0]
-        assert "created_at" in data[0]
+class TestDiscussionsAPIErrors:
+    """議論の API の想定外の失敗（判定は tests/api/test_api_endpoints.py、U6）"""
 
     @patch("web.routers.api.get_discussion_manager")
     def test_list_discussions_error_handling(self, mock_get_manager, client):
-        """エラー発生時に500エラーを返す"""
-        mock_manager = Mock()
-        mock_manager.get_discussion_history.side_effect = Exception("Database error")
-        mock_get_manager.return_value = mock_manager
+        """想定外の失敗は 500 で、例外文を出さない"""
+        mock_get_manager.return_value.list_accessible_discussions.side_effect = (
+            Exception("Database error at arn:aws:dynamodb:secret")
+        )
 
         response = client.get("/api/discussions")
 
         assert response.status_code == 500
         assert "議論一覧の取得に失敗しました" in response.json()["detail"]
-
-
-class TestDiscussionDetailEndpoint:
-    """議論詳細APIエンドポイントのテスト"""
-
-    @patch("web.routers.api.get_discussion_manager")
-    def test_get_discussion_success(self, mock_get_manager, client, sample_discussion):
-        """議論詳細を正常に取得"""
-        from src.models.message import Message
-        from src.models.insight import Insight
-
-        msg = Message.create_new("p1", "田中", "テストメッセージ")
-        sample_discussion = sample_discussion.add_message(msg)
-        sample_discussion.insights = [
-            Insight.create_new("テスト", "テストインサイト説明", [], 0.8)
-        ]
-
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = sample_discussion
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get(f"/api/discussions/{sample_discussion.id}")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == sample_discussion.id
-        assert data["topic"] == "新商品のマーケティング戦略について"
-        assert len(data["messages"]) == 1
-        assert len(data["insights"]) == 1
-
-    @patch("web.routers.api.get_discussion_manager")
-    def test_get_discussion_not_found(self, mock_get_manager, client):
-        """存在しない議論IDで404"""
-        mock_manager = Mock()
-        mock_manager.get_discussion.return_value = None
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/api/discussions/non-existent")
-
-        assert response.status_code == 404
-        assert "議論が見つかりません" in response.json()["detail"]
+        assert "secret" not in response.text
 
     @patch("web.routers.api.get_discussion_manager")
     def test_get_discussion_error(self, mock_get_manager, client):
         """エラー発生時に500"""
-        mock_manager = Mock()
-        mock_manager.get_discussion.side_effect = Exception("DB error")
-        mock_get_manager.return_value = mock_manager
+        mock_get_manager.return_value.get_discussion.side_effect = Exception("DB error")
 
         response = client.get("/api/discussions/test-id")
 
@@ -371,7 +298,7 @@ class TestJobEndpoint:
             id="job-2",
             status=JobStatus.FAILED,
             created_at=Mock(),
-            error="something broke",
+            error_code="unknown",
         )
         mock_jm = Mock()
         mock_jm.get.return_value = job
@@ -382,7 +309,9 @@ class TestJobEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "failed"
-        assert data["error"] == "処理中にエラーが発生しました"
+        # U6 BR8.3: 失敗はコードで返し、文言はカタログの文言（例外文ではない）
+        assert data["error_code"] == "unknown"
+        assert data["error"]
 
 
 class TestGeneratePersonasEndpoint:
@@ -422,56 +351,6 @@ class TestGeneratePersonasEndpoint:
         )
 
         assert response.status_code == 500
-
-
-class TestRunDiscussionEndpoint:
-    """議論実行APIのテスト"""
-
-    @patch("web.routers.api.get_job_manager")
-    @patch("web.routers.api.get_persona_manager")
-    def test_run_discussion_submits_job(
-        self, mock_get_pm, mock_get_jm, client, sample_persona, sample_persona_2
-    ):
-        """議論実行が202を返す"""
-        mock_pm = Mock()
-        mock_pm.get_persona_unchecked.side_effect = [sample_persona, sample_persona_2]
-        mock_get_pm.return_value = mock_pm
-
-        mock_jm = Mock()
-        mock_jm.submit.return_value = "job-456"
-        mock_get_jm.return_value = mock_jm
-
-        response = client.post(
-            "/api/discussions",
-            json={
-                "persona_ids": [sample_persona.id, sample_persona_2.id],
-                "topic": "テスト議論トピック",
-                "mode": "classic",
-            },
-        )
-
-        assert response.status_code == 202
-        data = response.json()
-        assert data["job_id"] == "job-456"
-        assert data["status"] == "pending"
-
-    @patch("web.routers.api.get_persona_manager")
-    def test_run_discussion_persona_not_found(self, mock_get_pm, client):
-        """存在しないペルソナIDで404"""
-        mock_pm = Mock()
-        mock_pm.get_persona_unchecked.return_value = None
-        mock_get_pm.return_value = mock_pm
-
-        response = client.post(
-            "/api/discussions",
-            json={
-                "persona_ids": ["bad-id-1", "bad-id-2"],
-                "topic": "テスト議論",
-                "mode": "classic",
-            },
-        )
-
-        assert response.status_code == 404
 
 
 class TestGenerateJobSavesOwnCandidatesU5:

@@ -20,10 +20,18 @@ const CACHING_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
 const CACHING_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
 const ALL_VIEWER_EXCEPT_HOST = 'b689b0a8-53d0-40ab-baf2-68738e2966ac';
 
+/**
+ * cdk.json の機能フラグ（cdk deploy が使う設定）。U6: タスクロールの方針の大きさは
+ * `@aws-cdk/aws-iam:minimizePolicies` で文がまとまった形で決まるため、テストも同じ設定で組む
+ * （フラグなしでは文がまとまらず、上限を超えた分が別の管理ポリシーへ溢れる）。
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
+
 function build(
   options: { context?: Record<string, string>; parameter?: Partial<AppParameter> } = {},
 ): { stack: AppStack; template: Template } {
-  const app = new cdk.App({ context: options.context ?? {} });
+  const app = new cdk.App({ context: { ...FEATURE_FLAGS, ...(options.context ?? {}) } });
   const parameter: AppParameter = { ...devParameter, ...(options.parameter ?? {}) };
   const data = new DataStack(app, 'Data', { env: TOKYO, parameter });
   const edge = new EdgeStack(app, 'Edge', {
@@ -203,7 +211,17 @@ describe('AppStack: Fargate', () => {
     const dynamoWrites = statements.filter((s) =>
       [s.Action].flat().some((a: string) => a === 'dynamodb:PutItem'),
     );
-    expect(dynamoWrites.length).toBeGreaterThanOrEqual(11);
+    // minimizePolicies で同じ操作の文はまとまるため、文の数ではなく、書き込むテーブルが
+    // どれも文の対象に入っていることを確かめる
+    const resources = JSON.stringify(dynamoWrites.map((s) => s.Resource));
+    for (const table of [
+      'Personas', 'Discussions', 'UploadedFiles', 'Datasets', 'SurveyTemplates', 'Surveys',
+      'KnowledgeBases', 'Jobs', 'Sessions', 'ResourceShares', 'PersonaCandidates',
+      'PersonaBindings', 'DiscussionMessages', 'DiscussionReports', 'InterviewSessions',
+      'InterviewMessages',
+    ]) {
+      expect(resources).toMatch(new RegExp(`Database${table}[0-9A-F]{8}Arn`));
+    }
     for (const s of dynamoWrites) {
       expect([s.Resource].flat()).not.toContain('*');
     }
@@ -503,6 +521,73 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     expect(resources).toContain('/uploads/*');
     expect(resources).toContain('/candidates/*');
     expect([tagging[0].Resource].flat()).toHaveLength(2);
+  });
+});
+
+describe('AppStack: 議論の発言・レポートとインタビュー（U6、NFR1.64、NFR2.20）', () => {
+  const NEW_TABLES = [
+    'DatabaseDiscussionMessages',
+    'DatabaseDiscussionReports',
+    'DatabaseInterviewSessions',
+    'DatabaseInterviewMessages',
+  ];
+  function taskPolicies(t: Template): any[] {
+    return Object.values(t.findResources('AWS::IAM::Policy')).filter((p) =>
+      JSON.stringify(p.Properties.Roles).includes('TaskRole'),
+    );
+  }
+  const taskStatements = (t: Template) =>
+    taskPolicies(t).flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+
+  test('新しい 4 テーブルの操作は 1 つの文で、8 つの操作だけ（Scan なし）。インデックスも含む', () => {
+    const touching = taskStatements(template).filter((s) =>
+      NEW_TABLES.some((id) => JSON.stringify(s.Resource ?? '').includes(id)),
+    );
+    expect(touching).toHaveLength(1);
+    const statement = touching[0];
+    expect([statement.Action].flat().sort()).toEqual([
+      'dynamodb:BatchGetItem',
+      'dynamodb:BatchWriteItem',
+      'dynamodb:ConditionCheckItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+      'dynamodb:UpdateItem',
+    ]);
+    const resources = JSON.stringify(statement.Resource);
+    for (const id of NEW_TABLES) {
+      expect(resources).toContain(id);
+    }
+    expect(resources).toContain('/index/*');
+  });
+
+  test('新しい 4 テーブルの名前をテーブルの参照で渡す（約束 C10、FR9.2）', () => {
+    const env = envOf(template);
+    const expected: Record<string, string> = {
+      DISCUSSION_MESSAGES_TABLE_NAME: 'DatabaseDiscussionMessages',
+      DISCUSSION_REPORTS_TABLE_NAME: 'DatabaseDiscussionReports',
+      INTERVIEW_SESSIONS_TABLE_NAME: 'DatabaseInterviewSessions',
+      INTERVIEW_MESSAGES_TABLE_NAME: 'DatabaseInterviewMessages',
+    };
+    for (const [name, logicalId] of Object.entries(expected)) {
+      expect(JSON.stringify(env[name])).toContain(logicalId);
+    }
+  });
+
+  test('ALB の無操作タイムアウトは 300 秒のまま（SSE の議論が途中で切れない）', () => {
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      LoadBalancerAttributes: Match.arrayWith([
+        { Key: 'idle_timeout.timeout_seconds', Value: '300' },
+      ]),
+    });
+  });
+
+  test('タスクロールのポリシーの JSON は 9,000 文字未満（インラインポリシーの上限 10,240 文字）', () => {
+    const policies = taskPolicies(template);
+    expect(policies).toHaveLength(1);
+    const size = JSON.stringify(policies[0].Properties.PolicyDocument).length;
+    expect(size).toBeLessThan(9000);
   });
 });
 
