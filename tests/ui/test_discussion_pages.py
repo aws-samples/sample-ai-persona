@@ -113,6 +113,19 @@ def test_detail_marks_participants_in_text_and_has_no_axe_violations(
     assert (
         ui.page.locator("[data-testid='discussion-share-button']").count() == 1
     ) is (manageable)
+    # 操作ボタンはペルソナの詳細と同じく、ヘッダーの 2 段目の右に置く
+    actions = ui.page.locator("[data-testid='discussion-detail-actions']")
+    assert actions.locator("[data-testid='discussion-export-button']").count() == 1
+    assert (
+        actions.locator("[data-testid='discussion-share-button']").count() == 1
+    ) is manageable
+    assert (
+        actions.locator("[data-testid='discussion-delete-button']").count() == 1
+    ) is manageable
+    header_bottom = actions.bounding_box()
+    first_card = participants.first.bounding_box()
+    assert header_bottom is not None and first_card is not None
+    assert header_bottom["y"] < first_card["y"]
     ui.check_a11y()
 
 

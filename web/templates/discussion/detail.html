@@ -28,13 +28,38 @@
                 {{ icon_chat("w-8 h-8 text-green-600") }} {{ discussion.topic }}
             {% endif %}
         </h1>
-        <div class="flex items-center gap-4 mt-2">
-            <span class="text-gray-500">
-                {% if discussion.created_at %}<time datetime="{{ discussion.created_at.isoformat() }}Z">{{ discussion.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
-            </span>
-            <span class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
-                {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
-            </span>
+        {#- 2 段目: 日時と種類（左）、操作ボタン（右）。ペルソナの詳細と同じ並び。狭いときはボタンが下へ折り返す #}
+        <div class="flex flex-wrap items-center justify-between gap-3 mt-2">
+            <div class="flex items-center gap-4">
+                <span class="text-gray-700">
+                    {% if discussion.created_at %}<time datetime="{{ discussion.created_at.isoformat() }}Z">{{ discussion.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
+                </span>
+                <span class="px-2 py-1 text-xs rounded-full flex items-center gap-1 {% if discussion.mode == 'agent' %}bg-purple-100 text-purple-800{% elif discussion.mode == 'interview' %}bg-green-100 text-green-800{% else %}bg-blue-100 text-blue-800{% endif %}">
+                    {% if discussion.mode == 'agent' %}{{ icon_cpu_chip("w-3 h-3") }} しっかり議論{% elif discussion.mode == 'interview' %}{{ icon_persona("w-3 h-3") }} インタビュー{% else %}{{ icon_bolt("w-3 h-3") }} 簡易議論{% endif %}
+                </span>
+            </div>
+            {#- エクスポートは読める人、共有・削除は管理できる人だけ（BR2.4、BR2.5、BR9.1） #}
+            <div class="flex flex-wrap items-center gap-2" data-testid="discussion-detail-actions">
+                <a href="/discussion/{{ discussion.id }}/export" download data-testid="discussion-export-button"
+                   class="whitespace-nowrap inline-flex items-center gap-1.5 bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors text-sm font-medium">
+                    Markdown でエクスポート
+                </a>
+                {%- if manageable %}
+                <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                        data-share-url="/share/discussion/{{ discussion.id }}/dialog"
+                        data-testid="discussion-share-button"
+                        class="whitespace-nowrap inline-flex items-center gap-1.5 bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200 transition-colors text-sm font-medium">
+                    共有
+                </button>
+                <button hx-delete="/discussion/{{ discussion.id }}"
+                        hx-confirm="この議論を削除しますか？発言・レポート・添付資料も一緒に削除されます"
+                        hx-target="body"
+                        data-testid="discussion-delete-button"
+                        class="whitespace-nowrap inline-flex items-center gap-1.5 bg-red-100 text-red-700 px-4 py-2 rounded-md hover:bg-red-200 transition-colors text-sm font-medium">
+                    {{ icon_trash("w-4 h-4") }} 削除
+                </button>
+                {%- endif %}
+            </div>
         </div>
     </div>
     
@@ -355,30 +380,12 @@
         </div>
     </div>
     
-    <!-- アクション（削除・共有は管理できる人だけ、エクスポートは読める人、BR2.4、BR9.1） -->
+    <!-- 次の議論へ（操作ボタンはヘッダーにある） -->
     <div class="flex flex-wrap gap-4">
         <a href="/discussion/setup"
            class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors flex items-center gap-1.5">
             {{ icon_refresh("w-4 h-4") }} 新しい議論を開始
         </a>
-        <a href="/discussion/{{ discussion.id }}/export" download data-testid="discussion-export-button"
-           class="bg-gray-100 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-200 transition-colors flex items-center gap-1.5">
-            Markdown でエクスポート
-        </a>
-        {%- if manageable %}
-        <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
-                data-share-url="/share/discussion/{{ discussion.id }}/dialog"
-                data-testid="discussion-share-button"
-                class="bg-blue-100 text-blue-700 px-4 py-2 rounded-md hover:bg-blue-200 transition-colors flex items-center gap-1.5">
-            共有
-        </button>
-        <button hx-delete="/discussion/{{ discussion.id }}"
-                hx-confirm="この議論を削除しますか？発言・レポート・添付資料も一緒に削除されます"
-                hx-target="body"
-                class="bg-red-100 text-red-700 px-4 py-2 rounded-md hover:bg-red-200 transition-colors flex items-center gap-1.5">
-            {{ icon_trash("w-4 h-4") }} この議論を削除
-        </button>
-        {%- endif %}
     </div>
     {%- if manageable %}
     {% include "sharing/partials/share_dialog.html" %}
