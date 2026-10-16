@@ -1151,19 +1151,6 @@ class DatabaseService:
             for item_id, item in items.items()
         }
 
-    def get_all_survey_templates(self) -> List["SurveyTemplate"]:
-        """Every template, every scan page (only the admin's ``all`` search)."""
-
-        def _get_all() -> List["SurveyTemplate"]:
-            return [
-                self._deserialize_survey_template(item)
-                for item in self._scan_items(self.survey_templates_table)
-            ]
-
-        return self._execute_with_retry(
-            _get_all, operation_name="get_all_survey_templates"
-        )
-
     # ========== Survey CRUD ==========
 
     def _serialize_survey(self, survey: "Survey") -> Dict[str, Any]:
@@ -1254,17 +1241,6 @@ class DatabaseService:
         return {
             item_id: self._deserialize_survey(item) for item_id, item in items.items()
         }
-
-    def get_all_surveys(self) -> List["Survey"]:
-        """Every survey, every scan page (only the admin's ``all`` search)."""
-
-        def _get_all() -> List["Survey"]:
-            return [
-                self._deserialize_survey(item)
-                for item in self._scan_items(self.surveys_table)
-            ]
-
-        return self._execute_with_retry(_get_all, operation_name="get_all_surveys")
 
     # ==================== KnowledgeBase Operations ====================
 

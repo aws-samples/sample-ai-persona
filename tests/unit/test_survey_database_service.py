@@ -88,17 +88,6 @@ class TestSurveyTemplateCRUD:
 
         assert result is None
 
-    def test_get_all_survey_templates(self):
-        service, mock_client = _make_service()
-        t1 = _sample_template()
-        serialized = service._serialize_survey_template(t1)
-        mock_client.scan.return_value = {"Items": [serialized]}
-
-        result = service.get_all_survey_templates()
-
-        assert len(result) == 1
-        assert result[0].id == "tmpl-001"
-
     def test_serialization_round_trip(self):
         """Verify serialize → deserialize produces equivalent object."""
         service, _ = _make_service()
@@ -147,17 +136,6 @@ class TestSurveyCRUD:
         result = service.get_survey("nonexistent")
 
         assert result is None
-
-    def test_get_all_surveys(self):
-        service, mock_client = _make_service()
-        survey = _sample_survey()
-        serialized = service._serialize_survey(survey)
-        mock_client.scan.return_value = {"Items": [serialized]}
-
-        result = service.get_all_surveys()
-
-        assert len(result) == 1
-        assert result[0].id == "srv-001"
 
     def test_survey_without_optional_fields(self):
         """Test Survey with None optional fields serializes/deserializes correctly."""
@@ -409,16 +387,6 @@ class TestTemplateWrites:
         assert set(found) == {first.id, second.id}
         table = moto_survey_service.survey_templates_table
         assert calls[0]["RequestItems"][table]["ConsistentRead"] is True
-
-    def test_all_templates_scan_reads_every_page(self, moto_survey_service):
-        made = [_owned_template() for _ in range(5)]
-        for template in made:
-            moto_survey_service.put_new_survey_template(template)
-        client = moto_survey_service.dynamodb_client
-        real = client.scan
-        client.scan = lambda **kw: real(**{**kw, "Limit": 2})
-        found = moto_survey_service.get_all_survey_templates()
-        assert {t.id for t in found} == {t.id for t in made}
 
 
 class TestSurveyWrites:
