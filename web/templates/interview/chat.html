@@ -273,9 +273,11 @@ let selectedFiles = []; // 選択されたファイルを保持
 let conversationStopped = {{ 'true' if stopped else 'false' }};
 
 // 会話を続けられなくなったとき（M12）: 枠を出し、入力欄の文字を残して送信と保存を無効にする
-function stopConversation(unsentMessage) {
+function stopConversation(unsentMessage, sentBubble) {
     conversationStopped = true;
-    if (messageInput && unsentMessage) messageInput.value = unsentMessage;
+    // 送れなかった発言は会話に残さない（保存されていない）
+    if (sentBubble) sentBubble.remove();
+    if (unsentMessage) setMessageInput(unsentMessage);
     if (messageInput) messageInput.disabled = false;
     if (sendButton) sendButton.disabled = true;
     if (saveButton) saveButton.disabled = true;
@@ -284,14 +286,21 @@ function stopConversation(unsentMessage) {
     }
 }
 
+// 入力欄に文字を戻し、文字数の表示も合わせる
+function setMessageInput(text) {
+    if (!messageInput) return;
+    messageInput.value = text;
+    messageInput.dispatchEvent(new Event('input'));
+}
+
 // 送信の失敗（SSE の error）を表示の区分ごとに扱う
-function handleSendFailure(data, unsentMessage) {
+function handleSendFailure(data, unsentMessage, sentBubble) {
     if (data.error_type === 'conversation_stopped') {
-        stopConversation(unsentMessage);
+        stopConversation(unsentMessage, sentBubble);
         return;
     }
     // 応答中の別の送信（CONCURRENT_UPDATE）などは入力を残して知らせる
-    if (messageInput && unsentMessage && !messageInput.value) messageInput.value = unsentMessage;
+    if (messageInput && unsentMessage && !messageInput.value) setMessageInput(unsentMessage);
     showDetailedError(data.message, data.error_type || 'agent_error');
 }
 
@@ -552,7 +561,7 @@ async function sendMessage(message) {
         setSendingState(true);
 
         // ユーザーメッセージを即座に表示（添付ファイル情報も含む）
-        addUserMessage(message, selectedFiles);
+        const sentBubble = addUserMessage(message, selectedFiles);
         messageInput.value = '';
         messageInput.style.height = 'auto';
         if (charCounter) charCounter.textContent = '0/500';
@@ -649,7 +658,7 @@ async function sendMessage(message) {
                     showErrorMessage('次の添付は使えなくなったため外しました: ' + (data.names || []).join('、'));
                 } else if (data.type === 'error') {
                     receivedResponse = true;
-                    handleSendFailure(data, message);
+                    handleSendFailure(data, message, sentBubble);
                 }
             }
         }
@@ -765,7 +774,7 @@ function hideLoadingIndicator() {
 
 // メッセージ表示関数
 function addUserMessage(content, files = []) {
-    if (!chatMessages) return;
+    if (!chatMessages) return null;
     
     // 添付ファイルのプレビューHTML生成
     let attachmentsHtml = '';
@@ -804,6 +813,7 @@ function addUserMessage(content, files = []) {
     `);
     chatMessages.appendChild(messageDiv);
     scrollToBottom();
+    return messageDiv;
 }
 
 function addPersonaMessage(personaName, content, timestamp, personaId, contentHtml) {

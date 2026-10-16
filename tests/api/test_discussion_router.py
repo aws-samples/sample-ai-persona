@@ -276,6 +276,36 @@ class TestResultsList:
         assert "これで全て" in last
         assert "もっと見る" not in last
 
+    def test_mode_filter_counts_the_matches_not_the_tab(self, aw, client):
+        """種類で絞ったら、件数の表示はタブ全体ではなく該当の数にする。"""
+        aw.discussion(topic="インタビューの記録", mode="interview")
+        aw.discussion(topic="議論の記録1")
+        aw.discussion(topic="議論の記録2")
+        html = client.get(
+            "/discussion/results?mode=interview",
+            headers={"HX-Target": "discussion-list"},
+        ).text
+        assert "該当1件（これで全て）" in html
+        assert "全3件" not in html
+
+    def test_search_counts_the_matches_not_the_tab(self, aw, client):
+        aw.discussion(topic="価格についての議論")
+        aw.discussion(topic="広告についての議論")
+        html = client.get(
+            "/discussion/results?search=価格",
+            headers={"HX-Target": "discussion-list"},
+        ).text
+        assert "該当1件（これで全て）" in html
+        assert "全2件" not in html
+
+    def test_unfiltered_list_counts_the_tab(self, aw, client):
+        aw.discussion(topic="議論の記録1")
+        aw.discussion(topic="議論の記録2")
+        html = client.get(
+            "/discussion/results", headers={"HX-Target": "discussion-list"}
+        ).text
+        assert "全2件（これで全て）" in html
+
     def test_rows_show_the_stored_names_and_counts(self, aw, client):
         aw.discussion(topic="自分の議論について")
         html = client.get("/discussion/results", headers=PAGE).text
@@ -434,7 +464,8 @@ class TestStart:
         assert response.status_code == 404
         assert response.headers.get("X-Render-Response") == "true"
         assert 'role="alert"' in response.text
-        assert "ページが見つかりません" in response.text
+        assert "この議論は続けられません" in response.text
+        assert "ページが見つかりません" not in response.text
         aw.ai.facilitate_discussion.assert_not_called()
         assert aw.world.store.bodies == {}
 

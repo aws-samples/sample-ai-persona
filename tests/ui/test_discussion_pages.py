@@ -195,6 +195,46 @@ def test_selection_tabs_keep_the_selection_and_mark_shared(
     ui.check_a11y()
 
 
+def _turn_on_memory(ui: UiHarness) -> None:
+    ui.page.locator("label").filter(has_text="しっかり議論").first.click()
+    ui.page.check("input[name=enable_memory]")
+    ui.settle()
+
+
+def _memory_mode(ui: UiHarness) -> tuple[bool, str]:
+    """(whether 'full' can be chosen, the checked memory mode)."""
+    full = ui.page.locator("input[name=memory_mode][value=full]")
+    checked = ui.page.locator("input[name=memory_mode]:checked").get_attribute("value")
+    return full.is_enabled(), str(checked)
+
+
+def test_memory_mode_is_retrieve_only_when_only_shared_personas_are_chosen(
+    ui: UiHarness, screen_client: Any
+) -> None:
+    _open_setup(ui, screen_client)
+    _turn_on_memory(ui)
+    assert _memory_mode(ui) == (True, "full")
+
+    ui.page.focus("[data-testid='persona-select-tab-shared']")
+    ui.page.keyboard.press("Enter")
+    ui.page.wait_for_selector("#persona-card-p2")
+    ui.page.click("#persona-card-p2")
+    ui.settle()
+    # 共有されたペルソナだけなら書き込める相手がいない
+    assert _memory_mode(ui) == (False, "retrieve_only")
+    assert ui.page.locator("[data-testid='memory-shared-only-note']").is_visible()
+
+    ui.page.focus("[data-testid='persona-select-tab-mine']")
+    ui.page.keyboard.press("Enter")
+    ui.page.wait_for_selector("#persona-card-p1")
+    ui.page.click("#persona-card-p1")
+    ui.settle()
+    # 自分のペルソナが入れば、選んでいたフルに戻る（共有されたものは検索のみ）
+    assert _memory_mode(ui) == (True, "full")
+    assert not ui.page.locator("[data-testid='memory-shared-only-note']").is_visible()
+    assert ui.page.locator("[data-testid='memory-shared-mixed-note']").is_visible()
+
+
 def test_a_participant_gone_while_running_shows_the_stop_panel(
     ui: UiHarness, screen_client: Any
 ) -> None:
@@ -313,6 +353,14 @@ def test_chat_stops_and_keeps_the_typed_message(
     assert panel.get_attribute("role") == "alert"
     ui.settle()
     assert ui.page.input_value("#message-input") == "価格は 5,000 円でも買いますか？"
+    # 送れなかった発言は会話に残さず、文字数の表示も入力欄に合わせる
+    assert "価格は 5,000 円" not in ui.page.locator("#chat-messages").inner_text()
+    assert (
+        ui.page.inner_text("#char-counter")
+        == f"{len('価格は 5,000 円でも買いますか？')}/500"
+    )
+    heading = ui.page.inner_text("[data-conversation-stopped-heading]")
+    assert heading == "このインタビューは続けられません"
     assert ui.page.is_disabled("#send-button")
     assert ui.page.is_disabled("#save-session-btn")
     assert ui.active(

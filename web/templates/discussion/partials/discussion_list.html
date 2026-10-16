@@ -117,7 +117,10 @@
 {% endif %}
 <p id="discussion-count-footer" class="text-sm text-gray-500 mt-4 text-center"
    {% if is_append %}hx-swap-oob="true"{% endif %}>
-    {% if total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
+    {#- 種類や検索で絞ったら、タブ全体の件数ではなく該当の数を出す。続きがあるか追加分のときは数が分からない #}
+    {%- if current_mode or current_search %}
+    {%- if not listing.next_cursor and not is_append %}該当{{ discussions | length }}件{% endif %}
+    {%- elif total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
 </p>
 
 {% if listing.next_cursor %}

@@ -26,6 +26,8 @@
               additionalInstructions: '',
               enableMemory: false,
               memoryMode: 'full',
+              // 共有されたペルソナだけを選んだ間、利用者が選んでいた記憶のモード（戻すため）
+              memoryModeChosen: null,
               enableDataset: false,
               enableKB: false,
               defaultModelId: '{{ default_model_id }}',
@@ -57,6 +59,22 @@
                       return;
                   }
                   this.categories.splice(index, 1);
+              },
+              // 記憶に書き込めるのは所有者だけ（U6）。共有されたペルソナだけなら検索のみにする
+              onlySharedSelected() {
+                  const selected = this.$store.discussionSetup.selectedPersonas;
+                  return selected.length > 0 && selected.every(p => p.shared);
+              },
+              syncMemoryModeForShared() {
+                  if (this.onlySharedSelected()) {
+                      if (this.memoryMode === 'full') {
+                          this.memoryModeChosen = 'full';
+                          this.memoryMode = 'retrieve_only';
+                      }
+                  } else if (this.memoryModeChosen) {
+                      this.memoryMode = this.memoryModeChosen;
+                      this.memoryModeChosen = null;
+                  }
               },
               resetCategories() {
                   this.categories = [
@@ -1296,7 +1314,7 @@
                 </p>
                 
                 <!-- メモリモード選択 -->
-                <div class="mt-4 pt-3 border-t border-purple-200">
+                <div class="mt-4 pt-3 border-t border-purple-200" x-effect="syncMemoryModeForShared()">
                     <p class="text-xs font-medium text-purple-800 mb-2">メモリモード:</p>
                     <div class="space-y-2">
                         <label class="flex items-center gap-2 cursor-pointer">
@@ -1304,7 +1322,8 @@
                                    name="memory_mode"
                                    value="full"
                                    x-model="memoryMode"
-                                   class="w-4 h-4 text-purple-600 focus:ring-purple-500">
+                                   :disabled="onlySharedSelected()"
+                                   class="w-4 h-4 text-purple-600 focus:ring-purple-500 disabled:opacity-50">
                             <div>
                                 <span class="text-xs font-medium text-purple-900">フル（検索 + 保存）</span>
                                 <p class="text-xs text-purple-600">過去の記憶・知識を検索し、新しい記憶・知識も保存します</p>
@@ -1322,6 +1341,14 @@
                             </div>
                         </label>
                     </div>
+                    <p x-show="onlySharedSelected()" x-cloak data-testid="memory-shared-only-note"
+                       class="text-xs text-purple-800 mt-2">
+                        共有されたペルソナだけを選んでいるため、検索のみになります
+                    </p>
+                    <p x-show="!onlySharedSelected() && $store.discussionSetup.selectedPersonas.some(p => p.shared)" x-cloak
+                       data-testid="memory-shared-mixed-note" class="text-xs text-purple-800 mt-2">
+                        共有されたペルソナは検索のみで、新しい記憶・知識は保存しません
+                    </p>
                 </div>
             </div>
         </div>

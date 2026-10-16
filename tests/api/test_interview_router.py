@@ -449,7 +449,7 @@ class TestChatPage:
         iw.api.world.unshare("p2")
         html = client.get(f"/interview/chat/{session.id}").text
         assert "data-conversation-stopped" in html
-        assert "ページが見つかりません" in html
+        assert "このインタビューは続けられません" in html
 
     def test_save_name_dialog_keeps_e2e_selectors_and_fetch(self, iw, client):
         session = iw.start("p1")
