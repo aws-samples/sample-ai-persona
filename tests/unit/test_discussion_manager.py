@@ -291,6 +291,30 @@ class TestList:
         listing = manager.list_discussions(OWNER, "mine", None, mode="interview")
         assert [d.id for d in listing.items] == [interview.id]
 
+    def test_mode_filter_reaches_older_pages(self, manager, world):
+        """新しい 1 ページぶんがすべて別の種類でも、古いインタビューに届く。"""
+        interview = _seed(manager, world, mode="interview")
+        for _ in range(25):
+            _seed(manager, world, mode="classic")
+        listing = manager.list_discussions(OWNER, "mine", None, mode="interview")
+        assert [d.id for d in listing.items] == [interview.id]
+        assert listing.next_cursor is None
+
+    def test_mode_filter_keeps_a_cursor_while_older_items_remain(self, manager, world):
+        """読み取りの上限に達したら、空でも「もっと見る」で続きを読める。"""
+        from src.managers import discussion_manager as dm
+
+        interview = _seed(manager, world, mode="interview")
+        for _ in range(45):
+            _seed(manager, world, mode="classic")
+        with patch.object(dm, "MODE_FILTER_MAX_PAGES", 2):
+            first = manager.list_discussions(OWNER, "mine", None, mode="interview")
+            assert first.items == [] and first.next_cursor is not None
+            rest = manager.list_discussions(
+                OWNER, "mine", first.next_cursor, mode="interview"
+            )
+        assert [d.id for d in rest.items] == [interview.id]
+
     def test_unreadable_rows_are_dropped_on_reread(self, manager, world):
         theirs = _seed(manager, world, principal=PEER)
         world.share(theirs.id, "sales")

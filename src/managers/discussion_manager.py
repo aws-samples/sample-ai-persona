@@ -47,7 +47,7 @@ from .components.discussion_records import DiscussionRecords
 from .components.file_attachments import FileAttachments
 from .components.owner_directory import OwnerDirectory
 from .components.participant_reader import ParticipantReader
-from .components.resource_sharing import SEARCH_LIMIT, ResourceSharing
+from .components.resource_sharing import PAGE_SIZE, SEARCH_LIMIT, ResourceSharing
 from .components.sharing_runtime import (
     DiscussionParts,
     SharingParts,
@@ -61,6 +61,9 @@ _DISCUSSION = ResourceType.DISCUSSION
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
+
+#: 種類で絞るときに 1 回の要求で読むページの上限（1 ページ 20 件）
+MODE_FILTER_MAX_PAGES = 10
 #: SSE event when a participant became unreadable (M12, BR7.5).
 STOPPED_EVENT = f"data: {json.dumps({'type': 'stopped'}, ensure_ascii=False)}\n\n"
 
@@ -333,12 +336,29 @@ class DiscussionManager:
         if query:
             return self._search(principal, active, query, mode)
         page = sharing.list_page(principal, _DISCUSSION, active, cursor)
+        total = page.total
         discussions = self._discussion_records.list_bodies(
             principal, [t.resource_id for t in page.items], mode=mode
         )
-        counts = self._counts(principal, {active: page.total}) if cursor is None else {}
+        next_cursor = page.next_cursor
+        # 種類で絞ると 1 ページが空になりうるため、1 ページぶん集まるまで続きを読む。
+        # 上限に達したら、空でもカーソルを返して「もっと見る」で続きを読めるようにする
+        pages = 1
+        while (
+            mode is not None
+            and next_cursor
+            and len(discussions) < PAGE_SIZE
+            and pages < MODE_FILTER_MAX_PAGES
+        ):
+            page = sharing.list_page(principal, _DISCUSSION, active, next_cursor)
+            discussions += self._discussion_records.list_bodies(
+                principal, [t.resource_id for t in page.items], mode=mode
+            )
+            next_cursor = page.next_cursor
+            pages += 1
+        counts = self._counts(principal, {active: total}) if cursor is None else {}
         return self._listing(
-            principal, active, discussions, next_cursor=page.next_cursor, counts=counts
+            principal, active, discussions, next_cursor=next_cursor, counts=counts
         )
 
     def _search(

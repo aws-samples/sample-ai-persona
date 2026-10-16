@@ -1,3 +1,4 @@
+{% from "components/datetime.html" import iso_datetime %}
 {% from "components/icons.html" import icon_users, icon_sparkles %}
 {% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
 {% from "components/status_label.html" import status_label %}
@@ -217,7 +218,7 @@
 
         <!-- 作成日時 -->
         <p class="text-xs text-gray-500 mt-4">
-            作成: {% if persona.created_at %}<time datetime="{{ persona.created_at.isoformat() }}Z">{{ persona.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
+            作成: {% if persona.created_at %}<time datetime="{{ iso_datetime(persona.created_at) }}">{{ persona.created_at.strftime('%Y/%m/%d %H:%M') }}</time>{% else %}不明{% endif %}
         </p>
     </div>
     {% endif %}

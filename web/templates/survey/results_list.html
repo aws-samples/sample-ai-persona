@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/datetime.html" import iso_datetime %}
 {% from "components/icons.html" import icon_chat, icon_arrow_left, icon_trash %}
 
 {% block content %}
@@ -44,7 +45,7 @@
                         {% endif %}
                         <div class="flex flex-col gap-2 mt-auto">
                             <span class="text-xs text-gray-500">
-                                <time datetime="{{ survey.created_at.isoformat() }}Z">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
+                                <time datetime="{{ iso_datetime(survey.created_at) }}">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
                             </span>
                             <div class="flex items-center gap-2 flex-wrap">
                                 <span class="text-xs text-gray-500">

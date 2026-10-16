@@ -227,6 +227,31 @@ class TestResultsList:
         assert "広告の出し方について" in interviews
         assert "価格の見直しについて" not in interviews
 
+    def test_mode_filter_with_an_empty_page_still_offers_more(self, aw, client):
+        """種類で絞って 1 回の読み取りで見つからなくても、「もっと見る」で古い結果へ進める。"""
+        import re
+
+        from src.managers import discussion_manager as dm
+
+        aw.discussion(topic="古いインタビュー", mode="interview")
+        for i in range(45):
+            aw.discussion(topic=f"新しい議論{i}")
+        with patch.object(dm, "MODE_FILTER_MAX_PAGES", 2):
+            first = client.get(
+                "/discussion/results?mode=interview",
+                headers={"HX-Target": "discussion-list"},
+            ).text
+            assert "該当する議論がありません" not in first
+            assert "もっと見る" in first
+            cursor = re.search(r"cursor=([^&\"]+)", first)
+            assert cursor is not None
+            rest = client.get(
+                f"/discussion/results?tab=mine&cursor={cursor.group(1)}"
+                "&mode=interview&append=1",
+                headers={"HX-Target": "discussion-grid"},
+            ).text
+        assert "古いインタビュー" in rest
+
     def test_rows_show_the_stored_names_and_counts(self, aw, client):
         aw.discussion(topic="自分の議論について")
         html = client.get("/discussion/results", headers=PAGE).text

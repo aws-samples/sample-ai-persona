@@ -135,6 +135,18 @@ class InterviewPersistenceError(InterviewManagerError):
 #: 利用者の発言の表示名。
 USER_NAME = "ユーザー"
 
+#: セッション ID から保存先の議論の ID を決める名前空間（固定の値。変えると再保存で別の議論になる）
+_SAVED_DISCUSSION_NAMESPACE = uuid.UUID("6f4b8a52-2d0e-4c1a-9b7e-3a5d1c8e0f21")
+
+
+def _discussion_id_for(session_id: str) -> str:
+    """The discussion a session is saved into, the same on every attempt.
+
+    A save whose discussion was written but not recorded on the session can
+    then find and reuse that discussion instead of making a second one.
+    """
+    return str(uuid.uuid5(_SAVED_DISCUSSION_NAMESPACE, session_id))
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -998,7 +1010,16 @@ class InterviewManager:
             else:
                 usable.append(document)
 
-        if session.saved_discussion_id is None:
+        saved_id = session.saved_discussion_id
+        if saved_id is None and self._discussion_records.can_manage(
+            principal, _discussion_id_for(session.id)
+        ):
+            # 前回の保存で議論はできたが、セッションへの記録だけ失敗した。
+            # 同じ議論を記録し直して書き足す（別の議論を作らない）
+            saved_id = _discussion_id_for(session.id)
+            self._record_saved(session.id, saved_id, now)
+
+        if saved_id is None:
             topic = (
                 session_name.strip()
                 if session_name and session_name.strip()
@@ -1011,21 +1032,14 @@ class InterviewManager:
                 documents=usable,
                 agent_config={"persona_models": session.persona_models},
                 participant_names=dict(session.persona_names),
+                discussion_id=_discussion_id_for(session.id),
                 now=session.created_at,
             )
             saved = self._discussion_records.save_new(principal, discussion, messages)
-            try:
-                self._store.mark_saved(session.id, saved.id, now=now)
-            except InterviewConflict as e:
-                raise self._conflict(session.id, "save") from e
-            except InterviewSessionStoreError as e:
-                raise InterviewPersistenceError(
-                    f"saved discussion could not be recorded ({type(e).__name__})",
-                    code=ErrorCode.INTERVIEW_SAVE_FAILED,
-                ) from e
+            self._record_saved(session.id, saved.id, now)
             discussion_id = saved.id
         else:
-            discussion_id = session.saved_discussion_id
+            discussion_id = saved_id
             self._discussion_records.append_messages(
                 principal, discussion_id, messages, usable, skip_saved=True
             )
@@ -1036,6 +1050,17 @@ class InterviewManager:
             self.logger.warning("Extending the interview session failed", exc_info=True)
         self.logger.info(f"Interview session saved: {session.id} -> {discussion_id}")
         return InterviewSaveResult(discussion_id=discussion_id, excluded_files=excluded)
+
+    def _record_saved(self, session_id: str, discussion_id: str, now: datetime) -> None:
+        try:
+            self._store.mark_saved(session_id, discussion_id, now=now)
+        except InterviewConflict as e:
+            raise self._conflict(session_id, "save") from e
+        except InterviewSessionStoreError as e:
+            raise InterviewPersistenceError(
+                f"saved discussion could not be recorded ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SAVE_FAILED,
+            ) from e
 
     # =========================================================================
     # 参照・状態・終了

@@ -32,7 +32,10 @@ from src.services.agent_service import (  # noqa: E402
     AgentCommunicationError,
     PersonaAgent,
 )
-from src.services.interview_session_store import InterviewSessionStore  # noqa: E402
+from src.services.interview_session_store import (  # noqa: E402
+    InterviewSessionStore,
+    InterviewSessionStoreError,
+)
 from tests.error_helpers import raises_code  # noqa: E402
 from tests.unit.discussion_world import (  # noqa: E402
     ADMIN,
@@ -703,6 +706,37 @@ class TestSave:
         assert again.discussion_id == first.discussion_id
         assert world.store.bodies[first.discussion_id]["message_count"] == 6
         assert len(world.store.bodies) == 1
+
+    def test_retry_after_the_id_was_not_recorded_reuses_the_discussion(
+        self, manager, world, store, tmp_path
+    ):
+        """初回の保存で議論の ID の記録だけ失敗しても、再保存は同じ議論に戻る。"""
+        world.files.attachable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "見て", [FILE_1])
+
+        real_mark_saved = store.mark_saved
+        with patch.object(
+            store, "mark_saved", side_effect=InterviewSessionStoreError("down")
+        ):
+            with raises_code(CodedError, ErrorCode.INTERVIEW_SAVE_FAILED):
+                manager.save_interview_session(OWNER, session.id, "保存名")
+        assert len(world.store.bodies) == 1
+        (first_id,) = world.store.bodies
+
+        # 添付は最初の議論に紐付いた（紐付け前としては読めない）
+        world.files.attachable_file.side_effect = CodedError(
+            "attached", code=ErrorCode.FILE_NOT_FOUND
+        )
+        world.files.readable_file.side_effect = lambda p, i: _upload(tmp_path, i)
+        with patch.object(store, "mark_saved", side_effect=real_mark_saved):
+            result = manager.save_interview_session(OWNER, session.id, "保存名")
+
+        assert result.discussion_id == first_id
+        assert result.excluded_files == []
+        assert len(world.store.bodies) == 1
+        assert world.store.bodies[first_id]["message_count"] == 3
+        assert store.get(session.id).saved_discussion_id == first_id
 
     def test_unusable_files_are_left_out_and_named(self, manager, world, tmp_path):
         uploads = {
