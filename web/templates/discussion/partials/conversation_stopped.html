@@ -1,0 +1,27 @@
+{#
+  会話を続けられなくなったときの枠（M12、U6 BR7.5）。インタビューと議論の両方で使う。
+  理由（読めない・削除された・共有が外れた）は出さない（NFR1.56）。見出しは「続けられません」にする
+  （画面は開いたままなので「ページが見つかりません」は使わない）。
+  見出しに tabindex="-1" を付け、差し込んだあと app.js がフォーカスを移す。
+
+  引数:
+    kind       ... "interview" / "discussion"
+    back_url   ... 戻り先
+    back_label ... 戻るボタンの文字
+#}
+<div data-conversation-stopped role="alert"
+     class="bg-red-50 border border-red-300 rounded-lg p-4 my-4">
+    <h2 tabindex="-1" data-conversation-stopped-heading
+        class="font-semibold text-red-900">
+        {%- if kind == "interview" %}このインタビューは続けられません{% else %}この議論は続けられません{% endif -%}
+    </h2>
+    {%- if kind == "interview" %}
+    <p class="text-sm text-red-900 mt-1">送れなかった発言は下の欄に残しています。</p>
+    {%- else %}
+    <p class="text-sm text-red-900 mt-1">選んだペルソナを確かめて、もう一度設定してください。</p>
+    {%- endif %}
+    <a href="{{ back_url }}"
+       class="inline-block mt-3 px-3 py-1.5 bg-red-700 text-white text-sm rounded hover:bg-red-800">
+        {{ back_label }}
+    </a>
+</div>

@@ -8,6 +8,7 @@ from src.models.persona import Persona
 from src.models.discussion import Discussion
 from src.models.message import Message
 from src.managers.discussion_manager import DiscussionManager, DiscussionManagerError
+from tests.unit.discussion_world import OWNER
 from src.managers.agent_discussion_manager import (
     AgentDiscussionManager,
     AgentDiscussionManagerError,
@@ -36,12 +37,24 @@ class TestDiscussionManagerFullFlow:
     """DiscussionManager.run_classic_discussion のテスト"""
 
     def setup_method(self):
+        from tests.unit.discussion_world import World
+
+        self.world = World()
         self.mock_ai = Mock()
-        self.mock_db = Mock()
         self.manager = DiscussionManager(
-            ai_service=self.mock_ai, database_service=self.mock_db
+            ai_service=self.mock_ai,
+            database_service=Mock(),
+            file_attachments=self.world.files,
+            discussion_records=self.world.records,
+            participants=self.world.participants,
+            resource_sharing=self.world.sharing,
+            owners=self.world.owners,
+            s3_service=Mock(),
         )
-        self.personas = [_make_persona("p1", "太郎"), _make_persona("p2", "花子")]
+        self.personas = [
+            self.world.persona_bodies["p1"],
+            self.world.persona_bodies["p2"],
+        ]
 
     def test_run_classic_discussion_returns_discussion(self):
         """フルフローがDiscussionオブジェクトを返すこと"""
@@ -59,21 +72,20 @@ class TestDiscussionManagerFullFlow:
         )
         self.mock_ai.facilitate_discussion.return_value = [msg1, msg2]
         self.mock_ai.extract_insights.return_value = []
-        self.mock_db.save_discussion.return_value = "disc-id"
 
         result = self.manager.run_classic_discussion(
-            personas=self.personas, topic="テストトピック"
+            OWNER, personas=self.personas, topic="テストトピック"
         )
 
         assert isinstance(result, Discussion)
         assert result.topic == "テストトピック"
-        self.mock_db.save_discussion.assert_called_once()
+        assert self.world.store.bodies[result.id]["message_count"] == 2
 
     def test_run_classic_discussion_validation_error(self):
         """ペルソナ不足でDiscussionManagerErrorが投げられること"""
         with pytest.raises(DiscussionManagerError):
             self.manager.run_classic_discussion(
-                personas=[self.personas[0]], topic="テスト"
+                OWNER, personas=[self.personas[0]], topic="テスト"
             )
 
     def test_run_classic_discussion_streaming_yields_events(self):
@@ -86,11 +98,10 @@ class TestDiscussionManagerFullFlow:
         )
         self.mock_ai.facilitate_discussion_streaming.return_value = iter([mock_msg])
         self.mock_ai.extract_insights.return_value = []
-        self.mock_db.save_discussion.return_value = "disc-id"
 
         events = list(
             self.manager.run_classic_discussion_streaming(
-                personas=self.personas, topic="テストトピック"
+                OWNER, personas=self.personas, topic="テストトピック"
             )
         )
 

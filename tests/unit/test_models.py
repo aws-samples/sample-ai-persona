@@ -327,7 +327,7 @@ class TestDiscussion:
         assert discussion.id is not None
         assert discussion.topic == "商品改善について"
         assert discussion.participants == ["persona1", "persona2"]
-        assert len(discussion.messages) == 0
+        assert discussion.message_count == 0
         assert len(discussion.insights) == 0
         assert isinstance(discussion.created_at, datetime)
         assert discussion.mode == "classic"
@@ -348,23 +348,11 @@ class TestDiscussion:
         assert discussion.agent_config["rounds"] == 3
         assert discussion.agent_config["additional_instructions"] == "Be concise"
 
-    def test_add_message_to_discussion(self):
+    def test_with_insights_returns_a_new_discussion(self):
         discussion = Discussion.create_new(
             topic="テスト議論", participants=["persona1"]
         )
-        updated_discussion = discussion.add_message(self.sample_message)
-
-        assert len(updated_discussion.messages) == 1
-        assert updated_discussion.messages[0].content == "テストメッセージ"
-        assert len(discussion.messages) == 0
-        assert updated_discussion.mode == discussion.mode
-        assert updated_discussion.agent_config == discussion.agent_config
-
-    def test_add_insight_to_discussion(self):
-        discussion = Discussion.create_new(
-            topic="テスト議論", participants=["persona1"]
-        )
-        updated_discussion = discussion.add_insight(self.sample_insight)
+        updated_discussion = discussion.with_insights([self.sample_insight])
 
         assert len(updated_discussion.insights) == 1
         assert updated_discussion.insights[0].category == "テスト"
@@ -376,22 +364,20 @@ class TestDiscussion:
         discussion = Discussion.create_new(
             topic="シリアライゼーションテスト", participants=["persona1"]
         )
-        discussion = discussion.add_message(self.sample_message)
-        discussion = discussion.add_insight(self.sample_insight)
+        discussion = discussion.with_insights([self.sample_insight])
 
         discussion_dict = discussion.to_dict()
         assert isinstance(discussion_dict, dict)
         assert discussion_dict["topic"] == "シリアライゼーションテスト"
         assert isinstance(discussion_dict["created_at"], str)
-        assert isinstance(discussion_dict["messages"], list)
+        assert "messages" not in discussion_dict
         assert isinstance(discussion_dict["insights"], list)
         assert discussion_dict["mode"] == "classic"
-        assert discussion_dict["agent_config"] is None
+        assert "agent_config" not in discussion_dict
 
         restored_discussion = Discussion.from_dict(discussion_dict)
         assert restored_discussion.id == discussion.id
         assert restored_discussion.topic == discussion.topic
-        assert len(restored_discussion.messages) == 1
         assert len(restored_discussion.insights) == 1
         assert restored_discussion.created_at == discussion.created_at
         assert restored_discussion.mode == "classic"
@@ -405,7 +391,6 @@ class TestDiscussion:
             mode="agent",
             agent_config=agent_config,
         )
-        discussion = discussion.add_message(self.sample_message)
 
         discussion_dict = discussion.to_dict()
         assert discussion_dict["mode"] == "agent"
@@ -439,15 +424,16 @@ class TestMessageInterviewExtensions:
     """Test cases for Message model interview extensions."""
 
     def test_discussion_with_documents(self):
+        from src.models.discussion import DocumentRef
+
         documents = [
-            {
-                "id": "doc1",
-                "filename": "test.png",
-                "file_path": "discussion_documents/uuid_test.png",
-                "file_size": 1024,
-                "mime_type": "image/png",
-                "uploaded_at": "2026-01-26T20:00:00",
-            }
+            DocumentRef(
+                id="doc1",
+                filename="test.png",
+                mime_type="image/png",
+                file_size=1024,
+                uploaded_at="2026-01-26T20:00:00",
+            )
         ]
         discussion = Discussion.create_new(
             topic="ドキュメント付き議論",
@@ -456,7 +442,7 @@ class TestMessageInterviewExtensions:
         )
         assert discussion.documents is not None
         assert len(discussion.documents) == 1
-        assert discussion.documents[0]["filename"] == "test.png"
+        assert discussion.documents[0].filename == "test.png"
 
     def test_discussion_without_documents(self):
         discussion = Discussion.create_new(
@@ -465,14 +451,16 @@ class TestMessageInterviewExtensions:
         assert discussion.documents is None
 
     def test_discussion_documents_serialization(self):
-        documents = [{"id": "doc1", "filename": "test.pdf"}]
+        from src.models.discussion import DocumentRef
+
+        documents = [DocumentRef("doc1", "test.pdf", "application/pdf", 1, "2026")]
         discussion = Discussion.create_new(
             topic="テスト", participants=["persona1"], documents=documents
         )
 
         discussion_dict = discussion.to_dict()
         assert "documents" in discussion_dict
-        assert discussion_dict["documents"] == documents
+        assert discussion_dict["documents"] == [d.to_dict() for d in documents]
 
         restored = Discussion.from_dict(discussion_dict)
         assert restored.documents == documents
@@ -490,26 +478,14 @@ class TestMessageInterviewExtensions:
         discussion = Discussion.from_dict(old_data)
         assert discussion.documents is None
 
-    def test_discussion_with_reports(self):
-        from src.models.discussion_report import DiscussionReport
-
-        report = DiscussionReport.create_new(
-            template_type="summary",
-            content="# サマリ",
-        )
+    def test_discussion_keeps_only_the_report_count(self):
+        """U6: レポートは DiscussionReports に置き、本体は件数だけを持つ（ADR-002）。"""
         discussion = Discussion.create_new(
             topic="レポートテスト", participants=["persona1"]
         )
-        discussion.reports = [report]
-
         data = discussion.to_dict()
-        assert len(data["reports"]) == 1
-        assert data["reports"][0]["template_type"] == "summary"
-
-        restored = Discussion.from_dict(data)
-        assert len(restored.reports) == 1
-        assert restored.reports[0].id == report.id
-        assert restored.reports[0].content == "# サマリ"
+        assert "reports" not in data
+        assert data["report_count"] == 0
 
     def test_discussion_backward_compatibility_no_reports(self):
         old_data = {
@@ -522,10 +498,11 @@ class TestMessageInterviewExtensions:
             "mode": "classic",
         }
         discussion = Discussion.from_dict(old_data)
-        assert discussion.reports == []
+        assert discussion.report_count == 0
+        assert discussion.is_legacy
 
-    def test_discussion_default_reports_empty(self):
+    def test_discussion_default_report_count_is_zero(self):
         discussion = Discussion.create_new(
             topic="デフォルトテスト", participants=["persona1"]
         )
-        assert discussion.reports == []
+        assert discussion.report_count == 0

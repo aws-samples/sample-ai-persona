@@ -96,7 +96,7 @@
             </div>
             {% else %}
             {# persona_idからインデックスを取得して色を決定 #}
-            {% set color_index = discussion.participants.index(message.persona_id) if message.persona_id in discussion.participants else 0 %}
+            {% set color_index = discussion.participant_ids.index(message.persona_id) if message.persona_id in discussion.participant_ids else 0 %}
             {% set color = persona_colors[color_index % persona_colors|length] %}
             <div class="flex gap-2 message-item">
                 <div class="flex-shrink-0">

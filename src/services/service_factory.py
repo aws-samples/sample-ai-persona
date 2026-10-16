@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from .persona_candidate_store import PersonaCandidateStore
     from .resource_share_store import ResourceShareStore
     from .uploaded_file_store import UploadedFileStore
+    from .discussion_store import DiscussionStore
+    from .interview_session_store import InterviewSessionStore
     from .user_directory_service import UserDirectoryService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
@@ -70,6 +72,8 @@ class ServiceFactory:
         self._persona_candidate_store: Optional["PersonaCandidateStore"] = None
         self._persona_binding_store: Optional["PersonaBindingStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
+        self._discussion_store: Optional["DiscussionStore"] = None
+        self._interview_session_store: Optional["InterviewSessionStore"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -466,6 +470,37 @@ class ServiceFactory:
                         table_name=config.table_name("UploadedFiles"),
                     )
         return self._uploaded_file_store
+
+    def get_discussion_store(self) -> "DiscussionStore":
+        """Return the store of discussion bodies, messages and reports (U6)."""
+        if self._discussion_store is None:
+            with self._lock:
+                if self._discussion_store is None:
+                    from .discussion_store import DiscussionStore
+
+                    self.logger.info("Creating new DiscussionStore instance")
+                    self._discussion_store = DiscussionStore(
+                        region=config.DYNAMODB_REGION,
+                        discussions_table=config.table_name("Discussions"),
+                        messages_table=config.DISCUSSION_MESSAGES_TABLE_NAME,
+                        reports_table=config.DISCUSSION_REPORTS_TABLE_NAME,
+                    )
+        return self._discussion_store
+
+    def get_interview_session_store(self) -> "InterviewSessionStore":
+        """Return the store of running interviews (U6, ADR-004)."""
+        if self._interview_session_store is None:
+            with self._lock:
+                if self._interview_session_store is None:
+                    from .interview_session_store import InterviewSessionStore
+
+                    self.logger.info("Creating new InterviewSessionStore instance")
+                    self._interview_session_store = InterviewSessionStore(
+                        region=config.DYNAMODB_REGION,
+                        sessions_table=config.INTERVIEW_SESSIONS_TABLE_NAME,
+                        messages_table=config.INTERVIEW_MESSAGES_TABLE_NAME,
+                    )
+        return self._interview_session_store
 
     def get_user_directory_service(self) -> "UserDirectoryService":
         """Return the user-list reader for owner names (U4, BR5.1).

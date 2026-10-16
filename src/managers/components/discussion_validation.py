@@ -15,6 +15,7 @@ from typing import List, Optional, Type
 
 from ...models.discussion import Discussion
 from ...models.errors import CodedError, ErrorCode
+from ...models.message import Message
 from ...models.persona import Persona
 
 logger = logging.getLogger(__name__)
@@ -94,28 +95,23 @@ def validate_personas_and_topic(
 
 
 def validate_results(
-    discussion: Discussion,
+    messages: List[Message],
     original_personas: List[Persona],
     *,
     error_cls: Type[CodedError],
     require_min_content: bool,
     count_statements_only: bool,
 ) -> None:
-    """AI 生成後の議論結果を検証する。
+    """AI 生成後の議論結果（発言の列）を検証する。
 
-    両モード共通: 結果 falsy / メッセージ最小2 / ペルソナ別発言有無の warning。
+    両モード共通: メッセージ最小2 / ペルソナ別発言有無の warning。
 
     ``require_min_content``: 全メッセージの合計文字数 < 100 を拒否（非エージェントのみ True）。
     ``count_statements_only``: ペルソナ別カウントを message_type=="statement" に限定
     （エージェントのみ True。warning の精度に影響）。
     """
-    if not discussion:
-        raise error_cls(
-            "generated discussion is falsy",
-            code=ErrorCode.DISCUSSION_RESULT_INVALID,
-        )
-    if not discussion.messages or len(discussion.messages) < MIN_MESSAGES:
-        message_count = len(discussion.messages) if discussion.messages else 0
+    if not messages or len(messages) < MIN_MESSAGES:
+        message_count = len(messages) if messages else 0
         raise error_cls(
             f"generated discussion has {message_count} messages, "
             f"minimum is {MIN_MESSAGES}",
@@ -123,7 +119,7 @@ def validate_results(
         )
 
     persona_message_count: dict[str, int] = {}
-    for message in discussion.messages:
+    for message in messages:
         if count_statements_only and message.message_type != "statement":
             continue
         persona_message_count[message.persona_id] = (
@@ -135,7 +131,7 @@ def validate_results(
             logger.warning(f"ペルソナ {persona.name} の発言が見つかりませんでした")
 
     if require_min_content:
-        total_content_length = sum(len(msg.content) for msg in discussion.messages)
+        total_content_length = sum(len(msg.content) for msg in messages)
         if total_content_length < MIN_TOTAL_CONTENT_LENGTH:
             raise error_cls(
                 f"generated discussion content length {total_content_length} "
@@ -150,6 +146,7 @@ def validate_for_save(
     error_cls: Type[CodedError],
     code: ErrorCode,
     require_mode: Optional[str] = None,
+    messages: Optional[List[Message]] = None,
 ) -> None:
     """保存前の議論オブジェクトの構造を検証する。
 
@@ -177,8 +174,8 @@ def validate_for_save(
             code=code,
         )
 
-    if discussion.messages:
-        for i, message in enumerate(discussion.messages):
+    if messages:
+        for i, message in enumerate(messages):
             if not message.persona_id or not message.content:
                 raise error_cls(
                     f"message at index {i} has no persona_id or content",

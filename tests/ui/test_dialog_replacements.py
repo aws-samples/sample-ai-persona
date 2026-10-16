@@ -37,6 +37,8 @@ INSIGHTS = render_page(
     "discussion/partials/insights.html",
     insights=[],
     discussion_id="d1",
+    # U6: 再生成のダイアログは管理できる人だけに出る
+    manageable=True,
     default_categories=[{"name": "顧客ニーズ", "description": "ニーズ"}],
 )
 

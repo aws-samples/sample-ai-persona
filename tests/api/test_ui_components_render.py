@@ -264,8 +264,13 @@ class TestStatusLabelMacro:
 
 
 def _list_screen_managers() -> dict[str, Mock]:
+    from src.models.sharing import ListTab, TabbedList
+
     discussion = Mock()
-    discussion.get_discussion_history.return_value = ([], None)
+    # U6: 議論の一覧もタブ別（TabbedList）
+    discussion.list_discussions.return_value = TabbedList(
+        tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
+    )
     execution = Mock()
     execution.get_all_surveys.return_value = []
     template = Mock()
@@ -310,3 +315,35 @@ class TestPageTitles:
 
         assert len(set(titles)) == len(titles), titles
         assert titles[-1] == "ページが見つかりません - AIペルソナシステム"
+
+
+class TestIsoDatetimeMacro:
+    """`<time datetime>` は、ブラウザーが読める ISO 8601 にする（日本時間への変換のため）。"""
+
+    SOURCE = (
+        '{% from "components/datetime.html" import iso_datetime %}'
+        "{{ iso_datetime(value) }}"
+    )
+
+    def test_naive_datetime_is_marked_as_utc(self) -> None:
+        from datetime import datetime
+
+        assert _render(self.SOURCE, value=datetime(2026, 10, 15, 9, 0)) == (
+            "2026-10-15T09:00:00Z"
+        )
+
+    def test_aware_datetime_keeps_its_offset_without_an_extra_z(self) -> None:
+        from datetime import datetime, timezone
+
+        html = _render(
+            self.SOURCE, value=datetime(2026, 10, 15, 9, 0, tzinfo=timezone.utc)
+        )
+        assert html == "2026-10-15T09:00:00+00:00"
+
+    def test_templates_do_not_append_z_to_isoformat_directly(self) -> None:
+        offenders = [
+            str(path.relative_to(_TEMPLATES))
+            for path in _TEMPLATES.rglob("*.html")
+            if "isoformat() }}Z" in path.read_text("utf-8")
+        ]
+        assert offenders == []

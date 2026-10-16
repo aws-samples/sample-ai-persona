@@ -1,128 +1,60 @@
-"""InterviewManager ファイル処理統合のテスト。"""
+"""インタビューの添付の扱い（U6 BR3.6）。
+
+U6 からは、添付を Router が先に ``FileManager.upload_interview_attachment`` で置き
+（種類と大きさの検査は test_file_manager.py）、InterviewManager には ID だけを渡す。
+ここでは、置いたファイルからエージェントに渡す ContentBlock を作る部分と、
+InterviewManager が生のバイト列を受け取らないことを確かめる。
+"""
 
 import pytest
-from unittest.mock import Mock, patch
 
-from src.managers.interview_manager import (
-    InterviewManager,
-    InterviewValidationError,
-)
-from src.models.errors import ErrorCode
-from tests.error_helpers import raises_code
+from src.managers.interview_manager import InterviewManager
+from src.managers.shared.document_loader import prepare_document_contents
 
 
-@pytest.mark.unit
-class TestValidateAndConvertFiles:
-    """_validate_and_convert_files のテスト"""
-
-    def setup_method(self):
-        self.manager = InterviewManager(agent_service=Mock(), database_service=Mock())
-
-    def test_valid_png(self):
-        """PNG画像が正しく変換されること"""
-        raw_files = [(b"\x89PNG\r\n", "image.png", "image/png")]
-        contents, metadata = self.manager._validate_and_convert_files(raw_files)
-
-        assert len(contents) == 1
-        assert "image" in contents[0]
-        assert contents[0]["image"]["format"] == "png"
-        assert len(metadata) == 1
-        assert metadata[0]["filename"] == "image.png"
-        assert metadata[0]["mime_type"] == "image/png"
-
-    def test_valid_pdf(self):
-        """PDFが正しく変換されること"""
-        raw_files = [(b"%PDF-1.4", "doc.pdf", "application/pdf")]
-        contents, metadata = self.manager._validate_and_convert_files(raw_files)
-
-        assert len(contents) == 1
-        assert "document" in contents[0]
-        assert contents[0]["document"]["format"] == "pdf"
-
-    def test_valid_text(self):
-        """テキストファイルが正しく変換されること"""
-        raw_files = [(b"hello world", "note.txt", "text/plain")]
-        contents, metadata = self.manager._validate_and_convert_files(raw_files)
-
-        assert len(contents) == 1
-        assert contents[0]["document"]["format"] == "txt"
-
-    def test_unsupported_mime_raises(self):
-        """未サポートMIMEでInterviewValidationErrorが投げられること"""
-        raw_files = [(b"data", "file.zip", "application/zip")]
-
-        with raises_code(InterviewValidationError, ErrorCode.FILE_MIME_UNSUPPORTED):
-            self.manager._validate_and_convert_files(raw_files)
-
-    def test_oversized_image_raises(self):
-        """画像サイズ超過でInterviewValidationErrorが投げられること"""
-        large_bytes = b"\x89PNG" * (6 * 1024 * 1024)  # >5MB
-        raw_files = [(large_bytes, "big.png", "image/png")]
-
-        with raises_code(InterviewValidationError, ErrorCode.FILE_TOO_LARGE):
-            self.manager._validate_and_convert_files(raw_files)
-
-    def test_oversized_document_raises(self):
-        """ドキュメントサイズ超過でInterviewValidationErrorが投げられること"""
-        large_bytes = b"%PDF" * (11 * 1024 * 1024)  # >10MB
-        raw_files = [(large_bytes, "big.pdf", "application/pdf")]
-
-        with raises_code(InterviewValidationError, ErrorCode.FILE_TOO_LARGE):
-            self.manager._validate_and_convert_files(raw_files)
-
-    def test_empty_file_skipped(self):
-        """空ファイルがスキップされること"""
-        raw_files = [(b"", "empty.txt", "text/plain")]
-        contents, metadata = self.manager._validate_and_convert_files(raw_files)
-
-        assert len(contents) == 0
-        assert len(metadata) == 0
-
-    def test_multiple_files(self):
-        """複数ファイルが正しく処理されること"""
-        raw_files = [
-            (b"\x89PNG", "img.png", "image/png"),
-            (b"%PDF-1.4", "doc.pdf", "application/pdf"),
-            (b"text content", "note.txt", "text/plain"),
-        ]
-        contents, metadata = self.manager._validate_and_convert_files(raw_files)
-
-        assert len(contents) == 3
-        assert len(metadata) == 3
+def _metadata(path, mime_type, filename):
+    return [{"file_path": str(path), "mime_type": mime_type, "filename": filename}]
 
 
 @pytest.mark.unit
-class TestSendUserMessageWithFiles:
-    """send_user_message_with_files のテスト"""
+class TestAttachmentContents:
+    """保存したファイルから ContentBlock を作る（作り直しのときも同じ）"""
 
-    def setup_method(self):
-        self.mock_agent_service = Mock()
-        self.mock_agent_service.create_persona_agent_with_integrations.return_value = (
-            Mock()
+    def test_png(self, tmp_path):
+        path = tmp_path / "image.png"
+        path.write_bytes(b"\x89PNG\r\n")
+        (block,) = prepare_document_contents(_metadata(path, "image/png", "image.png"))
+        assert block["image"]["format"] == "png"
+
+    def test_pdf(self, tmp_path):
+        path = tmp_path / "doc.pdf"
+        path.write_bytes(b"%PDF-1.4")
+        (block,) = prepare_document_contents(
+            _metadata(path, "application/pdf", "doc.pdf")
         )
-        self.manager = InterviewManager(
-            agent_service=self.mock_agent_service, database_service=Mock()
+        assert block["document"]["format"] == "pdf"
+
+    def test_text(self, tmp_path):
+        path = tmp_path / "note.txt"
+        path.write_bytes(b"hello world")
+        (block,) = prepare_document_contents(_metadata(path, "text/plain", "note.txt"))
+        assert block["document"]["format"] == "txt"
+
+    def test_missing_file_is_skipped(self, tmp_path):
+        assert (
+            prepare_document_contents(
+                _metadata(tmp_path / "gone.png", "image/png", "gone.png")
+            )
+            == []
         )
 
-    def test_delegates_to_send_user_message(self):
-        """send_user_message に正しく委譲すること"""
-        with patch.object(self.manager, "send_user_message") as mock_send:
-            mock_send.return_value = []
-            self.manager.send_user_message_with_files(
-                "session-1", "hello", raw_files=None
-            )
-            mock_send.assert_called_once_with(
-                session_id="session-1",
-                message="hello",
-                document_contents=None,
-                document_metadata=None,
-            )
 
-    def test_validation_error_on_bad_file(self):
-        """不正ファイルでInterviewValidationErrorが投げられること"""
-        with pytest.raises(InterviewValidationError):
-            self.manager.send_user_message_with_files(
-                "session-1",
-                "hello",
-                raw_files=[(b"data", "file.exe", "application/octet-stream")],
-            )
+@pytest.mark.unit
+class TestNoRawBytesInTheManager:
+    def test_the_raw_file_paths_are_gone(self):
+        for name in (
+            "_validate_and_convert_files",
+            "send_user_message_with_files",
+            "send_user_message_streaming_with_files",
+        ):
+            assert not hasattr(InterviewManager, name)

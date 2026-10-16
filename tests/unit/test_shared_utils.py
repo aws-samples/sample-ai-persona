@@ -45,23 +45,23 @@ class TestInsightUtils:
         discussion = Discussion.create_new(
             topic="テスト議論", participants=["p1", "p2"]
         )
-        # メッセージを追加（generate_insightsが要求）
+        # U6: 発言は本体の外に置くため、別に渡す
         from src.models.message import Message
 
-        msg = Message.create_new(
-            persona_id="p1",
-            persona_name="太郎",
-            content="テスト",
-            message_type="statement",
-        )
-        discussion = discussion.add_message(msg)
-        msg2 = Message.create_new(
-            persona_id="p2",
-            persona_name="花子",
-            content="テスト2",
-            message_type="statement",
-        )
-        discussion = discussion.add_message(msg2)
+        messages = [
+            Message.create_new(
+                persona_id="p1",
+                persona_name="太郎",
+                content="テスト",
+                message_type="statement",
+            ),
+            Message.create_new(
+                persona_id="p2",
+                persona_name="花子",
+                content="テスト2",
+                message_type="statement",
+            ),
+        ]
 
         mock_ai_service = Mock()
         mock_ai_service.extract_insights.return_value = [
@@ -75,12 +75,15 @@ class TestInsightUtils:
 
         result = attach_insights_to_discussion(
             discussion=discussion,
+            messages=messages,
             categories=None,
             ai_service=mock_ai_service,
             logger=Mock(),
         )
 
-        assert result.insights is not None
+        mock_ai_service.extract_insights.assert_called_once_with(
+            messages, categories=None, topic="テスト議論"
+        )
         assert len(result.insights) == 1
         assert result.insights[0].category == "ニーズ"
 
@@ -95,12 +98,13 @@ class TestInsightUtils:
 
         result = attach_insights_to_discussion(
             discussion=discussion,
+            messages=[],
             categories=None,
             ai_service=mock_ai_service,
             logger=Mock(),
         )
 
-        assert result.insights == [] or result.insights is None
+        assert result.insights == []
 
     def test_save_categories_to_config(self):
         """カテゴリーがagent_configに保存されること"""

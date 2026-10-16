@@ -964,8 +964,13 @@ class TestHttpExceptionRendersHtmlPage:
     def test_discussion_not_found_renders_html(self, mock_get_mgr, test_app, login_as):
         from fastapi.testclient import TestClient
 
+        from src.models.errors import CodedError, ErrorCode
+
+        # U6: 読めない・存在しない議論は Manager が DISCUSSION_NOT_FOUND を送出する
         mgr = Mock()
-        mgr.get_discussion.return_value = None
+        mgr.get_discussion.side_effect = CodedError(
+            "discussion not found", code=ErrorCode.DISCUSSION_NOT_FOUND
+        )
         mock_get_mgr.return_value = mgr
 
         with TestClient(test_app, follow_redirects=False) as browser:
@@ -1117,6 +1122,45 @@ class TestPersistedFailuresDoNotLeak:
             "error_code / error_context で保存し、文言は表示層で解決すること"
         )
         assert {"error_code", "error_context"} <= fields
+
+    def test_job_model_keeps_a_code_not_the_text(self):
+        """U6 BR8.3: `Job` は失敗を `error_code` で持ち、例外文の保存先を持たないこと。"""
+        from src.models.job import Job
+
+        fields = {f.name for f in dataclasses.fields(Job)}
+        assert "error_code" in fields
+        assert "error" not in fields and self._LEAKY_FIELD not in fields
+
+    def test_job_manager_saves_the_code(self):
+        """`JobManager` が失敗の保存に例外文（str(e)）を渡していないこと。"""
+        path = self._ROOT / "src" / "managers" / "job_manager.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "update_job_failed"
+        ]
+        assert calls, "update_job_failed の呼び出しが見つからない"
+        for call in calls:
+            assert not any(_stringifies_something(arg) for arg in call.args)
+
+    def test_old_job_records_drop_the_text(self):
+        """旧レコードの `error`（例外文）は読み出しで捨て、コードだけにすること。"""
+        from src.models.job import Job
+
+        job = Job.from_dict(
+            {
+                "id": "j",
+                "status": "failed",
+                "created_at": "2026-10-15T00:00:00",
+                "updated_at": "2026-10-15T00:00:00",
+                "error": "arn:aws:s3:::secret-bucket failed",
+            }
+        )
+        assert job.error_code == "unknown"
+        assert "secret" not in repr(job)
 
     def test_managers_do_not_store_exception_text(self):
         """Manager層が例外文をモデルのフィールドへ代入していないこと。"""

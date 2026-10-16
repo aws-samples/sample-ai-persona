@@ -11,7 +11,7 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.models.discussion import Discussion  # noqa: E402
+from src.models.discussion import Discussion, DiscussionView  # noqa: E402
 from src.models.message import Message  # noqa: E402
 
 
@@ -28,42 +28,41 @@ def test_discussion_mode_display_integration():
             topic=f"Classic Discussion {i + 1}",
             participants=[f"persona-{j}" for j in range(1, 4)],
         )
-        # Add some messages
-        for j in range(3):
-            message = Message(
+        # U6: 発言は本体の外に置き、表示は DiscussionView で受け取る
+        messages = [
+            Message(
                 persona_id=f"persona-{j + 1}",
                 persona_name=f"Persona {j + 1}",
                 content=f"Message {j + 1} in classic mode",
                 timestamp=datetime.now(),
             )
-            discussion = discussion.add_message(message)
-        discussions.append(discussion)
+            for j in range(3)
+        ]
+        discussions.append(DiscussionView(discussion, messages, [], []))
 
     # Agent mode discussions
     for i in range(2):
-        discussion = Discussion(
-            id=f"agent-discussion-{i + 1}",
+        discussion = Discussion.create_new(
             topic=f"Agent Discussion {i + 1}",
             participants=[f"persona-{j}" for j in range(1, 5)],
-            messages=[],
-            insights=[],
-            created_at=datetime.now(),
             mode="agent",
             agent_config={"rounds": 3, "additional_instructions": "Be creative"},
+            discussion_id=f"agent-discussion-{i + 1}",
         )
-        # Add messages with round numbers
-        for round_num in range(1, 4):
-            for j in range(1, 5):
-                message = Message(
-                    persona_id=f"persona-{j}",
-                    persona_name=f"Persona {j}",
-                    content=f"Message from round {round_num}",
-                    timestamp=datetime.now(),
-                    message_type="statement",
-                    round_number=round_num,
-                )
-                discussion = discussion.add_message(message)
-        discussions.append(discussion)
+        # Messages with round numbers
+        messages = [
+            Message(
+                persona_id=f"persona-{j}",
+                persona_name=f"Persona {j}",
+                content=f"Message from round {round_num}",
+                timestamp=datetime.now(),
+                message_type="statement",
+                round_number=round_num,
+            )
+            for round_num in range(1, 4)
+            for j in range(1, 5)
+        ]
+        discussions.append(DiscussionView(discussion, messages, [], []))
 
     print(f"✓ Created {len(discussions)} test discussions")
 

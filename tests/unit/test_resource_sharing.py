@@ -269,13 +269,26 @@ class TestRegistration:
         with pytest.raises(ValueError):
             sharing.register(TABLE)
 
-    def test_default_tables_register_personas(self):
+    def test_default_tables_register_personas_and_discussions(self):
         tables = default_sharing_tables()
-        assert [t.resource_type for t in tables] == [PERSONA]
+        assert [t.resource_type for t in tables] == [PERSONA, ResourceType.DISCUSSION]
         persona = tables[0]
         assert persona.name_attribute == "name"
         assert persona.not_found is ErrorCode.PERSONA_NOT_FOUND
         assert persona.cleanup_attributes == ("avatar_path",)
+
+    def test_discussion_table_registration(self):
+        """U6（logical-components.md「共有するもの」）。"""
+        discussion = default_sharing_tables()[1]
+        assert discussion.table.endswith("Discussions")
+        assert discussion.name_attribute == "topic"
+        assert discussion.not_found is ErrorCode.DISCUSSION_NOT_FOUND
+        assert discussion.delete_failed is ErrorCode.DISCUSSION_OPERATION_FAILED
+        assert discussion.cleanup_attributes == (
+            "documents",
+            "message_count",
+            "report_count",
+        )
 
 
 # =============================================================================

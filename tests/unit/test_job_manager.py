@@ -204,3 +204,20 @@ class TestRun:
 
         mock_db.update_job_status.assert_called_once()
         mock_db.update_job_failed.assert_called_once()
+        # U6 BR8.3: 例外文ではなくエラーコードを保存する（コードのない例外は UNKNOWN）
+        assert mock_db.update_job_failed.call_args[0][1] == ErrorCode.UNKNOWN.value
+
+    def test_failed_job_saves_the_coded_errors_code(self):
+        def failing(principal: Principal) -> None:
+            raise CodedError(
+                "s3://bucket/secret-key unreadable",
+                code=ErrorCode.DISCUSSION_TOO_LARGE,
+            )
+
+        jm, mock_db, _, done = _make_manager()
+        jm.submit(OWNER, "discussion", failing)
+        assert done.wait(timeout=5)
+
+        (_job_id, saved) = mock_db.update_job_failed.call_args[0]
+        assert saved == ErrorCode.DISCUSSION_TOO_LARGE.value
+        assert "secret" not in saved

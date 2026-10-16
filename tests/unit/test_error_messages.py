@@ -378,3 +378,26 @@ class TestPersonaU5Wording:
     )
     def test_missing_file_and_kb_binding_use_the_unified_toast(self, code):
         assert _toast(code)["message"] == error_messages.NOT_FOUND_TOAST_MESSAGE
+
+
+class TestDiscussionInterviewWording:
+    """U6 のコードがカタログの文言を返すこと（BR2.7、NFR1.59、NFR1.60）。"""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.DISCUSSION_TOO_LARGE,
+            ErrorCode.DISCUSSION_OPERATION_FAILED,
+            ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            ErrorCode.CONCURRENT_UPDATE,
+        ],
+    )
+    def test_codes_resolve_to_catalog_wording(self, code):
+        message = user_message_for(CodedError(code=code), default="既定")
+        assert message == error_messages._CATALOG[code]
+
+    def test_concurrent_update_tells_a_reply_is_in_progress(self):
+        """NFR Requirements の決定: 「応答の途中です」の趣旨で、入力を残すトースト。"""
+        message = user_message_for(CodedError(code=ErrorCode.CONCURRENT_UPDATE))
+        assert "応答の途中" in message
+        assert _toast(ErrorCode.CONCURRENT_UPDATE)["type"] == "error"

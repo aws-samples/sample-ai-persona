@@ -376,7 +376,7 @@ def test_delete_confirmation_names_what_goes_with_it(client, u5):
     assert 'id="persona-delete-dialog"' in html
     assert "データセット・ナレッジベースの紐付け" in html
     assert "このペルソナの長期記憶" in html
-    assert "共有先の部署からも見えなくなります" in html
+    assert "共有先のグループからも見えなくなります" in html
     # ブラウザの confirm() ではなく共通ダイアログで確かめる
     assert 'hx-confirm="ペルソナ「佐藤 花子」を削除しますか？"' not in html
     assert 'data-dialog-open="persona-delete-dialog"' in html
@@ -388,7 +388,7 @@ def test_delete_confirmation_of_an_unshared_persona_has_no_share_line(client, u5
     html = _as(client, "owner").get(f"/persona/{unshared.id}").text
 
     assert "このペルソナの長期記憶" in html
-    assert "共有先の部署からも見えなくなります" not in html
+    assert "共有先のグループからも見えなくなります" not in html
 
 
 # =============================================================================

@@ -1,0 +1,8 @@
+{#-
+  `<time datetime="...">` に入れる日時の文字列。
+  タイムゾーンを持たない日時は UTC として Z を付け、持つ日時はそのままの ISO 8601 にする
+  （`+00:00Z` のような形はブラウザーが読めず、app.js が日本時間に直せない）。
+-#}
+{%- macro iso_datetime(value) -%}
+{{ value.isoformat() }}{% if value.tzinfo is none %}Z{% endif %}
+{%- endmacro -%}

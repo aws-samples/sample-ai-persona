@@ -1,11 +1,17 @@
 """
 インタビュー関連のルーター
+
+v1.0.0 U6: セッションはアプリの外に置かれ、持ち主だけが使える（BR3.2）。Router は
+利用者（``request.state.principal``）を Manager に渡すだけで判定しない。添付は先に
+``FileManager.upload_interview_attachment`` で置き、ID を Manager に渡す（BR3.6）。
+会話を続けられなくなったとき（他人・期限切れのセッション、読めない参加者）は
+``error_type: conversation_stopped`` を返し、画面が M12 の枠を出す。
 """
 
 import logging
 import asyncio
 import json
-from typing import List, Optional, Any
+from typing import Callable, List, Optional, Any
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -14,17 +20,22 @@ from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from src.managers.file_manager import FileManager, FileUploadError
 from src.managers.persona_manager import PersonaManager
 from src.managers.interview_manager import (
     InterviewManager,
-    InterviewManagerError,
-    InterviewSessionError,
-    InterviewSessionNotFoundError,
-    InterviewValidationError,
     InterviewAgentError,
     InterviewPersistenceError,
 )
-from src.models.errors import ErrorCode, ErrorKind
+from src.models.authz import Principal
+from src.models.errors import (
+    AccessDeniedError,
+    CodedError,
+    ConcurrentUpdateError,
+    ErrorCode,
+    ErrorKind,
+    ParticipantNotFoundError,
+)
 from web.error_messages import (
     error_kind_of,
     is_correctable,
@@ -44,25 +55,58 @@ from ._persona_avatar import persona_avatar_url  # noqa: E402
 
 templates.env.globals["persona_avatar_url"] = persona_avatar_url
 
+#: 保存名の上限（入力欄の検査）。
+SESSION_NAME_MAX_LENGTH = 100
+#: Where the stop panel (M12) of an interview leads back to.
+_BACK_URL = "/discussion/results?mode=interview"
+
 
 def _error_type_for(exc: Exception) -> str:
     """例外を画面表示用の error_type 文字列に変換する。
 
     フロントエンド（chat.html の showDetailedError）はこの値でアイコン・
-    タイトル・再試行導線を切り替える。エージェント関連・永続化失敗はクラスの
-    意味がそのまま表示区分になるため型で判定し、それ以外（同じ例外型でも
-    コードによって VALIDATION と TRANSIENT の両方を取り得る InterviewSessionError
-    等）は ErrorKind で判定する。
+    タイトル・再試行導線を切り替える。``conversation_stopped`` は M12 の枠
+    （他人・期限切れのセッション、読めない参加者。理由は区別しない）。
     """
+    if isinstance(exc, ConcurrentUpdateError):
+        return "concurrent_update"
     if isinstance(exc, InterviewAgentError):
         return "agent_error"
     if isinstance(exc, InterviewPersistenceError):
         return "persistence_error"
+    if isinstance(exc, AccessDeniedError):
+        return "forbidden"
     if error_kind_of(exc) is ErrorKind.NOT_FOUND:
-        return "session_not_found"
+        return "conversation_stopped"
     if is_correctable(exc):
         return "validation_error"
     return "internal_error"
+
+
+#: HTTP status of a coded failure by kind (the chat screen's JSON).
+_STATUS_BY_KIND: dict[ErrorKind, int] = {
+    ErrorKind.FORBIDDEN: 403,
+    ErrorKind.NOT_FOUND: 404,
+    ErrorKind.VALIDATION: 400,
+    ErrorKind.CAPACITY: 400,
+    ErrorKind.CONFIG: 500,
+    ErrorKind.TRANSIENT: 503,
+}
+
+
+def _error_json(message: str, error_type: str, kind: ErrorKind) -> JSONResponse:
+    """The JSON error of a coded failure (resolved wording only, never the exception)."""
+    return JSONResponse(
+        {"error": message, "error_type": error_type},
+        status_code=_STATUS_BY_KIND.get(kind, 500),
+    )
+
+
+def _unexpected_json(message: str) -> JSONResponse:
+    """The JSON error of an unclassified failure (500)."""
+    return JSONResponse(
+        {"error": message, "error_type": "internal_error"}, status_code=500
+    )
 
 
 from web.sanitize import render_markdown  # noqa: E402
@@ -75,6 +119,7 @@ executor = ThreadPoolExecutor(max_workers=8)
 # シングルトンマネージャーインスタンス（モジュールレベルで共有）
 _persona_manager = None
 _interview_manager = None
+_file_manager = None
 
 
 def get_persona_manager() -> PersonaManager:
@@ -93,6 +138,59 @@ def get_interview_manager() -> InterviewManager:
     return _interview_manager
 
 
+def get_file_manager() -> FileManager:
+    """FileManagerのシングルトンインスタンスを取得"""
+    global _file_manager
+    if _file_manager is None:
+        _file_manager = FileManager()
+    return _file_manager
+
+
+def _principal(request: Request) -> Principal:
+    """The signed-in user that ``AuthMiddleware`` put on the request (C1)."""
+    principal: Principal = request.state.principal
+    return principal
+
+
+async def _run(func: Callable[..., Any], *args: Any) -> Any:
+    """Run a synchronous Manager call (DynamoDB / AI) in the worker pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, func, *args)
+
+
+def _sse(data: dict[str, Any]) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _sse_error(message: str, error_type: str) -> str:
+    return _sse({"type": "error", "message": message, "error_type": error_type})
+
+
+async def _upload_attachments(
+    principal: Principal, files: Optional[List[UploadFile]]
+) -> list[str]:
+    """Place the attached files first and return their IDs (BR3.6, NFR1.54).
+
+    Raises:
+        FileUploadError: The kind or size is not accepted.
+    """
+    ids: list[str] = []
+    file_manager = get_file_manager()
+    for file in files or []:
+        if not (file.filename and file.size and file.size > 0):
+            continue
+        content = await file.read()
+        metadata = await _run(
+            file_manager.upload_interview_attachment,
+            principal,
+            content,
+            file.filename,
+            file.content_type or "",
+        )
+        ids.append(metadata.file_id)
+    return ids
+
+
 @router.post("/create", response_class=JSONResponse)
 async def create_interview_session(
     request: Request,
@@ -102,163 +200,93 @@ async def create_interview_session(
     enable_dataset: bool = Form(False),
     enable_kb: bool = Form(False),
 ) -> Any:
-    """インタビューセッション作成エンドポイント（拡張エラーハンドリング）"""
+    """インタビューセッション作成エンドポイント（BR3.1）"""
+    principal = _principal(request)
     try:
-        # Get personas with enhanced error handling
-        persona_manager = get_persona_manager()
-        personas = []
-        missing_personas = []
-
-        for persona_id in persona_ids:
-            try:
-                # 参加者の判定は U6（PersonaManager.get_persona_unchecked）
-                persona = persona_manager.get_persona_unchecked(persona_id)
-                if persona:
-                    personas.append(persona)
-                else:
-                    missing_personas.append(persona_id)
-            except Exception as e:
-                logger.error(f"Error retrieving persona {persona_id}: {e}")
-                missing_personas.append(persona_id)
-
-        if missing_personas:
-            logger.warning(f"Personas not found: {missing_personas}")
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(ErrorCode.PERSONA_NOT_FOUND),
-                    "error_type": "persona_not_found",
-                    "missing_persona_count": len(missing_personas),
-                },
-                status_code=404,
-            )
-
-        if not personas:
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_PERSONAS_REQUIRED
-                    ),
-                    "error_type": "no_valid_personas",
-                },
-                status_code=400,
-            )
-
-        # Create session with enhanced error handling
-        form_data = await request.form()
-        persona_models = parse_persona_models(form_data)
-
-        loop = asyncio.get_event_loop()
-        interview_manager = get_interview_manager()
-
-        def create_session_sync() -> Any:
-            return interview_manager.start_interview_session(
-                personas,
-                enable_memory=enable_memory,
-                memory_mode=memory_mode,
-                enable_dataset=enable_dataset,
-                enable_kb=enable_kb,
-                persona_models=persona_models,
-            )
-
-        session = await loop.run_in_executor(executor, create_session_sync)
-
-        logger.info(
-            f"Interview session created successfully: {session.id} (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
+        personas = await _run(
+            get_persona_manager().get_personas_for_use, principal, persona_ids
         )
-
+    except ParticipantNotFoundError as e:
+        logger.info("Interview not started: a participant is unreadable")
         return JSONResponse(
             {
-                "session_id": session.id,
-                "participants": [{"id": p.id, "name": p.name} for p in personas],
-                "message": "インタビューセッションが正常に作成されました",
-                "created_at": session.created_at.isoformat(),
-                "enable_memory": enable_memory,
-                "memory_mode": memory_mode,
-                "enable_dataset": enable_dataset,
-                "enable_kb": enable_kb,
-            }
-        )
-
-    except InterviewValidationError as e:
-        logger.error("Interview validation error", exc_info=True)
-        return JSONResponse(
-            {"error": user_message_for(e), "error_type": _error_type_for(e)},
-            status_code=400,
-        )
-    except InterviewAgentError as e:
-        logger.error("Interview agent error", exc_info=True)
-        return JSONResponse(
-            {"error": user_message_for(e), "error_type": _error_type_for(e)},
-            status_code=503,
-        )
-    except InterviewSessionError as e:
-        logger.error("Interview session error", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="セッションの作成に失敗しました。再試行してください。"
-                ),
-                "error_type": _error_type_for(e),
+                "error": user_message_for(e),
+                "error_type": "persona_not_found",
+                "error_code": ErrorCode.PERSONA_NOT_FOUND.value,
             },
-            status_code=500,
+            status_code=404,
+        )
+    except CodedError as e:
+        logger.warning("Interview participants not read", exc_info=True)
+        return _error_json(
+            user_message_for(
+                e, default="セッションの作成に失敗しました。再試行してください。"
+            ),
+            _error_type_for(e),
+            error_kind_of(e),
+        )
+
+    form_data = await request.form()
+    persona_models = parse_persona_models(form_data)
+
+    def create_session_sync() -> Any:
+        return get_interview_manager().start_interview_session(
+            principal,
+            personas,
+            enable_memory=enable_memory,
+            memory_mode=memory_mode,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+            persona_models=persona_models,
+        )
+
+    try:
+        session = await _run(create_session_sync)
+    except CodedError as e:
+        logger.error("Interview session not created", exc_info=True)
+        return _error_json(
+            user_message_for(
+                e, default="セッションの作成に失敗しました。再試行してください。"
+            ),
+            _error_type_for(e),
+            error_kind_of(e),
         )
     except Exception as e:
         logger.error("Unexpected error creating interview session", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e,
-                    default="予期しないエラーが発生しました。"
-                    "システム管理者にお問い合わせください。",
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
+        return _unexpected_json(
+            user_message_for(
+                e,
+                default="予期しないエラーが発生しました。"
+                "システム管理者にお問い合わせください。",
+            )
         )
+
+    logger.info(f"Interview session created successfully: {session.id}")
+    return JSONResponse(
+        {
+            "session_id": session.id,
+            "participants": [{"id": p.id, "name": p.name} for p in personas],
+            "message": "インタビューセッションが正常に作成されました",
+            "created_at": session.created_at.isoformat(),
+            "enable_memory": session.enable_memory,
+            "memory_mode": session.memory_mode,
+            "enable_dataset": enable_dataset,
+            "enable_kb": enable_kb,
+        }
+    )
 
 
 @router.get("/chat/{session_id}", response_class=HTMLResponse)
 async def interview_chat_page(request: Request, session_id: str) -> Any:
-    """インタビューチャットページ（拡張エラーハンドリング）"""
+    """インタビューチャットページ（持ち主だけ、BR3.2）"""
+    principal = _principal(request)
     try:
-        interview_manager = get_interview_manager()
-        session = interview_manager.get_interview_session(session_id)
-
-        # 参加ペルソナの詳細情報を取得
-        persona_manager = get_persona_manager()
-        participants = []
-        missing_personas = []
-
-        for persona_id in session.participants:
-            try:
-                # 参加者の判定は U6（PersonaManager.get_persona_unchecked）
-                persona = persona_manager.get_persona_unchecked(persona_id)
-                if persona:
-                    participants.append(persona)
-                else:
-                    missing_personas.append(persona_id)
-            except Exception as e:
-                logger.error(f"Error retrieving participant persona {persona_id}: {e}")
-                missing_personas.append(persona_id)
-
-        # Log warnings for missing personas but continue
-        if missing_personas:
-            logger.warning(f"Some participant personas not found: {missing_personas}")
-
-        return templates.TemplateResponse(
-            request,
-            "interview/chat.html",
-            {
-                "request": request,
-                "title": "インタビューチャット",
-                "session": session,
-                "participants": participants,
-                "missing_persona_count": len(missing_personas),
-            },
+        view = await _run(
+            get_interview_manager().get_interview_session, principal, session_id
         )
-
-    except InterviewSessionNotFoundError as e:
-        logger.error("Interview session not found", exc_info=True)
+    except CodedError as e:
+        logger.info("Interview chat page not shown", exc_info=True)
+        status = 404 if error_kind_of(e) is ErrorKind.NOT_FOUND else 503
         return mark_renderable(
             templates.TemplateResponse(
                 request,
@@ -267,30 +295,38 @@ async def interview_chat_page(request: Request, session_id: str) -> Any:
                     "request": request,
                     "error": user_message_for(
                         e,
-                        default="指定されたインタビューセッションが見つかりません。"
-                        "セッションが終了しているか、無効なURLの可能性があります。",
+                        default="指定されたインタビューセッションが見つかりません。",
                     ),
                 },
-                status_code=404,
+                status_code=status,
             )
         )
-    except Exception as e:
-        logger.error("Error loading interview chat page", exc_info=True)
-        return mark_renderable(
-            templates.TemplateResponse(
-                request,
-                "partials/error_banner.html",
-                {
-                    "request": request,
-                    "error": user_message_for(
-                        e,
-                        default="ページの読み込み中にエラーが発生しました。"
-                        "しばらく待ってから再試行してください。",
-                    ),
-                },
-                status_code=500,
-            )
+
+    participants: list[Any] = []
+    stopped = False
+    try:
+        participants = await _run(
+            get_persona_manager().get_personas_for_use, principal, view.persona_ids
         )
+    except ParticipantNotFoundError:
+        # M12: 参加者を読めない。会話は表示するが、続けられない
+        stopped = True
+    except CodedError:
+        logger.warning("Interview participants not read", exc_info=True)
+        stopped = True
+
+    return templates.TemplateResponse(
+        request,
+        "interview/chat.html",
+        {
+            "request": request,
+            "title": "インタビューチャット",
+            "session": view,
+            "participants": participants,
+            "stopped": stopped,
+            "back_url": _BACK_URL,
+        },
+    )
 
 
 @router.post("/{session_id}/message/stream")
@@ -300,101 +336,103 @@ async def send_message_stream(
     message: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
 ) -> Any:
-    """メッセージ送信ストリーミングエンドポイント（トークン単位SSE）"""
-    try:
-        if not message or not message.strip():
-            return StreamingResponse(
-                iter(
-                    [
-                        f"data: {json.dumps({'type': 'error', 'message': 'メッセージが空です'}, ensure_ascii=False)}\n\n"
-                    ]
-                ),
-                media_type="text/event-stream",
+    """メッセージ送信ストリーミングエンドポイント（トークン単位SSE、BR3.3）"""
+    principal = _principal(request)
+
+    def single(event: str) -> StreamingResponse:
+        return StreamingResponse(iter([event]), media_type="text/event-stream")
+
+    if not message or not message.strip():
+        return single(
+            _sse(
+                {
+                    "type": "error",
+                    "message": user_message_for_code(
+                        ErrorCode.INTERVIEW_MESSAGE_REQUIRED
+                    ),
+                    "error_type": "validation_error",
+                }
             )
+        )
+    try:
+        document_ids = await _upload_attachments(principal, files)
+    except FileUploadError as e:
+        logger.warning("Interview attachment rejected", exc_info=True)
+        return single(
+            _sse_error(
+                user_message_for(e, default="ファイルのアップロードに失敗しました"),
+                _error_type_for(e),
+            )
+        )
+    except CodedError as e:
+        logger.warning("Interview attachment not placed", exc_info=True)
+        return single(
+            _sse_error(
+                user_message_for(e, default="ファイルのアップロードに失敗しました"),
+                _error_type_for(e),
+            )
+        )
 
-        # ファイル読み込み（I/O制御はRouter責務）
-        raw_files: list[tuple] = []
-        if files:
-            for file in files:
-                if file.filename and file.size and file.size > 0:
-                    file_bytes = await file.read()
-                    raw_files.append(
-                        (file_bytes, file.filename, file.content_type or "")
+    interview_manager = get_interview_manager()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+
+    def run_streaming() -> None:
+        try:
+            for event_type, data in interview_manager.send_user_message_streaming(
+                principal, session_id, message.strip(), document_ids
+            ):
+                if event_type in ("message_start", "message_delta"):
+                    sse = _sse({"type": event_type, **data})
+                elif event_type == "message_end":
+                    sse = _sse(
+                        {
+                            "type": "message_end",
+                            "persona_id": data.persona_id,
+                            "persona_name": data.persona_name,
+                            "content": data.content,
+                            "message_type": data.message_type,
+                        }
                     )
+                elif event_type == "files_excluded":
+                    sse = _sse({"type": "files_excluded", "names": list(data)})
+                else:
+                    continue
+                asyncio.run_coroutine_threadsafe(queue.put(sse), loop)
+            asyncio.run_coroutine_threadsafe(
+                queue.put(_sse({"type": "complete"})), loop
+            )
+        except Exception as e:
+            logger.error("Interview streaming error", exc_info=True)
+            error_sse = _sse_error(
+                user_message_for(e, default="応答の生成中にエラーが発生しました"),
+                _error_type_for(e),
+            )
+            asyncio.run_coroutine_threadsafe(queue.put(error_sse), loop)
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-        interview_manager = get_interview_manager()
+    loop = asyncio.get_running_loop()
 
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-
-        def run_streaming() -> None:
+    async def event_generator() -> Any:
+        executor.submit(run_streaming)
+        while True:
             try:
-                for (
-                    event_type,
-                    data,
-                ) in interview_manager.send_user_message_streaming_with_files(
-                    session_id,
-                    message.strip(),
-                    raw_files=raw_files or None,
-                ):
-                    if event_type == "message_start":
-                        sse = f"data: {json.dumps({'type': 'message_start', **data}, ensure_ascii=False)}\n\n"
-                    elif event_type == "message_delta":
-                        sse = f"data: {json.dumps({'type': 'message_delta', **data}, ensure_ascii=False)}\n\n"
-                    elif event_type == "message_end":
-                        sse = f"data: {json.dumps({'type': 'message_end', 'persona_id': data.persona_id, 'persona_name': data.persona_name, 'content': data.content, 'message_type': data.message_type}, ensure_ascii=False)}\n\n"
-                    else:
-                        continue
-                    asyncio.run_coroutine_threadsafe(queue.put(sse), loop)
-                complete_sse = (
-                    f"data: {json.dumps({'type': 'complete'}, ensure_ascii=False)}\n\n"
-                )
-                asyncio.run_coroutine_threadsafe(queue.put(complete_sse), loop)
-            except Exception as e:
-                logger.error("Interview streaming error", exc_info=True)
-                error_message = user_message_for(
-                    e, default="応答の生成中にエラーが発生しました"
-                )
-                error_sse = f"data: {json.dumps({'type': 'error', 'message': error_message}, ensure_ascii=False)}\n\n"
-                asyncio.run_coroutine_threadsafe(queue.put(error_sse), loop)
-            finally:
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                event = await asyncio.wait_for(queue.get(), timeout=30)
+                if event is None:
+                    break
+                yield event
+            except asyncio.TimeoutError:
+                yield _sse({"type": "keepalive"})
 
-        loop = asyncio.get_event_loop()
-
-        async def event_generator() -> Any:
-            executor.submit(run_streaming)
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                    if event is None:
-                        break
-                    yield event
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    except Exception as e:
-        logger.error("Interview stream endpoint error", exc_info=True)
-        message = user_message_for(
-            e, default="ストリーミング開始中にエラーが発生しました"
-        )
-        return StreamingResponse(
-            iter(
-                [
-                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                ]
-            ),
-            media_type="text/event-stream",
-        )
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{session_id}/message", response_class=JSONResponse)
@@ -404,441 +442,243 @@ async def send_message(
     message: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
 ) -> Any:
-    """メッセージ送信エンドポイント（マルチモーダル対応）"""
+    """メッセージ送信エンドポイント（マルチモーダル対応、BR3.3）"""
+    principal = _principal(request)
     try:
-        # ファイル読み込み（I/O制御はRouter責務）
-        raw_files: list[tuple] = []
-        if files:
-            for file in files:
-                if file.filename and file.size and file.size > 0:
-                    file_bytes = await file.read()
-                    raw_files.append(
-                        (file_bytes, file.filename, file.content_type or "")
-                    )
-
-        interview_manager = get_interview_manager()
-
-        loop = asyncio.get_event_loop()
-
-        def send_message_sync() -> Any:
-            return interview_manager.send_user_message_with_files(
-                session_id,
-                message.strip(),
-                raw_files=raw_files or None,
-            )
-
-        responses = await loop.run_in_executor(executor, send_message_sync)
-
-        response_data = []
-        for response in responses:
-            response_data.append(
-                {
-                    "persona_id": response.persona_id,
-                    "persona_name": response.persona_name,
-                    "content": response.content,
-                    "content_html": render_markdown(response.content),
-                    "timestamp": response.timestamp.isoformat()
-                    if response.timestamp
-                    else None,
-                    "message_type": response.message_type,
-                }
-            )
-
-        return JSONResponse(
-            {
-                "user_message": message.strip(),
-                "responses": response_data,
-                "message": "メッセージが正常に送信されました",
-                "response_count": len(response_data),
-                "timestamp": datetime.now().isoformat(),
-            }
+        document_ids = await _upload_attachments(principal, files)
+        reply = await _run(
+            get_interview_manager().send_user_message,
+            principal,
+            session_id,
+            message.strip(),
+            document_ids,
         )
-
-    except InterviewSessionNotFoundError as e:
-        logger.error("Session not found", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="インタビューセッションが見つかりません"
-                ),
-                "error_type": _error_type_for(e),
-                "session_id": session_id,
-            },
-            status_code=404,
-        )
-    except InterviewValidationError as e:
-        logger.error("Validation error", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(e, default="入力内容に問題があります"),
-                "error_type": _error_type_for(e),
-            },
-            status_code=400,
-        )
-    except InterviewAgentError as e:
-        logger.error("Agent error", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e,
-                    default="AIエージェントとの通信に失敗しました。"
-                    "しばらく待ってから再試行してください。",
-                ),
-                "error_type": _error_type_for(e),
-            },
-            status_code=503,
+    except CodedError as e:
+        logger.warning("Interview message not sent", exc_info=True)
+        return _error_json(
+            user_message_for(e, default="メッセージの送信中にエラーが発生しました"),
+            _error_type_for(e),
+            error_kind_of(e),
         )
     except Exception as e:
         logger.error("Unexpected error in message processing", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="メッセージの送信中に予期しないエラーが発生しました"
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
+        return _unexpected_json(
+            user_message_for(
+                e, default="メッセージの送信中に予期しないエラーが発生しました"
+            )
         )
+
+    response_data = [
+        {
+            "persona_id": response.persona_id,
+            "persona_name": response.persona_name,
+            "content": response.content,
+            "content_html": render_markdown(response.content),
+            "timestamp": response.timestamp.isoformat() if response.timestamp else None,
+            "message_type": response.message_type,
+        }
+        for response in reply.responses
+    ]
+    return JSONResponse(
+        {
+            "user_message": message.strip(),
+            "responses": response_data,
+            "excluded_files": reply.excluded_files,
+            "message": "メッセージが正常に送信されました",
+            "response_count": len(response_data),
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
 
 @router.get("/{session_id}/messages", response_class=JSONResponse)
 async def get_messages(request: Request, session_id: str) -> Any:
-    """メッセージ履歴取得エンドポイント"""
+    """メッセージ履歴取得エンドポイント（持ち主だけ）"""
     try:
-        interview_manager = get_interview_manager()
-        session = interview_manager.get_interview_session(session_id)
-
-        # メッセージをJSON形式で返す（タイムスタンプ順でソート）
-        messages_data = []
-        for message in sorted(session.messages, key=lambda m: m.timestamp):
-            messages_data.append(
-                {
-                    "persona_id": message.persona_id,
-                    "persona_name": message.persona_name,
-                    "content": message.content,
-                    "message_type": message.message_type,
-                    "timestamp": message.timestamp.isoformat()
-                    if message.timestamp
-                    else None,
-                }
-            )
-
-        return JSONResponse(
-            {
-                "session_id": session_id,
-                "messages": messages_data,
-                "message_count": len(messages_data),
-            }
+        view = await _run(
+            get_interview_manager().get_interview_session,
+            _principal(request),
+            session_id,
+        )
+    except CodedError as e:
+        logger.info("Interview messages not shown", exc_info=True)
+        return _error_json(
+            user_message_for(e, default="メッセージ履歴が見つかりません"),
+            _error_type_for(e),
+            error_kind_of(e),
         )
 
-    except InterviewManagerError as e:
-        logger.error("Error getting messages", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(e, default="メッセージ履歴が見つかりません"),
-                "error_type": _error_type_for(e),
-            },
-            status_code=404,
-        )
-    except Exception as e:
-        logger.error("Unexpected error getting messages", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="メッセージ履歴の取得中にエラーが発生しました"
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
-        )
+    messages_data = [
+        {
+            "persona_id": message.persona_id,
+            "persona_name": message.persona_name,
+            "content": message.content,
+            "message_type": message.message_type,
+            "timestamp": message.timestamp.isoformat() if message.timestamp else None,
+        }
+        for message in view.messages
+    ]
+    return JSONResponse(
+        {
+            "session_id": session_id,
+            "messages": messages_data,
+            "message_count": len(messages_data),
+        }
+    )
 
 
 # 受け身の要求（BR1.9）: 状態の確認。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/{session_id}/status", response_class=JSONResponse)
 async def get_session_status(request: Request, session_id: str) -> Any:
-    """インタビューセッション状態取得エンドポイント"""
+    """インタビューセッション状態取得エンドポイント（持ち主だけ）"""
     try:
-        interview_manager = get_interview_manager()
-
-        # 同期的な状態取得を非同期で実行
-        loop = asyncio.get_event_loop()
-
-        def get_status_sync() -> Any:
-            return interview_manager.get_session_status(session_id)
-
-        status = await loop.run_in_executor(executor, get_status_sync)
-
-        return JSONResponse(
-            {"session_status": status, "timestamp": datetime.now().isoformat()}
+        status = await _run(
+            get_interview_manager().get_session_status,
+            _principal(request),
+            session_id,
         )
-
-    except InterviewManagerError as e:
-        logger.error("Error getting session status", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(e, default="セッションが見つかりません"),
-                "error_type": _error_type_for(e),
-            },
-            status_code=404,
+    except CodedError as e:
+        logger.info("Interview status not shown", exc_info=True)
+        return _error_json(
+            user_message_for(e, default="セッションが見つかりません"),
+            _error_type_for(e),
+            error_kind_of(e),
         )
-    except Exception as e:
-        logger.error("Unexpected error getting session status", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="セッション状態の取得中にエラーが発生しました"
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
-        )
+    return JSONResponse(
+        {"session_status": status, "timestamp": datetime.now().isoformat()}
+    )
 
 
 @router.post("/{session_id}/save", response_class=JSONResponse)
 async def save_interview_session(
     request: Request, session_id: str, session_name: str = Form(...)
 ) -> Any:
-    """インタビューセッション保存エンドポイント（拡張エラーハンドリング）"""
-    try:
-        interview_manager = get_interview_manager()
-
-        # セッション状態を確認
-        def get_session_status_sync() -> Any:
-            try:
-                return interview_manager.get_session_status(session_id)
-            except InterviewSessionNotFoundError:
-                raise
-            except Exception as e:
-                raise InterviewSessionNotFoundError(
-                    f"session status fetch failed ({type(e).__name__})"
-                ) from e
-
-        loop = asyncio.get_event_loop()
-
-        try:
-            session_status = await loop.run_in_executor(
-                executor, get_session_status_sync
-            )
-        except InterviewSessionNotFoundError:
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_SESSION_NOT_FOUND
-                    ),
-                    "error_type": "session_not_found",
-                    "session_id": session_id,
-                },
-                status_code=404,
-            )
-
-        # 既に保存済みかチェック
-        if session_status.get("is_saved", False):
-            return JSONResponse(
-                {
-                    "message": user_message_for_code(
-                        ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
-                    ),
-                    "already_saved": True,
-                    "session_status": session_status,
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-
-        # メッセージがあるかチェック
-        message_count = session_status.get("message_count", 0)
-        if message_count == 0:
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(ErrorCode.INTERVIEW_NO_MESSAGES),
-                    "error_type": "validation_error",
-                    "message_count": message_count,
-                },
-                status_code=400,
-            )
-
-        # ユーザーメッセージとペルソナ応答の両方があるかチェック
-        if not session_status.get("has_user_messages", False):
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_NO_USER_MESSAGES
-                    ),
-                    "error_type": "validation_error",
-                },
-                status_code=400,
-            )
-
-        if not session_status.get("has_persona_responses", False):
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_NO_PERSONA_RESPONSES
-                    ),
-                    "error_type": "validation_error",
-                },
-                status_code=400,
-            )
-
-        # セッション名の検証
-        if not session_name or not session_name.strip():
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_SESSION_NAME_REQUIRED
-                    ),
-                    "error_type": "validation_error",
-                    "field": "session_name",
-                },
-                status_code=400,
-            )
-
-        session_name = session_name.strip()
-        if len(session_name) > 100:
-            return JSONResponse(
-                {
-                    "error": user_message_for_code(
-                        ErrorCode.INTERVIEW_SESSION_NAME_TOO_LONG, {"max_length": 100}
-                    ),
-                    "error_type": "validation_error",
-                    "field": "session_name",
-                    "max_length": 100,
-                    "provided_length": len(session_name),
-                },
-                status_code=400,
-            )
-
-        # 同期的な保存処理を非同期で実行
-        def save_session_sync() -> Any:
-            return interview_manager.save_interview_session(session_id, session_name)
-
-        discussion_id = await loop.run_in_executor(executor, save_session_sync)
-
-        # 保存後のセッション状態を取得
-        updated_status = await loop.run_in_executor(executor, get_session_status_sync)
-
-        logger.info(
-            f"Interview session saved successfully: {session_id} -> {discussion_id}"
-        )
-
+    """インタビューを議論として保存する（2 回目以降は同じ議論に書き足す、BR3.7、BR3.8）"""
+    name = (session_name or "").strip()
+    if not name:
         return JSONResponse(
             {
-                "discussion_id": discussion_id,
-                "message": "インタビューセッションが正常に保存されました",
-                "session_status": updated_status,
-                "save_timestamp": datetime.now().isoformat(),
-                "message_count": message_count,
-            }
-        )
-
-    except InterviewSessionNotFoundError as e:
-        logger.error("Session not found for save", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="インタビューセッションが見つかりません"
+                "error": user_message_for_code(
+                    ErrorCode.INTERVIEW_SESSION_NAME_REQUIRED
                 ),
-                "error_type": _error_type_for(e),
-                "session_id": session_id,
-            },
-            status_code=404,
-        )
-    except InterviewValidationError as e:
-        logger.error("Validation error during save", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="保存内容に問題があります。内容を確認してください。"
-                ),
-                "error_type": _error_type_for(e),
+                "error_type": "validation_error",
+                "field": "session_name",
             },
             status_code=400,
         )
-    except InterviewPersistenceError as e:
-        logger.error("Persistence error during save", exc_info=True)
+    if len(name) > SESSION_NAME_MAX_LENGTH:
         return JSONResponse(
             {
-                "error": user_message_for(
-                    e,
-                    default="データベースへの保存に失敗しました。"
-                    "しばらく待ってから再試行してください。",
+                "error": user_message_for_code(
+                    ErrorCode.INTERVIEW_SESSION_NAME_TOO_LONG,
+                    {"max_length": SESSION_NAME_MAX_LENGTH},
                 ),
-                "error_type": _error_type_for(e),
+                "error_type": "validation_error",
+                "field": "session_name",
+                "max_length": SESSION_NAME_MAX_LENGTH,
             },
-            status_code=503,
+            status_code=400,
+        )
+    principal = _principal(request)
+    interview_manager = get_interview_manager()
+    try:
+        result = await _run(
+            interview_manager.save_interview_session, principal, session_id, name
+        )
+        status = await _run(interview_manager.get_session_status, principal, session_id)
+    except CodedError as e:
+        logger.warning("Interview session not saved", exc_info=True)
+        return _error_json(
+            user_message_for(e, default="セッション保存中にエラーが発生しました"),
+            _error_type_for(e),
+            error_kind_of(e),
         )
     except Exception as e:
         logger.error("Unexpected error saving interview session", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="セッション保存中に予期しないエラーが発生しました"
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
+        return _unexpected_json(
+            user_message_for(
+                e, default="セッション保存中に予期しないエラーが発生しました"
+            )
         )
+
+    logger.info(f"Interview session saved: {session_id} -> {result.discussion_id}")
+    return JSONResponse(
+        {
+            "discussion_id": result.discussion_id,
+            "excluded_files": result.excluded_files,
+            "message": "インタビューセッションが正常に保存されました",
+            "session_status": status,
+            "save_timestamp": datetime.now().isoformat(),
+            "message_count": status.get("message_count", 0),
+        }
+    )
 
 
 @router.delete("/{session_id}", response_class=JSONResponse)
 async def end_interview_session(request: Request, session_id: str) -> Any:
-    """インタビューセッション終了エンドポイント"""
+    """インタビューセッション終了エンドポイント（持ち主だけ）"""
     try:
-        interview_manager = get_interview_manager()
-
-        # 同期的な終了処理を非同期で実行
-        loop = asyncio.get_event_loop()
-
-        def end_session_sync() -> Any:
-            interview_manager.end_interview_session(session_id)
-
-        await loop.run_in_executor(executor, end_session_sync)
-
-        logger.info(f"Interview session ended: {session_id}")
-
-        return JSONResponse({"message": "インタビューセッションが終了されました"})
-
-    except InterviewManagerError as e:
-        logger.error("Error ending interview session", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="インタビューセッションの終了に失敗しました"
-                ),
-                "error_type": _error_type_for(e),
-            },
-            status_code=400,
+        await _run(
+            get_interview_manager().end_interview_session,
+            _principal(request),
+            session_id,
+        )
+    except CodedError as e:
+        logger.warning("Interview session not ended", exc_info=True)
+        return _error_json(
+            user_message_for(e, default="インタビューセッションの終了に失敗しました"),
+            _error_type_for(e),
+            error_kind_of(e),
         )
     except Exception as e:
         logger.error("Unexpected error ending interview session", exc_info=True)
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="インタビューセッションの終了中にエラーが発生しました"
-                ),
-                "error_type": "internal_error",
-            },
-            status_code=500,
+        return _unexpected_json(
+            user_message_for(
+                e, default="インタビューセッションの終了中にエラーが発生しました"
+            )
         )
+    logger.info(f"Interview session ended: {session_id}")
+    return JSONResponse({"message": "インタビューセッションが終了されました"})
+
+
+#: Seconds between the stream's keepalives (the session is read again each time).
+_STREAM_KEEPALIVE_SECONDS = 30
 
 
 # リアルタイムメッセージ送受信のためのSSEエンドポイント
 # 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
 @router.get("/{session_id}/stream")
 async def stream_interview_messages(request: Request, session_id: str) -> Any:
-    """インタビューメッセージのリアルタイムストリーミング（SSE）"""
+    """インタビューメッセージのストリーミング（SSE、持ち主だけ）。
+
+    接続時に持ち主と期限を照合し（BR3.2）、keepalive のたびにセッションを読み直して
+    期限が来たら ``stopped`` を送って切る（security-design.md §2）。
+    """
+    principal = _principal(request)
+    interview_manager = get_interview_manager()
     try:
-        interview_manager = get_interview_manager()
+        view = await _run(
+            interview_manager.get_interview_session, principal, session_id
+        )
+    except CodedError as e:
+        logger.info("Interview stream not opened", exc_info=True)
+        return StreamingResponse(
+            iter(
+                [
+                    _sse_error(
+                        user_message_for(e, default="セッションが見つかりません"),
+                        _error_type_for(e),
+                    )
+                ]
+            ),
+            media_type="text/event-stream",
+        )
 
-        # セッションの存在確認
-        session = interview_manager.get_interview_session(session_id)
-
-        async def event_generator() -> Any:
-            # 初期メッセージを送信
-            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id}, ensure_ascii=False)}\n\n"
-
-            # 既存のメッセージを送信
-            for message in session.messages:
-                message_data = {
+    async def event_generator() -> Any:
+        yield _sse({"type": "connected", "session_id": session_id})
+        for message in view.messages:
+            yield _sse(
+                {
                     "type": "message",
                     "persona_id": message.persona_id,
                     "persona_name": message.persona_name,
@@ -848,106 +688,34 @@ async def stream_interview_messages(request: Request, session_id: str) -> Any:
                     if message.timestamp
                     else None,
                 }
-                yield f"data: {json.dumps(message_data, ensure_ascii=False)}\n\n"
+            )
+        while True:
+            await asyncio.sleep(_STREAM_KEEPALIVE_SECONDS)
+            try:
+                await _run(interview_manager.get_session_status, principal, session_id)
+            except CodedError:
+                yield _sse({"type": "stopped"})
+                return
+            yield _sse({"type": "keepalive"})
 
-            # Keep-alive（実際のリアルタイム更新は別途実装が必要）
-            while True:
-                await asyncio.sleep(30)  # 30秒ごとにkeep-alive
-                yield f"data: {json.dumps({'type': 'keepalive'}, ensure_ascii=False)}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    except InterviewManagerError as e:
-        logger.error("Interview session not found for streaming", exc_info=True)
-        message = user_message_for(e, default="セッションが見つかりません")
-        return StreamingResponse(
-            iter(
-                [
-                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                ]
-            ),
-            media_type="text/event-stream",
-        )
-    except Exception as e:
-        logger.error("Error starting interview stream", exc_info=True)
-        message = user_message_for(
-            e, default="ストリーミングの開始中にエラーが発生しました"
-        )
-        return StreamingResponse(
-            iter(
-                [
-                    f"data: {json.dumps({'type': 'error', 'message': message}, ensure_ascii=False)}\n\n"
-                ]
-            ),
-            media_type="text/event-stream",
-        )
-
-
-@router.post("/cleanup", response_class=JSONResponse)
-async def cleanup_inactive_sessions(request: Request, max_age_hours: int = 24) -> Any:
-    """非アクティブなインタビューセッションのクリーンアップ"""
-    try:
-        interview_manager = get_interview_manager()
-
-        # 同期的なクリーンアップ処理を非同期で実行
-        loop = asyncio.get_event_loop()
-
-        def cleanup_sync() -> Any:
-            return interview_manager.cleanup_inactive_sessions(max_age_hours)
-
-        cleaned_count = await loop.run_in_executor(executor, cleanup_sync)
-
-        logger.info(f"Cleaned up {cleaned_count} inactive sessions")
-
-        return JSONResponse(
-            {
-                "cleaned_sessions": cleaned_count,
-                "message": f"{cleaned_count}個の非アクティブセッションをクリーンアップしました",
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error during session cleanup: {e}")
-        return JSONResponse(
-            {
-                "error": user_message_for(
-                    e, default="セッションクリーンアップ中にエラーが発生しました"
-                )
-            },
-            status_code=500,
-        )
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/stats", response_class=JSONResponse)
 async def get_interview_stats(request: Request) -> Any:
-    """インタビューシステムの統計情報取得"""
+    """この台が手元に持つインタビューの数（全体の件数は数えない、BR3.5）"""
     try:
-        interview_manager = get_interview_manager()
-
-        # 同期的な統計取得を非同期で実行
-        loop = asyncio.get_event_loop()
-
-        def get_stats_sync() -> Any:
-            active_count = interview_manager.get_active_sessions_count()
-            return {
-                "active_sessions": active_count,
-                "timestamp": datetime.now().isoformat(),
-            }
-
-        stats = await loop.run_in_executor(executor, get_stats_sync)
-
-        return JSONResponse(stats)
-
+        active_count = await _run(get_interview_manager().get_active_sessions_count)
     except Exception as e:
-        logger.error(f"Error getting interview stats: {e}")
+        logger.error(f"Error getting interview stats: {type(e).__name__}")
         return JSONResponse(
             {
                 "error": user_message_for(
@@ -956,3 +724,6 @@ async def get_interview_stats(request: Request) -> Any:
             },
             status_code=500,
         )
+    return JSONResponse(
+        {"active_sessions": active_count, "timestamp": datetime.now().isoformat()}
+    )

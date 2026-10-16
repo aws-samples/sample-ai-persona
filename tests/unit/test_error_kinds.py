@@ -295,3 +295,31 @@ class TestSharingCodes:
 
     def test_update_failure_is_transient(self):
         assert ErrorCode["SHARE_UPDATE_FAILED"].kind is ErrorKind.TRANSIENT
+
+
+class TestDiscussionInterviewCodes:
+    """U6 のコード（rules.md BR2.7、reliability-requirements.md「機能設計への追加」）。"""
+
+    def test_too_large_is_capacity(self):
+        assert ErrorCode["DISCUSSION_TOO_LARGE"].kind is ErrorKind.CAPACITY
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "DISCUSSION_OPERATION_FAILED",
+            "INTERVIEW_SESSION_OPERATION_FAILED",
+            "CONCURRENT_UPDATE",
+        ],
+    )
+    def test_failures_and_conflicts_are_transient(self, name):
+        assert ErrorCode[name].kind is ErrorKind.TRANSIENT
+
+    def test_concurrent_update_error_carries_its_code(self):
+        from src.models.errors import ConcurrentUpdateError
+
+        assert ConcurrentUpdateError("busy").code is ErrorCode.CONCURRENT_UPDATE
+        assert is_transient(ConcurrentUpdateError("busy"))
+
+    def test_no_interview_message_conflict_code(self):
+        """衝突は約束 C5 の CONCURRENT_UPDATE だけ（409 のコードを足さない）。"""
+        assert "INTERVIEW_MESSAGE_CONFLICT" not in ErrorCode.__members__

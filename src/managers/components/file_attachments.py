@@ -24,9 +24,10 @@ module never reaches for ``service_factory``.
 
 Delivery (BR5.4〜BR5.7): before attaching, only the uploader and only before
 ``expires_at``; after attaching, the parent type's registered reader decides.
-Until U6 / U7 register discussions and survey templates, an attached file is
-served to its uploader and to ``resource:read_all`` only (narrower than the
-parent's readers, so nothing leaks).
+U6 registers discussions (the discussion's readers, BR5.1). Until U7 registers
+survey templates, a file attached to one is served to its uploader and to
+``resource:read_all`` only (narrower than the parent's readers, so nothing leaks).
+``delete_attached`` removes the files of a deleted parent (U6 BR1.5).
 
 Logs: ``file.attach_rollback_failed`` (``file_id``, ``parent_type``, ``step``,
 ``error_type``; NFR8.15) and ``authz.denied`` for refused reads.
@@ -83,6 +84,8 @@ class FileMetadataStore(Protocol):
         self, original_expires_at: Mapping[str, int], parent_type: str, parent_id: str
     ) -> None: ...
 
+    def delete(self, file_id: str, parent_type: str, parent_id: str) -> None: ...
+
 
 class ObjectTags(Protocol):
     """What this component needs from ``S3Service``."""
@@ -90,6 +93,8 @@ class ObjectTags(Protocol):
     def delete_object_tagging(self, s3_key: str) -> None: ...
 
     def put_object_tags(self, s3_key: str, tags: Mapping[str, str]) -> None: ...
+
+    def delete_file(self, s3_path: str) -> bool: ...
 
 
 def _not_found(message: str) -> CodedError:
@@ -212,6 +217,35 @@ class FileAttachments:
                 self._rollback_failed(file_id, result.parent_type, "detach", e)
             return
         self._restore_tags(list(result.file_ids), result.parent_type)
+
+    def delete_attached(
+        self, parent_type: str, parent_id: str, file_ids: Sequence[str]
+    ) -> list[str]:
+        """Delete the files attached to a deleted parent (U6 BR1.5 (3)).
+
+        Only files still attached to ``parent_id`` are touched: the S3 object
+        first, then the metadata (conditioned on the parent). Files without an
+        S3 object (local development) lose only their metadata.
+
+        Returns:
+            The IDs that could not be deleted (the caller retries and logs).
+        """
+        failed: list[str] = []
+        for file_id in dict.fromkeys(file_ids):
+            try:
+                uploaded = self._store.get(file_id) if is_uuid(file_id) else None
+                if uploaded is None or (uploaded.parent_type, uploaded.parent_id) != (
+                    parent_type,
+                    parent_id,
+                ):
+                    continue
+                if self._tags is not None and self._tagged(uploaded):
+                    self._tags.delete_file(uploaded.file_path)
+                self._store.delete(file_id, parent_type, parent_id)
+            except Exception as e:
+                logger.warning("Deleting an attached file failed: %s", type(e).__name__)
+                failed.append(file_id)
+        return failed
 
     def _restore_tags(self, file_ids: Sequence[str], parent_type: str) -> None:
         """Step 7: put ``pending`` back on files that are still unattached."""

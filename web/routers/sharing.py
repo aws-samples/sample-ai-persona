@@ -49,7 +49,11 @@ executor = ThreadPoolExecutor(max_workers=4)
 DIALOG_ID = "share-dialog"
 
 #: The list panel each type reloads after a save (``list_tabpanel`` id).
-_LIST_TARGETS: dict[str, str] = {"persona": "#persona-list"}
+_LIST_TARGETS: dict[str, str] = {
+    "persona": "#persona-list",
+    # U6: 議論・インタビュー結果の一覧（/discussion/results）
+    "discussion": "#discussion-list",
+}
 
 #: Detail-screen regions that show the shares and are reloaded after a save
 #: (their own ``data-reload-url``). The list and the detail are never on the

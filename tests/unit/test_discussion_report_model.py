@@ -1,5 +1,5 @@
 """
-Unit tests for DiscussionReport model.
+Unit tests for DiscussionReport model (U6: one item of DiscussionReports).
 """
 
 from datetime import datetime
@@ -12,10 +12,12 @@ class TestDiscussionReport:
 
     def test_create_new(self):
         report = DiscussionReport.create_new(
+            discussion_id="d1",
             template_type="summary",
             content="# サマリレポート\n\nテスト内容",
         )
         assert report.id is not None
+        assert report.discussion_id == "d1"
         assert report.template_type == "summary"
         assert report.custom_prompt is None
         assert report.content == "# サマリレポート\n\nテスト内容"
@@ -23,6 +25,7 @@ class TestDiscussionReport:
 
     def test_create_new_with_custom_prompt(self):
         report = DiscussionReport.create_new(
+            discussion_id="d1",
             template_type="custom",
             content="カスタム出力",
             custom_prompt="箇条書きでまとめて",
@@ -32,29 +35,28 @@ class TestDiscussionReport:
 
     def test_to_dict(self):
         report = DiscussionReport.create_new(
+            discussion_id="d1",
             template_type="review",
             content="# レビュー",
         )
         data = report.to_dict()
-        assert data["id"] == report.id
+        assert data["report_id"] == report.id
+        assert data["discussion_id"] == "d1"
         assert data["template_type"] == "review"
-        assert data["custom_prompt"] is None
+        assert "custom_prompt" not in data
         assert data["content"] == "# レビュー"
         assert isinstance(data["created_at"], str)
 
     def test_from_dict(self):
         original = DiscussionReport.create_new(
+            discussion_id="d1",
             template_type="summary",
             content="テスト",
             custom_prompt="プロンプト",
         )
         data = original.to_dict()
         restored = DiscussionReport.from_dict(data)
-        assert restored.id == original.id
-        assert restored.template_type == original.template_type
-        assert restored.custom_prompt == original.custom_prompt
-        assert restored.content == original.content
-        assert restored.created_at == original.created_at
+        assert restored == original
 
     def test_from_dict_without_custom_prompt(self):
         data = {
@@ -65,3 +67,4 @@ class TestDiscussionReport:
         }
         report = DiscussionReport.from_dict(data)
         assert report.custom_prompt is None
+        assert report.report_id == "test-id"

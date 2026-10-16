@@ -33,13 +33,11 @@ def _persona(name="p"):
     )
 
 
-def _discussion(topic="有効なトピック", participants=None, messages=None, mode="agent"):
-    d = Discussion.create_new(
+def _discussion(topic="有効なトピック", participants=None, mode="agent"):
+    # U6: 発言は本体の外（DiscussionMessages）に置くため、本体だけを作る
+    return Discussion.create_new(
         topic=topic, participants=participants or ["p1", "p2"], mode=mode
     )
-    for m in messages or []:
-        d = d.add_message(m)
-    return d
 
 
 def _msg(
@@ -111,12 +109,9 @@ class TestValidatePersonasAndTopic:
 
 
 class TestValidateResults:
-    def _valid_discussion(self):
-        return _discussion(messages=[_msg("p1"), _msg("p2")])
-
     def test_valid_passes(self):
         dv.validate_results(
-            self._valid_discussion(),
+            [_msg("p1"), _msg("p2")],
             [],
             error_cls=_Err,
             require_min_content=True,
@@ -124,10 +119,9 @@ class TestValidateResults:
         )
 
     def test_too_few_messages(self):
-        d = _discussion(messages=[_msg("p1")])
         with raises_code(_Err, ErrorCode.DISCUSSION_RESULT_INVALID):
             dv.validate_results(
-                d,
+                [_msg("p1")],
                 [],
                 error_cls=_Err,
                 require_min_content=False,
@@ -136,10 +130,9 @@ class TestValidateResults:
 
     def test_min_content_enforced_when_required(self):
         # 各発言は非空だが合計 < 100 文字。require_min_content=True で拒否。
-        d = _discussion(messages=[_msg("p1", "短い"), _msg("p2", "短い")])
         with raises_code(_Err, ErrorCode.DISCUSSION_RESULT_INVALID):
             dv.validate_results(
-                d,
+                [_msg("p1", "短い"), _msg("p2", "短い")],
                 [],
                 error_cls=_Err,
                 require_min_content=True,
@@ -148,9 +141,8 @@ class TestValidateResults:
 
     def test_min_content_skipped_when_not_required(self):
         # 同じ短い議論でも require_min_content=False なら通過（エージェント挙動）。
-        d = _discussion(messages=[_msg("p1", "短い"), _msg("p2", "短い")])
         dv.validate_results(
-            d,
+            [_msg("p1", "短い"), _msg("p2", "短い")],
             [],
             error_cls=_Err,
             require_min_content=False,
@@ -159,24 +151,22 @@ class TestValidateResults:
 
 
 class TestValidateForSave:
-    def _valid(self, mode="agent"):
-        return _discussion(messages=[_msg("p1"), _msg("p2")], mode=mode)
-
     def test_valid_passes(self):
         dv.validate_for_save(
-            self._valid(),
+            _discussion(),
             error_cls=_Err,
             code=ErrorCode.DISCUSSION_OPERATION_FAILED,
             require_mode="agent",
+            messages=[_msg("p1"), _msg("p2")],
         )
 
     def test_too_few_participants(self):
-        d = _discussion(participants=["only-one"], messages=[_msg(), _msg()])
+        d = _discussion(participants=["only-one"])
         with raises_code(_Err, ErrorCode.DISCUSSION_INVALID):
             dv.validate_for_save(d, error_cls=_Err, code=ErrorCode.DISCUSSION_INVALID)
 
     def test_mode_mismatch_rejected(self):
-        d = self._valid(mode="normal")
+        d = _discussion(mode="classic")
         with raises_code(_Err, ErrorCode.DISCUSSION_OPERATION_FAILED):
             dv.validate_for_save(
                 d,
@@ -186,10 +176,14 @@ class TestValidateForSave:
             )
 
     def test_mode_not_checked_when_require_mode_none(self):
-        d = self._valid(mode="normal")
+        d = _discussion(mode="classic")
         dv.validate_for_save(d, error_cls=_Err, code=ErrorCode.DISCUSSION_INVALID)
 
     def test_empty_message_content_rejected(self):
-        d = _discussion(messages=[_msg("p1"), _msg("p2", content="")])
         with raises_code(_Err, ErrorCode.DISCUSSION_INVALID):
-            dv.validate_for_save(d, error_cls=_Err, code=ErrorCode.DISCUSSION_INVALID)
+            dv.validate_for_save(
+                _discussion(),
+                error_cls=_Err,
+                code=ErrorCode.DISCUSSION_INVALID,
+                messages=[_msg("p1"), _msg("p2", content="")],
+            )

@@ -480,6 +480,42 @@ class TestFileManagerU5Uploads:
         assert metadata.file_path == f"s3://{_U5_BUCKET}/{stored.s3_key}"
         assert s3.get_object_tags(stored.s3_key) == {"pending": "true"}
 
+    def test_interview_attachment_is_an_owned_pending_upload(self, u5_files):
+        """U6 BR3.6: インタビューの添付も議論と同じアップロードで置く。"""
+        manager, store, s3, _, _ = u5_files
+
+        metadata = manager.upload_interview_attachment(PRINCIPAL, _PNG, "画像.png")
+
+        stored = store.get(metadata.file_id)
+        assert stored.owner_sub == PRINCIPAL.sub
+        assert stored.s3_key.startswith(f"uploads/{PRINCIPAL.sub}/")
+        assert stored.expires_at == int(_U5_NOW.timestamp()) + 24 * 3600
+        assert stored.mime_type == "image/png"
+        assert s3.get_object_tags(stored.s3_key) == {"pending": "true"}
+
+    @pytest.mark.parametrize(
+        "content, name, code",
+        [
+            (b"data", "file.zip", ErrorCode.FILE_MIME_UNSUPPORTED),
+            (b"\x89PNG" * (6 * 1024 * 1024), "big.png", ErrorCode.FILE_TOO_LARGE),
+            (b"%PDF" * (11 * 1024 * 1024), "big.pdf", ErrorCode.FILE_TOO_LARGE),
+        ],
+        ids=["unsupported", "image-too-large", "document-too-large"],
+    )
+    def test_interview_attachment_kind_and_size(self, u5_files, content, name, code):
+        manager, store, _, _, _ = u5_files
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.upload_interview_attachment(PRINCIPAL, content, name)
+        assert exc_info.value.code is code
+
+    def test_interview_attachment_needs_resource_create(self, u5_files):
+        from src.models.errors import AccessDeniedError
+        from tests.conftest import NO_ROLE
+
+        manager, _, _, _, _ = u5_files
+        with pytest.raises(AccessDeniedError):
+            manager.upload_interview_attachment(NO_ROLE.principal(), _PNG, "a.png")
+
     def test_two_users_with_the_same_name_keep_both_files(self, u5_files):
         from tests.conftest import MEMBER_B
 

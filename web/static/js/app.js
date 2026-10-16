@@ -1404,6 +1404,26 @@ registerBlock('ShareDialog', function() {
     });
 });
 
+// -------------------------------------------------------------
+// ConversationStopped（M12、U6 BR7.5）
+// 会話を続けられなくなったとき（SSE の stopped、または conversation_stopped の
+// 失敗）に、画面の <template id="conversation-stopped-template"> の枠を差し込み、
+// 枠の見出しへフォーカスを移す（理由は出さない）。入力欄の文字は呼び出し側が残す。
+// -------------------------------------------------------------
+function showConversationStopped(container) {
+    const template = document.getElementById('conversation-stopped-template');
+    if (!container || !template) return null;
+    let panel = container.querySelector('[data-conversation-stopped]');
+    if (!panel) {
+        container.appendChild(template.content.cloneNode(true));
+        panel = container.querySelector('[data-conversation-stopped]');
+    }
+    const heading = panel && panel.querySelector('[data-conversation-stopped-heading]');
+    if (heading) heading.focus();
+    return panel;
+}
+window.showConversationStopped = showConversationStopped;
+
 // ページ読み込み完了時の処理
 document.addEventListener('DOMContentLoaded', function() {
     // ドラッグ＆ドロップの設定

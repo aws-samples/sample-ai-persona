@@ -1,9 +1,11 @@
-"""紐付けの呼び出しと読み先の付け替え（U5、Step 23）。
+"""紐付けの呼び出しと読み先の付け替え（U5、Step 23。U6 で議論の保存を付け替え）。
 
-- 議論の保存（クラシック・エージェント）とテンプレートの作成・更新が、資料・画像の
-  ファイル ID で ``FileAttachments.attach_all`` を呼び、親の保存の失敗で ``detach`` する
+- 議論の保存（クラシック・エージェント）が、資料のファイル ID で
+  ``FileAttachments.attach_all`` を呼び、親の保存の失敗で ``detach`` する。
+  U6 からは両 Manager とも ``DiscussionRecords.save_new`` を通る
   （reliability-design.md §3、BR5.3、NFR1.27、NFR1.38、AC2.2.2）
-- 議論の開始・実行の資料の読み込みが ``can_read_file`` を通る（他人の資料は読まない）
+- テンプレートの作成・更新が画像のファイル ID で ``attach_all`` を呼ぶ
+- 議論の開始・実行の資料の読み込みが ``attachable_file`` を通る（他人の資料は読まない）
 - ``PersonaAgentIntegration`` は紐付けを ``PersonaBindingStore`` から読み、
   ``AgentService.get_kb_tools`` は KB の紐付けを引数で受け取る
 
@@ -23,55 +25,47 @@ from src.managers.survey_template_manager import (
     SurveyTemplateManager,
     SurveyTemplateManagerError,
 )
-from src.models.discussion import Discussion
 from src.models.errors import CodedError, ErrorCode
 from src.models.message import Message
 from src.models.survey_template import Question, TemplateImage
-from src.models.uploaded_file import AttachResult, UploadedFile, upload_key
+from src.models.uploaded_file import UploadedFile, upload_key
+from src.services.agent_service import FacilitatorAgent, PersonaAgent
+from src.services.discussion_store import DiscussionStoreError
 from tests.conftest import MEMBER_A, MEMBER_B
 from tests.error_helpers import raises_code
+from tests.unit.discussion_world import OWNER, World
 
 A = MEMBER_A.principal()
 NOW = datetime(2026, 10, 14, 3, 0, 0, tzinfo=timezone.utc)
 FILE_1 = "11111111-1111-4111-8111-111111111111"
 FILE_2 = "22222222-2222-4222-8222-222222222222"
+TOPIC = "新商品の議論について"
 
 
-def _attachments() -> Mock:
-    files = Mock()
-    files.attach_all.side_effect = lambda principal, ids, ptype, pid: AttachResult(
-        parent_type=ptype,
-        parent_id=pid,
-        original_expires_at={i: 100 for i in dict.fromkeys(ids)},
-    )
-    return files
+def _own_upload(file_id: str) -> UploadedFile:
+    return UploadedFile.create_new(
+        owner_sub=OWNER.sub,
+        file_type="discussion_document",
+        original_filename="資料.pdf",
+        file_size=3,
+        file_hash="h",
+        mime_type="application/pdf",
+        now=NOW,
+        file_id=file_id,
+    ).with_path(f"s3://bucket/uploads/{OWNER.sub}/discussion_document/{file_id}.pdf")
 
 
-def _discussion(mode: str = "classic", documents=None) -> Discussion:
-    discussion = Discussion.create_new(
-        topic="新商品の議論", participants=["p1", "p2"], documents=documents, mode=mode
-    )
-    for i in range(2):
-        discussion = discussion.add_message(
-            Message.create_new(
-                persona_id=f"p{i + 1}",
-                persona_name=f"ペルソナ{i + 1}",
-                content="十分な長さの発言内容です。" * 3,
-            )
-        )
-    return discussion
+def _world_with_uploads(*file_ids: str) -> World:
+    world = World()
+    uploads = {i: _own_upload(i) for i in file_ids}
+    world.files.attachable_file.side_effect = lambda principal, fid: uploads[fid]
+    return world
 
 
-def _documents(*ids: str) -> list[dict]:
+def _messages(world: World) -> list[Message]:
     return [
-        {
-            "id": i,
-            "filename": "資料.pdf",
-            "file_path": f"s3://bucket/uploads/{A.sub}/discussion_document/{i}_資料.pdf",
-            "file_size": 3,
-            "mime_type": "application/pdf",
-        }
-        for i in ids
+        Message.create_new(p.id, p.name, "十分な長さの発言内容です。" * 4)
+        for p in (world.persona_bodies["p1"], world.persona_bodies["p2"])
     ]
 
 
@@ -81,68 +75,74 @@ def _documents(*ids: str) -> list[dict]:
 
 
 class TestClassicDiscussionSave:
-    def _manager(self, files: Mock) -> tuple[DiscussionManager, Mock]:
-        db = Mock()
-        db.save_discussion.side_effect = lambda d: d.id
+    def _manager(self, world: World) -> tuple[DiscussionManager, Mock]:
+        ai = Mock()
+        ai.facilitate_discussion.side_effect = lambda *a, **k: _messages(world)
+        ai.extract_insights.return_value = []
         return (
             DiscussionManager(
-                ai_service=Mock(), database_service=db, file_attachments=files
+                ai_service=ai,
+                database_service=Mock(),
+                file_attachments=world.files,
+                discussion_records=world.records,
+                participants=world.participants,
+                resource_sharing=world.sharing,
+                owners=world.owners,
+                s3_service=Mock(),
             ),
-            db,
+            ai,
+        )
+
+    def _run(self, manager, world, *file_ids):
+        return manager.run_classic_discussion(
+            OWNER,
+            [world.persona_bodies["p1"], world.persona_bodies["p2"]],
+            TOPIC,
+            document_ids=list(file_ids) or None,
         )
 
     def test_save_attaches_the_documents_to_the_discussion(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        discussion = _discussion(documents=_documents(FILE_1, FILE_2))
+        world = _world_with_uploads(FILE_1, FILE_2)
+        manager, _ = self._manager(world)
 
-        manager.save_discussion(discussion, principal=A)
+        discussion = self._run(manager, world, FILE_1, FILE_2)
 
-        files.attach_all.assert_called_once_with(
-            A, [FILE_1, FILE_2], "discussion", discussion.id
+        world.files.attach_all.assert_called_once_with(
+            OWNER, [FILE_1, FILE_2], "discussion", discussion.id
         )
-        db.save_discussion.assert_called_once()
-        files.detach.assert_not_called()
+        assert discussion.id in world.store.bodies
+        world.files.detach.assert_not_called()
 
     def test_failed_save_detaches(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        db.save_discussion.side_effect = RuntimeError("db down")
-        discussion = _discussion(documents=_documents(FILE_1))
+        world = _world_with_uploads(FILE_1)
+        world.store.fail["put_new"] = [DiscussionStoreError("down")]
+        manager, _ = self._manager(world)
 
-        with raises_code(DiscussionManagerError, ErrorCode.DISCUSSION_OPERATION_FAILED):
-            manager.save_discussion(discussion, principal=A)
-        (result,) = files.detach.call_args.args
+        with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
+            self._run(manager, world, FILE_1)
+        (result,) = world.files.detach.call_args.args
         assert result.file_ids == (FILE_1,)
 
     def test_someone_elses_file_stops_the_save(self):
-        files = _attachments()
-        files.attach_all.side_effect = CodedError("x", code=ErrorCode.FILE_NOT_FOUND)
-        manager, db = self._manager(files)
+        world = _world_with_uploads(FILE_1)
+        world.files.attach_all.side_effect = CodedError(
+            "x", code=ErrorCode.FILE_NOT_FOUND
+        )
+        manager, _ = self._manager(world)
 
-        with raises_code(DiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
-            manager.save_discussion(
-                _discussion(documents=_documents(FILE_1)), principal=A
-            )
-        db.save_discussion.assert_not_called()
-
-    def test_documents_without_a_user_are_never_attached(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        with raises_code(DiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
-            manager.save_discussion(_discussion(documents=_documents(FILE_1)))
-        files.attach_all.assert_not_called()
-        db.save_discussion.assert_not_called()
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            self._run(manager, world, FILE_1)
+        assert world.store.bodies == {}
 
     def test_no_documents_attach_nothing(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        manager.save_discussion(_discussion())
-        files.attach_all.assert_not_called()
-        db.save_discussion.assert_called_once()
+        world = World()
+        manager, _ = self._manager(world)
+        discussion = self._run(manager, world)
+        world.files.attach_all.assert_not_called()
+        assert discussion.id in world.store.bodies
 
     def test_documents_are_read_through_attachable_file(self):
-        files = _attachments()
+        files = Mock()
         uploaded = UploadedFile.create_new(
             owner_sub=A.sub,
             file_type="discussion_document",
@@ -158,10 +158,13 @@ class TestClassicDiscussionSave:
             if principal is A and fid == FILE_1
             else (_ for _ in ()).throw(CodedError("x", code=ErrorCode.FILE_NOT_FOUND))
         )
-        manager, db = self._manager(files)
+        db = Mock()
+        manager = DiscussionManager(
+            ai_service=Mock(), database_service=db, file_attachments=files
+        )
 
-        data, metadata = manager._load_documents([FILE_1], A)
-        assert metadata[0]["id"] == FILE_1
+        data, documents = manager._load_documents([FILE_1], A)
+        assert documents[0].id == FILE_1
         assert data[0]["file_path"] == "s3://bucket/key"
         db.get_uploaded_file_info.assert_not_called()
         files.readable_file.assert_not_called()
@@ -176,73 +179,103 @@ class TestClassicDiscussionSave:
 # =============================================================================
 
 
+def _agent_manager(world: World) -> AgentDiscussionManager:
+    def agent(**kw):
+        persona = kw["persona"]
+        made = Mock(spec=PersonaAgent)
+        made.get_persona_id.return_value = persona.id
+        made.get_persona_name.return_value = persona.name
+        made.respond.return_value = "発言です"
+        return made
+
+    agent_service = Mock()
+    agent_service.create_persona_agent.side_effect = agent
+    facilitator = Mock(spec=FacilitatorAgent)
+    facilitator.rounds = 1
+    facilitator.additional_instructions = ""
+    facilitator.invoke.return_value = "まとめ"
+    agent_service.create_facilitator_agent.return_value = facilitator
+    ai = Mock()
+    ai.extract_insights.return_value = []
+    return AgentDiscussionManager(
+        agent_service=agent_service,
+        database_service=Mock(),
+        dataset_analysis_service=Mock(),
+        file_attachments=world.files,
+        binding_store=Mock(list_for_persona=Mock(return_value=[])),
+        discussion_records=world.records,
+        participants=world.participants,
+        resource_lookup=world.lookup,
+        ai_service=ai,
+    )
+
+
 class TestAgentDiscussionSave:
-    def _manager(self, files: Mock) -> tuple[AgentDiscussionManager, Mock]:
-        db = Mock()
-        db.save_discussion.side_effect = lambda d: d.id
-        return (
-            AgentDiscussionManager(
-                agent_service=Mock(),
-                database_service=db,
-                dataset_analysis_service=Mock(),
-                file_attachments=files,
-                binding_store=Mock(),
-            ),
-            db,
+    def _run(self, manager, world, *file_ids):
+        return manager.run_agent_discussion_full(
+            OWNER,
+            [world.persona_bodies["p1"], world.persona_bodies["p2"]],
+            TOPIC,
+            rounds=1,
+            document_ids=list(file_ids),
         )
 
-    def test_save_attaches_and_failure_detaches(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        discussion = _discussion(mode="agent", documents=_documents(FILE_1))
+    def test_save_attaches_and_failure_detaches(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.managers.shared.document_loader.prepare_document_contents",
+            lambda metadata, s3=None: [],
+        )
+        world = _world_with_uploads(FILE_1)
+        manager = _agent_manager(world)
 
-        manager.save_agent_discussion(discussion, principal=A)
-        files.attach_all.assert_called_once_with(
-            A, [FILE_1], "discussion", discussion.id
+        discussion = self._run(manager, world, FILE_1)
+        world.files.attach_all.assert_called_once_with(
+            OWNER, [FILE_1], "discussion", discussion.id
         )
 
-        db.save_discussion.side_effect = RuntimeError("down")
-        with raises_code(
-            AgentDiscussionManagerError, ErrorCode.DISCUSSION_OPERATION_FAILED
-        ):
-            manager.save_agent_discussion(discussion, principal=A)
-        files.detach.assert_called_once()
+        world.store.fail["put_new"] = [DiscussionStoreError("down")]
+        with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
+            self._run(manager, world, FILE_1)
+        world.files.detach.assert_called_once()
 
-    def test_unattachable_file_stops_the_save(self):
-        files = _attachments()
-        files.attach_all.side_effect = CodedError("x", code=ErrorCode.FILE_NOT_FOUND)
-        manager, db = self._manager(files)
-        with raises_code(AgentDiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
-            manager.save_agent_discussion(
-                _discussion(mode="agent", documents=_documents(FILE_1)), principal=A
-            )
-        db.save_discussion.assert_not_called()
-
-    def test_documents_are_read_through_attachable_file(self, monkeypatch):
-        files = _attachments()
-        files.attachable_file.side_effect = CodedError(
+    def test_unattachable_file_stops_the_save(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.managers.shared.document_loader.prepare_document_contents",
+            lambda metadata, s3=None: [],
+        )
+        world = _world_with_uploads(FILE_1)
+        world.files.attach_all.side_effect = CodedError(
             "x", code=ErrorCode.FILE_NOT_FOUND
         )
-        manager, db = self._manager(files)
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            self._run(_agent_manager(world), world, FILE_1)
+        assert world.store.bodies == {}
+
+    def test_documents_are_read_through_attachable_file(self):
+        world = World()
+        world.files.attachable_file.side_effect = CodedError(
+            "x", code=ErrorCode.FILE_NOT_FOUND
+        )
+        manager = _agent_manager(world)
 
         # R-02: an unusable document stops the discussion (no longer skipped)
         with raises_code(AgentDiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
             manager._load_and_attach_documents([FILE_1], [], None, principal=A)
 
-        files.attachable_file.assert_called_once_with(A, FILE_1)
-        files.readable_file.assert_not_called()
-        db.get_uploaded_file_info.assert_not_called()
+        world.files.attachable_file.assert_called_once_with(A, FILE_1)
+        world.files.readable_file.assert_not_called()
 
     def test_a_failed_read_is_an_operation_failure(self):
-        files = _attachments()
-        files.attachable_file.side_effect = CodedError(
+        world = World()
+        world.files.attachable_file.side_effect = CodedError(
             "x", code=ErrorCode.FILE_OPERATION_FAILED
         )
-        manager, _ = self._manager(files)
         with raises_code(
             AgentDiscussionManagerError, ErrorCode.DISCUSSION_OPERATION_FAILED
         ):
-            manager._load_and_attach_documents([FILE_1], [], None, principal=A)
+            _agent_manager(world)._load_and_attach_documents(
+                [FILE_1], [], None, principal=A
+            )
 
 
 # =============================================================================
@@ -259,6 +292,18 @@ def _image(file_id: str, owner: str = A.sub) -> TemplateImage:
         mime_type="image/png",
         original_filename="a.png",
     )
+
+
+def _attachments() -> Mock:
+    from src.models.uploaded_file import AttachResult
+
+    files = Mock()
+    files.attach_all.side_effect = lambda principal, ids, ptype, pid: AttachResult(
+        parent_type=ptype,
+        parent_id=pid,
+        original_expires_at={i: 100 for i in dict.fromkeys(ids)},
+    )
+    return files
 
 
 class TestTemplateSave:
@@ -360,9 +405,9 @@ class _FakeFileStore:
         raise AssertionError("no detach is expected")
 
 
-def _upload(file_id: str = FILE_1) -> UploadedFile:
+def _upload(file_id: str = FILE_1, owner: str = A.sub) -> UploadedFile:
     return UploadedFile.create_new(
-        owner_sub=A.sub,
+        owner_sub=owner,
         file_type="discussion_document",
         original_filename="資料.pdf",
         file_size=3,
@@ -370,32 +415,15 @@ def _upload(file_id: str = FILE_1) -> UploadedFile:
         mime_type="application/pdf",
         now=datetime.now(timezone.utc),
         file_id=file_id,
-    ).with_path(f"s3://bucket/uploads/{A.sub}/discussion_document/{file_id}_資料.pdf")
+    ).with_path(f"s3://bucket/uploads/{owner}/discussion_document/{file_id}_資料.pdf")
 
 
 def _attached_elsewhere_files():
     """A real FileAttachments whose FILE_1 is already attached to another discussion."""
     from src.managers.components.file_attachments import FileAttachments
 
-    attached = _upload().attached_to("discussion", "another-discussion")
+    attached = _upload(owner=OWNER.sub).attached_to("discussion", "another-discussion")
     return FileAttachments(_FakeFileStore(attached), None)
-
-
-def _personas():
-    from src.models.persona import Persona
-
-    return [
-        Persona.create_new(
-            name=f"ペルソナ{i}",
-            age=30,
-            occupation="会社員",
-            background="背景",
-            values=["v"],
-            pain_points=["p"],
-            goals=["g"],
-        )
-        for i in range(2)
-    ]
 
 
 class TestDocumentsAttachedElsewhere:
@@ -408,68 +436,67 @@ class TestDocumentsAttachedElsewhere:
     """
 
     def _classic(self):
+        world = World()
         ai = Mock()
         manager = DiscussionManager(
             ai_service=ai,
             database_service=Mock(),
             file_attachments=_attached_elsewhere_files(),
+            discussion_records=world.records,
+            participants=world.participants,
+            resource_sharing=world.sharing,
+            owners=world.owners,
+            s3_service=Mock(),
         )
-        return manager, ai
+        return manager, ai, world
 
     def _agent(self):
-        manager = AgentDiscussionManager(
-            agent_service=Mock(),
-            database_service=Mock(),
-            dataset_analysis_service=Mock(),
-            file_attachments=_attached_elsewhere_files(),
-            binding_store=Mock(),
-        )
-        return manager
+        world = World()
+        world.files = _attached_elsewhere_files()
+        manager = _agent_manager(world)
+        return manager, world
+
+    def _personas(self, world):
+        return [world.persona_bodies["p1"], world.persona_bodies["p2"]]
 
     def test_classic(self):
-        manager, ai = self._classic()
+        manager, ai, world = self._classic()
         with raises_code(DiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
             manager.run_classic_discussion(
-                _personas(), "新商品の議論", document_ids=[FILE_1], principal=A
+                OWNER, self._personas(world), TOPIC, document_ids=[FILE_1]
             )
         ai.facilitate_discussion.assert_not_called()
 
     def test_classic_streaming(self):
-        manager, ai = self._classic()
+        manager, ai, world = self._classic()
         with raises_code(DiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
             list(
                 manager.run_classic_discussion_streaming(
-                    _personas(), "新商品の議論", document_ids=[FILE_1], principal=A
+                    OWNER, self._personas(world), TOPIC, document_ids=[FILE_1]
                 )
             )
         ai.facilitate_discussion_streaming.assert_not_called()
 
     def test_agent(self):
-        manager = self._agent()
-        facilitator = Mock()
+        manager, world = self._agent()
+        facilitator = manager.agent_service.create_facilitator_agent.return_value
         with raises_code(AgentDiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
-            manager.start_agent_discussion(
-                personas=_personas(),
-                topic="新商品の議論",
-                persona_agents=[Mock(), Mock()],
-                facilitator=facilitator,
-                document_ids=[FILE_1],
-                principal=A,
+            manager.run_agent_discussion_full(
+                OWNER, self._personas(world), TOPIC, rounds=1, document_ids=[FILE_1]
             )
         facilitator.start_discussion.assert_not_called()
 
     def test_agent_streaming(self):
-        manager = self._agent()
-        facilitator = Mock()
+        manager, world = self._agent()
+        facilitator = manager.agent_service.create_facilitator_agent.return_value
         with raises_code(AgentDiscussionManagerError, ErrorCode.FILE_NOT_FOUND):
             list(
-                manager.start_agent_discussion_streaming(
-                    personas=_personas(),
-                    topic="新商品の議論",
-                    persona_agents=[Mock(), Mock()],
-                    facilitator=facilitator,
+                manager.run_agent_discussion_streaming(
+                    OWNER,
+                    self._personas(world),
+                    TOPIC,
+                    rounds=1,
                     document_ids=[FILE_1],
-                    principal=A,
                 )
             )
         facilitator.start_discussion.assert_not_called()
@@ -482,8 +509,8 @@ class TestDocumentsAttachedElsewhere:
             database_service=Mock(),
             file_attachments=FileAttachments(_FakeFileStore(_upload()), None),
         )
-        data, metadata = manager._load_documents([FILE_1], A)
-        assert metadata[0]["id"] == FILE_1
+        _data, documents = manager._load_documents([FILE_1], A)
+        assert documents[0].id == FILE_1
 
     def test_reading_and_attaching_share_one_rule(self):
         """attach_all refuses exactly the files the start paths refuse."""
@@ -520,14 +547,30 @@ class TestBindingReaders:
         db.get_knowledge_base.return_value = kb
         agent = Mock()
         agent.get_kb_tools.return_value = ([], None)
+        from src.managers.components.resource_lookup import build_resource_lookup
+        from src.models.authz import AccessTarget, Principal, ResourceType, Role
+
+        class _AnyKb:
+            def read(self, ids, deadline):
+                return {i: AccessTarget(ResourceType.KNOWLEDGE_BASE, i) for i in ids}
+
         component = pai.PersonaAgentIntegration(
             database_service=db,
             agent_service=agent,
             dataset_analysis_service=Mock(),
             binding_store=store,
+            resource_lookup=build_resource_lookup(
+                [(ResourceType.KNOWLEDGE_BASE, _AnyKb())], sample_rate=0.0
+            ),
         )
 
-        component.prepare("p1", "BASE", enable_kb=True, enable_dataset=False)
+        component.prepare(
+            "p1",
+            "BASE",
+            enable_kb=True,
+            enable_dataset=False,
+            principal=Principal(sub="admin", roles=frozenset({Role.ADMIN})),
+        )
 
         store.list_for_persona.assert_called_once_with("p1")
         (binding, knowledge_base) = agent.get_kb_tools.call_args.args

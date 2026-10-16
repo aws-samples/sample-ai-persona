@@ -131,6 +131,8 @@ class TestTransactAttach:
             assert stored.parent_type == "discussion"
             assert stored.parent_id == "d1"
             assert stored.expires_at is None
+            # 後始末のスクリプトが保存の途中を見分けるための紐付けの時刻
+            assert stored.attached_at == NOW_EPOCH
 
     @pytest.mark.parametrize(
         "case", ["other_owner", "expired", "already_attached", "missing"]
@@ -175,6 +177,7 @@ class TestTransactDetach:
         restored = store.get(f.id)
         assert restored.parent_id is None
         assert restored.expires_at == f.expires_at
+        assert restored.attached_at is None
 
     def test_detach_from_another_parent_fails(self, store):
         f = _file()

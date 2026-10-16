@@ -342,6 +342,108 @@ class TestAgentService:
         assert facilitator_agent.additional_instructions == additional_instructions
 
 
+class TestInitialMessages:
+    """作り直しの履歴の口（U6、BR3.4、logical-components.md「共有するもの」）。
+
+    ``initial_messages`` はセッション管理の初期化のあとに会話の履歴を置き換え、
+    短期記憶から復元した履歴を上書きする。入れた履歴は保存の経路を通らない。
+    """
+
+    def setup_method(self):
+        self.persona = Persona(
+            id="p1",
+            name="佐藤",
+            age=30,
+            occupation="会社員",
+            background="背景",
+            values=["v"],
+            pain_points=["p"],
+            goals=["g"],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        self.history = [
+            {"role": "user", "content": [{"text": "質問"}]},
+            {"role": "assistant", "content": [{"text": "答え"}]},
+        ]
+
+    def _service(self, mock_config) -> AgentService:
+        mock_config.AWS_REGION = "us-east-1"
+        mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_config.get_aws_credentials.return_value = {}
+        service = AgentService()
+        service._create_tool_logging_callback = Mock(return_value=None)
+        return service
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    def test_history_replaces_the_agents_messages(
+        self, mock_config, _model, mock_agent
+    ):
+        agent = Mock()
+        agent.messages = [{"role": "user", "content": [{"text": "復元された古い履歴"}]}]
+        mock_agent.return_value = agent
+        service = self._service(mock_config)
+
+        service.create_persona_agent(self.persona, "sys", initial_messages=self.history)
+
+        assert agent.messages == self.history
+        assert agent.messages is not self.history
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    def test_without_history_the_messages_are_untouched(
+        self, mock_config, _model, mock_agent
+    ):
+        agent = Mock()
+        restored = [{"role": "user", "content": [{"text": "復元"}]}]
+        agent.messages = restored
+        mock_agent.return_value = agent
+        service = self._service(mock_config)
+
+        service.create_persona_agent(self.persona, "sys")
+
+        assert agent.messages is restored
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    @patch("src.services.agent_service.config")
+    def test_history_does_not_go_through_the_session_manager(
+        self, mock_config, _model, mock_agent
+    ):
+        agent = Mock()
+        agent.messages = []
+        mock_agent.return_value = agent
+        session_manager = Mock()
+        service = self._service(mock_config)
+
+        with (
+            patch(
+                "src.services.memory.session_manager_factory.is_memory_enabled",
+                return_value=True,
+            ),
+            patch(
+                "src.services.memory.session_manager_factory."
+                "create_agentcore_session_manager",
+                return_value=session_manager,
+            ),
+        ):
+            service.create_persona_agent(
+                self.persona,
+                "sys",
+                enable_memory=True,
+                session_id="s1",
+                initial_messages=self.history,
+            )
+
+        assert mock_agent.call_args.kwargs["session_manager"] is session_manager
+        assert agent.messages == self.history
+        session_manager.append_message.assert_not_called()
+        session_manager.sync_agent.assert_not_called()
+
+
 class TestPersonaAgent:
     """PersonaAgentのテストクラス"""
 

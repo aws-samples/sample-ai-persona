@@ -1,38 +1,99 @@
 """
 Interview Manager for AI Persona System.
 Handles interview session setup, execution, and persistence.
+
+v1.0.0 U6（``functional-design/rules.md`` BR3.1〜BR3.8、ADR-004）:
+
+- セッションと発言はアプリの外（``InterviewSessionStore``）に置き、どの台でも会話を続けられる
+- 送信・参照・保存・終了は持ち主だけ。他人・期限切れ・存在しないは区別せず
+  ``INTERVIEW_SESSION_NOT_FOUND``（admin でも他人のセッションは使えない）
+- 送信は (a) 利用者の発言と応答中の印、(b) ペルソナ 1 体ごとの応答を、それぞれ
+  ``last_seq`` を条件にしたトランザクションで書く。応答中の別の送信と保存は
+  ``CONCURRENT_UPDATE``。印は AI の失敗でもジェネレータのクローズでも外す
+- 手元のエージェントは ``(session_id, owner_sub)`` で引き、ない・番号がずれていれば
+  保存した発言から作り直す。8 時間使わなければ捨てる
+- 添付は ID で持ち、紐付け前は ``attachable_file``、保存した議論に紐付いたあとは
+  ``readable_file`` で読む。読めないファイルは外して名前を返す
+- 保存は ``DiscussionRecords``（初回 ``save_new``、2 回目以降 ``append_messages``）
 """
 
 import logging
+import threading
 import uuid
-from typing import List, Dict, Mapping, Any, Optional, TYPE_CHECKING
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+)
 
-
-from ..config import config
-from ..models.errors import CodedError, ErrorCode
-from ..models.persona import Persona
-from ..models.discussion import Discussion
+from ..models.authz import (
+    AccessTarget,
+    ExecutionContext,
+    Permission,
+    Principal,
+    ResourceType,
+)
+from ..models.discussion import Discussion, DocumentRef
+from ..models.errors import CodedError, ConcurrentUpdateError, ErrorCode
+from ..models.interview_session import (
+    MEMORY_MODES,
+    SESSION_IDLE_SECONDS,
+    USER_PERSONA_ID,
+    InterviewMessage,
+    InterviewReply,
+    InterviewSaveResult,
+    InterviewSession,
+    InterviewView,
+)
 from ..models.message import Message
-from ..models.interview_session import InterviewSession
+from ..models.persona import Persona
+from ..models.uploaded_file import UploadedFile
 from ..services.agent_service import (
-    AgentService,
-    PersonaAgent,
+    AgentCommunicationError,
     AgentConfigurationError,
     AgentInitializationError,
-    AgentCommunicationError,
+    AgentService,
+    PersonaAgent,
 )
-from ..services.database_service import DatabaseService, DatabaseError
+from ..services.database_service import DatabaseService
+from ..services.interview_session_store import (
+    InterviewConflict,
+    InterviewSessionStore,
+    InterviewSessionStoreError,
+)
+from ..services.service_factory import service_factory
+from .components.access_policy import AccessPolicy
+from .components.discussion_records import DiscussionRecords
+from .components.file_attachments import FileAttachments
+from .components.participant_reader import ParticipantReader
 from .components.persona_agent_integration import PersonaAgentIntegration
+from .components.resource_lookup import ResourceLookup
+from .components.sharing_runtime import (
+    AccessParts,
+    DiscussionParts,
+    access_parts_from,
+    discussion_parts_from,
+)
 from .shared.agent_cleanup import dispose_agents
 from .shared.model_validation import (
     resolve_effective_persona_models,
     validate_document_size_for_models,
     validate_model_selection,
 )
+from .shared.structured_log import log_event
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
+    from ..services.s3_service import S3Service
 
 
 class InterviewManagerError(CodedError):
@@ -71,6 +132,88 @@ class InterviewPersistenceError(InterviewManagerError):
     pass
 
 
+#: 利用者の発言の表示名。
+USER_NAME = "ユーザー"
+
+#: セッション ID から保存先の議論の ID を決める名前空間（固定の値。変えると再保存で別の議論になる）
+_SAVED_DISCUSSION_NAMESPACE = uuid.UUID("6f4b8a52-2d0e-4c1a-9b7e-3a5d1c8e0f21")
+
+
+def _discussion_id_for(session_id: str) -> str:
+    """The discussion a session is saved into, the same on every attempt.
+
+    A save whose discussion was written but not recorded on the session can
+    then find and reuse that discussion instead of making a second one.
+    """
+    return str(uuid.uuid5(_SAVED_DISCUSSION_NAMESPACE, session_id))
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class _LocalAgents:
+    """This task's agents of one session (BR3.4)."""
+
+    agents: List[PersonaAgent]
+    known_seq: int
+    messages: List[Message] = field(default_factory=list)
+    last_used: datetime = field(default_factory=_utc_now)
+
+
+def _discussion_parts() -> DiscussionParts:
+    return discussion_parts_from(service_factory)
+
+
+def _access_parts() -> AccessParts:
+    return access_parts_from(service_factory)
+
+
+def _history_for(persona_id: str, messages: Sequence[Message]) -> List[dict[str, Any]]:
+    """The conversation one persona's agent is rebuilt with (BR3.4 (3)).
+
+    The user's messages and the persona's own replies, in order. Consecutive
+    messages of the same side are merged (the model needs alternating turns);
+    a trailing unanswered user message is left to the next prompt's context.
+    """
+    turns: List[dict[str, Any]] = []
+    for message in messages:
+        if message.persona_id == USER_PERSONA_ID:
+            role = "user"
+        elif message.persona_id == persona_id:
+            role = "assistant"
+        else:
+            continue
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"].append({"text": message.content})
+        else:
+            turns.append({"role": role, "content": [{"text": message.content}]})
+    if turns and turns[-1]["role"] == "user":
+        turns.pop()
+    return turns
+
+
+def _target_of(persona: Persona) -> AccessTarget:
+    return AccessTarget(
+        resource_type=ResourceType.PERSONA,
+        resource_id=persona.id,
+        owner_sub=persona.owner_sub,
+        shared_group_ids=persona.shared_group_ids,
+        display_name=persona.name,
+    )
+
+
+def _document_ref(uploaded: UploadedFile) -> DocumentRef:
+    return DocumentRef(
+        id=uploaded.id,
+        filename=uploaded.original_filename,
+        mime_type=uploaded.mime_type or "text/plain",
+        file_size=uploaded.file_size,
+        uploaded_at=uploaded.uploaded_at.isoformat(),
+    )
+
+
 class InterviewManager:
     """
     Manager class for handling interview operations.
@@ -87,20 +230,30 @@ class InterviewManager:
         database_service: Optional[DatabaseService] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
         binding_store: Any = None,
+        session_store: Optional[InterviewSessionStore] = None,
+        discussion_records: Optional[DiscussionRecords] = None,
+        participants: Optional[ParticipantReader] = None,
+        file_attachments: Optional[FileAttachments] = None,
+        resource_lookup: Optional[ResourceLookup] = None,
+        s3_service: Optional["S3Service"] = None,
+        clock: Callable[[], datetime] = _utc_now,
     ):
         """
         Initialize interview manager.
 
-        ``binding_store`` (U5): ``PersonaBindings`` for the KB / dataset tools
-        (optional, the singleton when omitted).
-
         Args:
-            agent_service: Agent service instance for agent management (optional, uses singleton if not provided)
-            database_service: Database service instance for persistence (optional, uses singleton if not provided)
-            dataset_analysis_service: Dataset analysis service for analyze_dataset tools (optional, uses singleton if not provided)
+            agent_service: Agent service (the singleton when omitted)
+            database_service: Database service (the singleton when omitted)
+            dataset_analysis_service: Dataset tools (the singleton when omitted)
+            binding_store: ``PersonaBindings`` for the KB / dataset tools (U5)
+            session_store: Sessions and messages outside the app (U6)
+            discussion_records: Saves the interview as a discussion (U6)
+            participants: Checks the participants on every send and save (U6)
+            file_attachments: Reads the attachments by ID (U5)
+            resource_lookup: Usage scopes of organization assets (U6)
+            s3_service: Reads attachments kept on S3 (the singleton when omitted)
+            clock: Aware UTC now (tests replace it)
         """
-        from ..services.service_factory import service_factory
-
         self.logger = logging.getLogger(__name__)
         self.agent_service = agent_service or service_factory.get_agent_service()
         self.database_service = (
@@ -109,23 +262,63 @@ class InterviewManager:
         self.dataset_analysis_service = (
             dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
+        self._resource_lookup = resource_lookup
         self._agent_integration = PersonaAgentIntegration(
             database_service=self.database_service,
             agent_service=self.agent_service,
             dataset_analysis_service=self.dataset_analysis_service,
             binding_store=binding_store or service_factory.get_persona_binding_store(),
+            resource_lookup=resource_lookup,
         )
+        self._store = session_store or service_factory.get_interview_session_store()
+        self._records = discussion_records
+        self._reader = participants
+        self._attachments = file_attachments
+        self._s3 = s3_service
+        self._clock = clock
 
-        # Active interview sessions (temporary storage)
-        self._active_sessions: Dict[str, InterviewSession] = {}
-        self._session_agents: Dict[str, List[PersonaAgent]] = {}
+        # This task's agents, keyed by (session_id, owner_sub) (BR3.4)
+        self._local: Dict[tuple[str, str], _LocalAgents] = {}
+        self._local_lock = threading.Lock()
 
         self.logger.info("Interview Manager initialized")
 
+    # --- 部品（遅延取得） ------------------------------------------------------------
+
+    @property
+    def _discussion_records(self) -> DiscussionRecords:
+        if self._records is None:
+            self._records = _discussion_parts().records
+        return self._records
+
+    @property
+    def _participant_reader(self) -> ParticipantReader:
+        if self._reader is None:
+            self._reader = _discussion_parts().participants
+        return self._reader
+
+    @property
+    def _file_attachments(self) -> FileAttachments:
+        if self._attachments is None:
+            self._attachments = _access_parts().files
+        return self._attachments
+
+    def _lookup_for_assets(self) -> None:
+        if self._resource_lookup is None:
+            self._resource_lookup = _access_parts().lookup
+            self._agent_integration.bind_lookup(self._resource_lookup)
+
+    def _now(self) -> datetime:
+        return self._clock()
+
+    # =========================================================================
+    # 開始（BR3.1）
+    # =========================================================================
+
     def start_interview_session(
         self,
+        principal: Principal,
         personas: List[Persona],
-        user_id: str = "user",
         enable_memory: bool = False,
         memory_mode: str = "full",
         enable_dataset: bool = False,
@@ -133,136 +326,66 @@ class InterviewManager:
         persona_models: Optional[Dict[str, str]] = None,
     ) -> InterviewSession:
         """
-        Start a new interview session with selected personas.
+        Start a new interview session owned by ``principal``.
 
         Args:
-            personas: List of personas to participate in the interview
-            user_id: ID of the user conducting the interview
-            enable_memory: Whether to enable long-term memory for persona agents
-            memory_mode: Memory mode (default: "full")
-                - "full": 検索 + 保存
-                - "retrieve_only": 検索のみ（保存しない）
-                - "disabled": メモリ機能無効
-            enable_dataset: Whether to enable external dataset access (default: False)
+            principal: The user who starts (and alone may use) the session
+            personas: Participants read with the decision
+                (``PersonaManager.get_personas_for_use``)
+            enable_memory: Whether to use long-term memory
+            memory_mode: ``full`` / ``retrieve_only`` / ``disabled``; personas the
+                user does not own only retrieve (BR6.1)
+            enable_dataset: Whether to enable dataset tools
+            enable_kb: Whether to enable knowledge base tools
             persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
 
         Returns:
-            InterviewSession: Created interview session
+            InterviewSession: The stored session
 
         Raises:
+            AccessDeniedError: ``ai:execute`` がない
             InterviewValidationError: If input validation fails
             InterviewAgentError: If agent creation fails
-            InterviewSessionError: If session creation fails
+            InterviewSessionError: If the session could not be stored
         """
-        # Enhanced input validation
-        self._validate_session_creation_input(personas, user_id)
-
-        # Validate memory_mode
-        valid_memory_modes = ["full", "retrieve_only", "disabled"]
-        if memory_mode not in valid_memory_modes:
+        AccessPolicy.require(principal, Permission.AI_EXECUTE)
+        self._validate_session_creation_input(personas)
+        if memory_mode not in MEMORY_MODES:
             raise InterviewValidationError(
                 f"invalid memory_mode {memory_mode!r}, expected one of "
-                f"{valid_memory_modes}",
+                f"{list(MEMORY_MODES)}",
                 code=ErrorCode.INTERVIEW_MEMORY_MODE_INVALID,
                 context={"field": "memory_mode"},
             )
-
         self._validate_model_selection(persona_models)
+        self._evict_idle()
 
-        self.logger.info(
-            f"Starting interview session with {len(personas)} personas for user: {user_id} (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
+        now = self._now()
+        session = InterviewSession.create_new(
+            owner_sub=principal.sub,
+            persona_ids=[p.id for p in personas],
+            persona_names={p.id: p.name for p in personas},
+            memory_mode=memory_mode if enable_memory else "disabled",
+            now=now,
+            enable_dataset=enable_dataset,
+            enable_kb=enable_kb,
+            persona_models=persona_models,
         )
-
-        session_id = None
-        persona_agents = []
-
+        agents = self._create_interview_persona_agents(principal, session, personas)
         try:
-            # Create interview session
-            session = InterviewSession(
-                id=str(uuid.uuid4()),
-                participants=[persona.id for persona in personas],
-                messages=[],
-                created_at=datetime.now(),
-                is_saved=False,
-                enable_memory=enable_memory,
-                memory_mode=memory_mode,
-                enable_dataset=enable_dataset,
-                persona_models=persona_models,
-            )
-            session_id = session.id
-
-            # Create persona agents for the interview with enhanced error handling
-            try:
-                system_prompts = {}
-                for persona in personas:
-                    try:
-                        # Generate interview-specific system prompt
-                        system_prompt = self._generate_interview_system_prompt(persona)
-                        system_prompts[persona.id] = system_prompt
-                    except Exception as e:
-                        error_msg = f"Failed to generate system prompt for persona {persona.name}: {e}"
-                        self.logger.error(error_msg)
-                        raise InterviewAgentError(
-                            error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
-                        ) from e
-
-                # Create persona agents for interview (allows single persona)
-                # Pass memory and dataset configuration
-                persona_agents = self._create_interview_persona_agents(
-                    personas,
-                    system_prompts,
-                    enable_memory=enable_memory,
-                    session_id=session_id,
-                    memory_mode=memory_mode,
-                    enable_dataset=enable_dataset,
-                    enable_kb=enable_kb,
-                    persona_models=persona_models,
-                )
-
-            except AgentConfigurationError as e:
-                # 追加ペルソナベースモデル無効等の設定不足はINTERVIEW_AGENT_SETUP_FAILEDに
-                # 丸めず自ドメインのCONFIGコードへ変換する
-                error_msg = f"model configuration error: {e}"
-                self.logger.error(error_msg)
-                raise InterviewAgentError(
-                    error_msg,
-                    code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
-                ) from e
-            except AgentInitializationError as e:
-                error_msg = f"agent initialization failed: {e}"
-                self.logger.error(error_msg)
-                raise InterviewAgentError(
-                    error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
-                ) from e
-            except InterviewAgentError:
-                # Re-raise InterviewAgentError as-is
-                raise
-            except Exception as e:
-                error_msg = f"unexpected error creating persona agents: {e}"
-                self.logger.error(error_msg)
-                raise InterviewAgentError(
-                    error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
-                ) from e
-
-            # Store active session and agents
-            self._active_sessions[session.id] = session
-            self._session_agents[session.id] = persona_agents
-
-            self.logger.info(f"Interview session created successfully: {session.id}")
-            return session
-
-        except (InterviewValidationError, InterviewAgentError):
-            # Clean up any partially created resources
-            self._cleanup_failed_session(session_id, persona_agents)
-            raise
-        except Exception as e:
-            # Clean up any partially created resources
-            self._cleanup_failed_session(session_id, persona_agents)
-            error_msg = f"unexpected error creating interview session: {e}"
-            self.logger.error(error_msg)
+            self._store.create(session)
+        except InterviewSessionStoreError as e:
+            self._dispose(agents)
+            self.logger.error("Storing the interview session failed", exc_info=True)
             raise InterviewSessionError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
+                f"interview session could not be stored ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
             ) from e
+        self._keep_local(principal, session.id, _LocalAgents(agents, 0, [], now))
+        self.logger.info(
+            "Interview session created: %s (%d personas)", session.id, len(personas)
+        )
+        return session
 
     def _validate_model_selection(
         self, model_ids: Optional[Mapping[str, Optional[str]]]
@@ -284,636 +407,550 @@ class InterviewManager:
             ),
         )
 
-    def _validate_document_size_for_models(
-        self,
-        new_document_metadata: List[Dict[str, Any]],
-        existing_document_metadata: Optional[List[Dict[str, Any]]],
-        persona_models: Optional[Mapping[str, Optional[str]]],
+    def _validate_document_size(
+        self, session: InterviewSession, documents: Sequence[DocumentRef]
     ) -> None:
         """選択モデルのmax_request_bytes（Gemma4等）に対しドキュメント合計サイズを検証する。
 
         インタビューはターンを跨いでドキュメントを蓄積するため、セッションに既に
-        添付済みのドキュメント（existing_document_metadata）も合計に含める。
-        base64化によるオーバーヘッド（概算4/3倍）を見込んだ実効上限で判定する。
+        添付済みのドキュメントも合計に含める。
         """
-        total_size = sum(
-            doc.get("file_size", 0)
-            for doc in (existing_document_metadata or []) + new_document_metadata
-        )
+        total_size = sum(d.file_size for d in list(session.documents) + list(documents))
         validate_document_size_for_models(
             total_size,
-            persona_models,
+            resolve_effective_persona_models(
+                session.persona_ids, session.persona_models
+            ),
             InterviewValidationError,
             ErrorCode.INTERVIEW_MODEL_INPUT_TOO_LARGE,
         )
 
-    def send_user_message(
-        self,
-        session_id: str,
-        message: str,
-        document_contents: Optional[List[Dict[str, Any]]] = None,
-        document_metadata: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[Message]:
-        """
-        Send a user message to the interview session and get persona responses.
+    # =========================================================================
+    # 持ち主と期限（BR3.2、BR3.5）
+    # =========================================================================
 
-        Args:
-            session_id: ID of the interview session
-            message: User message content
-            document_contents: Optional list of document ContentBlocks for multimodal input
-                画像の場合: {"image": {"format": "png", "source": {"bytes": bytes}}}
-                ドキュメントの場合: {"document": {"name": str, "format": str, "source": {"bytes": bytes}}}
-            document_metadata: Optional list of document metadata for display
-                {"filename": str, "mime_type": str, "file_size": int, "uploaded_at": str}
-
-        Returns:
-            List[Message]: List of persona responses
+    def _owned_session(self, principal: Principal, session_id: str) -> InterviewSession:
+        """The session, if ``principal`` owns it and it has not expired.
 
         Raises:
-            InterviewSessionNotFoundError: If session not found
-            InterviewValidationError: If message validation fails
-            InterviewAgentError: If agent communication fails
+            InterviewSessionNotFoundError: Someone else's, expired or missing
+                (not told apart).
+            InterviewSessionError: The store could not be read.
         """
-        # Enhanced session validation
-        self._validate_session_exists(session_id)
-        self._validate_message_input(message)
-
-        session = self._active_sessions[session_id]
-
-        # Check if session is already saved (agents may have been cleaned up)
-        if session.is_saved:
-            error_msg = f"cannot send message to already-saved session {session_id}"
-            self.logger.error(error_msg)
-            raise InterviewSessionError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
+        if not session_id:
+            raise InterviewSessionNotFoundError(
+                "session_id is blank", code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND
             )
-
-        persona_agents = self._session_agents.get(session_id, [])
-
-        if not persona_agents:
-            error_msg = (
-                f"no persona agents found for session {session_id} "
-                "(may already be saved)"
-            )
-            self.logger.error(error_msg)
-            raise InterviewAgentError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
-            )
-
-        effective_persona_models = resolve_effective_persona_models(
-            session.participants, session.persona_models
-        )
-        if document_metadata:
-            self._validate_document_size_for_models(
-                document_metadata, session.documents, effective_persona_models
-            )
-
-        self.logger.info(
-            f"Processing user message in session {session_id}: '{message[:50]}...' (documents: {len(document_contents) if document_contents else 0})"
-        )
-
         try:
-            # Add user message to session
-            session = session.add_user_message(message.strip())
-
-            # ドキュメントメタデータがある場合、セッションに追加（重複チェック）
-            if document_metadata:
-                for doc_meta in document_metadata:
-                    # 重複チェック（同じファイル名とサイズの組み合わせ）
-                    existing_docs = session.documents or []
-                    is_duplicate = any(
-                        d.get("filename") == doc_meta.get("filename")
-                        and d.get("file_size") == doc_meta.get("file_size")
-                        for d in existing_docs
-                    )
-                    if not is_duplicate:
-                        session = session.add_document(doc_meta)
-                        self.logger.info(
-                            f"Added document metadata: {doc_meta.get('filename')}"
-                        )
-
-            # ドキュメントコンテンツがある場合、各エージェントに設定
-            if document_contents:
-                for persona_agent in persona_agents:
-                    persona_agent.set_document_contents(document_contents.copy())
-                self.logger.info(
-                    f"Set {len(document_contents)} document contents to {len(persona_agents)} agents"
-                )
-
-            # Generate responses from all participating personas with enhanced error handling
-            responses = []
-            failed_agents = []
-
-            for persona_agent in persona_agents:
-                agent_name = persona_agent.get_persona_name()
-                try:
-                    # Create interview-specific prompt for persona
-                    prompt = self._create_interview_prompt(
-                        persona_agent, message, session.messages
-                    )
-
-                    # Get persona response with timeout handling
-                    response_content = self._get_agent_response_with_retry(
-                        persona_agent, prompt, session.messages
-                    )
-
-                    # Add persona response to session
-                    session = session.add_persona_response(
-                        persona_agent.get_persona_id(),
-                        persona_agent.get_persona_name(),
-                        response_content,
-                    )
-
-                    # Create response message for return
-                    response_message = Message.create_new(
-                        persona_id=persona_agent.get_persona_id(),
-                        persona_name=persona_agent.get_persona_name(),
-                        content=response_content,
-                        message_type="statement",
-                    )
-                    responses.append(response_message)
-
-                    self.logger.info(f"Generated response from {agent_name}")
-
-                except AgentCommunicationError as e:
-                    error_msg = f"agent {agent_name} failed to respond: {e}"
-                    self.logger.error(error_msg)
-                    failed_agents.append(agent_name)
-                    continue
-                except Exception as e:
-                    error_msg = f"unexpected error processing agent {agent_name}: {e}"
-                    self.logger.error(error_msg)
-                    failed_agents.append(agent_name)
-                    continue
-
-            # Check if we got at least some responses
-            if not responses and failed_agents:
-                error_msg = (
-                    f"all persona agents failed to respond: {', '.join(failed_agents)}"
-                )
-                self.logger.error(error_msg)
-                raise InterviewAgentError(
-                    error_msg, code=ErrorCode.INTERVIEW_AGENT_UNAVAILABLE
-                )
-
-            # Update stored session
-            self._active_sessions[session_id] = session
-
-            # Log warnings for failed agents
-            if failed_agents:
-                self.logger.warning(
-                    f"some persona agents failed: {', '.join(failed_agents)}"
-                )
-
-            self.logger.info(
-                f"Processed user message, generated {len(responses)} responses"
-            )
-            return responses
-
-        except (
-            InterviewSessionNotFoundError,
-            InterviewValidationError,
-            InterviewAgentError,
-        ):
-            # Re-raise specific errors as-is
-            raise
-        except Exception as e:
-            error_msg = f"unexpected error processing message: {e}"
-            self.logger.error(error_msg)
-            raise InterviewAgentError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
+            session = self._store.get(session_id)
+        except InterviewSessionStoreError as e:
+            raise InterviewSessionError(
+                f"interview session unreadable ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
             ) from e
+        # admin でも他人のセッションは使えない（実行中の会話は持ち主だけのもの、BR3.2）
+        if (
+            session is None
+            or not AccessPolicy.is_owner(principal, session.owner_sub)
+            or session.is_expired(self._now())
+        ):
+            raise InterviewSessionNotFoundError(
+                "interview session not found",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            )
+        return session
+
+    def _fresh_session(self, session: InterviewSession) -> InterviewSession:
+        """``session`` read again (strongly consistent), ownership already checked."""
+        try:
+            fresh = self._store.get(session.id)
+        except InterviewSessionStoreError as e:
+            raise InterviewSessionError(
+                f"interview session unreadable ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            ) from e
+        if fresh is None:
+            raise InterviewSessionNotFoundError(
+                "interview session not found",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            )
+        return fresh
+
+    def _messages(self, session: InterviewSession) -> List[InterviewMessage]:
+        if session.last_seq == 0:
+            return []
+        try:
+            return self._store.query_messages(session.id, up_to=session.last_seq)
+        except InterviewSessionStoreError as e:
+            raise InterviewSessionError(
+                f"interview messages unreadable ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            ) from e
+
+    def _conflict(self, session_id: str, phase: str) -> ConcurrentUpdateError:
+        log_event(
+            "interview.message_conflict",
+            interview_session_id=session_id,
+            phase=phase,
+        )
+        return ConcurrentUpdateError(
+            f"a reply is in progress ({phase})", code=ErrorCode.CONCURRENT_UPDATE
+        )
+
+    # =========================================================================
+    # 送信（BR3.3、BR3.6、BR7.2）
+    # =========================================================================
+
+    def send_user_message(
+        self,
+        principal: Principal,
+        session_id: str,
+        message: str,
+        document_ids: Optional[Sequence[str]] = None,
+    ) -> InterviewReply:
+        """
+        Send the owner's message and get every persona's reply.
+
+        Args:
+            principal: The session's owner
+            session_id: ID of the interview session
+            message: User message content
+            document_ids: Files uploaded for this send (``FileManager``)
+
+        Returns:
+            InterviewReply: The replies and the names of files left out
+
+        Raises:
+            InterviewSessionNotFoundError: Not the owner's, expired or missing
+            InterviewValidationError: Message or attachment size validation
+            CodedError: ``PERSONA_NOT_FOUND`` (a participant is unreadable),
+                ``FILE_NOT_FOUND`` (a new attachment), ``CONCURRENT_UPDATE``
+            InterviewAgentError: Every persona failed to reply
+        """
+        responses: List[Message] = []
+        excluded: List[str] = []
+        for kind, data in self._send(
+            principal, session_id, message, document_ids, streaming=False
+        ):
+            if kind == "files_excluded":
+                excluded = list(data)
+            elif kind == "message_end":
+                responses.append(data)
+        return InterviewReply(responses=responses, excluded_files=excluded)
 
     def send_user_message_streaming(
         self,
+        principal: Principal,
         session_id: str,
         message: str,
-        document_contents: Optional[List[Dict[str, Any]]] = None,
-        document_metadata: Optional[List[Dict[str, Any]]] = None,
-    ) -> Any:
+        document_ids: Optional[Sequence[str]] = None,
+    ) -> Iterator[tuple[str, Any]]:
         """
-        Send a user message and stream persona responses token by token.
+        Send the owner's message and stream persona replies token by token.
 
         Yields:
             tuple: (event_type, data)
+                - ("files_excluded", list[str]): Attachments left out
                 - ("message_start", dict): New persona bubble
                 - ("message_delta", dict): Token chunk
-                - ("message_end", Message): Complete message
+                - ("message_end", Message): Complete (and saved) message
 
         Raises:
-            InterviewSessionNotFoundError: If session not found
-            InterviewValidationError: If message validation fails
-            InterviewAgentError: If all agents fail
+            The same as :meth:`send_user_message`.
         """
-        self._validate_session_exists(session_id)
-        self._validate_message_input(message)
-
-        session = self._active_sessions[session_id]
-
-        if session.is_saved:
-            error_msg = f"cannot send message to already-saved session {session_id}"
-            self.logger.error(error_msg)
-            raise InterviewSessionError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_ALREADY_SAVED
-            )
-
-        persona_agents = self._session_agents.get(session_id, [])
-
-        if not persona_agents:
-            error_msg = f"no persona agents found for session {session_id}"
-            self.logger.error(error_msg)
-            raise InterviewAgentError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING
-            )
-
-        effective_persona_models = resolve_effective_persona_models(
-            session.participants, session.persona_models
+        yield from self._send(
+            principal, session_id, message, document_ids, streaming=True
         )
-        if document_metadata:
-            self._validate_document_size_for_models(
-                document_metadata, session.documents, effective_persona_models
+
+    def _send(
+        self,
+        principal: Principal,
+        session_id: str,
+        message: str,
+        document_ids: Optional[Sequence[str]],
+        *,
+        streaming: bool,
+    ) -> Iterator[tuple[str, Any]]:
+        self._validate_message_input(message)
+        self._evict_idle()
+        session = self._owned_session(principal, session_id)
+        now = self._now()
+        if session.reply_in_progress(now):
+            raise self._conflict(session.id, "a")
+        self._participant_reader.ensure_all_readable(principal, session.persona_ids)
+
+        new_documents, new_contents = self._read_new_attachments(
+            principal, session, document_ids or []
+        )
+        local, excluded = self._local_agents(principal, session)
+        if excluded:
+            yield ("files_excluded", excluded)
+
+        token = str(uuid.uuid4())
+        user_message = InterviewMessage.create_new(
+            session_id=session.id,
+            seq=session.last_seq + 1,
+            speaker="user",
+            persona_id=USER_PERSONA_ID,
+            persona_name_at_time=USER_NAME,
+            content=message.strip(),
+            now=now,
+            document_ids=tuple(d.id for d in new_documents),
+        )
+        with_documents = replace(
+            session,
+            document_ids=list(session.document_ids) + [d.id for d in new_documents],
+            documents=list(session.documents) + new_documents,
+        )
+        try:
+            session = self._store.append_user_message(
+                with_documents, user_message, token=token, now=now
             )
+        except InterviewConflict as e:
+            raise self._conflict(session.id, "a") from e
+        except InterviewSessionStoreError as e:
+            raise InterviewSessionError(
+                f"user message could not be written ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            ) from e
 
-        # Add user message to session
-        session = session.add_user_message(message.strip())
+        local.messages.append(user_message.to_message())
+        local.known_seq = session.last_seq
+        if new_contents:
+            for agent in local.agents:
+                agent.set_document_contents(list(new_contents))
 
-        # ドキュメントメタデータ追加
-        if document_metadata:
-            for doc_meta in document_metadata:
-                existing_docs = session.documents or []
-                is_duplicate = any(
-                    d.get("filename") == doc_meta.get("filename")
-                    and d.get("file_size") == doc_meta.get("file_size")
-                    for d in existing_docs
-                )
-                if not is_duplicate:
-                    session = session.add_document(doc_meta)
-
-        # ドキュメントコンテンツをエージェントに設定
-        if document_contents:
-            for persona_agent in persona_agents:
-                persona_agent.set_document_contents(document_contents.copy())
-
-        failed_agents: list[str] = []
-        response_count = 0
-
-        for persona_agent in persona_agents:
-            agent_name = persona_agent.get_persona_name()
-            try:
+        held = True
+        replied = 0
+        failed: List[str] = []
+        seq = session.last_seq
+        try:
+            for index, agent in enumerate(local.agents):
+                is_last = index == len(local.agents) - 1
+                name = agent.get_persona_name()
+                # これまでの会話は 1 体ごとに作り直す。今回の送信で先に答えたペルソナの
+                # 応答も入る（今の会話の進め方と同じ、BR3.4）
                 prompt = self._create_interview_prompt(
-                    persona_agent, message, session.messages
+                    agent, message.strip(), list(local.messages)
                 )
-
-                yield (
-                    "message_start",
-                    {
-                        "persona_id": persona_agent.get_persona_id(),
-                        "persona_name": agent_name,
-                        "message_type": "statement",
-                    },
-                )
-
-                full_text = ""
-                for token in persona_agent.respond_streaming(prompt, session.messages):
-                    full_text += token
-                    yield (
-                        "message_delta",
-                        {
-                            "persona_id": persona_agent.get_persona_id(),
-                            "content": token,
-                        },
+                try:
+                    text = yield from self._reply(agent, prompt, streaming)
+                except AgentCommunicationError as e:
+                    self.logger.error(
+                        f"agent {name} failed to respond: {type(e).__name__}"
                     )
-
-                if not full_text.strip():
-                    raise AgentCommunicationError("Empty response from agent")
-
-                session = session.add_persona_response(
-                    persona_agent.get_persona_id(),
-                    agent_name,
-                    full_text,
+                    failed.append(name)
+                    if not is_last:
+                        self._renew(session.id, token)
+                    continue
+                reply = InterviewMessage.create_new(
+                    session_id=session.id,
+                    seq=seq + 1,
+                    speaker="persona",
+                    persona_id=agent.get_persona_id(),
+                    persona_name_at_time=name,
+                    content=text,
+                    now=self._now(),
                 )
+                try:
+                    self._store.append_reply(
+                        session.id,
+                        reply,
+                        expected_seq=seq,
+                        token=token,
+                        now=self._now(),
+                        last=is_last,
+                    )
+                except InterviewConflict as e:
+                    held = False
+                    self._discard_local(principal, session.id)
+                    raise self._conflict(session.id, "b") from e
+                except InterviewSessionStoreError as e:
+                    raise InterviewSessionError(
+                        f"reply could not be written ({type(e).__name__})",
+                        code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+                    ) from e
+                if is_last:
+                    held = False
+                seq += 1
+                replied += 1
+                local.known_seq = seq
+                local.messages.append(reply.to_message())
+                local.last_used = self._now()
+                yield ("message_end", reply.to_message())
+        finally:
+            if held:
+                self._release(session.id, token)
 
-                response_message = Message.create_new(
-                    persona_id=persona_agent.get_persona_id(),
-                    persona_name=agent_name,
-                    content=full_text,
-                    message_type="statement",
-                )
-                yield ("message_end", response_message)
-                response_count += 1
-
-            except AgentCommunicationError as e:
-                self.logger.error(f"agent {agent_name} failed to respond: {e}")
-                failed_agents.append(agent_name)
-                continue
-            except Exception as e:
-                self.logger.error(
-                    f"unexpected error processing agent {agent_name}: {e}"
-                )
-                failed_agents.append(agent_name)
-                continue
-
-        if response_count == 0 and failed_agents:
+        if replied == 0 and failed:
             raise InterviewAgentError(
-                f"all persona agents failed to respond: {', '.join(failed_agents)}",
+                f"all persona agents failed to respond ({len(failed)})",
                 code=ErrorCode.INTERVIEW_AGENT_UNAVAILABLE,
             )
+        if failed:
+            self.logger.warning(f"some persona agents failed: {', '.join(failed)}")
 
-        # Update stored session
-        self._active_sessions[session_id] = session
+    def _reply(
+        self, agent: PersonaAgent, prompt: str, streaming: bool
+    ) -> Generator[tuple[str, Any], None, str]:
+        """One persona's reply text (generator: streaming events go through)."""
+        if not streaming:
+            text = agent.respond(prompt, None)
+        else:
+            persona_id = agent.get_persona_id()
+            yield (
+                "message_start",
+                {
+                    "persona_id": persona_id,
+                    "persona_name": agent.get_persona_name(),
+                    "message_type": "statement",
+                },
+            )
+            text = ""
+            for token in agent.respond_streaming(prompt, None):
+                text += token
+                yield ("message_delta", {"persona_id": persona_id, "content": token})
+        if not text or not text.strip():
+            raise AgentCommunicationError("Empty response from agent")
+        return text
 
-        self.logger.info(
-            f"Streaming message processed, generated {response_count} responses"
-        )
+    def _renew(self, session_id: str, token: str) -> None:
+        try:
+            self._store.renew_reply(session_id, token, self._now())
+        except InterviewSessionStoreError:
+            self.logger.warning("Renewing the reply mark failed", exc_info=True)
 
-    def save_interview_session(
-        self, session_id: str, session_name: str | None = None
-    ) -> str:
-        """
-        Save an interview session to the database with enhanced validation and error handling.
+    def _release(self, session_id: str, token: str) -> None:
+        try:
+            self._store.release_reply(session_id, token)
+        except InterviewSessionStoreError:
+            # 外せなくても 5 分で無効になる（BR3.3）
+            self.logger.warning("Releasing the reply mark failed", exc_info=True)
 
-        Args:
-            session_id: ID of the interview session to save
-            session_name: Name for the session (used as topic)
+    # --- 添付（BR3.6） ---------------------------------------------------------------
+
+    def _read_new_attachments(
+        self,
+        principal: Principal,
+        session: InterviewSession,
+        document_ids: Sequence[str],
+    ) -> tuple[List[DocumentRef], List[Dict[str, Any]]]:
+        known = set(session.document_ids)
+        uploads: List[UploadedFile] = []
+        for file_id in dict.fromkeys(document_ids):
+            if file_id in known:
+                continue
+            uploads.append(self._file_attachments.attachable_file(principal, file_id))
+        documents = [_document_ref(u) for u in uploads]
+        if documents:
+            self._validate_document_size(session, documents)
+        return documents, self._contents(uploads)
+
+    def _readable_attachment(
+        self, principal: Principal, file_id: str
+    ) -> Optional[UploadedFile]:
+        """Before the save the user's own upload; after it, the discussion's file."""
+        try:
+            return self._file_attachments.attachable_file(principal, file_id)
+        except CodedError as e:
+            if e.code is not ErrorCode.FILE_NOT_FOUND:
+                raise
+        try:
+            return self._file_attachments.readable_file(principal, file_id)
+        except CodedError as e:
+            if e.code is not ErrorCode.FILE_NOT_FOUND:
+                raise
+        return None
+
+    def _contents(self, uploads: Sequence[UploadedFile]) -> List[Dict[str, Any]]:
+        if not uploads:
+            return []
+        from .shared.document_loader import prepare_document_contents
+
+        metadata = [
+            {
+                "file_path": u.file_path,
+                "mime_type": u.mime_type or "text/plain",
+                "filename": u.original_filename,
+            }
+            for u in uploads
+        ]
+        s3 = self._s3 or service_factory.get_optional_s3_service()
+        return prepare_document_contents(metadata, s3)
+
+    # --- 手元のエージェント（BR3.4、BR3.5） ------------------------------------------
+
+    def _keep_local(
+        self, principal: Principal, session_id: str, local: _LocalAgents
+    ) -> None:
+        with self._local_lock:
+            old = self._local.pop((session_id, principal.sub), None)
+            self._local[(session_id, principal.sub)] = local
+        if old is not None and old is not local:
+            self._dispose(old.agents)
+
+    def _discard_local(self, principal: Principal, session_id: str) -> None:
+        with self._local_lock:
+            old = self._local.pop((session_id, principal.sub), None)
+        if old is not None:
+            self._dispose(old.agents)
+
+    def _evict_idle(self) -> None:
+        """Drop the agents not used for eight hours (BR3.5)."""
+        limit = self._now() - timedelta(seconds=SESSION_IDLE_SECONDS)
+        with self._local_lock:
+            idle = [k for k, v in self._local.items() if v.last_used <= limit]
+            dropped = [self._local.pop(k) for k in idle]
+        for local in dropped:
+            self._dispose(local.agents)
+
+    def _local_agents(
+        self, principal: Principal, session: InterviewSession
+    ) -> tuple[_LocalAgents, List[str]]:
+        """This task's agents, rebuilt from the stored messages if needed.
 
         Returns:
-            str: The discussion ID
-
-        Raises:
-            InterviewSessionNotFoundError: If session not found
-            InterviewValidationError: If session validation fails
-            InterviewPersistenceError: If database save fails
+            ``(agents, excluded_file_names)``.
         """
-        # Enhanced session validation
-        self._validate_session_exists(session_id)
-        session = self._active_sessions[session_id]
+        with self._local_lock:
+            local = self._local.get((session.id, principal.sub))
+        if local is not None and local.known_seq == session.last_seq:
+            local.last_used = self._now()
+            return local, []
+        if local is not None:
+            # 同じ台で送信が重なったとき、先の送信が使っているエージェントを捨てない。
+            # 作り直す前にセッションを読み直し、応答中なら衝突として断る
+            session = self._fresh_session(session)
+            if session.reply_in_progress(self._now()):
+                raise self._conflict(session.id, "a")
+            if local.known_seq == session.last_seq:
+                local.last_used = self._now()
+                return local, []
+        reason = "missing" if local is None else "seq_mismatch"
 
-        # Enhanced validation with specific error messages
-        try:
-            self._validate_session_for_save(session)
-        except InterviewValidationError:
-            raise
-        except Exception as e:
-            self.logger.error(f"session save validation error: {e}")
-            raise InterviewValidationError(
-                "unexpected error validating session for save",
-                code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
-            ) from e
-
-        # Check if already saved
-        if session.is_saved:
-            self.logger.warning(f"Interview session already saved: {session_id}")
-            try:
-                existing_discussion_id = self._find_existing_discussion(session)
-                if existing_discussion_id:
-                    return existing_discussion_id
-            except Exception as e:
-                self.logger.warning(f"Failed to find existing discussion: {e}")
-
-        self.logger.info(
-            f"Saving interview session: {session_id} with {len(session.messages)} messages"
-        )
-
-        try:
-            # Create Discussion object from interview session with preserved timestamps
-            discussion = self._create_discussion_from_session(session, session_name)
-
-            # Save to database with retry logic
-            discussion_id = self._save_discussion_with_retry(discussion)
-
-            # Mark session as saved
-            session.is_saved = True
-            self._active_sessions[session_id] = session
-
-            # Clean up persona agents after successful save to free resources
-            self._cleanup_session_agents(session_id)
-
-            self.logger.info(
-                f"Interview session saved successfully: {session_id} -> {discussion_id}"
+        stored = self._messages(session)
+        if [m.seq for m in stored] != list(range(1, session.last_seq + 1)):
+            log_event(
+                "interview.agents_rebuild_failed",
+                interview_session_id=session.id,
+                reason="gap",
             )
-            return discussion_id
-
-        except DatabaseError as e:
-            error_msg = f"database error while saving interview session: {e}"
-            self.logger.error(error_msg)
-            raise InterviewPersistenceError(
-                error_msg, code=ErrorCode.INTERVIEW_SAVE_FAILED
-            ) from e
-        except Exception as e:
-            error_msg = f"unexpected error saving interview session: {e}"
-            self.logger.error(error_msg)
-            raise InterviewPersistenceError(
-                error_msg, code=ErrorCode.INTERVIEW_SAVE_FAILED
-            ) from e
-
-    def get_interview_session(self, session_id: str) -> InterviewSession:
-        """
-        Get an active interview session.
-
-        Args:
-            session_id: ID of the interview session
-
-        Returns:
-            InterviewSession: The interview session
-
-        Raises:
-            InterviewSessionNotFoundError: If session not found
-        """
-        self._validate_session_exists(session_id)
-        return self._active_sessions[session_id]
-
-    def end_interview_session(self, session_id: str) -> None:
-        """
-        End an interview session and clean up resources.
-
-        Args:
-            session_id: ID of the interview session to end
-
-        Raises:
-            InterviewSessionNotFoundError: If session not found
-            InterviewSessionError: If cleanup fails
-        """
-        self._validate_session_exists(session_id)
-
-        self.logger.info(f"Ending interview session: {session_id}")
-
-        cleanup_errors = []
-
-        try:
-            # Clean up persona agents with detailed error tracking
-            persona_agents = self._session_agents.get(session_id, [])
-
-            def _agent_label(agent: Any) -> str:
-                return (
-                    agent.get_persona_name()
-                    if hasattr(agent, "get_persona_name")
-                    else repr(agent)
-                )
-
-            def _record_dispose_error(agent: Any, e: Exception) -> str:
-                error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
-                cleanup_errors.append(error_msg)
-                return error_msg
-
-            dispose_agents(
-                persona_agents,
-                self.logger,
-                error_message=_record_dispose_error,
-                success_message=lambda agent: (
-                    f"Successfully disposed agent: {_agent_label(agent)}"
-                ),
-            )
-
-            # Remove from active sessions
-            try:
-                del self._active_sessions[session_id]
-                self.logger.debug(f"Removed session from active sessions: {session_id}")
-            except KeyError as e:
-                self.logger.warning(
-                    f"Session not found in active sessions during cleanup: {e}"
-                )
-
-            try:
-                if session_id in self._session_agents:
-                    del self._session_agents[session_id]
-                    self.logger.debug(f"Removed session agents: {session_id}")
-            except KeyError as e:
-                self.logger.warning(f"Session agents not found during cleanup: {e}")
-
-            if cleanup_errors:
-                self.logger.warning(
-                    f"Session ended with {len(cleanup_errors)} cleanup warnings: {session_id}"
-                )
-            else:
-                self.logger.info(f"Interview session ended successfully: {session_id}")
-
-        except Exception as e:
-            error_msg = f"unexpected error ending interview session: {e}"
-            self.logger.error(error_msg)
             raise InterviewSessionError(
-                error_msg, code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED
-            ) from e
+                "interview messages have a gap",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            )
+        messages = [m.to_message() for m in stored]
+        personas = self._participant_reader.read_for_use(principal, session.persona_ids)
+
+        uploads: List[UploadedFile] = []
+        excluded: List[str] = []
+        for document in session.documents:
+            uploaded = self._readable_attachment(principal, document.id)
+            if uploaded is None:
+                excluded.append(document.filename)
+            else:
+                uploads.append(uploaded)
+        contents = self._contents(uploads)
+
+        agents = self._create_interview_persona_agents(
+            principal, session, personas, history=messages
+        )
+        if contents:
+            for agent in agents:
+                agent.set_document_contents(list(contents))
+        rebuilt = _LocalAgents(agents, session.last_seq, messages, self._now())
+        self._keep_local(principal, session.id, rebuilt)
+        log_event(
+            "interview.agents_rebuilt",
+            interview_session_id=session.id,
+            reason=reason,
+            persona_count=len(agents),
+            message_count=len(messages),
+        )
+        return rebuilt, excluded
 
     def _create_interview_persona_agents(
         self,
+        principal: Principal,
+        session: InterviewSession,
         personas: List[Persona],
-        system_prompts: Dict[str, str],
-        enable_memory: bool = False,
-        session_id: Optional[str] = None,
-        memory_mode: str = "full",
-        enable_dataset: bool = False,
-        enable_kb: bool = False,
-        persona_models: Optional[Dict[str, str]] = None,
+        history: Optional[Sequence[Message]] = None,
     ) -> List[PersonaAgent]:
         """
-        Create persona agents for interview (allows single persona unlike discussion mode).
+        One agent per persona for ``principal`` (allows a single persona).
 
         Args:
-            personas: List of Persona objects
-            system_prompts: Dictionary mapping persona_id to system_prompt
-            enable_memory: Whether to enable long-term memory for agents
-            session_id: Interview session ID for memory association
-            memory_mode: Memory mode (default: "full")
-                - "full": 検索 + 保存
-                - "retrieve_only": 検索のみ（保存しない）
-                - "disabled": メモリ機能無効
-            enable_dataset: Whether to enable external dataset access (default: False)
-            enable_kb: Whether to enable knowledge base access (default: False)
-            persona_models: persona_id -> model_id のマップ（省略時は既定モデル）
+            principal: The session's owner (memory: BR6.1)
+            session: Memory, dataset, KB and model settings
+            personas: The participants' bodies
+            history: Stored messages to rebuild the conversation with (BR3.4)
 
         Returns:
             List[PersonaAgent]: Created persona agents
 
         Raises:
-            InterviewManagerError: If agent creation fails
+            InterviewAgentError: If agent creation fails
         """
         if not personas:
             raise InterviewManagerError(
-                "persona list is empty",
-                code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED,
+                "persona list is empty", code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED
             )
-
-        self.logger.info(
-            f"Creating {len(personas)} persona agents for interview (enable_memory={enable_memory}, memory_mode={memory_mode}, enable_dataset={enable_dataset}, enable_kb={enable_kb})"
-        )
-
-        # Validate memory configuration
-        if enable_memory and not session_id:
-            self.logger.warning(
-                "Long-term memory requested but session_id is not provided. "
-                "Agents will be created without memory."
-            )
-            enable_memory = False
-
-        persona_agents = []
-        failed_personas = []
-
+        self._lookup_for_assets()
+        persona_agents: List[PersonaAgent] = []
+        failed_personas: List[str] = []
         for persona in personas:
             try:
-                # Get system prompt for this persona
-                from ..prompts.discussion_interview_prompts import (
-                    build_persona_system_prompt,
+                persona_agents.append(
+                    self._agent_integration.build_agent(
+                        ExecutionContext.for_persona(principal, _target_of(persona)),
+                        persona,
+                        self._generate_interview_system_prompt(persona),
+                        enable_memory=session.enable_memory,
+                        session_id=session.id,
+                        memory_mode=session.memory_mode,
+                        enable_dataset=session.enable_dataset,
+                        enable_kb=session.enable_kb,
+                        model_id=(session.persona_models or {}).get(persona.id),
+                        initial_messages=(
+                            _history_for(persona.id, history)
+                            if history is not None
+                            else None
+                        ),
+                    )
                 )
-
-                system_prompt = system_prompts.get(
-                    persona.id,
-                    build_persona_system_prompt(persona),
-                )
-
-                # Create persona agent with memory, dataset, and KB configuration
-                persona_agent = self._agent_integration.create_agent(
-                    persona,
-                    system_prompt,
-                    enable_memory=enable_memory,
-                    session_id=session_id,
-                    memory_mode=memory_mode,
-                    enable_dataset=enable_dataset,
-                    enable_kb=enable_kb,
-                    model_id=(persona_models or {}).get(persona.id),
-                )
-                persona_agents.append(persona_agent)
-
-                self.logger.info(f"Created persona agent for interview: {persona.name}")
-
             except AgentConfigurationError as e:
-                # 追加ペルソナベースモデル無効等の設定不足は個別ペルソナの失敗として
-                # 握り潰さず、INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED（CONFIG）として即時通知する。
-                # InterviewAgentErrorを使う（呼び出し元のexcept InterviewAgentError: raise
-                # で素通りさせ、except Exceptionによる再ラップでコードが潰れないようにする）
+                # 追加ペルソナベースモデル無効等の設定不足は CONFIG のまま即時通知する
                 self.logger.error(
-                    f"Configuration error creating agent for persona {persona.name}: {e}"
+                    f"Configuration error creating agent for persona {persona.name}: "
+                    f"{type(e).__name__}"
                 )
+                self._dispose(persona_agents)
                 raise InterviewAgentError(
-                    f"model configuration error for persona {persona.name} "
-                    f"({type(e).__name__})",
+                    f"model configuration error ({type(e).__name__})",
                     code=ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,
                 ) from e
-            except AgentInitializationError as e:
-                error_msg = f"Failed to create agent for persona {persona.name}: {e}"
-                self.logger.error(error_msg)
+            except (AgentInitializationError, CodedError) as e:
+                self.logger.error(
+                    f"Failed to create agent for persona {persona.name}: "
+                    f"{type(e).__name__}"
+                )
                 failed_personas.append(persona.name)
             except Exception as e:
-                error_msg = (
-                    f"Unexpected error creating agent for persona {persona.name}: {e}"
+                self.logger.error(
+                    f"Unexpected error creating agent for persona {persona.name}: "
+                    f"{type(e).__name__}"
                 )
-                self.logger.error(error_msg)
                 failed_personas.append(persona.name)
 
-        # Check if we have at least one agent (interview allows single persona)
-        if len(persona_agents) == 0:
-            error_msg = f"Failed to create any persona agents. Failed: {', '.join(failed_personas)}"
-            raise InterviewManagerError(
-                error_msg, code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED
+        if not persona_agents:
+            raise InterviewAgentError(
+                f"no persona agent could be created ({len(failed_personas)} failed)",
+                code=ErrorCode.INTERVIEW_AGENT_SETUP_FAILED,
             )
-
         if failed_personas:
             self.logger.warning(
                 f"Some persona agents failed to initialize: {', '.join(failed_personas)}"
             )
-
-        self.logger.info(
-            f"Successfully created {len(persona_agents)} persona agents for interview"
-        )
         return persona_agents
 
     def _generate_interview_system_prompt(self, persona: Persona) -> str:
@@ -922,110 +959,237 @@ class InterviewManager:
 
         return build_interview_system_prompt(persona)
 
-    def get_session_status(self, session_id: str) -> Dict[str, Any]:
-        """
-        Get detailed status information about an interview session.
-
-        Args:
-            session_id: ID of the interview session
-
-        Returns:
-            Dictionary with session status information
-
-        Raises:
-            InterviewManagerError: If session not found
-        """
-        if session_id not in self._active_sessions:
-            raise InterviewManagerError(
-                f"interview session not found: {session_id}",
-                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
-            )
-
-        session = self._active_sessions[session_id]
-
-        # Check if agents are still active
-        agents_active = (
-            session_id in self._session_agents
-            and len(self._session_agents[session_id]) > 0
+    def _dispose(self, agents: Sequence[PersonaAgent]) -> None:
+        dispose_agents(
+            list(agents),
+            self.logger,
+            error_message=lambda _agent, e: (
+                f"Error disposing interview agent: {type(e).__name__}"
+            ),
         )
 
+    # =========================================================================
+    # 保存（BR3.7、BR3.8）
+    # =========================================================================
+
+    def save_interview_session(
+        self, principal: Principal, session_id: str, session_name: str | None = None
+    ) -> InterviewSaveResult:
+        """
+        Save the interview as a ``mode=interview`` discussion (or add to it).
+
+        Args:
+            principal: The session's owner
+            session_id: ID of the interview session to save
+            session_name: Name for the session (used as topic)
+
+        Returns:
+            InterviewSaveResult: The discussion ID and the files left out
+
+        Raises:
+            InterviewSessionNotFoundError: Not the owner's, expired or missing
+            InterviewValidationError: Nothing to save yet
+            CodedError: ``CONCURRENT_UPDATE``, ``PERSONA_NOT_FOUND``,
+                ``DISCUSSION_NOT_FOUND``, ``DISCUSSION_TOO_LARGE``,
+                ``DISCUSSION_OPERATION_FAILED``
+        """
+        self._evict_idle()
+        session = self._owned_session(principal, session_id)
+        now = self._now()
+        if session.reply_in_progress(now):
+            raise self._conflict(session.id, "save")
+        messages = [m.to_message() for m in self._messages(session)]
+        self._validate_session_for_save(messages)
+        self._participant_reader.ensure_all_readable(principal, session.persona_ids)
+
+        usable: List[DocumentRef] = []
+        excluded: List[str] = []
+        for document in session.documents:
+            if self._readable_attachment(principal, document.id) is None:
+                excluded.append(document.filename)
+            else:
+                usable.append(document)
+
+        saved_id = session.saved_discussion_id
+        created = False
+        if saved_id is None:
+            saved_id, created = self._save_first(
+                principal, session, messages, usable, session_name, now
+            )
+        if not created:
+            self._discussion_records.append_messages(
+                principal, saved_id, messages, usable, skip_saved=True
+            )
+        discussion_id = saved_id
+
+        try:
+            self._store.extend(session.touched(now))
+        except InterviewSessionStoreError:
+            self.logger.warning("Extending the interview session failed", exc_info=True)
+        self.logger.info(f"Interview session saved: {session.id} -> {discussion_id}")
+        return InterviewSaveResult(discussion_id=discussion_id, excluded_files=excluded)
+
+    def _save_first(
+        self,
+        principal: Principal,
+        session: InterviewSession,
+        messages: List[Message],
+        usable: List[DocumentRef],
+        session_name: Optional[str],
+        now: datetime,
+    ) -> tuple[str, bool]:
+        """Run the first save of a session; only one request at a time (BR3.7).
+
+        Returns:
+            The discussion ID, and whether this call wrote the discussion
+            (``False``: it already existed and the caller appends to it).
+
+        Raises:
+            CodedError: ``CONCURRENT_UPDATE`` while another request is saving.
+        """
+        token = uuid.uuid4().hex
+        try:
+            took = self._store.begin_save(session.id, token, now=now)
+        except InterviewSessionStoreError as e:
+            raise InterviewPersistenceError(
+                f"the save could not start ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SAVE_FAILED,
+            ) from e
+        if not took:
+            # 別の要求が初回の保存を終えていればそれに合流し、保存中なら断る
+            fresh = self._store.get(session.id)
+            if fresh is not None and fresh.saved_discussion_id:
+                return fresh.saved_discussion_id, False
+            raise self._conflict(session.id, "save")
+
+        discussion_id = _discussion_id_for(session.id)
+        try:
+            if self._discussion_records.can_manage(principal, discussion_id):
+                # 前回の保存で議論はできたが、セッションへの記録だけ失敗した。
+                # 同じ議論を記録し直して書き足す（別の議論を作らない）
+                self._record_saved(session.id, discussion_id, now)
+                return discussion_id, False
+            topic = (
+                session_name.strip()
+                if session_name and session_name.strip()
+                else "Interview Session"
+            )
+            discussion = Discussion.create_new(
+                topic=topic,
+                participants=list(session.persona_ids),
+                mode="interview",
+                documents=usable,
+                agent_config={"persona_models": session.persona_models},
+                participant_names=dict(session.persona_names),
+                discussion_id=discussion_id,
+                now=session.created_at,
+            )
+            self._discussion_records.save_new(principal, discussion, messages)
+            self._record_saved(session.id, discussion_id, now)
+            return discussion_id, True
+        except BaseException:
+            try:
+                self._store.release_save(session.id, token)
+            except InterviewSessionStoreError:
+                # 外せなくても 5 分で解ける
+                self.logger.warning("Releasing the save mark failed", exc_info=True)
+            raise
+
+    def _record_saved(self, session_id: str, discussion_id: str, now: datetime) -> None:
+        try:
+            self._store.mark_saved(session_id, discussion_id, now=now)
+        except InterviewConflict as e:
+            raise self._conflict(session_id, "save") from e
+        except InterviewSessionStoreError as e:
+            raise InterviewPersistenceError(
+                f"saved discussion could not be recorded ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SAVE_FAILED,
+            ) from e
+
+    # =========================================================================
+    # 参照・状態・終了
+    # =========================================================================
+
+    def get_interview_session(
+        self, principal: Principal, session_id: str
+    ) -> InterviewView:
+        """
+        The owner's session with its messages.
+
+        Raises:
+            InterviewSessionNotFoundError: Not the owner's, expired or missing
+        """
+        session = self._owned_session(principal, session_id)
+        return InterviewView(
+            session=session, messages=[m.to_message() for m in self._messages(session)]
+        )
+
+    def end_interview_session(self, principal: Principal, session_id: str) -> None:
+        """
+        End the owner's session; it can no longer be used.
+
+        Raises:
+            InterviewSessionNotFoundError: Not the owner's, expired or missing
+            InterviewSessionError: If the store failed
+        """
+        session = self._owned_session(principal, session_id)
+        try:
+            self._store.end(session.id)
+        except InterviewSessionStoreError as e:
+            raise InterviewSessionError(
+                f"interview session could not be ended ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
+            ) from e
+        self._discard_local(principal, session.id)
+        self.logger.info(f"Interview session ended: {session.id}")
+
+    def get_session_status(
+        self, principal: Principal, session_id: str
+    ) -> Dict[str, Any]:
+        """
+        Status of the owner's session.
+
+        Raises:
+            InterviewSessionNotFoundError: Not the owner's, expired or missing
+        """
+        session = self._owned_session(principal, session_id)
+        view = InterviewView(
+            session=session, messages=[m.to_message() for m in self._messages(session)]
+        )
+        with self._local_lock:
+            local = self._local.get((session.id, principal.sub))
         return {
             "session_id": session.id,
-            "participants": session.participants,
-            "message_count": len(session.messages),
+            "participants": list(session.persona_ids),
+            "message_count": session.last_seq,
             "created_at": session.created_at.isoformat(),
-            "is_saved": session.is_saved,
-            "agents_active": agents_active,
+            "is_saved": view.is_saved,
+            "agents_active": local is not None and bool(local.agents),
             "has_user_messages": any(
-                msg.message_type == "user_message" for msg in session.messages
+                m.message_type == "user_message" for m in view.messages
             ),
             "has_persona_responses": any(
-                msg.message_type == "statement" for msg in session.messages
+                m.message_type == "statement" for m in view.messages
             ),
-            "last_activity": session.messages[-1].timestamp.isoformat()
-            if session.messages
-            else None,
+            "last_activity": session.last_active_at.isoformat(),
             "enable_memory": session.enable_memory,
             "memory_mode": session.memory_mode,
             "enable_dataset": session.enable_dataset,
         }
 
-    def cleanup_inactive_sessions(self, max_age_hours: int = 24) -> int:
-        """
-        Clean up inactive interview sessions that are older than specified age.
-
-        Args:
-            max_age_hours: Maximum age in hours for keeping sessions
-
-        Returns:
-            Number of sessions cleaned up
-        """
-        current_time = datetime.now()
-        sessions_to_remove = []
-
-        for session_id, session in self._active_sessions.items():
-            age_hours = (current_time - session.created_at).total_seconds() / 3600
-
-            if age_hours > max_age_hours and not session.is_saved:
-                sessions_to_remove.append(session_id)
-                self.logger.info(
-                    f"Marking session for cleanup: {session_id} (age: {age_hours:.1f}h)"
-                )
-
-        # Clean up sessions and their agents
-        cleaned_count = 0
-        for session_id in sessions_to_remove:
-            try:
-                self.end_interview_session(session_id)
-                cleaned_count += 1
-            except Exception as e:
-                self.logger.error(f"Error cleaning up session {session_id}: {e}")
-
-        if cleaned_count > 0:
-            self.logger.info(f"Cleaned up {cleaned_count} inactive sessions")
-
-        return cleaned_count
-
     def get_active_sessions_count(self) -> int:
-        """
-        Get the number of currently active interview sessions.
+        """The number of sessions whose agents this task holds."""
+        self._evict_idle()
+        with self._local_lock:
+            return len(self._local)
 
-        Returns:
-            Number of active sessions
-        """
-        return len(self._active_sessions)
+    # =========================================================================
+    # 検証と文面
+    # =========================================================================
 
-    # Enhanced validation methods
-
-    def _validate_session_creation_input(
-        self, personas: List[Persona], user_id: str
-    ) -> None:
+    def _validate_session_creation_input(self, personas: List[Persona]) -> None:
         """
         Validate input for session creation.
-
-        Args:
-            personas: List of personas to validate
-            user_id: User ID to validate
 
         Raises:
             InterviewValidationError: If validation fails
@@ -1036,62 +1200,27 @@ class InterviewManager:
                 code=ErrorCode.INTERVIEW_PERSONAS_REQUIRED,
                 context={"field": "persona_ids"},
             )
-
         if len(personas) > self.MAX_PERSONAS:
             raise InterviewValidationError(
                 f"persona count {len(personas)} exceeds max {self.MAX_PERSONAS}",
                 code=ErrorCode.INTERVIEW_TOO_MANY_PERSONAS,
                 context={"max_personas": self.MAX_PERSONAS, "field": "persona_ids"},
             )
-
-        if not user_id or not isinstance(user_id, str) or not user_id.strip():
-            raise InterviewValidationError(
-                "user_id is blank or invalid",
-                code=ErrorCode.INTERVIEW_USER_ID_INVALID,
-            )
-
-        # Validate each persona
         for i, persona in enumerate(personas):
-            if not persona or not hasattr(persona, "id") or not persona.id:
+            if not persona or not getattr(persona, "id", None):
                 raise InterviewValidationError(
                     f"persona at index {i} has no id",
                     code=ErrorCode.INTERVIEW_PERSONA_INVALID,
                 )
-
-            if not hasattr(persona, "name") or not persona.name:
+            if not getattr(persona, "name", None):
                 raise InterviewValidationError(
                     f"persona at index {i} has no name",
                     code=ErrorCode.INTERVIEW_PERSONA_INVALID,
                 )
 
-    def _validate_session_exists(self, session_id: str) -> None:
-        """
-        Validate that a session exists.
-
-        Args:
-            session_id: Session ID to validate
-
-        Raises:
-            InterviewSessionNotFoundError: If session not found
-        """
-        if not session_id:
-            raise InterviewSessionNotFoundError(
-                "session_id is blank",
-                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
-            )
-
-        if session_id not in self._active_sessions:
-            raise InterviewSessionNotFoundError(
-                f"interview session not found: {session_id}",
-                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
-            )
-
     def _validate_message_input(self, message: str) -> None:
         """
         Validate message input.
-
-        Args:
-            message: Message to validate
 
         Raises:
             InterviewValidationError: If validation fails
@@ -1101,7 +1230,6 @@ class InterviewManager:
                 "message is blank",
                 code=ErrorCode.INTERVIEW_MESSAGE_REQUIRED,
             )
-
         if len(message.strip()) > self.MAX_MESSAGE_LENGTH:
             raise InterviewValidationError(
                 f"message length {len(message.strip())} exceeds max "
@@ -1110,266 +1238,20 @@ class InterviewManager:
                 context={"max_length": self.MAX_MESSAGE_LENGTH},
             )
 
-    def _validate_session_for_save(self, session: InterviewSession) -> None:
+    def _validate_session_for_save(self, messages: Sequence[Message]) -> None:
         """
-        Validate session before saving.
-
-        Args:
-            session: Session to validate
+        Validate the conversation before saving.
 
         Raises:
-            InterviewValidationError: If validation fails
+            InterviewValidationError: No user message or no persona reply yet
         """
-        if not session or not session.messages or not session.participants:
-            raise InterviewValidationError(
-                "session is empty or has no participants",
-                code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
-            )
-
-        # Validate message integrity
-        user_messages = [
-            msg for msg in session.messages if msg.message_type == "user_message"
-        ]
-        persona_messages = [
-            msg for msg in session.messages if msg.message_type == "statement"
-        ]
-
-        if not user_messages or not persona_messages:
+        has_user = any(m.message_type == "user_message" for m in messages)
+        has_reply = any(m.message_type == "statement" for m in messages)
+        if not has_user or not has_reply:
             raise InterviewValidationError(
                 "session has no user message or no persona response",
                 code=ErrorCode.INTERVIEW_SAVE_PRECONDITION_NOT_MET,
             )
-
-    # Enhanced helper methods
-
-    def _cleanup_session_agents(self, session_id: str) -> None:
-        """
-        Clean up persona agents for a specific session to free resources.
-
-        Args:
-            session_id: ID of the session to clean up agents for
-        """
-        if session_id not in self._session_agents:
-            self.logger.debug(f"No agents found for session cleanup: {session_id}")
-            return
-
-        persona_agents = self._session_agents[session_id]
-        cleanup_errors = []
-
-        self.logger.info(
-            f"Cleaning up {len(persona_agents)} persona agents for session: {session_id}"
-        )
-
-        def _agent_label(agent: Any) -> str:
-            return (
-                agent.get_persona_name()
-                if hasattr(agent, "get_persona_name")
-                else repr(agent)
-            )
-
-        def _record_dispose_error(agent: Any, e: Exception) -> str:
-            error_msg = f"Error disposing agent {_agent_label(agent)}: {e}"
-            cleanup_errors.append(error_msg)
-            return error_msg
-
-        dispose_agents(
-            persona_agents,
-            self.logger,
-            error_message=_record_dispose_error,
-            success_message=lambda agent: (
-                f"Successfully disposed agent: {_agent_label(agent)}"
-            ),
-        )
-
-        # Remove agents from tracking
-        try:
-            del self._session_agents[session_id]
-            self.logger.debug(f"Removed session agents from tracking: {session_id}")
-        except KeyError as e:
-            self.logger.warning(f"Session agents not found during cleanup: {e}")
-
-        if cleanup_errors:
-            self.logger.warning(
-                f"Agent cleanup completed with {len(cleanup_errors)} warnings for session: {session_id}"
-            )
-        else:
-            self.logger.info(
-                f"All persona agents cleaned up successfully for session: {session_id}"
-            )
-
-    def _cleanup_failed_session(
-        self, session_id: Optional[str], persona_agents: List[PersonaAgent]
-    ) -> None:
-        """
-        Clean up resources from a failed session creation.
-
-        Args:
-            session_id: Session ID (may be None)
-            persona_agents: List of persona agents to clean up
-        """
-        try:
-            # Clean up agents
-            dispose_agents(
-                persona_agents,
-                self.logger,
-                error_message=lambda _agent,
-                e: f"Error disposing agent during cleanup: {e}",
-            )
-
-            # Clean up session if it was created
-            if session_id and session_id in self._active_sessions:
-                del self._active_sessions[session_id]
-
-            if session_id and session_id in self._session_agents:
-                del self._session_agents[session_id]
-
-        except Exception as e:
-            self.logger.error(f"Error during failed session cleanup: {e}")
-
-    def _get_agent_response_with_retry(
-        self,
-        persona_agent: PersonaAgent,
-        prompt: str,
-        context: List[Message],
-        max_retries: int = 2,
-    ) -> str:
-        """
-        Get agent response with retry logic.
-
-        Args:
-            persona_agent: Persona agent to get response from
-            prompt: Prompt to send
-            context: Message context
-            max_retries: Maximum number of retries
-
-        Returns:
-            str: Agent response
-
-        Raises:
-            AgentCommunicationError: If all retries fail
-        """
-        last_error = None
-
-        for attempt in range(max_retries + 1):
-            try:
-                response = persona_agent.respond(prompt, context)
-                if response and response.strip():
-                    return response
-                else:
-                    raise AgentCommunicationError("Empty response from agent")
-
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    self.logger.warning(
-                        f"Agent response attempt {attempt + 1} failed, retrying: {e}"
-                    )
-                    continue
-                else:
-                    break
-
-        raise AgentCommunicationError(
-            f"Agent failed after {max_retries + 1} attempts: {last_error}"
-        )
-
-    def _find_existing_discussion(self, session: InterviewSession) -> Optional[str]:
-        """
-        Find existing discussion for a session.
-
-        Args:
-            session: Session to find discussion for
-
-        Returns:
-            Discussion ID if found, None otherwise
-        """
-        try:
-            discussions = self.database_service.get_discussions_by_mode("interview")
-            for discussion in discussions:
-                if discussion.participants == session.participants and len(
-                    discussion.messages
-                ) == len(session.messages):
-                    return discussion.id
-        except Exception as e:
-            self.logger.warning(f"Error finding existing discussion: {e}")
-
-        return None
-
-    def _create_discussion_from_session(
-        self, session: InterviewSession, session_name: str | None = None
-    ) -> Discussion:
-        """
-        Create Discussion object from interview session.
-
-        Args:
-            session: Interview session
-            session_name: Name for the session (used as topic)
-
-        Returns:
-            Discussion object
-        """
-        # Use provided session name or default
-        topic = (
-            session_name
-            if session_name and session_name.strip()
-            else "Interview Session"
-        )
-
-        # Create Discussion object from interview session with preserved timestamps
-        discussion = Discussion.create_new(
-            topic=topic,
-            participants=session.participants,
-            mode="interview",
-            documents=session.documents,  # Include attached documents metadata
-            agent_config={"persona_models": session.persona_models},
-        )
-
-        # Preserve original creation time from session
-        discussion.created_at = session.created_at
-
-        # Add all messages to discussion in order (messages already have timestamps)
-        for message in session.messages:
-            discussion = discussion.add_message(message)
-
-        return discussion
-
-    def _save_discussion_with_retry(
-        self, discussion: Discussion, max_retries: int = 2
-    ) -> str:
-        """
-        Save discussion with retry logic.
-
-        Args:
-            discussion: Discussion to save
-            max_retries: Maximum number of retries
-
-        Returns:
-            Discussion ID
-
-        Raises:
-            DatabaseError: If all retries fail
-        """
-        last_error = None
-
-        for attempt in range(max_retries + 1):
-            try:
-                return self.database_service.save_discussion(discussion)
-
-            except DatabaseError as e:
-                last_error = e
-                if attempt < max_retries:
-                    self.logger.warning(
-                        f"Database save attempt {attempt + 1} failed, retrying: {e}"
-                    )
-                    continue
-                else:
-                    break
-            except Exception as e:
-                # Don't retry for non-database errors
-                raise DatabaseError(f"Unexpected error during save: {e}")
-
-        raise DatabaseError(
-            f"Database save failed after {max_retries + 1} attempts: {last_error}"
-        )
 
     def _create_interview_prompt(
         self, persona_agent: PersonaAgent, user_message: str, context: List[Message]
@@ -1386,174 +1268,19 @@ class InterviewManager:
             str: Generated prompt
         """
         persona_name = persona_agent.get_persona_name()
-
-        # Get recent context (last 5 messages)
-        recent_context = context[-5:] if len(context) > 5 else context
-
+        recent_context = context[-5:]
         if not recent_context:
-            # First interaction
-            prompt = (
+            return (
                 f"ユーザーからの質問: 「{user_message}」\n\n"
                 f"この質問に対して、{persona_name}として答えてください。"
             )
-        else:
-            # Build context from recent messages
-            context_text = "\n".join(
-                [
-                    f"{'ユーザー' if msg.persona_id == 'user' else msg.persona_name}: {msg.content}"
-                    for msg in recent_context
-                ]
-            )
-
-            prompt = (
-                f"これまでの会話:\n{context_text}\n\n"
-                f"ユーザーからの新しい質問: 「{user_message}」\n\n"
-                f"この質問に対して、{persona_name}として答えてください。"
-            )
-
-        return prompt
-
-    # =========================================================================
-    # ファイル処理統合（Router層のContentBlock構築ロジックをManager層に統合）
-    # =========================================================================
-
-    def _validate_and_convert_files(
-        self,
-        raw_files: List[tuple],
-    ) -> tuple:
-        """ファイルのバリデーションとContentBlock変換。
-
-        Args:
-            raw_files: [(bytes, filename, mime_type), ...] のリスト
-
-        Returns:
-            (document_contents, document_metadata) のタプル
-
-        Raises:
-            InterviewValidationError: サイズ超過、未サポートMIMEタイプ
-        """
-        from .shared.document_loader import (
-            build_content_block,
-            is_supported_mime_type,
-            is_image_type,
+        context_text = "\n".join(
+            f"{'ユーザー' if msg.persona_id == USER_PERSONA_ID else msg.persona_name}: "
+            f"{msg.content}"
+            for msg in recent_context
         )
-
-        document_contents: List[Dict[str, Any]] = []
-        document_metadata: List[Dict[str, Any]] = []
-
-        for file_bytes, filename, mime_type in raw_files:
-            if not file_bytes or not filename:
-                continue
-
-            # MIMEタイプバリデーション
-            if not is_supported_mime_type(mime_type):
-                raise InterviewValidationError(
-                    f"mime type {mime_type!r} not supported for file {filename!r}",
-                    code=ErrorCode.FILE_MIME_UNSUPPORTED,
-                )
-
-            # サイズバリデーション
-            size_limit = (
-                config.MAX_IMAGE_SIZE
-                if is_image_type(mime_type)
-                else config.MAX_FILE_SIZE
-            )
-            if len(file_bytes) > size_limit:
-                raise InterviewValidationError(
-                    f"file {filename!r} size {len(file_bytes)} exceeds limit {size_limit}",
-                    code=ErrorCode.FILE_TOO_LARGE,
-                    context={"max_size_mb": size_limit / (1024 * 1024)},
-                )
-
-            # ContentBlock変換
-            content_block = build_content_block(file_bytes, mime_type, filename)
-            if content_block:
-                document_contents.append(content_block)
-                document_metadata.append(
-                    {
-                        "filename": filename,
-                        "mime_type": mime_type,
-                        "file_size": len(file_bytes),
-                        "uploaded_at": datetime.now().isoformat(),
-                    }
-                )
-
-        return document_contents, document_metadata
-
-    def send_user_message_with_files(
-        self,
-        session_id: str,
-        message: str,
-        raw_files: Optional[List[tuple]] = None,
-    ) -> List[Message]:
-        """メッセージ送信（ファイル処理統合版、非ストリーミング）。
-
-        Router層から生バイナリを受け取り、バリデーション + ContentBlock変換を
-        Manager内部で実施する。
-
-        Args:
-            session_id: セッションID
-            message: メッセージ本文
-            raw_files: [(bytes, filename, mime_type), ...] のリスト
-
-        Returns:
-            List[Message]: ペルソナ応答リスト
-
-        Raises:
-            InterviewSessionNotFoundError: セッション未存在
-            InterviewValidationError: バリデーション失敗
-            InterviewAgentError: エージェント通信失敗
-        """
-        document_contents = None
-        document_metadata = None
-
-        if raw_files:
-            document_contents, document_metadata = self._validate_and_convert_files(
-                raw_files
-            )
-
-        return self.send_user_message(
-            session_id=session_id,
-            message=message,
-            document_contents=document_contents or None,
-            document_metadata=document_metadata or None,
-        )
-
-    def send_user_message_streaming_with_files(
-        self,
-        session_id: str,
-        message: str,
-        raw_files: Optional[List[tuple]] = None,
-    ) -> Any:
-        """メッセージ送信（ファイル処理統合版、ストリーミング）。
-
-        Router層から生バイナリを受け取り、バリデーション + ContentBlock変換を
-        Manager内部で実施する。
-
-        Args:
-            session_id: セッションID
-            message: メッセージ本文
-            raw_files: [(bytes, filename, mime_type), ...] のリスト
-
-        Yields:
-            tuple: (event_type, data)
-
-        Raises:
-            InterviewSessionNotFoundError: セッション未存在
-            InterviewValidationError: バリデーション失敗
-            InterviewAgentError: エージェント通信失敗
-        """
-        document_contents = None
-        document_metadata = None
-
-        if raw_files:
-            document_contents, document_metadata = self._validate_and_convert_files(
-                raw_files
-            )
-
-        yield from self.send_user_message_streaming(
-            session_id=session_id,
-            message=message,
-            document_contents=document_contents or None,
-            document_metadata=document_metadata or None,
+        return (
+            f"これまでの会話:\n{context_text}\n\n"
+            f"ユーザーからの新しい質問: 「{user_message}」\n\n"
+            f"この質問に対して、{persona_name}として答えてください。"
         )

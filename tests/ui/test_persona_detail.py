@@ -142,7 +142,7 @@ def test_delete_confirmation_names_what_goes_and_focuses_cancel(
     assert "「佐藤 太郎」を削除します" in text
     assert "データセット・ナレッジベースの紐付け" in text
     assert "このペルソナの長期記憶" in text
-    assert "共有先の部署からも見えなくなります" in text
+    assert "共有先のグループからも見えなくなります" in text
     # 取り消せない操作なので、既定のフォーカスは［キャンセル］
     assert ui.active("document.activeElement.dataset.testid") == (
         "persona-delete-cancel"
@@ -158,7 +158,7 @@ def test_delete_confirmation_of_an_unshared_persona(ui: UiHarness) -> None:
 
     ui.page.click("[data-testid='persona-delete-button']")
 
-    assert "共有先の部署からも見えなくなります" not in _delete_dialog_text(ui)
+    assert "共有先のグループからも見えなくなります" not in _delete_dialog_text(ui)
 
 
 def test_cancel_closes_without_deleting(ui: UiHarness) -> None:

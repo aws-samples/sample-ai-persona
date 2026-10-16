@@ -3,7 +3,6 @@
 """
 
 import pytest
-from unittest.mock import Mock, patch
 from datetime import datetime
 
 from src.models.dataset import Dataset, DatasetColumn
@@ -97,6 +96,22 @@ class TestDatasetIntegrationFlow:
         assert restored == sample_binding
 
 
+def _session(personas, **kwargs):
+    """A U6 interview session (kept outside the app) of ``personas``."""
+    from datetime import timezone
+
+    from src.models.interview_session import InterviewSession
+
+    return InterviewSession.create_new(
+        owner_sub="user-a",
+        persona_ids=[p.id for p in personas],
+        persona_names={p.id: p.name for p in personas},
+        memory_mode="disabled",
+        now=datetime(2026, 10, 15, tzinfo=timezone.utc),
+        **kwargs,
+    )
+
+
 class TestInterviewDatasetIntegration:
     """インタビューモードデータセット連携統合テスト"""
 
@@ -126,48 +141,21 @@ class TestInterviewDatasetIntegration:
 
     def test_interview_session_with_dataset_enabled(self, sample_personas):
         """データセット連携有効のインタビューセッションテスト"""
-        from src.managers.interview_manager import InterviewSession
-
-        session = InterviewSession(
-            id="interview-dataset-001",
-            participants=[p.id for p in sample_personas],
-            messages=[],
-            created_at=datetime.now(),
-            enable_memory=False,
-            enable_dataset=True,
-        )
+        session = _session(sample_personas, enable_dataset=True)
 
         assert session.enable_dataset is True
-        assert len(session.participants) == 2
+        assert session.enable_memory is False
+        assert len(session.persona_ids) == 2
 
     def test_interview_session_status_includes_dataset(self, sample_personas):
-        """セッションステータスにenable_datasetが含まれるテスト"""
-        from src.managers.interview_manager import InterviewManager, InterviewSession
+        """保存したセッションに enable_dataset が残る（どの台の状態でも同じ値になる）"""
+        from src.models.interview_session import InterviewSession
 
-        # InterviewManagerのモック
-        with patch.object(
-            InterviewManager, "__init__", lambda x, *args, **kwargs: None
-        ):
-            manager = InterviewManager()
-            manager.logger = Mock()
-            manager._active_sessions = {}
-            manager._session_agents = {}
+        session = _session(sample_personas, enable_dataset=True)
+        stored = session.to_dict()
 
-            # セッションを追加
-            session = InterviewSession(
-                id="interview-status-001",
-                participants=["p1", "p2"],
-                messages=[],
-                created_at=datetime.now(),
-                enable_dataset=True,
-            )
-            manager._active_sessions[session.id] = session
-            manager._session_agents[session.id] = []
-
-            # ステータス取得
-            status = manager.get_session_status(session.id)
-
-            assert status["enable_dataset"] is True
+        assert stored["enable_dataset"] is True
+        assert InterviewSession.from_dict(stored).enable_dataset is True
 
 
 class TestDiscussionDatasetIntegration:
@@ -178,8 +166,8 @@ class TestDiscussionDatasetIntegration:
         from src.managers.agent_discussion_manager import AgentDiscussionManager
         import inspect
 
-        # create_persona_agentsメソッドのシグネチャを確認
-        sig = inspect.signature(AgentDiscussionManager.create_persona_agents)
+        # _create_persona_agentsメソッドのシグネチャを確認（U6 で非公開に）
+        sig = inspect.signature(AgentDiscussionManager._create_persona_agents)
         params = list(sig.parameters.keys())
 
         # enable_datasetパラメータが存在することを確認
@@ -190,12 +178,11 @@ class TestDiscussionDatasetIntegration:
         from src.managers.interview_manager import InterviewManager
         import inspect
 
-        # _create_interview_persona_agentsメソッドのシグネチャを確認
+        # U6: データセットの設定はセッションに持ち、エージェントはセッションから作る
         sig = inspect.signature(InterviewManager._create_interview_persona_agents)
         params = list(sig.parameters.keys())
 
-        # enable_datasetパラメータが存在することを確認
-        assert "enable_dataset" in params
+        assert "session" in params
 
     def test_start_interview_session_with_dataset(self):
         """データセット連携付きインタビューセッション開始テスト"""

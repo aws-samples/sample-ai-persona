@@ -18,6 +18,7 @@ from typing import (
     Iterable,
     List,
     Optional,
+    Sequence,
     Tuple,
     TypeVar,
 )
@@ -47,6 +48,7 @@ from ..services.database_service import DatabaseService, DatabaseError
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
+from .components.participant_reader import ParticipantReader
 from .components.resource_lookup import ResourceLookup
 from .components.resource_sharing import ResourceSharing
 from .components.sharing_runtime import (
@@ -212,6 +214,7 @@ class PersonaManager:
         preview_service: Any = None,
         candidate_store: Optional["PersonaCandidateStore"] = None,
         clock: Callable[[], datetime] = _utc_now,
+        participants: Optional[ParticipantReader] = None,
     ):
         """
         Args:
@@ -232,6 +235,8 @@ class PersonaManager:
                 confirmed right before it is saved (R-04; optional, built on
                 first use)
             clock: UTC clock for the hold checks (tests pass a fake one)
+            participants: Reads discussion / interview participants after the
+                decision (U6; built on first use)
         """
         self.logger = logging.getLogger(__name__)
         self.database_service = (
@@ -252,6 +257,15 @@ class PersonaManager:
         self._preview = preview_service
         self._candidate_store = candidate_store
         self._clock = clock
+        self._reader = participants
+
+    @property
+    def _participant_reader(self) -> ParticipantReader:
+        if self._reader is None:
+            self._reader = ParticipantReader(
+                self._resource_lookup, self.database_service
+            )
+        return self._reader
 
     @property
     def _candidates(self) -> "PersonaCandidateStore":
@@ -380,51 +394,36 @@ class PersonaManager:
         assert persona is not None
         return persona
 
-    def get_persona_unchecked(self, persona_id: str) -> Optional[Persona]:
+    def get_personas_for_use(
+        self, principal: Principal, persona_ids: Sequence[str]
+    ) -> List[Persona]:
         """
-        Retrieve a persona by ID without an authorization decision.
+        The personas a discussion or interview starts with (U6 BR2.8).
 
-        Discussions and interviews still read personas this way; U6 moves
-        those callers to :meth:`get_persona` (classified ``pending("U6")``).
-
-        Args:
-            persona_id: ID of the persona to retrieve
+        The personas are used to run AI, so ``ai:execute`` is checked first
+        (C12: the permission before the existence, so a missing persona is not
+        told to a user without the permission). Every participant is decided
+        next (one ``ResourceLookup`` read); the bodies are read only when all
+        of them passed.
 
         Returns:
-            Persona object if found, None otherwise
+            The personas in the given order (duplicates dropped).
 
         Raises:
-            PersonaManagerError: If retrieval operation fails
+            AccessDeniedError: ``ai:execute`` がない
+            PersonaManagerError: ``PERSONA_ID_INVALID`` (no ID given)
+            CodedError: ``PERSONA_NOT_FOUND`` when any is unreadable or missing
+            LookupUnavailableError: The decision or the body read failed
         """
-        if not persona_id or not persona_id.strip():
+        AccessPolicy.require(
+            principal, Permission.AI_EXECUTE, resource_type=ResourceType.PERSONA
+        )
+        ids = [i.strip() for i in persona_ids if i and i.strip()]
+        if not ids:
             raise PersonaManagerError(
-                "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
+                "persona ids are blank", code=ErrorCode.PERSONA_ID_INVALID
             )
-
-        try:
-            persona = self.database_service.get_persona(persona_id.strip())
-            if persona:
-                self.logger.debug(
-                    f"Persona retrieved successfully: {persona.name} (ID: {persona_id})"
-                )
-            else:
-                self.logger.debug(f"Persona not found: {persona_id}")
-            return persona
-
-        except DatabaseError as e:
-            self.logger.error("Database error while retrieving persona", exc_info=True)
-            raise PersonaManagerError(
-                f"persona retrieval failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
-        except Exception as e:
-            self.logger.error(
-                "Unexpected error while retrieving persona", exc_info=True
-            )
-            raise PersonaManagerError(
-                f"persona retrieval failed ({type(e).__name__})",
-                code=ErrorCode.PERSONA_OPERATION_FAILED,
-            ) from e
+        return self._participant_reader.read_for_use(principal, ids)
 
     # ------------------------------------------------------------------
     # Tabbed lists, search, detail (BR3, BR6.2〜BR6.4)
@@ -1124,7 +1123,7 @@ class PersonaManager:
         if written:
             return
 
-        if self.get_persona_unchecked(current.id) is None:
+        if self._read_consistent(current.id) is None:
             self.logger.info(f"Persona {current.id} was deleted during avatar update")
             raise PersonaManagerError(
                 "persona deleted during avatar update",

@@ -140,6 +140,11 @@ class Config:
     # 生成候補と紐付け（U5）。ResourceShares と同じく操作を絞った専用の項目
     PERSONA_CANDIDATES_TABLE_NAME: str = ""
     PERSONA_BINDINGS_TABLE_NAME: str = ""
+    # 議論の発言・レポートと実行中のインタビュー（U6）。同じく操作を絞った専用の項目
+    DISCUSSION_MESSAGES_TABLE_NAME: str = ""
+    DISCUSSION_REPORTS_TABLE_NAME: str = ""
+    INTERVIEW_SESSIONS_TABLE_NAME: str = ""
+    INTERVIEW_MESSAGES_TABLE_NAME: str = ""
     # AUTH_MODE=local の開発用の利用者（ロール・部署はカンマ区切り）
     LOCAL_DEV_USER_NAME: str = "開発ユーザー"
     LOCAL_DEV_USER_EMAIL: str = "dev@example.com"
@@ -284,6 +289,17 @@ class Config:
             os.getenv("PERSONA_BINDINGS_TABLE_NAME")
             or f"{self.DYNAMODB_TABLE_PREFIX}_PersonaBindings"
         )
+        for setting, kind in (
+            ("DISCUSSION_MESSAGES_TABLE_NAME", "DiscussionMessages"),
+            ("DISCUSSION_REPORTS_TABLE_NAME", "DiscussionReports"),
+            ("INTERVIEW_SESSIONS_TABLE_NAME", "InterviewSessions"),
+            ("INTERVIEW_MESSAGES_TABLE_NAME", "InterviewMessages"),
+        ):
+            setattr(
+                self,
+                setting,
+                os.getenv(setting) or f"{self.DYNAMODB_TABLE_PREFIX}_{kind}",
+            )
         sample_rate = os.getenv("AUTH_TIMING_SAMPLE_RATE")
         if sample_rate:
             rate = float(sample_rate)
