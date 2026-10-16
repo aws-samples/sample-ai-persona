@@ -1,0 +1,10 @@
+{% extends "_frame.html" %}
+{#
+  利用範囲のダイアログ（M10、U7）のテスト用の画面。設定画面のデータセットの一覧
+  （開くボタンと読み直し先の #dataset-list）をそのまま置く。
+  引数:
+    list_html ... settings/partials/dataset_list.html を描いたもの
+#}
+{% block component %}
+<div id="dataset-list" data-reload-url="/settings/datasets">{{ list_html | safe }}</div>
+{% endblock %}

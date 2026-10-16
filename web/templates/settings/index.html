@@ -21,7 +21,7 @@
                 {{ dialog_open_button("upload-modal", "+ 新規アップロード", classes="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition") }}
             </div>
             
-            <div id="dataset-list" hx-get="/settings/datasets" hx-trigger="load">
+            <div id="dataset-list" data-reload-url="/settings/datasets">
                 {% include "settings/partials/dataset_list.html" %}
             </div>
         </div>
@@ -37,7 +37,7 @@
             {{ dialog_open_button("kb-register-modal", "+ ナレッジベース登録", classes="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition") }}
         </div>
         
-        <div id="kb-list" hx-get="/settings/knowledge-bases" hx-trigger="load">
+        <div id="kb-list" data-reload-url="/settings/knowledge-bases">
             {% include "settings/partials/kb_list.html" %}
         </div>
     </div>

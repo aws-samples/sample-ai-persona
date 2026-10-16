@@ -9,7 +9,7 @@ field.
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Generic, TypeVar
+from typing import Generic, Iterable, TypeVar
 
 from .authz import AccessTarget, Department, ResourceType
 from .errors import ErrorCode
@@ -73,6 +73,91 @@ class ShareChange:
     def is_empty(self) -> bool:
         """Whether the change adds and removes nothing."""
         return not self.add and not self.remove
+
+
+@dataclass(frozen=True)
+class AssetScopeChange:
+    """A change of an organization asset's usage scope (U7 BR5.2, M10).
+
+    The same shape as :class:`ShareChange`: ``add`` is the departments chosen,
+    ``remove`` those unchecked that were in the scope when the dialog opened.
+
+    Raises:
+        TypeError: ``add`` or ``remove`` is not a frozenset.
+        ValueError: A department is in both sets.
+    """
+
+    add: frozenset[str] = frozenset()
+    remove: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.add, frozenset) or not isinstance(
+            self.remove, frozenset
+        ):
+            raise TypeError("AssetScopeChange.add and .remove must be frozensets")
+        if self.add & self.remove:
+            raise ValueError("a department cannot be both added and removed")
+
+    @classmethod
+    def from_form(
+        cls, selected: Iterable[str], initial: Iterable[str]
+    ) -> "AssetScopeChange":
+        """The change of the dialog: add what is checked, remove what was unchecked.
+
+        ``initial`` is the scope when the dialog opened, so a department another
+        admin added meanwhile is left as it is (BR5.2).
+        """
+        chosen = frozenset(g for g in selected if g)
+        opened = frozenset(g for g in initial if g)
+        return cls(add=chosen, remove=opened - chosen)
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether the change adds and removes nothing."""
+        return not self.add and not self.remove
+
+    def applied_to(self, current: frozenset[str]) -> frozenset[str]:
+        """The scope after the change: ``(current - remove) | add``."""
+        return (frozenset(current) - self.remove) | self.add
+
+
+@dataclass(frozen=True)
+class AssetScopeDialog:
+    """The content of the usage-scope dialog (M10, U7 BR5.2).
+
+    Attributes:
+        resource_type: ``knowledge_base``, ``dataset`` or ``custom_persona_data``.
+        resource_id: The asset.
+        name: Its name (the dialog title).
+        choices: Every department (admins may choose any).
+        selected: The scope when the dialog opened (sent back as ``initial``).
+        vanished: Departments in the scope that no longer exist; shown as
+            ``（削除されたグループ）`` and checked, so they can be removed.
+    """
+
+    resource_type: ResourceType
+    resource_id: str
+    name: str
+    choices: tuple[Department, ...]
+    selected: frozenset[str] = frozenset()
+    vanished: tuple[str, ...] = ()
+
+
+_AssetT = TypeVar("_AssetT")
+
+
+@dataclass(frozen=True)
+class ScopedAssets(Generic[_AssetT]):
+    """Organization assets on the settings screen with their scope (U7 BR5.1).
+
+    Attributes:
+        items: The assets.
+        scope_labels: Asset id -> names of its scope's departments (empty =
+            admin only; deleted groups read ``（削除されたグループ）``).
+    """
+
+    items: list[_AssetT]
+    scope_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -513,3 +513,28 @@ class TestDiscussionInterviewTables:
             "InterviewMessages",
         ):
             assert kind not in TABLE_NAME_SETTINGS
+
+
+class TestCustomPersonaDataTable:
+    """U7: CustomPersonaData の物理名（Infrastructure Design の指摘、U6 と同じ形）。"""
+
+    def test_falls_back_to_the_prefix(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
+            config = Config()
+        assert config.CUSTOM_PERSONA_DATA_TABLE_NAME == "Local_CustomPersonaData"
+
+    def test_reads_the_cdk_name(self):
+        from src.config import Config
+
+        with patch.dict(
+            os.environ, {"CUSTOM_PERSONA_DATA_TABLE_NAME": "Data-Custom1"}, clear=True
+        ):
+            config = Config()
+        assert config.CUSTOM_PERSONA_DATA_TABLE_NAME == "Data-Custom1"
+
+    def test_is_not_bulk_granted(self):
+        from src.config import TABLE_NAME_SETTINGS
+
+        assert "CustomPersonaData" not in TABLE_NAME_SETTINGS

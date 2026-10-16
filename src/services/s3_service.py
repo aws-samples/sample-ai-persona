@@ -149,6 +149,26 @@ class S3Service:
                 code=ErrorCode.S3_OPERATION_FAILED,
             ) from e
 
+    def exists(self, s3_path: str) -> bool:
+        """Whether an object is at ``s3_path`` (U7 BR2.2, BR2.8).
+
+        Raises:
+            S3ServiceError: The check itself failed (not a missing object).
+        """
+        s3_key = self._extract_key_from_path(s3_path)
+        try:
+            self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
+            return True
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            if error_code in ("404", "NoSuchKey", "NotFound"):
+                return False
+            logger.error("Failed to check an S3 object: %s", error_code)
+            raise S3ServiceError(
+                f"s3 head failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
+
     # --- U5: keys, tags and copies (BR5.2, BR5.3, BR6.1) ---------------------------
 
     def path_of(self, s3_key: str) -> str:

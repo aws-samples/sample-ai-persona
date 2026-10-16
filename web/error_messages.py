@@ -153,6 +153,24 @@ _CATALOG: dict[ErrorCode, str] = {
         "選択式質問「{question_text}」には2つ以上の選択肢が必要です"
     ),
     ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES: "画像は1枚まで添付できます",
+    ErrorCode.SURVEY_TEMPLATE_TOO_LARGE: (
+        "テンプレートの内容が大きすぎます。質問や選択肢の数・長さを減らしてください"
+    ),
+    ErrorCode.SURVEY_REPORT_TOO_LARGE: (
+        "レポートが大きすぎて保存できません。時間をおいて再度生成してください"
+    ),
+    ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE: (
+        "テンプレートの画像を読み込めなかったため、アンケートを中止しました。"
+        "画像を付け直したテンプレートで、もう一度実行してください"
+    ),
+    ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND: "ペルソナ元データが見つかりません",
+    ErrorCode.CUSTOM_PERSONA_DATA_NAME_INVALID: (
+        "名前は1〜{max_length}文字で入力してください"
+    ),
+    ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN: (
+        "同じ名前のペルソナ元データがあります。別の名前を入力してください"
+    ),
+    ErrorCode.SETTINGS_NOT_FOUND: "お探しのページが見つかりません",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
     ErrorCode.SURVEY_PERSONA_COUNT_INVALID: "ペルソナ数は整数で入力してください",
     ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW: (
@@ -474,6 +492,9 @@ UNIFIED_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         # U5: 他人・期限切れ・紐付け済みのファイルと、KB の紐付け（NFR1.14）
         ErrorCode.FILE_NOT_FOUND,
         ErrorCode.KB_BINDING_NOT_FOUND,
+        # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
+        ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
+        ErrorCode.SETTINGS_NOT_FOUND,
     }
 )
 

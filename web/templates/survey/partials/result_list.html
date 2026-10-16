@@ -1,0 +1,152 @@
+{% from "components/datetime.html" import iso_datetime %}
+{% from "components/icons.html" import icon_chat, icon_trash %}
+{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
+{% from "components/status_label.html" import status_label %}
+{#
+  アンケート結果の一覧パーシャル（M6、U7 BR1.2・BR2.10）。タブ（list_tabpanel）の中身。
+  テンプレート名とペルソナ元データの名前は、実行したときの写し（template_snapshot、
+  datasource_name）で出す。
+
+  引数:
+    listing        ... src/models/sharing.py の TabbedList（items は Survey）
+    current_search ... 検索語（今のタブの中を検索する）
+    is_append      ... 「もっと見る」の追加分
+#}
+{%- set tab = listing.tab.value -%}
+{%- set surveys = listing.items -%}
+{%- set total = listing.counts.get(tab) -%}
+{%- set bulk = tab != "shared" -%}
+{%- set extra = "&search=" ~ (current_search | urlencode) if current_search else "" -%}
+
+{%- if not is_append %}
+<input type="hidden" name="tab" value="{{ tab }}" data-survey-tab>
+{%- if listing.search_truncated %}
+<p class="text-sm text-gray-700 mb-3" data-testid="survey-search-truncated">新しい順に 500 件までを検索しました</p>
+{%- endif %}
+{%- if surveys and bulk and listing.manageable %}
+{{ bulk_select_bar("survey", True, "共有先を設定", "share-dialog") }}
+{%- endif %}
+{%- endif %}
+
+{% if surveys or is_append %}
+{% if not is_append %}
+<div class="grid md:grid-cols-3 gap-4" id="survey-grid" data-busy-target>
+{% endif %}
+    {% for survey in surveys %}
+    {%- set manageable = survey.id in listing.manageable %}
+    <div class="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow relative" id="survey-card-{{ survey.id }}" data-testid="survey-result-row">
+        {%- if manageable %}
+        <div class="absolute top-3 right-3 flex gap-1 z-10">
+            {%- if bulk %}{{ bulk_select_row(survey.id, survey.name) }}{% endif %}
+            <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                    aria-label="アンケート「{{ survey.name }}」を共有"
+                    data-share-url="/share/survey/{{ survey.id }}/dialog"
+                    data-testid="survey-result-share-button"
+                    class="bg-blue-100 text-blue-700 px-2 py-1 rounded-md hover:bg-blue-200 transition-colors text-xs">
+                共有
+            </button>
+            <button type="button" hx-delete="/survey/results/{{ survey.id }}"
+                    hx-target="#survey-card-{{ survey.id }}"
+                    hx-swap="outerHTML"
+                    hx-confirm="このアンケートを削除しますか？共有と結果のファイルも一緒に削除されます"
+                    aria-label="アンケート「{{ survey.name }}」を削除" data-testid="survey-delete-button"
+                    class="bg-red-100 text-red-700 p-1.5 rounded-md hover:bg-red-200 transition-colors">
+                {{ icon_trash("w-4 h-4") }}
+            </button>
+        </div>
+        {%- endif %}
+        <a href="/survey/results/{{ survey.id }}" class="block p-5">
+            <div class="flex flex-col h-full {{ 'pr-24' if manageable else '' }}">
+                <div class="flex-1">
+                    <h2 class="text-lg font-semibold text-gray-900 mb-2">{{ survey.name }}</h2>
+                    {% if survey.description %}
+                    <p class="text-sm text-gray-600 mb-3 line-clamp-2">{{ survey.description }}</p>
+                    {% endif %}
+                    <div class="flex flex-col gap-2 mt-auto">
+                        <span class="text-xs text-gray-500">
+                            <time datetime="{{ iso_datetime(survey.created_at) }}">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
+                        </span>
+                        {%- if tab != "mine" %}
+                        {%- set label = listing.owners.get(survey.id) %}
+                        <span class="text-xs text-gray-700">所有者: {% if label is none %}-{% elif label == "所有者不明" %}{{ status_label("所有者不明") }}{% else %}{{ label }}{% endif %}</span>
+                        {%- endif %}
+                        {%- set names = listing.shared_with.get(survey.id, []) %}
+                        {%- if tab == "shared" %}
+                        <span class="text-xs text-gray-700">共有元: {{ names | join("、") or "-" }}</span>
+                        {%- elif names %}
+                        <span class="text-xs text-gray-700">共有: {{ names | join("、") }}</span>
+                        {%- else %}
+                        <span class="text-xs text-gray-700">{{ status_label("共有なし") }}</span>
+                        {%- endif %}
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-xs text-gray-500">{{ survey.persona_count }}名</span>
+                            <span data-testid="survey-status" class="px-2 py-0.5 text-xs rounded-full
+                                {% if survey.status == 'completed' %}bg-green-100 text-green-800
+                                {% elif survey.status == 'running' %}bg-blue-100 text-blue-800
+                                {% elif survey.status == 'error' %}bg-red-100 text-red-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {% if survey.status == 'completed' %}完了
+                                {% elif survey.status == 'running' %}実行中
+                                {% elif survey.status == 'error' %}エラー
+                                {% else %}待機中{% endif %}
+                            </span>
+                            {% if survey.insight_report %}
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">レポート</span>
+                            {% endif %}
+                        </div>
+                        <div class="flex items-center gap-2 flex-wrap mt-1">
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-800">{{ survey.datasource_label }}</span>
+                            {% if survey.template_name %}
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 truncate max-w-[140px]" title="{{ survey.template_name }}">{{ survey.template_name }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+    {% endfor %}
+{% if not is_append %}
+</div>
+{% endif %}
+<p id="survey-count-footer" class="text-center text-gray-500 mt-6 text-sm"
+   {% if is_append %}hx-swap-oob="true"{% endif %}>
+    {%- if current_search %}
+    {%- if not listing.next_cursor and not is_append %}該当{{ surveys | length }}件{% endif %}
+    {%- elif total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
+</p>
+
+{% if listing.next_cursor %}
+<div id="load-more-survey" class="text-center mt-6"
+     {% if is_append %}hx-swap-oob="true"{% endif %}>
+    <button hx-get="/survey/results?tab={{ tab }}&cursor={{ listing.next_cursor }}{{ extra }}&append=1"
+            hx-target="#survey-grid"
+            hx-swap="beforeend"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">
+        もっと見る
+    </button>
+</div>
+{% elif is_append %}
+<div id="load-more-survey" hx-swap-oob="true"></div>
+{% endif %}
+
+{% else %}
+<div class="bg-gray-50 rounded-lg p-12 text-center" data-testid="survey-result-list-empty">
+    <div class="flex justify-center mb-4 text-gray-400">{{ icon_chat("w-16 h-16") }}</div>
+    {% if current_search %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">該当するアンケート結果がありません</h2>
+    <p class="text-gray-500 mb-6">検索語を変えてください。</p>
+    {% elif tab == "shared" and listing.no_department %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">所属グループがないため、共有されたアンケート結果はありません</h2>
+    {% elif tab == "shared" %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">共有されたアンケート結果はありません。所属グループに共有されると、ここに表示されます</h2>
+    {% else %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">アンケート結果がありません</h2>
+    <p class="text-gray-500 mb-6">アンケートを実行してください。</p>
+    <a href="/survey/start"
+       class="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
+        アンケートを開始
+    </a>
+    {% endif %}
+</div>
+{% endif %}

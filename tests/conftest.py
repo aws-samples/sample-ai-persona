@@ -444,6 +444,7 @@ def reset_singletons():
         from web.routers import settings
 
         settings._dataset_manager = None
+        settings._settings_manager = None
     except (ImportError, AttributeError):
         pass
     try:

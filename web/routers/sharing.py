@@ -53,6 +53,9 @@ _LIST_TARGETS: dict[str, str] = {
     "persona": "#persona-list",
     # U6: 議論・インタビュー結果の一覧（/discussion/results）
     "discussion": "#discussion-list",
+    # U7: アンケートテンプレートと結果の一覧（/survey/templates、/survey/results）
+    "survey_template": "#survey-template-list",
+    "survey": "#survey-list",
 }
 
 #: Detail-screen regions that show the shares and are reloaded after a save

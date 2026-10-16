@@ -195,6 +195,23 @@ def default_sharing_tables() -> list[SharingTable]:
             delete_failed=ErrorCode.DISCUSSION_OPERATION_FAILED,
             cleanup_attributes=("documents", "message_count", "report_count"),
         ),
+        # U7 BR6.3: テンプレート（後始末は画像）と結果（後始末は結果 CSV）
+        SharingTable(
+            resource_type=ResourceType.SURVEY_TEMPLATE,
+            table=config.table_name("SurveyTemplates"),
+            name_attribute="name",
+            not_found=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
+            delete_failed=ErrorCode.SURVEY_OPERATION_FAILED,
+            cleanup_attributes=("images",),
+        ),
+        SharingTable(
+            resource_type=ResourceType.SURVEY,
+            table=config.table_name("Surveys"),
+            name_attribute="name",
+            not_found=ErrorCode.SURVEY_NOT_FOUND,
+            delete_failed=ErrorCode.SURVEY_OPERATION_FAILED,
+            cleanup_attributes=("s3_result_path",),
+        ),
     ]
 
 

@@ -1,26 +1,53 @@
 """
 SurveyAnalysisManager
 ビジュアル分析 + ペルソナ統計 + インサイトレポート生成を担当するマネージャークラス。
+
+v1.0.0 U7 (``functional-design/rules.md``):
+
+- BR2.4 / BR2.5: every entry point reads the survey's decision columns and
+  calls ``ensure_readable`` first; only then is the result CSV read, from the
+  per-process ``ResultCsvCache`` (keyed by the survey ID) or from S3.
+- BR2.7: the questions come from the survey's template snapshot. A survey
+  saved before v1.0.0 (no snapshot) reads its template, and only when the
+  reader may read it; otherwise there is no analysis (the CSV stays).
+- BR2.11: generating and saving the insight report needs ``ai:execute`` and
+  ``ensure_manageable``; the report is checked against the 350KB body limit
+  and written alone, so the owner, the shares and the snapshot stay.
 """
 
 import logging
-import time
 from collections import Counter
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
-from ..models.errors import CodedError, ErrorCode
-from ..models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
-from ..models.survey_template import SurveyTemplate
+from ..models.authz import Permission, Principal, ResourceType
+from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
+from ..models.survey import (
+    InsightReport,
+    PersonaStatistics,
+    Survey,
+    TemplateSnapshot,
+    VisualAnalysisData,
+)
 from ..prompts.survey_prompts import INSIGHT_REPORT_SYSTEM_PROMPT, build_insight_prompt
 from ..services.ai_service import AIService
-from ..services.database_service import DatabaseService
+from ..services.database_service import DatabaseError, DatabaseService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
+from .components.access_policy import AccessPolicy
+from .components.resource_lookup import ResourceLookup
+from .components.resource_sharing import ResourceSharing
+from .components.sharing_runtime import access_parts_from, sharing_parts_from
 from .shared.file_utils import parse_results_csv
+from .shared.result_csv_cache import ResultCsvCache, shared_result_cache
 
 logger = logging.getLogger(__name__)
+
+_SURVEY = ResourceType.SURVEY
+_TEMPLATE = ResourceType.SURVEY_TEMPLATE
+#: Largest survey body written, report included (NFR2.25).
+MAX_SURVEY_BYTES = 350 * 1024
 
 
 class SurveyAnalysisManagerError(CodedError):
@@ -32,79 +59,143 @@ class SurveyAnalysisManagerError(CodedError):
 class SurveyAnalysisManager:
     """ビジュアル分析 + ペルソナ統計 + インサイトレポート生成"""
 
-    _CACHE_TTL_SECONDS: int = 300
-
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
         s3_service: Optional[S3Service] = None,
         ai_service: Optional[AIService] = None,
         survey_batch_service: Optional[SurveyBatchService] = None,
+        resource_lookup: Optional[ResourceLookup] = None,
+        resource_sharing: Optional[ResourceSharing] = None,
+        result_cache: Optional[ResultCsvCache] = None,
     ) -> None:
+        """Create the manager.
+
+        Args:
+            database_service: Survey and template bodies.
+            s3_service: Result CSVs.
+            ai_service: Insight reports.
+            survey_batch_service: Statistical summaries.
+            resource_lookup: The per-task ``ResourceLookup`` (decisions).
+            resource_sharing: The per-task ``ResourceSharing``.
+            result_cache: The per-process result CSV cache.
+        """
         self.db = database_service or service_factory.get_database_service()
         self.s3_service: S3Service = s3_service or service_factory.get_s3_service()
         self.ai_service = ai_service or service_factory.get_ai_service()
         self.batch_service = (
             survey_batch_service or service_factory.get_survey_batch_service()
         )
-        self._csv_cache: Dict[str, tuple[float, bytes]] = {}
+        self._lookup = resource_lookup
+        self._sharing = resource_sharing
+        self._cache = result_cache
+
+    # --- parts (built lazily) -------------------------------------------------------
+
+    @property
+    def _resource_lookup(self) -> ResourceLookup:
+        if self._lookup is None:
+            self._lookup = access_parts_from(service_factory).lookup
+        return self._lookup
+
+    @property
+    def _resource_sharing(self) -> ResourceSharing:
+        if self._sharing is None:
+            self._sharing = sharing_parts_from(service_factory).sharing
+        return self._sharing
+
+    @property
+    def result_cache(self) -> ResultCsvCache:
+        """The per-process result CSV cache (shared with the delete, BR1.8)."""
+        if self._cache is None:
+            self._cache = shared_result_cache()
+        return self._cache
 
     # =========================================================================
-    # 内部ヘルパー
+    # 判定と読み取り（BR2.4、BR2.5、BR2.7）
     # =========================================================================
 
-    def _load_results_csv(self, s3_path: str) -> bytes:
-        """S3から結果CSVを取得する（TTLキャッシュ付き）。"""
-        now = time.monotonic()
-        cached = self._csv_cache.get(s3_path)
-        if cached is not None:
-            cached_at, data = cached
-            if now - cached_at < self._CACHE_TTL_SECONDS:
-                return data
-        data = self.s3_service.download_file(s3_path)
-        self._csv_cache[s3_path] = (now, data)
-        return data
+    def _readable_survey(self, principal: Principal, survey_id: str) -> Survey:
+        target = self._resource_lookup.get(_SURVEY, survey_id)
+        AccessPolicy.ensure_readable(principal, target, ErrorCode.SURVEY_NOT_FOUND)
+        return self._body(survey_id)
 
-    def _get_survey_with_result(self, survey_id: str) -> Any:
-        """アンケートを取得し結果が存在することを確認する。"""
-        survey = self.db.get_survey(survey_id)
+    def _manageable_survey(self, principal: Principal, survey_id: str) -> Survey:
+        AccessPolicy.require(principal, Permission.AI_EXECUTE, resource_type=_SURVEY)
+        target = self._resource_lookup.get(_SURVEY, survey_id)
+        AccessPolicy.ensure_manageable(principal, target, ErrorCode.SURVEY_NOT_FOUND)
+        return self._body(survey_id)
+
+    def _body(self, survey_id: str) -> Survey:
+        try:
+            survey = self.db.get_survey(survey_id, consistent=True)
+        except DatabaseError as e:
+            raise LookupUnavailableError("survey body unreadable") from e
         if survey is None:
             raise SurveyAnalysisManagerError(
-                f"survey {survey_id!r} not found",
-                code=ErrorCode.SURVEY_NOT_FOUND,
-            )
-        if not survey.s3_result_path:
-            raise SurveyAnalysisManagerError(
-                f"survey {survey_id!r} has no s3 result path",
-                code=ErrorCode.SURVEY_RESULT_NOT_READY,
+                "survey is gone", code=ErrorCode.SURVEY_NOT_FOUND
             )
         return survey
 
-    def _get_template(self, template_id: str) -> SurveyTemplate:
-        """テンプレートを取得する。"""
-        template = self.db.get_survey_template(template_id)
+    @staticmethod
+    def _require_result(survey: Survey) -> str:
+        if survey.status != "completed" or not survey.s3_result_path:
+            raise SurveyAnalysisManagerError(
+                f"survey {survey.id!r} has no result yet",
+                code=ErrorCode.SURVEY_RESULT_NOT_READY,
+            )
+        return survey.s3_result_path
+
+    def _questions_of(self, principal: Principal, survey: Survey) -> TemplateSnapshot:
+        """The snapshot, or a readable template for a survey before v1.0.0."""
+        if survey.template_snapshot is not None:
+            return survey.template_snapshot
+        target = self._resource_lookup.get(_TEMPLATE, survey.template_id)
+        template = None
+        if AccessPolicy.can_read(principal, target):
+            try:
+                template = self.db.get_survey_template(
+                    survey.template_id, consistent=True
+                )
+            except DatabaseError as e:
+                raise LookupUnavailableError("template body unreadable") from e
         if template is None:
             raise SurveyAnalysisManagerError(
-                f"survey template {template_id!r} not found",
+                "the template of this old survey is not readable",
                 code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
             )
-        return template
+        return TemplateSnapshot.from_template(template)
+
+    def _load_results_csv(self, survey: Survey) -> bytes:
+        """The result CSV, from the cache or S3 (called after the decision only)."""
+        cached = self.result_cache.get(survey.id)
+        if cached is not None:
+            return cached
+        data = self.s3_service.download_file(self._require_result(survey))
+        self.result_cache.put(survey.id, data)
+        return data
 
     # =========================================================================
     # ビジュアル分析
     # =========================================================================
 
-    def get_visual_analysis(self, survey_id: str) -> VisualAnalysisData:
-        """CSVデータをパースし、選択式/スケール評価の分布を計算する。"""
-        survey = self._get_survey_with_result(survey_id)
-        template = self._get_template(survey.template_id)
+    def get_visual_analysis(
+        self, principal: Principal, survey_id: str
+    ) -> VisualAnalysisData:
+        """選択式/スケール評価の分布（読める人だけ、BR2.4）。
 
-        csv_bytes = self._load_results_csv(survey.s3_result_path)
-        rows = parse_results_csv(csv_bytes)
-        return self._compute_visual_analysis(rows, template)
+        Raises:
+            CodedError: ``SURVEY_NOT_FOUND``, ``SURVEY_RESULT_NOT_READY`` or
+                ``SURVEY_TEMPLATE_NOT_FOUND`` (an old survey's template).
+        """
+        survey = self._readable_survey(principal, survey_id)
+        self._require_result(survey)
+        questions = self._questions_of(principal, survey)
+        rows = parse_results_csv(self._load_results_csv(survey))
+        return self._compute_visual_analysis(rows, questions)
 
     def _compute_visual_analysis(
-        self, rows: List[Dict[str, Any]], template: SurveyTemplate
+        self, rows: List[Dict[str, Any]], template: Any
     ) -> VisualAnalysisData:
         """回答データからビジュアル分析データを計算する。"""
         multiple_choice_charts: List[Dict[str, Any]] = []
@@ -256,12 +347,16 @@ class SurveyAnalysisManager:
     # ペルソナ統計
     # =========================================================================
 
-    def get_persona_statistics(self, survey_id: str) -> PersonaStatistics:
-        """CSVデータからペルソナの統計情報を集計する。"""
-        survey = self._get_survey_with_result(survey_id)
+    def get_persona_statistics(
+        self, principal: Principal, survey_id: str
+    ) -> PersonaStatistics:
+        """回答したペルソナの統計（読める人だけ、BR2.4）。
 
-        csv_bytes = self._load_results_csv(survey.s3_result_path)
-        rows = parse_results_csv(csv_bytes)
+        Raises:
+            CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``.
+        """
+        survey = self._readable_survey(principal, survey_id)
+        rows = parse_results_csv(self._load_results_csv(survey))
         return self._compute_persona_statistics(rows)
 
     def _compute_persona_statistics(
@@ -331,72 +426,95 @@ class SurveyAnalysisManager:
         )
 
     # =========================================================================
-    # インサイトレポート
+    # インサイトレポート（BR2.11）
     # =========================================================================
 
-    def generate_insight_report(self, survey_id: str) -> InsightReport:
-        """インサイトレポートを生成しDynamoDBに保存する。"""
-        survey = self._get_survey_with_result(survey_id)
-        template = self._get_template(survey.template_id)
+    def _report_prompt(self, principal: Principal, survey: Survey) -> str:
+        self._require_result(survey)
+        questions = self._questions_of(principal, survey)
+        csv_text = self._load_results_csv(survey).decode("utf-8-sig")
+        summary = self._generate_statistical_summary(csv_text, questions)
+        return build_insight_prompt(summary, questions)  # type: ignore[arg-type]
 
+    def generate_insight_report(
+        self, principal: Principal, survey_id: str
+    ) -> InsightReport:
+        """インサイトレポートを生成して保存する（管理できる人だけ、BR2.11）。
+
+        Raises:
+            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
+            CodedError: ``SURVEY_NOT_FOUND``, ``SURVEY_RESULT_NOT_READY``,
+                ``SURVEY_REPORT_TOO_LARGE`` or ``SURVEY_REPORT_GENERATION_FAILED``.
+        """
+        survey = self._manageable_survey(principal, survey_id)
+        prompt = self._report_prompt(principal, survey)
         try:
-            csv_bytes = self._load_results_csv(survey.s3_result_path)
-            csv_text = csv_bytes.decode("utf-8-sig")
-
-            summary = self._generate_statistical_summary(csv_text, template)
-            prompt = build_insight_prompt(summary, template)
             content = self.ai_service.invoke_model(prompt, max_tokens=8000)
-
-            report = InsightReport.create_new(survey_id=survey_id, content=content)
-
-            survey.insight_report = report
-            survey.updated_at = datetime.now()
-            self.db.update_survey(survey)
-
-            logger.info(f"Insight report generated for survey: {survey_id}")
-            return report
-
-        except SurveyAnalysisManagerError:
-            raise
         except Exception as e:
-            logger.error(f"Failed to generate insight report: {e}")
+            logger.error("Failed to generate insight report: %s", type(e).__name__)
             raise SurveyAnalysisManagerError(
                 f"insight report generation failed ({type(e).__name__})",
                 code=ErrorCode.SURVEY_REPORT_GENERATION_FAILED,
             ) from e
+        return self._store_report(survey, content)
 
-    def generate_insight_report_streaming(self, survey_id: str) -> Any:
-        """インサイトレポートをストリーミング生成する。"""
-        survey = self._get_survey_with_result(survey_id)
-        template = self._get_template(survey.template_id)
+    def generate_insight_report_streaming(
+        self, principal: Principal, survey_id: str
+    ) -> Iterator[str]:
+        """インサイトレポートをストリーミング生成する（判定は最初の 1 片の前、BR2.11）。
 
-        csv_bytes = self._load_results_csv(survey.s3_result_path)
-        csv_text = csv_bytes.decode("utf-8-sig")
-
-        summary = self._generate_statistical_summary(csv_text, template)
-        prompt = build_insight_prompt(summary, template)
+        Raises:
+            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
+            CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``.
+        """
+        survey = self._manageable_survey(principal, survey_id)
+        prompt = self._report_prompt(principal, survey)
         converse_messages = [{"role": "user", "content": [{"text": prompt}]}]
-
-        yield from self.ai_service.generate_standard_report_streaming(
+        stream: Iterator[str] = self.ai_service.generate_standard_report_streaming(
             system_prompt=INSIGHT_REPORT_SYSTEM_PROMPT,
             converse_messages=converse_messages,
         )
+        return stream
 
-    def save_insight_report(self, survey_id: str, content: str) -> InsightReport:
-        """ストリーミング生成済みのレポートを保存する。"""
-        survey = self.db.get_survey(survey_id)
-        if survey is None:
+    def save_insight_report(
+        self, principal: Principal, survey_id: str, content: str
+    ) -> InsightReport:
+        """ストリーミング生成済みのレポートを保存する（管理できる人だけ、BR2.11）。
+
+        Raises:
+            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
+            CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_REPORT_TOO_LARGE``.
+        """
+        survey = self._manageable_survey(principal, survey_id)
+        return self._store_report(survey, content)
+
+    def _store_report(self, survey: Survey, content: str) -> InsightReport:
+        report = InsightReport.create_new(survey_id=survey.id, content=content)
+        with_report = survey.to_dict()
+        with_report["insight_report"] = report.to_dict()
+        if self.db.item_size(with_report) > MAX_SURVEY_BYTES:
             raise SurveyAnalysisManagerError(
-                f"survey {survey_id!r} not found",
-                code=ErrorCode.SURVEY_NOT_FOUND,
+                "the report pushes the survey over 350KB",
+                code=ErrorCode.SURVEY_REPORT_TOO_LARGE,
             )
-
-        report = InsightReport.create_new(survey_id=survey_id, content=content)
-        survey.insight_report = report
-        survey.updated_at = datetime.now()
-        self.db.update_survey(survey)
-
-        logger.info(f"Insight report saved for survey: {survey_id}")
+        try:
+            written = self.db.update_survey_fields(
+                survey.id,
+                {
+                    "insight_report": report.to_dict(),
+                    "updated_at": datetime.now().isoformat(),
+                },
+            )
+        except DatabaseError as e:
+            raise SurveyAnalysisManagerError(
+                "insight report could not be saved",
+                code=ErrorCode.SURVEY_OPERATION_FAILED,
+            ) from e
+        if not written:
+            raise SurveyAnalysisManagerError(
+                "survey is gone", code=ErrorCode.SURVEY_NOT_FOUND
+            )
+        logger.info("Insight report saved for survey: %s", survey.id)
         return report
 
     # =========================================================================
@@ -404,7 +522,7 @@ class SurveyAnalysisManager:
     # =========================================================================
 
     def _generate_statistical_summary(
-        self, results_csv: str, template: SurveyTemplate
+        self, results_csv: str, template: Any
     ) -> Dict[str, Any]:
         """CSV結果から統計要約を生成する。DataFrame操作はService層に委譲。"""
         questions = [

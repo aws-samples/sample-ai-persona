@@ -1,13 +1,21 @@
+{#
+  取り込みの結果（U7）。成功したら一覧（#custom-dataset-list）も OOB で差し替える。
+  引数:
+    error   ... 失敗の文言（カタログの文言）
+    success ... 成功したか
+    result  ... 登録した CustomPersonaData
+    listing ... 一覧（PersonaDataListing）
+#}
 {% if error is defined and error %}
-<div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+<div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700" role="alert">
     {{ error }}
 </div>
 {% elif success %}
-<div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700">
-    ✓ <strong>{{ result.name }}</strong> をアップロードしました（{{ result.row_count }}行、{{ result.columns|length }}カラム、{{ result.size_mb }} MB）
+<div class="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700" role="status">
+    ✓ <strong>{{ result.name }}</strong> を登録しました（{{ "{:,}".format(result.row_count) }}行、{{ result.columns|length }}カラム）
 </div>
 <!-- OOBスワップでデータセット一覧も更新 -->
-<div id="custom-dataset-list" hx-swap-oob="innerHTML">
+<div id="custom-dataset-list" data-reload-url="/survey/persona-data/custom" hx-swap-oob="true">
     {% include "survey/partials/custom_dataset_list.html" %}
 </div>
 {% endif %}

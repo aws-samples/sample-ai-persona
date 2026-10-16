@@ -323,3 +323,28 @@ class TestDiscussionInterviewCodes:
     def test_no_interview_message_conflict_code(self):
         """衝突は約束 C5 の CONCURRENT_UPDATE だけ（409 のコードを足さない）。"""
         assert "INTERVIEW_MESSAGE_CONFLICT" not in ErrorCode.__members__
+
+
+class TestSurveyOrgAssetCodes:
+    """U7 のコード（rules.md BR3.1、BR4.2〜BR4.4、BR2.2、NFR2.25）。"""
+
+    @pytest.mark.parametrize(
+        ("name", "kind"),
+        [
+            ("SETTINGS_NOT_FOUND", ErrorKind.NOT_FOUND),
+            ("CUSTOM_PERSONA_DATA_NOT_FOUND", ErrorKind.NOT_FOUND),
+            ("CUSTOM_PERSONA_DATA_NAME_INVALID", ErrorKind.VALIDATION),
+            ("CUSTOM_PERSONA_DATA_NAME_TAKEN", ErrorKind.VALIDATION),
+            ("SURVEY_TEMPLATE_TOO_LARGE", ErrorKind.CAPACITY),
+            ("SURVEY_REPORT_TOO_LARGE", ErrorKind.CAPACITY),
+            ("SURVEY_TEMPLATE_IMAGE_UNAVAILABLE", ErrorKind.TRANSIENT),
+        ],
+    )
+    def test_kind(self, name, kind):
+        assert ErrorCode[name].kind is kind
+
+    def test_hidden_settings_answer_404(self):
+        from web.error_messages import http_status_for
+
+        assert http_status_for(ErrorCode["SETTINGS_NOT_FOUND"]) == 404
+        assert http_status_for(ErrorCode["CUSTOM_PERSONA_DATA_NOT_FOUND"]) == 404

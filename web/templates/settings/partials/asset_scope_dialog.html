@@ -1,0 +1,33 @@
+{% from "components/dialog.html" import dialog %}
+{% from "components/department_picker.html" import department_picker %}
+{#
+  組織資産の利用範囲のダイアログ（M10、U7 BR5.2）。htmx で body に差し込まれて開き、
+  閉じたら消える。部署の選択は U3 の department_picker（mode="scope"）。
+  保存は開いたときの部署との差分だけ（departments / departments_initial）。
+  開いたときの部署を外すと、保存の前に role="alert" の注意を出す（app.js の AssetScope）。
+
+  引数:
+    scope     ... src/models/sharing.py の AssetScopeDialog（dialog はマクロの名前と重なるため使わない）
+    dialog_id ... ダイアログの id（画面に 1 つ）
+    save_url  ... 保存先（POST）
+#}
+{% call dialog(dialog_id, "利用範囲を設定: " ~ scope.name, describedby=dialog_id ~ "-note", autoopen=True, remove_on_close=True, panel_class="max-w-lg") %}
+<form hx-post="{{ save_url }}" hx-target="find [data-scope-error]" hx-swap="innerHTML" data-asset-scope-form data-testid="asset-scope-form">
+    <p id="{{ dialog_id }}-note" class="text-sm text-gray-700 mb-4">
+        選んだグループの人が、ペルソナやアンケートでこの資産を使えます。どのグループも選ばないと admin だけが使えます。
+        外したグループの人は、すでに紐付けたものがあっても、次の実行から使えなくなります（紐付けは残ります）。
+    </p>
+    {{ department_picker("departments", scope.choices, scope.selected, mode="scope", id_prefix=dialog_id ~ "-departments", vanished=scope.vanished, vanished_label="（削除されたグループ）") }}
+    <p data-scope-remove-warning data-testid="asset-scope-remove-warning" role="alert" hidden
+       class="mt-3 p-3 text-sm text-yellow-900 bg-yellow-50 border border-yellow-200 rounded-md">
+        外したグループの人は、この資産を使えなくなります。保存してよいか確かめてください。
+    </p>
+    <div data-scope-error class="mt-3"></div>
+    <div class="flex justify-end gap-2 mt-6">
+        <button type="button" data-dialog-close
+                class="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">キャンセル</button>
+        <button type="submit" data-testid="asset-scope-save"
+                class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">保存</button>
+    </div>
+</form>
+{% endcall %}

@@ -2,7 +2,7 @@
 SurveyTemplate and Question data models for the Mass Survey feature.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
@@ -132,7 +132,11 @@ class Question:
 
 @dataclass
 class SurveyTemplate:
-    """アンケートテンプレート"""
+    """アンケートテンプレート
+
+    U7（約束 C8）: ``owner_sub`` は作った人（v1.0.0 より前のテンプレートにはない）、
+    ``shared_group_ids`` は共有先の部署で、書くのは ``ResourceSharing`` だけ。
+    """
 
     id: str
     name: str
@@ -140,6 +144,8 @@ class SurveyTemplate:
     created_at: datetime
     updated_at: datetime
     images: List[TemplateImage] = field(default_factory=list)
+    owner_sub: Optional[str] = None
+    shared_group_ids: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def create_new(
@@ -159,6 +165,26 @@ class SurveyTemplate:
             images=images or [],
         )
 
+    def owned_by(self, owner_sub: str) -> "SurveyTemplate":
+        """Return a new instance owned by ``owner_sub`` and unshared (BR1.1)."""
+        return replace(self, owner_sub=owner_sub, shared_group_ids=frozenset())
+
+    def edited(
+        self,
+        name: str,
+        questions: List[Question],
+        images: List[TemplateImage],
+        now: Optional[datetime] = None,
+    ) -> "SurveyTemplate":
+        """Return the edited template; owner, shares and ``created_at`` stay (BR1.5)."""
+        return replace(
+            self,
+            name=name,
+            questions=list(questions),
+            images=list(images),
+            updated_at=now or datetime.now(),
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert SurveyTemplate to dictionary for serialization."""
         d: Dict[str, Any] = {
@@ -170,6 +196,10 @@ class SurveyTemplate:
         }
         if self.images:
             d["images"] = [img.to_dict() for img in self.images]
+        if self.owner_sub:
+            d["owner_sub"] = self.owner_sub
+        if self.shared_group_ids:
+            d["shared_group_ids"] = sorted(self.shared_group_ids)
         return d
 
     @classmethod
@@ -182,4 +212,6 @@ class SurveyTemplate:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             images=[TemplateImage.from_dict(img) for img in data.get("images", [])],
+            owner_sub=str(data["owner_sub"]) if data.get("owner_sub") else None,
+            shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
         )

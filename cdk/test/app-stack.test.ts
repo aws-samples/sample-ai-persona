@@ -591,6 +591,46 @@ describe('AppStack: 議論の発言・レポートとインタビュー（U6、N
   });
 });
 
+describe('AppStack: カスタムデータの登録情報（U7、NFR1.80、NFR1.81）', () => {
+  const TABLE = 'DatabaseCustomPersonaData';
+  function taskStatements(t: Template): any[] {
+    return Object.values(t.findResources('AWS::IAM::Policy'))
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes('TaskRole'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+  }
+
+  test('CustomPersonaData への操作は 1 つの文で、7 つの操作だけ（Query なし）。GSI がないためインデックスを指さない', () => {
+    const touching = taskStatements(template).filter((s) =>
+      JSON.stringify(s.Resource ?? '').includes(TABLE),
+    );
+    expect(touching).toHaveLength(1);
+    const statement = touching[0];
+    expect([statement.Action].flat().sort()).toEqual([
+      'dynamodb:BatchGetItem',
+      'dynamodb:ConditionCheckItem',
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Scan',
+      'dynamodb:UpdateItem',
+    ]);
+    expect(JSON.stringify(statement.Resource)).not.toContain('/index/');
+  });
+
+  test('環境変数 CUSTOM_PERSONA_DATA_TABLE_NAME をテーブルの参照で渡す（約束 C10）', () => {
+    expect(JSON.stringify(envOf(template).CUSTOM_PERSONA_DATA_TABLE_NAME)).toContain(TABLE);
+  });
+
+  test('アンケートの 2 テーブルの OwnerIndex は今の付与（インデックスを含む）で読める', () => {
+    const statements = taskStatements(template).filter((s) =>
+      JSON.stringify(s.Resource ?? '').includes('DatabaseSurveys'),
+    );
+    const actions = statements.flatMap((s) => [s.Action].flat());
+    expect(actions).toContain('dynamodb:Query');
+    expect(JSON.stringify(statements.map((s) => s.Resource))).toContain('/index/*');
+  });
+});
+
 test('出力に CloudFront の URL とサービスの名前がある（deploy.sh が読む）', () => {
   const outputs = Object.keys(template.toJSON().Outputs ?? {});
   for (const name of ['AppUrl', 'ClusterName', 'ServiceName']) {

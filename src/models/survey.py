@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import uuid
 
 from .errors import ErrorCode
+from .survey_template import Question, SurveyTemplate, TemplateImage
 
 
 @dataclass
@@ -71,9 +72,61 @@ class PersonaStatistics:
     age_stats: Dict[str, Any]  # min, max, average
 
 
+@dataclass(frozen=True)
+class TemplateSnapshot:
+    """The template as it was when a survey started (U7 BR2.7).
+
+    Analysis, display and the insight prompt use this copy, so editing or
+    deleting the template later does not change past results. Images are
+    references only; the files stay attached to the template (BR2.8).
+    """
+
+    name: str
+    questions: tuple[Question, ...]
+    images: tuple[TemplateImage, ...] = ()
+
+    @classmethod
+    def from_template(cls, template: SurveyTemplate) -> "TemplateSnapshot":
+        """Copy the name, questions and image references of ``template``."""
+        return cls(
+            name=template.name,
+            questions=tuple(template.questions),
+            images=tuple(template.images or ()),
+        )
+
+    def image(self, image_id: str) -> Optional[TemplateImage]:
+        """The image reference with ``image_id``, or ``None`` (BR2.8)."""
+        return next((img for img in self.images if img.id == image_id), None)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the snapshot to a dictionary (no empty image list)."""
+        data: Dict[str, Any] = {
+            "name": self.name,
+            "questions": [q.to_dict() for q in self.questions],
+        }
+        if self.images:
+            data["images"] = [img.to_dict() for img in self.images]
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TemplateSnapshot":
+        """Create a snapshot from :meth:`to_dict` output (DynamoDB values too)."""
+        return cls(
+            name=str(data["name"]),
+            questions=tuple(Question.from_dict(q) for q in data.get("questions", [])),
+            images=tuple(TemplateImage.from_dict(i) for i in data.get("images", [])),
+        )
+
+
 @dataclass
 class Survey:
-    """アンケート実行インスタンス"""
+    """アンケート実行インスタンス
+
+    U7（約束 C8、BR1.1、BR2.7）: ``owner_sub`` は実行した人（古い結果にはない）、
+    ``shared_group_ids`` は ``ResourceSharing`` だけが書く共有先、``template_snapshot``
+    は開始時のテンプレートの写し、``datasource_name`` は開始時のカスタムペルソナ
+    データの名前（表示用）。
+    """
 
     id: str
     name: str
@@ -96,6 +149,10 @@ class Survey:
     #: to show a user (counts, limits) -- never IDs, paths or SDK text.
     error_context: Optional[Dict[str, Any]] = None
     datasource: Optional[str] = None
+    owner_sub: Optional[str] = None
+    shared_group_ids: frozenset[str] = field(default_factory=frozenset)
+    template_snapshot: Optional[TemplateSnapshot] = None
+    datasource_name: Optional[str] = None
 
     @classmethod
     def create_new(
@@ -106,8 +163,11 @@ class Survey:
         persona_count: int,
         filters: Optional[Dict[str, Any]] = None,
         datasource: Optional[str] = None,
+        owner_sub: Optional[str] = None,
+        template_snapshot: Optional[TemplateSnapshot] = None,
+        datasource_name: Optional[str] = None,
     ) -> "Survey":
-        """Create a new Survey with auto-generated ID and timestamps."""
+        """Create a new, unshared Survey with auto-generated ID and timestamps."""
         now = datetime.now()
         return cls(
             id=str(uuid.uuid4()),
@@ -122,7 +182,15 @@ class Survey:
             created_at=now,
             updated_at=now,
             datasource=datasource,
+            owner_sub=owner_sub,
+            template_snapshot=template_snapshot,
+            datasource_name=datasource_name,
         )
+
+    @property
+    def template_name(self) -> Optional[str]:
+        """The template name of the snapshot; ``None`` for surveys before v1.0.0."""
+        return self.template_snapshot.name if self.template_snapshot else None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert Survey to dictionary for serialization."""
@@ -147,6 +215,14 @@ class Survey:
             result["error_context"] = self.error_context
         if self.datasource is not None:
             result["datasource"] = self.datasource
+        if self.owner_sub:
+            result["owner_sub"] = self.owner_sub
+        if self.shared_group_ids:
+            result["shared_group_ids"] = sorted(self.shared_group_ids)
+        if self.template_snapshot is not None:
+            result["template_snapshot"] = self.template_snapshot.to_dict()
+        if self.datasource_name:
+            result["datasource_name"] = self.datasource_name
         return result
 
     @classmethod
@@ -169,7 +245,22 @@ class Survey:
             error_code=cls._read_error_code(data),
             error_context=data.get("error_context"),
             datasource=data.get("datasource"),
+            owner_sub=str(data["owner_sub"]) if data.get("owner_sub") else None,
+            shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
+            template_snapshot=TemplateSnapshot.from_dict(data["template_snapshot"])
+            if data.get("template_snapshot")
+            else None,
+            datasource_name=data.get("datasource_name") or None,
         )
+
+    @property
+    def datasource_label(self) -> str:
+        """The persona data name to show (BR2.10): Nemotron or the stored name."""
+        if not self.datasource or self.datasource == "nemotron":
+            return "Nemotron"
+        if self.datasource_name:
+            return self.datasource_name
+        return self.datasource.split(":", 1)[-1]
 
     @staticmethod
     def _read_error_code(data: Dict[str, Any]) -> Optional[str]:
@@ -185,3 +276,22 @@ class Survey:
         if data.get("error_message"):
             return ErrorCode.SURVEY_EXECUTION_FAILED.value
         return None
+
+
+@dataclass(frozen=True)
+class SurveyDetail:
+    """What the result detail screen shows for one reader (U7 BR2.7〜BR2.11).
+
+    Attributes:
+        survey: The survey.
+        manageable: The reader may delete, share and generate the report.
+        template_name: From the snapshot; for an old survey without one, the
+            template's name when the reader may read it, else ``None``.
+        analysis_available: The questions are known (snapshot, or a readable
+            template for an old survey); otherwise only the CSV is offered.
+    """
+
+    survey: Survey
+    manageable: bool
+    template_name: Optional[str]
+    analysis_available: bool

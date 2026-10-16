@@ -1,36 +1,70 @@
-{% if custom_datasets %}
-<h3 class="text-sm font-semibold text-gray-700 mb-3">アップロード済みデータセット</h3>
-<div class="space-y-2">
-    {% for ds in custom_datasets %}
+{#
+  カスタムペルソナデータの一覧（U7 BR4.1・BR4.2、M10）。
+  引数:
+    listing ... src/models/custom_persona_data.py の PersonaDataListing
+                （custom は使えるもの。admin は全件。manageable は admin か。
+                 scope_labels は admin のときの利用範囲の部署名）
+  削除と利用範囲は admin だけ。URL は ID（/survey/persona-data/custom/{id}/...）。
+#}
+{%- set records = listing.custom if listing else [] -%}
+{% if records %}
+<div class="space-y-2" data-testid="custom-data-list">
+    {% for record in records %}
     <div>
-        <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3">
+        <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3" data-testid="custom-data-row">
             <div class="flex items-center gap-3">
-                <svg class="w-5 h-5 text-teal-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <svg class="w-5 h-5 text-teal-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
                 </svg>
                 <div>
-                    <p class="text-sm font-medium text-gray-900">{{ ds.name }}</p>
-                    <p class="text-xs text-gray-500">{{ ds.size_mb }} MB</p>
+                    <p class="text-sm font-medium text-gray-900">{{ record.name }}</p>
+                    <p class="text-xs text-gray-600">{{ "{:,}".format(record.row_count) }} 人・{{ record.columns | length }} 列</p>
+                    {%- if listing.manageable %}
+                    {%- set scope = listing.scope_labels.get(record.id, []) %}
+                    <p class="text-xs text-gray-700" data-testid="custom-data-scope">利用範囲: {{ scope | join("、") if scope else "admin のみ" }}</p>
+                    {%- endif %}
                 </div>
             </div>
             <div class="flex items-center gap-3">
-                <button hx-get="/survey/persona-data/custom/{{ ds.name }}/detail"
-                        hx-target="#detail-{{ ds.name | replace(' ', '-') }}"
+                <button type="button"
+                        hx-get="/survey/persona-data/custom/{{ record.id }}/detail"
+                        hx-target="#detail-{{ record.id }}"
                         hx-swap="innerHTML"
-                        class="text-blue-500 hover:text-blue-700 text-sm">
+                        aria-label="{{ record.name }} の詳細"
+                        class="text-blue-700 hover:text-blue-900 text-sm">
                     詳細
                 </button>
-                <button hx-delete="/survey/persona-data/custom/{{ ds.name }}"
+                {%- if listing.manageable %}
+                <button type="button"
+                        aria-haspopup="dialog"
+                        aria-label="{{ record.name }} の利用範囲を設定"
+                        data-testid="custom-data-scope-button"
+                        hx-get="/survey/persona-data/custom/{{ record.id }}/scope"
+                        hx-target="body"
+                        hx-swap="beforeend"
+                        class="text-gray-700 hover:text-gray-900 text-sm">
+                    利用範囲
+                </button>
+                <button type="button"
+                        hx-delete="/survey/persona-data/custom/{{ record.id }}"
                         hx-target="#custom-dataset-list"
                         hx-swap="innerHTML"
-                        hx-confirm="「{{ ds.name }}」を削除しますか？"
-                        class="text-red-500 hover:text-red-700 text-sm">
+                        hx-confirm="「{{ record.name }}」を削除しますか？このデータで実行した結果は残ります"
+                        aria-label="{{ record.name }} を削除"
+                        data-testid="custom-data-delete-button"
+                        class="text-red-600 hover:text-red-800 text-sm">
                     削除
                 </button>
+                {%- endif %}
             </div>
         </div>
-        <div id="detail-{{ ds.name | replace(' ', '-') }}"></div>
+        <div id="detail-{{ record.id }}"></div>
     </div>
     {% endfor %}
 </div>
+{% else %}
+<p class="text-sm text-gray-600" data-testid="custom-data-list-empty">
+    {%- if listing and listing.manageable %}カスタムペルソナデータはまだありません。下の「カスタムペルソナデータの追加」から登録してください。
+    {%- else %}使えるカスタムペルソナデータはありません。{% endif %}
+</p>
 {% endif %}

@@ -119,3 +119,26 @@ def test_base_page_has_no_axe_violations(nav: UiHarness) -> None:
     nav.page.focus(INTERVIEW)
     nav.page.keyboard.press("ArrowDown")
     nav.check_a11y()
+
+
+def test_admin_navigation_has_settings(nav: UiHarness) -> None:
+    """U7 BR3.1: 「設定」は admin のナビゲーションにだけある"""
+    assert nav.page.locator("[data-testid='nav-settings']").count() == 1
+    assert nav.page.locator("[data-testid='nav-settings-mobile']").count() == 1
+
+
+def test_member_navigation_has_no_settings(ui: UiHarness, test_app: Any) -> None:
+    """U7 BR3.1、AC5.2.1: member のナビゲーション（広い画面・狭い画面）に「設定」がない"""
+    from fastapi.testclient import TestClient
+
+    from tests.conftest import MEMBER_A
+
+    with TestClient(test_app, follow_redirects=False) as member:
+        MEMBER_A.login(member)
+        ui.page.set_viewport_size({"width": 1280, "height": 800})
+        ui.load_screen(member, "/")
+
+    assert ui.page.locator("[data-testid='nav-settings']").count() == 0
+    assert ui.page.locator("[data-testid='nav-settings-mobile']").count() == 0
+    assert ui.page.locator("a[href='/settings']").count() == 0
+    ui.check_a11y()

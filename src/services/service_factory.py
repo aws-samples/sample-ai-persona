@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .authz_lookup_service import AuthzLookupService
     from .cognito_groups_service import CognitoGroupsService
     from .oidc_service import OidcService
+    from .custom_persona_data_store import CustomPersonaDataStore
     from .persona_binding_store import PersonaBindingStore
     from .persona_candidate_store import PersonaCandidateStore
     from .resource_share_store import ResourceShareStore
@@ -74,6 +75,7 @@ class ServiceFactory:
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._discussion_store: Optional["DiscussionStore"] = None
         self._interview_session_store: Optional["InterviewSessionStore"] = None
+        self._custom_persona_data_store: Optional["CustomPersonaDataStore"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -456,6 +458,20 @@ class ServiceFactory:
                         table_name=config.PERSONA_BINDINGS_TABLE_NAME,
                     )
         return self._persona_binding_store
+
+    def get_custom_persona_data_store(self) -> "CustomPersonaDataStore":
+        """Return the store of custom persona data records (U7)."""
+        if self._custom_persona_data_store is None:
+            with self._lock:
+                if self._custom_persona_data_store is None:
+                    from .custom_persona_data_store import CustomPersonaDataStore
+
+                    self.logger.info("Creating new CustomPersonaDataStore instance")
+                    self._custom_persona_data_store = CustomPersonaDataStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.CUSTOM_PERSONA_DATA_TABLE_NAME,
+                    )
+        return self._custom_persona_data_store
 
     def get_uploaded_file_store(self) -> "UploadedFileStore":
         """Return the store of upload metadata (U5)."""

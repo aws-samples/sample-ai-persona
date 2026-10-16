@@ -271,10 +271,15 @@ def _list_screen_managers() -> dict[str, Mock]:
     discussion.list_discussions.return_value = TabbedList(
         tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
     )
+    # U7: アンケートの結果・テンプレートの一覧もタブ別（TabbedList）
     execution = Mock()
-    execution.get_all_surveys.return_value = []
+    execution.list_surveys.return_value = TabbedList(
+        tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
+    )
     template = Mock()
-    template.get_all_templates.return_value = []
+    template.list_templates.return_value = TabbedList(
+        tab=ListTab.MINE, items=[], counts={"mine": 0, "shared": 0}
+    )
     return {
         "web.routers.discussion.get_discussion_manager": discussion,
         "web.routers.survey.get_execution_manager": execution,

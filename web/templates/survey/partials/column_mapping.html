@@ -11,16 +11,31 @@
       hx-indicator="#mapping-spinner">
     <input type="hidden" name="filename" value="{{ filename }}">
     <input type="hidden" name="temp_key" value="{{ temp_key }}">
-    {% if is_dwh %}
+    {#- 名前（前後の空白を除いて 1〜100 文字、重なる名前は使えない）と利用範囲（既定は admin のみ、BR4.4・BR5.2） #}
     <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
-        <input type="text" name="dataset_name" value="{{ dataset_name }}" required
-               pattern="[a-zA-Z0-9\-_　-鿿＀-￯]+"
-               title="日本語・英数字・ハイフン・アンダースコアのみ使用可（括弧・スペース・特殊記号不可）"
+        <label for="custom-data-name" class="block text-sm font-medium text-gray-700 mb-1">データセット名</label>
+        <input type="text" id="custom-data-name" name="dataset_name" value="{{ dataset_name }}" required maxlength="100"
+               data-testid="custom-data-name"
                class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                placeholder="データセット名を確認・編集してください">
     </div>
-    {% endif %}
+    {#- 新規の登録なので外す部署はない。department_picker（変更の有無で保存を止める）は使わず、選ぶだけの欄にする #}
+    <fieldset class="mb-4" data-testid="custom-data-scope-field">
+        <legend class="text-sm font-medium text-gray-700 mb-2">利用できるグループ（複数選択可）</legend>
+        {%- if scope_choices %}
+        <div class="grid gap-2 {{ 'sm:grid-cols-2' if scope_choices | length > 8 else 'grid-cols-1' }}">
+            {%- for department in scope_choices %}
+            <label class="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" name="departments" value="{{ department.group_id }}" class="rounded border-gray-300">
+                <span>{{ department.display_name }}</span>
+            </label>
+            {%- endfor %}
+        </div>
+        {%- else %}
+        <p class="text-sm text-gray-700">登録されているグループがありません。</p>
+        {%- endif %}
+        <p class="text-xs text-gray-600 mt-1">どのグループも選ばないと、admin だけが使えます（既定）。あとから一覧の「利用範囲」で変えられます。</p>
+    </fieldset>
 
     <!-- CSVカラムのサンプルデータ表示 -->
     <div class="mb-4 overflow-x-auto">
@@ -184,7 +199,7 @@
                 hx-target="#prompt-preview"
                 hx-swap="innerHTML"
                 hx-indicator="#preview-spinner"
-                class="bg-amber-500 text-white px-4 py-2 rounded-md hover:bg-amber-600 text-sm flex items-center gap-2">
+                class="bg-amber-700 text-white px-4 py-2 rounded-md hover:bg-amber-800 text-sm flex items-center gap-2">
             <span id="preview-spinner" class="htmx-indicator">
                 <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -194,7 +209,7 @@
             プロンプトをプレビュー
         </button>
         <button type="submit"
-                class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 text-sm flex items-center gap-2">
+                class="bg-teal-700 text-white px-4 py-2 rounded-md hover:bg-teal-800 text-sm flex items-center gap-2">
             <span id="mapping-spinner" class="htmx-indicator">
                 <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

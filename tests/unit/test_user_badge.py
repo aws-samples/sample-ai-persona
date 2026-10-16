@@ -73,3 +73,22 @@ def test_three_or_more_departments_show_two_and_the_rest_count():
 
 def test_no_principal_means_no_badge():
     assert build_user_badge(None) is None
+
+
+@pytest.mark.parametrize(
+    ("roles", "expected"),
+    [
+        (frozenset({Role.ADMIN}), True),
+        (frozenset({Role.MEMBER}), False),
+        (frozenset(), False),
+        (frozenset({Role.MEMBER, Role.ADMIN}), True),
+    ],
+)
+def test_settings_link_follows_the_settings_permission(roles, expected):
+    """U7 BR3.2: 「設定」の導線は settings:manage を持つ人だけ（ロール名は見ない）。"""
+    assert build_user_badge(_principal(roles=roles)).can_manage_settings is expected
+
+
+def test_no_sub_never_manages_settings():
+    badge = build_user_badge(_principal(sub="", roles=frozenset({Role.ADMIN})))
+    assert badge.can_manage_settings is False

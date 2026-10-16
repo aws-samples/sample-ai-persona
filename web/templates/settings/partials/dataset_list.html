@@ -8,6 +8,7 @@
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">カラム数</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">行数</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">作成日</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">利用範囲</th>
                 <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">操作</th>
             </tr>
         </thead>
@@ -29,6 +30,10 @@
                 <td class="px-4 py-3 text-sm text-gray-500">
                     {{ dataset.created_at[:10].replace('-', '/') }}
                 </td>
+                <td class="px-4 py-3 text-sm text-gray-700" data-testid="dataset-scope">
+                    {%- set scope = (dataset_scopes or {}).get(dataset.id, []) %}
+                    利用範囲: {{ scope | join("、") if scope else "admin のみ" }}
+                </td>
                 <td class="px-4 py-3 text-right whitespace-nowrap">
                     <div class="flex flex-col items-end gap-1">
                     <button
@@ -38,6 +43,17 @@
                         hx-swap="beforeend"
                     >
                         編集
+                    </button>
+                    <button type="button"
+                        class="text-gray-600 hover:text-gray-800 text-sm"
+                        aria-haspopup="dialog"
+                        aria-label="{{ dataset.name }} の利用範囲を設定"
+                        data-testid="dataset-scope-button"
+                        hx-get="/settings/datasets/{{ dataset.id }}/scope"
+                        hx-target="body"
+                        hx-swap="beforeend"
+                    >
+                        利用範囲
                     </button>
                     <button
                         class="text-red-600 hover:text-red-800 text-sm"

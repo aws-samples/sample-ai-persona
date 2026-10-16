@@ -46,7 +46,7 @@ NO_USER_DATA = Entry(Kind.EXEMPT, Reason.NO_USER_DATA)
 #: Units in build order. ``pending_unit`` must name one after ``CURRENT_UNIT``.
 UNIT_ORDER: tuple[str, ...] = ("U1", "U2", "U3", "U4", "U5", "U6", "U7")
 #: The Unit being built. Each Unit's Code Generation moves it forward.
-CURRENT_UNIT = "U6"
+CURRENT_UNIT = "U7"
 #: At this Unit's Build and Test no ``pending_unit`` may remain (NFR1.8).
 FINAL_UNIT = "U7"
 
@@ -129,7 +129,9 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
 #: が使う PersonaManager.get_persona_unchecked を U6 に回し（35 → 36）、
 #: DatasetManager の紐付けの 5 メソッドを消した（55 → 50）。
 #: U6: pending("U6") を 0 件にした（36 件を CHECKS にするか、消すか非公開にした）。
-PENDING_BASELINE: dict[str, int] = {"U7": 50}
+#: U7: pending("U7") を 0 件にした（50 件を CHECKS / NO_USER_DATA にするか、消すか
+#: 非公開にするか置き換えた）。これで残りは 0 件（FINAL_UNIT）。
+PENDING_BASELINE: dict[str, int] = {}
 
 CLASSIFICATION: dict[str, Entry] = {
     # agent_discussion_manager.py — U6（security-design.md §1。エージェントの組み立て・
@@ -147,14 +149,16 @@ CLASSIFICATION: dict[str, Entry] = {
     "AuthManager.start_local_session": NO_USER_DATA,
     "AuthManager.check_request": NO_USER_DATA,
     "AuthManager.logout": NO_USER_DATA,
-    # dataset_manager.py
-    "DatasetManager.analyze_schema": pending("U7"),
-    "DatasetManager.download_csv_from_url": pending("U7"),
-    "DatasetManager.upload_csv": pending("U7"),
-    "DatasetManager.get_datasets": pending("U7"),
-    "DatasetManager.get_dataset": pending("U7"),
-    "DatasetManager.update_dataset": pending("U7"),
-    "DatasetManager.delete_dataset": pending("U7"),
+    # dataset_manager.py — U7（設定は settings:manage、なければ 404。security-design.md 1.4）
+    "DatasetManager.analyze_schema": CHECKS,
+    "DatasetManager.download_csv_from_url": CHECKS,
+    "DatasetManager.upload_csv": CHECKS,
+    "DatasetManager.get_datasets": CHECKS,
+    "DatasetManager.get_dataset": CHECKS,
+    "DatasetManager.update_dataset": CHECKS,
+    "DatasetManager.delete_dataset": CHECKS,
+    "DatasetManager.scope_dialog": CHECKS,  # 利用範囲のダイアログ（M10）
+    "DatasetManager.update_scope": CHECKS,  # ADD / DELETE（BR5.2）
     # 紐付けの 5 メソッドは U5 で PersonaManager へ移した（ADR-007）
     # discussion_manager.py — U6（security-design.md §1）
     "DiscussionManager.run_classic_discussion_streaming": CHECKS,  # ai:execute（BR2.8）
@@ -241,56 +245,68 @@ CLASSIFICATION: dict[str, Entry] = {
     "SharingManager.bulk_dialog": CHECKS,
     "SharingManager.save": CHECKS,
     "SharingManager.bulk_save": CHECKS,
-    # settings_manager.py
-    "SettingsManager.get_all_knowledge_bases": pending("U7"),
-    "SettingsManager.create_knowledge_base": pending("U7"),
-    "SettingsManager.delete_knowledge_base": pending("U7"),
-    "SettingsManager.save_data_agent_settings": pending("U7"),
+    # settings_manager.py — U7（設定は settings:manage、なければ 404。security-design.md 1.4）
+    "SettingsManager.get_all_knowledge_bases": CHECKS,
+    "SettingsManager.create_knowledge_base": CHECKS,
+    "SettingsManager.delete_knowledge_base": CHECKS,
+    "SettingsManager.scope_dialog": CHECKS,  # 利用範囲のダイアログ（M10）
+    "SettingsManager.update_scope": CHECKS,  # ADD / DELETE（BR5.2）
+    "SettingsManager.save_data_agent_settings": CHECKS,
     "SettingsManager.is_data_agent_available": NO_USER_DATA,  # 設定の有無だけ
-    "SettingsManager.test_data_agent_connection": pending("U7"),
-    # survey_analysis_manager.py
-    "SurveyAnalysisManager.get_visual_analysis": pending("U7"),
-    "SurveyAnalysisManager.get_persona_statistics": pending("U7"),
-    "SurveyAnalysisManager.generate_insight_report": pending("U7"),
-    "SurveyAnalysisManager.generate_insight_report_streaming": pending("U7"),
-    "SurveyAnalysisManager.save_insight_report": pending("U7"),
-    # survey_dataset_manager.py
-    "SurveyDatasetManager.check_nemotron_status": pending("U7"),
-    "SurveyDatasetManager.download_nemotron_dataset": pending("U7"),
-    "SurveyDatasetManager.list_custom_datasets": pending("U7"),
-    "SurveyDatasetManager.upload_custom_dataset": pending("U7"),
-    "SurveyDatasetManager.load_dataset_metadata": pending("U7"),
-    "SurveyDatasetManager.delete_custom_dataset": pending("U7"),
-    "SurveyDatasetManager.extract_segment_from_dwh": pending("U7"),
-    "SurveyDatasetManager.suggest_column_mapping": pending("U7"),
-    "SurveyDatasetManager.upload_temp_file": pending("U7"),
-    "SurveyDatasetManager.download_temp_file": pending("U7"),
-    "SurveyDatasetManager.delete_temp_file": pending("U7"),
-    "SurveyDatasetManager.parse_csv_columns": pending("U7"),
+    "SettingsManager.test_data_agent_connection": CHECKS,
+    "SettingsManager.get_data_agent_settings": CHECKS,
+    # survey_analysis_manager.py — U7（判定のあとだけ CSV とキャッシュ、BR2.4・BR2.11）
+    "SurveyAnalysisManager.result_cache": NO_USER_DATA,  # キャッシュの実体を返すだけ
+    "SurveyAnalysisManager.get_visual_analysis": CHECKS,  # ensure_readable
+    "SurveyAnalysisManager.get_persona_statistics": CHECKS,  # ensure_readable
+    "SurveyAnalysisManager.generate_insight_report": CHECKS,  # ai:execute + manage
+    "SurveyAnalysisManager.generate_insight_report_streaming": CHECKS,  # 同上
+    "SurveyAnalysisManager.save_insight_report": CHECKS,  # 同上
+    # survey_dataset_manager.py — U7（管理は settings:manage、参照は can_use_asset）
+    "SurveyDatasetManager.check_nemotron_status": NO_USER_DATA,  # 取り込みの有無だけ
+    "SurveyDatasetManager.download_nemotron_dataset": CHECKS,
+    "SurveyDatasetManager.ensure_manageable": CHECKS,  # 裏で動かす前の止め
+    "SurveyDatasetManager.import_scope_choices": CHECKS,  # 取り込みの利用範囲の欄
+    "SurveyDatasetManager.list_persona_data": CHECKS,  # can_use_asset（BR4.2）
+    "SurveyDatasetManager.get_custom_persona_data": CHECKS,  # can_use_asset
+    "SurveyDatasetManager.upload_custom_dataset": CHECKS,
+    "SurveyDatasetManager.delete_custom_dataset": CHECKS,
+    "SurveyDatasetManager.rename_custom_dataset": CHECKS,
+    "SurveyDatasetManager.scope_dialog": CHECKS,
+    "SurveyDatasetManager.update_scope": CHECKS,
+    "SurveyDatasetManager.extract_segment_from_dwh": CHECKS,
+    "SurveyDatasetManager.suggest_column_mapping": CHECKS,
+    "SurveyDatasetManager.upload_temp_file": CHECKS,
+    "SurveyDatasetManager.download_temp_file": CHECKS,
+    "SurveyDatasetManager.delete_temp_file": CHECKS,
+    "SurveyDatasetManager.parse_csv_columns": CHECKS,
     "SurveyDatasetManager.get_standard_columns": NO_USER_DATA,  # 固定の列定義
-    "SurveyDatasetManager.preview_system_prompt": pending("U7"),
-    "SurveyDatasetManager.get_available_filter_values": pending("U7"),
-    "SurveyDatasetManager.get_filtered_count": pending("U7"),
-    "SurveyDatasetManager.get_preview_stats": pending("U7"),
-    "SurveyDatasetManager.get_datasource_count": pending("U7"),
-    "SurveyDatasetManager.get_image_presigned_url": pending("U7"),
-    # survey_execution_manager.py
-    "SurveyExecutionManager.create_survey": pending("U7"),
-    "SurveyExecutionManager.execute_survey": pending("U7"),
-    "SurveyExecutionManager.start_survey": pending("U7"),
-    "SurveyExecutionManager.get_survey": pending("U7"),
-    "SurveyExecutionManager.get_all_surveys": pending("U7"),
-    "SurveyExecutionManager.delete_survey": pending("U7"),
-    "SurveyExecutionManager.get_download_url": pending("U7"),
-    "SurveyExecutionManager.download_results_csv": pending("U7"),
+    "SurveyDatasetManager.preview_system_prompt": CHECKS,
+    "SurveyDatasetManager.get_available_filter_values": CHECKS,  # データソースの判定
+    "SurveyDatasetManager.get_filtered_count": CHECKS,  # 同上
+    "SurveyDatasetManager.get_preview_stats": CHECKS,  # 同上
+    "SurveyDatasetManager.get_datasource_count": CHECKS,  # 同上
+    # survey_execution_manager.py — U7（開始は ai:execute・テンプレート・元データ、BR2.1。
+    # execute_survey・start_survey は非公開にし、get_all_surveys は list_surveys にした）
+    "SurveyExecutionManager.result_cache": NO_USER_DATA,  # キャッシュの実体を返すだけ
+    "SurveyExecutionManager.create_survey": CHECKS,
+    "SurveyExecutionManager.list_surveys": CHECKS,  # ResourceSharing + can_read
+    "SurveyExecutionManager.get_survey": CHECKS,  # ensure_readable
+    "SurveyExecutionManager.get_survey_detail": CHECKS,  # 同上 + can_manage
+    "SurveyExecutionManager.get_download_url": CHECKS,  # 同上
+    "SurveyExecutionManager.download_results_csv": CHECKS,  # 同上
+    "SurveyExecutionManager.get_result_image_url": CHECKS,  # 同上 + 写しの画像だけ
+    "SurveyExecutionManager.delete_survey": CHECKS,  # delete_with_shares
     "SurveyExecutionManager.normalize_filters": NO_USER_DATA,  # 入力の整形だけ
     "SurveyExecutionManager.generate_default_survey_name": NO_USER_DATA,  # 名前の生成だけ
-    # survey_template_manager.py
-    "SurveyTemplateManager.create_template": pending("U7"),
-    "SurveyTemplateManager.get_template": pending("U7"),
-    "SurveyTemplateManager.get_all_templates": pending("U7"),
-    "SurveyTemplateManager.update_template": pending("U7"),
-    "SurveyTemplateManager.delete_template": pending("U7"),
-    "SurveyTemplateManager.generate_ai_chat_response": pending("U7"),
-    "SurveyTemplateManager.generate_ai_questions_draft": pending("U7"),
+    # survey_template_manager.py — U7（所有・共有・判定、BR1.1〜BR1.7、BR2.3。
+    # get_all_templates は list_templates にした）
+    "SurveyTemplateManager.create_template": CHECKS,  # resource:create
+    "SurveyTemplateManager.list_templates": CHECKS,  # ResourceSharing + can_read
+    "SurveyTemplateManager.get_template": CHECKS,  # ensure_readable
+    "SurveyTemplateManager.get_template_for_edit": CHECKS,  # ensure_manageable
+    "SurveyTemplateManager.update_template": CHECKS,  # ensure_manageable
+    "SurveyTemplateManager.delete_template": CHECKS,  # delete_with_shares
+    "SurveyTemplateManager.generate_ai_chat_response": CHECKS,  # ai:execute
+    "SurveyTemplateManager.generate_ai_questions_draft": CHECKS,  # ai:execute
 }

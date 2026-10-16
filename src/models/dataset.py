@@ -2,7 +2,7 @@
 Dataset data model for external data integration.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
@@ -33,6 +33,13 @@ class Dataset:
     # U5（Q3 A）: ペルソナ専用のデータセットなら持ち主のペルソナ ID。組織資産は None。
     # 作成後は変えない
     owner_persona_id: Optional[str] = None
+    # U7: 組織資産の利用範囲（BR5.1）。空なら admin だけが使える。ペルソナ専用には書かない
+    shared_group_ids: frozenset[str] = field(default_factory=frozenset)
+
+    @property
+    def is_org_asset(self) -> bool:
+        """Whether this is an organization asset (not persona-dedicated, BR5.6)."""
+        return not self.owner_persona_id
 
     @classmethod
     def create_new(
@@ -68,6 +75,8 @@ class Dataset:
         data = self._base_dict()
         if self.owner_persona_id:
             data["owner_persona_id"] = self.owner_persona_id
+        if self.shared_group_ids:
+            data["shared_group_ids"] = sorted(self.shared_group_ids)
         return data
 
     def _base_dict(self) -> Dict[str, Any]:
@@ -101,6 +110,7 @@ class Dataset:
             updated_at=datetime.fromisoformat(data["updated_at"]),
             notes=data.get("notes", ""),
             owner_persona_id=data.get("owner_persona_id") or None,
+            shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
         )
 
 

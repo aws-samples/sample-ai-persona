@@ -9,6 +9,8 @@ import * as kms from 'aws-cdk-lib/aws-kms';
  * - 今と同じキー・GSI・PITR の 10 テーブルを TableV2 で新しく作る（形の作り直しは U4〜U7）
  * - U5: 生成候補（PersonaCandidates）と紐付け（PersonaBindings）を足し、UploadedFiles に TTL を足す
  * - U6: 議論の発言・レポートとインタビューの 4 テーブルを足し、Discussions に OwnerIndex を足す
+ * - U7: カスタムペルソナデータの登録情報（CustomPersonaData）を足し、SurveyTemplates・Surveys に
+ *   OwnerIndex を足す
  * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
  * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
  * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
@@ -58,6 +60,12 @@ export class Database extends Construct {
   public readonly interviewSessionsTable: dynamodb.TableV2;
   /** 実行中のインタビューの発言（U6）。PK session_id・SK seq（数値）、TTL expires_at。 */
   public readonly interviewMessagesTable: dynamodb.TableV2;
+  /**
+   * カスタムペルソナデータの登録情報（U7、BR4.3〜BR4.6）。PK id、GSI なし、PITR・削除保護・
+   * RETAIN・AWS 管理キー。applicationTables には入れず、App スタックが Query を除く
+   * 7 つの操作を 1 つの文で付ける（タスクロールのポリシーの大きさ、NFR1.81）。
+   */
+  public readonly customPersonaDataTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
@@ -103,8 +111,17 @@ export class Database extends Construct {
     this.bindingsTable = this.table('PersonaDatasetBindings', {
       globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
     });
-    this.surveyTemplatesTable = this.table('SurveyTemplates');
-    this.surveysTable = this.table('Surveys');
+    // 「自分のもの」の一覧と件数（U7、BR1.2）。テーブルは置き換えない（GSI の追加だけ）
+    this.surveyTemplatesTable = this.table('SurveyTemplates', {
+      globalSecondaryIndexes: [
+        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+      ],
+    });
+    this.surveysTable = this.table('Surveys', {
+      globalSecondaryIndexes: [
+        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+      ],
+    });
     this.knowledgeBasesTable = this.table('KnowledgeBases');
     this.personaKBBindingsTable = this.table('PersonaKBBindings', {
       globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
@@ -162,6 +179,10 @@ export class Database extends Construct {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // U7: カスタムペルソナデータの登録情報（PK id、名前の押さえの項目 id="name#{名前}" も同じ
+    // テーブル、約束 C8）。applicationTables には入れず、App スタックが絞った操作を付ける
+    this.customPersonaDataTable = this.table('CustomPersonaData');
 
     // U6: 議論の発言とレポート（ADR-002）。消えると戻せないため PITR と削除保護を付ける
     const seq = { name: 'seq', type: dynamodb.AttributeType.NUMBER };

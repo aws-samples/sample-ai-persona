@@ -270,3 +270,144 @@ class TestDiscussionRegistration:
         assert found["old"].display_name == "古い議論"
         assert found["new"].shared_group_ids == frozenset({"sales"})
         assert found["gone"].exists is False
+
+
+class TestSurveyOrgAssetRegistration:
+    """U7: テンプレート・結果・カスタムペルソナデータを登録する（約束 C3、BR5.7）。"""
+
+    def _tables(self):
+        from src.managers.components.sharing_runtime import lookup_tables
+
+        return {t.resource_type: t for t in lookup_tables()}
+
+    @pytest.mark.parametrize(
+        ("resource_type", "suffix"),
+        [
+            (ResourceType.SURVEY, "Surveys"),
+            (ResourceType.SURVEY_TEMPLATE, "SurveyTemplates"),
+            (ResourceType.CUSTOM_PERSONA_DATA, "CustomPersonaData"),
+        ],
+    )
+    def test_registered_with_their_name(self, resource_type, suffix):
+        table = self._tables()[resource_type]
+        assert table.display_name_attribute == "name"
+        assert table.table_name.endswith(suffix)
+
+    def test_name_reservations_are_hidden(self):
+        tables = self._tables()
+        assert tables[ResourceType.CUSTOM_PERSONA_DATA].hidden_id_prefix == "name#"
+        assert tables[ResourceType.SURVEY].hidden_id_prefix is None
+
+    def _moto_lookup(self, monkeypatch, rows: dict[ResourceType, list[dict]]):
+        moto = pytest.importorskip("moto")
+        import boto3
+
+        from src.services.authz_lookup_service import AuthzLookupService
+
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        tables = self._tables()
+        mock = moto.mock_aws()
+        mock.start()
+        try:
+            client = boto3.client("dynamodb", region_name="us-east-1")
+            for resource_type, items in rows.items():
+                name = tables[resource_type].table_name
+                client.create_table(
+                    TableName=name,
+                    KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+                    AttributeDefinitions=[
+                        {"AttributeName": "id", "AttributeType": "S"}
+                    ],
+                    BillingMode="PAY_PER_REQUEST",
+                )
+                for item in items:
+                    client.put_item(TableName=name, Item=item)
+            service = AuthzLookupService(
+                region="us-east-1", jobs_table_name="Jobs", client=client
+            )
+            lookup = build_resource_lookup(
+                [(t, service.reader(tables[t])) for t in rows], sample_rate=0.0
+            )
+        except BaseException:
+            mock.stop()
+            raise
+        return lookup, mock
+
+    def test_old_template_without_owner_and_a_shared_survey(self, monkeypatch):
+        lookup, mock = self._moto_lookup(
+            monkeypatch,
+            {
+                ResourceType.SURVEY_TEMPLATE: [
+                    {"id": {"S": "old"}, "name": {"S": "古いテンプレート"}}
+                ],
+                ResourceType.SURVEY: [
+                    {
+                        "id": {"S": "s1"},
+                        "name": {"S": "結果"},
+                        "owner_sub": {"S": "a"},
+                        "shared_group_ids": {"SS": ["sales"]},
+                    }
+                ],
+            },
+        )
+        try:
+            template = lookup.get(ResourceType.SURVEY_TEMPLATE, "old")
+            survey = lookup.get(ResourceType.SURVEY, "s1")
+        finally:
+            mock.stop()
+        assert template.owner_sub is None
+        assert template.display_name == "古いテンプレート"
+        assert survey.owner_sub == "a"
+        assert survey.shared_group_ids == frozenset({"sales"})
+
+    def test_custom_data_scope_and_reservations_read_as_missing(self, monkeypatch):
+        lookup, mock = self._moto_lookup(
+            monkeypatch,
+            {
+                ResourceType.CUSTOM_PERSONA_DATA: [
+                    {
+                        "id": {"S": "c1"},
+                        "name": {"S": "顧客"},
+                        "shared_group_ids": {"SS": ["sales"]},
+                    },
+                    {"id": {"S": "name#顧客"}, "data_id": {"S": "c1"}},
+                ],
+            },
+        )
+        try:
+            found = lookup.get_many(
+                ResourceType.CUSTOM_PERSONA_DATA, ["c1", "name#顧客"]
+            )
+            single = lookup.get(ResourceType.CUSTOM_PERSONA_DATA, "name#顧客")
+        finally:
+            mock.stop()
+        assert found["c1"].shared_group_ids == frozenset({"sales"})
+        assert found["c1"].owner_sub is None
+        assert found["name#顧客"].exists is False
+        assert single.exists is False
+
+    def test_kb_and_dataset_read_their_scope(self, monkeypatch):
+        lookup, mock = self._moto_lookup(
+            monkeypatch,
+            {
+                ResourceType.KNOWLEDGE_BASE: [
+                    {
+                        "id": {"S": "k1"},
+                        "name": {"S": "KB"},
+                        "shared_group_ids": {"SS": ["plan"]},
+                    }
+                ],
+                ResourceType.DATASET: [
+                    {"id": {"S": "d1"}, "name": {"S": "DS"}},
+                ],
+            },
+        )
+        try:
+            kb = lookup.get(ResourceType.KNOWLEDGE_BASE, "k1")
+            dataset = lookup.get(ResourceType.DATASET, "d1")
+        finally:
+            mock.stop()
+        assert kb.shared_group_ids == frozenset({"plan"})
+        assert dataset.shared_group_ids == frozenset()

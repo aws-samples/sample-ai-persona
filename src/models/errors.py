@@ -318,6 +318,35 @@ class ErrorCode(StrEnum):
         "survey_report_generation_failed",
         ErrorKind.TRANSIENT,
     )
+    # U7 (NFR2.25): a template body over 200KB, or a survey body (with its
+    # template snapshot) over 350KB. The user shortens the questions.
+    SURVEY_TEMPLATE_TOO_LARGE = ("survey_template_too_large", ErrorKind.CAPACITY)
+    # U7 (NFR2.25): the insight report would push the survey body over 350KB.
+    SURVEY_REPORT_TOO_LARGE = ("survey_report_too_large", ErrorKind.CAPACITY)
+    # U7 (BR2.2 (b)): an image of the template snapshot could not be read while
+    # the survey ran. The survey stops instead of answering without the image.
+    SURVEY_TEMPLATE_IMAGE_UNAVAILABLE = (
+        "survey_template_image_unavailable",
+        ErrorKind.TRANSIENT,
+    )
+    # --- Custom persona data (U7, BR4.2〜BR4.4) ---
+    # Missing, or outside the user's usage scope (not told apart, NFR1.79).
+    CUSTOM_PERSONA_DATA_NOT_FOUND = (
+        "custom_persona_data_not_found",
+        ErrorKind.NOT_FOUND,
+    )
+    CUSTOM_PERSONA_DATA_NAME_INVALID = (
+        "custom_persona_data_name_invalid",
+        ErrorKind.VALIDATION,
+    )
+    CUSTOM_PERSONA_DATA_NAME_TAKEN = (
+        "custom_persona_data_name_taken",
+        ErrorKind.VALIDATION,
+    )
+    # --- Settings (U7, BR3.1) ---
+    # A settings screen or API for a user without ``settings:manage``: the same
+    # 404 as a missing page, so the screen's existence is not revealed.
+    SETTINGS_NOT_FOUND = ("settings_not_found", ErrorKind.NOT_FOUND)
 
     # --- Personas ---
     # Field-level validation is expressed as a validation *kind* plus a stable

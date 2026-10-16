@@ -506,3 +506,37 @@ class TestMessageInterviewExtensions:
             topic="デフォルトテスト", participants=["persona1"]
         )
         assert discussion.report_count == 0
+
+
+class TestDatasetScope:
+    """U7: データセットの利用範囲（shared_group_ids、BR5.1、BR5.6）。"""
+
+    def _dataset(self):
+        from src.models.dataset import Dataset, DatasetColumn
+
+        return Dataset.create_new(
+            name="売上",
+            description="",
+            s3_path="s3://b/datasets/x.csv",
+            columns=[DatasetColumn(name="a", data_type="string")],
+        )
+
+    def test_new_dataset_is_admin_only(self):
+        dataset = self._dataset()
+        assert dataset.shared_group_ids == frozenset()
+        assert "shared_group_ids" not in dataset.to_dict()
+
+    def test_scope_roundtrip(self):
+        from src.models.dataset import Dataset
+
+        data = {**self._dataset().to_dict(), "shared_group_ids": {"sales"}}
+        dataset = Dataset.from_dict(data)
+        assert dataset.shared_group_ids == frozenset({"sales"})
+        assert dataset.to_dict()["shared_group_ids"] == ["sales"]
+
+    def test_is_org_asset(self):
+        dataset = self._dataset()
+        assert dataset.is_org_asset
+        from dataclasses import replace
+
+        assert not replace(dataset, owner_persona_id="p1").is_org_asset

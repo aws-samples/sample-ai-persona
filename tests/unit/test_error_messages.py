@@ -275,6 +275,9 @@ _RESOURCE_NOT_FOUND = {
     # U5: アップロードファイルと KB の紐付け（security-design.md §5）
     ErrorCode.FILE_NOT_FOUND,
     ErrorCode.KB_BINDING_NOT_FOUND,
+    # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
+    ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
+    ErrorCode.SETTINGS_NOT_FOUND,
 }
 
 
@@ -401,3 +404,45 @@ class TestDiscussionInterviewWording:
         message = user_message_for(CodedError(code=ErrorCode.CONCURRENT_UPDATE))
         assert "応答の途中" in message
         assert _toast(ErrorCode.CONCURRENT_UPDATE)["type"] == "error"
+
+
+class TestSurveyOrgAssetWording:
+    """U7 のコードがカタログの文言を返すこと（BR3.1、BR4.4、NFR2.25）。"""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "SETTINGS_NOT_FOUND",
+            "CUSTOM_PERSONA_DATA_NOT_FOUND",
+            "CUSTOM_PERSONA_DATA_NAME_INVALID",
+            "CUSTOM_PERSONA_DATA_NAME_TAKEN",
+            "SURVEY_TEMPLATE_TOO_LARGE",
+            "SURVEY_REPORT_TOO_LARGE",
+            "SURVEY_TEMPLATE_IMAGE_UNAVAILABLE",
+        ],
+    )
+    def test_codes_resolve_to_catalog_wording(self, name):
+        code = ErrorCode[name]
+        context = {"max_length": 100}
+        message = user_message_for(
+            CodedError(code=code, context=context), default="既定"
+        )
+        assert message == error_messages._CATALOG[code].format(**context)
+
+    @pytest.mark.parametrize(
+        "name", ["SETTINGS_NOT_FOUND", "CUSTOM_PERSONA_DATA_NOT_FOUND"]
+    )
+    def test_hidden_and_unusable_toast_like_a_missing_page(self, name):
+        """存在を知らせない（NFR1.79）: トーストは「ページが見つかりません」。"""
+        code = ErrorCode[name]
+        assert code in error_messages.UNIFIED_NOT_FOUND_TOAST_CODES
+        assert _toast(code)["message"] == error_messages.NOT_FOUND_TOAST_MESSAGE
+
+    def test_name_invalid_shows_the_limit(self):
+        message = user_message_for(
+            CodedError(
+                code=ErrorCode["CUSTOM_PERSONA_DATA_NAME_INVALID"],
+                context={"max_length": 100},
+            )
+        )
+        assert "100" in message

@@ -21,14 +21,9 @@ from src.managers.agent_discussion_manager import (
     AgentDiscussionManagerError,
 )
 from src.managers.discussion_manager import DiscussionManager, DiscussionManagerError
-from src.managers.survey_template_manager import (
-    SurveyTemplateManager,
-    SurveyTemplateManagerError,
-)
 from src.models.errors import CodedError, ErrorCode
 from src.models.message import Message
-from src.models.survey_template import Question, TemplateImage
-from src.models.uploaded_file import UploadedFile, upload_key
+from src.models.uploaded_file import UploadedFile
 from src.services.agent_service import FacilitatorAgent, PersonaAgent
 from src.services.discussion_store import DiscussionStoreError
 from tests.conftest import MEMBER_A, MEMBER_B
@@ -278,107 +273,8 @@ class TestAgentDiscussionSave:
             )
 
 
-# =============================================================================
-# テンプレートの作成・更新
-# =============================================================================
-
-
-def _image(file_id: str, owner: str = A.sub) -> TemplateImage:
-    key = upload_key(owner, "survey_image", file_id, "a.png")
-    return TemplateImage(
-        id="img",
-        name="画像",
-        file_path=f"s3://bucket/{key}",
-        mime_type="image/png",
-        original_filename="a.png",
-    )
-
-
-def _attachments() -> Mock:
-    from src.models.uploaded_file import AttachResult
-
-    files = Mock()
-    files.attach_all.side_effect = lambda principal, ids, ptype, pid: AttachResult(
-        parent_type=ptype,
-        parent_id=pid,
-        original_expires_at={i: 100 for i in dict.fromkeys(ids)},
-    )
-    return files
-
-
-class TestTemplateSave:
-    def _manager(self, files: Mock) -> tuple[SurveyTemplateManager, Mock]:
-        db = Mock()
-        return (
-            SurveyTemplateManager(
-                database_service=db, ai_service=Mock(), file_attachments=files
-            ),
-            db,
-        )
-
-    def _questions(self) -> list[Question]:
-        return [Question.create_free_text(text="感想は？")]
-
-    def test_create_attaches_the_image_by_its_path(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-
-        template = manager.create_template(
-            "テンプレ", self._questions(), [_image(FILE_1)], principal=A
-        )
-
-        files.attach_all.assert_called_once_with(
-            A, [FILE_1], "survey_template", template.id
-        )
-        db.save_survey_template.assert_called_once()
-
-    def test_create_failure_detaches(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        db.save_survey_template.side_effect = RuntimeError("down")
-        with raises_code(SurveyTemplateManagerError, ErrorCode.SURVEY_OPERATION_FAILED):
-            manager.create_template(
-                "テンプレ", self._questions(), [_image(FILE_1)], principal=A
-            )
-        files.detach.assert_called_once()
-
-    def test_a_path_of_another_shape_is_not_found(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        bad = TemplateImage(
-            id="i",
-            name="n",
-            file_path="s3://bucket/survey_images/x.png",
-            mime_type="image/png",
-            original_filename="x.png",
-        )
-        with raises_code(SurveyTemplateManagerError, ErrorCode.FILE_NOT_FOUND):
-            manager.create_template("テンプレ", self._questions(), [bad], principal=A)
-        db.save_survey_template.assert_not_called()
-
-    def test_update_attaches_only_new_images(self):
-        files = _attachments()
-        manager, db = self._manager(files)
-        from src.models.survey_template import SurveyTemplate
-
-        existing = SurveyTemplate.create_new(
-            name="旧", questions=self._questions(), images=[_image(FILE_1)]
-        )
-        db.get_survey_template.return_value = existing
-
-        # keeping the image attaches nothing
-        manager.update_template(
-            existing.id, "新", self._questions(), [_image(FILE_1)], principal=A
-        )
-        files.attach_all.assert_not_called()
-
-        # replacing it attaches only the new one (one image per template)
-        manager.update_template(
-            existing.id, "新", self._questions(), [_image(FILE_2)], principal=A
-        )
-        files.attach_all.assert_called_once_with(
-            A, [FILE_2], "survey_template", existing.id
-        )
+# テンプレートの作成・更新の画像の紐付けは U7 で本体を先に書く順に変わったため、
+# tests/unit/test_survey_template_manager.py（TestCreateTemplate・TestUpdateTemplate）で確かめる。
 
 
 # =============================================================================
