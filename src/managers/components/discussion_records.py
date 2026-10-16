@@ -278,7 +278,11 @@ class DiscussionRecords:
             self._store.put_new(body)
         except DiscussionStoreError as e:
             logger.warning("Saving discussion failed: %s", type(e).__name__)
-            self._roll_back(discussion.id, attached, wrote_messages=bool(stored))
+            # 同じ ID の議論がすでにある（別の要求が先に保存した）ときは、その発言を消さない
+            exists = isinstance(e, DiscussionConditionFailed)
+            self._roll_back(
+                discussion.id, attached, wrote_messages=bool(stored) and not exists
+            )
             raise _failed("the discussion could not be saved") from e
         return discussion
 

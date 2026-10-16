@@ -1011,15 +1011,64 @@ class InterviewManager:
                 usable.append(document)
 
         saved_id = session.saved_discussion_id
-        if saved_id is None and self._discussion_records.can_manage(
-            principal, _discussion_id_for(session.id)
-        ):
-            # 前回の保存で議論はできたが、セッションへの記録だけ失敗した。
-            # 同じ議論を記録し直して書き足す（別の議論を作らない）
-            saved_id = _discussion_id_for(session.id)
-            self._record_saved(session.id, saved_id, now)
-
+        created = False
         if saved_id is None:
+            saved_id, created = self._save_first(
+                principal, session, messages, usable, session_name, now
+            )
+        if not created:
+            self._discussion_records.append_messages(
+                principal, saved_id, messages, usable, skip_saved=True
+            )
+        discussion_id = saved_id
+
+        try:
+            self._store.extend(session.touched(now))
+        except InterviewSessionStoreError:
+            self.logger.warning("Extending the interview session failed", exc_info=True)
+        self.logger.info(f"Interview session saved: {session.id} -> {discussion_id}")
+        return InterviewSaveResult(discussion_id=discussion_id, excluded_files=excluded)
+
+    def _save_first(
+        self,
+        principal: Principal,
+        session: InterviewSession,
+        messages: List[Message],
+        usable: List[DocumentRef],
+        session_name: Optional[str],
+        now: datetime,
+    ) -> tuple[str, bool]:
+        """Run the first save of a session; only one request at a time (BR3.7).
+
+        Returns:
+            The discussion ID, and whether this call wrote the discussion
+            (``False``: it already existed and the caller appends to it).
+
+        Raises:
+            CodedError: ``CONCURRENT_UPDATE`` while another request is saving.
+        """
+        token = uuid.uuid4().hex
+        try:
+            took = self._store.begin_save(session.id, token, now=now)
+        except InterviewSessionStoreError as e:
+            raise InterviewPersistenceError(
+                f"the save could not start ({type(e).__name__})",
+                code=ErrorCode.INTERVIEW_SAVE_FAILED,
+            ) from e
+        if not took:
+            # 別の要求が初回の保存を終えていればそれに合流し、保存中なら断る
+            fresh = self._store.get(session.id)
+            if fresh is not None and fresh.saved_discussion_id:
+                return fresh.saved_discussion_id, False
+            raise self._conflict(session.id, "save")
+
+        discussion_id = _discussion_id_for(session.id)
+        try:
+            if self._discussion_records.can_manage(principal, discussion_id):
+                # 前回の保存で議論はできたが、セッションへの記録だけ失敗した。
+                # 同じ議論を記録し直して書き足す（別の議論を作らない）
+                self._record_saved(session.id, discussion_id, now)
+                return discussion_id, False
             topic = (
                 session_name.strip()
                 if session_name and session_name.strip()
@@ -1032,24 +1081,19 @@ class InterviewManager:
                 documents=usable,
                 agent_config={"persona_models": session.persona_models},
                 participant_names=dict(session.persona_names),
-                discussion_id=_discussion_id_for(session.id),
+                discussion_id=discussion_id,
                 now=session.created_at,
             )
-            saved = self._discussion_records.save_new(principal, discussion, messages)
-            self._record_saved(session.id, saved.id, now)
-            discussion_id = saved.id
-        else:
-            discussion_id = saved_id
-            self._discussion_records.append_messages(
-                principal, discussion_id, messages, usable, skip_saved=True
-            )
-
-        try:
-            self._store.extend(session.touched(now))
-        except InterviewSessionStoreError:
-            self.logger.warning("Extending the interview session failed", exc_info=True)
-        self.logger.info(f"Interview session saved: {session.id} -> {discussion_id}")
-        return InterviewSaveResult(discussion_id=discussion_id, excluded_files=excluded)
+            self._discussion_records.save_new(principal, discussion, messages)
+            self._record_saved(session.id, discussion_id, now)
+            return discussion_id, True
+        except BaseException:
+            try:
+                self._store.release_save(session.id, token)
+            except InterviewSessionStoreError:
+                # 外せなくても 5 分で解ける
+                self.logger.warning("Releasing the save mark failed", exc_info=True)
+            raise
 
     def _record_saved(self, session_id: str, discussion_id: str, now: datetime) -> None:
         try:

@@ -351,6 +351,15 @@ class TestSaveNew:
         files.detach.assert_called_once()
         assert store.messages == {} and store.bodies == {}
 
+    def test_an_existing_body_keeps_its_messages(self, records, store):
+        """同じ ID の議論が先に保存されていたら、巻き戻しでその発言を消さない。"""
+        discussion = _discussion()
+        records.save_new(OWNER, discussion, _messages())
+        with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
+            records.save_new(OWNER, discussion, _messages())
+        assert len(store.messages[discussion.id]) == 3
+        assert store.bodies[discussion.id]["message_count"] == 3
+
     def test_messages_left_behind_are_logged(self, records, store, logs):
         store.fail["put_new"] = [DiscussionStoreError("down")]
         store.fail["delete_messages"] = [DiscussionStoreError("x")] * CLEANUP_ATTEMPTS

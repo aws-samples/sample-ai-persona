@@ -738,6 +738,58 @@ class TestSave:
         assert world.store.bodies[first_id]["message_count"] == 3
         assert store.get(session.id).saved_discussion_id == first_id
 
+    def test_a_second_save_during_the_first_does_not_lose_messages(
+        self, manager, world, store
+    ):
+        """同じインタビューを同時に保存しても、成立した議論の発言は消えない。"""
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+
+        real_save_new = world.records.save_new
+        second: dict[str, Any] = {}
+
+        def save_new_with_a_second_request(principal, discussion, messages):
+            # 1 つ目の要求が保存している間に、2 つ目の要求が届く（入れ子は 1 回だけ）
+            if "started" not in second:
+                second["started"] = True
+                try:
+                    manager.save_interview_session(OWNER, session.id, "保存名")
+                except CodedError as e:
+                    second["error"] = e
+            return real_save_new(principal, discussion, messages)
+
+        with patch.object(
+            world.records, "save_new", side_effect=save_new_with_a_second_request
+        ):
+            result = manager.save_interview_session(OWNER, session.id, "保存名")
+
+        assert second["error"].code is ErrorCode.CONCURRENT_UPDATE
+        assert len(world.store.bodies) == 1
+        assert world.store.bodies[result.discussion_id]["message_count"] == 3
+        assert len(world.store.messages[result.discussion_id]) == 3
+        assert store.get(session.id).saved_discussion_id == result.discussion_id
+
+    def test_a_save_after_the_first_finished_joins_it(self, manager, world, store):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        first = manager.save_interview_session(OWNER, session.id, "保存名")
+        again = manager.save_interview_session(OWNER, session.id, "保存名")
+        assert again.discussion_id == first.discussion_id
+        assert len(world.store.messages[first.discussion_id]) == 3
+
+    def test_a_failed_first_save_releases_the_mark(self, manager, world, store):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "質問1")
+        with patch.object(
+            world.records,
+            "save_new",
+            side_effect=CodedError("down", code=ErrorCode.DISCUSSION_OPERATION_FAILED),
+        ):
+            with raises_code(CodedError, ErrorCode.DISCUSSION_OPERATION_FAILED):
+                manager.save_interview_session(OWNER, session.id, "保存名")
+        result = manager.save_interview_session(OWNER, session.id, "保存名")
+        assert world.store.bodies[result.discussion_id]["message_count"] == 3
+
     def test_unusable_files_are_left_out_and_named(self, manager, world, tmp_path):
         uploads = {
             i: _upload(tmp_path, i, name=f"{i[:2]}.txt") for i in (FILE_1, FILE_2)

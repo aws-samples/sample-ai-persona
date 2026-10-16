@@ -252,6 +252,30 @@ class TestResultsList:
             ).text
         assert "古いインタビュー" in rest
 
+    def test_mode_filter_that_finds_nothing_to_the_end_removes_more(self, aw, client):
+        """最後まで読んでも該当がなければ、「もっと見る」を消して終わりを示す。"""
+        import re
+
+        from src.managers import discussion_manager as dm
+
+        for i in range(45):
+            aw.discussion(topic=f"新しい議論{i}")
+        with patch.object(dm, "MODE_FILTER_MAX_PAGES", 2):
+            first = client.get(
+                "/discussion/results?mode=interview",
+                headers={"HX-Target": "discussion-list"},
+            ).text
+            cursor = re.search(r"cursor=([^&\"]+)", first)
+            assert cursor is not None
+            last = client.get(
+                f"/discussion/results?tab=mine&cursor={cursor.group(1)}"
+                "&mode=interview&append=1",
+                headers={"HX-Target": "discussion-grid"},
+            ).text
+        assert '<div id="load-more-discussion" hx-swap-oob="true"></div>' in last
+        assert "これで全て" in last
+        assert "もっと見る" not in last
+
     def test_rows_show_the_stored_names_and_counts(self, aw, client):
         aw.discussion(topic="自分の議論について")
         html = client.get("/discussion/results", headers=PAGE).text

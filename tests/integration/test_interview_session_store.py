@@ -319,6 +319,36 @@ class TestMessagesAndSave:
         assert store.get(created.id).saved_discussion_id == "d1"
 
 
+class TestFirstSaveMark:
+    """初回の保存は 1 つの要求だけが行う（保存中の印、同時の保存で発言を消さない）。"""
+
+    def test_only_one_request_takes_the_mark(self, store, created):
+        assert store.begin_save(created.id, "a", now=NOW)
+        assert not store.begin_save(created.id, "b", now=NOW + timedelta(seconds=1))
+
+    def test_a_stale_mark_can_be_taken(self, store, created):
+        assert store.begin_save(created.id, "a", now=NOW)
+        assert store.begin_save(created.id, "b", now=NOW + timedelta(minutes=6))
+
+    def test_a_saved_session_cannot_be_marked_again(self, store, created):
+        store.mark_saved(created.id, "d1", now=NOW)
+        assert not store.begin_save(created.id, "a", now=NOW)
+
+    def test_mark_saved_clears_the_save_mark(self, store, created):
+        assert store.begin_save(created.id, "a", now=NOW)
+        store.mark_saved(created.id, "d1", now=NOW)
+        item = store.client.get_item(
+            TableName=store.sessions_table, Key={"id": {"S": created.id}}
+        )["Item"]
+        assert "save_token" not in item and "save_started_at" not in item
+
+    def test_release_needs_the_own_token(self, store, created):
+        assert store.begin_save(created.id, "a", now=NOW)
+        assert not store.release_save(created.id, "b")
+        assert store.release_save(created.id, "a")
+        assert store.begin_save(created.id, "b", now=NOW)
+
+
 # =============================================================================
 # 失敗の分類
 # =============================================================================

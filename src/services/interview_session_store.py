@@ -46,6 +46,10 @@ _SEQ = "seq"
 #: The mark is absent, or older than five minutes (a crashed task's mark).
 _NO_LIVE_MARK = "(attribute_not_exists(#token) OR #started < :stale)"
 
+#: 初回の保存の印（同じセッションの初回の保存を 1 つの要求だけが行う）
+_SAVE_TOKEN = "save_token"
+_SAVE_STARTED = "save_started_at"
+
 
 class InterviewSessionStoreError(CodedError):
     """An interview read or write failed."""
@@ -158,13 +162,15 @@ class InterviewSessionStore:
             self.client.update_item(
                 TableName=self.sessions_table,
                 Key={_ID: {"S": session_id}},
-                UpdateExpression="SET #saved = :saved",
+                UpdateExpression="SET #saved = :saved REMOVE #stoken, #sstarted",
                 ConditionExpression=f"attribute_exists(#id) AND {_NO_LIVE_MARK}",
                 ExpressionAttributeNames={
                     "#id": _ID,
                     "#saved": "saved_discussion_id",
                     "#token": "reply_token",
                     "#started": "reply_started_at",
+                    "#stoken": _SAVE_TOKEN,
+                    "#sstarted": _SAVE_STARTED,
                 },
                 ExpressionAttributeValues={
                     ":saved": {"S": discussion_id},
@@ -308,6 +314,63 @@ class InterviewSessionStore:
     def release_reply(self, session_id: str, token: str) -> bool:
         """Remove the caller's mark; ``False`` when it does not hold it."""
         return self._conditional_mark(session_id, "REMOVE #token, #started", token, {})
+
+    def begin_save(self, session_id: str, token: str, *, now: datetime) -> bool:
+        """Take the first-save mark; ``False`` when another request holds it.
+
+        Only a session not saved yet can be marked. A mark older than five
+        minutes (a request that died) can be taken over.
+        """
+        try:
+            self.client.update_item(
+                TableName=self.sessions_table,
+                Key={_ID: {"S": session_id}},
+                UpdateExpression="SET #stoken = :token, #sstarted = :now",
+                ConditionExpression=(
+                    "attribute_exists(#id) AND attribute_not_exists(#saved) AND "
+                    "(attribute_not_exists(#stoken) OR #sstarted < :stale)"
+                ),
+                ExpressionAttributeNames={
+                    "#id": _ID,
+                    "#saved": "saved_discussion_id",
+                    "#stoken": _SAVE_TOKEN,
+                    "#sstarted": _SAVE_STARTED,
+                },
+                ExpressionAttributeValues={
+                    ":token": {"S": token},
+                    ":now": {"S": stamp(now)},
+                    ":stale": {"S": self._stale(now)},
+                },
+            )
+        except ClientError as e:
+            if isinstance(self._classify(e), InterviewConflict):
+                return False
+            raise self._classify(e) from e
+        except BotoCoreError as e:
+            raise self._unreachable("update_item", e) from e
+        return True
+
+    def release_save(self, session_id: str, token: str) -> bool:
+        """Remove the caller's first-save mark; ``False`` when it does not hold it."""
+        try:
+            self.client.update_item(
+                TableName=self.sessions_table,
+                Key={_ID: {"S": session_id}},
+                UpdateExpression="REMOVE #stoken, #sstarted",
+                ConditionExpression="#stoken = :token",
+                ExpressionAttributeNames={
+                    "#stoken": _SAVE_TOKEN,
+                    "#sstarted": _SAVE_STARTED,
+                },
+                ExpressionAttributeValues={":token": {"S": token}},
+            )
+        except ClientError as e:
+            if isinstance(self._classify(e), InterviewConflict):
+                return False
+            raise self._classify(e) from e
+        except BotoCoreError as e:
+            raise self._unreachable("update_item", e) from e
+        return True
 
     def _conditional_mark(
         self,

@@ -29,8 +29,9 @@
 {%- endif %}
 {%- endif %}
 
-{#- 種類で絞ると、続きがあっても読んだ範囲に該当がないことがある。そのときも「もっと見る」を出す #}
-{% if discussions or listing.next_cursor %}
+{#- 種類で絞ると、続きがあっても読んだ範囲に該当がないことがある。そのときも「もっと見る」を出す。
+    「もっと見る」の追加分は、該当が 0 件でも件数の表示とボタン（続きがなければ消す）を返す #}
+{% if discussions or listing.next_cursor or is_append %}
 {% if not is_append %}
 <div class="space-y-6" id="discussion-grid" data-busy-target>
 {% endif %}
