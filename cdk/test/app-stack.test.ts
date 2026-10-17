@@ -284,11 +284,24 @@ describe('AppStack: CloudFront', () => {
     expect(config.WebACLId).toBeDefined();
   });
 
-  test('/static/* だけはキャッシュする', () => {
+  test('/static/* だけはキャッシュし、版（クエリの v）をキャッシュの鍵に含める', () => {
     const behaviors = distribution().CacheBehaviors as any[];
     expect(behaviors).toHaveLength(1);
     expect(behaviors[0].PathPattern).toBe('/static/*');
-    expect(behaviors[0].CachePolicyId).toBe(CACHING_OPTIMIZED);
+    // 管理ポリシー CachingOptimized はクエリを鍵に含めず、デプロイ後も古い JS・CSS を
+    // 最大 1 日返していた。v（中身のハッシュ）を鍵に含める自前のポリシーにする
+    expect(behaviors[0].CachePolicyId).not.toBe(CACHING_OPTIMIZED);
+    template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+      CachePolicyConfig: Match.objectLike({
+        ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+          EnableAcceptEncodingGzip: true,
+          EnableAcceptEncodingBrotli: true,
+          QueryStringsConfig: { QueryStringBehavior: 'whitelist', QueryStrings: ['v'] },
+          CookiesConfig: { CookieBehavior: 'none' },
+          HeadersConfig: { HeaderBehavior: 'none' },
+        }),
+      }),
+    });
   });
 
   test('VPC オリジンは内部 ALB へ HTTP、読み取り 120 秒', () => {

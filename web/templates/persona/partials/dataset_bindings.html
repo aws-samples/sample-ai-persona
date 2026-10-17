@@ -12,7 +12,10 @@
 #}
 {% if not view.bindings and not view.choices %}
 <p class="text-gray-500 text-sm">
-    {%- if view.manageable %}紐付けられるデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。
+    {%- set badge = user_badge(request) if request is defined else none %}
+    {%- if view.manageable and badge and badge.can_manage_settings %}紐付けられるデータセットがありません。<a href="/settings" class="text-cyan-600 hover:underline">設定</a>からデータセットを追加してください。
+    {#- 設定画面は admin だけ（U7 BR3.2）。member には開けない画面への導線を出さない #}
+    {%- elif view.manageable %}紐付けられるデータセットがありません。使えるデータセットの追加は、管理者に依頼してください。
     {%- else %}紐付けられたデータセットはありません。{% endif -%}
 </p>
 {% else %}

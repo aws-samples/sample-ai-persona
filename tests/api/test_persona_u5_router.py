@@ -570,3 +570,12 @@ def test_bulk_save_with_someone_elses_candidate_saves_nothing(client, saving):
     # 押さえた分は外してある（保存し直せる）
     again = client.post("/persona/save", data={**_FORM, "persona_id": mine})
     assert again.status_code == 200
+
+
+def test_member_owner_without_choices_is_not_sent_to_the_settings_screen(client, u5):
+    """member の所有者に、開けない設定画面（/settings）への導線を出さない（U7 BR3.2）"""
+    pid = u5.persona.id
+    html = _as(client, "owner").get(f"/persona/{pid}/dataset-bindings").text
+
+    assert 'href="/settings"' not in html
+    assert "管理者に依頼" in html
