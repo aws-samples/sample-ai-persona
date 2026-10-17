@@ -113,6 +113,8 @@ U6（議論・インタビュー）からは、戻すのはアプリのイメー
 
 - 前のアプリは U6 の新しい 4 テーブル（`DiscussionMessages`・`DiscussionReports`・`InterviewSessions`・`InterviewMessages`）を使いません。U6 のあとに保存した議論は、前のアプリからは発言とレポートのない議論に見えます。もう一度 U6 以降のイメージでデプロイすれば、同じテーブルを読むため元どおり見えます
 - **CDK を U6 より前のコミットに戻して `./deploy.sh` を流さないでください。** `deploy.sh` は Data スタックを先に更新するため、今の App スタックが使っている新しいテーブルの出力を消せずに止まります（U5 で起きた失敗と同じ）。仮に通っても、`Discussions` の `OwnerIndex` は削除され、新しいテーブルはスタックから外れ（RETAIN で実体は残るが、物理名が自動生成のため入れ直すと別の空のテーブルになる）、保存した発言・レポートが見えなくなります
+- U7（アンケート・組織資産）でも同じく、戻すのは **App スタックのイメージだけ** です（`./deploy.sh --image-tag <前のタグ>`）。**Data スタックは戻しません。** GSI には RETAIN が効かないため、`SurveyTemplates`・`Surveys` の `OwnerIndex` は Data を戻すと削除されます。`CustomPersonaData` テーブルはスタックから外れ（RETAIN で実体は残る）、物理名が自動生成のため入れ直すと別の空のテーブルになって、登録したカスタムデータが見えなくなります
+- 前のアプリは `CustomPersonaData` を使わず、S3 のファイル名でカスタムデータを並べます。U7 のあとに登録したカスタムデータは名前ではなく ID（`persona-dataset/custom/{ID}.parquet`）で出て、利用範囲も効きません。テンプレート・結果の見え方も U6 のとき（所有者・共有で絞らない）に戻ります。前の版に戻している間は、利用範囲を絞りたいデータの扱いに気をつけてください。もう一度 U7 以降のイメージでデプロイすれば元どおりになります
 
 U5 より前の版のことは次の段落のとおりです。戻し方は「前に直す」（直したコミットで `./deploy.sh` をやり直す）が基本です。`deploy.sh` は App だけでなく Data も入れ直すため、前のコミットに戻すと Data スタックの形も前に戻ります。U5 の後で U5 より前のコミットまで戻したときは次のようになります。
 
@@ -144,6 +146,11 @@ U6 では次の差分が出ます。どれもテーブルの置き換えでは�
 - Data: `DiscussionMessages`（PK `discussion_id`・SK `seq`（数値）、PITR、削除保護）、`DiscussionReports`（PK `discussion_id`・SK `report_id`、PITR、削除保護）、`InterviewSessions`（PK `id`、TTL `expires_at`、PITR なし）、`InterviewMessages`（PK `session_id`・SK `seq`（数値）、TTL `expires_at`、PITR なし）の追加。`Discussions` への GSI `OwnerIndex`（PK `owner_sub`・SK `created_at`、キーだけの射影）の追加。どれも RETAIN
 - App: 新しい 4 テーブルの権限（Scan を除く 8 つの操作を 1 つの文で）と環境変数 `DISCUSSION_MESSAGES_TABLE_NAME`・`DISCUSSION_REPORTS_TABLE_NAME`・`INTERVIEW_SESSIONS_TABLE_NAME`・`INTERVIEW_MESSAGES_TABLE_NAME` の追加
 
+U7 では次の差分が出ます。どれもテーブルの置き換えではありません。
+
+- Data: `CustomPersonaData`（PK `id`、GSI なし、PITR、削除保護、AWS 管理キー、RETAIN。名前の押さえの項目 `id="name#{名前}"` も同じテーブル）の追加。`SurveyTemplates`・`Surveys` への GSI `OwnerIndex`（PK `owner_sub`・SK `created_at`、キーだけの射影）の追加（論理 ID は変わらない）
+- App: `CustomPersonaData` の権限（`GetItem`・`BatchGetItem`・`PutItem`・`UpdateItem`・`DeleteItem`・`ConditionCheckItem`・`Scan` を 1 つの文で。`Query` とインデックスはなし）と環境変数 `CUSTOM_PERSONA_DATA_TABLE_NAME` の追加。タスクロールのポリシーの JSON は約 6,800 文字（9,000 文字未満を `app-stack.test.ts` で確かめている）
+
 #### 議論の削除で残ったものの後始末（U6）
 
 議論を消すと、本体と共有を先に消し、そのあと発言・レポート・資料を 3 回までやり直して消します。それでも残ったもの（本体のない発言・レポート、親の議論がないファイル）は、admin の手元の資格情報で次のスクリプトを流して見つけます（アプリのタスクロールには新しいテーブルの Scan の権限がありません）。
@@ -156,6 +163,19 @@ uv run python scripts/cleanup_discussion_orphans.py --region ap-northeast-1 --ap
 ```
 
 テーブル名は `DISCUSSIONS_TABLE_NAME`・`DISCUSSION_MESSAGES_TABLE_NAME`・`DISCUSSION_REPORTS_TABLE_NAME`・`UPLOADED_FILES_TABLE_NAME`（`src/config.py`）で渡します。今ある議論から届くものには触れません。保存の途中の議論（資料と発言は書いたが本体はまだ）を消さないよう、書かれてから 1 時間たっていない議論は対象にせず（件数だけ出す）、`--apply` は消す直前に本体がないことを確かめ直します。
+
+#### アンケートとカスタムデータの削除で残ったものの後始末（U7）
+
+アンケートを消すと、本体と共有を先に消し、そのあと結果の CSV を 3 回までやり直して消します。カスタムペルソナデータを消すと、登録情報（と名前の押さえ）を先に消し、そのあと Parquet を 3 回までやり直して消します。それでも残ったもの（本体のない `survey-results/{ID}/` と、登録情報のない `persona-dataset/custom/{ID}.parquet`）は、admin の手元の資格情報で次のスクリプトを流して見つけます（アプリのタスクロールには、これらの一覧の権限がありません）。
+
+```bash
+# 既定は件数を出すだけで、何も消さない
+uv run python scripts/cleanup_survey_orphans.py --region ap-northeast-1
+# 件数を確かめたら、--apply を付けて消す
+uv run python scripts/cleanup_survey_orphans.py --region ap-northeast-1 --apply
+```
+
+バケットとテーブルの名前は `S3_BUCKET_NAME`・`DYNAMODB_TABLE_PREFIX`・`CUSTOM_PERSONA_DATA_TABLE_NAME`（`src/config.py`）で渡します。ID（UUID）の名前のものだけを対象にし、v1.0.0 より前の名前のファイル（`persona-dataset/custom/{データセット名}.parquet` など）と一時ファイルには触れません。保存の途中（結果の CSV や Parquet は書いたが本体・登録情報はまだ）のものを消さないよう、書かれてから 1 時間たっていないものは対象にせず（件数だけ出す）、`--apply` は消す直前に本体・登録情報がないことを確かめ直します。
 
 #### アップロード用バケットのライフサイクル（U5）
 

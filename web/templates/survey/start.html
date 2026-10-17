@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_play, icon_arrow_left, icon_document, icon_pencil, icon_users, icon_cog %}
+{% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto" x-data="surveyStartForm()">
@@ -18,14 +19,6 @@
     <!-- エラーメッセージ -->
     <div id="execute-error"></div>
 
-    {% if not templates %}
-    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-        <p class="text-yellow-800 mb-4">テンプレートがまだ作成されていません。</p>
-        <a href="/survey/templates/new" class="bg-teal-600 text-white px-4 py-2 rounded-md hover:bg-teal-700 transition-colors">
-            テンプレートを作成する
-        </a>
-    </div>
-    {% else %}
     <form id="survey-form"
           hx-post="/survey/execute"
           hx-target="#survey-form"
@@ -38,13 +31,22 @@
             <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
                 {{ icon_document("w-5 h-5 text-teal-600") }} テンプレート選択
             </label>
-            <select name="template_id" required x-model="templateId"
-                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
-                <option value="">テンプレートを選択してください</option>
-                {% for tmpl in templates %}
-                <option value="{{ tmpl.id }}">{{ tmpl.name }}（{{ tmpl.questions|length }}問）</option>
-                {% endfor %}
-            </select>
+            {#- 読めるテンプレートだけ。タブ（自分のもの・共有されたもの・すべて）と名前の検索（BR1.2） #}
+            <input type="search" name="search" value="{{ current_search or '' }}" placeholder="テンプレート名を検索..."
+                   aria-label="テンプレート名で検索"
+                   class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm mb-3 focus:ring-blue-500 focus:border-blue-500"
+                   hx-get="/survey/start" hx-target="#start-template-panel" hx-swap="innerHTML"
+                   hx-trigger="keyup changed delay:300ms" hx-include="#start-template-panel [data-start-template-tab]"
+                   @keydown.enter.prevent>
+            {%- set active = listing.tab.value if listing else (tab or "mine") %}
+            {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/survey/start", "start-template-panel") }}
+            {% call list_tabpanel("start-template-panel", active, "/survey/start") %}
+            {%- if listing %}
+            {% include "survey/partials/start_template_select.html" %}
+            {%- else %}
+            {% include "partials/error_banner.html" %}
+            {%- endif %}
+            {% endcall %}
         </div>
 
         <!-- アンケート名・説明 -->
@@ -81,19 +83,20 @@
                 {% if nemotron_available %}
                 <option value="nemotron">オープンデータ(Nemotron-Personas-Japan)</option>
                 {% endif %}
-                {% for ds in custom_datasets %}
-                <option value="custom:{{ ds.name }}">カスタムデータ（{{ ds.name }}）</option>
+                {#- 使えるカスタムデータだけ（利用範囲、BR4.2）。値は ID #}
+                {% for record in custom_data %}
+                <option value="custom:{{ record.id }}">カスタムデータ（{{ record.name }}）</option>
                 {% endfor %}
-                {% if not nemotron_available and not custom_datasets %}
+                {% if not nemotron_available and not custom_data %}
                 <option value="" disabled selected>利用可能なデータセットがありません</option>
                 {% endif %}
             </select>
             <p class="text-sm text-gray-500 mt-2" x-show="datasourceCounts[currentDatasource]">
                 含まれるペルソナ数: <span class="font-semibold text-gray-700" x-text="(datasourceCounts[currentDatasource] || 0).toLocaleString()"></span> 人
             </p>
-            {% if not nemotron_available and not custom_datasets %}
-            <p class="text-sm text-yellow-600 mt-2">
-                <a href="/survey/persona-data" class="underline">ペルソナデータ設定</a>からデータセットを準備してください。
+            {% if not nemotron_available and not custom_data %}
+            <p class="text-sm text-yellow-800 mt-2">
+                使えるペルソナデータがありません。<a href="/survey/persona-data" class="underline">ペルソナデータ設定</a>を確かめるか、管理者に依頼してください。
             </p>
             {% endif %}
         </div>
@@ -172,7 +175,6 @@
             </button>
         </div>
     </form>
-    {% endif %}
 </div>
 {% endblock %}
 
@@ -180,7 +182,7 @@
 <script>
 function surveyStartForm() {
     return {
-        templateId: '',
+        templateId: {{ (selected_template or '') | tojson }},
         hasImages: false,
         datasourceCounts: {{ datasource_counts | tojson }},
         currentDatasource: document.querySelector('select[name="datasource"]')?.value || '',
@@ -191,13 +193,10 @@ function surveyStartForm() {
             return this.hasImages ? '（100〜1,000）' : '（100〜10,000）';
         },
         init() {
-            // テンプレート選択時に画像の有無をチェック
+            // 選んだテンプレートの画像の有無（選択肢の data-has-images。タブを替えても読める）
             this.$watch('templateId', (value) => {
-                if (value) {
-                    const templates = {{ templates_dict | tojson }};
-                    const selected = templates.find(t => t.id === value);
-                    this.hasImages = selected && selected.images && selected.images.length > 0;
-                }
+                const option = value ? document.querySelector(`#start-template option[value="${CSS.escape(value)}"]`) : null;
+                this.hasImages = !!option && option.dataset.hasImages === '1';
             });
         },
         collectFilters() {

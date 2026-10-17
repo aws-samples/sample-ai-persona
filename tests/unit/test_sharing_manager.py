@@ -246,7 +246,7 @@ class TestSharedParts:
         built: list[SharingParts] = []
 
         def build() -> SharingParts:
-            parts = SharingParts(sharing=Mock(), owners=Mock())
+            parts = SharingParts(sharing=Mock(), owners=Mock(), departments=Mock())
             built.append(parts)
             return parts
 

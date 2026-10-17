@@ -1,458 +1,585 @@
-"""SurveyDatasetManager のユニットテスト"""
+"""SurveyDatasetManager のユニットテスト（U7）。
 
-import json
+BR4.1〜BR4.7、BR5.1〜BR5.3、NFR1.73、NFR1.74、NFR1.76、NFR1.82、NFR1.85、NFR2.23、
+NFR8.24、AC2.5.1〜AC2.5.3、AC5.2.4、AC5.2.5、AC5.3.1、AC5.3.4。DynamoDB と S3 は moto、
+ResourceLookup・DepartmentDirectory・AccessPolicy は本物（tests/unit/survey_world.py）、
+バッチ推論・エージェント・AI はモック。
+"""
+
 from unittest.mock import Mock
 
+import polars as pl
 import pytest
 
-from src.models.errors import ErrorCode
-from tests.error_helpers import raises_code
-
+from src.managers.shared.asset_scope import (
+    VANISHED_GROUP_LABEL,
+    scope_dialog,
+    scope_labels,
+)
 from src.managers.survey_dataset_manager import (
     SurveyDatasetManager,
+    SurveyDatasetManagerError,
     SurveyDatasetValidationError,
 )
+from src.models.authz import Department, ResourceType
+from src.models.custom_persona_data import ExtraColumn, reservation_id
+from src.models.errors import AccessDeniedError, CodedError, ErrorCode
+from src.models.sharing import AssetScopeChange
+from tests.error_helpers import raises_code
+from tests.log_helpers import LogCapture
+from tests.unit.survey_world import (
+    ADMIN,
+    BUCKET,
+    MEMBER_A,
+    MEMBER_C,
+    NO_DEPARTMENT,
+    NO_ROLE,
+    SurveyWorld,
+)
+
+CUSTOM = ResourceType.CUSTOM_PERSONA_DATA
+ROWS = SurveyDatasetManager.MIN_SEGMENT_ROWS
 
 
 @pytest.fixture
-def mock_batch_service() -> Mock:
-    svc = Mock()
-    svc._parquet_s3_uri = "s3://bucket/key.parquet"
-    return svc
+def batch() -> Mock:
+    batch = Mock()
+    batch.has_parquet_uri.return_value = True
+    batch.get_filtered_count.return_value = 500
+    batch.get_total_count.return_value = 800
+    batch.get_available_filter_values.return_value = {"性別": {"values": ["男性"]}}
+    batch.get_preview_stats.return_value = {"count": 500}
+    batch.convert_csv_to_parquet.side_effect = lambda csv, mapping=None: (
+        pl.DataFrame(
+            {"persona": [f"p{i}" for i in range(ROWS)], "hobby": ["釣り"] * ROWS}
+        ),
+        b"parquet-bytes",
+    )
+    return batch
 
 
 @pytest.fixture
-def mock_agent_service() -> Mock:
+def agent() -> Mock:
     return Mock()
 
 
 @pytest.fixture
-def mock_ai_service() -> Mock:
+def ai() -> Mock:
     return Mock()
 
 
-class _FakeClientError(Exception):
-    pass
-
-
 @pytest.fixture
-def mock_s3_service() -> Mock:
-    svc = Mock()
-    svc.bucket_name = "test-bucket"
-    svc.region_name = "us-east-1"
-    svc.s3_client.exceptions.ClientError = _FakeClientError
-    return svc
-
-
-@pytest.fixture
-def mgr(
-    mock_batch_service: Mock,
-    mock_agent_service: Mock,
-    mock_ai_service: Mock,
-    mock_s3_service: Mock,
-) -> SurveyDatasetManager:
+def dm(survey_world: SurveyWorld, batch, agent, ai) -> SurveyDatasetManager:
     return SurveyDatasetManager(
-        survey_batch_service=mock_batch_service,
-        agent_service=mock_agent_service,
-        ai_service=mock_ai_service,
-        s3_service=mock_s3_service,
+        survey_batch_service=batch,
+        agent_service=agent,
+        ai_service=ai,
+        s3_service=survey_world.s3,
+        custom_persona_data_store=survey_world.custom_store,
+        resource_lookup=survey_world.lookup,
+        departments=survey_world.departments,
+        sleep=lambda _s: None,
     )
 
 
-class TestCheckNemotronStatus:
-    def test_exists(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mock_s3_service.s3_client.head_object.return_value = {
-            "ContentLength": 1024 * 1024 * 50
-        }
-        result = mgr.check_nemotron_status()
-        assert result["exists"] is True
-        assert result["size_mb"] == 50.0
+@pytest.fixture
+def logs(capsys) -> LogCapture:
+    return LogCapture(capsys)
 
-    def test_not_exists(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mock_s3_service.s3_client.head_object.side_effect = _FakeClientError(
-            "not found"
+
+def _objects(world: SurveyWorld, prefix: str = "persona-dataset/custom/") -> list[str]:
+    listed = world.s3.s3_client.list_objects_v2(Bucket=BUCKET, Prefix=prefix)
+    return [o["Key"] for o in listed.get("Contents", [])]
+
+
+def _upload(dm, principal=ADMIN, name="顧客データ", **kwargs):
+    return dm.upload_custom_dataset(
+        principal,
+        b"csv",
+        name,
+        column_mapping={"persona": "persona"},
+        extra_columns=[{"csv_column": "hobby", "description": "趣味"}],
+        **kwargs,
+    )
+
+
+# =============================================================================
+# 参照（全員、BR4.1、BR4.2、BR5.3）
+# =============================================================================
+
+
+class TestReferenceForEveryone:
+    def test_nemotron_status_needs_no_permission(self, dm, survey_world):
+        assert dm.check_nemotron_status() == {"exists": False, "size_mb": 0}
+        survey_world.s3.upload_file(
+            b"x" * 1024, "persona-dataset/nemotron-personas-japan.parquet"
         )
-        result = mgr.check_nemotron_status()
-        assert result["exists"] is False
+        assert dm.check_nemotron_status()["exists"] is True
 
+    def test_member_lists_only_data_in_their_scope(self, dm, survey_world):
+        sales = survey_world.custom_data("営業向け", "sales")
+        survey_world.custom_data("企画向け", "plan")
+        survey_world.custom_data("admin だけ")
+        listing = dm.list_persona_data(MEMBER_A)
+        assert [d.id for d in listing.custom] == [sales.id]
+        assert listing.manageable is False
 
-class TestDownloadNemotronDataset:
-    def test_success(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        mock_batch_service.download_nemotron_dataset.return_value = b"parquet_data"
-        mock_s3_service.s3_client.head_object.return_value = {
-            "ContentLength": 1024 * 1024 * 10
-        }
-        result = mgr.download_nemotron_dataset()
-        mock_s3_service.upload_file.assert_called_once()
-        mock_batch_service.set_parquet_s3_uri.assert_called_once()
-        assert result["exists"] is True
+    def test_admin_lists_everything_with_scope_labels(self, dm, survey_world):
+        sales = survey_world.custom_data("営業向け", "sales", "gone")
+        only_admin = survey_world.custom_data("admin だけ")
+        listing = dm.list_persona_data(ADMIN)
+        assert {d.id for d in listing.custom} == {sales.id, only_admin.id}
+        assert listing.manageable is True
+        assert listing.scope_labels[sales.id] == ["営業部", VANISHED_GROUP_LABEL]
+        assert listing.scope_labels[only_admin.id] == []
 
+    def test_reservations_never_appear(self, dm, survey_world):
+        survey_world.custom_data("営業向け", "sales")
+        listing = dm.list_persona_data(ADMIN)
+        assert all(not d.id.startswith("name#") for d in listing.custom)
 
-class TestUploadCustomDataset:
-    def test_success(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        import polars as pl
+    def test_member_without_department_sees_no_custom_data(self, dm, survey_world):
+        survey_world.custom_data("営業向け", "sales")
+        assert dm.list_persona_data(NO_DEPARTMENT).custom == ()
 
-        rows = SurveyDatasetManager.MIN_SEGMENT_ROWS
-        df = pl.DataFrame(
-            {
-                "persona": [f"p{i}" for i in range(rows)],
-                "uuid": [f"u{i}" for i in range(rows)],
-            }
+    def test_unreadable_table_is_not_an_empty_list(self, dm, survey_world):
+        survey_world.custom_store.list_all = Mock(
+            side_effect=__import__(
+                "src.services.custom_persona_data_store",
+                fromlist=["CustomPersonaDataStoreError"],
+            ).CustomPersonaDataStoreError("down")
         )
-        mock_batch_service.convert_csv_to_parquet.return_value = (df, b"pq_bytes")
+        with raises_code(CodedError, ErrorCode.LOOKUP_UNAVAILABLE):
+            dm.list_persona_data(MEMBER_A)
 
-        result = mgr.upload_custom_dataset(b"csv_data", "test.csv", {"persona": "col1"})
-        assert result["name"] == "test"
-        assert result["row_count"] == rows
-        mock_s3_service.upload_file.assert_called()
+    def test_scope_change_shows_up_at_once(self, dm, survey_world):
+        data = survey_world.custom_data("企画向け", "plan")
+        assert dm.list_persona_data(MEMBER_A).custom == ()
+        dm.update_scope(ADMIN, data.id, AssetScopeChange(add=frozenset({"sales"})))
+        assert [d.id for d in dm.list_persona_data(MEMBER_A).custom] == [data.id]
 
-    def test_too_few_rows_rejected(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        """最小レコード数を下回るデータセットは保存させない（Issue #118）。
+    def test_detail_for_a_user_in_scope(self, dm, survey_world):
+        data = survey_world.custom_data("営業向け", "sales")
+        assert dm.get_custom_persona_data(MEMBER_A, data.id).name == "営業向け"
 
-        アップロードできてしまうと、アンケート実行時に必ずバッチ推論が失敗する。
-        """
-        import polars as pl
+    @pytest.mark.parametrize("which", ["out_of_scope", "missing", "reservation"])
+    def test_detail_outside_the_scope_is_not_found(self, dm, survey_world, which):
+        data = survey_world.custom_data("企画向け", "plan")
+        target = {
+            "out_of_scope": data.id,
+            "missing": "2b0f8d2e-0000-4000-8000-000000000000",
+            "reservation": reservation_id("企画向け"),
+        }[which]
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.get_custom_persona_data(MEMBER_A, target)
 
-        df = pl.DataFrame({"persona": ["a"], "uuid": ["u1"]})
-        mock_batch_service.convert_csv_to_parquet.return_value = (df, b"pq_bytes")
+    def test_filters_and_counts_judge_the_datasource(self, dm, survey_world, batch):
+        data = survey_world.custom_data("企画向け", "plan")
+        source = f"custom:{data.id}"
+        for call in (
+            lambda: dm.get_available_filter_values(MEMBER_A, source),
+            lambda: dm.get_filtered_count(MEMBER_A, None, source),
+            lambda: dm.get_preview_stats(MEMBER_A, None, source),
+            lambda: dm.get_datasource_count(MEMBER_A, source),
+        ):
+            with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+                call()
+        batch.get_filtered_count.assert_not_called()
+        batch.get_available_filter_values.assert_not_called()
+        assert dm.get_filtered_count(MEMBER_C, None, source) == 500
+        assert dm.get_datasource_count(MEMBER_C, source) == 800
 
+    def test_nemotron_needs_no_scope(self, dm):
+        assert dm.get_filtered_count(MEMBER_A, None, "nemotron") == 500
+        assert dm.get_preview_stats(MEMBER_A, None, "nemotron") == {"count": 500}
+
+    def test_old_name_datasource_is_not_found(self, dm, batch):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.get_filtered_count(MEMBER_A, None, "custom:顧客データ")
+        batch.get_filtered_count.assert_not_called()
+
+    def test_standard_columns(self, dm):
+        assert "persona" in dm.get_standard_columns()
+
+    def test_image_signing_by_path_is_gone(self):
+        assert not hasattr(SurveyDatasetManager, "get_image_presigned_url")
+        assert not hasattr(SurveyDatasetManager, "list_custom_datasets")
+        assert not hasattr(SurveyDatasetManager, "load_dataset_metadata")
+
+
+# =============================================================================
+# 管理（admin だけ、BR4.1、NFR1.73）
+# =============================================================================
+
+
+class TestManagementIsAdminOnly:
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda dm: dm.download_nemotron_dataset(MEMBER_A),
+            lambda dm: _upload(dm, MEMBER_A),
+            lambda dm: dm.delete_custom_dataset(MEMBER_A, "x"),
+            lambda dm: dm.rename_custom_dataset(MEMBER_A, "x", "y"),
+            lambda dm: dm.update_scope(MEMBER_A, "x", AssetScopeChange()),
+            lambda dm: dm.scope_dialog(MEMBER_A, "x"),
+            lambda dm: dm.extract_segment_from_dwh(MEMBER_A, "条件", Mock()),
+            lambda dm: dm.suggest_column_mapping(MEMBER_A, ["a"], {}),
+            lambda dm: dm.upload_temp_file(MEMBER_A, b"x", "temp/x.csv"),
+            lambda dm: dm.download_temp_file(MEMBER_A, "temp/x.csv"),
+            lambda dm: dm.delete_temp_file(MEMBER_A, "temp/x.csv"),
+            lambda dm: dm.parse_csv_columns(MEMBER_A, b"a,b\n1,2"),
+            lambda dm: dm.preview_system_prompt(MEMBER_A, b"a\n1", {"persona": "a"}),
+            lambda dm: dm.ensure_manageable(MEMBER_A),
+            lambda dm: dm.import_scope_choices(MEMBER_A),
+        ],
+    )
+    def test_member_gets_404_and_nothing_changes(
+        self, dm, survey_world, batch, logs, call
+    ):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            call(dm)
+        assert _objects(survey_world, "") == []
+        batch.convert_csv_to_parquet.assert_not_called()
+        denied = logs.events("authz.denied")
+        assert denied and denied[-1]["reason"] == "hidden"
+
+    def test_no_role_is_refused_too(self, dm):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.download_nemotron_dataset(NO_ROLE)
+
+    def test_admin_passes_the_management_check(self, dm):
+        assert dm.ensure_manageable(ADMIN) is None
+
+    def test_import_offers_every_department(self, dm):
+        """取り込みの利用範囲の欄（admin は全部署から選ぶ、BR5.2）"""
+        names = {d.display_name for d in dm.import_scope_choices(ADMIN)}
+        assert names == {"営業部", "企画部"}
+
+    def test_admin_temp_files_roundtrip(self, dm):
+        dm.upload_temp_file(ADMIN, b"a,b\n", "temp/x.csv")
+        assert dm.download_temp_file(ADMIN, "temp/x.csv") == b"a,b\n"
+        dm.delete_temp_file(ADMIN, "temp/x.csv")
+
+    def test_admin_parses_columns_and_previews_the_prompt(self, dm):
+        assert "columns" in dm.parse_csv_columns(ADMIN, b"name,age\nA,30\nB,25")
+        prompt = dm.preview_system_prompt(
+            ADMIN, b"persona\nhello", {"persona": "persona"}
+        )
+        assert "hello" in prompt
+
+    def test_admin_downloads_nemotron(self, dm, survey_world, batch):
+        batch.download_nemotron_dataset.return_value = b"parquet"
+        result = dm.download_nemotron_dataset(ADMIN)
+        assert result["exists"] is True
+        batch.set_parquet_s3_uri.assert_called_once()
+
+
+# =============================================================================
+# 取り込み（BR4.3〜BR4.5、NFR1.82、NFR1.85）
+# =============================================================================
+
+
+class TestUpload:
+    def test_writes_the_file_under_a_new_id_then_the_record(self, dm, survey_world):
+        data = _upload(dm)
+        assert data.s3_key == f"persona-dataset/custom/{data.id}.parquet"
+        assert _objects(survey_world) == [data.s3_key]
+        stored = survey_world.custom_store.get(data.id)
+        assert stored.name == "顧客データ"
+        assert stored.row_count == ROWS
+        assert stored.registered_by == "admin"
+        assert stored.standard_mapping == {"persona": "persona"}
+        assert stored.extra_columns == (
+            ExtraColumn(csv_column="hobby", description="趣味"),
+        )
+        assert stored.columns == ("persona", "hobby")
+        assert stored.shared_group_ids == frozenset()
+
+    def test_no_meta_json_is_written(self, dm, survey_world):
+        _upload(dm)
+        assert not any(k.endswith(".meta.json") for k in _objects(survey_world))
+
+    def test_scope_chosen_in_the_dialog(self, dm, survey_world):
+        data = _upload(dm, shared_group_ids=frozenset({"sales"}))
+        assert survey_world.custom_store.get(data.id).shared_group_ids == frozenset(
+            {"sales"}
+        )
+
+    def test_unknown_department_in_the_dialog_is_refused(self, dm, survey_world):
+        with raises_code(CodedError, ErrorCode.SHARE_SCOPE_INVALID):
+            _upload(dm, shared_group_ids=frozenset({"no-such"}))
+        assert _objects(survey_world) == []
+
+    @pytest.mark.parametrize("name", ["", "   ", "あ" * 101])
+    def test_invalid_name_writes_nothing(self, dm, survey_world, name):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_INVALID):
+            _upload(dm, name=name)
+        assert _objects(survey_world) == []
+
+    def test_taken_name_removes_the_file(self, dm, survey_world):
+        _upload(dm, name="同じ名前")
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN):
+            _upload(dm, name="同じ名前")
+        assert len(_objects(survey_world)) == 1
+
+    def test_the_name_does_not_shape_the_key(self, dm, survey_world):
+        data = _upload(dm, name="../../etc/passwd")
+        assert ".." not in data.s3_key
+        assert data.name == "../../etc/passwd"
+
+    def test_dwh_import_finds_a_free_name(self, dm, survey_world):
+        _upload(dm, name="20代女性")
+        _upload(dm, name="20代女性 (2)")
+        data = _upload(dm, name="20代女性", avoid_name_conflict=True)
+        assert data.name == "20代女性 (3)"
+
+    def test_dwh_import_gives_up_after_ten_tries(self, dm, survey_world):
+        _upload(dm, name="同じ")
+        for n in range(2, 11):
+            _upload(dm, name=f"同じ ({n})")
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN):
+            _upload(dm, name="同じ", avoid_name_conflict=True)
+
+    def test_too_few_rows_writes_nothing(self, dm, survey_world, batch):
+        batch.convert_csv_to_parquet.side_effect = lambda csv, mapping=None: (
+            pl.DataFrame({"persona": ["a"]}),
+            b"pq",
+        )
         with raises_code(
             SurveyDatasetValidationError, ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS
         ):
-            mgr.upload_custom_dataset(b"csv_data", "small.csv")
+            _upload(dm)
+        assert _objects(survey_world) == []
 
-        mock_s3_service.upload_file.assert_not_called()
+    def test_failed_record_write_removes_the_file(self, dm, survey_world):
+        from src.services.custom_persona_data_store import CustomPersonaDataStoreError
 
-
-class TestDeleteCustomDataset:
-    def test_success(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock, mock_batch_service: Mock
-    ) -> None:
-        mgr.delete_custom_dataset("mydata")
-        mock_s3_service.s3_client.delete_object.assert_called()
-        mock_batch_service.invalidate_datasource.assert_called_once_with(
-            "custom:mydata"
+        survey_world.custom_store.put_new = Mock(
+            side_effect=CustomPersonaDataStoreError("down")
         )
+        with raises_code(SurveyDatasetManagerError, ErrorCode.SURVEY_OPERATION_FAILED):
+            _upload(dm)
+        assert _objects(survey_world) == []
 
+    def test_a_file_left_behind_is_logged(self, dm, survey_world, logs, monkeypatch):
+        from src.services.custom_persona_data_store import CustomPersonaDataStoreError
 
-class TestLoadDatasetMetadata:
-    def test_found(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        meta = {"standard_mapping": {}, "extra_columns": []}
-        mock_s3_service.download_file.return_value = json.dumps(meta).encode()
-        result = mgr.load_dataset_metadata("test")
-        assert result == meta
-
-    def test_not_found(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mock_s3_service.download_file.side_effect = Exception("not found")
-        result = mgr.load_dataset_metadata("missing")
-        assert result is None
-
-
-class TestParseCsvColumns:
-    def test_returns_dict(self, mgr: SurveyDatasetManager) -> None:
-        csv_data = b"name,age\nAlice,30\nBob,25"
-        result = mgr.parse_csv_columns(csv_data)
-        assert "columns" in result
-        assert "samples" in result
-
-
-class TestPreviewSystemPrompt:
-    def test_returns_string(self, mgr: SurveyDatasetManager) -> None:
-        csv_data = "sex,age,persona\n男性,30,テスト概要".encode("utf-8-sig")
-        result = mgr.preview_system_prompt(
-            csv_data, {"sex": "sex", "age": "age", "persona": "persona"}
+        survey_world.custom_store.put_new = Mock(
+            side_effect=CustomPersonaDataStoreError("down")
         )
-        assert "男性" in result
-        assert "テスト概要" in result
-
-
-class TestGetFilteredCount:
-    def test_delegates_to_batch_service(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock
-    ) -> None:
-        mock_batch_service.get_filtered_count.return_value = 500
-        result = mgr.get_filtered_count({"性別": "男性"}, datasource="nemotron")
-        assert result == 500
-
-
-class TestGenerateDatasetName:
-    def test_ai_success(self, mgr: SurveyDatasetManager, mock_ai_service: Mock) -> None:
-        mock_ai_service.invoke_model.return_value = "テストデータセット"
-        result = mgr._generate_dataset_name("20代女性")
-        assert result == "テストデータセット"
-
-    def test_ai_failure_fallback(
-        self, mgr: SurveyDatasetManager, mock_ai_service: Mock
-    ) -> None:
-        mock_ai_service.invoke_model.side_effect = Exception("API error")
-        result = mgr._generate_dataset_name("20代女性の購買行動データ")
-        assert len(result) <= 20
-
-
-class TestValidateSegmentRowCount:
-    def test_too_few(self, mgr: SurveyDatasetManager) -> None:
-        with pytest.raises(SurveyDatasetValidationError):
-            mgr._validate_segment_row_count(50)
-
-    def test_too_many(self, mgr: SurveyDatasetManager) -> None:
-        with pytest.raises(SurveyDatasetValidationError):
-            mgr._validate_segment_row_count(20000)
-
-    def test_valid(self, mgr: SurveyDatasetManager) -> None:
-        mgr._validate_segment_row_count(500)
-
-
-class TestTempFileOperations:
-    def test_upload(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mgr.upload_temp_file(b"data", "tmp/key")
-        mock_s3_service.upload_file.assert_called_once_with(b"data", "tmp/key")
-
-    def test_download(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mock_s3_service.download_file.return_value = b"data"
-        result = mgr.download_temp_file("tmp/key")
-        assert result == b"data"
-
-    def test_delete(self, mgr: SurveyDatasetManager, mock_s3_service: Mock) -> None:
-        mgr.delete_temp_file("tmp/key")
-        mock_s3_service.s3_client.delete_object.assert_called_once()
-
-
-# =========================================================================
-# 以下、カバレッジ拡充テスト (lines 96-128, 180-181, 329-359, 390, 408-409,
-# 426-427, 431-432, 440, 450)
-# =========================================================================
-
-
-@pytest.mark.unit
-class TestEnsureParquetUri:
-    """_ensure_parquet_uri のテスト (lines 96-105)"""
-
-    def test_success_sets_uri(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock, mock_batch_service: Mock
-    ) -> None:
-        mock_s3_service.s3_client.head_object.return_value = {"ContentLength": 100}
-        mgr._ensure_parquet_uri()
-        mock_batch_service.set_parquet_s3_uri.assert_called_once_with(
-            "s3://test-bucket/persona-dataset/nemotron-personas-japan.parquet"
+        monkeypatch.setattr(
+            survey_world.s3, "delete_file", Mock(side_effect=RuntimeError("down"))
         )
+        with pytest.raises(SurveyDatasetManagerError):
+            _upload(dm)
+        events = logs.events("survey.cleanup_failed")
+        assert events[0]["step"] == "custom_file"
+        assert events[0]["resource_type"] == "custom_persona_data"
 
-    def test_not_found_raises_error(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock
-    ) -> None:
-        from src.managers.survey_dataset_manager import SurveyDatasetManagerError
 
-        mock_s3_service.s3_client.head_object.side_effect = _FakeClientError(
-            "not found"
+# =============================================================================
+# 削除・名前の変更（BR4.4、BR4.6）
+# =============================================================================
+
+
+class TestDeleteAndRename:
+    def test_delete_removes_record_reservation_and_file(self, dm, survey_world, batch):
+        data = _upload(dm)
+        dm.delete_custom_dataset(ADMIN, data.id)
+        assert survey_world.custom_store.get(data.id) is None
+        assert (
+            survey_world.raw(survey_world.custom_table, reservation_id(data.name))
+            is None
         )
-        with pytest.raises(SurveyDatasetManagerError) as exc_info:
-            mgr._ensure_parquet_uri()
-        assert exc_info.value.code is ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED
+        assert _objects(survey_world) == []
+        batch.invalidate_datasource.assert_called_once_with(f"custom:{data.id}")
+
+    def test_delete_missing_is_not_found(self, dm):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.delete_custom_dataset(ADMIN, "2b0f8d2e-0000-4000-8000-000000000000")
+
+    def test_file_delete_failure_is_logged_and_the_delete_succeeds(
+        self, dm, survey_world, logs, monkeypatch
+    ):
+        data = _upload(dm)
+        monkeypatch.setattr(
+            survey_world.s3, "delete_file", Mock(side_effect=RuntimeError("down"))
+        )
+        dm.delete_custom_dataset(ADMIN, data.id)
+        assert survey_world.custom_store.get(data.id) is None
+        assert survey_world.s3.delete_file.call_count == 3
+        assert logs.events("survey.cleanup_failed")[0]["step"] == "custom_file"
+        assert dm.list_persona_data(ADMIN).custom == ()
+
+    def test_results_made_from_it_stay(self, dm, survey_world):
+        data = _upload(dm)
+        survey = survey_world.survey("a", datasource=f"custom:{data.id}")
+        dm.delete_custom_dataset(ADMIN, data.id)
+        assert survey_world.db.get_survey(survey.id) is not None
+
+    def test_rename(self, dm, survey_world):
+        data = _upload(dm, name="旧")
+        renamed = dm.rename_custom_dataset(ADMIN, data.id, " 新 ")
+        assert renamed.name == "新"
+        assert survey_world.custom_store.get(data.id).name == "新"
+
+    def test_rename_to_a_taken_name(self, dm):
+        _upload(dm, name="一")
+        second = _upload(dm, name="二")
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN):
+            dm.rename_custom_dataset(ADMIN, second.id, "一")
+
+    def test_rename_invalid_or_missing(self, dm):
+        data = _upload(dm)
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_INVALID):
+            dm.rename_custom_dataset(ADMIN, data.id, " ")
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.rename_custom_dataset(ADMIN, "2b0f8d2e-0000-4000-8000-000000000000", "x")
 
 
-@pytest.mark.unit
-class TestListCustomDatasets:
-    """list_custom_datasets のテスト (lines 111-128)"""
+# =============================================================================
+# 利用範囲（BR5.2、NFR8.24）
+# =============================================================================
 
-    def test_returns_parquet_files_only(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock
-    ) -> None:
-        mock_s3_service.s3_client.list_objects_v2.return_value = {
-            "Contents": [
-                {"Key": "persona-dataset/custom/test.parquet", "Size": 1048576},
-                {"Key": "persona-dataset/custom/test.meta.json", "Size": 100},
-                {"Key": "persona-dataset/custom/other.parquet", "Size": 2097152},
-            ]
+
+class TestScope:
+    def test_dialog_shows_every_department_and_the_current_scope(
+        self, dm, survey_world
+    ):
+        data = survey_world.custom_data("営業向け", "sales", "gone")
+        dialog = dm.scope_dialog(ADMIN, data.id)
+        assert [d.group_id for d in dialog.choices] == ["plan", "sales"]
+        assert dialog.selected == frozenset({"sales", "gone"})
+        assert dialog.vanished == ("gone",)
+        assert dialog.name == "営業向け"
+
+    def test_dialog_of_a_missing_record(self, dm):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.scope_dialog(ADMIN, "2b0f8d2e-0000-4000-8000-000000000000")
+
+    def test_add_and_remove(self, dm, survey_world, logs):
+        data = survey_world.custom_data("営業向け", "sales")
+        updated = dm.update_scope(
+            ADMIN,
+            data.id,
+            AssetScopeChange(add=frozenset({"plan"}), remove=frozenset({"sales"})),
+        )
+        assert updated.shared_group_ids == frozenset({"plan"})
+        event = logs.events("asset.scope_changed")[0]
+        assert event["resource_type"] == "custom_persona_data"
+        assert event["resource_id"] == data.id
+        assert event["added"] == ["plan"]
+        assert event["removed"] == ["sales"]
+        assert event["actor_sub"] == "admin"
+        assert "営業向け" not in str(event)
+
+    def test_a_deleted_group_can_be_removed(self, dm, survey_world):
+        data = survey_world.custom_data("営業向け", "sales", "gone")
+        updated = dm.update_scope(
+            ADMIN, data.id, AssetScopeChange(remove=frozenset({"gone"}))
+        )
+        assert updated.shared_group_ids == frozenset({"sales"})
+
+    def test_only_existing_departments_can_be_added(self, dm, survey_world):
+        data = survey_world.custom_data("営業向け")
+        with raises_code(CodedError, ErrorCode.SHARE_SCOPE_INVALID):
+            dm.update_scope(ADMIN, data.id, AssetScopeChange(add=frozenset({"x"})))
+        assert survey_world.custom_store.get(data.id).shared_group_ids == frozenset()
+
+    def test_scope_of_a_missing_record_creates_nothing(self, dm, survey_world):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.update_scope(
+                ADMIN,
+                "2b0f8d2e-0000-4000-8000-000000000000",
+                AssetScopeChange(add=frozenset({"sales"})),
+            )
+        assert survey_world.custom_store.list_all() == []
+
+
+# =============================================================================
+# DWH・列の対応（admin、今の振る舞い）
+# =============================================================================
+
+
+class TestDwhAndMapping:
+    def test_suggest_column_mapping_filters_invalid(self, dm, agent):
+        agent.suggest_column_mapping_with_llm.return_value = {
+            "mapping": {"persona": "desc", "bogus": "x"},
+            "extra_columns": [{"csv_column": "hobby"}, {"csv_column": "nope"}],
         }
-        result = mgr.list_custom_datasets()
-        assert len(result) == 2
-        assert result[0]["name"] == "test"
-        assert result[0]["size_mb"] == 1.0
-        assert result[1]["name"] == "other"
-        assert result[1]["size_mb"] == 2.0
-
-    def test_empty_bucket(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock
-    ) -> None:
-        mock_s3_service.s3_client.list_objects_v2.return_value = {}
-        result = mgr.list_custom_datasets()
-        assert result == []
-
-    def test_exception_returns_empty(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock
-    ) -> None:
-        mock_s3_service.s3_client.list_objects_v2.side_effect = Exception("S3 error")
-        result = mgr.list_custom_datasets()
-        assert result == []
-
-
-@pytest.mark.unit
-class TestDeleteCustomDatasetMetaError:
-    """delete_custom_dataset のメタデータ削除例外パス (lines 180-181)"""
-
-    def test_meta_delete_exception_is_swallowed(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock, mock_batch_service: Mock
-    ) -> None:
-        call_count = [0]
-
-        def side_effect(**kwargs):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise Exception("meta delete failed")
-
-        mock_s3_service.s3_client.delete_object.side_effect = side_effect
-        mgr.delete_custom_dataset("mydata")
-        mock_batch_service.invalidate_datasource.assert_called_once_with(
-            "custom:mydata"
+        result = dm.suggest_column_mapping(
+            ADMIN, ["desc", "hobby"], {"desc": ["a"], "hobby": ["b"]}
         )
+        assert result["mapping"] == {"persona": "desc"}
+        assert result["extra_columns"] == [{"csv_column": "hobby"}]
 
-
-@pytest.mark.unit
-class TestSuggestColumnMapping:
-    """suggest_column_mapping のテスト (lines 329-359)"""
-
-    def test_valid_result_filters_correctly(
-        self, mgr: SurveyDatasetManager, mock_agent_service: Mock
-    ) -> None:
-        mock_agent_service.suggest_column_mapping_with_llm.return_value = {
-            "mapping": {"sex": "gender_col", "age": "age_col", "invalid_key": "x"},
-            "extra_columns": [
-                {"csv_column": "hobby_col", "label": "趣味"},
-                {"csv_column": "gender_col", "label": "性別"},  # 既にmappingで使用済み
-                {"csv_column": "missing_col", "label": "存在しない"},
-            ],
+    def test_suggest_column_mapping_failure_is_empty(self, dm, agent):
+        agent.suggest_column_mapping_with_llm.side_effect = RuntimeError("x")
+        assert dm.suggest_column_mapping(ADMIN, ["a"], {}) == {
+            "mapping": {},
+            "extra_columns": [],
         }
-        columns = ["gender_col", "age_col", "hobby_col"]
-        samples = {"gender_col": ["男性"], "age_col": ["30"], "hobby_col": ["読書"]}
-        result = mgr.suggest_column_mapping(columns, samples)
 
-        assert result["mapping"] == {"sex": "gender_col", "age": "age_col"}
-        assert len(result["extra_columns"]) == 1
-        assert result["extra_columns"][0]["csv_column"] == "hobby_col"
+    def test_dwh_condition_is_required(self, dm):
+        with raises_code(
+            SurveyDatasetValidationError, ErrorCode.SEGMENT_CONDITION_REQUIRED
+        ):
+            dm.extract_segment_from_dwh(ADMIN, " ", Mock())
 
-    def test_exception_returns_empty(
-        self, mgr: SurveyDatasetManager, mock_agent_service: Mock
-    ) -> None:
-        mock_agent_service.suggest_column_mapping_with_llm.side_effect = Exception(
-            "LLM error"
+    def test_dataset_name_falls_back_to_the_condition(self, dm, ai):
+        ai.invoke_model.side_effect = RuntimeError("x")
+        assert dm._generate_dataset_name("20代女性で都内在住") == "20代女性で都内在住"
+
+    def test_segment_row_count_limits(self, dm):
+        with raises_code(
+            SurveyDatasetValidationError, ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW
+        ):
+            dm._validate_segment_row_count(10)
+        with raises_code(
+            SurveyDatasetValidationError, ErrorCode.SEGMENT_ROW_COUNT_TOO_HIGH
+        ):
+            dm._validate_segment_row_count(20000)
+        dm._validate_segment_row_count(500)
+
+
+# =============================================================================
+# 利用範囲の部品（shared/asset_scope.py、判定を持たない）
+# =============================================================================
+
+
+class TestAssetScopeHelpers:
+    DEPARTMENTS = [Department("sales", "営業部"), Department("plan", "企画部")]
+
+    def test_change_from_form(self):
+        change = AssetScopeChange.from_form(
+            selected=["plan"], initial=["sales", "gone"]
         )
-        result = mgr.suggest_column_mapping(["col1"], {"col1": ["val"]})
-        assert result == {"mapping": {}, "extra_columns": []}
+        assert change.add == frozenset({"plan"})
+        assert change.remove == frozenset({"sales", "gone"})
 
-    def test_no_agent_service_returns_empty(
-        self, mock_batch_service: Mock, mock_ai_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        mgr_no_agent = SurveyDatasetManager(
-            survey_batch_service=mock_batch_service,
-            agent_service=None,
-            ai_service=mock_ai_service,
-            s3_service=mock_s3_service,
+    def test_kept_departments_are_not_removed(self):
+        change = AssetScopeChange.from_form(selected=["sales", ""], initial=["sales"])
+        assert change.add == frozenset({"sales"})
+        assert change.remove == frozenset()
+
+    def test_labels_mark_deleted_groups(self):
+        assert scope_labels(["sales", "gone"], self.DEPARTMENTS) == [
+            "営業部",
+            VANISHED_GROUP_LABEL,
+        ]
+        assert VANISHED_GROUP_LABEL == "（削除されたグループ）"
+
+    def test_dialog(self):
+        dialog = scope_dialog(
+            CUSTOM, "c1", "名前", frozenset({"sales", "gone"}), self.DEPARTMENTS
         )
-        mgr_no_agent.agent_service = None
-        result = mgr_no_agent.suggest_column_mapping(["col1"], {"col1": ["val"]})
-        assert result == {"mapping": {}, "extra_columns": []}
+        assert dialog.vanished == ("gone",)
+        assert dialog.selected == frozenset({"sales", "gone"})
+        assert [d.group_id for d in dialog.choices] == ["sales", "plan"]
 
 
-@pytest.mark.unit
-class TestGetAvailableFilterValues:
-    """get_available_filter_values のテスト (lines 408-409)"""
-
-    def test_delegates_to_batch_service(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock
-    ) -> None:
-        expected = {"性別": {"values": ["男性", "女性"]}}
-        mock_batch_service.has_parquet_uri.return_value = True
-        mock_batch_service.get_available_filter_values.return_value = expected
-        result = mgr.get_available_filter_values("nemotron")
-        assert result == expected
-        mock_batch_service.get_available_filter_values.assert_called_once_with(
-            "nemotron"
-        )
-
-
-@pytest.mark.unit
-class TestGetPreviewStats:
-    """get_preview_stats のテスト (lines 426-427)"""
-
-    def test_delegates_to_batch_service(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock
-    ) -> None:
-        expected = {"total": 1000, "filtered": 500}
-        mock_batch_service.has_parquet_uri.return_value = True
-        mock_batch_service.get_preview_stats.return_value = expected
-        result = mgr.get_preview_stats({"性別": "男性"}, datasource="nemotron")
-        assert result == expected
-        mock_batch_service.get_preview_stats.assert_called_once_with(
-            {"性別": "男性"}, "nemotron"
-        )
-
-
-@pytest.mark.unit
-class TestGetDatasourceCount:
-    """get_datasource_count のテスト (lines 431-432)"""
-
-    def test_delegates_to_batch_service(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock
-    ) -> None:
-        mock_batch_service.has_parquet_uri.return_value = True
-        mock_batch_service.get_total_count.return_value = 2000
-        result = mgr.get_datasource_count("nemotron")
-        assert result == 2000
-        mock_batch_service.get_total_count.assert_called_once_with("nemotron")
-
-
-@pytest.mark.unit
-class TestGetImagePresignedUrl:
-    """get_image_presigned_url のテスト (line 440)"""
-
-    def test_delegates_to_s3_service(
-        self, mgr: SurveyDatasetManager, mock_s3_service: Mock
-    ) -> None:
-        mock_s3_service.generate_presigned_url.return_value = "https://presigned.url"
-        result = mgr.get_image_presigned_url("images/test.png")
-        assert result == "https://presigned.url"
-        mock_s3_service.generate_presigned_url.assert_called_once_with(
-            "images/test.png"
-        )
-
-
-@pytest.mark.unit
-class TestEnsureParquetUriIfNemotron:
-    """_ensure_parquet_uri_if_nemotron のテスト (lines 446-450)"""
-
-    def test_custom_datasource_does_nothing(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        mgr._ensure_parquet_uri_if_nemotron("custom:mydata")
-        mock_batch_service.has_parquet_uri.assert_not_called()
-        mock_s3_service.s3_client.head_object.assert_not_called()
-
-    def test_nemotron_with_uri_does_nothing(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        mock_batch_service.has_parquet_uri.return_value = True
-        mgr._ensure_parquet_uri_if_nemotron("nemotron")
-        mock_s3_service.s3_client.head_object.assert_not_called()
-
-    def test_nemotron_without_uri_calls_ensure(
-        self, mgr: SurveyDatasetManager, mock_batch_service: Mock, mock_s3_service: Mock
-    ) -> None:
-        mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.return_value = {"ContentLength": 100}
-        mgr._ensure_parquet_uri_if_nemotron("nemotron")
-        mock_batch_service.set_parquet_s3_uri.assert_called_once()
-
-
-@pytest.mark.unit
-class TestGetStandardColumns:
-    """get_standard_columns のテスト (line 390)"""
-
-    def test_returns_dict(self, mgr: SurveyDatasetManager) -> None:
-        result = mgr.get_standard_columns()
-        assert isinstance(result, dict)
-        assert "sex" in result or "age" in result or len(result) > 0
+def test_member_cannot_manage_even_through_an_access_denied_path(dm):
+    """管理の経路は 403 ではなく 404（存在を知らせない、NFR1.79）。"""
+    with pytest.raises(CodedError) as info:
+        dm.delete_custom_dataset(MEMBER_A, "x")
+    assert not isinstance(info.value, AccessDeniedError)

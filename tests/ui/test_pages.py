@@ -148,6 +148,21 @@ def _templates() -> list[SurveyTemplate]:
     ]
 
 
+def _survey_listing(items: list, tab: str | None) -> TabbedList:
+    """What the U7 survey / template lists return for the admin (M6)."""
+    active = ListTab.parse(tab) or ListTab.MINE
+    return TabbedList(
+        tab=active,
+        items=items,
+        counts={"mine": len(items), "shared": 0, "all": len(items)},
+        show_all=True,
+        owners={} if active is ListTab.MINE else {i.id: "中村 由美" for i in items},
+        manageable=frozenset()
+        if active is ListTab.SHARED
+        else frozenset(i.id for i in items),
+    )
+
+
 @pytest.fixture
 def screens() -> Generator[dict[str, Mock]]:
     """Patch the Managers behind the four list screens with a few rows each."""
@@ -162,10 +177,16 @@ def screens() -> Generator[dict[str, Mock]]:
     discussion_manager.list_discussions.side_effect = (
         lambda _p, tab, _c, *_a: _discussion_listing(discussions, tab)
     )
+    # U7: アンケートの結果・テンプレートの一覧もタブ別
+    surveys, survey_templates = _surveys(), _templates()
     execution_manager = Mock()
-    execution_manager.get_all_surveys.return_value = _surveys()
+    execution_manager.list_surveys.side_effect = (
+        lambda _p, tab, _c, *_a: _survey_listing(surveys, tab)
+    )
     template_manager = Mock()
-    template_manager.get_all_templates.return_value = _templates()
+    template_manager.list_templates.side_effect = (
+        lambda _p, tab, _c, *_a: _survey_listing(survey_templates, tab)
+    )
     managers = {
         "web.routers.persona.get_persona_manager": persona_manager,
         "web.routers.discussion.get_persona_manager": persona_manager,
@@ -332,7 +353,7 @@ def test_load_more_marks_the_list_busy(
         ("/persona/management", "persona-list"),
         ("/discussion/results", "discussion-list"),
         ("/survey/results", "survey-list"),
-        ("/survey/templates", "template-list"),
+        ("/survey/templates", "survey-template-list"),
     ],
 )
 def test_list_part_is_wrapped_in_an_id(

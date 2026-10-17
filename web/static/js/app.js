@@ -1285,6 +1285,32 @@ registerBlock('DepartmentPicker', function() {
 });
 
 // -------------------------------------------------------------
+// AssetScope（U7、M10、BR5.2）
+// 組織資産の利用範囲のダイアログ [data-asset-scope-form]。開いたときに利用範囲に
+// 入っていた部署（data-initial が unchecked でない選択肢）を外すと、保存の前に
+// [data-scope-remove-warning]（role="alert"）を出す。戻すと消す。部署の選択の
+// 振る舞い（中間・確認・保存ボタン）は DepartmentPicker のまま。
+// -------------------------------------------------------------
+registerBlock('AssetScope', function() {
+    const FORM = '[data-asset-scope-form]';
+
+    function refresh(form) {
+        const warning = form.querySelector('[data-scope-remove-warning]');
+        if (!warning) return;
+        const removing = Array.from(form.querySelectorAll('[data-department-option]'))
+            .some((o) => o.dataset.initial !== 'unchecked' && !o.checked);
+        if (warning.hidden === !removing) return;
+        warning.hidden = !removing;
+    }
+
+    document.addEventListener('change', function(evt) {
+        const target = evt.target instanceof Element ? evt.target : null;
+        const form = target ? target.closest(FORM) : null;
+        if (form) refresh(form);
+    });
+});
+
+// -------------------------------------------------------------
 // ShareDialog（U4、M7、WF1・WF2、BR7.3）
 // 画面に 1 つの共有ダイアログ #share-dialog の中身の読み込み先を、開くボタンごとに
 // 決める。1 件は data-share-url、一括は操作バー（data-bulk-select の種類）と選んだ

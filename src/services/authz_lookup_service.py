@@ -84,11 +84,15 @@ class LookupTable:
         table_name: Physical DynamoDB table name.
         display_name_attribute: Column used as the display name (``name`` for
             personas, ``topic`` for discussions), or ``None``.
+        hidden_id_prefix: IDs with this prefix are other kinds of items of the
+            same table (``name#`` reservations of custom persona data, U7);
+            they are never read and come back as missing (NFR1.74).
     """
 
     resource_type: ResourceType
     table_name: str
     display_name_attribute: str | None = None
+    hidden_id_prefix: str | None = None
 
 
 class _TableReader:
@@ -150,6 +154,8 @@ class AuthzLookupService:
             AuthzLookupError: Out of time, keys left unprocessed, or DynamoDB
                 unreachable.
         """
+        if table.hidden_id_prefix:
+            ids = [i for i in ids if not i.startswith(table.hidden_id_prefix)]
         if not ids:
             return {}
         if len(ids) == 1:

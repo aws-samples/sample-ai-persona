@@ -22,6 +22,7 @@ from typing import Any, Callable, Protocol
 
 from ...config import config
 from ...models.authz import LookupReader, ResourceType
+from ...models.custom_persona_data import NAME_RESERVATION_PREFIX
 from ...services.authz_lookup_service import LookupTable
 from .access_policy import AccessPolicy
 from .department_directory import DepartmentDirectory, DepartmentSource
@@ -40,10 +41,12 @@ class SharingParts:
     Attributes:
         sharing: Sharing decisions and tab queries.
         owners: The owner-name copy (display only).
+        departments: The department copy (U7: the usage-scope choices, C4).
     """
 
     sharing: ResourceSharing
     owners: OwnerDirectory
+    departments: DepartmentDirectory
 
 
 _parts: SharingParts | None = None
@@ -56,10 +59,13 @@ def build_sharing_parts(
     user_source: UserSource,
 ) -> SharingParts:
     """Assemble the parts and register every shareable type."""
-    sharing = ResourceSharing(share_store, DepartmentDirectory(department_source))
+    departments = DepartmentDirectory(department_source)
+    sharing = ResourceSharing(share_store, departments)
     for table in default_sharing_tables():
         sharing.register(table)
-    return SharingParts(sharing=sharing, owners=OwnerDirectory(user_source))
+    return SharingParts(
+        sharing=sharing, owners=OwnerDirectory(user_source), departments=departments
+    )
 
 
 def shared_parts(build: Callable[[], SharingParts]) -> SharingParts:
@@ -108,10 +114,11 @@ _access_parts: AccessParts | None = None
 
 
 def lookup_tables() -> list[LookupTable]:
-    """The resource types U5 registers with ``ResourceLookup`` (C3).
+    """The resource types registered with ``ResourceLookup`` (C3).
 
-    Datasets and knowledge bases have no ``shared_group_ids`` column until U7,
-    so they read as unscoped organization assets (admin only, BR2.3).
+    Datasets, knowledge bases and custom persona data are organization assets:
+    their ``shared_group_ids`` is the usage scope (U7 BR5.7); an asset without
+    the column is admin only.
     """
     return [
         LookupTable(ResourceType.PERSONA, config.table_name("Personas"), "name"),
@@ -120,6 +127,18 @@ def lookup_tables() -> list[LookupTable]:
         LookupTable(ResourceType.DATASET, config.table_name("Datasets"), "name"),
         LookupTable(
             ResourceType.KNOWLEDGE_BASE, config.table_name("KnowledgeBases"), "name"
+        ),
+        # U7: テンプレートと結果（所有者のない古い行は owner_sub が空、BR1.6）
+        LookupTable(
+            ResourceType.SURVEY_TEMPLATE, config.table_name("SurveyTemplates"), "name"
+        ),
+        LookupTable(ResourceType.SURVEY, config.table_name("Surveys"), "name"),
+        # U7: カスタムペルソナデータ（利用範囲だけ。名前の押さえ name# は読まない）
+        LookupTable(
+            ResourceType.CUSTOM_PERSONA_DATA,
+            config.CUSTOM_PERSONA_DATA_TABLE_NAME,
+            "name",
+            hidden_id_prefix=NAME_RESERVATION_PREFIX,
         ),
     ]
 
@@ -149,7 +168,13 @@ def build_access_parts(
             principal, lookup.get(ResourceType.DISCUSSION, discussion_id)
         ),
     )
-    # U7: files.register_parent("survey_template", ...)
+    # U7 BR1.9: テンプレートを親とする画像は、テンプレートを読める人に配信する
+    files.register_parent(
+        "survey_template",
+        lambda principal, template_id: AccessPolicy.can_read(
+            principal, lookup.get(ResourceType.SURVEY_TEMPLATE, template_id)
+        ),
+    )
     return AccessParts(lookup=lookup, files=files)
 
 

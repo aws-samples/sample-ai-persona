@@ -228,6 +228,55 @@ describe('DataStack: 議論の発言・レポートとインタビュー（U6、
   });
 });
 
+describe('DataStack: カスタムデータの登録情報とアンケートの OwnerIndex（U7、NFR1.80、NFR1.81）', () => {
+  const resources = () => template.findResources('AWS::DynamoDB::GlobalTable');
+  const byLogicalId = (prefix: string): any => {
+    const found = Object.entries(resources()).filter(([id]) => id.startsWith(prefix));
+    expect(found).toHaveLength(1);
+    return found[0][1];
+  };
+
+  test('CustomPersonaData は PK id、PITR、削除保護、RETAIN、AWS 管理キー、GSI なし、TTL なし', () => {
+    const table = byLogicalId('DatabaseCustomPersonaData');
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
+    expect(table.Properties.AttributeDefinitions).toEqual([
+      { AttributeName: 'id', AttributeType: 'S' },
+    ]);
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    // AWS 管理キー（カスタマー管理の KMS キーを指さない）
+    expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
+    const replica = table.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+    expect(replica.SSESpecification).toBeUndefined();
+  });
+
+  test.each([
+    { id: 'DatabaseSurveyTemplates94E0DB60', name: 'SurveyTemplates' },
+    { id: 'DatabaseSurveysAEB1D8E2', name: 'Surveys' },
+  ])('$name は論理 ID が変わらず（置き換えない）、OwnerIndex（PK owner_sub・SK created_at、KEYS_ONLY）だけを持つ', ({ id }) => {
+    const table = resources()[id];
+    expect(table).toBeDefined();
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
+    const indexes = table.Properties.GlobalSecondaryIndexes;
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0].IndexName).toBe('OwnerIndex');
+    expect(indexes[0].KeySchema).toEqual([
+      { AttributeName: 'owner_sub', KeyType: 'HASH' },
+      { AttributeName: 'created_at', KeyType: 'RANGE' },
+    ]);
+    expect(indexes[0].Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
+    const replica = table.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+});
+
 describe('DataStack: アップロード用バケットのライフサイクル（U5、NFR1.33、NFR1.41）', () => {
   function rules(): any[] {
     const bucket = Object.values(template.findResources('AWS::S3::Bucket'))[0];
@@ -270,9 +319,9 @@ describe('DataStack: アップロード用バケットのライフサイクル�
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つを含めて 18 テーブル。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つを含めて 19 テーブル。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(18);
+    expect(Object.keys(tables)).toHaveLength(19);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

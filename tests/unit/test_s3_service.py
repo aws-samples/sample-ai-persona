@@ -299,3 +299,11 @@ def test_paths_and_keys_convert_both_ways(s3_service, s3_bucket_name):
     assert s3_service.key_of(path) == "uploads/a"
     assert s3_service.key_of("s3://another-bucket/uploads/a") is None
     assert s3_service.key_of("/tmp/local") is None
+
+
+def test_exists_tells_whether_an_object_is_there(s3_service):
+    """U7 BR2.2・BR2.8: 実行に要るファイルと写しの画像が残っているか。"""
+    path = s3_service.upload_file(b"x", "persona-dataset/custom/x.parquet")
+    assert s3_service.exists(path) is True
+    s3_service.delete_file(path)
+    assert s3_service.exists(path) is False

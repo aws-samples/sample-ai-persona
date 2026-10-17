@@ -2,7 +2,7 @@
 Knowledge Base data model for Bedrock Knowledge Base integration.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Any
 import uuid
@@ -10,7 +10,11 @@ import uuid
 
 @dataclass
 class KnowledgeBase:
-    """登録済みBedrock Knowledge Baseの情報"""
+    """登録済みBedrock Knowledge Baseの情報
+
+    U7: ``shared_group_ids`` は利用範囲（組織資産、BR5.1）。空なら admin だけが使える。
+    書くのは利用範囲の変更だけ（BR1.5）。
+    """
 
     id: str
     knowledge_base_id: str  # Bedrock KB ID (e.g., "KB12345678")
@@ -18,6 +22,7 @@ class KnowledgeBase:
     description: str
     created_at: datetime
     updated_at: datetime
+    shared_group_ids: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def create_new(
@@ -34,6 +39,12 @@ class KnowledgeBase:
         )
 
     def to_dict(self) -> Dict[str, Any]:
+        data = self._base_dict()
+        if self.shared_group_ids:
+            data["shared_group_ids"] = sorted(self.shared_group_ids)
+        return data
+
+    def _base_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "knowledge_base_id": self.knowledge_base_id,
@@ -56,6 +67,7 @@ class KnowledgeBase:
             description=data.get("description", ""),
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
+            shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
         )
 
 

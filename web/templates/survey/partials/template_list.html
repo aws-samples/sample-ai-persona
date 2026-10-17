@@ -1,0 +1,153 @@
+{% from "components/datetime.html" import iso_datetime %}
+{% from "components/icons.html" import icon_document, icon_plus, icon_pencil, icon_trash %}
+{% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
+{% from "components/status_label.html" import status_label %}
+{#
+  アンケートテンプレートの一覧パーシャル（M6、U7 BR1.2）。タブ（list_tabpanel）の中身。
+
+  引数:
+    listing        ... src/models/sharing.py の TabbedList（items は SurveyTemplate）
+    current_search ... 検索語（今のタブの中を検索する）
+    is_append      ... 「もっと見る」の追加分
+#}
+{%- set tab = listing.tab.value -%}
+{%- set items = listing.items -%}
+{%- set total = listing.counts.get(tab) -%}
+{%- set bulk = tab != "shared" -%}
+{%- set extra = "&search=" ~ (current_search | urlencode) if current_search else "" -%}
+
+{%- if not is_append %}
+{# 検索がタブの中で動くよう、今のタブを持たせる #}
+<input type="hidden" name="tab" value="{{ tab }}" data-survey-template-tab>
+{%- if listing.search_truncated %}
+<p class="text-sm text-gray-700 mb-3" data-testid="survey-template-search-truncated">新しい順に 500 件までを検索しました</p>
+{%- endif %}
+{%- if items and bulk and listing.manageable %}
+{{ bulk_select_bar("survey_template", True, "共有先を設定", "share-dialog") }}
+{%- endif %}
+{%- endif %}
+
+{% if items or is_append %}
+{% if not is_append %}
+<div class="space-y-4" id="survey-template-grid" data-busy-target>
+{% endif %}
+    {% for tmpl in items %}
+    {%- set manageable = tmpl.id in listing.manageable %}
+    <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition-shadow" id="template-card-{{ tmpl.id }}" data-testid="survey-template-row">
+        <div class="flex items-start justify-between">
+            <div class="flex items-start gap-3">
+                {%- if bulk and manageable %}
+                <div class="pt-1">{{ bulk_select_row(tmpl.id, tmpl.name) }}</div>
+                {%- endif %}
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900">{{ tmpl.name }}</h2>
+                    <p class="text-sm text-gray-500 mt-1">
+                        {{ tmpl.questions|length }}問
+                        {% if tmpl.images %} ・ 画像あり{% endif %} ・
+                        作成: <time datetime="{{ iso_datetime(tmpl.created_at) }}">{{ tmpl.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
+                        {% if tmpl.updated_at != tmpl.created_at %}
+                        ・ 更新: <time datetime="{{ iso_datetime(tmpl.updated_at) }}">{{ tmpl.updated_at.strftime('%Y/%m/%d %H:%M') }}</time>
+                        {% endif %}
+                    </p>
+                    {%- if tab != "mine" %}
+                    {%- set label = listing.owners.get(tmpl.id) %}
+                    <p class="text-xs text-gray-700 mt-1">所有者: {% if label is none %}-{% elif label == "所有者不明" %}{{ status_label("所有者不明") }}{% else %}{{ label }}{% endif %}</p>
+                    {%- endif %}
+                    {%- set names = listing.shared_with.get(tmpl.id, []) %}
+                    {%- if tab == "shared" %}
+                    <p class="text-xs text-gray-700 mt-1">共有元: {{ names | join("、") or "-" }}</p>
+                    {%- elif names %}
+                    <p class="text-xs text-gray-700 mt-1">共有: {{ names | join("、") }}</p>
+                    {%- else %}
+                    <p class="text-xs text-gray-700 mt-1">{{ status_label("共有なし") }}</p>
+                    {%- endif %}
+                    <div class="flex flex-wrap gap-2 mt-2">
+                        {% for q in tmpl.questions %}
+                        <span class="text-xs px-2 py-1 rounded-full
+                            {% if q.question_type == 'multiple_choice' %}bg-blue-100 text-blue-700
+                            {% elif q.question_type == 'scale_rating' %}bg-amber-100 text-amber-700
+                            {% else %}bg-gray-100 text-gray-700{% endif %}">
+                            {% if q.question_type == 'multiple_choice' %}選択式{% if q.allow_multiple %}(複数){% endif %}
+                            {% elif q.question_type == 'scale_rating' %}スケール
+                            {% else %}自由記述{% endif %}:
+                            {{ q.text[:30] }}{% if q.text|length > 30 %}...{% endif %}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-2 ml-4 shrink-0">
+                <a href="/survey/start?template_id={{ tmpl.id }}"
+                   class="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 transition-colors text-sm">
+                    使う
+                </a>
+                {%- if manageable %}
+                <a href="/survey/templates/{{ tmpl.id }}/edit"
+                   class="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 transition-colors text-sm flex items-center gap-1">
+                    {{ icon_pencil("w-3.5 h-3.5") }} 編集
+                </a>
+                <button type="button" aria-haspopup="dialog" data-dialog-open="share-dialog"
+                        aria-label="{{ tmpl.name }} を共有"
+                        data-share-url="/share/survey_template/{{ tmpl.id }}/dialog"
+                        data-testid="survey-template-share-button"
+                        class="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 transition-colors text-sm">
+                    共有
+                </button>
+                <button hx-delete="/survey/templates/{{ tmpl.id }}"
+                        hx-target="#template-card-{{ tmpl.id }}"
+                        hx-swap="outerHTML"
+                        hx-confirm="このテンプレートを削除しますか？共有も一緒に削除されます。実行済みの結果は残ります"
+                        aria-label="{{ tmpl.name }} を削除"
+                        data-testid="survey-template-delete-button"
+                        class="bg-red-100 text-red-700 px-3 py-1.5 rounded-md hover:bg-red-200 transition-colors text-sm flex items-center gap-1">
+                    {{ icon_trash("w-3.5 h-3.5") }} 削除
+                </button>
+                {%- endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% if not is_append %}
+</div>
+{% endif %}
+<p id="survey-template-count-footer" class="text-sm text-gray-500 mt-4 text-center"
+   {% if is_append %}hx-swap-oob="true"{% endif %}>
+    {%- if current_search %}
+    {%- if not listing.next_cursor and not is_append %}該当{{ items | length }}件{% endif %}
+    {%- elif total is not none %}全{{ total }}件{% endif %}{% if listing.next_cursor %}（次あり）{% else %}（これで全て）{% endif %}
+</p>
+
+{% if listing.next_cursor %}
+<div id="load-more-survey-template" class="text-center mt-6"
+     {% if is_append %}hx-swap-oob="true"{% endif %}>
+    <button hx-get="/survey/templates?tab={{ tab }}&cursor={{ listing.next_cursor }}{{ extra }}&append=1"
+            hx-target="#survey-template-grid"
+            hx-swap="beforeend"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-md transition-colors">
+        もっと見る
+    </button>
+</div>
+{% elif is_append %}
+<div id="load-more-survey-template" hx-swap-oob="true"></div>
+{% endif %}
+
+{% else %}
+<div class="bg-gray-50 rounded-lg p-12 text-center" data-testid="survey-template-list-empty">
+    <div class="flex justify-center mb-4 text-gray-400">{{ icon_document("w-16 h-16") }}</div>
+    {% if current_search %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">該当するテンプレートがありません</h2>
+    <p class="text-gray-500 mb-6">検索語を変えてください。</p>
+    {% elif tab == "shared" and listing.no_department %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">所属グループがないため、共有されたテンプレートはありません</h2>
+    {% elif tab == "shared" %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">共有されたテンプレートはありません。所属グループに共有されると、ここに表示されます</h2>
+    {% else %}
+    <h2 class="text-xl font-semibold text-gray-700 mb-2">テンプレートがありません</h2>
+    <p class="text-gray-500 mb-6">新しいアンケートテンプレートを作成してください。</p>
+    <a href="/survey/templates/new"
+       class="inline-flex items-center gap-2 bg-teal-700 text-white px-6 py-2 rounded-md hover:bg-teal-800 transition-colors">
+        {{ icon_plus("w-4 h-4") }} テンプレートを作成
+    </a>
+    {% endif %}
+</div>
+{% endif %}

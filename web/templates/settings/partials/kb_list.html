@@ -1,9 +1,10 @@
-<!-- ナレッジベース一覧パーシャル -->
+<!-- ナレッジベース一覧パーシャル（U7: 利用範囲の列とボタン、M10） -->
 {% if not knowledge_bases %}
 <p class="text-gray-500 text-sm">登録されたナレッジベースはありません。</p>
 {% else %}
 <div class="space-y-3">
     {% for kb in knowledge_bases %}
+    {%- set scope = (kb_scopes or {}).get(kb.id, []) %}
     <div class="border border-gray-200 rounded-lg p-4 flex items-center justify-between">
         <div>
             <h4 class="font-medium text-gray-900">{{ kb.name }}</h4>
@@ -11,14 +12,26 @@
             <p class="text-sm text-gray-500 mt-0.5">{{ kb.description }}</p>
             {% endif %}
             <p class="text-sm text-gray-500 mt-1">ナレッジベースID: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{ kb.knowledge_base_id }}</code></p>
+            <p class="text-sm text-gray-700 mt-1" data-testid="kb-scope">利用範囲: {{ scope | join("、") if scope else "admin のみ" }}</p>
         </div>
-        <button
-            hx-delete="/settings/knowledge-bases/{{ kb.id }}"
-            hx-target="#kb-list"
-            hx-swap="innerHTML"
-            hx-confirm="ナレッジベース「{{ kb.name }}」を削除しますか？"
-            class="text-red-500 hover:text-red-700 text-sm"
-        >削除</button>
+        <div class="flex items-center gap-3">
+            <button type="button"
+                aria-haspopup="dialog"
+                aria-label="{{ kb.name }} の利用範囲を設定"
+                data-testid="kb-scope-button"
+                hx-get="/settings/knowledge-bases/{{ kb.id }}/scope"
+                hx-target="body"
+                hx-swap="beforeend"
+                class="text-gray-600 hover:text-gray-800 text-sm"
+            >利用範囲</button>
+            <button
+                hx-delete="/settings/knowledge-bases/{{ kb.id }}"
+                hx-target="#kb-list"
+                hx-swap="innerHTML"
+                hx-confirm="ナレッジベース「{{ kb.name }}」を削除しますか？"
+                class="text-red-500 hover:text-red-700 text-sm"
+            >削除</button>
+        </div>
     </div>
     {% endfor %}
 </div>

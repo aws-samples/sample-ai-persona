@@ -1,375 +1,522 @@
-"""Survey ルーターの API テスト"""
+"""Survey ルーターの API テスト（U7）。
 
+本物の U7 の Manager と判定の部品を moto の上で動かす（tests/api/u7_world.py）。
+BR1.2〜BR1.4、BR1.9、BR2.1、BR2.6、BR2.8、BR2.11、BR2.12、BR4.1、BR4.2、BR5.2、
+NFR1.66〜NFR1.74、NFR1.79、NFR4.14、AC2.1.2、AC2.1.3、AC2.2.4、AC2.5.1〜AC2.5.3、
+AC4.1.1〜AC4.1.5、AC4.4.1、AC4.4.2、AC4.4.4、AC5.1.1、AC5.1.3、AC5.2.2。
+"""
+
+import json
+from contextlib import ExitStack
 from unittest.mock import Mock, patch
 
 import pytest
 
-
-class TestSurveyIndexPage:
-    def test_survey_index_loads(self, client):
-        resp = client.get("/survey/")
-        assert resp.status_code == 200
-
-
-class TestSurveyTemplatesPage:
-    @patch("web.routers.survey.get_template_manager")
-    def test_templates_list_loads(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_all_templates.return_value = []
-        mock_get_mgr.return_value = mock_mgr
-        resp = client.get("/survey/templates")
-        assert resp.status_code == 200
-
-    def test_template_new_form_loads(self, client):
-        resp = client.get("/survey/templates/new")
-        assert resp.status_code == 200
-
-
-class TestSurveyResultsPage:
-    @patch("web.routers.survey.get_template_manager")
-    @patch("web.routers.survey.get_execution_manager")
-    def test_results_list_loads(self, mock_get_exec, mock_get_tmpl, client):
-        mock_exec = Mock()
-        mock_exec.get_all_surveys.return_value = []
-        mock_get_exec.return_value = mock_exec
-        mock_tmpl = Mock()
-        mock_tmpl.get_all_templates.return_value = []
-        mock_get_tmpl.return_value = mock_tmpl
-        resp = client.get("/survey/results")
-        assert resp.status_code == 200
-
-
-class TestSurveyStartPage:
-    @patch("web.routers.survey.get_dataset_manager")
-    @patch("web.routers.survey.get_template_manager")
-    def test_start_page_loads(self, mock_get_tmpl, mock_get_ds, client):
-        mock_ds = Mock()
-        mock_ds.check_nemotron_status.return_value = {"exists": False, "size_mb": 0}
-        mock_ds.list_custom_datasets.return_value = []
-        mock_ds.get_available_filter_values.return_value = {}
-        mock_ds.get_datasource_count.return_value = 0
-        mock_get_ds.return_value = mock_ds
-        mock_tmpl = Mock()
-        mock_tmpl.get_all_templates.return_value = []
-        mock_get_tmpl.return_value = mock_tmpl
-        resp = client.get("/survey/start")
-        assert resp.status_code == 200
-
-
-class TestSurveyPersonaDataPage:
-    @patch("web.routers.survey.get_dataset_manager")
-    def test_persona_data_page_loads(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.check_nemotron_status.return_value = {
-            "exists": False,
-            "size_mb": 0,
-        }
-        mock_mgr.list_custom_datasets.return_value = []
-        mock_get_mgr.return_value = mock_mgr
-        resp = client.get("/survey/persona-data")
-        assert resp.status_code == 200
-
-
-class TestSurveyTemplateCreate:
-    @patch("web.routers.survey.get_template_manager")
-    def test_create_template(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.create_template.return_value = Mock(id="t1")
-        mock_get_mgr.return_value = mock_mgr
-        resp = client.post(
-            "/survey/templates",
-            data={
-                "name": "テストテンプレート",
-                "question_text_1": "質問1",
-                "question_type_1": "free_text",
-            },
-            headers={"HX-Request": "true"},
-        )
-        assert resp.status_code in (200, 303)
-
-
-class TestSurveyTemplateDelete:
-    @patch("web.routers.survey.get_template_manager")
-    def test_delete_template(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.delete_template.return_value = True
-        mock_get_mgr.return_value = mock_mgr
-        resp = client.delete(
-            "/survey/templates/t1",
-            headers={"HX-Request": "true"},
-        )
-        assert resp.status_code == 200
-
-
-class TestSurveyResultDelete:
-    @patch("web.routers.survey.get_execution_manager")
-    def test_delete_result(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.delete_survey.return_value = True
-        mock_get_mgr.return_value = mock_mgr
-        resp = client.delete(
-            "/survey/results/s1",
-            headers={"HX-Request": "true"},
-        )
-        assert resp.status_code == 200
-
-
-class TestSurveyTemplateEdit:
-    @patch("web.routers.survey.get_template_manager")
-    def test_edit_page_loads(self, mock_get_mgr, client):
-        from src.models.survey_template import SurveyTemplate, Question
-
-        tmpl = SurveyTemplate.create_new("テスト", [Question.create_free_text("Q1")])
-        mock_mgr = Mock()
-        mock_mgr.get_template.return_value = tmpl
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get(f"/survey/templates/{tmpl.id}/edit")
-        assert resp.status_code == 200
-        assert "テンプレート編集" in resp.text
-
-    @patch("web.routers.survey.get_template_manager")
-    def test_edit_page_not_found(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_template.return_value = None
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/templates/nonexistent/edit")
-        assert resp.status_code == 404
-
-
-class TestSurveyResultDetail:
-    @patch("web.routers.survey.get_template_manager")
-    @patch("web.routers.survey.get_execution_manager")
-    def test_result_detail_loads(self, mock_get_exec, mock_get_tmpl, client):
-        from src.models.survey import Survey
-        from src.models.survey_template import SurveyTemplate, Question
-
-        survey = Survey.create_new("テスト", "", "tmpl-1", 100)
-        survey.status = "completed"
-        tmpl = SurveyTemplate.create_new("T", [Question.create_free_text("Q")])
-        mock_exec = Mock()
-        mock_exec.get_survey.return_value = survey
-        mock_get_exec.return_value = mock_exec
-        mock_tmpl = Mock()
-        mock_tmpl.get_template.return_value = tmpl
-        mock_get_tmpl.return_value = mock_tmpl
-
-        resp = client.get(f"/survey/results/{survey.id}")
-        assert resp.status_code == 200
-
-    @patch("web.routers.survey.get_execution_manager")
-    def test_result_detail_not_found(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_survey.return_value = None
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/nonexistent")
-        assert resp.status_code == 404
-
-
-class TestSurveyDownload:
-    @patch("web.routers.survey.get_execution_manager")
-    def test_download_redirects(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_download_url.return_value = "https://s3.example.com/signed"
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/s1/download", follow_redirects=False)
-        assert resp.status_code == 307
-        assert resp.headers["location"] == "https://s3.example.com/signed"
-
-    @patch("web.routers.survey.get_execution_manager")
-    def test_download_not_found(self, mock_get_mgr, client):
-        from src.managers.survey_execution_manager import SurveyExecutionManagerError
-
-        mock_mgr = Mock()
-        mock_mgr.get_download_url.side_effect = SurveyExecutionManagerError(
-            "見つかりません"
-        )
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/bad-id/download")
-        assert resp.status_code == 404
-
-
-class TestSurveyPersonaStatistics:
-    @patch("web.routers.survey.get_analysis_manager")
-    def test_statistics_success(self, mock_get_mgr, client):
-        from src.models.survey import PersonaStatistics
-
-        stats = PersonaStatistics(
-            total_count=100,
-            sex_distribution={"男性": 50, "女性": 50},
-            age_distribution={"20代": 30, "30代": 40, "40代": 30},
-            occupation_distribution={"エンジニア": 50},
-            region_distribution={"関東": 60},
-            prefecture_distribution={"東京都": 40},
-            marital_status_distribution={"未婚": 60},
-            age_stats={"min": 20, "max": 49, "average": 32.5},
-        )
-        mock_mgr = Mock()
-        mock_mgr.get_persona_statistics.return_value = stats
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/s1/personas")
-        assert resp.status_code == 200
-
-    @patch("web.routers.survey.get_analysis_manager")
-    def test_statistics_error(self, mock_get_mgr, client):
-        from src.managers.survey_analysis_manager import SurveyAnalysisManagerError
-
-        mock_mgr = Mock()
-        mock_mgr.get_persona_statistics.side_effect = SurveyAnalysisManagerError(
-            "見つかりません"
-        )
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/bad-id/personas")
-        assert resp.status_code == 400
-
-
-class TestSurveyVisualAnalysis:
-    @patch("web.routers.survey.get_analysis_manager")
-    def test_visual_analysis_success(self, mock_get_mgr, client):
-        from src.models.survey import VisualAnalysisData
-
-        data = VisualAnalysisData(
-            multiple_choice_charts=[],
-            scale_rating_charts=[],
-        )
-        mock_mgr = Mock()
-        mock_mgr.get_visual_analysis.return_value = data
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/s1/visual")
-        assert resp.status_code == 200
-
-    @patch("web.routers.survey.get_analysis_manager")
-    def test_visual_analysis_error(self, mock_get_mgr, client):
-        from src.managers.survey_analysis_manager import SurveyAnalysisManagerError
-
-        mock_mgr = Mock()
-        mock_mgr.get_visual_analysis.side_effect = SurveyAnalysisManagerError(
-            "結果なし"
-        )
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/results/bad-id/visual")
-        assert resp.status_code == 400
-
-
-class TestSurveyAIChat:
-    @patch("web.routers.survey.get_template_manager")
-    def test_ai_chat_success(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.generate_ai_chat_response.return_value = "AIの回答です"
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.post(
-            "/survey/templates/ai-chat",
-            json={"messages": [{"role": "user", "content": "質問です"}]},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["assistant_message"] == "AIの回答です"
-
-    @patch("web.routers.survey.get_template_manager")
-    def test_ai_chat_invalid_messages(self, mock_get_mgr, client):
-        resp = client.post(
-            "/survey/templates/ai-chat",
-            json={"messages": "not a list"},
-        )
-        assert resp.status_code == 400
-
-    def test_ai_chat_no_body(self, client):
-        resp = client.post("/survey/templates/ai-chat", content=b"not json")
-        assert resp.status_code in (400, 422)
-
-
-class TestSurveyAIGenerate:
-    @patch("web.routers.survey.get_template_manager")
-    def test_ai_generate_success(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.generate_ai_questions_draft.return_value = {
-            "summary": "テスト",
-            "template_name": "調査",
-            "questions": [{"id": "q1", "text": "Q", "question_type": "free_text"}],
-        }
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.post(
-            "/survey/templates/ai-generate",
-            json={"messages": [{"role": "user", "content": "設問を生成して"}]},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "questions" in data
-
-    @patch("web.routers.survey.get_template_manager")
-    def test_ai_generate_validation_error(self, mock_get_mgr, client):
-        from src.managers.survey_template_manager import SurveyTemplateValidationError
-
-        mock_mgr = Mock()
-        mock_mgr.generate_ai_questions_draft.side_effect = (
-            SurveyTemplateValidationError("会話履歴が空です")
-        )
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.post(
-            "/survey/templates/ai-generate",
-            json={"messages": [{"role": "user", "content": "x"}]},
-        )
-        assert resp.status_code == 400
-
-
-class TestSurveyFilterOptions:
-    @patch("web.routers.survey.get_dataset_manager")
-    def test_filter_options_loads(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_available_filter_values.return_value = {
-            "sex": ["男性", "女性"],
-            "occupation": ["エンジニア"],
-        }
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.get("/survey/filter-options?datasource=nemotron")
-        assert resp.status_code == 200
-
-
-class TestSurveyExecute:
-    @patch("web.routers.survey.get_execution_manager")
-    def test_execute_success(self, mock_get_mgr, client):
-        from src.models.survey import Survey
-
-        survey = Survey.create_new("テスト", "", "tmpl-1", 100)
-        mock_mgr = Mock()
-        mock_mgr.create_survey.return_value = survey
-        mock_get_mgr.return_value = mock_mgr
-
-        resp = client.post(
-            "/survey/execute",
-            data={
-                "template_id": "tmpl-1",
-                "name": "テスト実行",
-                "persona_count": "100",
-                "datasource": "nemotron",
-            },
-            headers={"HX-Request": "true"},
-        )
-        assert resp.status_code == 200
-
-
-# =============================================================================
-# U5: テンプレートの画像は利用者のキーで置き、配信は判定を通す（BR5.1、BR5.8）
-# =============================================================================
-
-_UPLOADED = (
-    "s3://bucket/uploads/local:dev@example.com/survey_image/"
-    "0b9c8f2e-3c1d-4d55-9a57-2a9f4b1f0c11_a.png"
+from src.models.authz import ResourceType
+from tests.api.u7_world import ADMIN_USER, ME, OTHER, PEER_SUB, ApiWorld
+
+TEMPLATE = ResourceType.SURVEY_TEMPLATE
+SURVEY = ResourceType.SURVEY
+_UPLOADED = "s3://bucket/uploads/local:dev@example.com/survey_image/f1_a.png"
+_QUESTIONS = json.dumps(
+    [{"question_type": "multiple_choice", "text": "Q", "options": ["A", "B"]}]
 )
 
 
-class TestSurveyImagesU5:
+@pytest.fixture
+def aw(client, survey_world):
+    """ME signed in, with the real U7 Managers behind the routers."""
+    ME.login(client)
+    world = ApiWorld(survey_world)
+    with ExitStack() as stack:
+        world.patch_routers(stack)
+        yield world
+
+
+def _as(client, user) -> None:
+    user.login(client)
+
+
+# =============================================================================
+# 画面の入口（今のまま）
+# =============================================================================
+
+
+def test_survey_index_loads(client):
+    assert client.get("/survey/").status_code == 200
+
+
+def test_template_new_form_loads(client):
+    assert client.get("/survey/templates/new").status_code == 200
+
+
+# =============================================================================
+# テンプレートの一覧（BR1.2、AC2.1.2、AC2.1.3、AC4.1.1、AC4.1.4、AC5.1.1）
+# =============================================================================
+
+
+class TestTemplateList:
+    def test_tabs_counts_and_only_readable_rows(self, aw, client):
+        mine = aw.template(name="自分のテンプレート")
+        shared = aw.template(PEER_SUB, name="共有されたテンプレート")
+        aw.world.share(TEMPLATE, shared.id, "sales")
+        aw.template("c", name="他人のテンプレート")
+
+        html = client.get("/survey/templates").text
+
+        assert 'data-testid="list-tab-mine"' in html
+        assert "自分のテンプレート" in html
+        assert "他人のテンプレート" not in html
+        assert "共有されたテンプレート" not in html
+        shared_html = client.get("/survey/templates?tab=shared").text
+        assert "共有されたテンプレート" in shared_html
+        assert "利用者b" in shared_html
+        assert mine.id not in shared_html
+
+    def test_zero_rows_explain_how_to_start(self, aw, client):
+        html = client.get("/survey/templates").text
+        assert 'data-testid="survey-template-list-empty"' in html
+        shared = client.get("/survey/templates?tab=shared").text
+        assert "共有されると" in shared
+
+    def test_member_asking_for_all_gets_mine(self, aw, client):
+        aw.template("c", name="他人のテンプレート")
+        html = client.get("/survey/templates?tab=all").text
+        assert "他人のテンプレート" not in html
+        assert 'data-testid="list-tab-all"' not in html
+
+    def test_admin_all_tab(self, aw, client):
+        aw.template("c", name="他人のテンプレート")
+        aw.template(None, name="古いテンプレート")
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/templates?tab=all").text
+        assert "他人のテンプレート" in html
+        assert "古いテンプレート" in html
+        assert "所有者不明" in html
+
+    def test_search_inside_the_tab(self, aw, client):
+        aw.template(name="顧客満足度")
+        aw.template(name="新商品")
+        html = client.get("/survey/templates?search=顧客").text
+        assert "顧客満足度" in html
+        assert "新商品" not in html
+
+    def test_own_rows_offer_share_edit_and_delete(self, aw, client):
+        aw.template(name="自分のテンプレート")
+        html = client.get("/survey/templates").text
+        assert 'data-testid="survey-template-share-button"' in html
+        assert 'data-testid="survey-template-delete-button"' in html
+        assert 'data-testid="bulk-select-bar"' in html
+
+    def test_shared_rows_offer_no_changes(self, aw, client):
+        shared = aw.template(PEER_SUB, name="共有されたテンプレート")
+        aw.world.share(TEMPLATE, shared.id, "sales")
+        html = client.get("/survey/templates?tab=shared").text
+        assert 'data-testid="survey-template-share-button"' not in html
+        assert 'data-testid="survey-template-delete-button"' not in html
+
+
+# =============================================================================
+# テンプレートの読む・変える・消す（BR1.3、BR1.4、AC4.1.3、AC4.4.1）
+# =============================================================================
+
+
+class TestTemplateAccess:
+    def test_owner_opens_the_edit_screen(self, aw, client):
+        template = aw.template(name="編集する")
+        html = client.get(f"/survey/templates/{template.id}/edit").text
+        assert "編集する" in html
+
+    @pytest.mark.parametrize("which", ["unrelated", "missing"])
+    def test_unrelated_and_missing_are_the_same_404(self, aw, client, which):
+        template = aw.template("c")
+        target = template.id if which == "unrelated" else "missing-id"
+        response = client.get(f"/survey/templates/{target}/edit")
+        assert response.status_code == 404
+
+    def test_shared_reader_cannot_edit(self, aw, client):
+        shared = aw.template(PEER_SUB)
+        aw.world.share(TEMPLATE, shared.id, "sales")
+        assert client.get(f"/survey/templates/{shared.id}/edit").status_code == 403
+        response = client.put(
+            f"/survey/templates/{shared.id}",
+            data={"name": "x", "questions_json": _QUESTIONS},
+        )
+        assert response.status_code == 403
+        assert client.delete(f"/survey/templates/{shared.id}").status_code == 403
+
+    def test_unrelated_update_and_delete_are_404(self, aw, client):
+        template = aw.template("c")
+        response = client.put(
+            f"/survey/templates/{template.id}",
+            data={"name": "x", "questions_json": _QUESTIONS},
+        )
+        assert response.status_code == 404
+        assert client.delete(f"/survey/templates/{template.id}").status_code == 404
+        assert aw.world.db.get_survey_template(template.id) is not None
+
+    def test_create_records_me_as_the_owner(self, aw, client):
+        response = client.post(
+            "/survey/templates", data={"name": "新しい", "questions_json": _QUESTIONS}
+        )
+        assert response.status_code == 200
+        assert response.headers["HX-Redirect"] == "/survey/templates"
+        listed = aw.templates.list_templates(ME.principal(), "mine", None)
+        assert [t.name for t in listed.items] == ["新しい"]
+
+    def test_owner_updates_and_deletes(self, aw, client):
+        template = aw.template(name="旧")
+        response = client.put(
+            f"/survey/templates/{template.id}",
+            data={"name": "新", "questions_json": _QUESTIONS},
+        )
+        assert response.status_code == 200
+        assert aw.world.db.get_survey_template(template.id).name == "新"
+        assert client.delete(f"/survey/templates/{template.id}").status_code == 200
+        assert aw.world.db.get_survey_template(template.id) is None
+
+    def test_image_that_cannot_be_attached_is_not_found(self, aw, client):
+        from src.models.errors import CodedError, ErrorCode
+
+        aw.world.files.attach_all.side_effect = CodedError(
+            "not attachable", code=ErrorCode.FILE_NOT_FOUND
+        )
+        images = json.dumps(
+            [
+                {
+                    "id": "i",
+                    "name": "画像",
+                    "file_path": f"s3://b/uploads/{ME.sub}/survey_image/"
+                    "11111111-1111-4111-8111-111111111111_a.png",
+                    "mime_type": "image/png",
+                    "original_filename": "a.png",
+                }
+            ]
+        )
+        response = client.post(
+            "/survey/templates",
+            data={"name": "画像", "questions_json": _QUESTIONS, "images_json": images},
+        )
+        assert response.status_code == 404
+
+
+# =============================================================================
+# アンケートの開始（BR2.1、BR2.12、AC2.5.1、AC2.5.2、AC4.4.5）
+# =============================================================================
+
+
+class TestStart:
+    def test_start_page_lists_readable_templates_and_usable_data(self, aw, client):
+        aw.template(name="自分のテンプレート")
+        aw.template("c", name="他人のテンプレート")
+        usable = aw.world.custom_data("営業向けデータ", "sales")
+        aw.world.custom_data("企画向けデータ", "plan")
+        html = client.get("/survey/start").text
+        assert "自分のテンプレート" in html
+        assert "他人のテンプレート" not in html
+        assert "営業向けデータ" in html
+        assert f"custom:{usable.id}" in html
+        assert "企画向けデータ" not in html
+
+    def test_shared_template_tab_on_the_start_page(self, aw, client):
+        shared = aw.template(PEER_SUB, name="共有されたテンプレート")
+        aw.world.share(TEMPLATE, shared.id, "sales")
+        html = client.get("/survey/start?tab=shared").text
+        assert "共有されたテンプレート" in html
+
+    def test_execute_with_an_unreadable_template_is_404_and_runs_nothing(
+        self, aw, client
+    ):
+        template = aw.template("c")
+        response = client.post(
+            "/survey/execute",
+            data={"template_id": template.id, "persona_count": "100"},
+        )
+        assert response.status_code == 404
+        aw.batch.get_filtered_count.assert_not_called()
+        assert aw.world.client.scan(TableName=aw.world.db.surveys_table)["Count"] == 0
+
+    def test_execute_with_unusable_custom_data_is_404(self, aw, client):
+        template = aw.template()
+        data = aw.world.custom_data("企画向け", "plan")
+        response = client.post(
+            "/survey/execute",
+            data={
+                "template_id": template.id,
+                "persona_count": "100",
+                "datasource": f"custom:{data.id}",
+            },
+        )
+        assert response.status_code == 404
+        assert aw.world.client.scan(TableName=aw.world.db.surveys_table)["Count"] == 0
+
+    def test_execute_starts_my_survey(self, aw, client):
+        template = aw.template(name="使う")
+        with patch("web.routers.survey.asyncio.to_thread") as to_thread:
+            to_thread.return_value = Mock()
+            with patch("web.routers.survey.asyncio.create_task"):
+                response = client.post(
+                    "/survey/execute",
+                    data={"template_id": template.id, "persona_count": "100"},
+                )
+        assert response.status_code == 200
+        listed = aw.executions.list_surveys(ME.principal(), "mine", None)
+        assert len(listed.items) == 1
+        assert listed.items[0].template_snapshot.name == "使う"
+
+    def test_filter_options_and_preview_judge_the_datasource(self, aw, client):
+        data = aw.world.custom_data("企画向け", "plan")
+        source = f"custom:{data.id}"
+        assert (
+            client.get(f"/survey/filter-options?datasource={source}").status_code == 404
+        )
+        response = client.post("/survey/preview", data={"datasource": source})
+        assert response.status_code == 404
+        aw.batch.get_filtered_count.assert_not_called()
+
+
+# =============================================================================
+# 結果（BR1.2〜BR1.4、BR2.6、BR2.8、BR2.11、AC4.1.2、AC4.4.4）
+# =============================================================================
+
+
+class TestResults:
+    def _shared(self, aw):
+        survey = aw.survey(PEER_SUB, name="共有された結果")
+        aw.world.share(SURVEY, survey.id, "sales")
+        return survey
+
+    def test_list_tabs_and_names_from_the_snapshot(self, aw, client):
+        aw.survey(name="自分の結果")
+        self._shared(aw)
+        aw.survey("c", name="他人の結果")
+        html = client.get("/survey/results").text
+        assert "自分の結果" in html
+        assert "写しのテンプレート" in html
+        assert "他人の結果" not in html
+        shared = client.get("/survey/results?tab=shared").text
+        assert "共有された結果" in shared
+
+    def test_zero_results(self, aw, client):
+        html = client.get("/survey/results").text
+        assert 'data-testid="survey-result-list-empty"' in html
+
+    def test_owner_detail_offers_delete_share_and_report(self, aw, client):
+        survey = aw.survey(name="自分の結果")
+        html = client.get(f"/survey/results/{survey.id}").text
+        assert 'data-testid="survey-delete-button"' in html
+        assert 'data-testid="survey-share-button"' in html
+        assert 'data-testid="survey-report-generate"' in html
+
+    def test_shared_reader_detail_is_read_only(self, aw, client):
+        survey = self._shared(aw)
+        html = client.get(f"/survey/results/{survey.id}").text
+        assert "共有された結果" in html
+        assert 'data-testid="survey-delete-button"' not in html
+        assert 'data-testid="survey-share-button"' not in html
+        assert 'data-testid="survey-report-generate"' not in html
+
+    def test_shared_reader_cannot_delete_or_generate(self, aw, client):
+        survey = self._shared(aw)
+        assert client.delete(f"/survey/results/{survey.id}").status_code == 403
+        response = client.get(
+            f"/survey/results/{survey.id}/report/generate",
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert response.status_code == 403
+        aw.ai.generate_standard_report_streaming.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/survey/results/{id}",
+            "/survey/results/{id}/personas",
+            "/survey/results/{id}/visual",
+            "/survey/results/{id}/download",
+            "/survey/results/{id}/images/img1",
+        ],
+    )
+    @pytest.mark.parametrize("which", ["unrelated", "missing"])
+    def test_unrelated_and_missing_are_404(self, aw, client, path, which):
+        survey = aw.survey("c")
+        target = survey.id if which == "unrelated" else "missing-id"
+        response = client.get(path.format(id=target), follow_redirects=False)
+        assert response.status_code == 404
+
+    def test_download_redirects_to_a_signed_url(self, aw, client):
+        survey = self._shared(aw)
+        response = client.get(
+            f"/survey/results/{survey.id}/download", follow_redirects=False
+        )
+        assert response.status_code in (302, 307)
+        assert "results.csv" in response.headers["location"]
+
+    def test_analysis_for_a_shared_reader(self, aw, client):
+        survey = self._shared(aw)
+        assert client.get(f"/survey/results/{survey.id}/personas").status_code == 200
+        assert client.get(f"/survey/results/{survey.id}/visual").status_code == 200
+
+    def test_result_image_only_from_the_snapshot(self, aw, client):
+        from src.models.survey_template import TemplateImage
+
+        key = "uploads/b/survey_image/11111111-1111-4111-8111-111111111111_a.png"
+        aw.world.s3.upload_file(b"png", key)
+        image = TemplateImage(
+            id="img1",
+            name="商品",
+            file_path=aw.world.s3.path_of(key),
+            mime_type="image/png",
+            original_filename="a.png",
+        )
+        template = aw.world.template(PEER_SUB, images=[image])
+        survey = aw.world.survey(PEER_SUB, template)
+        aw.world.share(SURVEY, survey.id, "sales")
+        response = client.get(
+            f"/survey/results/{survey.id}/images/img1", follow_redirects=False
+        )
+        assert response.status_code in (302, 307)
+        other = client.get(
+            f"/survey/results/{survey.id}/images/other", follow_redirects=False
+        )
+        assert other.status_code == 404
+        detail = client.get(f"/survey/results/{survey.id}").text
+        assert f"/survey/results/{survey.id}/images/img1" in detail
+
+    def test_owner_deletes(self, aw, client):
+        survey = aw.survey()
+        assert client.delete(f"/survey/results/{survey.id}").status_code == 200
+        assert aw.world.db.get_survey(survey.id) is None
+
+
+# =============================================================================
+# ペルソナ元データ（BR4.1、BR4.2、BR5.2、NFR1.73、NFR1.74、AC2.5.3、AC5.2.2）
+# =============================================================================
+
+_MANAGEMENT_ROUTES = [
+    ("post", "/survey/persona-data/download-nemotron", {}),
+    ("post", "/survey/persona-data/preview-prompt", {"data": {"temp_key": "k"}}),
+    ("post", "/survey/persona-data/confirm-mapping", {"data": {"temp_key": "k"}}),
+    ("post", "/survey/persona-data/dwh-extract", {"data": {"condition": "x"}}),
+    ("post", "/survey/persona-data/dwh-preview", {"data": {"temp_key": "k"}}),
+    ("post", "/survey/persona-data/dwh-confirm", {"data": {"temp_key": "k"}}),
+    ("delete", "/survey/persona-data/custom/{id}", {}),
+    ("get", "/survey/persona-data/custom/{id}/scope", {}),
+    (
+        "post",
+        "/survey/persona-data/custom/{id}/scope",
+        {"data": {"departments": "sales"}},
+    ),
+]
+
+
+class TestPersonaData:
+    def test_member_page_has_no_management_and_only_usable_data(self, aw, client):
+        aw.world.custom_data("営業向け", "sales")
+        aw.world.custom_data("企画向け", "plan")
+        html = client.get("/survey/persona-data").text
+        assert "営業向け" in html
+        assert "企画向け" not in html
+        for testid in (
+            "nemotron-download-button",
+            "custom-data-upload",
+            "custom-data-delete-button",
+            "custom-data-scope-button",
+        ):
+            assert f'data-testid="{testid}"' not in html
+        assert "管理者に依頼してください" in html
+
+    def test_admin_page_has_the_management_and_every_record(self, aw, client):
+        aw.world.custom_data("営業向け", "sales")
+        aw.world.custom_data("admin だけ")
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/persona-data").text
+        assert "営業向け" in html and "admin だけ" in html
+        assert 'data-testid="custom-data-upload"' in html
+        assert 'data-testid="custom-data-scope-button"' in html
+        assert "利用範囲: admin のみ" in html
+        assert "利用範囲: 営業部" in html
+
+    @pytest.mark.parametrize(("method", "path", "kwargs"), _MANAGEMENT_ROUTES)
+    def test_member_management_routes_are_404_and_change_nothing(
+        self, aw, client, method, path, kwargs
+    ):
+        data = aw.world.custom_data("営業向け", "sales")
+        response = getattr(client, method)(path.format(id=data.id), **kwargs)
+        assert response.status_code == 404
+        assert aw.world.custom_store.get(data.id) is not None
+        aw.batch.download_nemotron_dataset.assert_not_called()
+
+    def test_member_upload_is_404_and_nothing_is_written(self, aw, client):
+        response = client.post(
+            "/survey/persona-data/upload-custom",
+            files={"file": ("a.csv", b"persona\nx\n", "text/csv")},
+        )
+        assert response.status_code == 404
+        listed = aw.world.s3.s3_client.list_objects_v2(
+            Bucket="u7-test-bucket", Prefix="persona-dataset/"
+        )
+        assert listed.get("KeyCount", 0) == 0
+
+    def test_detail_by_id_for_users_in_scope(self, aw, client):
+        usable = aw.world.custom_data("営業向け", "sales")
+        other = aw.world.custom_data("企画向け", "plan")
+        detail = client.get(f"/survey/persona-data/custom/{usable.id}/detail")
+        assert detail.status_code == 200
+        assert "営業向け" in detail.text
+        assert (
+            client.get(f"/survey/persona-data/custom/{other.id}/detail").status_code
+            == 404
+        )
+
+    def test_admin_scope_dialog_and_save(self, aw, client):
+        data = aw.world.custom_data("営業向け", "sales")
+        _as(client, ADMIN_USER)
+        dialog = client.get(f"/survey/persona-data/custom/{data.id}/scope").text
+        assert 'name="departments"' in dialog
+        assert 'name="departments_initial"' in dialog
+        assert 'role="alert"' in dialog
+        response = client.post(
+            f"/survey/persona-data/custom/{data.id}/scope",
+            data={"departments": "plan", "departments_initial": "sales"},
+        )
+        assert response.status_code == 200
+        assert "dialogClose" in response.headers["HX-Trigger"]
+        assert aw.world.custom_store.get(data.id).shared_group_ids == frozenset(
+            {"plan"}
+        )
+
+    def test_admin_imports_with_a_name_and_a_scope(self, aw, client):
+        _as(client, ADMIN_USER)
+        aw.world.s3.upload_file(b"persona\nx\n", "persona-dataset/temp/a.csv")
+        response = client.post(
+            "/survey/persona-data/confirm-mapping",
+            data={
+                "temp_key": "persona-dataset/temp/a.csv",
+                "dataset_name": "取り込んだデータ",
+                "departments": "sales",
+                "mapping_persona": "persona",
+            },
+        )
+        assert response.status_code == 200
+        records = aw.world.custom_store.list_all()
+        assert [r.name for r in records] == ["取り込んだデータ"]
+        assert records[0].shared_group_ids == frozenset({"sales"})
+
+    def test_admin_deletes_by_id(self, aw, client):
+        data = aw.world.custom_data("消す")
+        _as(client, ADMIN_USER)
+        assert (
+            client.delete(f"/survey/persona-data/custom/{data.id}").status_code == 200
+        )
+        assert aw.world.custom_store.get(data.id) is None
+
+
+# =============================================================================
+# 画像のアップロードと配信（BR1.9、U5 のまま）
+# =============================================================================
+
+
+class TestSurveyImages:
     @patch("web.routers.survey.get_file_manager")
     def test_upload_passes_the_signed_in_user(self, mock_get_fm, client):
         manager = mock_get_fm.return_value
@@ -391,8 +538,6 @@ class TestSurveyImagesU5:
         assert principal.sub == "local:dev@example.com"
         assert (content, filename) == (b"\x89PNG", "a.png")
         assert resp.json()["preview_url"] == "https://signed/a.png"
-        # 配信 URL は判定を通して作る（本人のアップロード）
-        assert manager.preview_url_for_path.call_args.args[1] == _UPLOADED
 
     @pytest.mark.parametrize(
         "path",
@@ -403,8 +548,9 @@ class TestSurveyImagesU5:
         ],
     )
     def test_image_preview_of_any_other_path_is_not_found(self, client, path):
-        """任意のパス・他人のパスは 404 で URL を作らない（BR5.8）"""
+        """任意のパス・他人のパスは 404 で URL を作らない（BR1.9）"""
         from src.managers.file_manager import FileManager
+        from src.models.errors import CodedError, ErrorCode
 
         s3 = Mock()
         s3.key_of.side_effect = lambda p: (
@@ -413,8 +559,6 @@ class TestSurveyImagesU5:
         store = Mock()
         store.get.return_value = None
         attachments = Mock()
-        from src.models.errors import CodedError, ErrorCode
-
         attachments.readable_file.side_effect = CodedError(
             "unreadable", code=ErrorCode.FILE_NOT_FOUND
         )
@@ -427,53 +571,60 @@ class TestSurveyImagesU5:
         assert resp.status_code == 404
         s3.generate_presigned_url.assert_not_called()
 
-    @patch("web.routers.survey.get_file_manager")
-    def test_image_preview_of_own_upload(self, mock_get_fm, client):
-        mock_get_fm.return_value.preview_url_for_path.return_value = "https://signed"
+    def test_edit_screen_signs_images_through_the_file_attachments(self, aw, client):
+        from src.models.survey_template import TemplateImage
 
-        resp = client.get("/survey/image-preview", params={"file_path": _UPLOADED})
-
-        assert resp.status_code == 200
-        assert resp.json() == {"url": "https://signed"}
-        principal, path = mock_get_fm.return_value.preview_url_for_path.call_args.args
-        assert principal.sub == "local:dev@example.com" and path == _UPLOADED
-
-    @patch("web.routers.survey.get_template_manager")
-    def test_template_save_passes_the_user_for_attaching(self, mock_get_mgr, client):
-        resp = client.post(
-            "/survey/templates",
-            data={"name": "テンプレート", "questions_json": "[]"},
+        image = TemplateImage(
+            id="img1",
+            name="商品",
+            file_path=_UPLOADED,
+            mime_type="image/png",
+            original_filename="a.png",
         )
+        template = aw.template(images=[image])
+        html = client.get(f"/survey/templates/{template.id}/edit").text
+        assert "https://signed/image" in html
+        principal, path = aw.file_manager.preview_url_for_path.call_args.args
+        assert principal.sub == ME.sub and path == _UPLOADED
 
-        assert resp.status_code == 200
-        kwargs = mock_get_mgr.return_value.create_template.call_args.kwargs
-        assert kwargs["principal"].sub == "local:dev@example.com"
+    def test_path_signing_helper_is_gone(self):
+        import web.routers.survey as survey_router
 
-    @patch("web.routers.survey.get_template_manager")
-    def test_template_update_passes_the_user(self, mock_get_mgr, client):
-        resp = client.put(
-            "/survey/templates/t1",
-            data={"name": "テンプレート", "questions_json": "[]"},
-        )
+        assert not hasattr(survey_router, "_get_image_preview_url")
 
-        assert resp.status_code == 200
-        kwargs = mock_get_mgr.return_value.update_template.call_args.kwargs
-        assert kwargs["principal"].sub == "local:dev@example.com"
 
-    @patch("web.routers.survey.get_template_manager")
-    def test_image_that_cannot_be_attached_is_not_found(self, mock_get_mgr, client):
-        from src.managers.survey_template_manager import SurveyTemplateManagerError
-        from src.models.errors import ErrorCode
+# =============================================================================
+# CSRF（NFR4.14）
+# =============================================================================
 
-        mock_get_mgr.return_value.create_template.side_effect = (
-            SurveyTemplateManagerError(
-                "image not attachable", code=ErrorCode.FILE_NOT_FOUND
-            )
-        )
 
-        resp = client.post(
-            "/survey/templates",
-            data={"name": "テンプレート", "questions_json": "[]"},
-        )
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/survey/templates"),
+        ("put", "/survey/templates/t1"),
+        ("delete", "/survey/templates/t1"),
+        ("post", "/survey/execute"),
+        ("delete", "/survey/results/s1"),
+        ("delete", "/survey/persona-data/custom/c1"),
+        ("post", "/survey/persona-data/custom/c1/scope"),
+        ("post", "/survey/persona-data/confirm-mapping"),
+    ],
+)
+def test_changes_need_the_csrf_header(test_app, method, path):
+    from fastapi.testclient import TestClient
 
-        assert resp.status_code == 404
+    with TestClient(test_app) as no_header:
+        ME.login(no_header)
+        response = getattr(no_header, method)(path)
+
+    assert response.status_code == 403
+
+
+def test_unrelated_user_sees_nothing_of_mine(aw, client):
+    """AC4.4.2: 部署の違う人の一覧に、私のテンプレート・結果が出ない。"""
+    aw.template(name="私のテンプレート")
+    aw.survey(name="私の結果")
+    _as(client, OTHER)
+    assert "私のテンプレート" not in client.get("/survey/templates").text
+    assert "私の結果" not in client.get("/survey/results").text

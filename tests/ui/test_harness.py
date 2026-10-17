@@ -14,7 +14,10 @@ def test_built_css_is_loaded(ui: UiHarness) -> None:
     ui.load_component("harness.html")
 
     sheets = ui.page.evaluate("Array.from(document.styleSheets).map(s => s.href || '')")
-    assert any(href.endswith("/static/css/tailwind.css") for href in sheets), sheets
+    # URL には中身のハッシュ（?v=...）が付く（web/static_assets.py）
+    assert any(
+        href.split("?")[0].endswith("/static/css/tailwind.css") for href in sheets
+    ), sheets
     assert ui.page.locator("#hidden-probe").is_hidden()
     assert (
         ui.page.evaluate(

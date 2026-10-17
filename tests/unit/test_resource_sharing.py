@@ -271,7 +271,12 @@ class TestRegistration:
 
     def test_default_tables_register_personas_and_discussions(self):
         tables = default_sharing_tables()
-        assert [t.resource_type for t in tables] == [PERSONA, ResourceType.DISCUSSION]
+        assert [t.resource_type for t in tables] == [
+            PERSONA,
+            ResourceType.DISCUSSION,
+            ResourceType.SURVEY_TEMPLATE,
+            ResourceType.SURVEY,
+        ]
         persona = tables[0]
         assert persona.name_attribute == "name"
         assert persona.not_found is ErrorCode.PERSONA_NOT_FOUND
@@ -289,6 +294,50 @@ class TestRegistration:
             "message_count",
             "report_count",
         )
+
+    def test_survey_template_and_survey_registration(self):
+        """U7 BR6.3（security-design.md 1.5）。"""
+        tables = {t.resource_type: t for t in default_sharing_tables()}
+        template = tables[ResourceType.SURVEY_TEMPLATE]
+        assert template.table.endswith("SurveyTemplates")
+        assert template.name_attribute == "name"
+        assert template.not_found is ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
+        assert template.delete_failed is ErrorCode.SURVEY_OPERATION_FAILED
+        assert template.cleanup_attributes == ("images",)
+        survey = tables[ResourceType.SURVEY]
+        assert survey.table.endswith("Surveys")
+        assert survey.name_attribute == "name"
+        assert survey.not_found is ErrorCode.SURVEY_NOT_FOUND
+        assert survey.delete_failed is ErrorCode.SURVEY_OPERATION_FAILED
+        assert survey.cleanup_attributes == ("s3_result_path",)
+
+    def test_ownerless_survey_cannot_be_shared_alone_or_in_bulk(
+        self, store, departments
+    ):
+        """U7 BR1.6: 所有者のない古い結果は共有できない（一括では失敗に数える）。"""
+        rs = ResourceSharing(store, departments)
+        for table in default_sharing_tables():
+            rs.register(
+                SharingTable(
+                    resource_type=table.resource_type,
+                    table=TABLE.table,
+                    name_attribute="name",
+                    not_found=table.not_found,
+                    delete_failed=table.delete_failed,
+                )
+            )
+        store.add("legacy", None)
+        store.add("mine", "sub-admin")
+        target = AccessTarget(ResourceType.SURVEY, "legacy")
+        with raises_code(ResourceSharingError, ErrorCode.SHARE_OWNER_MISSING):
+            rs.update_shares(ADMIN, target, _change({"sales"}))
+        result = rs.bulk_update_shares(
+            ADMIN,
+            [target, AccessTarget(ResourceType.SURVEY, "mine")],
+            _change({"sales"}),
+        )
+        assert result.updated == ["mine"]
+        assert [f.code for f in result.failed] == [ErrorCode.SHARE_OWNER_MISSING]
 
 
 # =============================================================================

@@ -18,6 +18,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import duckdb
 import polars as pl
 
+from ..models.custom_persona_data import (
+    CUSTOM_FILE_PREFIX,
+    PersonaDataRef,
+    custom_file_key,
+)
 from ..models.errors import CodedError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -88,7 +93,7 @@ DATASET_NAME = "nvidia/Nemotron-Personas-Japan"
 # S3上のParquetファイルの固定キー
 PARQUET_S3_KEY = "persona-dataset/nemotron-personas-japan.parquet"  # gitleaks:allow
 
-CUSTOM_DATASET_PREFIX = "persona-dataset/custom/"
+CUSTOM_DATASET_PREFIX = CUSTOM_FILE_PREFIX
 
 # DuckDBクエリで使用する有効なカラム名（SQLインジェクション防止用）
 _VALID_COLUMNS = frozenset(
@@ -248,9 +253,16 @@ class SurveyBatchService:
             return self._duckdb_conns[datasource]
 
         if datasource.startswith("custom:"):
-            name = datasource.split(":", 1)[1]
-            key = f"{CUSTOM_DATASET_PREFIX}{name}.parquet"
-            s3_uri = f"s3://{self.bucket_name}/{key}"
+            # U7 BR4.3: custom:{id} だけを受け付け、キーは ID から作る（名前やパスは使わない）
+            try:
+                ref = PersonaDataRef.parse(datasource)
+            except ValueError as e:
+                raise SurveyBatchServiceError(
+                    "custom datasource must be custom:{id}",
+                    code=ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
+                ) from e
+            assert ref.custom_id is not None
+            s3_uri = f"s3://{self.bucket_name}/{custom_file_key(ref.custom_id)}"
         else:
             if self._parquet_s3_uri is None:
                 raise SurveyBatchServiceError(

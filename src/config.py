@@ -145,6 +145,8 @@ class Config:
     DISCUSSION_REPORTS_TABLE_NAME: str = ""
     INTERVIEW_SESSIONS_TABLE_NAME: str = ""
     INTERVIEW_MESSAGES_TABLE_NAME: str = ""
+    # カスタムペルソナデータの登録情報（U7）。同じく操作を絞った専用の項目
+    CUSTOM_PERSONA_DATA_TABLE_NAME: str = ""
     # AUTH_MODE=local の開発用の利用者（ロール・部署はカンマ区切り）
     LOCAL_DEV_USER_NAME: str = "開発ユーザー"
     LOCAL_DEV_USER_EMAIL: str = "dev@example.com"
@@ -294,6 +296,7 @@ class Config:
             ("DISCUSSION_REPORTS_TABLE_NAME", "DiscussionReports"),
             ("INTERVIEW_SESSIONS_TABLE_NAME", "InterviewSessions"),
             ("INTERVIEW_MESSAGES_TABLE_NAME", "InterviewMessages"),
+            ("CUSTOM_PERSONA_DATA_TABLE_NAME", "CustomPersonaData"),
         ):
             setattr(
                 self,

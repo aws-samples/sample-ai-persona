@@ -1,6 +1,13 @@
 {% extends "base.html" %}
-{% from "components/datetime.html" import iso_datetime %}
-{% from "components/icons.html" import icon_document, icon_plus, icon_pencil, icon_trash, icon_arrow_left %}
+{% from "components/icons.html" import icon_document, icon_plus, icon_arrow_left %}
+{% from "components/list_tabs.html" import list_tabs, list_tabpanel %}
+{#
+  アンケートテンプレートの一覧（M6、U7 BR1.2）。
+  引数:
+    listing        ... TabbedList（items は SurveyTemplate）。取れなければ None
+    error          ... 一覧を取れなかったときの文言
+    current_search ... 検索語（今のタブの中を検索する）
+#}
 
 {% block content %}
 <div class="max-w-5xl mx-auto">
@@ -25,66 +32,26 @@
         </div>
     </div>
 
-    {# 一覧部分（U4〜U7 がタブの差し替え先に使う） #}
-    <div id="template-list">
-    {% if templates %}
-    <div class="space-y-4">
-        {% for tmpl in templates %}
-        <div class="bg-white rounded-lg shadow-md p-5 hover:shadow-lg transition-shadow" id="template-card-{{ tmpl.id }}">
-            <div class="flex items-start justify-between">
-                <div>
-                    <h2 class="text-lg font-semibold text-gray-900">{{ tmpl.name }}</h2>
-                    <p class="text-sm text-gray-500 mt-1">
-                        {{ tmpl.questions|length }}問
-                        {% if tmpl.images %} ・ 画像あり{% endif %} ・
-                        作成: <time datetime="{{ iso_datetime(tmpl.created_at) }}">{{ tmpl.created_at.strftime('%Y/%m/%d %H:%M') }}</time>
-                        {% if tmpl.updated_at != tmpl.created_at %}
-                        ・ 更新: <time datetime="{{ iso_datetime(tmpl.updated_at) }}">{{ tmpl.updated_at.strftime('%Y/%m/%d %H:%M') }}</time>
-                        {% endif %}
-                    </p>
-                    <div class="flex flex-wrap gap-2 mt-2">
-                        {% for q in tmpl.questions %}
-                        <span class="text-xs px-2 py-1 rounded-full
-                            {% if q.question_type == 'multiple_choice' %}bg-blue-100 text-blue-700
-                            {% elif q.question_type == 'scale_rating' %}bg-amber-100 text-amber-700
-                            {% else %}bg-gray-100 text-gray-700{% endif %}">
-                            {% if q.question_type == 'multiple_choice' %}選択式{% if q.allow_multiple %}(複数){% endif %}
-                            {% elif q.question_type == 'scale_rating' %}スケール
-                            {% else %}自由記述{% endif %}:
-                            {{ q.text[:30] }}{% if q.text|length > 30 %}...{% endif %}
-                        </span>
-                        {% endfor %}
-                    </div>
-                </div>
-                <div class="flex gap-2 ml-4 shrink-0">
-                    <a href="/survey/templates/{{ tmpl.id }}/edit"
-                       class="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-md hover:bg-blue-200 transition-colors text-sm flex items-center gap-1">
-                        {{ icon_pencil("w-3.5 h-3.5") }} 編集
-                    </a>
-                    <button hx-delete="/survey/templates/{{ tmpl.id }}"
-                            hx-target="#template-card-{{ tmpl.id }}"
-                            hx-swap="outerHTML"
-                            hx-confirm="このテンプレートを削除しますか？"
-                            class="bg-red-100 text-red-700 px-3 py-1.5 rounded-md hover:bg-red-200 transition-colors text-sm flex items-center gap-1">
-                        {{ icon_trash("w-3.5 h-3.5") }} 削除
-                    </button>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
+    <!-- 検索（今のタブの中） -->
+    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+        <label for="template-search" class="block text-sm font-medium text-gray-700 mb-1">テンプレート名で検索</label>
+        <input type="text" id="template-search" name="search" value="{{ current_search or '' }}" placeholder="テンプレート名を検索..."
+               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+               hx-get="/survey/templates" hx-target="#survey-template-list" hx-swap="innerHTML"
+               hx-trigger="keyup changed delay:300ms"
+               hx-include="#survey-template-list [data-survey-template-tab]">
     </div>
-    <p class="text-center text-gray-500 mt-6 text-sm">{{ templates|length }}件のテンプレート</p>
-    {% else %}
-    <div class="bg-gray-50 rounded-lg p-12 text-center">
-        <div class="flex justify-center mb-4 text-gray-400">{{ icon_document("w-16 h-16") }}</div>
-        <h2 class="text-xl font-semibold text-gray-700 mb-2">テンプレートがありません</h2>
-        <p class="text-gray-500 mb-6">新しいアンケートテンプレートを作成してください。</p>
-        <a href="/survey/templates/new"
-           class="inline-flex items-center gap-2 bg-teal-700 text-white px-6 py-2 rounded-md hover:bg-teal-800 transition-colors">
-            {{ icon_plus("w-4 h-4") }} テンプレートを作成
-        </a>
-    </div>
-    {% endif %}
-    </div>
+
+    {#- 一覧（タブ別、M6）。タブと読み直しは /survey/templates?tab=... #}
+    {%- set active = listing.tab.value if listing else (tab or "mine") %}
+    {{ list_tabs(active, listing.counts if listing else {}, listing.show_all if listing else False, "/survey/templates", "survey-template-list") }}
+    {% call list_tabpanel("survey-template-list", active, "/survey/templates") %}
+    {%- if listing %}
+    {% include "survey/partials/template_list.html" %}
+    {%- else %}
+    {% include "partials/error_banner.html" %}
+    {%- endif %}
+    {% endcall %}
+    {% include "sharing/partials/share_dialog.html" %}
 </div>
 {% endblock %}

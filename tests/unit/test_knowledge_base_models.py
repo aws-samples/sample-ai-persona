@@ -69,3 +69,25 @@ class TestPersonaKBBinding:
         }
         binding = PersonaBinding.from_dict(data)
         assert binding.metadata_filters == {}
+
+
+class TestKnowledgeBaseScope:
+    """U7: 利用範囲（shared_group_ids、BR5.1、約束 C8）。"""
+
+    def test_new_kb_is_admin_only(self):
+        kb = KnowledgeBase.create_new("KB1", "n")
+        assert kb.shared_group_ids == frozenset()
+        assert "shared_group_ids" not in kb.to_dict()
+
+    def test_scope_roundtrip_as_a_sorted_list(self):
+        data = {
+            **KnowledgeBase.create_new("KB1", "n").to_dict(),
+            "shared_group_ids": {"sales", "plan"},
+        }
+        kb = KnowledgeBase.from_dict(data)
+        assert kb.shared_group_ids == frozenset({"sales", "plan"})
+        assert kb.to_dict()["shared_group_ids"] == ["plan", "sales"]
+
+    def test_old_kb_without_scope(self):
+        kb = KnowledgeBase.from_dict(KnowledgeBase.create_new("KB1", "n").to_dict())
+        assert kb.shared_group_ids == frozenset()

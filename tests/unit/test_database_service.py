@@ -1809,3 +1809,247 @@ class TestDiscussionsMovedToDiscussionStore:
                 "initialize_database",
                 "get_database_info",
             }, f"{name} still touches Discussions"
+
+
+# =============================================================================
+# U7: 組織資産の部分更新と利用範囲（BR1.5、BR5.2、BR5.6、NFR1.77、NFR1.87）
+# =============================================================================
+
+
+@pytest.fixture
+def moto_asset_service(monkeypatch):
+    moto = pytest.importorskip("moto")
+    import boto3
+
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    with moto.mock_aws():
+        service = DatabaseService(table_prefix="AsTest", region="us-east-1")
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        for table in (service.datasets_table, service.kb_table):
+            client.create_table(
+                TableName=table,
+                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+        yield service
+
+
+def _org_dataset(**kwargs):
+    from src.models.dataset import Dataset, DatasetColumn
+
+    return Dataset.create_new(
+        name="売上",
+        description="説明",
+        s3_path="s3://b/datasets/x.csv",
+        columns=[DatasetColumn(name="a", data_type="string")],
+        row_count=3,
+        **kwargs,
+    )
+
+
+def _kb():
+    from src.models.knowledge_base import KnowledgeBase
+
+    return KnowledgeBase.create_new("KB123", "社内資料", "説明")
+
+
+def _item(service, table, item_id):
+    return service.dynamodb_client.get_item(
+        TableName=table, Key={"id": {"S": item_id}}
+    ).get("Item")
+
+
+class TestAssetScope:
+    @pytest.mark.parametrize("kind", ["dataset", "knowledge_base"])
+    def test_add_then_remove_as_two_set_updates(self, moto_asset_service, kind):
+        asset = _org_dataset() if kind == "dataset" else _kb()
+        save = (
+            moto_asset_service.save_dataset
+            if kind == "dataset"
+            else moto_asset_service.save_knowledge_base
+        )
+        save(asset)
+        spy = Mock(wraps=moto_asset_service.dynamodb_client.update_item)
+        moto_asset_service.dynamodb_client.update_item = spy
+
+        moto_asset_service.update_asset_scope(
+            kind, asset.id, add=frozenset({"sales", "plan"}), remove=frozenset()
+        )
+        moto_asset_service.update_asset_scope(
+            kind, asset.id, add=frozenset({"dev"}), remove=frozenset({"plan"})
+        )
+
+        expressions = [c.kwargs["UpdateExpression"] for c in spy.call_args_list]
+        assert len(expressions) == 3
+        assert expressions[1].startswith("ADD") and expressions[2].startswith("DELETE")
+        table = (
+            moto_asset_service.datasets_table
+            if kind == "dataset"
+            else moto_asset_service.kb_table
+        )
+        assert set(
+            _item(moto_asset_service, table, asset.id)["shared_group_ids"]["SS"]
+        ) == {
+            "sales",
+            "dev",
+        }
+
+    def test_removing_every_department_drops_the_column(self, moto_asset_service):
+        kb = _kb()
+        moto_asset_service.save_knowledge_base(kb)
+        moto_asset_service.update_asset_scope(
+            "knowledge_base", kb.id, add=frozenset({"sales"}), remove=frozenset()
+        )
+        moto_asset_service.update_asset_scope(
+            "knowledge_base", kb.id, add=frozenset(), remove=frozenset({"sales"})
+        )
+        stored = moto_asset_service.get_knowledge_base(kb.id, consistent=True)
+        assert stored.shared_group_ids == frozenset()
+
+    def test_empty_change_sends_nothing(self, moto_asset_service):
+        spy = Mock(wraps=moto_asset_service.dynamodb_client.update_item)
+        moto_asset_service.dynamodb_client.update_item = spy
+        moto_asset_service.update_asset_scope(
+            "dataset", "any", add=frozenset(), remove=frozenset()
+        )
+        assert spy.call_count == 0
+
+    def test_missing_asset_creates_nothing(self, moto_asset_service):
+        from src.services.database_service import DatabaseConditionFailed
+
+        with pytest.raises(DatabaseConditionFailed):
+            moto_asset_service.update_asset_scope(
+                "dataset", "gone", add=frozenset({"sales"}), remove=frozenset()
+            )
+        assert (
+            _item(moto_asset_service, moto_asset_service.datasets_table, "gone") is None
+        )
+
+    def test_persona_dedicated_dataset_is_refused(self, moto_asset_service):
+        from src.services.database_service import DatabaseConditionFailed
+
+        dedicated = _org_dataset(owner_persona_id="p1")
+        moto_asset_service.save_dataset(dedicated)
+        with pytest.raises(DatabaseConditionFailed):
+            moto_asset_service.update_asset_scope(
+                "dataset", dedicated.id, add=frozenset({"sales"}), remove=frozenset()
+            )
+        assert "shared_group_ids" not in _item(
+            moto_asset_service, moto_asset_service.datasets_table, dedicated.id
+        )
+
+    def test_unknown_kind_is_a_caller_bug(self, moto_asset_service):
+        with pytest.raises(ValueError):
+            moto_asset_service.update_asset_scope(
+                "persona", "x", add=frozenset({"a"}), remove=frozenset()
+            )
+
+
+class TestAssetPartialUpdates:
+    def test_dataset_update_keeps_scope(self, moto_asset_service):
+        from src.models.dataset import DatasetColumn
+
+        dataset = _org_dataset()
+        moto_asset_service.save_dataset(dataset)
+        moto_asset_service.update_asset_scope(
+            "dataset", dataset.id, add=frozenset({"sales"}), remove=frozenset()
+        )
+        spy = Mock(wraps=moto_asset_service.dynamodb_client.put_item)
+        moto_asset_service.dynamodb_client.put_item = spy
+
+        assert moto_asset_service.update_dataset_fields(
+            dataset.id,
+            name="新しい名前",
+            description="d2",
+            notes="n2",
+            columns=[DatasetColumn(name="b", data_type="integer")],
+            updated_at=datetime(2030, 1, 1),
+        )
+
+        assert spy.call_count == 0
+        stored = moto_asset_service.get_dataset(dataset.id, consistent=True)
+        assert stored.name == "新しい名前"
+        assert stored.notes == "n2"
+        assert stored.columns[0].name == "b"
+        assert stored.shared_group_ids == frozenset({"sales"})
+        assert stored.created_at == dataset.created_at
+
+    def test_dataset_update_only_given_columns(self, moto_asset_service):
+        dataset = _org_dataset()
+        moto_asset_service.save_dataset(dataset)
+        moto_asset_service.update_dataset_fields(
+            dataset.id, name="x", updated_at=datetime(2030, 1, 1)
+        )
+        stored = moto_asset_service.get_dataset(dataset.id)
+        assert stored.description == "説明"
+
+    def test_dataset_update_of_a_deleted_dataset_is_false(self, moto_asset_service):
+        assert (
+            moto_asset_service.update_dataset_fields(
+                "gone", name="x", updated_at=datetime(2030, 1, 1)
+            )
+            is False
+        )
+        assert (
+            _item(moto_asset_service, moto_asset_service.datasets_table, "gone") is None
+        )
+
+    def test_save_dataset_never_overwrites(self, moto_asset_service):
+        dataset = _org_dataset()
+        moto_asset_service.save_dataset(dataset)
+        moto_asset_service.update_asset_scope(
+            "dataset", dataset.id, add=frozenset({"sales"}), remove=frozenset()
+        )
+        with pytest.raises(DatabaseError):
+            moto_asset_service.save_dataset(dataset)
+        assert moto_asset_service.get_dataset(dataset.id).shared_group_ids == frozenset(
+            {"sales"}
+        )
+
+    def test_save_knowledge_base_never_overwrites(self, moto_asset_service):
+        kb = _kb()
+        moto_asset_service.save_knowledge_base(kb)
+        with pytest.raises(DatabaseError):
+            moto_asset_service.save_knowledge_base(kb)
+
+    def test_scope_change_and_rename_both_survive(self, moto_asset_service):
+        dataset = _org_dataset()
+        moto_asset_service.save_dataset(dataset)
+        moto_asset_service.update_asset_scope(
+            "dataset", dataset.id, add=frozenset({"sales"}), remove=frozenset()
+        )
+        moto_asset_service.update_dataset_fields(
+            dataset.id, name="改名", updated_at=datetime(2030, 1, 1)
+        )
+        stored = moto_asset_service.get_dataset(dataset.id)
+        assert stored.name == "改名"
+        assert stored.shared_group_ids == frozenset({"sales"})
+
+
+class TestAssetListings:
+    def test_dataset_listing_reads_scope_and_leaves_out_dedicated(
+        self, moto_asset_service
+    ):
+        org = _org_dataset()
+        moto_asset_service.save_dataset(org)
+        moto_asset_service.save_dataset(_org_dataset(owner_persona_id="p1"))
+        moto_asset_service.update_asset_scope(
+            "dataset", org.id, add=frozenset({"plan"}), remove=frozenset()
+        )
+        listed = moto_asset_service.get_all_datasets()
+        assert [d.id for d in listed] == [org.id]
+        assert listed[0].shared_group_ids == frozenset({"plan"})
+        assert isinstance(listed[0].shared_group_ids, frozenset)
+
+    def test_kb_listing_reads_every_page(self, moto_asset_service):
+        made = [_kb() for _ in range(5)]
+        for kb in made:
+            moto_asset_service.save_knowledge_base(kb)
+        client = moto_asset_service.dynamodb_client
+        real = client.scan
+        client.scan = lambda **kw: real(**{**kw, "Limit": 2})
+        listed = moto_asset_service.get_all_knowledge_bases()
+        assert {k.id for k in listed} == {k.id for k in made}

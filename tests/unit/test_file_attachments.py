@@ -505,6 +505,10 @@ class TestAssembly:
                 ResourceType.DISCUSSION: "topic",
                 ResourceType.DATASET: "name",
                 ResourceType.KNOWLEDGE_BASE: "name",
+                # U7（約束 C3）
+                ResourceType.SURVEY_TEMPLATE: "name",
+                ResourceType.SURVEY: "name",
+                ResourceType.CUSTOM_PERSONA_DATA: "name",
             }
             assert isinstance(parts.files, FileAttachments)
         finally:
@@ -550,6 +554,43 @@ class TestAssembly:
         with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
             parts.files.readable_file(B, f.id)
         assert not parts.files.can_read_file(A, g.id)
+
+    def test_survey_template_parent_is_registered_with_the_template_readers(
+        self, store, s3, clock
+    ):
+        """U7 BR1.9: テンプレートの画像は、テンプレートを読める人に配信する（NFR1.71）。"""
+        from src.managers.components.sharing_runtime import build_access_parts
+        from src.models.authz import AccessTarget, ResourceType
+
+        def reader(table: Any) -> Any:
+            class _Reader:
+                def read(self, ids: Any, deadline: float) -> dict:
+                    if table.resource_type is not ResourceType.SURVEY_TEMPLATE:
+                        return {}
+                    return {
+                        i: AccessTarget(
+                            ResourceType.SURVEY_TEMPLATE,
+                            i,
+                            owner_sub=A.sub,
+                            shared_group_ids=frozenset({"sales"}),
+                        )
+                        for i in ids
+                        if i == "t1"
+                    }
+
+            return _Reader()
+
+        lookup_service = Mock()
+        lookup_service.reader.side_effect = reader
+        parts = build_access_parts(lookup_service, store, s3, clock=clock)
+        f = _upload(store, s3)
+        parts.files.attach_all(A, [f.id], "survey_template", "t1")
+        sales_peer = Principal(sub="peer", roles=A.roles, group_ids=A.group_ids)
+
+        assert parts.files.can_read_file(A, f.id)
+        assert parts.files.can_read_file(sales_peer, f.id)
+        assert not parts.files.can_read_file(B, f.id)
+        assert parts.files.can_read_file(ADMIN.principal(), f.id)
 
 
 class TestDeleteAttached:

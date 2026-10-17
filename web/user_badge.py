@@ -9,7 +9,7 @@ names are the Cognito group names as-is.
 from dataclasses import dataclass
 from typing import Any
 
-from src.models.authz import Principal, Role
+from src.models.authz import Permission, Principal, Role, permissions_of
 
 MAX_SHOWN_DEPARTMENTS = 2
 NO_ROLE_LABEL = "ロールなし"
@@ -26,6 +26,8 @@ class UserBadge:
     shown_departments: tuple[str, ...]
     all_departments: tuple[str, ...]
     hidden_count: int
+    #: U7 BR3.2: show the "設定" link (``settings:manage``, never the role name).
+    can_manage_settings: bool = False
 
     @property
     def departments_label(self) -> str:
@@ -53,6 +55,8 @@ def build_user_badge(principal: Principal | None) -> UserBadge | None:
         shown_departments=shown,
         all_departments=departments,
         hidden_count=len(departments) - len(shown),
+        can_manage_settings=bool(principal.sub)
+        and Permission.SETTINGS_MANAGE in permissions_of(principal.roles),
     )
 
 

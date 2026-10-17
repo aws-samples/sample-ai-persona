@@ -235,7 +235,7 @@ class TestSave:
         assert "bug" not in response.text
 
     def test_unregistered_type_save_is_not_found(self, member_a):
-        response = member_a.post("/share/survey/p1", data={"departments": "sales"})
+        response = member_a.post("/share/nope/p1", data={"departments": "sales"})
         assert response.status_code == 404
 
 
@@ -252,3 +252,57 @@ class TestEntryChecks:
         with TestClient(test_app, headers={"HX-Request": "true"}) as anonymous:
             response = anonymous.get("/share/persona/p1/dialog")
         assert response.status_code == 401
+
+
+# =============================================================================
+# U7: アンケートテンプレートと結果の共有（BR1.2、AC4.1.1、AC4.1.2）
+# =============================================================================
+
+
+@pytest.fixture
+def u7(client, survey_world):
+    """ME signed in, with the real U7 sharing behind /share/... (moto)."""
+    from contextlib import ExitStack
+
+    from tests.api.u7_world import ME, ApiWorld
+
+    ME.login(client)
+    world = ApiWorld(survey_world)
+    with ExitStack() as stack:
+        world.patch_routers(stack)
+        yield world
+
+
+class TestSurveyAssetsAreSharable:
+    @pytest.mark.parametrize(
+        ("resource_type", "target"),
+        [("survey_template", "#survey-template-list"), ("survey", "#survey-list")],
+    )
+    def test_owner_shares_and_the_list_is_reloaded(
+        self, u7, client, resource_type, target
+    ):
+        item = u7.template() if resource_type == "survey_template" else u7.survey()
+
+        dialog = client.get(f"/share/{resource_type}/{item.id}/dialog")
+        assert dialog.status_code == 200
+        response = client.post(
+            f"/share/{resource_type}/{item.id}", data={"departments": "sales"}
+        )
+
+        assert response.status_code == 200
+        assert target in _triggers(response)["listReload"]["targets"]
+
+    def test_bulk_share_of_templates(self, u7, client):
+        first, second = u7.template(name="1"), u7.template(name="2")
+        response = client.post(
+            "/share/survey_template",
+            data={"ids": [first.id, second.id], "departments": "sales"},
+        )
+        assert response.status_code == 200
+
+    def test_unrelated_survey_cannot_be_shared(self, u7, client):
+        survey = u7.survey("c")
+        response = client.post(
+            f"/share/survey/{survey.id}", data={"departments": "sales"}
+        )
+        assert response.status_code == 404

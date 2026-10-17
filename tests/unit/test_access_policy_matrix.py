@@ -766,3 +766,189 @@ def test_u6_interview_sessions(actor, state, expected):
         assert expected == "404"
         return
     assert expected == "ok"
+
+
+# =============================================================================
+# U7: アンケートテンプレートと結果（読む・管理する・共有する）、カスタムペルソナ
+# データ（使う）。security-design.md §1・§2、BR1.2〜BR1.6、BR4.2、BR6.2、AC4.4.5
+# =============================================================================
+
+#: member A (``a``, ``sales``) sees: ``own`` (a's), ``shared`` (b's, shared with
+#: ``sales``), ``unrelated`` (c's), ``ownerless`` (before v1.0.0), ``deleted``.
+U7_KINDS = ("own", "shared", "unrelated", "ownerless", "deleted")
+#: ``invalid`` = refused as VALIDATION (an ownerless row cannot be shared, BR1.6).
+U7Outcome = Literal["ok", "404", "403", "invalid"]
+
+U7_MATRIX: list[tuple[str, str, str, str]] = []
+for _resource in ("template", "survey"):
+    for _op, _member, _admin, _no_role in [
+        ("read", ("ok", "ok", "404", "404", "404"), ("ok", "ok", "ok", "404"), "404"),
+        (
+            "manage",
+            ("ok", "403", "404", "404", "404"),
+            ("ok", "ok", "ok", "404"),
+            "404",
+        ),
+        (
+            "share",
+            ("ok", "403", "404", "404", "404"),
+            ("ok", "ok", "invalid", "404"),
+            "invalid",
+        ),
+    ]:
+        _name = f"{_resource}_{_op}"
+        U7_MATRIX += [(_name, "member", k, o) for k, o in zip(U7_KINDS, _member)]
+        U7_MATRIX += [(_name, "admin", k, o) for k, o in zip(U7_KINDS[1:], _admin)]
+        U7_MATRIX.append((_name, "no_role", "own", _no_role))
+
+
+def _u7_seed(world, resource: str) -> dict[str, str]:
+    from src.models.authz import ResourceType as RT
+
+    resource_type = RT.SURVEY_TEMPLATE if resource == "template" else RT.SURVEY
+    make = world.template if resource == "template" else world.survey
+    ids = {"deleted": "missing-id"}
+    for kind, owner in (
+        ("own", "a"),
+        ("shared", "b"),
+        ("unrelated", "c"),
+        ("ownerless", None),
+        ("no_role_own", "x"),
+    ):
+        ids[kind] = make(owner).id
+    world.share(resource_type, ids["shared"], "sales")
+    return ids
+
+
+def _u7_call(world, op: str, principal: Principal, resource_id: str) -> None:
+    from unittest.mock import Mock
+
+    from src.managers.survey_execution_manager import SurveyExecutionManager
+    from src.managers.survey_template_manager import SurveyTemplateManager
+    from src.models.authz import ResourceType as RT
+    from src.models.survey_template import Question
+
+    resource, action = op.split("_", 1)
+    if action == "share":
+        resource_type = RT.SURVEY_TEMPLATE if resource == "template" else RT.SURVEY
+        world.sharing.update_shares(
+            principal,
+            AccessTarget(resource_type, resource_id),
+            ShareChange(add=frozenset({"sales"})),
+        )
+        return
+    if resource == "template":
+        templates = SurveyTemplateManager(
+            database_service=world.db,
+            ai_service=Mock(),
+            file_attachments=world.files,
+            resource_sharing=world.sharing,
+            owners=world.owners,
+            resource_lookup=world.lookup,
+            sleep=lambda _s: None,
+        )
+        if action == "read":
+            templates.get_template(principal, resource_id)
+        else:
+            templates.update_template(
+                principal, resource_id, "変更", [Question.create_free_text("Q")]
+            )
+        return
+    surveys = SurveyExecutionManager(
+        database_service=world.db,
+        survey_batch_service=Mock(),
+        s3_service=world.s3,
+        resource_sharing=world.sharing,
+        owners=world.owners,
+        resource_lookup=world.lookup,
+        custom_persona_data_store=world.custom_store,
+        result_cache=Mock(),
+        sleep=lambda _s: None,
+    )
+    if action == "read":
+        surveys.get_survey(principal, resource_id)
+    else:
+        surveys.delete_survey(principal, resource_id)
+
+
+@pytest.mark.parametrize(
+    ("op", "actor", "kind", "expected"),
+    U7_MATRIX,
+    ids=[f"{op}-{actor}-{kind}" for op, actor, kind, _ in U7_MATRIX],
+)
+def test_u7_templates_and_surveys(survey_world, op, actor, kind, expected):
+    from tests.unit.survey_world import ADMIN, MEMBER_A, NO_ROLE
+
+    ids = _u7_seed(survey_world, op.split("_", 1)[0])
+    principal = {"member": MEMBER_A, "admin": ADMIN, "no_role": NO_ROLE}[actor]
+    resource_id = ids["no_role_own" if actor == "no_role" else kind]
+    not_found = (
+        ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
+        if op.startswith("template")
+        else ErrorCode.SURVEY_NOT_FOUND
+    )
+    try:
+        _u7_call(survey_world, op, principal, resource_id)
+    except AccessDeniedError:
+        assert expected == "403"
+        return
+    except CodedError as e:
+        if e.code.kind.value == "validation":
+            assert expected == "invalid"
+            return
+        assert e.code is not_found
+        assert expected == "404"
+        return
+    assert expected == "ok"
+
+
+#: Custom persona data: use = the scope meets the user's departments, or
+#: ``settings:manage`` (BR4.2, BR5.1).
+U7_ASSET_ROWS: list[tuple[str, str, str]] = [
+    ("member", "in_scope", "ok"),
+    ("member", "out_of_scope", "404"),
+    ("member", "admin_only", "404"),
+    ("member", "reservation", "404"),
+    ("admin", "out_of_scope", "ok"),
+    ("admin", "admin_only", "ok"),
+    ("no_role", "in_scope", "404"),
+    ("no_department", "in_scope", "404"),
+]
+
+
+@pytest.mark.parametrize(("actor", "kind", "expected"), U7_ASSET_ROWS)
+def test_u7_custom_persona_data_use(survey_world, actor, kind, expected):
+    from unittest.mock import Mock
+
+    from src.managers.survey_dataset_manager import SurveyDatasetManager
+    from src.models.custom_persona_data import reservation_id
+    from tests.unit.survey_world import ADMIN, MEMBER_A, NO_DEPARTMENT, NO_ROLE
+
+    records = {
+        "in_scope": survey_world.custom_data("営業向け", "sales"),
+        "out_of_scope": survey_world.custom_data("企画向け", "plan"),
+        "admin_only": survey_world.custom_data("admin だけ"),
+    }
+    data_id = reservation_id("営業向け") if kind == "reservation" else records[kind].id
+    manager = SurveyDatasetManager(
+        survey_batch_service=Mock(),
+        agent_service=Mock(),
+        ai_service=Mock(),
+        s3_service=survey_world.s3,
+        custom_persona_data_store=survey_world.custom_store,
+        resource_lookup=survey_world.lookup,
+        departments=survey_world.departments,
+    )
+    principal = {
+        "member": MEMBER_A,
+        "admin": ADMIN,
+        "no_role": NO_ROLE,
+        "no_department": NO_DEPARTMENT,
+    }[actor]
+    try:
+        manager.get_custom_persona_data(principal, data_id)
+    except CodedError as e:
+        assert e.code is ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND
+        assert expected == "404"
+        return
+    assert expected == "ok"

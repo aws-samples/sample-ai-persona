@@ -556,6 +556,25 @@ class TestServiceFactoryAuthzServices:
         assert interviews.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
+    def test_u7_custom_persona_data_store_uses_its_table(
+        self, mock_config, monkeypatch
+    ):
+        """U7 の Service（カスタムペルソナデータの登録情報）。"""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.CUSTOM_PERSONA_DATA_TABLE_NAME = "Custom-physical"
+
+        factory = ServiceFactory()
+        store = factory.get_custom_persona_data_store()
+
+        assert store is factory.get_custom_persona_data_store()
+        assert store.table_name == "Custom-physical"
+        assert store.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
     def test_user_directory_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory

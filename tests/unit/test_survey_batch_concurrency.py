@@ -84,3 +84,43 @@ def test_cursor_inherits_view_and_is_independent(service_with_local_parquet):
     # 別カーソルは独立
     other = svc._acquire_cursor("nemotron")
     assert other is not cursor
+
+
+# --- U7: カスタムペルソナデータは ID のキーで読む（BR4.3、NFR1.82） ---
+
+
+def _connect_spy(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import src.services.survey_batch_service as module
+
+    conn = MagicMock()
+    monkeypatch.setattr(module.duckdb, "connect", lambda *_: conn)
+    monkeypatch.setattr(module, "_load_httpfs", lambda _conn: None)
+    monkeypatch.setattr(SurveyBatchService, "_set_s3_credentials", lambda *_: None)
+    return conn
+
+
+@pytest.mark.unit
+def test_custom_data_is_read_from_its_id_key(monkeypatch):
+    conn = _connect_spy(monkeypatch)
+    svc = SurveyBatchService(bucket_name="bucket", region_name="ap-northeast-1")
+    data_id = "2b0f8d2e-1111-4000-8000-000000000000"
+
+    svc._get_duckdb_conn(f"custom:{data_id}")
+
+    sql = conn.execute.call_args_list[-1].args[0]
+    assert f"s3://bucket/persona-dataset/custom/{data_id}.parquet" in sql
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["custom:顧客データ", "custom:../x", "custom:"])
+def test_custom_data_by_name_or_path_is_refused(monkeypatch, value):
+    from src.services.survey_batch_service import SurveyBatchServiceError
+
+    conn = _connect_spy(monkeypatch)
+    svc = SurveyBatchService(bucket_name="bucket", region_name="ap-northeast-1")
+
+    with pytest.raises(SurveyBatchServiceError):
+        svc._get_duckdb_conn(value)
+    conn.execute.assert_not_called()

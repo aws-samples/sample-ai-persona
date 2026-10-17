@@ -16,7 +16,9 @@ export interface CloudFrontDistributionProps {
  *
  * - Lambda@Edge は使わない（ログインはアプリが行う。ADR-010）
  * - 既定の振る舞いはキャッシュしない（CachingDisabled、BR1.20）。/static/* だけ
- *   キャッシュする（CachingOptimized）
+ *   キャッシュする。鍵にはクエリの v（アプリが付ける中身のハッシュ、web/static_assets.py）
+ *   を含め、デプロイで中身が変わったら新しい URL として取り直させる。管理ポリシーの
+ *   CachingOptimized はクエリを鍵に含めず、デプロイ後も古い JS・CSS を最大 1 日返していた
  * - オリジンリクエストポリシーは AWS 管理の AllViewerExceptHostHeader（全 Cookie・
  *   全クエリ・Host 以外の全ヘッダー。CSRF の検査に要る Origin・HX-Request・
  *   X-Requested-With を含む）
@@ -35,6 +37,18 @@ export class CloudFrontDistribution extends Construct {
       readTimeout: cdk.Duration.seconds(120),
     });
 
+    const staticAssets = new cloudfront.CachePolicy(this, 'StaticAssetsCachePolicy', {
+      comment: 'AI Persona v1 static assets (versioned by ?v=<content hash>)',
+      defaultTtl: cdk.Duration.days(1),
+      minTtl: cdk.Duration.seconds(0),
+      maxTtl: cdk.Duration.days(365),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.allowList('v'),
+      headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: 'AI Persona v1',
       defaultBehavior: {
@@ -48,7 +62,7 @@ export class CloudFrontDistribution extends Construct {
         '/static/*': {
           origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          cachePolicy: staticAssets,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
         },
       },

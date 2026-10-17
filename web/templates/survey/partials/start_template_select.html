@@ -1,0 +1,30 @@
+{#
+  アンケート開始のテンプレートの選択（U7 BR1.2・BR2.1）。タブ（list_tabpanel）の中身。
+  読めるテンプレートだけを、タブごとに新しい順で出す（1 ページ分。見つからなければ検索する）。
+  引数:
+    listing           ... TabbedList（items は SurveyTemplate）
+    current_search    ... 検索語
+    selected_template ... 初めに選んでおくテンプレートの ID（一覧の「使う」から）
+#}
+{%- set tab = listing.tab.value -%}
+<input type="hidden" name="tab" value="{{ tab }}" data-start-template-tab>
+<label for="start-template" class="sr-only">テンプレート</label>
+<select id="start-template" name="template_id" required x-model="templateId"
+        @change="hasImages = ($event.target.selectedOptions[0] || {}).dataset?.hasImages === '1'"
+        data-testid="start-template-select"
+        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
+    <option value="">テンプレートを選択してください</option>
+    {% for tmpl in listing.items %}
+    <option value="{{ tmpl.id }}" data-has-images="{{ '1' if tmpl.images else '0' }}"
+            {%- if tmpl.id == selected_template %} selected{% endif %}>{{ tmpl.name }}（{{ tmpl.questions|length }}問）</option>
+    {% endfor %}
+</select>
+{%- if not listing.items %}
+<p class="text-sm text-gray-700 mt-2" data-testid="start-template-empty">
+    {%- if current_search %}該当するテンプレートがありません。
+    {%- elif tab == "shared" %}共有されたテンプレートはありません。所属グループに共有されると、ここに表示されます。
+    {%- else %}テンプレートがまだありません。<a href="/survey/templates/new" class="underline text-blue-700">テンプレートを作成する</a>{% endif %}
+</p>
+{%- elif listing.next_cursor %}
+<p class="text-xs text-gray-600 mt-2">新しい順に表示しています。見つからないときは名前で検索してください。</p>
+{%- endif %}

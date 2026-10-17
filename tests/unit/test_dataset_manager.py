@@ -1,15 +1,22 @@
 """
 DatasetManager単体テスト
+
+U7: BR3.1、BR3.3、BR5.1、BR5.2、BR5.6、NFR1.72、NFR1.77、NFR8.23、NFR8.24、AC5.2.1、
+AC5.2.3、AC5.3.1、AC5.3.3。設定の全メソッドは settings:manage（なければ 404）。
+DynamoDB と S3 は moto（tests/unit/survey_world.py）。
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from datetime import datetime
 from dataclasses import asdict
 
 from src.models.dataset import Dataset, DatasetColumn
-from src.models.errors import ErrorCode
+from src.models.errors import CodedError, ErrorCode
+from src.models.sharing import AssetScopeChange
 from tests.error_helpers import raises_code
+from tests.log_helpers import LogCapture
+from tests.unit.survey_world import ADMIN, MEMBER_A, NO_ROLE, SurveyWorld
 
 
 class TestDatasetModels:
@@ -175,18 +182,20 @@ class TestDatasetManagerSchemaAnalysis:
     @pytest.fixture
     def dataset_manager(self):
         """DatasetManagerインスタンス（モック使用）"""
-        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
-            mock_factory.get_database_service.return_value = Mock()
-            mock_factory.get_s3_service.return_value = Mock()
-            from src.managers.dataset_manager import DatasetManager
+        from src.managers.dataset_manager import DatasetManager
 
-            return DatasetManager()
+        return DatasetManager(
+            survey_batch_service=Mock(),
+            database_service=Mock(),
+            s3_service=Mock(),
+            departments=Mock(),
+        )
 
     def test_analyze_schema_basic(self, dataset_manager):
         """基本的なスキーマ解析テスト"""
         csv_content = b"id,name,age\n1,Alice,30\n2,Bob,25"
 
-        columns, row_count = dataset_manager.analyze_schema(csv_content)
+        columns, row_count = dataset_manager.analyze_schema(ADMIN, csv_content)
 
         assert len(columns) == 3
         assert columns[0].name == "id"
@@ -198,7 +207,7 @@ class TestDatasetManagerSchemaAnalysis:
         """型推論テスト"""
         csv_content = b"int_col,float_col,str_col\n1,1.5,hello\n2,2.5,world"
 
-        columns, _ = dataset_manager.analyze_schema(csv_content)
+        columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
 
         assert columns[0].data_type == "integer"
         assert columns[1].data_type == "float"
@@ -208,7 +217,7 @@ class TestDatasetManagerSchemaAnalysis:
         """日付型推論テスト"""
         csv_content = b"date_col,value\n2024-01-01,100\n2024-02-01,200"
 
-        columns, _ = dataset_manager.analyze_schema(csv_content)
+        columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
 
         assert columns[0].data_type == "date"
         assert columns[1].data_type == "integer"
@@ -217,7 +226,7 @@ class TestDatasetManagerSchemaAnalysis:
         """空ファイルのスキーマ解析テスト"""
         csv_content = b""
 
-        columns, row_count = dataset_manager.analyze_schema(csv_content)
+        columns, row_count = dataset_manager.analyze_schema(ADMIN, csv_content)
 
         assert columns == []
         assert row_count == 0
@@ -228,7 +237,9 @@ class TestDatasetManagerSchemaAnalysis:
         rows = "".join(f"{i},name{i}\n" for i in range(150))
         csv_content = (header + rows).encode("utf-8")
 
-        columns, row_count = dataset_manager.analyze_schema(csv_content, sample_rows=50)
+        columns, row_count = dataset_manager.analyze_schema(
+            ADMIN, csv_content, sample_rows=50
+        )
 
         assert len(columns) == 2
         assert row_count == 149
@@ -244,7 +255,7 @@ class TestDatasetManagerSchemaAnalysis:
 
         csv_content = b"user_id,,category\nU001,100,food\n"
         with raises_code(DatasetManagerError, ErrorCode.FILE_CSV_HEADER_INVALID):
-            dataset_manager.analyze_schema(csv_content)
+            dataset_manager.analyze_schema(ADMIN, csv_content)
 
     def test_analyze_schema_rejects_duplicate_header(self, dataset_manager):
         """重複ヘッダーは FILE_CSV_HEADER_INVALID で弾く（DuckDBが name_1 にリネーム）。"""
@@ -252,183 +263,206 @@ class TestDatasetManagerSchemaAnalysis:
 
         csv_content = b"user_id,amount,amount\nU001,100,10\n"
         with raises_code(DatasetManagerError, ErrorCode.FILE_CSV_HEADER_INVALID):
-            dataset_manager.analyze_schema(csv_content)
+            dataset_manager.analyze_schema(ADMIN, csv_content)
 
     def test_analyze_schema_strips_whitespace_headers(self, dataset_manager):
         """前後空白ヘッダーは正規化して受け入れる（DuckDBのtrimと揃える）。"""
         csv_content = b"user id, amount ,category\nU001,100,food\n"
-        columns, _ = dataset_manager.analyze_schema(csv_content)
+        columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
         assert [c.name for c in columns] == ["user id", "amount", "category"]
 
 
+# =============================================================================
+# U7: 設定は admin だけ・部分更新・利用範囲
+# =============================================================================
+
+
+@pytest.fixture
+def ds_mgr(survey_world: SurveyWorld):
+    from src.managers.dataset_manager import DatasetManager
+
+    return DatasetManager(
+        survey_batch_service=Mock(),
+        database_service=survey_world.db,
+        s3_service=survey_world.s3,
+        departments=survey_world.departments,
+    )
+
+
+@pytest.fixture
+def logs(capsys) -> LogCapture:
+    return LogCapture(capsys)
+
+
+class TestDatasetManagerIsAdminOnly:
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda m: m.analyze_schema(MEMBER_A, b"a\n1"),
+            lambda m: m.download_csv_from_url(MEMBER_A, "https://example.com/x.csv"),
+            lambda m: m.upload_csv(MEMBER_A, b"a\n1", "a.csv", "名前"),
+            lambda m: m.get_datasets(MEMBER_A),
+            lambda m: m.get_dataset(MEMBER_A, "x"),
+            lambda m: m.update_dataset(MEMBER_A, "x", name="y"),
+            lambda m: m.delete_dataset(MEMBER_A, "x"),
+            lambda m: m.scope_dialog(MEMBER_A, "x"),
+            lambda m: m.update_scope(MEMBER_A, "x", AssetScopeChange()),
+        ],
+    )
+    def test_member_gets_404_reads_and_writes_nothing(
+        self, ds_mgr, survey_world, logs, call
+    ):
+        scan = survey_world.spy("scan")
+        put = survey_world.spy("put_item")
+        with raises_code(CodedError, ErrorCode.SETTINGS_NOT_FOUND):
+            call(ds_mgr)
+        assert scan.call_count == 0
+        assert put.call_count == 0
+        denied = logs.events("authz.denied")
+        assert len(denied) == 1
+        assert denied[0]["reason"] == "hidden"
+
+    def test_no_role_too(self, ds_mgr):
+        with raises_code(CodedError, ErrorCode.SETTINGS_NOT_FOUND):
+            ds_mgr.get_datasets(NO_ROLE)
+
+
 class TestDatasetManagerCRUD:
-    """DatasetManager CRUD操作テスト"""
-
-    @pytest.fixture
-    def manager(self):
-        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
-            mock_db = Mock()
-            mock_s3 = Mock()
-            mock_factory.get_database_service.return_value = mock_db
-            mock_factory.get_s3_service.return_value = mock_s3
-            from src.managers.dataset_manager import DatasetManager
-
-            mgr = DatasetManager()
-            mgr._mock_db = mock_db
-            mgr._mock_s3 = mock_s3
-            return mgr
-
-    def test_upload_csv(self, manager):
-        """CSVアップロードテスト"""
-        manager._mock_s3.upload_file.return_value = "s3://bucket/datasets/x.csv"
-        csv_content = b"id,name\n1,Alice\n2,Bob"
-
-        result = manager.upload_csv(
-            file_content=csv_content,
-            filename="test.csv",
-            name="テスト",
-            description="説明",
+    def test_upload_registers_an_org_asset_with_an_ascii_key(
+        self, ds_mgr, survey_world
+    ):
+        dataset = ds_mgr.upload_csv(
+            ADMIN, b"id,name\n1,Alice\n2,Bob", "購買 データ.csv", "購買データ", "説明"
         )
+        assert dataset.name == "購買データ"
+        assert dataset.row_count == 2
+        key = survey_world.s3.key_of(dataset.s3_path)
+        assert key.startswith("datasets/") and "購買" not in key
+        stored = ds_mgr.get_dataset(ADMIN, dataset.id)
+        assert stored.shared_group_ids == frozenset()
 
-        assert result.name == "テスト"
-        assert result.description == "説明"
-        assert result.row_count == 2
-        assert len(result.columns) == 2
-        manager._mock_s3.upload_file.assert_called_once()
-        manager._mock_db.save_dataset.assert_called_once()
-
-    def test_upload_csv_key_is_ascii_normalized(self, manager):
-        """日本語/空白ファイル名でも S3 key は ASCII（id.csv）に正規化される。
-
-        表示名は Dataset.name が保持する。
-        """
-        manager._mock_s3.upload_file.return_value = "s3://bucket/datasets/x.csv"
-        csv_content = b"id,name\n1,Alice"
-
-        manager.upload_csv(
-            file_content=csv_content,
-            filename="購買 データ 2024.csv",
-            name="購買データ",
+    def test_upload_with_custom_columns(self, ds_mgr):
+        columns = [DatasetColumn(name="a", data_type="string")]
+        dataset = ds_mgr.upload_csv(
+            ADMIN, b"a,b\n1,2", "t.csv", "テスト", columns=columns
         )
+        assert dataset.columns == columns
 
-        s3_key = manager._mock_s3.upload_file.call_args[0][1]
-        assert s3_key.startswith("datasets/")
-        assert s3_key.endswith(".csv")
-        # 元ファイル名（日本語・空白）が key に含まれない
-        assert "購買" not in s3_key
-        assert " " not in s3_key
-        s3_key.encode("ascii")  # ASCII であること（例外にならない）
+    def test_listing_leaves_out_dedicated_and_labels_the_scope(
+        self, ds_mgr, survey_world
+    ):
+        org = survey_world.dataset("sales", "gone")
+        survey_world.dataset(owner_persona_id="p1")
+        listing = ds_mgr.get_datasets(ADMIN)
+        assert [d.id for d in listing.items] == [org.id]
+        assert listing.scope_labels[org.id] == ["営業部", "（削除されたグループ）"]
 
-    def test_upload_csv_with_custom_columns(self, manager):
-        """カスタムカラム指定でのアップロード"""
-        manager._mock_s3.upload_file.return_value = "s3://bucket/x.csv"
-        csv_content = b"a,b\n1,2"
-        custom_cols = [DatasetColumn(name="a", data_type="string")]
+    def test_dedicated_dataset_is_not_a_settings_target(self, ds_mgr, survey_world):
+        dedicated = survey_world.dataset(owner_persona_id="p1")
+        assert ds_mgr.get_dataset(ADMIN, dedicated.id) is None
+        assert ds_mgr.update_dataset(ADMIN, dedicated.id, name="x") is None
+        assert ds_mgr.delete_dataset(ADMIN, dedicated.id) is False
+        with raises_code(CodedError, ErrorCode.DATASET_NOT_FOUND):
+            ds_mgr.update_scope(
+                ADMIN, dedicated.id, AssetScopeChange(add=frozenset({"sales"}))
+            )
+        with raises_code(CodedError, ErrorCode.DATASET_NOT_FOUND):
+            ds_mgr.scope_dialog(ADMIN, dedicated.id)
 
-        result = manager.upload_csv(
-            file_content=csv_content,
-            filename="test.csv",
-            name="テスト",
-            columns=custom_cols,
+    def test_update_is_partial_and_keeps_the_scope(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset("sales")
+        put = survey_world.spy("put_item")
+        updated = ds_mgr.update_dataset(
+            ADMIN, dataset.id, name="新名", description="新説明", notes="メモ"
         )
+        assert updated.name == "新名"
+        assert put.call_count == 0
+        stored = ds_mgr.get_dataset(ADMIN, dataset.id)
+        assert stored.notes == "メモ"
+        assert stored.shared_group_ids == frozenset({"sales"})
 
-        assert result.columns == custom_cols
+    def test_update_of_a_missing_dataset(self, ds_mgr, survey_world):
+        assert ds_mgr.update_dataset(ADMIN, "missing", name="x") is None
+        assert survey_world.raw(survey_world.db.datasets_table, "missing") is None
 
-    def test_upload_csv_no_s3_service(self):
-        """S3なしの場合ローカル保存"""
-        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
-            mock_factory.get_database_service.return_value = Mock()
-            mock_factory.get_s3_service.return_value = None
-            from src.managers.dataset_manager import DatasetManager
+    def test_scope_change_then_rename_both_stay(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset()
+        ds_mgr.update_scope(
+            ADMIN, dataset.id, AssetScopeChange(add=frozenset({"plan"}))
+        )
+        ds_mgr.update_dataset(ADMIN, dataset.id, name="改名")
+        stored = ds_mgr.get_dataset(ADMIN, dataset.id)
+        assert stored.name == "改名"
+        assert stored.shared_group_ids == frozenset({"plan"})
 
-            mgr = DatasetManager()
+    def test_delete_removes_the_file_and_the_record(self, ds_mgr, survey_world):
+        dataset = ds_mgr.upload_csv(ADMIN, b"a\n1", "a.csv", "消す")
+        assert ds_mgr.delete_dataset(ADMIN, dataset.id) is True
+        assert ds_mgr.get_dataset(ADMIN, dataset.id) is None
+        assert not survey_world.s3.exists(dataset.s3_path)
 
-        csv_content = b"id,name\n1,test"
-        with patch("pathlib.Path.mkdir"), patch("pathlib.Path.write_bytes"):
-            result = mgr.upload_csv(
-                file_content=csv_content, filename="t.csv", name="ローカル"
+    def test_delete_continues_when_the_file_cannot_be_removed(
+        self, ds_mgr, survey_world, monkeypatch
+    ):
+        dataset = ds_mgr.upload_csv(ADMIN, b"a\n1", "a.csv", "消す")
+        monkeypatch.setattr(
+            survey_world.s3, "delete_file", Mock(side_effect=RuntimeError("down"))
+        )
+        assert ds_mgr.delete_dataset(ADMIN, dataset.id) is True
+        assert ds_mgr.get_dataset(ADMIN, dataset.id) is None
+
+    def test_delete_missing(self, ds_mgr):
+        assert ds_mgr.delete_dataset(ADMIN, "missing") is False
+
+
+class TestDatasetScope:
+    def test_dialog(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset("sales")
+        dialog = ds_mgr.scope_dialog(ADMIN, dataset.id)
+        assert dialog.selected == frozenset({"sales"})
+        assert {d.group_id for d in dialog.choices} == {"sales", "plan"}
+
+    def test_add_and_remove_are_logged(self, ds_mgr, survey_world, logs):
+        dataset = survey_world.dataset("sales")
+        updated = ds_mgr.update_scope(
+            ADMIN,
+            dataset.id,
+            AssetScopeChange(add=frozenset({"plan"}), remove=frozenset({"sales"})),
+        )
+        assert updated.shared_group_ids == frozenset({"plan"})
+        event = logs.events("asset.scope_changed")[0]
+        assert event["resource_type"] == "dataset"
+        assert event["added"] == ["plan"]
+        assert event["removed"] == ["sales"]
+        assert "売上データ" not in str(event)
+
+    def test_only_existing_departments_can_be_added(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset()
+        with raises_code(CodedError, ErrorCode.SHARE_SCOPE_INVALID):
+            ds_mgr.update_scope(
+                ADMIN, dataset.id, AssetScopeChange(add=frozenset({"x"}))
             )
 
-        assert "local://" in result.s3_path
+    def test_missing_dataset(self, ds_mgr, survey_world):
+        with raises_code(CodedError, ErrorCode.DATASET_NOT_FOUND):
+            ds_mgr.update_scope(
+                ADMIN, "missing", AssetScopeChange(add=frozenset({"sales"}))
+            )
+        assert survey_world.raw(survey_world.db.datasets_table, "missing") is None
 
-    def test_get_datasets(self, manager):
-        """全データセット取得"""
-        manager._mock_db.get_all_datasets.return_value = ["ds1", "ds2"]
-        result = manager.get_datasets()
-        assert result == ["ds1", "ds2"]
+    def test_member_in_scope_can_then_use_it(self, ds_mgr, survey_world):
+        """利用範囲の変更は次の判定から効く（AccessPolicy.can_use_asset、NFR9.36）。"""
+        from src.managers.components.access_policy import AccessPolicy
+        from src.models.authz import ResourceType
 
-    def test_get_dataset(self, manager):
-        """ID指定取得"""
-        manager._mock_db.get_dataset.return_value = "ds1"
-        result = manager.get_dataset("id1")
-        assert result == "ds1"
-        manager._mock_db.get_dataset.assert_called_once_with("id1")
-
-    def test_update_dataset(self, manager):
-        """データセット更新"""
-        existing = Dataset.create_new(
-            name="旧名",
-            description="旧説明",
-            s3_path="s3://x",
-            columns=[],
-            row_count=10,
+        dataset = survey_world.dataset()
+        target = survey_world.lookup.get(ResourceType.DATASET, dataset.id)
+        assert not AccessPolicy.can_use_asset(MEMBER_A, target)
+        ds_mgr.update_scope(
+            ADMIN, dataset.id, AssetScopeChange(add=frozenset({"sales"}))
         )
-        manager._mock_db.get_dataset.return_value = existing
-
-        result = manager.update_dataset(
-            existing.id, name="新名", description="新説明", notes="メモ"
-        )
-
-        assert result.name == "新名"
-        assert result.description == "新説明"
-        assert result.notes == "メモ"
-        manager._mock_db.save_dataset.assert_called_once()
-
-    def test_update_dataset_not_found(self, manager):
-        """存在しないデータセット更新"""
-        manager._mock_db.get_dataset.return_value = None
-        result = manager.update_dataset("bad-id", name="x")
-        assert result is None
-
-    def test_delete_dataset_with_s3(self, manager):
-        """S3ファイル付きデータセット削除"""
-        existing = Dataset.create_new(
-            name="テスト",
-            description="",
-            s3_path="s3://bucket/file.csv",
-            columns=[],
-            row_count=5,
-        )
-        manager._mock_db.get_dataset.return_value = existing
-
-        result = manager.delete_dataset(existing.id)
-
-        assert result is True
-        manager._mock_s3.delete_file.assert_called_once_with("s3://bucket/file.csv")
-        manager._mock_db.delete_dataset.assert_called_once_with(existing.id)
-
-    def test_delete_dataset_s3_error_continues(self, manager):
-        """S3削除失敗でもDB削除は実行"""
-        existing = Dataset.create_new(
-            name="テスト",
-            description="",
-            s3_path="s3://bucket/file.csv",
-            columns=[],
-            row_count=5,
-        )
-        manager._mock_db.get_dataset.return_value = existing
-        manager._mock_s3.delete_file.side_effect = Exception("S3 error")
-
-        result = manager.delete_dataset(existing.id)
-
-        assert result is True
-        manager._mock_db.delete_dataset.assert_called_once()
-
-    def test_delete_dataset_not_found(self, manager):
-        """存在しないデータセット削除"""
-        manager._mock_db.get_dataset.return_value = None
-        result = manager.delete_dataset("bad-id")
-        assert result is False
+        target = survey_world.lookup.get(ResourceType.DATASET, dataset.id)
+        assert AccessPolicy.can_use_asset(MEMBER_A, target)
 
 
 class TestDatasetManagerBindingsMoved:
@@ -448,14 +482,3 @@ class TestDatasetManagerBindingsMoved:
         from src.managers.dataset_manager import DatasetManager
 
         assert not hasattr(DatasetManager, method)
-
-    def test_listing_is_the_organization_assets(self):
-        with patch("src.managers.dataset_manager.service_factory") as mock_factory:
-            mock_db = Mock()
-            mock_db.get_all_datasets.return_value = ["org"]
-            mock_factory.get_database_service.return_value = mock_db
-            mock_factory.get_s3_service.return_value = Mock()
-            from src.managers.dataset_manager import DatasetManager
-
-            # get_all_datasets leaves out persona-dedicated datasets (BR6.2)
-            assert DatasetManager().get_datasets() == ["org"]

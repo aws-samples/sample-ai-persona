@@ -46,6 +46,7 @@ from web.routers import (
     auth,
     sharing,
 )
+from web.static_assets import static_url
 from web.user_badge import user_badge
 
 # ログ設定
@@ -112,12 +113,16 @@ from web.sanitize import render_markdown  # noqa: E402
 templates.env.filters["markdown"] = render_markdown
 
 # テンプレートグローバル変数
-# user_badge は画面上部の利用者表示（BR1.16）。base.html を描く全 Router に登録する
+# user_badge は画面上部の利用者表示（BR1.16）。static_url は自前の静的ファイルに
+# 中身のハッシュを付ける（CDN のキャッシュでデプロイが隠れないように）。
+# base.html を描く全 Router に登録する
 templates.env.globals["app_version"] = __version__
 templates.env.globals["user_badge"] = user_badge
+templates.env.globals["static_url"] = static_url
 for _mod in [persona, discussion, interview, settings, survey, auth, sharing]:
     _mod.templates.env.globals["app_version"] = __version__
     _mod.templates.env.globals["user_badge"] = user_badge
+    _mod.templates.env.globals["static_url"] = static_url
 
 # ルーターの登録
 app.include_router(persona.router, prefix="/persona", tags=["persona"])

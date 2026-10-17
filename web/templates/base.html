@@ -16,21 +16,21 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
         ページ全体を取り直す。既定の再取得は HX-Request 付きで、断片を返す画面（議論結果など）で
         ページ全体が断片に置き換わるため（U4 レビュー P2） #}
     <meta name="htmx-config" content='{"refreshOnHistoryMiss": true}'>
-    <script src="/static/js/vendor/htmx.min.js"></script>
+    <script src="{{ static_url('js/vendor/htmx.min.js') }}"></script>
     
     <!-- Tailwind CSS (ビルド済み、typographyプラグイン含む) -->
-    <link rel="stylesheet" href="/static/css/tailwind.css">
+    <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
     
     <!-- Alpine.js (軽量なインタラクション用) -->
-    <script defer src="/static/js/vendor/alpine.min.js"></script>
+    <script defer src="{{ static_url('js/vendor/alpine.min.js') }}"></script>
     
     <!-- DOMPurify (XSS防止用HTMLサニタイザー) -->
-    <script src="/static/js/vendor/purify.min.js"></script>
+    <script src="{{ static_url('js/vendor/purify.min.js') }}"></script>
     <!-- Marked.js (Markdownパーサー) -->
-    <script src="/static/js/vendor/marked.min.js"></script>
+    <script src="{{ static_url('js/vendor/marked.min.js') }}"></script>
     
     <!-- カスタムCSS（Tailwindの後に読み込む） -->
-    <link rel="stylesheet" href="/static/css/custom.css">
+    <link rel="stylesheet" href="{{ static_url('css/custom.css') }}">
     
     {% block head %}{% endblock %}
 <style>[x-cloak]{display:none!important}</style>
@@ -75,9 +75,12 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                             </svg>
                         </button>
 
+                        {# U7 BR3.2: 「設定」は settings:manage を持つ人にだけ出す（ロール名は見ない） #}
+                        {% set nav_badge = user_badge(request) if request is defined else none %}
+                        {% if nav_badge and nav_badge.can_manage_settings %}
                         <div class="w-px h-6 bg-gray-200"></div>
 
-                        <a href="/settings" 
+                        <a href="/settings" data-testid="nav-settings"
                            class="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50 rounded-md">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
@@ -85,6 +88,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                             </svg>
                             設定
                         </a>
+                        {% endif %}
 
                     </div>
                 </div>
@@ -149,14 +153,16 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
                         <a href="/survey/templates" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_document("w-4 h-4") }} テンプレート管理</a>
                         <a href="/survey/start" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_play("w-4 h-4") }} アンケート開始</a>
                         <a href="/survey/results" data-nav-item class="flex items-center gap-2 px-6 py-2 text-gray-700 hover:bg-gray-100">{{ icon_chat("w-4 h-4") }} 結果表示</a>
+                        {% if nav_badge and nav_badge.can_manage_settings %}
                         <div class="border-t my-1"></div>
-                        <a href="/settings" data-nav-item class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100">
+                        <a href="/settings" data-nav-item data-testid="nav-settings-mobile" class="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-100">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                             </svg>
                             設定
                         </a>
+                        {% endif %}
                         <div class="border-t my-1"></div>
                         {% if badge %}
                         <div data-testid="user-badge-mobile" class="px-4 py-2 text-sm">
@@ -242,7 +248,7 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
     {# htmx のイベントハンドラは app.js に集約している。以前はここにも
        afterSwap / beforeRequest / afterRequest を重複登録していたため、
        fade-in が二重に適用されていた（Issue #117 ステップ5）。 #}
-    <script src="/static/js/app.js"></script>
+    <script src="{{ static_url('js/app.js') }}"></script>
 
     {% block scripts %}{% endblock %}
 </body>

@@ -154,6 +154,8 @@ export class AppStack extends Stack {
           table.tableName,
         ]),
       ),
+      // カスタムペルソナデータの登録情報（U7、src/config.py の CUSTOM_PERSONA_DATA_TABLE_NAME）
+      CUSTOM_PERSONA_DATA_TABLE_NAME: data.database.customPersonaDataTable.tableName,
       ...tableNames,
       S3_BUCKET_NAME: data.uploadBucket.bucket.bucketName,
       // Strategy ID はアプリが起動時に GetMemory で引く（手で書き写さない）
@@ -300,6 +302,20 @@ export class AppStack extends Stack {
         'dynamodb:ConditionCheckItem',
       ],
       resources: childTables.flatMap((table) => [table.tableArn, `${table.tableArn}/index/*`]),
+    }));
+    // カスタムペルソナデータの登録情報（U7、NFR1.80、NFR1.81）。名前の押さえはトランザクション
+    // （ConditionCheckItem）、一覧は件数の小さい Scan。GSI がないため Query とインデックスは付けない
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:BatchGetItem',
+        'dynamodb:PutItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem',
+        'dynamodb:ConditionCheckItem',
+        'dynamodb:Scan',
+      ],
+      resources: [data.database.customPersonaDataTable.tableArn],
     }));
     this.grantUploadBucket(taskRole, data.uploadBucket.bucket);
     // 部署の一覧（DepartmentDirectory、ADR-009）と所有者の名前の写し（OwnerDirectory、U4）。

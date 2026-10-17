@@ -5,8 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} - AIペルソナシステム</title>
-    <link rel="stylesheet" href="/static/css/tailwind.css">
-    <link rel="stylesheet" href="/static/css/custom.css">
+    <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/custom.css') }}">
 </head>
 {# ログイン関連の画面は画面上部（M1）を出さず、ログイン専用の簡素な枠を使う（mockups.md M2・M5） #}
 <body class="bg-gray-50 min-h-screen flex items-center justify-center px-4">

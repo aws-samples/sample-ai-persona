@@ -49,3 +49,16 @@ def test_mobile_menu_also_has_the_badge_and_signout(client, login_as):
 def test_signout_is_no_longer_a_link(client):
     html = client.get("/persona/management").text
     assert 'href="/signout"' not in html
+
+
+def test_member_navigation_has_no_settings_link(client, login_as):
+    """U7 BR3.2、NFR1.72: member のナビゲーション（広い・狭い画面）に「設定」がない。"""
+    login_as(client, roles=("member",), groups=("sales",))
+    html = client.get("/persona/management").text
+    assert 'href="/settings"' not in html
+
+
+def test_admin_navigation_has_the_settings_link_twice(client, login_as):
+    login_as(client, roles=("admin",), groups=())
+    html = client.get("/persona/management").text
+    assert html.count('href="/settings"') == 2
