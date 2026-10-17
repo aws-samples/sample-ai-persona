@@ -348,3 +348,36 @@ class TestSurveyOrgAssetCodes:
 
         assert http_status_for(ErrorCode["SETTINGS_NOT_FOUND"]) == 404
         assert http_status_for(ErrorCode["CUSTOM_PERSONA_DATA_NOT_FOUND"]) == 404
+
+
+class TestClosedNetworkLoginCodes:
+    """U8 の閉域構成のログインのコード（functional-spec.md、約束 C5）。
+
+    M2・M3 はフルページのフォームで、VALIDATION と TRANSIENT のどちらも画面の中に
+    文言を出す。時間切れだけはログイン画面からやり直す（UNAUTHORIZED）。
+    """
+
+    @pytest.mark.parametrize(
+        ("name", "kind"),
+        [
+            ("LOGIN_FAILED", ErrorKind.VALIDATION),
+            ("PASSWORD_POLICY_NOT_MET", ErrorKind.VALIDATION),
+            ("PASSWORD_CONFIRMATION_MISMATCH", ErrorKind.VALIDATION),
+            ("LOGIN_RATE_LIMITED", ErrorKind.TRANSIENT),
+            ("LOGIN_UNAVAILABLE", ErrorKind.TRANSIENT),
+            ("LOGIN_CHALLENGE_EXPIRED", ErrorKind.UNAUTHORIZED),
+        ],
+    )
+    def test_kind(self, name, kind):
+        assert ErrorCode[name].kind is kind
+
+    def test_values_are_snake_case_of_the_names(self):
+        for name in (
+            "LOGIN_FAILED",
+            "PASSWORD_POLICY_NOT_MET",
+            "PASSWORD_CONFIRMATION_MISMATCH",
+            "LOGIN_RATE_LIMITED",
+            "LOGIN_UNAVAILABLE",
+            "LOGIN_CHALLENGE_EXPIRED",
+        ):
+            assert ErrorCode[name].value == name.lower()

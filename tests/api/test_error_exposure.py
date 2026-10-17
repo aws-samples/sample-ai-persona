@@ -50,6 +50,9 @@ _ALLOWED_CALLS = frozenset(
         # context["field"] の安定キーのみを返す。例外メッセージには触らない
         # （TestFieldOfDoesNotLeak で直接検証している）。
         "field_of",
+        # U8: PASSWORD_POLICY_NOT_MET の context["rules"] の既知の条件キーだけを返す
+        # （tests/unit/test_error_messages.py TestPasswordRuleLabels で検証）
+        "missed_password_rules",
         "isinstance",
         "type",
         # web/routers/interview.py 限定のローカルヘルパー。isinstance と

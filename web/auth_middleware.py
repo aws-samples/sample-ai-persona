@@ -57,7 +57,15 @@ SESSION_COOKIE_NAME = "session_id"
 
 #: URLs reachable without a login (contract C11 ``security: []``).
 PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/health", "/api/health", "/login", "/auth/callback", "/signout"}
+    {
+        "/health",
+        "/api/health",
+        "/login",
+        "/auth/callback",
+        # U8: the first password change (M3) happens before a session exists
+        "/auth/new-password",
+        "/signout",
+    }
 )
 #: Static assets (CSS / JS only; the login pages need them). Never user data.
 PUBLIC_PREFIXES: tuple[str, ...] = ("/static/",)

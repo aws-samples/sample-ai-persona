@@ -263,6 +263,14 @@ describe('AppStack: Cognito のアプリクライアント', () => {
     expect(JSON.stringify(client.Properties.LogoutURLs)).toContain('/login');
   });
 
+  test('U8 BR4.2: 公開構成のクライアントは ADMIN_USER_PASSWORD_AUTH を許さない', () => {
+    const clients = Object.values(template.findResources('AWS::Cognito::UserPoolClient'));
+    expect(clients).toHaveLength(1);
+    const flows: string[] = clients[0].Properties.ExplicitAuthFlows ?? [];
+    expect(flows).not.toContain('ALLOW_ADMIN_USER_PASSWORD_AUTH');
+    expect(flows).not.toContain('ADMIN_NO_SRP_AUTH');
+  });
+
   test('Managed Login のブランディングは Cognito の既定の見た目（R-07）', () => {
     template.hasResourceProperties('AWS::Cognito::ManagedLoginBranding', {
       UseCognitoProvidedValues: true,
@@ -360,6 +368,41 @@ describe('AppStack: ログとメトリクス', () => {
     expect(transformation.DefaultValue).toBeUndefined();
     expect(transformation.Dimensions).toEqual([{ Key: 'reason', Value: '$.reason' }]);
     template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+  });
+});
+
+describe('AppStack: 公開構成に閉域構成のログインの権限を付けない（U8、BR4.2、NFR3.18）', () => {
+  const ADMIN_ACTIONS = ['cognito-idp:AdminInitiateAuth', 'cognito-idp:AdminRespondToAuthChallenge'];
+
+  function actionsOf(t: Template): string[] {
+    const policies = [
+      ...Object.values(t.findResources('AWS::IAM::Policy')),
+      ...Object.values(t.findResources('AWS::IAM::ManagedPolicy')),
+    ];
+    return policies.flatMap((p) =>
+      (p.Properties.PolicyDocument.Statement as any[]).flatMap((s) => [s.Action].flat()),
+    );
+  }
+
+  test('どの方針にも AdminInitiateAuth・AdminRespondToAuthChallenge がない', () => {
+    const actions = actionsOf(template);
+    expect(actions.length).toBeGreaterThan(0);
+    for (const action of ADMIN_ACTIONS) {
+      expect(actions).not.toContain(action);
+    }
+    // ワイルドカードでも付けない
+    for (const action of actions) {
+      expect(action).not.toMatch(/^cognito-idp:(\*|Admin\*)$/);
+      expect(action).not.toBe('*');
+    }
+  });
+
+  test('App は AUTH_MODE=oidc でパスワードの条件の環境変数を持たない', () => {
+    const env = envOf(template);
+    expect(env.AUTH_MODE).toBe('oidc');
+    for (const name of Object.keys(env)) {
+      expect(name.startsWith('PASSWORD_')).toBe(false);
+    }
   });
 });
 

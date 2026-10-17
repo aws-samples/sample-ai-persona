@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from .authz import Principal, Role
+from .login_challenge import LoginChallenge
 
 #: Cleanup horizon for the DynamoDB TTL attribute. Expiry decisions are made by
 #: the AuthManager from ``created_at`` / ``last_accessed_at``, never from ``ttl``.
@@ -283,4 +284,22 @@ class SessionStore(Protocol):
 
     def delete(self, session_id_hash: str, expected_version: int | None = None) -> bool:
         """Delete, optionally only if the stored version matches."""
+        ...
+
+    # --- LoginChallenge (U8, ``admin_api`` first password change) -------------
+
+    def put_challenge(self, challenge: "LoginChallenge") -> None:
+        """Store a new challenge."""
+        ...
+
+    def get_challenge(self, key: str) -> "LoginChallenge | None":
+        """Read a challenge with strong consistency; ``None`` for anything else."""
+        ...
+
+    def claim_challenge(self, key: str) -> "LoginChallenge | None":
+        """Remove and return the challenge once; ``None`` when already taken."""
+        ...
+
+    def restore_challenge(self, challenge: "LoginChallenge") -> bool:
+        """Write a claimed challenge back only if its key is free."""
         ...

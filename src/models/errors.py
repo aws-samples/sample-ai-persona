@@ -112,6 +112,28 @@ class ErrorCode(StrEnum):
     # Only an operator can fix it; the app refuses to start (BR1.15).
     AUTH_CONFIG_INVALID = ("auth_config_invalid", ErrorKind.CONFIG)
 
+    # --- Closed-network login (v1.0.0 U8, AUTH_MODE=admin_api; contract C5) ---
+    # M2 and M3 are full-page forms: VALIDATION and TRANSIENT are both shown
+    # inside the form, never as a toast (there is no page header before login).
+    # Wrong password, disabled / unknown user, reset required, bad input,
+    # unsupported challenge or an unacceptable ID token: one answer (BR1.4).
+    LOGIN_FAILED = ("login_failed", ErrorKind.VALIDATION)
+    # Cognito's attempt limit or throttling (BR1.5).
+    LOGIN_RATE_LIMITED = ("login_rate_limited", ErrorKind.TRANSIENT)
+    # Cognito unreachable, timed out, 5xx, breaker open, or an unexpected
+    # answer; never treated as success (BR1.5, NFR4.22).
+    LOGIN_UNAVAILABLE = ("login_unavailable", ErrorKind.TRANSIENT)
+    # The new password misses a rule of the User Pool (BR2.5, BR2.6).
+    PASSWORD_POLICY_NOT_MET = ("password_policy_not_met", ErrorKind.VALIDATION)
+    # The confirmation field differs from the new password (BR2.5).
+    PASSWORD_CONFIRMATION_MISMATCH = (
+        "password_confirmation_mismatch",
+        ErrorKind.VALIDATION,
+    )
+    # The first-password-change challenge expired or was used (BR2.4, BR2.7):
+    # start again from the login screen.
+    LOGIN_CHALLENGE_EXPIRED = ("login_challenge_expired", ErrorKind.UNAUTHORIZED)
+
     # --- Authorization (v1.0.0 U2; the rest of contract C5) ---
     # Signed in without any role: only the no-role page is usable (BR2.8).
     ROLE_REQUIRED = ("role_required", ErrorKind.FORBIDDEN)

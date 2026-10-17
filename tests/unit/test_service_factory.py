@@ -599,6 +599,45 @@ class TestServiceFactoryAuthzServices:
         assert service.user_pool_id == "ap-northeast-1_Pool"
 
     @patch("src.services.service_factory.config")
+    def test_cognito_auth_service_is_built_for_admin_api(
+        self, mock_config, monkeypatch
+    ):
+        """U8: AUTH_MODE=admin_api の Cognito 管理 API の Service（1 つだけ作る）。"""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.AUTH_MODE = "admin_api"
+        mock_config.COGNITO_USER_POOL_ID = "ap-northeast-1_Pool"
+        mock_config.COGNITO_CLIENT_ID = "client"
+        mock_config.COGNITO_CLIENT_SECRET = "secret"
+
+        factory = ServiceFactory()
+        service = factory.get_cognito_auth_service()
+
+        assert service is factory.get_cognito_auth_service()
+        assert service.user_pool_id == "ap-northeast-1_Pool"
+        assert service.client.meta.region_name == "ap-northeast-1"
+
+    @pytest.mark.parametrize(
+        "missing",
+        ["COGNITO_USER_POOL_ID", "COGNITO_CLIENT_ID", "COGNITO_CLIENT_SECRET"],
+    )
+    @patch("src.services.service_factory.config")
+    def test_cognito_auth_service_needs_its_settings(self, mock_config, missing):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.AUTH_MODE = "admin_api"
+        mock_config.COGNITO_USER_POOL_ID = "ap-northeast-1_Pool"
+        mock_config.COGNITO_CLIENT_ID = "client"
+        mock_config.COGNITO_CLIENT_SECRET = "secret"
+        setattr(mock_config, missing, None)
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_cognito_auth_service()
+        assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID
+
+    @patch("src.services.service_factory.config")
     def test_cognito_groups_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory

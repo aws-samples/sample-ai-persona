@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError  # noqa: E4
 
 from src.models.authz import Role  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
+from src.models.login_challenge import LoginChallenge  # noqa: E402
 from src.models.login_session import AuthMethod, LoginSession  # noqa: E402
 from src.services.session_store_service import (  # noqa: E402
     SessionStoreError,
@@ -179,3 +180,106 @@ class TestFailures:
         # 試行は合計 2 回（botocore の total_max_attempts は最初の呼び出しを含む）
         assert cfg.retries["total_max_attempts"] == 2
         assert cfg.retries["mode"] == "standard"
+
+
+# =============================================================================
+# U8: LoginChallenge（BR2.2、BR2.7、NFR3.17、NFR9.42、NFR9.45）
+# =============================================================================
+
+
+def _challenge(challenge_id: str = "raw-challenge-1") -> LoginChallenge:
+    return LoginChallenge.create_new(
+        challenge_id=challenge_id,
+        cognito_session_enc="v1.cipher-of-session",
+        key_version="v1",
+        username="user-sub-1",
+        next="/persona",
+        now=_NOW,
+    )
+
+
+class TestChallenge:
+    def test_put_then_strong_read(self, store):
+        challenge = _challenge()
+        store.put_challenge(challenge)
+
+        assert store.get_challenge(challenge.session_id_hash) == challenge
+
+    def test_strong_read_is_used(self, store):
+        store.put_challenge(_challenge())
+        real = store.client
+        spy = Mock(wraps=real)
+        store.client = spy
+        store.get_challenge(_challenge().session_id_hash)
+        assert spy.get_item.call_args.kwargs["ConsistentRead"] is True
+
+    def test_claim_takes_it_once(self, store):
+        challenge = _challenge()
+        store.put_challenge(challenge)
+
+        assert store.claim_challenge(challenge.session_id_hash) == challenge
+        assert store.claim_challenge(challenge.session_id_hash) is None
+        assert store.get_challenge(challenge.session_id_hash) is None
+
+    def test_restore_writes_back_only_when_absent(self, store):
+        challenge = _challenge()
+        store.put_challenge(challenge)
+        claimed = store.claim_challenge(challenge.session_id_hash)
+        assert claimed is not None
+
+        assert store.restore_challenge(claimed) is True
+        assert store.get_challenge(challenge.session_id_hash) == challenge
+        assert store.restore_challenge(claimed) is False
+
+    def test_challenge_item_is_not_a_login_session(self, store):
+        challenge = _challenge()
+        store.put_challenge(challenge)
+        assert store.get(challenge.session_id_hash) is None
+
+    def test_login_session_item_is_not_a_challenge(self, store):
+        session = _session()
+        store.put(session)
+        assert store.get_challenge(session.session_id_hash) is None
+        assert store.claim_challenge(session.session_id_hash) is None
+        # 取り出しに失敗しても、ログインセッションは消えない
+        assert store.get(session.session_id_hash) == session
+
+    def test_unknown_challenge_is_none(self, store):
+        assert store.get_challenge("challenge#missing") is None
+        assert store.claim_challenge("challenge#missing") is None
+
+    def test_no_plain_cognito_session_or_password_in_the_item(self, store):
+        challenge = _challenge()
+        store.put_challenge(challenge)
+        item = boto3.client("dynamodb", region_name=REGION).get_item(
+            TableName=TABLE, Key={"session_id_hash": {"S": challenge.session_id_hash}}
+        )["Item"]
+        assert item["item_type"] == {"S": "challenge"}
+        assert not any("password" in name for name in item)
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["put_item", "get_item", "delete_item"],
+    )
+    def test_unreachable_table_raises_store_unavailable(self, store, operation):
+        broken = Mock()
+        getattr(broken, operation).side_effect = EndpointConnectionError(
+            endpoint_url="https://dynamodb.invalid"
+        )
+        store.client = broken
+        calls = {
+            "put_item": lambda: store.put_challenge(_challenge()),
+            "get_item": lambda: store.get_challenge("challenge#x"),
+            "delete_item": lambda: store.claim_challenge("challenge#x"),
+        }
+        with raises_code(SessionStoreError, ErrorCode.SESSION_STORE_UNAVAILABLE):
+            calls[operation]()
+
+    def test_restore_on_unreachable_table_raises(self, store):
+        broken = Mock()
+        broken.put_item.side_effect = EndpointConnectionError(
+            endpoint_url="https://dynamodb.invalid"
+        )
+        store.client = broken
+        with raises_code(SessionStoreError, ErrorCode.SESSION_STORE_UNAVAILABLE):
+            store.restore_challenge(_challenge())

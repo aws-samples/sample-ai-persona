@@ -6,6 +6,7 @@ SessionStoreService と同じ口で、同じ振る舞いをすること（BR1.15
 from datetime import datetime, timedelta, timezone
 
 from src.models.authz import Role
+from src.models.login_challenge import LoginChallenge
 from src.models.login_session import AuthMethod, LoginSession
 from src.services.memory_session_store import MemorySessionStore
 
@@ -70,3 +71,49 @@ def test_delete_respects_the_version():
     assert store.delete(session.session_id_hash, expected_version=3) is False
     assert store.delete(session.session_id_hash, expected_version=1) is True
     assert store.get(session.session_id_hash) is None
+
+
+# --- U8: LoginChallenge（SessionStoreService と同じ振る舞い） ---
+
+
+def _challenge() -> LoginChallenge:
+    return LoginChallenge.create_new(
+        challenge_id="raw-challenge-1",
+        cognito_session_enc="v1.cipher",
+        key_version="v1",
+        username="user-sub-1",
+        next="/",
+        now=_NOW,
+    )
+
+
+def test_challenge_put_get_claim_once():
+    store = MemorySessionStore()
+    challenge = _challenge()
+    store.put_challenge(challenge)
+
+    assert store.get_challenge(challenge.session_id_hash) == challenge
+    assert store.claim_challenge(challenge.session_id_hash) == challenge
+    assert store.claim_challenge(challenge.session_id_hash) is None
+    assert store.get_challenge(challenge.session_id_hash) is None
+
+
+def test_challenge_restore_only_when_absent():
+    store = MemorySessionStore()
+    challenge = _challenge()
+    assert store.restore_challenge(challenge) is True
+    assert store.restore_challenge(challenge) is False
+    assert store.get_challenge(challenge.session_id_hash) == challenge
+
+
+def test_challenges_and_sessions_never_read_as_each_other():
+    store = MemorySessionStore()
+    challenge = _challenge()
+    session = _session()
+    store.put_challenge(challenge)
+    store.put(session)
+
+    assert store.get(challenge.session_id_hash) is None
+    assert store.get_challenge(session.session_id_hash) is None
+    assert store.claim_challenge(session.session_id_hash) is None
+    assert store.get(session.session_id_hash) == session

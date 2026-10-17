@@ -126,6 +126,24 @@ def test_malformed_api_request_is_request_invalid(api):
         assert internal not in response.text
 
 
+def test_validation_log_has_no_submitted_values(api, caplog):
+    """U8 NFR3.16: 422 のログは方法・パス・件数・欄の位置だけ（送信値も例外の文字列化も出さない）。"""
+    caplog.set_level("DEBUG", logger="web.main")
+    secret = "Pw-SENTINEL-422-value"
+    response = api.post("/api/things", json={"name": secret, "count": f"x{secret}"})
+    assert response.status_code == 422
+
+    records = [r for r in caplog.records if r.name == "web.main"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.exc_info is None
+    text = record.getMessage()
+    assert secret not in caplog.text
+    assert "POST" in text and "/api/things" in text
+    assert "count" in text
+    assert "1" in text  # エラーの件数
+
+
 @pytest.mark.parametrize(
     ("method", "path", "status"),
     [("GET", "/api/nope", 404), ("DELETE", "/api/things", 405)],

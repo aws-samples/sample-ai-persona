@@ -13,6 +13,10 @@ task is visible immediately (``performance-design.md``). The two write kinds
 of :mod:`src.models.login_session` map to two disjoint ``UpdateItem`` calls so
 that neither overwrites the other's attributes (BR1.10, BR1.12).
 
+U8 adds the LoginChallenge items (``challenge#`` keys, ``item_type``) of the
+first password change: strong reads, a conditional ``DeleteItem`` that takes a
+challenge out exactly once, and a conditional write-back (BR2.7, NFR3.17).
+
 Failures to reach the table raise :class:`SessionStoreError`
 (``SESSION_STORE_UNAVAILABLE``). Messages never contain the session id hash.
 """
@@ -26,6 +30,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.models.errors import CodedError, ErrorCode
+from src.models.login_challenge import CHALLENGE_ITEM_TYPE, LoginChallenge
 from src.models.login_session import LoginSession
 
 logger = logging.getLogger(__name__)
@@ -97,16 +102,80 @@ class SessionStoreService:
                 f"Sessions table {operation} unreachable: {type(e).__name__}"
             ) from e
 
-    def get(self, session_id_hash: str) -> LoginSession | None:
-        """Read one session with a strongly consistent ``GetItem``."""
-        response = self._call(
-            "get_item", Key=self._key(session_id_hash), ConsistentRead=True
-        )
+    def _read_item(self, key: str) -> dict[str, Any] | None:
+        response = self._call("get_item", Key=self._key(key), ConsistentRead=True)
         item = (response or {}).get("Item")
         if not item:
             return None
-        data = {k: self._deserializer.deserialize(v) for k, v in item.items()}
+        return self._deserialize(item)
+
+    def _deserialize(self, item: dict[str, Any]) -> dict[str, Any]:
+        return {k: self._deserializer.deserialize(v) for k, v in item.items()}
+
+    def get(self, session_id_hash: str) -> LoginSession | None:
+        """Read one session with a strongly consistent ``GetItem``.
+
+        A LoginChallenge item (``item_type="challenge"``, U8 BR2.2) is never a
+        session and reads as absent.
+        """
+        data = self._read_item(session_id_hash)
+        if data is None or data.get("item_type") == CHALLENGE_ITEM_TYPE:
+            return None
         return LoginSession.from_dict(data)
+
+    # --- LoginChallenge (U8 BR2.2, BR2.7, NFR3.17) ------------------------------
+
+    @staticmethod
+    def _challenge_or_none(data: dict[str, Any] | None) -> LoginChallenge | None:
+        if data is None:
+            return None
+        try:
+            return LoginChallenge.from_dict(data)
+        except ValueError:
+            # An incomplete 3-minute item is treated as gone (the user signs in again).
+            logger.warning("Sessions table holds an unreadable challenge item")
+            return None
+
+    def put_challenge(self, challenge: LoginChallenge) -> None:
+        """Store a new first-password-change challenge."""
+        self._call("put_item", Item=self._values(challenge.to_dict()))
+
+    def get_challenge(self, key: str) -> LoginChallenge | None:
+        """Read a challenge with a strong read; ``None`` for any other item."""
+        return self._challenge_or_none(self._read_item(key))
+
+    def claim_challenge(self, key: str) -> LoginChallenge | None:
+        """Take the challenge out once: conditional ``DeleteItem`` + ``ALL_OLD``.
+
+        Returns:
+            The removed challenge, or ``None`` when it was already taken (or
+            the item is not a challenge, which is then left untouched).
+        """
+        response = self._call(
+            "delete_item",
+            Key=self._key(key),
+            ConditionExpression=f"attribute_exists({_KEY}) AND #type = :challenge",
+            ExpressionAttributeNames={"#type": "item_type"},
+            ExpressionAttributeValues=self._values({":challenge": CHALLENGE_ITEM_TYPE}),
+            ReturnValues="ALL_OLD",
+        )
+        attributes = (response or {}).get("Attributes")
+        if not attributes:
+            return None
+        return self._challenge_or_none(self._deserialize(attributes))
+
+    def restore_challenge(self, challenge: LoginChallenge) -> bool:
+        """Write a claimed challenge back unchanged, only if the key is free.
+
+        Returns:
+            ``False`` when an item with the key already exists.
+        """
+        response = self._call(
+            "put_item",
+            Item=self._values(challenge.to_dict()),
+            ConditionExpression=f"attribute_not_exists({_KEY})",
+        )
+        return response is not None
 
     def put(self, session: LoginSession) -> None:
         """Write the whole item (a new login)."""

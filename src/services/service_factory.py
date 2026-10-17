@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from ..models.login_session import SessionStore
     from .authz_lookup_service import AuthzLookupService
     from .cognito_groups_service import CognitoGroupsService
-    from .oidc_service import OidcService
+    from .cognito.cognito_auth_service import CognitoAuthService
+    from .cognito.oidc_service import OidcService
     from .custom_persona_data_store import CustomPersonaDataStore
     from .persona_binding_store import PersonaBindingStore
     from .persona_candidate_store import PersonaCandidateStore
@@ -66,6 +67,7 @@ class ServiceFactory:
         self._dataset_analysis_service: Optional["DatasetAnalysisService"] = None
         self._session_store: Optional["SessionStore"] = None
         self._oidc_service: Optional["OidcService"] = None
+        self._cognito_auth_service: Optional["CognitoAuthService"] = None
         self._authz_lookup_service: Optional["AuthzLookupService"] = None
         self._cognito_groups_service: Optional["CognitoGroupsService"] = None
         self._resource_share_store: Optional["ResourceShareStore"] = None
@@ -360,7 +362,7 @@ class ServiceFactory:
                 f"Cognito settings are missing: {', '.join(missing)}",
                 code=ErrorCode.AUTH_CONFIG_INVALID,
             )
-        from .oidc_service import OidcService
+        from .cognito.oidc_service import OidcService
 
         self.logger.info("Creating new OidcService instance")
         return OidcService(
@@ -369,6 +371,39 @@ class ServiceFactory:
             client_secret=config.COGNITO_CLIENT_SECRET or "",
             domain=config.COGNITO_DOMAIN or "",
             redirect_uri=config.APP_BASE_URL.rstrip("/") + "/auth/callback",
+        )
+
+    def get_cognito_auth_service(self) -> "CognitoAuthService":
+        """Return the Cognito admin API client (AUTH_MODE=admin_api only, U8).
+
+        Raises:
+            CodedError: ``AUTH_CONFIG_INVALID`` when a Cognito setting is missing.
+        """
+        if self._cognito_auth_service is None:
+            with self._lock:
+                if self._cognito_auth_service is None:
+                    self._cognito_auth_service = self._create_cognito_auth_service()
+        return self._cognito_auth_service
+
+    def _create_cognito_auth_service(self) -> "CognitoAuthService":
+        required = {
+            "COGNITO_USER_POOL_ID": config.COGNITO_USER_POOL_ID,
+            "COGNITO_CLIENT_ID": config.COGNITO_CLIENT_ID,
+            "COGNITO_CLIENT_SECRET": config.COGNITO_CLIENT_SECRET,
+        }
+        missing = sorted(name for name, value in required.items() if not value)
+        if missing:
+            raise CodedError(
+                f"Cognito settings are missing: {', '.join(missing)}",
+                code=ErrorCode.AUTH_CONFIG_INVALID,
+            )
+        from .cognito.cognito_auth_service import CognitoAuthService
+
+        self.logger.info("Creating new CognitoAuthService instance")
+        return CognitoAuthService(
+            user_pool_id=config.COGNITO_USER_POOL_ID or "",
+            client_id=config.COGNITO_CLIENT_ID or "",
+            client_secret=config.COGNITO_CLIENT_SECRET or "",
         )
 
     def get_authz_lookup_service(self) -> "AuthzLookupService":

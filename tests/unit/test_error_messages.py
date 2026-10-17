@@ -446,3 +446,94 @@ class TestSurveyOrgAssetWording:
             )
         )
         assert "100" in message
+
+
+class TestClosedNetworkLoginWording:
+    """U8 のログインのコード（M2・M3）がカタログの文言を返すこと。"""
+
+    _NAMES = (
+        "LOGIN_FAILED",
+        "LOGIN_RATE_LIMITED",
+        "LOGIN_UNAVAILABLE",
+        "PASSWORD_POLICY_NOT_MET",
+        "PASSWORD_CONFIRMATION_MISMATCH",
+        "LOGIN_CHALLENGE_EXPIRED",
+    )
+
+    @pytest.mark.parametrize("name", _NAMES)
+    def test_codes_resolve_to_catalog_wording(self, name):
+        code = ErrorCode[name]
+        message = user_message_for(CodedError(code=code), default="既定")
+        assert message == error_messages._CATALOG[code]
+
+    def test_login_failure_wording_does_not_depend_on_the_reason(self):
+        """BR1.4: 理由（context）が違っても文言は同じ。"""
+        code = ErrorCode["LOGIN_FAILED"]
+        plain = user_message_for(CodedError(code=code))
+        with_reason = user_message_for(
+            CodedError(code=code, context={"reason": "user_not_found"})
+        )
+        assert plain == with_reason
+
+
+class TestPasswordRuleLabels:
+    """M3 の条件の一覧の文言（条件のキー → 表示）は 1 か所に置く。"""
+
+    def _policy(self, **overrides: object):
+        from src.models.password_policy import PasswordPolicy
+
+        params: dict[str, object] = {
+            "min_length": 10,
+            "require_uppercase": True,
+            "require_lowercase": True,
+            "require_digits": True,
+            "require_symbols": True,
+        }
+        params.update(overrides)
+        return PasswordPolicy(**params)  # type: ignore[arg-type]
+
+    def test_every_rule_has_a_label(self):
+        from src.models.password_policy import PasswordRule
+
+        policy = self._policy()
+        for rule in PasswordRule:
+            assert error_messages.password_rule_label(rule, policy)
+
+    def test_min_length_label_names_the_length(self):
+        from src.models.password_policy import PasswordRule
+
+        label = error_messages.password_rule_label(
+            PasswordRule.MIN_LENGTH, self._policy(min_length=12)
+        )
+        assert "12" in label
+
+    def test_max_length_label_names_256(self):
+        from src.models.password_policy import PasswordRule
+
+        label = error_messages.password_rule_label(
+            PasswordRule.MAX_LENGTH, self._policy()
+        )
+        assert "256" in label
+
+    def test_missed_rules_are_read_from_the_policy_error_only(self):
+        from src.models.password_policy import PasswordRule
+
+        error = CodedError(
+            code=ErrorCode["PASSWORD_POLICY_NOT_MET"],
+            context={"rules": ["digits", "uppercase", "not-a-rule"]},
+        )
+        assert error_messages.missed_password_rules(error) == frozenset(
+            {PasswordRule.DIGITS, PasswordRule.UPPERCASE}
+        )
+        other = CodedError(
+            code=ErrorCode["LOGIN_FAILED"], context={"rules": ["digits"]}
+        )
+        assert error_messages.missed_password_rules(other) == frozenset()
+        assert error_messages.missed_password_rules(None) == frozenset()
+
+    def test_labels_are_distinct(self):
+        from src.models.password_policy import PasswordRule
+
+        policy = self._policy()
+        labels = [error_messages.password_rule_label(r, policy) for r in PasswordRule]
+        assert len(labels) == len(set(labels))

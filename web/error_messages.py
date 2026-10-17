@@ -22,6 +22,11 @@ from typing import TypeVar
 from fastapi import Response
 
 from src.models.errors import CodedError, ErrorCode, ErrorKind
+from src.models.password_policy import (
+    MAX_PASSWORD_LENGTH,
+    PasswordPolicy,
+    PasswordRule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,19 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.AUTH_CONFIG_INVALID: (
         "ログインの設定が正しくありません。管理者に連絡してください"
+    ),
+    # --- 閉域構成のログイン（v1.0.0 U8、M2・M3） ---
+    ErrorCode.LOGIN_FAILED: "メールアドレスまたはパスワードが違います",
+    ErrorCode.LOGIN_RATE_LIMITED: (
+        "試行回数が上限に達しました。しばらくしてから再度お試しください"
+    ),
+    ErrorCode.LOGIN_UNAVAILABLE: (
+        "現在ログインできません。時間をおいて再度お試しください"
+    ),
+    ErrorCode.PASSWORD_POLICY_NOT_MET: "パスワードが条件を満たしていません",
+    ErrorCode.PASSWORD_CONFIRMATION_MISMATCH: "確認用のパスワードが一致しません",
+    ErrorCode.LOGIN_CHALLENGE_EXPIRED: (
+        "時間が経過したため、もう一度ログインしてください"
     ),
     # --- 認可（v1.0.0 U2） ---
     ErrorCode.ROLE_REQUIRED: "利用権限がまだありません。管理者に連絡してください",
@@ -734,3 +752,40 @@ def mark_renderable(response: _ResponseT) -> _ResponseT:
     """
     response.headers.update(RENDER_RESPONSE_HEADER)
     return response
+
+
+# --- M3 のパスワードの条件（v1.0.0 U8、BR2.5、BR4.3） ---
+# 条件のキー（PasswordRule）→ 表示の文言。PASSWORD_POLICY_NOT_MET の context と
+# M3 の条件の一覧は同じキーを使い、文言はここだけが持つ。
+_PASSWORD_RULE_LABELS: dict[PasswordRule, str] = {
+    PasswordRule.MIN_LENGTH: "{min_length} 文字以上",
+    PasswordRule.UPPERCASE: "英大文字（A〜Z）を含む",
+    PasswordRule.LOWERCASE: "英小文字（a〜z）を含む",
+    PasswordRule.DIGITS: "数字（0〜9）を含む",
+    PasswordRule.SYMBOLS: "記号を含む",
+    PasswordRule.MAX_LENGTH: "{max_length} 文字以下",
+    PasswordRule.NO_SURROUNDING_SPACE: "先頭と末尾に空白を入れない",
+}
+
+
+def password_rule_label(rule: PasswordRule, policy: PasswordPolicy) -> str:
+    """The M3 wording of one password rule under ``policy``."""
+    return _PASSWORD_RULE_LABELS[rule].format(
+        min_length=policy.min_length, max_length=MAX_PASSWORD_LENGTH
+    )
+
+
+def missed_password_rules(exc: BaseException | None) -> frozenset[PasswordRule]:
+    """The rule keys a ``PASSWORD_POLICY_NOT_MET`` error names (others: none).
+
+    Like :func:`field_of`, this keeps Routers from reading exception
+    attributes; unknown keys are ignored.
+    """
+    if getattr(exc, "code", None) is not ErrorCode.PASSWORD_POLICY_NOT_MET:
+        return frozenset()
+    context = getattr(exc, "context", None)
+    keys = context.get("rules") if isinstance(context, dict) else None
+    if not isinstance(keys, list):
+        return frozenset()
+    known = {rule.value: rule for rule in PasswordRule}
+    return frozenset(known[key] for key in keys if key in known)

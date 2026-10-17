@@ -227,10 +227,20 @@ async def validation_exception_handler(request: Request, exc: Exception) -> Resp
       （約束 C13）
 
     `exc.errors()` には利用者の入力値が `input` として含まれるため、
-    レスポンスには一切転写しない（診断はログのみ）。
+    レスポンスには一切転写しない。ログにも送信値（`input`・`ctx`）と例外の
+    文字列化（`exc_info`）を出さず、方法・パス・件数・欄の位置（`loc`）だけを出す
+    （U8 NFR3.16。パスワードの欄がこの経路でログに残らないように）。
     """
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    locations = [
+        ".".join(str(part) for part in error.get("loc", ())) for error in errors
+    ]
     logger.warning(
-        "リクエスト検証エラー: %s %s", request.method, request.url.path, exc_info=exc
+        "リクエスト検証エラー: %s %s errors=%d loc=%s",
+        request.method,
+        request.url.path,
+        len(errors),
+        locations,
     )
     invalid = CodedError("request validation failed", code=ErrorCode.REQUEST_INVALID)
     if request.headers.get("HX-Request"):

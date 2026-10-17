@@ -83,6 +83,41 @@ cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=$(git rev-parse --short HEAD
 
 `role:admin` にも `role:member` にも入っていない利用者は、ログインすると「利用権限がまだありません」の画面に送られ、ログアウトしかできません（API は 403 の `role_required`）。グループに入れたあとは、ログアウトしてログインし直すと使えるようになります。
 
+#### 閉域構成の利用者（後続リリース）
+
+閉域構成（`deploymentMode=closed`）は後続リリースで提供します（v1.0.0 では synth でエラー）。閉域構成ではアプリ自身のログイン画面（`AUTH_MODE=admin_api`）を使うため、利用者の作成とパスワードの再設定は次のとおりに行います。
+
+- **作成は一時パスワード付きで行う。** 利用者は初回ログインで「パスワードの設定」画面に移り、新しいパスワードを設定するとそのままログインします。グループ（`role:*`・`group:*`）の付け方は上と同じです。
+
+  ```bash
+  aws cognito-idp admin-create-user --user-pool-id <User Pool ID> \
+    --username <メールアドレス> \
+    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
+    --temporary-password '<一時パスワード>'
+  ```
+
+- **パスワードの再設定は、一時パスワードの設定で行う。** コンソールの「パスワードをリセット」は使いません（再設定が必要な状態の利用者は、ログイン画面で「メールアドレスまたはパスワードが違います」になり、先へ進めないため）。一時パスワードを設定すると、次のログインで再び「パスワードの設定」画面に移ります。
+
+  ```bash
+  aws cognito-idp admin-set-user-password --user-pool-id <User Pool ID> \
+    --username <メールアドレス> --password '<一時パスワード>' --no-permanent
+  ```
+
+一時パスワードは User Pool のパスワードの条件を満たす必要があります。利用者には別の経路（メールなど）で伝え、コマンドの履歴に残さないよう注意してください。
+
+#### 閉域構成のリリースで行うこと（v1.0.0 から送った項目）
+
+v1.0.0 ではアプリ側のログイン（`AUTH_MODE=admin_api`）だけを作り、AWS では動かしていません（公開構成には切り替えを作らない）。閉域構成のスタックを作るリリースで、次を作り、確かめます。
+
+| 項目 | 内容 |
+|---|---|
+| App の環境変数 | closed の分岐で `AUTH_MODE=admin_api` と、パスワードの条件の 5 つ（`PASSWORD_MIN_LENGTH`・`PASSWORD_REQUIRE_UPPERCASE`・`PASSWORD_REQUIRE_LOWERCASE`・`PASSWORD_REQUIRE_DIGITS`・`PASSWORD_REQUIRE_SYMBOLS`）。値は User Pool のパスワードポリシーと同じ定数から作る |
+| App クライアント | closed の User Pool のクライアントに `ADMIN_USER_PASSWORD_AUTH`（と `REFRESH_TOKEN_AUTH`）を許す |
+| タスクロール | `cognito-idp:AdminInitiateAuth`・`cognito-idp:AdminRespondToAuthChallenge`（closed の User Pool の ARN だけ） |
+| 内部 ALB の TLS | 閉域構成ではパスワードがアプリを通るため、ALB までを TLS にする |
+| Cognito への経路 | `cognito-idp` の VPC エンドポイント |
+| AWS での確かめ | Cognito の一時停止（パスワードを続けて間違えた利用者）が画面の「試行回数が上限に達しました」になること、ログインの応答時間の 95 パーセンタイル（20 回以上）、App クライアントの設定の変更が置き換えにならないこと（`npx cdk diff`） |
+
 #### 設定（`cdk/parameters.ts`）
 
 v1.0.0 では `deploy.sh` のオプションで設定を変えず、`cdk/parameters.ts` を編集してコミットしてから `./deploy.sh` を実行します。

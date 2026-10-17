@@ -158,7 +158,14 @@ class TestPublicPaths:
 
     def test_public_list_is_exactly_the_documented_one(self):
         assert PUBLIC_PATHS == frozenset(
-            {"/health", "/api/health", "/login", "/auth/callback", "/signout"}
+            {
+                "/health",
+                "/api/health",
+                "/login",
+                "/auth/callback",
+                "/auth/new-password",  # U8: 初回パスワード変更（M3）
+                "/signout",
+            }
         )
         assert is_public_path("/static/js/app.js")
         assert not is_public_path("/static")
