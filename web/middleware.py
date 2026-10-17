@@ -31,8 +31,9 @@ from web.error_messages import user_message_for
 
 UNSAFE_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
 EXEMPT_PATHS = {"/health"}
-#: カスタムヘッダーの代わりに Origin で確かめるフォーム送信（U8 で POST /login 等を足す）
-ORIGIN_CHECKED_PATHS = {"/signout"}
+#: カスタムヘッダーの代わりに Origin で確かめるフォーム送信。U8 で閉域構成の
+#: ログイン（M2）と初回パスワード変更（M3）のフォームを足した（BR4.6、約束 C11）
+ORIGIN_CHECKED_PATHS = {"/signout", "/login", "/auth/new-password"}
 #: SSE のため GET で AI を動かす入口（U6、security-design.md §4、NFR4.13）。
 #: ``Sec-Fetch-Site`` が ``same-origin`` でなければ（ない場合も）断る。
 #: ``EventSource`` / ``fetch`` は同じオリジンへの要求でこの値を送る

@@ -1,5 +1,10 @@
 """
-Cognito OIDC communication (AUTH_MODE=oidc) and the per-task circuit breaker.
+Cognito OIDC communication (AUTH_MODE=oidc).
+
+Moved into :mod:`src.services.cognito` in U8 so that it shares
+:class:`~src.services.cognito.circuit_breaker.CircuitBreaker` with the admin
+API client; an open breaker (``CircuitOpenError``) becomes ``OIDC_UNAVAILABLE``
+here, so the behaviour seen by callers is unchanged.
 
 The OAuth 2.0 / OIDC protocol work is delegated to libraries instead of being
 hand-written (NFR4.5): Authlib's ``OAuth2Client`` builds the authorization URL
@@ -48,6 +53,8 @@ from joserfc.errors import JoseError
 from joserfc.jwk import KeySet
 
 from src.models.errors import CodedError, ErrorCode
+
+from .circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -116,74 +123,6 @@ class TokenSet:
     refresh_token: str | None
     expires_in: int
     claims: dict[str, Any]
-
-
-class CircuitBreaker:
-    """Per-task breaker in front of the Cognito token endpoint.
-
-    Closed: calls go through. Five consecutive transient failures open it for
-    60 seconds, during which calls fail immediately. After that one trial call
-    is allowed (half-open); its success closes the breaker, its failure opens
-    it again. Other calls during the trial fail immediately. State is local to
-    the process and resets on restart.
-    """
-
-    def __init__(
-        self,
-        *,
-        failure_threshold: int = 5,
-        reset_timeout: float = 60.0,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._threshold = failure_threshold
-        self._reset_timeout = reset_timeout
-        self._clock = clock
-        self._lock = Lock()
-        self._failures = 0
-        self._opened_at: float | None = None
-        self._trial_in_flight = False
-        self._listeners: list[Callable[[], None]] = []
-
-    def add_open_listener(self, listener: Callable[[], None]) -> None:
-        """Call ``listener`` every time the breaker opens (for logging)."""
-        self._listeners.append(listener)
-
-    def before_call(self) -> None:
-        """Admit or refuse a call.
-
-        Raises:
-            OidcError: ``OIDC_UNAVAILABLE`` while open or while a half-open
-                trial is in flight.
-        """
-        with self._lock:
-            if self._opened_at is None:
-                return
-            if self._trial_in_flight:
-                raise OidcError("circuit half-open; trial call in flight")
-            if self._clock() - self._opened_at < self._reset_timeout:
-                raise OidcError("circuit open")
-            self._trial_in_flight = True
-
-    def record_success(self) -> None:
-        """Close the breaker and reset the failure count."""
-        with self._lock:
-            self._failures = 0
-            self._opened_at = None
-            self._trial_in_flight = False
-
-    def record_failure(self) -> None:
-        """Count a transient failure; open (or reopen) when due."""
-        with self._lock:
-            reopen = self._trial_in_flight
-            self._trial_in_flight = False
-            self._failures += 1
-            if not (reopen or self._failures >= self._threshold):
-                return
-            already_open = self._opened_at is not None and not reopen
-            self._opened_at = self._clock()
-            listeners = [] if already_open else list(self._listeners)
-        for listener in listeners:
-            listener()
 
 
 class OidcService:
@@ -343,11 +282,18 @@ class OidcService:
 
     # --- internals ---------------------------------------------------------------
 
+    def _admit(self, operation: str) -> None:
+        """Ask the breaker; an open breaker is ``OIDC_UNAVAILABLE``."""
+        try:
+            self.breaker.before_call()
+        except CircuitOpenError as e:
+            raise OidcError(f"{operation} refused: {e}") from None
+
     def _guarded(
         self, operation: str, call: Callable[[OAuth2Client], dict[str, Any]]
     ) -> dict[str, Any]:
         """Run a token-endpoint call behind the breaker and classify failures."""
-        self.breaker.before_call()
+        self._admit(operation)
         try:
             with self._oauth_client() as client:
                 token = call(client)
@@ -390,7 +336,7 @@ class OidcService:
         with self._jwks_lock:
             if self._jwks is not None and not refresh:
                 return self._jwks
-        self.breaker.before_call()
+        self._admit("JWKS fetch")
         try:
             with httpx.Client(
                 transport=self._transport,

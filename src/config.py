@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 
+from src.models.password_policy import PASSWORD_POLICY_SETTINGS
+
 if TYPE_CHECKING:
     from src.models.insight_category import InsightCategory
 
@@ -157,6 +159,14 @@ class Config:
     # ECS の中で動いているか（ECS_CONTAINER_METADATA_URI_V4 の有無）。
     # AUTH_MODE=local を AWS 上で起動させないために使う（NFR4.7）
     RUNNING_IN_ECS: bool = False
+    # --- 閉域構成のログイン（v1.0.0 U8、BR4.3） ---
+    # User Pool のパスワードの条件。AUTH_MODE=admin_api のときだけ読む。値は受け取った
+    # 文字列のまま持ち、数・真偽としての検査は起動時の検査（BR4.1）が PasswordPolicy で行う
+    PASSWORD_MIN_LENGTH: Optional[str] = None
+    PASSWORD_REQUIRE_UPPERCASE: Optional[str] = None
+    PASSWORD_REQUIRE_LOWERCASE: Optional[str] = None
+    PASSWORD_REQUIRE_DIGITS: Optional[str] = None
+    PASSWORD_REQUIRE_SYMBOLS: Optional[str] = None
 
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
@@ -279,6 +289,9 @@ class Config:
         ):
             setattr(self, name, os.getenv(name, getattr(self, name)))
         self.RUNNING_IN_ECS = bool(os.getenv("ECS_CONTAINER_METADATA_URI_V4"))
+        if self.AUTH_MODE == "admin_api":
+            for name in PASSWORD_POLICY_SETTINGS:
+                setattr(self, name, os.getenv(name))
         self.RESOURCE_SHARES_TABLE_NAME = (
             os.getenv("RESOURCE_SHARES_TABLE_NAME")
             or f"{self.DYNAMODB_TABLE_PREFIX}_ResourceShares"
@@ -327,6 +340,14 @@ class Config:
         """
         explicit = getattr(self, TABLE_NAME_SETTINGS[kind])
         return explicit or f"{self.DYNAMODB_TABLE_PREFIX}_{kind}"
+
+    def password_policy_settings(self) -> dict[str, Optional[str]]:
+        """The five password policy settings as read (``None`` when unset).
+
+        Only ``AUTH_MODE=admin_api`` reads them (BR4.3); under other modes every
+        value is ``None``.
+        """
+        return {name: getattr(self, name) for name in PASSWORD_POLICY_SETTINGS}
 
     def table_names(self) -> dict[str, str]:
         """Physical names of the eight bulk-granted tables, keyed by kind."""

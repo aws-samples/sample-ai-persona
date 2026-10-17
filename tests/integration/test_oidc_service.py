@@ -17,7 +17,8 @@ from joserfc import jwt
 from joserfc.jwk import RSAKey
 
 from src.models.errors import ErrorCode
-from src.services.oidc_service import CircuitBreaker, OidcError, OidcService
+from src.services.cognito.circuit_breaker import CircuitBreaker, CircuitOpenError
+from src.services.cognito.oidc_service import OidcError, OidcService
 from tests.error_helpers import raises_code
 
 POOL_ID = "ap-northeast-1_TestPool"
@@ -318,10 +319,10 @@ class TestCircuitBreaker:
         clock.now += 60
 
         breaker.before_call()  # 半開の 1 回
-        with raises_code(OidcError, ErrorCode.OIDC_UNAVAILABLE):
+        with pytest.raises(CircuitOpenError):
             breaker.before_call()  # 結果が出るまで他は呼ばない
         breaker.record_failure()
-        with raises_code(OidcError, ErrorCode.OIDC_UNAVAILABLE):
+        with pytest.raises(CircuitOpenError):
             breaker.before_call()
         assert opened == ["opened", "opened"]
 

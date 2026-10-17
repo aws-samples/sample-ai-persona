@@ -149,6 +149,11 @@ CLASSIFICATION: dict[str, Entry] = {
     "AuthManager.start_local_session": NO_USER_DATA,
     "AuthManager.check_request": NO_USER_DATA,
     "AuthManager.logout": NO_USER_DATA,
+    # U8: 閉域構成のログイン（ログイン前で、利用者のデータを扱わない）
+    "AuthManager.password_policy": NO_USER_DATA,
+    "AuthManager.login_admin_api": NO_USER_DATA,
+    "AuthManager.check_challenge": NO_USER_DATA,
+    "AuthManager.complete_new_password": NO_USER_DATA,
     # dataset_manager.py — U7（設定は settings:manage、なければ 404。security-design.md 1.4）
     "DatasetManager.analyze_schema": CHECKS,
     "DatasetManager.download_csv_from_url": CHECKS,

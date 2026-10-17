@@ -20,7 +20,9 @@ converted to :class:`~src.models.errors.AuthRequiredError` (401 / login),
 :class:`LoginFailedError` / :class:`AuthConfigError` before they leave.
 """
 
+import base64
 import hashlib
+import json
 import logging
 import secrets
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -40,15 +42,27 @@ from src.models.errors import (
     ErrorKind,
     LookupUnavailableError,
 )
+from src.models.login_challenge import LoginChallenge, challenge_key
 from src.models.login_session import AuthMethod, LoginSession, SessionStore
-from src.services.oidc_service import OidcError, TokenSet
+from src.models.password_policy import (
+    MAX_PASSWORD_LENGTH,
+    PasswordPolicy,
+    PasswordPolicyConfigError,
+)
+from src.services.cognito.cognito_auth_service import (
+    CognitoAuthError,
+    CognitoChallenge,
+    CognitoTokens,
+)
+from src.services.cognito.oidc_service import OidcError, TokenSet
 from src.services.session_store_service import SessionStoreError
 
 from .shared.structured_log import log_event
 from .shared.token_cipher import TokenCipher, TokenDecryptError, TokenKeyConfigError
 
 if TYPE_CHECKING:
-    from src.services.oidc_service import OidcService
+    from src.services.cognito.cognito_auth_service import CognitoAuthService
+    from src.services.cognito.oidc_service import OidcService
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +73,28 @@ REFRESH_LEEWAY = timedelta(seconds=60)
 REFRESH_FAILURE_GRACE = timedelta(minutes=15)
 LOGIN_TRANSACTION_TTL = timedelta(minutes=10)
 
-#: Login methods implemented in U1 (``admin_api`` arrives with U8).
-SUPPORTED_MODES = frozenset({AuthMethod.OIDC.value, AuthMethod.LOCAL.value})
+#: Login methods: ``oidc`` and ``local`` (U1), ``admin_api`` (U8, closed network).
+SUPPORTED_MODES = frozenset(
+    {AuthMethod.OIDC.value, AuthMethod.ADMIN_API.value, AuthMethod.LOCAL.value}
+)
 SIGNED_OUT_PATH = "/login?reason=signed_out"
+#: Where an ``admin_api`` login goes when Cognito asks for a new password (BR2.1).
+NEW_PASSWORD_PATH = "/auth/new-password"
+#: Longest sign-in e-mail address accepted before calling Cognito (BR1.2).
+MAX_EMAIL_LENGTH = 254
+#: The ``reason`` values of ``auth.login_failed`` under ``admin_api`` (NFR8.28).
+LOGIN_FAILURE_REASONS = frozenset(
+    {
+        "bad_credentials",
+        "invalid_input",
+        "rate_limited",
+        "unavailable",
+        "unexpected_error",
+        "unsupported_challenge",
+        "token_invalid",
+    }
+)
+_NEW_PASSWORD_REQUIRED = "NEW_PASSWORD_REQUIRED"
 
 _ROLE_PREFIX = "role:"
 _GROUP_PREFIX = "group:"
@@ -73,6 +106,10 @@ _OIDC_REQUIRED_SETTINGS = (
     "TOKEN_ENCRYPTION_KEYS",
     "LOGIN_COOKIE_SIGNING_KEY",
     "SESSIONS_TABLE_NAME",
+)
+#: BR4.1: like ``oidc`` but without the Managed Login domain (plus the policy).
+_ADMIN_API_REQUIRED_SETTINGS = tuple(
+    name for name in _OIDC_REQUIRED_SETTINGS if name != "COGNITO_DOMAIN"
 )
 
 
@@ -89,6 +126,18 @@ class LoginFailedError(CodedError):
     """
 
     code = ErrorCode.AUTH_REQUIRED
+
+
+class AdminLoginError(CodedError):
+    """An ``admin_api`` login or first password change was not completed.
+
+    ``code`` is one of the closed-network login codes (``LOGIN_FAILED``,
+    ``LOGIN_RATE_LIMITED``, ``LOGIN_UNAVAILABLE``, ``PASSWORD_POLICY_NOT_MET``,
+    ``PASSWORD_CONFIRMATION_MISMATCH``, ``LOGIN_CHALLENGE_EXPIRED``). The
+    message never contains the e-mail address, a password or Cognito's text.
+    """
+
+    code = ErrorCode.LOGIN_FAILED
 
 
 @dataclass(frozen=True)
@@ -108,15 +157,36 @@ class AuthSettings:
     mode: str
     app_base_url: str
     local_user: LocalUser
+    #: ``admin_api`` only: the User Pool and app client the ID token must name
+    #: (BR3.1), and the password rules of the pool (BR4.3).
+    user_pool_id: str = ""
+    client_id: str = ""
+    password_policy: PasswordPolicy | None = None
+
+    @property
+    def issuer(self) -> str:
+        """The ``iss`` of the pool's ID tokens."""
+        region = self.user_pool_id.split("_", 1)[0]
+        return f"https://cognito-idp.{region}.amazonaws.com/{self.user_pool_id}"
 
     @classmethod
     def from_config(cls, cfg: Config) -> "AuthSettings":
-        """Build from :mod:`src.config` (unknown local roles are ignored)."""
+        """Build from :mod:`src.config` (unknown local roles are ignored).
+
+        A malformed password policy is left ``None`` here; the startup check
+        (:meth:`AuthManager.check_startup`) refuses it first.
+        """
         roles = frozenset(
             Role(value)
             for value in _split(cfg.LOCAL_DEV_USER_ROLES)
             if value in {r.value for r in Role}
         )
+        policy: PasswordPolicy | None = None
+        if cfg.AUTH_MODE == AuthMethod.ADMIN_API.value:
+            try:
+                policy = PasswordPolicy.from_settings(cfg.password_policy_settings())
+            except PasswordPolicyConfigError:
+                policy = None
         return cls(
             mode=cfg.AUTH_MODE or "",
             app_base_url=cfg.APP_BASE_URL.rstrip("/"),
@@ -126,6 +196,9 @@ class AuthSettings:
                 roles=roles,
                 group_ids=frozenset(_split(cfg.LOCAL_DEV_USER_GROUPS)),
             ),
+            user_pool_id=cfg.COGNITO_USER_POOL_ID or "",
+            client_id=cfg.COGNITO_CLIENT_ID or "",
+            password_policy=policy,
         )
 
 
@@ -152,6 +225,18 @@ class LoginResult:
     principal: Principal
 
 
+@dataclass(frozen=True)
+class NewPasswordStart:
+    """Cognito asked for a first password change (``admin_api``, BR2.1).
+
+    ``challenge_id`` is the raw random id for the signed ``login_tx`` cookie;
+    only its hash is stored. ``location`` is the M3 URL.
+    """
+
+    challenge_id: str
+    location: str = NEW_PASSWORD_PATH
+
+
 def record_event(event: str, *, stream: TextIO | None = None, **fields: Any) -> None:
     """Write one structured log line for the web layer (access log, CSRF, timing).
 
@@ -173,6 +258,62 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _log_circuit_opened() -> None:
+    log_event("auth.circuit_opened", reason="circuit_open")
+
+
+@dataclass(frozen=True)
+class _NewSession:
+    """A just-written session and its raw id (for the cookie)."""
+
+    session_id: str
+    session: LoginSession
+
+
+def _challenge_expired(message: str) -> AdminLoginError:
+    return AdminLoginError(message, code=ErrorCode.LOGIN_CHALLENGE_EXPIRED)
+
+
+def _no_required_attributes(parameters: Mapping[str, str]) -> bool:
+    """Whether ``requiredAttributes`` is an empty JSON array (BR2.1)."""
+    try:
+        required = json.loads(parameters.get("requiredAttributes", "[]"))
+    except ValueError:
+        return False
+    return isinstance(required, list) and not required
+
+
+class _RefreshFailed(Exception):
+    """A token refresh failed; ``transient`` selects the U1 handling (BR1.11)."""
+
+    def __init__(self, transient: bool) -> None:
+        super().__init__("token refresh failed")
+        self.transient = transient
+
+
+def _token_set(tokens: CognitoTokens, claims: dict[str, Any]) -> TokenSet:
+    """Put admin API tokens and their checked claims into the shared shape."""
+    return TokenSet(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        expires_in=tokens.expires_in,
+        claims=claims,
+    )
+
+
+def _jwt_payload(token: str) -> dict[str, Any] | None:
+    """The JSON payload of a JWT without checking its signature (BR3.1, Q2 A)."""
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[1]:
+        return None
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 class AuthManager:
     """Login, session check, refresh and logout for one AUTH_MODE."""
 
@@ -182,23 +323,34 @@ class AuthManager:
         settings: AuthSettings | None = None,
         session_store: SessionStore | None = None,
         oidc_service: "OidcService | None" = None,
+        cognito_auth_service: "CognitoAuthService | None" = None,
         cipher: TokenCipher | None = None,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
-        """Create the manager; missing dependencies come from ``service_factory``."""
+        """Create the manager; missing dependencies come from ``service_factory``.
+
+        One Cognito client is held per mode: ``OidcService`` for ``oidc``,
+        ``CognitoAuthService`` for ``admin_api``, none for ``local``.
+        """
         from src.services.service_factory import service_factory
 
         self._settings = settings or AuthSettings.from_config(config)
         self._store: SessionStore = session_store or service_factory.get_session_store()
         self._clock = clock
         self._oidc: "OidcService | None" = None
+        self._cognito: "CognitoAuthService | None" = None
         self._cipher: TokenCipher | None = None
-        if self._settings.mode == AuthMethod.OIDC.value:
+        mode = self._settings.mode
+        if mode == AuthMethod.OIDC.value:
             self._oidc = oidc_service or service_factory.get_oidc_service()
-            self._cipher = cipher or TokenCipher(config.TOKEN_ENCRYPTION_KEYS or "")
-            self._oidc.add_circuit_open_listener(
-                lambda: log_event("auth.circuit_opened", reason="circuit_open")
+            self._oidc.add_circuit_open_listener(_log_circuit_opened)
+        elif mode == AuthMethod.ADMIN_API.value:
+            self._cognito = (
+                cognito_auth_service or service_factory.get_cognito_auth_service()
             )
+            self._cognito.add_circuit_open_listener(_log_circuit_opened)
+        if self._oidc is not None or self._cognito is not None:
+            self._cipher = cipher or TokenCipher(config.TOKEN_ENCRYPTION_KEYS or "")
         self._locks_guard = Lock()
         self._refresh_locks: dict[str, tuple[Lock, int]] = {}
 
@@ -219,8 +371,10 @@ class AuthManager:
         """Refuse to start with an unusable login configuration (BR1.15, NFR4.7).
 
         Raises:
-            AuthConfigError: AUTH_MODE unset / unknown / ``admin_api``,
-                ``local`` inside ECS, or a missing / malformed ``oidc`` setting.
+            AuthConfigError: AUTH_MODE unset / unknown, ``local`` inside ECS,
+                or a missing / malformed ``oidc`` / ``admin_api`` setting
+                (``admin_api`` also needs the five password policy settings,
+                BR4.1).
         """
         mode = cfg.AUTH_MODE
         if mode not in SUPPORTED_MODES:
@@ -231,10 +385,21 @@ class AuthManager:
                 logger.error("AUTH_MODE=local is refused inside ECS")
                 raise AuthConfigError("AUTH_MODE=local cannot run inside ECS")
             return
-        missing = [name for name in _OIDC_REQUIRED_SETTINGS if not getattr(cfg, name)]
+        required = (
+            _ADMIN_API_REQUIRED_SETTINGS
+            if mode == AuthMethod.ADMIN_API.value
+            else _OIDC_REQUIRED_SETTINGS
+        )
+        missing = [name for name in required if not getattr(cfg, name)]
         if missing:
-            logger.error("AUTH_MODE=oidc requires settings: %s", ", ".join(missing))
-            raise AuthConfigError(f"missing oidc settings: {', '.join(missing)}")
+            logger.error("AUTH_MODE=%s requires settings: %s", mode, ", ".join(missing))
+            raise AuthConfigError(f"missing {mode} settings: {', '.join(missing)}")
+        if mode == AuthMethod.ADMIN_API.value:
+            try:
+                PasswordPolicy.from_settings(cfg.password_policy_settings())
+            except PasswordPolicyConfigError as e:
+                logger.error("password policy settings are invalid: %s", e)
+                raise AuthConfigError("password policy settings are invalid") from e
         try:
             TokenCipher(cfg.TOKEN_ENCRYPTION_KEYS or "")
         except TokenKeyConfigError as e:
@@ -298,16 +463,14 @@ class AuthManager:
         except OidcError as e:
             self._login_failed("exchange_failed", error_code=e.code.value)
             raise LoginFailedError("code exchange failed") from e
-        now = self._clock()
-        session_id = secrets.token_urlsafe(32)
-        session = self._session_from_tokens(_hash_session_id(session_id), tokens, now)
-        self._remove_previous(previous_session_id)
-        self._put(session)
-        log_event("auth.login_succeeded", sub=session.user_sub, auth_method=self.mode)
+        session = self._create_session(tokens, previous_session_id)
+        log_event(
+            "auth.login_succeeded", sub=session.session.user_sub, auth_method=self.mode
+        )
         return LoginResult(
-            session_id=session_id,
+            session_id=session.session_id,
             next=self.sanitize_next(str(transaction.get("next") or "/")),
-            principal=session.to_principal(),
+            principal=session.session.to_principal(),
         )
 
     def login_local(
@@ -360,6 +523,295 @@ class AuthManager:
         self._put(session)
         log_event("auth.login_succeeded", sub=session.user_sub, auth_method=self.mode)
         return session_id
+
+    # --- admin_api login (U8, closed network) -------------------------------------
+
+    @property
+    def password_policy(self) -> PasswordPolicy:
+        """The password rules of the pool (``admin_api`` only, BR4.3).
+
+        Raises:
+            AuthConfigError: Not running under ``admin_api`` or no policy.
+        """
+        policy = self._settings.password_policy
+        if self.mode != AuthMethod.ADMIN_API.value or policy is None:
+            raise AuthConfigError("password policy exists only under admin_api")
+        return policy
+
+    def _admin_api(self) -> "CognitoAuthService":
+        if self._cognito is None:
+            raise AuthConfigError("this login exists only under AUTH_MODE=admin_api")
+        return self._cognito
+
+    def login_admin_api(
+        self,
+        *,
+        email: str,
+        password: str,
+        next_url: str | None,
+        previous_session_id: str | None,
+    ) -> LoginResult | NewPasswordStart:
+        """Sign in with e-mail and password through Cognito (WF1, BR1.2〜BR1.6).
+
+        The password is only passed on to Cognito; it is never stored, logged
+        or put into an exception (BR4.5).
+
+        Returns:
+            :class:`LoginResult` with a new session, or :class:`NewPasswordStart`
+            when Cognito asks for a first password change (BR2.1).
+
+        Raises:
+            AdminLoginError: ``LOGIN_FAILED`` / ``LOGIN_RATE_LIMITED`` /
+                ``LOGIN_UNAVAILABLE``; no session is created.
+            LookupUnavailableError: The Sessions table is unreachable (503).
+        """
+        cognito = self._admin_api()
+        target = self.sanitize_next(next_url)
+        address = email.strip()
+        if not address or len(address) > MAX_EMAIL_LENGTH:
+            raise self._login_refused("invalid_input")
+        if not password or len(password) > MAX_PASSWORD_LENGTH:
+            raise self._login_refused("invalid_input")
+        try:
+            answer = cognito.initiate_auth(address, password)
+        except CognitoAuthError as e:
+            raise self._cognito_refused(e) from None
+        if isinstance(answer, CognitoChallenge):
+            return self._start_new_password(answer, target)
+        return self._finish_login(answer, target, previous_session_id)
+
+    def check_challenge(self, challenge_id: str | None) -> PasswordPolicy:
+        """Confirm that M3 may be shown for this challenge (WF2 1, BR2.4).
+
+        Returns:
+            The password policy for the rule list.
+
+        Raises:
+            AdminLoginError: ``LOGIN_CHALLENGE_EXPIRED`` (the item is removed).
+            LookupUnavailableError: The Sessions table is unreachable.
+        """
+        self._admin_api()
+        self._load_challenge(challenge_id)
+        return self.password_policy
+
+    def complete_new_password(
+        self,
+        *,
+        challenge_id: str | None,
+        new_password: str,
+        confirmation: str,
+        previous_session_id: str | None,
+    ) -> LoginResult:
+        """Set the first password and sign in (WF2, BR2.4〜BR2.7).
+
+        Order: read the challenge, check the rules and the confirmation
+        (without touching the challenge), take the challenge out exactly once,
+        then call Cognito once. Retryable answers write the challenge back.
+
+        Raises:
+            AdminLoginError: ``PASSWORD_POLICY_NOT_MET`` (``context["rules"]``
+                lists the missed rule keys), ``PASSWORD_CONFIRMATION_MISMATCH``,
+                ``LOGIN_CHALLENGE_EXPIRED``, ``LOGIN_RATE_LIMITED`` or
+                ``LOGIN_UNAVAILABLE``.
+            LookupUnavailableError: The Sessions table is unreachable.
+        """
+        cognito = self._admin_api()
+        challenge, cognito_session = self._load_challenge(challenge_id)
+        self._check_new_password(new_password, confirmation)
+        claimed = self._claim(challenge.session_id_hash)
+        try:
+            answer = cognito.respond_new_password(
+                claimed.username, new_password, cognito_session
+            )
+        except CognitoAuthError as e:
+            raise self._new_password_refused(e, claimed) from None
+        if isinstance(answer, CognitoChallenge):
+            self._login_failed("unsupported_challenge")
+            raise _challenge_expired("another challenge after the new password")
+        try:
+            return self._finish_login(
+                answer, claimed.next, previous_session_id, first_login=True
+            )
+        except AdminLoginError:
+            # The password was changed; the user signs in again from M2.
+            raise _challenge_expired("ID token refused after the new password")
+
+    def _start_new_password(
+        self, challenge: CognitoChallenge, target: str
+    ) -> NewPasswordStart:
+        """Keep the Cognito session for M3 (BR2.1〜BR2.3) or refuse it (BR1.6)."""
+        username = challenge.parameters.get("USER_ID_FOR_SRP", "")
+        if (
+            challenge.name != _NEW_PASSWORD_REQUIRED
+            or not username
+            or not _no_required_attributes(challenge.parameters)
+        ):
+            raise self._login_refused("unsupported_challenge")
+        assert self._cipher is not None
+        challenge_id = secrets.token_urlsafe(32)
+        item = LoginChallenge.create_new(
+            challenge_id=challenge_id,
+            cognito_session_enc=self._cipher.encrypt(challenge.session),
+            key_version=self._cipher.current_version,
+            username=username,
+            next=target,
+            now=self._clock(),
+        )
+        try:
+            self._store.put_challenge(item)
+        except SessionStoreError as e:
+            raise LookupUnavailableError("Sessions table unreachable") from e
+        return NewPasswordStart(challenge_id=challenge_id)
+
+    def _finish_login(
+        self,
+        tokens: CognitoTokens,
+        target: str,
+        previous_session_id: str | None,
+        *,
+        first_login: bool = False,
+    ) -> LoginResult:
+        """Check the ID token and create the session (BR1.3, BR3.1)."""
+        claims = self._verified_claims(tokens.id_token)
+        if claims is None:
+            raise self._login_refused("token_invalid")
+        created = self._create_session(_token_set(tokens, claims), previous_session_id)
+        extra: dict[str, Any] = {"first_login": True} if first_login else {}
+        log_event(
+            "auth.login_succeeded",
+            sub=created.session.user_sub,
+            auth_method=self.mode,
+            **extra,
+        )
+        return LoginResult(
+            session_id=created.session_id,
+            next=self.sanitize_next(target),
+            principal=created.session.to_principal(),
+        )
+
+    def _verified_claims(self, id_token: str) -> dict[str, Any] | None:
+        """The ID token claims when iss / aud / exp / token_use / sub match (BR3.1).
+
+        The signature is not checked: the token comes from an AWS API call over
+        TLS signed with IAM, not through the browser (Q2 A).
+        """
+        claims = _jwt_payload(id_token)
+        if claims is None:
+            return None
+        sub = claims.get("sub")
+        exp = claims.get("exp")
+        if not (
+            claims.get("iss") == self._settings.issuer
+            and claims.get("aud") == self._settings.client_id
+            and claims.get("token_use") == "id"
+            and isinstance(exp, (int, float))
+            and not isinstance(exp, bool)
+            and exp > self._clock().timestamp()
+            and isinstance(sub, str)
+            and sub
+            and claims.get("cognito:username") == sub
+        ):
+            return None
+        return claims
+
+    def _load_challenge(self, challenge_id: str | None) -> tuple[LoginChallenge, str]:
+        """The valid challenge and its decrypted Cognito session (BR2.4)."""
+        if not challenge_id:
+            raise _challenge_expired("no challenge id")
+        key = challenge_key(challenge_id)
+        try:
+            challenge = self._store.get_challenge(key)
+        except SessionStoreError as e:
+            raise LookupUnavailableError("Sessions table unreachable") from e
+        if challenge is None:
+            raise _challenge_expired("challenge not found")
+        if challenge.is_expired(self._clock()):
+            self._drop_challenge(key)
+            raise _challenge_expired("challenge older than three minutes")
+        assert self._cipher is not None
+        try:
+            return challenge, self._cipher.decrypt(challenge.cognito_session_enc)
+        except TokenDecryptError:
+            self._drop_challenge(key)
+            raise _challenge_expired("challenge could not be decrypted") from None
+
+    def _check_new_password(self, new_password: str, confirmation: str) -> None:
+        """BR2.5: the rules first, then the confirmation; Cognito is not called."""
+        missed = self.password_policy.violations(new_password)
+        if missed:
+            raise AdminLoginError(
+                "new password misses policy rules",
+                code=ErrorCode.PASSWORD_POLICY_NOT_MET,
+                context={"rules": [rule.value for rule in missed]},
+            )
+        if not secrets.compare_digest(
+            new_password.encode("utf-8"), confirmation.encode("utf-8")
+        ):
+            raise AdminLoginError(
+                "confirmation differs",
+                code=ErrorCode.PASSWORD_CONFIRMATION_MISMATCH,
+                context={"field": "confirmation"},
+            )
+
+    def _claim(self, key: str) -> LoginChallenge:
+        """Take the challenge out once (BR2.7); losing the race is expiry."""
+        try:
+            claimed = self._store.claim_challenge(key)
+        except SessionStoreError as e:
+            raise LookupUnavailableError("Sessions table unreachable") from e
+        if claimed is None:
+            raise _challenge_expired("challenge already used")
+        return claimed
+
+    def _new_password_refused(
+        self, error: CognitoAuthError, claimed: LoginChallenge
+    ) -> AdminLoginError:
+        """Map Cognito's answer to M3 (BR2.6); retryable answers restore it."""
+        code = error.code
+        if code in (ErrorCode.LOGIN_CHALLENGE_EXPIRED, ErrorCode.LOGIN_FAILED):
+            return _challenge_expired("Cognito refused the challenge session")
+        self._restore(claimed)
+        if code is ErrorCode.PASSWORD_POLICY_NOT_MET:
+            return AdminLoginError(
+                "Cognito refused the new password",
+                code=code,
+                context={"rules": []},
+            )
+        self._login_failed_for(error)
+        return AdminLoginError("new password not set", code=code)
+
+    def _restore(self, claimed: LoginChallenge) -> None:
+        """Write the claimed challenge back unchanged (BR2.7, NFR9.45)."""
+        try:
+            self._store.restore_challenge(claimed)
+        except SessionStoreError:
+            # The user starts again from M2; the password was not changed.
+            logger.warning("could not write the challenge back", exc_info=True)
+
+    def _drop_challenge(self, key: str) -> None:
+        try:
+            self._store.claim_challenge(key)
+        except SessionStoreError:
+            logger.warning("could not delete an expired challenge", exc_info=True)
+
+    def _login_refused(self, reason: str) -> AdminLoginError:
+        """Log one ``auth.login_failed`` and build the ``LOGIN_FAILED`` error."""
+        self._login_failed(reason)
+        return AdminLoginError(f"login refused: {reason}", code=ErrorCode.LOGIN_FAILED)
+
+    def _cognito_refused(self, error: CognitoAuthError) -> AdminLoginError:
+        self._login_failed_for(error)
+        return AdminLoginError("login not completed", code=error.code)
+
+    def _login_failed_for(self, error: CognitoAuthError) -> None:
+        if error.unexpected:
+            self._login_failed("unexpected_error", error_type=error.error_type)
+            return
+        reasons = {
+            ErrorCode.LOGIN_FAILED: "bad_credentials",
+            ErrorCode.LOGIN_RATE_LIMITED: "rate_limited",
+        }
+        self._login_failed(reasons.get(error.code, "unavailable"))
 
     # --- per-request check -------------------------------------------------------
 
@@ -416,6 +868,7 @@ class AuthManager:
         if session_id:
             self._end_session(_hash_session_id(session_id))
         if self._oidc is None:
+            # local and admin_api go to the app's own login page (BR3.3).
             return SIGNED_OUT_PATH
         return self._oidc.logout_url(f"{self._settings.app_base_url}/login")
 
@@ -425,7 +878,7 @@ class AuthManager:
         except SessionStoreError:
             logger.warning("could not read the session at logout", exc_info=True)
             session = None
-        if session is not None and session.refresh_token_enc and self._oidc:
+        if session is not None and session.refresh_token_enc and self._has_provider:
             self._revoke(session)
         # Logout must not report success while the old cookie still works, so a
         # delete failure surfaces as 503 (the user can sign out again).
@@ -439,11 +892,20 @@ class AuthManager:
             auth_method=self.mode,
         )
 
+    @property
+    def _has_provider(self) -> bool:
+        """Whether this mode talks to Cognito (``oidc`` / ``admin_api``)."""
+        return self._oidc is not None or self._cognito is not None
+
     def _revoke(self, session: LoginSession) -> None:
-        assert self._oidc is not None and self._cipher is not None
+        assert self._cipher is not None
         try:
-            self._oidc.revoke(self._cipher.decrypt(session.refresh_token_enc or ""))
-        except (OidcError, TokenDecryptError):
+            refresh_token = self._cipher.decrypt(session.refresh_token_enc or "")
+            if self._cognito is not None:
+                self._cognito.revoke(refresh_token)
+            elif self._oidc is not None:
+                self._oidc.revoke(refresh_token)
+        except (OidcError, CognitoAuthError, TokenDecryptError):
             logger.warning("refresh token revocation failed", exc_info=True)
             log_event(
                 "auth.logout",
@@ -455,7 +917,7 @@ class AuthManager:
     # --- refresh -----------------------------------------------------------------
 
     def _needs_refresh(self, session: LoginSession, now: datetime) -> bool:
-        if session.auth_method is AuthMethod.LOCAL or self._oidc is None:
+        if session.auth_method is AuthMethod.LOCAL or not self._has_provider:
             return False
         expires_at = session.access_expires_at
         return expires_at is None or expires_at - REFRESH_LEEWAY <= now
@@ -492,8 +954,30 @@ class AuthManager:
                 else:
                     self._refresh_locks[session_hash] = (lock, users - 1)
 
+    def _refresh_tokens(self, session: LoginSession, refresh_token: str) -> TokenSet:
+        """Call the mode's Cognito client.
+
+        Raises:
+            _RefreshFailed: ``transient`` tells the 15-minute grace from the
+                permanent failure that ends the session.
+        """
+        if self._cognito is not None:
+            try:
+                tokens = self._cognito.refresh(session.user_sub, refresh_token)
+            except CognitoAuthError as e:
+                raise _RefreshFailed(e.code.kind is ErrorKind.TRANSIENT) from None
+            claims = self._verified_claims(tokens.id_token)
+            if claims is None:
+                raise _RefreshFailed(transient=False)
+            return _token_set(tokens, claims)
+        assert self._oidc is not None
+        try:
+            return self._oidc.refresh(refresh_token)
+        except OidcError as e:
+            raise _RefreshFailed(e.code.kind is ErrorKind.TRANSIENT) from None
+
     def _refresh_now(self, session: LoginSession, now: datetime) -> LoginSession:
-        assert self._oidc is not None and self._cipher is not None
+        assert self._cipher is not None
         try:
             refresh_token = self._cipher.decrypt(session.refresh_token_enc or "")
         except TokenDecryptError as e:
@@ -503,9 +987,9 @@ class AuthManager:
             )
             raise AuthRequiredError("stored token could not be decrypted") from e
         try:
-            tokens = self._oidc.refresh(refresh_token)
-        except OidcError as e:
-            if e.code.kind is ErrorKind.TRANSIENT:
+            tokens = self._refresh_tokens(session, refresh_token)
+        except _RefreshFailed as e:
+            if e.transient:
                 return self._on_transient_failure(session, now)
             return self._on_permanent_failure(session)
         roles, groups = self._roles_and_groups(tokens.claims)
@@ -614,6 +1098,21 @@ class AuthManager:
             elif group.startswith(_GROUP_PREFIX) and len(group) > len(_GROUP_PREFIX):
                 departments.add(group[len(_GROUP_PREFIX) :])
         return frozenset(roles), frozenset(departments)
+
+    def _create_session(
+        self, tokens: TokenSet, previous_session_id: str | None
+    ) -> "_NewSession":
+        """New session from verified tokens; the browser's old one is dropped.
+
+        Shared by ``oidc`` and ``admin_api`` (BR1.3, U1 BR1.5 / BR1.6 / BR1.14).
+        """
+        session_id = secrets.token_urlsafe(32)
+        session = self._session_from_tokens(
+            _hash_session_id(session_id), tokens, self._clock()
+        )
+        self._remove_previous(previous_session_id)
+        self._put(session)
+        return _NewSession(session_id=session_id, session=session)
 
     def _session_from_tokens(
         self, session_hash: str, tokens: TokenSet, now: datetime

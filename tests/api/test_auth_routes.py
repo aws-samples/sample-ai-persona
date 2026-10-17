@@ -20,7 +20,11 @@ from src.managers.auth_manager import AuthManager, AuthSettings, LocalUser
 from src.managers.shared.token_cipher import TokenCipher
 from src.models.login_session import SessionStore
 from src.services.memory_session_store import MemorySessionStore
-from src.services.oidc_service import AuthorizationRequest, OidcService, TokenSet
+from src.services.cognito.oidc_service import (
+    AuthorizationRequest,
+    OidcService,
+    TokenSet,
+)
 from src.services.session_store_service import SessionStoreError
 
 KEYS = json.dumps({"current": "v1", "k_v1": "api-test-key-material-0123456789"})
@@ -141,6 +145,36 @@ class TestLoginPage:
     def test_external_next_falls_back_to_root(self, browser):
         response = browser.get("/login", params={"next": "https://evil.example.com"})
         assert response.headers["location"] == "/"
+
+
+class TestClosedNetworkUrlsOutsideAdminApi:
+    """U8: M2・M3 の URL は admin_api だけ。oidc・local の振る舞いは変わらない。"""
+
+    def test_oidc_new_password_page_goes_to_login(self, browser, oidc_manager):
+        response = browser.get("/auth/new-password")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
+
+    def test_oidc_post_login_goes_to_login_without_reading_the_form(
+        self, browser, oidc_manager
+    ):
+        from src.config import config
+
+        _, oidc = oidc_manager
+        response = browser.post(
+            "/login",
+            data={"email": "a@example.com", "password": "x"},
+            headers={"Origin": config.APP_BASE_URL},
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
+        oidc.create_authorization_request.assert_not_called()
+
+    def test_challenge_expired_reason_under_oidc_still_logs_in(
+        self, browser, oidc_manager
+    ):
+        response = browser.get("/login", params={"reason": "challenge_expired"})
+        assert response.status_code == 302
 
 
 class TestCallback:

@@ -35,7 +35,7 @@ from src.models.errors import (
 )
 from src.models.login_session import AuthMethod, LoginSession, SessionStore
 from src.services.memory_session_store import MemorySessionStore
-from src.services.oidc_service import (
+from src.services.cognito.oidc_service import (
     AuthorizationRequest,
     OidcError,
     OidcService,

@@ -1,0 +1,47 @@
+{% extends "auth/layout.html" %}
+{# M2. 閉域構成のログイン画面（U8、mockups.md M2、interaction-spec.md C8）。
+   フルページのフォーム送信（htmx を使わない）。失敗の文言は理由で変えない（BR1.4）。
+   パスワード欄は常に空で描く（BR4.5）。 #}
+{% block content %}
+<h1 class="text-lg font-bold text-gray-900 mb-4">ログイン</h1>
+{% if notice == "expired" %}
+<p data-testid="login-notice-expired" role="status"
+   class="mb-4 px-3 py-2 rounded-md bg-blue-50 text-blue-800 text-sm">再度ログインしてください</p>
+{% elif notice == "signed_out" %}
+<p data-testid="login-notice-signed_out" role="status"
+   class="mb-4 px-3 py-2 rounded-md bg-blue-50 text-blue-800 text-sm">ログアウトしました</p>
+{% elif notice == "challenge_expired" %}
+<p data-testid="login-notice-challenge_expired" role="status"
+   class="mb-4 px-3 py-2 rounded-md bg-blue-50 text-blue-800 text-sm">時間が経過したため、もう一度ログインしてください</p>
+{% endif %}
+<form method="post" action="/login" data-testid="login-form" data-busy-form novalidate>
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="mb-4">
+        <label for="login-email" class="block text-sm font-medium text-gray-900 mb-1">メールアドレス</label>
+        <input id="login-email" name="email" type="email" value="{{ email }}"
+               autocomplete="username" required
+               {% if not error %}autofocus{% endif %}
+               data-testid="login-email-input"
+               class="block w-full min-h-[44px] px-3 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-600">
+    </div>
+    <div class="mb-4">
+        <label for="login-password" class="block text-sm font-medium text-gray-900 mb-1">パスワード</label>
+        <input id="login-password" name="password" type="password" value=""
+               autocomplete="current-password" required
+               {% if error %}autofocus aria-describedby="login-error" aria-invalid="true"{% endif %}
+               data-testid="login-password-input"
+               class="block w-full min-h-[44px] px-3 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-600">
+    </div>
+    {% if error %}
+    <p id="login-error" data-testid="login-error" role="alert"
+       class="mb-4 text-sm text-red-700">{{ error }}</p>
+    {% endif %}
+    <button type="submit" data-testid="login-submit-button" data-busy-label="ログイン中..."
+            class="block w-full min-h-[44px] px-4 py-3 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60">
+        ログイン
+    </button>
+</form>
+{% endblock %}
+{% block scripts %}
+<script src="{{ static_url('js/auth.js') }}" defer></script>
+{% endblock %}

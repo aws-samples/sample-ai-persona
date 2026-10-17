@@ -10,6 +10,7 @@ tests. Never used on AWS: the startup check refuses ``local`` inside ECS.
 from dataclasses import replace
 from threading import Lock
 
+from src.models.login_challenge import LoginChallenge
 from src.models.login_session import LoginSession
 
 
@@ -18,7 +19,34 @@ class MemorySessionStore:
 
     def __init__(self) -> None:
         self._items: dict[str, LoginSession] = {}
+        self._challenges: dict[str, LoginChallenge] = {}
         self._lock = Lock()
+
+    # --- LoginChallenge (U8; same semantics as SessionStoreService) -------------
+
+    def put_challenge(self, challenge: LoginChallenge) -> None:
+        """Store a challenge."""
+        with self._lock:
+            self._challenges[challenge.session_id_hash] = challenge
+
+    def get_challenge(self, key: str) -> LoginChallenge | None:
+        """Return the stored challenge, or ``None``."""
+        with self._lock:
+            return self._challenges.get(key)
+
+    def claim_challenge(self, key: str) -> LoginChallenge | None:
+        """Remove and return the challenge; ``None`` when already taken."""
+        with self._lock:
+            return self._challenges.pop(key, None)
+
+    def restore_challenge(self, challenge: LoginChallenge) -> bool:
+        """Write a claimed challenge back only if its key is free."""
+        with self._lock:
+            key = challenge.session_id_hash
+            if key in self._challenges or key in self._items:
+                return False
+            self._challenges[key] = challenge
+            return True
 
     def get(self, session_id_hash: str) -> LoginSession | None:
         """Return the stored session, or ``None``."""

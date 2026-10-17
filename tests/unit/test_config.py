@@ -538,3 +538,45 @@ class TestCustomPersonaDataTable:
         from src.config import TABLE_NAME_SETTINGS
 
         assert "CustomPersonaData" not in TABLE_NAME_SETTINGS
+
+
+class TestPasswordPolicySettings:
+    """U8 BR4.3: パスワードの条件の 5 つは AUTH_MODE=admin_api のときだけ読む。"""
+
+    _ENV = {
+        "PASSWORD_MIN_LENGTH": "10",
+        "PASSWORD_REQUIRE_UPPERCASE": "true",
+        "PASSWORD_REQUIRE_LOWERCASE": "false",
+        "PASSWORD_REQUIRE_DIGITS": "true",
+        "PASSWORD_REQUIRE_SYMBOLS": "false",
+    }
+
+    def test_admin_api_reads_the_five_settings_as_given(self):
+        from src.config import Config
+
+        with patch.dict(os.environ, {**self._ENV, "AUTH_MODE": "admin_api"}):
+            cfg = Config()
+        assert cfg.PASSWORD_MIN_LENGTH == "10"
+        assert cfg.PASSWORD_REQUIRE_UPPERCASE == "true"
+        assert cfg.PASSWORD_REQUIRE_LOWERCASE == "false"
+        assert cfg.PASSWORD_REQUIRE_DIGITS == "true"
+        assert cfg.PASSWORD_REQUIRE_SYMBOLS == "false"
+        assert cfg.password_policy_settings() == self._ENV
+
+    @pytest.mark.parametrize("mode", ["oidc", "local"])
+    def test_other_modes_do_not_read_them(self, mode):
+        from src.config import Config
+
+        with patch.dict(os.environ, {**self._ENV, "AUTH_MODE": mode}):
+            cfg = Config()
+        assert cfg.PASSWORD_MIN_LENGTH is None
+        assert cfg.PASSWORD_REQUIRE_SYMBOLS is None
+        assert set(cfg.password_policy_settings().values()) == {None}
+
+    def test_missing_settings_stay_unset_for_the_startup_check(self):
+        from src.config import Config
+
+        env = {k: v for k, v in self._ENV.items() if k != "PASSWORD_MIN_LENGTH"}
+        with patch.dict(os.environ, {**env, "AUTH_MODE": "admin_api"}, clear=True):
+            cfg = Config()
+        assert cfg.PASSWORD_MIN_LENGTH is None
