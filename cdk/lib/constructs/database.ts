@@ -3,6 +3,16 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 
+/** 「自分のもの」の一覧と件数の GSI（src/services/resource_share_store.py が Query する）。 */
+export const OWNER_INDEX = 'OwnerIndex';
+/** 紐付けの逆引きの GSI（src/services/persona_binding_store.py が Query する）。 */
+export const TARGET_INDEX = 'TargetIndex';
+/**
+ * アプリが IndexName で Query する GSI。App スタックはこの名前の GSI だけをタスクロールに
+ * 付ける（`<テーブルの ARN>/index/<名前>`、U9）。
+ */
+const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([OWNER_INDEX, TARGET_INDEX]);
+
 /**
  * v1.0.0 の DynamoDB テーブル（Data スタック）。
  *
@@ -11,6 +21,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
  * - U6: 議論の発言・レポートとインタビューの 4 テーブルを足し、Discussions に OwnerIndex を足す
  * - U7: カスタムペルソナデータの登録情報（CustomPersonaData）を足し、SurveyTemplates・Surveys に
  *   OwnerIndex を足す
+ * - U9: 型固定の GSI 7 つを外す。古い紐付けの 2 テーブルの定義を外す
  * - ログインセッションの Sessions テーブルを足す（カスタマー管理の KMS キー、TTL、PITR なし）
  * - 物理名は自動生成にし、App スタックへは参照で渡す（約束 C10）
  * - すべて RETAIN と削除保護（NFR9.10、project.md の Forbidden）
@@ -20,11 +31,9 @@ export class Database extends Construct {
   public readonly discussionsTable: dynamodb.TableV2;
   public readonly uploadedFilesTable: dynamodb.TableV2;
   public readonly datasetsTable: dynamodb.TableV2;
-  public readonly bindingsTable: dynamodb.TableV2;
   public readonly surveyTemplatesTable: dynamodb.TableV2;
   public readonly surveysTable: dynamodb.TableV2;
   public readonly knowledgeBasesTable: dynamodb.TableV2;
-  public readonly personaKBBindingsTable: dynamodb.TableV2;
   public readonly jobsTable: dynamodb.TableV2;
   public readonly sessionsTable: dynamodb.TableV2;
   public readonly sessionsKey: kms.Key;
@@ -67,6 +76,9 @@ export class Database extends Construct {
    */
   public readonly customPersonaDataTable: dynamodb.TableV2;
 
+  /** The GSI names defined on each table (recorded where the table is created). */
+  private readonly indexNames = new Map<dynamodb.TableV2, string[]>();
+
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
@@ -82,50 +94,41 @@ export class Database extends Construct {
       ...(projectionType ? { projectionType } : {}),
     });
 
+    // 型固定の GSI 7 つ（NFR2.27）は U9 ですべて外した。dev は Stage を作り直して出すため
+    // 1 回で外す。既存のテーブルは 1 回の更新で各テーブル 1 つまでしか消せない
+    // （cdk/README.md「GSI の片付け」）
     this.personasTable = this.table('Personas', {
       globalSecondaryIndexes: [
-        gsi('CreatedAtIndex', 'type', 'created_at'),
-        gsi('NameIndex', 'type', 'name'),
-        gsi('OccupationIndex', 'type', 'occupation'),
         // 「自分のもの」の一覧と件数（U4、BR3.2）。owner_sub のない項目は入らない
-        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+        gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     this.discussionsTable = this.table('Discussions', {
       globalSecondaryIndexes: [
-        gsi('CreatedAtIndex', 'type', 'created_at'),
-        gsi('TopicIndex', 'type', 'topic'),
-        gsi('ModeIndex', 'mode', 'created_at'),
-        // 「自分のもの」の一覧と件数（U6、BR2.1）。テーブルは置き換えない（NFR1.65）。
-        // 型固定の 3 つは U9 で外す
-        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+        // 「自分のもの」の一覧と件数（U6、BR2.1）。テーブルは置き換えない（NFR1.65）
+        gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     // U5: 紐付かなかったアップロードのメタデータは 24 時間後に TTL で消える（BR5.6）。
     // TTL の設定はテーブルの属性の更新で、テーブルは置き換わらない
     this.uploadedFilesTable = this.table('UploadedFiles', {
-      globalSecondaryIndexes: [gsi('UploadedAtIndex', 'type', 'uploaded_at')],
       timeToLiveAttribute: 'expires_at',
     });
     this.datasetsTable = this.table('Datasets');
-    this.bindingsTable = this.table('PersonaDatasetBindings', {
-      globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
-    });
+    // 古い紐付けの PersonaDatasetBindings・PersonaKBBindings は U9 で CDK の管理から外した
+    // （NFR2.28）。RETAIN のため AWS には残る。管理に戻す手順は cdk/README.md
     // 「自分のもの」の一覧と件数（U7、BR1.2）。テーブルは置き換えない（GSI の追加だけ）
     this.surveyTemplatesTable = this.table('SurveyTemplates', {
       globalSecondaryIndexes: [
-        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+        gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     this.surveysTable = this.table('Surveys', {
       globalSecondaryIndexes: [
-        gsi('OwnerIndex', 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+        gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
       ],
     });
     this.knowledgeBasesTable = this.table('KnowledgeBases');
-    this.personaKBBindingsTable = this.table('PersonaKBBindings', {
-      globalSecondaryIndexes: [gsi('PersonaIdIndex', 'persona_id')],
-    });
     // Jobs: 非同期ジョブの追跡。今と同じく PITR なし、TTL は expires_at
     this.jobsTable = this.table('Jobs', { pitr: false, timeToLiveAttribute: 'expires_at' });
 
@@ -167,18 +170,20 @@ export class Database extends Construct {
     });
 
     // PersonaBindings（U5、ADR-007）: 紐付けは消えると戻せないため PITR と削除保護を付ける
+    const bindingIndexes = [
+      gsi(TARGET_INDEX, 'target_id', undefined, dynamodb.ProjectionType.KEYS_ONLY),
+    ];
     this.personaBindingsTable = new dynamodb.TableV2(this, 'PersonaBindings', {
       partitionKey: { name: 'persona_id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'target_key', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
-      globalSecondaryIndexes: [
-        gsi('TargetIndex', 'target_id', undefined, dynamodb.ProjectionType.KEYS_ONLY),
-      ],
+      globalSecondaryIndexes: bindingIndexes,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    this.recordIndexes(this.personaBindingsTable, bindingIndexes);
 
     // U7: カスタムペルソナデータの登録情報（PK id、名前の押さえの項目 id="name#{名前}" も同じ
     // テーブル、約束 C8）。applicationTables には入れず、App スタックが絞った操作を付ける
@@ -247,7 +252,7 @@ export class Database extends Construct {
     } = {},
   ): dynamodb.TableV2 {
     const { globalSecondaryIndexes, pitr = true, timeToLiveAttribute } = options;
-    return new dynamodb.TableV2(this, id, {
+    const table = new dynamodb.TableV2(this, id, {
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
       encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
@@ -259,12 +264,33 @@ export class Database extends Construct {
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    this.recordIndexes(table, globalSecondaryIndexes ?? []);
+    return table;
+  }
+
+  private recordIndexes(
+    table: dynamodb.TableV2,
+    indexes: readonly dynamodb.GlobalSecondaryIndexPropsV2[],
+  ): void {
+    this.indexNames.set(table, indexes.map((index) => index.indexName));
+  }
+
+  /**
+   * ARNs of the GSIs on `table` that the application queries (`<tableArn>/index/<name>`).
+   *
+   * Only indexes defined on this table and listed in APP_QUERIED_INDEXES are returned, so the
+   * task role never gets `<tableArn>/index/*` (U9). Tables without such an index return [].
+   */
+  public queriedIndexArns(table: dynamodb.TableV2): string[] {
+    return (this.indexNames.get(table) ?? [])
+      .filter((name) => APP_QUERIED_INDEXES.has(name))
+      .map((name) => `${table.tableArn}/index/${name}`);
   }
 
   /**
    * App スタックがタスクロールに権限を与え、環境変数に名前を渡す 8 テーブル。
    * U5: 古い紐付けの 2 テーブル（PersonaDatasetBindings・PersonaKBBindings）は外した
-   * （RETAIN のまま残し、テーブルを外すのは U9）。
+   * （U9 でテーブルの定義も外した。RETAIN のため AWS には残る）。
    */
   public get applicationTables(): Record<string, dynamodb.TableV2> {
     return {

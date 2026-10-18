@@ -116,8 +116,12 @@ def test_region_option_reaches_every_cdk_deploy(workspace, tmp_path):
     result = _run(["--region", "us-west-2", "--image-tag", "abc1234"], repo, ok_bin)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    deploys = [line for line in calls.read_text().splitlines() if " cdk deploy " in line]
+    deploys = [
+        line for line in calls.read_text().splitlines() if " cdk deploy " in line
+    ]
     assert len(deploys) == 2  # ① Data・Edge と ③ App
     assert all("-c region=us-west-2" in line for line in deploys)
-    bootstraps = [line for line in calls.read_text().splitlines() if "cdk bootstrap" in line]
+    bootstraps = [
+        line for line in calls.read_text().splitlines() if "cdk bootstrap" in line
+    ]
     assert any("aws://123/us-west-2" in line for line in bootstraps)

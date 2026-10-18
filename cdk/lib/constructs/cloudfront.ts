@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 export interface CloudFrontDistributionProps {
   /** 内部 ALB（VPC オリジン）。 */
@@ -71,5 +72,14 @@ export class CloudFrontDistribution extends Construct {
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
     });
     this.domainName = this.distribution.distributionDomainName;
+
+    // cdk-nag の抑止（U9、NFR7.15）。理由は nag-reasons.ts
+    acknowledgeAll(this.distribution, ['CFR1'], NAG_REASONS.geoRestriction);
+    acknowledgeAll(this.distribution, ['CFR3'], NAG_REASONS.accessLogs);
+    acknowledgeAll(this.distribution, ['CFR4'], NAG_REASONS.cloudFrontDefaultCertificate);
+    if (!props.webAclArn) {
+      // enableWaf: false の構成だけ WebACL がない（利用者の指示で WAF を任意にした、2026-10-17）
+      acknowledgeAll(this.distribution, ['CFR2'], NAG_REASONS.wafOptional);
+    }
   }
 }

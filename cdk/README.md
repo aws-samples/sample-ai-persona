@@ -126,7 +126,7 @@ v1.0.0 では `deploy.sh` のオプションで設定を変えず、`cdk/paramet
 |---|---|---|
 | `appDesiredCount` | 1 | タスクの台数（1〜10。範囲外は synth でエラー）。`-c appDesiredCount=2` でも変えられる |
 | `deploymentMode` | `public` | `closed`（閉域構成）は後続リリースで提供。v1.0.0 では synth でエラー |
-| `enableWaf` / `allowedIpAddresses` | `false` / なし | CloudFront 用 WAF と IP 制限 |
+| `enableWaf` / `allowedIpAddresses` | `false` / なし | CloudFront 用 WAF と IP 制限。`true` のときだけ WebACL を作り、ログイン系の URL のレート制限（下の「安全網（U9）」）もかかる |
 | `enableAdditionalPersonaModels` | `false` | 追加ペルソナベースモデル（Bedrock Mantle 経由） |
 | `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
 | `dataAgentRuntimeArn` / `dataAgentRegion` | なし | データ分析エージェント連携 |
@@ -185,6 +185,58 @@ U7 では次の差分が出ます。どれもテーブルの置き換えでは�
 
 - Data: `CustomPersonaData`（PK `id`、GSI なし、PITR、削除保護、AWS 管理キー、RETAIN。名前の押さえの項目 `id="name#{名前}"` も同じテーブル）の追加。`SurveyTemplates`・`Surveys` への GSI `OwnerIndex`（PK `owner_sub`・SK `created_at`、キーだけの射影）の追加（論理 ID は変わらない）
 - App: `CustomPersonaData` の権限（`GetItem`・`BatchGetItem`・`PutItem`・`UpdateItem`・`DeleteItem`・`ConditionCheckItem`・`Scan` を 1 つの文で。`Query` とインデックスはなし）と環境変数 `CUSTOM_PERSONA_DATA_TABLE_NAME` の追加。タスクロールのポリシーの JSON は約 6,800 文字（9,000 文字未満を `app-stack.test.ts` で確かめている）
+
+U9 の PR 1 では次の差分が出ます。テーブル・User Pool・バケットの置き換えはありません。
+
+- Data: `Personas`・`Discussions` の `CreatedAtIndex` と `UploadedFiles` の `UploadedAtIndex` の削除（各テーブル 1 つずつ）。`PersonaDatasetBindings`・`PersonaKBBindings` は「削除」ではなく `orphan`（RETAIN でスタックの管理から外れ、実体は残る）。User Pool の `Policies.PasswordPolicy.RequireSymbols` が `true`（更新で済み、今のパスワードはそのまま使える。次に決めるときから記号が要る）
+- App: タスクロールとバッチ推論ロールの方針（`*` をリソースの種類まで絞る。操作の集合は変わらない）。タスクロールのポリシーの JSON は約 7,500 文字（追加のペルソナモデルを有効にすると約 7,600 文字）
+- Edge: `enableWaf: true` のときだけ、WebACL の先頭に `LoginRateLimit` が入り、ほかのルールの priority が 1〜3 にずれる
+
+#### 安全網（U9）
+
+U9 は、CDK のテストと CI で設定の誤りを止める仕組みを入れました。jest（`npm test`）が失敗すると CI の `synth` が失敗し、マージが止まります。
+
+**cdk-nag**（`lib/dev-stage.ts` の `applyNagChecks`）
+
+- `bin/app.ts` と `test/cdk-nag.test.ts` が、Stage 全体に cdk-nag 3 の AwsSolutions を掛けます。ほかの jest は `createDevStage` だけを呼びます
+- 違反（error）が 1 件でも残ると、jest の中の `app.synth()` が `ValidationFailed` を投げて `cdk-nag.test.ts` が失敗します。`npx cdk synth`（CLI）は違反があっても終了コード 0 で終わり、`cdk.out/validation-report.json` に違反を書きます。止めるのは jest です
+- 直せない指摘は、指摘の出るリソースのそばで `acknowledgeAll(construct, ['<ルール ID>'], NAG_REASONS.<理由>)` で抑止します。理由の文は `lib/nag-reasons.ts` にだけ置き、スタックやアプリ全体には付けません。IAM5 は指摘ごとの ID（`IAM5[Resource::...]`）で 1 件ずつ、ロールごとに付けます（`lib/app-stack.ts` の `acknowledgeIamWildcards`）
+- 抑止を足す・消すときは、同じ変更で `test/cdk-nag.test.ts` の期待の一覧を直します。抑止は template の `Metadata.cdk_nag.rules_to_suppress` にも書かれます。期待の一覧は「抑止を持つリソースの construct のパス」と「ルール ID」の組で書き、テストは template の `aws:cdk:path` から同じ組を作って過不足なく比べます
+- テーブルを足したときは `test/data-stack-logical-ids.test.ts`（construct のパス）と `test/data-stack.test.ts`（GSI。キーはテーブルの construct ID）の一覧を、IAM の `*` の文を足したときは `test/iam-wildcards.test.ts` の例外の一覧を、同じ変更で直します
+- ソースとテストには、CDK が作る名前（論理 ID の末尾のハッシュ、`ExportsOutput...` の出力名、カスタムリソースの Lambda の ID）を書きません。テストはリソースを construct のパスで、Data スタックから受け取る値を `{<出力するリソースのパス>.<属性>}`（`test/template-paths.ts`）で表します
+- バケットの接頭辞（`/*`・`uploads/*` など）と AgentCore Memory の `<ARN>/*` の IAM5 の指摘の ID には、Data スタックの出力名が入ります。`lib/app-stack.ts` はその名前を書かず、`iam5ExportedResourceId`（`lib/nag-reasons.ts`）で参照から求めます。中で使う `Stack.exportValue()` は、CDK が自動のスタック間参照で作るのと同じ出力を返す公開の API で、出力を足したり名前を変えたりしません。テストは Data スタックの template の Outputs から出力名をパスに直して比べるため、論理 ID が変わっても直すのは期待の一覧のパスだけです
+- テーブルの GSI は `<テーブルの ARN>/index/*` ではなく、アプリが Query する GSI（`OwnerIndex`・`TargetIndex`、`lib/constructs/database.ts` の `APP_QUERIED_INDEXES`）だけを名前で付けます（`Database.queriedIndexArns`）。アプリで別の GSI を Query するときは、`APP_QUERIED_INDEXES` と `test/iam-wildcards.test.ts` の `QUERIED_INDEX_ARNS` を同じ変更で直します
+- データを持つリソースの論理 ID は、`test/data-stack-logical-ids.test.ts` が (1) 種類ごとの construct のパスの集合と、(2) 論理 ID が CDK がそのパスに既定で割り当てる値と同じこと（`overrideLogicalId`・`renameLogicalId` を使っていない）で固定します。construct ID を変える・別の親へ移すと (1) で失敗します
+- cdk-nag 3.0.2 の 2 つの制約に合わせた回避策があります。Stage の中の template に抑止を書くため、`applyNagChecks` が各 Stage にも `WriteNagSuppressionsToCloudFormationAspect` を足します。`::` を 2 つ以上含む ID は `acknowledge()` が受け付けないため、`acknowledgeAll` が同じメタデータを直接書きます。cdk-nag を上げるときは、この 2 つが要らなくなっていないかと、`test/cdk-nag.test.ts` の期待を一緒に見直します
+- 削除保護のないテーブルは `PersonaCandidates`・`InterviewSessions`・`InterviewMessages` の 3 つだけです（TTL で消える一時データで、作り直しても失うものがないため。U5・U6 の決定）。`test/data-stack-logical-ids.test.ts` の `TABLES_WITHOUT_DELETION_PROTECTION` が、この 3 つと完全に一致することを確かめます
+
+**ログイン系の URL のレート制限**（`lib/edge-stack.ts`）
+
+- `enableWaf: true` のときだけかかります。`enableWaf: false`（dev の既定）では WebACL を作らず、ログイン系の総当たりは Cognito の試行回数の上限とアプリの回路遮断で守ります
+- `LoginRateLimit`（priority 0）が、`LOGIN_RATE_LIMITED_PATHS`（`/login`・`/auth/callback`・`/auth/new-password` の完全一致）への要求を、IP ごとに `LOGIN_RATE_WINDOW_SEC`（300 秒）で `LOGIN_RATE_LIMIT`（100 件）を超えたら 403 で止めます。メソッドは見ません
+- 利用者から「ログインできない、403 が出る」と言われたら、us-east-1 の WAF のコンソールで WebACL `ai-persona-v1-waf-<env>` の「Sampled requests」を開き、ルール `LoginRateLimit` で止めた要求の送り元の IP とパスを確かめます（サンプルは 3 時間分。件数は CloudWatch の `AWS/WAFV2` の `BlockedRequests`、Rule=`LoginRateLimit`）。出口の IP を多くの人が共有する組織で正当な利用者が止まっているなら、`edge-stack.ts` の閾値の定数を上げて Edge スタックを出し直します
+- 急ぐときは、コンソールで `LoginRateLimit` の動作を Count に変えてかまいません。ただし CloudFormation の知らない変更（ドリフト）になるため、**同じ日のうちに**定数（か動作）を直したコミットで Edge スタックを出し直し、コンソールの変更を上書きするまでを 1 つの手順とします（`cd cdk && npx cdk deploy AIPersonaDev/Edge`）
+
+**IAM の絞り込みを戻す**
+
+- 権限が足りないと分かったら（アプリのログに `AccessDenied` が出る）、足りない ARN か操作を IAM の文に足すコミットを作り、**App スタックだけ**を出し直します: `cd cdk && npx cdk deploy AIPersonaDev/App -c imageTag=<今のタグ>`
+- 急ぐときは、App スタックの IAM の文だけを前の定義に戻したコミットで、同じコマンドで出します。`deploy.sh` は Data スタックを先に出すため使いません（外した GSI が作り直され、外した紐付けの 2 テーブルは別の物理名の空のテーブルとして作られる）。IAM の文の差し戻しはデータに影響しません
+
+**型固定の GSI の片付け**
+
+- U9 で、型固定の GSI 7 つ（`Personas` の `CreatedAtIndex`・`NameIndex`・`OccupationIndex`、`Discussions` の `CreatedAtIndex`・`TopicIndex`・`ModeIndex`、`UploadedFiles` の `UploadedAtIndex`）をまとめて外しました。dev は Stage を作り直して出すため、新しいテーブルは最初から最後の形でできます
+- 既存の環境に出す場合: DynamoDB は 1 回の更新で GSI を各テーブル 1 つまでしか消せません。`Personas`・`Discussions` は 3 つずつ消すため、そのまま出すと CloudFormation が止まり、更新は巻き戻ります（データは消えない）。1 回に各テーブル 1 つずつ外した形で 3 回に分けて出すか、Stage を作り直します
+- 出す前に `npx cdk diff` で、テーブルの置き換えが 0 件であることを確かめます
+- 外した GSI は戻せません（作り直すと全件を読み直す）。v1.0.0 のコードはどれも読みません（`tests/unit/test_no_legacy_reads.py`）
+
+**外した紐付けの 2 テーブル**（`PersonaDatasetBindings`・`PersonaKBBindings`）
+
+- RETAIN のため AWS には残ります。消すかどうかは利用者が判断して手で行います
+- CDK の管理に戻す必要が出たときは、定義を戻す前に `tableName` に今の物理名を指定し、`npx cdk import AIPersonaDev/Data` で既存のテーブルを取り込みます（新しく作らせない）。v1.0.0 のコードも v0 のスタックも、この 2 テーブルを読みません
+
+**v1.0.0 でしないこと**
+
+- 本番の Data スタックの termination protection とスタックポリシー（置換・削除の拒否）は、本番の Stage を足すリリースで作ります（NFR7.19）。v1.0.0 は dev の Stage だけで、データを持つリソースは RETAIN・削除保護と、論理 ID を固定するテストで守ります
 
 #### 議論の削除で残ったものの後始末（U6）
 

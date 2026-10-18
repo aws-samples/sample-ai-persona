@@ -467,7 +467,7 @@ describe('AppStack: 認可（U2）', () => {
     const app = new cdk.App();
     const data = new DataStack(app, 'Data', { env: TOKYO, parameter: devParameter });
     const tables = Template.fromStack(data).findResources('AWS::DynamoDB::GlobalTable');
-    const jobs = tables.DatabaseJobs6F06B67C;
+    const jobs = tables[data.getLogicalId(data.database.jobsTable.node.defaultChild as cdk.CfnElement)];
     expect(jobs).toBeDefined();
     expect(jobs.DeletionPolicy).toBe('Retain');
     expect(jobs.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
@@ -517,7 +517,7 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     ]);
   });
 
-  test('PersonaBindings はテーブルと TargetIndex に 7 つの操作だけで Scan を含まない', () => {
+  test('PersonaBindings はテーブルと TargetIndex（名前で付ける）に 7 つの操作だけで Scan を含まない', () => {
     const statements = touching('DatabasePersonaBindings');
     const actions = actionsOf(statements);
     expect([...actions].sort()).toEqual([
@@ -529,7 +529,8 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
       'dynamodb:Query',
       'dynamodb:UpdateItem',
     ]);
-    expect(JSON.stringify(statements)).toContain('/index/*');
+    expect(JSON.stringify(statements)).toContain('/index/TargetIndex');
+    expect(JSON.stringify(statements)).not.toContain('/index/*');
   });
 
   test('S3 の方針に古いバージョンの操作がない', () => {
@@ -595,7 +596,7 @@ describe('AppStack: 議論の発言・レポートとインタビュー（U6、N
   const taskStatements = (t: Template) =>
     taskPolicies(t).flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
 
-  test('新しい 4 テーブルの操作は 1 つの文で、8 つの操作だけ（Scan なし）。インデックスも含む', () => {
+  test('新しい 4 テーブルの操作は 1 つの文で、8 つの操作だけ（Scan なし）。GSI がないためインデックスを指さない', () => {
     const touching = taskStatements(template).filter((s) =>
       NEW_TABLES.some((id) => JSON.stringify(s.Resource ?? '').includes(id)),
     );
@@ -615,7 +616,7 @@ describe('AppStack: 議論の発言・レポートとインタビュー（U6、N
     for (const id of NEW_TABLES) {
       expect(resources).toContain(id);
     }
-    expect(resources).toContain('/index/*');
+    expect(resources).not.toContain('/index/');
   });
 
   test('新しい 4 テーブルの名前をテーブルの参照で渡す（約束 C10、FR9.2）', () => {
@@ -677,13 +678,15 @@ describe('AppStack: カスタムデータの登録情報（U7、NFR1.80、NFR1.8
     expect(JSON.stringify(envOf(template).CUSTOM_PERSONA_DATA_TABLE_NAME)).toContain(TABLE);
   });
 
-  test('アンケートの 2 テーブルの OwnerIndex は今の付与（インデックスを含む）で読める', () => {
+  test('アンケートの 2 テーブルの OwnerIndex は名前で付けたインデックスの ARN で読める', () => {
     const statements = taskStatements(template).filter((s) =>
       JSON.stringify(s.Resource ?? '').includes('DatabaseSurveys'),
     );
     const actions = statements.flatMap((s) => [s.Action].flat());
     expect(actions).toContain('dynamodb:Query');
-    expect(JSON.stringify(statements.map((s) => s.Resource))).toContain('/index/*');
+    const resources = JSON.stringify(statements.map((s) => s.Resource));
+    expect(resources).toContain('/index/OwnerIndex');
+    expect(resources).not.toContain('/index/*');
   });
 });
 

@@ -123,7 +123,9 @@ def create_kb_retrieval_tool(
                 return "ナレッジベースが見つかりません。設定を確認してください。"
             if error_code == "AccessDeniedException":
                 return "ナレッジベースへのアクセスが拒否されました。"
-            return "ナレッジベースの検索中にエラーが発生しました。検索なしで続行します。"
+            return (
+                "ナレッジベースの検索中にエラーが発生しました。検索なしで続行します。"
+            )
 
         except Exception as e:
             logger.error(
@@ -132,6 +134,8 @@ def create_kb_retrieval_tool(
                 e,
                 exc_info=True,
             )
-            return "ナレッジベースの検索中にエラーが発生しました。検索なしで続行します。"
+            return (
+                "ナレッジベースの検索中にエラーが発生しました。検索なしで続行します。"
+            )
 
     return search_knowledge_base

@@ -1,6 +1,7 @@
 import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 /**
  * アップロードファイル用の S3 バケット（v1.0.0、Data スタック）。
@@ -44,5 +45,6 @@ export class UploadBucket extends Construct {
         },
       ],
     });
+    acknowledgeAll(this.bucket, ['S1'], NAG_REASONS.accessLogs);
   }
 }

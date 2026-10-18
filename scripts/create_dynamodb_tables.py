@@ -16,6 +16,22 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
+# "Mine" listing index (U4/U6/U7), the same shape as the CDK Data stack's OwnerIndex.
+# The GSI sets here follow cdk/lib/constructs/database.ts (U9: the type-fixed GSIs and the
+# old PersonaDatasetBindings / PersonaKBBindings tables are gone).
+OWNER_INDEX = {
+    "IndexName": "OwnerIndex",
+    "KeySchema": [
+        {"AttributeName": "owner_sub", "KeyType": "HASH"},
+        {"AttributeName": "created_at", "KeyType": "RANGE"},
+    ],
+    "Projection": {"ProjectionType": "KEYS_ONLY"},
+}
+OWNER_INDEX_ATTRIBUTES = [
+    {"AttributeName": "owner_sub", "AttributeType": "S"},
+    {"AttributeName": "created_at", "AttributeType": "S"},
+]
+
 
 class DynamoDBTableCreator:
     """Creates DynamoDB tables for AI Persona System."""
@@ -55,38 +71,10 @@ class DynamoDBTableCreator:
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
                 AttributeDefinitions=[
                     {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "type", "AttributeType": "S"},
-                    {"AttributeName": "created_at", "AttributeType": "S"},
-                    {"AttributeName": "name", "AttributeType": "S"},
-                    {"AttributeName": "occupation", "AttributeType": "S"},
+                    *OWNER_INDEX_ATTRIBUTES,
                 ],
                 BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[
-                    {
-                        "IndexName": "CreatedAtIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "created_at", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                    {
-                        "IndexName": "NameIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "name", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                    {
-                        "IndexName": "OccupationIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "occupation", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                ],
+                GlobalSecondaryIndexes=[OWNER_INDEX],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},
@@ -119,38 +107,10 @@ class DynamoDBTableCreator:
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
                 AttributeDefinitions=[
                     {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "type", "AttributeType": "S"},
-                    {"AttributeName": "created_at", "AttributeType": "S"},
-                    {"AttributeName": "topic", "AttributeType": "S"},
-                    {"AttributeName": "mode", "AttributeType": "S"},
+                    *OWNER_INDEX_ATTRIBUTES,
                 ],
                 BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[
-                    {
-                        "IndexName": "CreatedAtIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "created_at", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                    {
-                        "IndexName": "TopicIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "topic", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                    {
-                        "IndexName": "ModeIndex",
-                        "KeySchema": [
-                            {"AttributeName": "mode", "KeyType": "HASH"},
-                            {"AttributeName": "created_at", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                ],
+                GlobalSecondaryIndexes=[OWNER_INDEX],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},
@@ -170,7 +130,7 @@ class DynamoDBTableCreator:
 
     def create_uploaded_files_table(self) -> bool:
         """
-        Create the UploadedFiles table with GSI.
+        Create the UploadedFiles table (no GSI since U9).
 
         Returns:
             True if table was created, False if it already exists
@@ -181,22 +141,8 @@ class DynamoDBTableCreator:
             self.dynamodb.create_table(
                 TableName=table_name,
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-                AttributeDefinitions=[
-                    {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "type", "AttributeType": "S"},
-                    {"AttributeName": "uploaded_at", "AttributeType": "S"},
-                ],
+                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
                 BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[
-                    {
-                        "IndexName": "UploadedAtIndex",
-                        "KeySchema": [
-                            {"AttributeName": "type", "KeyType": "HASH"},
-                            {"AttributeName": "uploaded_at", "KeyType": "RANGE"},
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                ],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},
@@ -241,45 +187,6 @@ class DynamoDBTableCreator:
                 print(f"✗ Error creating table {table_name}: {e}")
                 raise
 
-    def create_bindings_table(self) -> bool:
-        """Create the PersonaDatasetBindings table with GSI."""
-        table_name = f"{self.table_prefix}_PersonaDatasetBindings"
-
-        try:
-            self.dynamodb.create_table(
-                TableName=table_name,
-                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-                AttributeDefinitions=[
-                    {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "persona_id", "AttributeType": "S"},
-                ],
-                BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[
-                    {
-                        "IndexName": "PersonaIdIndex",
-                        "KeySchema": [
-                            {"AttributeName": "persona_id", "KeyType": "HASH"}
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                ],
-                SSESpecification={"Enabled": True, "SSEType": "KMS"},
-                Tags=[
-                    {"Key": "Application", "Value": "AIPersonaSystem"},
-                    {"Key": "ManagedBy", "Value": "Python"},
-                ],
-            )
-            print(f"✓ Created table: {table_name}")
-            return True
-
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceInUseException":
-                print(f"⚠ Table already exists: {table_name}")
-                return False
-            else:
-                print(f"✗ Error creating table {table_name}: {e}")
-                raise
-
     def create_knowledge_bases_table(self) -> bool:
         """Create the KnowledgeBases table."""
         table_name = f"{self.table_prefix}_KnowledgeBases"
@@ -307,9 +214,9 @@ class DynamoDBTableCreator:
                 print(f"✗ Error creating table {table_name}: {e}")
                 raise
 
-    def create_persona_kb_bindings_table(self) -> bool:
-        """Create the PersonaKBBindings table with GSI."""
-        table_name = f"{self.table_prefix}_PersonaKBBindings"
+    def create_survey_templates_table(self) -> bool:
+        """Create the SurveyTemplates table with OwnerIndex."""
+        table_name = f"{self.table_prefix}_SurveyTemplates"
 
         try:
             self.dynamodb.create_table(
@@ -317,45 +224,10 @@ class DynamoDBTableCreator:
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
                 AttributeDefinitions=[
                     {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "persona_id", "AttributeType": "S"},
+                    *OWNER_INDEX_ATTRIBUTES,
                 ],
                 BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[
-                    {
-                        "IndexName": "PersonaIdIndex",
-                        "KeySchema": [
-                            {"AttributeName": "persona_id", "KeyType": "HASH"}
-                        ],
-                        "Projection": {"ProjectionType": "ALL"},
-                    },
-                ],
-                SSESpecification={"Enabled": True, "SSEType": "KMS"},
-                Tags=[
-                    {"Key": "Application", "Value": "AIPersonaSystem"},
-                    {"Key": "ManagedBy", "Value": "Python"},
-                ],
-            )
-            print(f"✓ Created table: {table_name}")
-            return True
-
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceInUseException":
-                print(f"⚠ Table already exists: {table_name}")
-                return False
-            else:
-                print(f"✗ Error creating table {table_name}: {e}")
-                raise
-
-    def create_survey_templates_table(self) -> bool:
-        """Create the SurveyTemplates table."""
-        table_name = f"{self.table_prefix}_SurveyTemplates"
-
-        try:
-            self.dynamodb.create_table(
-                TableName=table_name,
-                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
-                BillingMode="PAY_PER_REQUEST",
+                GlobalSecondaryIndexes=[OWNER_INDEX],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},
@@ -375,15 +247,19 @@ class DynamoDBTableCreator:
                 raise
 
     def create_surveys_table(self) -> bool:
-        """Create the Surveys table."""
+        """Create the Surveys table with OwnerIndex."""
         table_name = f"{self.table_prefix}_Surveys"
 
         try:
             self.dynamodb.create_table(
                 TableName=table_name,
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "id", "AttributeType": "S"},
+                    *OWNER_INDEX_ATTRIBUTES,
+                ],
                 BillingMode="PAY_PER_REQUEST",
+                GlobalSecondaryIndexes=[OWNER_INDEX],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},
@@ -503,10 +379,6 @@ class DynamoDBTableCreator:
         if self.create_datasets_table():
             tables_created.append(f"{self.table_prefix}_Datasets")
 
-        # Create PersonaDatasetBindings table
-        if self.create_bindings_table():
-            tables_created.append(f"{self.table_prefix}_PersonaDatasetBindings")
-
         # Create SurveyTemplates table
         if self.create_survey_templates_table():
             tables_created.append(f"{self.table_prefix}_SurveyTemplates")
@@ -518,10 +390,6 @@ class DynamoDBTableCreator:
         # Create KnowledgeBases table
         if self.create_knowledge_bases_table():
             tables_created.append(f"{self.table_prefix}_KnowledgeBases")
-
-        # Create PersonaKBBindings table
-        if self.create_persona_kb_bindings_table():
-            tables_created.append(f"{self.table_prefix}_PersonaKBBindings")
 
         # Create Jobs table
         if self.create_jobs_table():

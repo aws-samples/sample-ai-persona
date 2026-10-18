@@ -1,4 +1,4 @@
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import { Annotations, CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -6,12 +6,57 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import { AwsCustomResource } from 'aws-cdk-lib/custom-resources';
 import { AppParameter } from '../parameters';
+import { bedrockInferenceArns } from './bedrock-arns';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
 import { CloudFrontDistribution } from './constructs/cloudfront';
 import { FargateAppService } from './constructs/fargate-service';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
+import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
+
+/**
+ * AwsCustomResource のシングルトンの Lambda の construct ID。CDK は公開の定数
+ * PROVIDER_FUNCTION_UUID のハイフンを除いた値に 'AWS' を前に付けて作る。
+ */
+const AWS_CUSTOM_RESOURCE_PROVIDER_ID = `AWS${AwsCustomResource.PROVIDER_FUNCTION_UUID.replace(/-/g, '')}`;
+
+/**
+ * grantReadWriteData がテーブルに付ける操作と同じもの（読み・書き・DescribeTable）。U9 で
+ * `<テーブルの ARN>/index/*` を付けないため、grantReadWriteData を明示の文に置き換えた。
+ */
+const TABLE_READ_WRITE_ACTIONS = [
+  'dynamodb:BatchGetItem',
+  'dynamodb:Query',
+  'dynamodb:GetItem',
+  'dynamodb:Scan',
+  'dynamodb:ConditionCheckItem',
+  'dynamodb:GetRecords',
+  'dynamodb:GetShardIterator',
+  'dynamodb:BatchWriteItem',
+  'dynamodb:PutItem',
+  'dynamodb:UpdateItem',
+  'dynamodb:DeleteItem',
+  'dynamodb:DescribeTable',
+];
+/** grantReadWriteData がカスタマー管理キーに付ける操作と同じもの（Sessions のキー）。 */
+const TABLE_KEY_READ_WRITE_ACTIONS = [
+  'kms:Decrypt',
+  'kms:DescribeKey',
+  'kms:Encrypt',
+  'kms:ReEncrypt*',
+  'kms:GenerateDataKey*',
+];
+
+/** The CfnPolicy of a role's default policy (created by the first grant). */
+function defaultPolicyOf(role: iam.IRole): IConstruct {
+  const policy = role.node.tryFindChild('DefaultPolicy');
+  if (!policy) {
+    throw new Error(`${role.node.path} has no default policy to acknowledge cdk-nag findings on.`);
+  }
+  return policy;
+}
 
 /** imageTag が渡されなかったときのタグ。deploy.sh は ③ の前にこの値なら止める（R-09）。 */
 export const UNSET_IMAGE_TAG = 'unset';
@@ -107,9 +152,96 @@ export class AppStack extends Stack {
 
     this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn);
 
+    // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
+    acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
+    this.acknowledgeCustomResourceRole();
+    this.acknowledgeIamWildcards(app, batchRole, data, parameter);
+
     new CfnOutput(this, 'AppUrl', { value: appBaseUrl });
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
     new CfnOutput(this, 'ServiceName', { value: app.service.serviceName });
+  }
+
+  /**
+   * IAM4: client.userPoolClientSecret が作る AwsCustomResource の Lambda（スタックに 1 つの
+   * シングルトン）のロール。CDK の内部の作るもの。
+   */
+  private acknowledgeCustomResourceRole(): void {
+    const provider = this.node.tryFindChild(AWS_CUSTOM_RESOURCE_PROVIDER_ID);
+    const role = provider?.node.tryFindChild('ServiceRole');
+    if (!role) {
+      throw new Error(
+        `The AwsCustomResource provider ${AWS_CUSTOM_RESOURCE_PROVIDER_ID} was not found; ` +
+          'update the cdk-nag acknowledgement for its role.',
+      );
+    }
+    acknowledgeAll(
+      role,
+      ['IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]'],
+      NAG_REASONS.cdkCustomResourceManagedPolicy,
+    );
+  }
+
+  /**
+   * IAM5（ワイルドカード）の抑止をロールごと・指摘ごとに付ける（NFR7.16）。
+   *
+   * Data スタックから受け取る ARN（バケット・Memory）の指摘の ID には、CDK が論理 ID から
+   * 作る出力名が入る。その名前はコードに書かず、iam5ExportedResourceId で参照から求める。
+   * テーブルの GSI は名前で付けるため `/index/*` の指摘は出ない。バケットの接頭辞を足す
+   * 変更は、ここと test/cdk-nag.test.ts を一緒に直す。
+   */
+  private acknowledgeIamWildcards(
+    app: FargateAppService,
+    batchRole: BedrockBatchRole,
+    data: DataStack,
+    parameter: AppParameter,
+  ): void {
+    const bucketObjects = (...suffixes: string[]) =>
+      suffixes.map((suffix) => iam5ExportedResourceId(data, data.uploadBucket.bucket.bucketArn, suffix));
+    const inference = bedrockInferenceArns(this).map((arn) => iam5ResourceId(this, arn));
+
+    const taskPolicy = defaultPolicyOf(app.taskDefinition.taskRole);
+    acknowledgeAll(taskPolicy, ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
+    acknowledgeAll(taskPolicy, bucketObjects('/*', '/uploads/*', '/candidates/*'), NAG_REASONS.bucketObjects);
+    acknowledgeAll(taskPolicy, inference, NAG_REASONS.bedrockInference);
+    acknowledgeAll(
+      taskPolicy,
+      ['model-invocation-job/*', 'knowledge-base/*'].map((resource) =>
+        iam5ResourceId(this, `arn:${this.partition}:bedrock:${this.region}:${this.account}:${resource}`),
+      ),
+      NAG_REASONS.bedrockAccountResources,
+    );
+    acknowledgeAll(
+      taskPolicy,
+      [iam5ExportedResourceId(data, data.memory.memoryArn, '/*')],
+      NAG_REASONS.memoryChildren,
+    );
+    acknowledgeAll(
+      taskPolicy,
+      ['IAM5[Action::kms:GenerateDataKey*]', 'IAM5[Action::kms:ReEncrypt*]'],
+      NAG_REASONS.kmsDataKeyActions,
+    );
+    if (parameter.enableAdditionalPersonaModels) {
+      acknowledgeAll(
+        taskPolicy,
+        [iam5ResourceId(this, `arn:${this.partition}:bedrock-mantle:*:${this.account}:project/*`)],
+        NAG_REASONS.mantleProject,
+      );
+    }
+
+    const executionRole = app.taskDefinition.executionRole;
+    if (!executionRole) {
+      throw new Error('The task definition has no execution role to acknowledge.');
+    }
+    acknowledgeAll(defaultPolicyOf(executionRole), ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
+
+    const batchPolicy = defaultPolicyOf(batchRole.role);
+    acknowledgeAll(
+      batchPolicy,
+      bucketObjects('/batch-inference/*', '/batch-inference/output/*'),
+      NAG_REASONS.bucketObjects,
+    );
+    acknowledgeAll(batchPolicy, inference, NAG_REASONS.bedrockInference);
   }
 
   private resolveImageTag(): string {
@@ -244,13 +376,30 @@ export class AppStack extends Stack {
     data: DataStack,
     batchRoleArn: string,
   ): void {
-    // テーブルの読み書きはテーブルの ARN に絞る。Sessions はカスタマー管理キーの権限も付く
-    for (const table of [...Object.values(data.database.applicationTables), data.database.sessionsTable]) {
-      table.grantReadWriteData(taskRole);
-    }
-    // DatabaseService は起動時に ListTables で接続を確かめる
+    // テーブルの読み書きはテーブルの ARN と、アプリが Query する GSI の ARN（名前で付ける）に
+    // 絞る（U9）。操作は grantReadWriteData と同じ。Sessions はカスタマー管理キーの権限も付ける
+    const { database } = data;
+    const readWriteTables = [...Object.values(database.applicationTables), database.sessionsTable];
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['dynamodb:ListTables'],
+      actions: TABLE_READ_WRITE_ACTIONS,
+      resources: readWriteTables.flatMap((table) => [
+        table.tableArn,
+        ...database.queriedIndexArns(table),
+      ]),
+    }));
+    for (const table of readWriteTables) {
+      table.encryptionKey?.grant(taskRole, ...TABLE_KEY_READ_WRITE_ACTIONS);
+    }
+    // リソースを指定できない一覧の API だけを * で付ける（U9、NFR7.16。例外の一覧は
+    // test/iam-wildcards.test.ts）。DatabaseService は起動時に ListTables で接続を確かめる
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:ListTables',
+        'bedrock:ListFoundationModels',
+        'bedrock:ListInferenceProfiles',
+        'bedrock:ListModelInvocationJobs',
+        'bedrock-agentcore:ListMemories',
+      ],
       resources: ['*'],
     }));
     // 部署ごとの共有の索引（U4、security-design.md §8）。Scan は付けない（member の一覧で
@@ -275,19 +424,22 @@ export class AppStack extends Stack {
       'dynamodb:UpdateItem',
       'dynamodb:DeleteItem',
     );
-    // 紐付け（U5、ADR-007）。テーブルと TargetIndex に、Scan を除く 7 つの操作
-    data.database.personaBindingsTable.grant(
-      taskRole,
-      'dynamodb:GetItem',
-      'dynamodb:BatchGetItem',
-      'dynamodb:Query',
-      'dynamodb:PutItem',
-      'dynamodb:BatchWriteItem',
-      'dynamodb:UpdateItem',
-      'dynamodb:DeleteItem',
-    );
+    // 紐付け（U5、ADR-007）。テーブルと TargetIndex（名前で付ける）に、Scan を除く 7 つの操作
+    const bindings = data.database.personaBindingsTable;
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:BatchGetItem',
+        'dynamodb:Query',
+        'dynamodb:PutItem',
+        'dynamodb:BatchWriteItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem',
+      ],
+      resources: [bindings.tableArn, ...data.database.queriedIndexArns(bindings)],
+    }));
     // 議論の発言・レポートとインタビュー（U6、NFR1.64）。Scan を除く 8 つの操作を 4 テーブル
-    // （とそのインデックス）を並べた 1 つの文で付ける。ポリシーの上限（10,240 文字）に近いため
+    // を並べた 1 つの文で付ける（GSI はないため、インデックスの ARN は並ばない）。ポリシーの上限（10,240 文字）に近いため
     // テーブルごとに文を足さない。後始末のスクリプトはタスクロールでは動かさない
     const childTables = Object.values(data.database.discussionChildTables);
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -301,7 +453,10 @@ export class AppStack extends Stack {
         'dynamodb:DeleteItem',
         'dynamodb:ConditionCheckItem',
       ],
-      resources: childTables.flatMap((table) => [table.tableArn, `${table.tableArn}/index/*`]),
+      resources: childTables.flatMap((table) => [
+        table.tableArn,
+        ...data.database.queriedIndexArns(table),
+      ]),
     }));
     // カスタムペルソナデータの登録情報（U7、NFR1.80、NFR1.81）。名前の押さえはトランザクション
     // （ConditionCheckItem）、一覧は件数の小さい Scan。GSI がないため Query とインデックスは付けない
@@ -324,27 +479,45 @@ export class AppStack extends Stack {
       actions: ['cognito-idp:ListGroups', 'cognito-idp:ListUsers'],
       resources: [data.cognito.userPool.userPoolArn],
     }));
-    // Bedrock・AgentCore Memory は v0 と同じ範囲（* の絞り込みは U9）
+    // Bedrock（U9、NFR7.16）: 操作は v0 と同じで、リソースを種類ごとに絞る。
+    // minimizePolicies は同じリソースの文をまとめるため、種類ごとに文を分ける
+    const { partition, account } = Stack.of(this);
+    const inferenceArns = bedrockInferenceArns(this);
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
         'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream',
-        'bedrock:ListFoundationModels', 'bedrock:GetFoundationModel',
-        'bedrock:ListInferenceProfiles', 'bedrock:GetInferenceProfile',
-        'bedrock:TagResource', 'bedrock:UntagResource', 'bedrock:ListTagsForResource',
-        'bedrock:CreateModelInvocationJob', 'bedrock:GetModelInvocationJob',
-        'bedrock:ListModelInvocationJobs', 'bedrock:StopModelInvocationJob',
-        'bedrock:Retrieve',
+        'bedrock:GetFoundationModel', 'bedrock:GetInferenceProfile',
       ],
-      resources: ['*'],
+      resources: inferenceArns,
+    }));
+    // バッチ推論（アンケート）。CreateModelInvocationJob はジョブの ARN と使うモデルの ARN の
+    // 両方で認可される（Bedrock ユーザーガイド「Required permissions for batch inference」）
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'bedrock:CreateModelInvocationJob', 'bedrock:GetModelInvocationJob',
+        'bedrock:StopModelInvocationJob',
+        'bedrock:TagResource', 'bedrock:UntagResource', 'bedrock:ListTagsForResource',
+      ],
+      resources: [
+        `arn:${partition}:bedrock:${this.region}:${account}:model-invocation-job/*`,
+        ...inferenceArns,
+      ],
+    }));
+    // ナレッジベースの検索は、このアカウント・リージョンの KB だけ
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['bedrock:Retrieve'],
+      resources: [`arn:${partition}:bedrock:${this.region}:${account}:knowledge-base/*`],
     }));
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
       resources: [batchRoleArn],
       conditions: { StringEquals: { 'iam:PassedToService': 'bedrock.amazonaws.com' } },
     }));
+    // AgentCore Memory は、この Stage の Memory だけ（ListMemories は上の一覧の文）。
+    // ListEvents などの子の操作のため <ARN>/* も並べる
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
-        'bedrock-agentcore:GetMemory', 'bedrock-agentcore:ListMemories',
+        'bedrock-agentcore:GetMemory',
         'bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:GetEvent',
         'bedrock-agentcore:CreateMemoryRecord', 'bedrock-agentcore:BatchCreateMemoryRecords',
         'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:GetMemoryRecord',
@@ -352,7 +525,7 @@ export class AppStack extends Stack {
         'bedrock-agentcore:RetrieveMemoryRecords',
         'bedrock-agentcore:InvokeMemory', 'bedrock-agentcore:RetrieveMemory',
       ],
-      resources: ['*'],
+      resources: [data.memory.memoryArn, `${data.memory.memoryArn}/*`],
     }));
     if (parameter.dataAgentRuntimeArn) {
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -361,9 +534,16 @@ export class AppStack extends Stack {
       }));
     }
     if (parameter.enableAdditionalPersonaModels) {
-      // 追加ペルソナベースモデル（Bedrock Mantle 経由の非 Anthropic モデル）
+      // 追加ペルソナベースモデル（Bedrock Mantle 経由の非 Anthropic モデル）。CreateInference は
+      // このアカウントの project に絞る。リージョンは *（アプリの resolve_call_region が非対応の
+      // リージョンから us-east-1 へ送るため、スタックのリージョンと呼び先が食い違う）
       taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-        actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:CallWithBearerToken'],
+        actions: ['bedrock-mantle:CreateInference'],
+        resources: [`arn:${partition}:bedrock-mantle:*:${account}:project/*`],
+      }));
+      // CallWithBearerToken はリソースの種類を持たないため * のまま（例外）
+      taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['bedrock-mantle:CallWithBearerToken'],
         resources: ['*'],
       }));
     }
