@@ -5,6 +5,7 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 /**
  * AWS 管理のプレフィックスリスト com.amazonaws.global.cloudfront.origin-facing の ID。
@@ -108,6 +109,11 @@ export class FargateAppService extends Construct {
       maxHealthyPercent: 200,
       healthCheckGracePeriod: Duration.seconds(60),
     });
+
+    // cdk-nag の抑止（U9、NFR7.15）。理由は nag-reasons.ts
+    acknowledgeAll(this.cluster, ['ECS4'], NAG_REASONS.containerInsights);
+    acknowledgeAll(this.loadBalancer, ['ELB2'], NAG_REASONS.accessLogs);
+    acknowledgeAll(this.taskDefinition, ['ECS2'], NAG_REASONS.ecsEnvironment);
 
     listener.addTargets('App', {
       port: CONTAINER_PORT,

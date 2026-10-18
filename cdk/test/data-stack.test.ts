@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { PASSWORD_POLICY } from '../lib/constructs/cognito';
 import { DataStack } from '../lib/data-stack';
 import { devParameter } from '../parameters';
 
@@ -8,26 +9,51 @@ import { devParameter } from '../parameters';
  * ステートフルなリソースはすべて RETAIN で、物理名は自動生成にする。
  */
 
+/**
+ * テーブルごとの GSI の名前（U9、NFR2.27）。型固定の GSI 7 つはすべて外した。
+ * dev は Stage を作り直して出すため、1 回で外す（既存の環境の扱いは cdk/README.md）。
+ * この一覧を変えるときは tests/unit/test_create_dynamodb_tables.py の EXPECTED_GSIS も直す。
+ */
+const EXPECTED_GSIS: Record<string, string[]> = {
+  // キーはテーブルの construct ID（database.ts）
+  Personas: ['OwnerIndex'],
+  Discussions: ['OwnerIndex'],
+  UploadedFiles: [],
+  Datasets: [],
+  SurveyTemplates: ['OwnerIndex'],
+  Surveys: ['OwnerIndex'],
+  KnowledgeBases: [],
+  Jobs: [],
+  Sessions: [],
+  ResourceShares: [],
+  PersonaCandidates: [],
+  PersonaBindings: ['TargetIndex'],
+  CustomPersonaData: [],
+  DiscussionMessages: [],
+  DiscussionReports: [],
+  InterviewSessions: [],
+  InterviewMessages: [],
+};
+
 const ENV = { account: '123456789012', region: 'ap-northeast-1' };
 
-function synth(): Template {
-  const app = new cdk.App();
-  const stack = new DataStack(app, 'Data', { env: ENV, parameter: devParameter });
-  return Template.fromStack(stack);
+const dataStack = new DataStack(new cdk.App(), 'Data', { env: ENV, parameter: devParameter });
+const template = Template.fromStack(dataStack);
+
+/** The logical ID of a table, looked up by its construct ID (no generated name in the test). */
+function logicalIdOf(tableId: string): string {
+  const cfn = dataStack.database.node.findChild(tableId).node.defaultChild as cdk.CfnElement;
+  return dataStack.getLogicalId(cfn);
 }
 
-const template = synth();
-
-const EXISTING_TABLES: { pk: string; gsis: string[]; pitr: boolean; ttl?: string }[] = [
-  // Personas（U4 で OwnerIndex を足した。既存の 3 つは今と同じ）
-  { pk: 'id', gsis: ['CreatedAtIndex', 'NameIndex', 'OccupationIndex', 'OwnerIndex'], pitr: true },
-  // Discussions（U6 で OwnerIndex を足した。型固定の 3 つは U9 まで残す）
-  { pk: 'id', gsis: ['CreatedAtIndex', 'TopicIndex', 'ModeIndex', 'OwnerIndex'], pitr: true },
-  // UploadedFiles（U5 で TTL expires_at を足した。キー・GSI・PITR は今のまま）
-  { pk: 'id', gsis: ['UploadedAtIndex'], pitr: true, ttl: 'expires_at' },
-  { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaDatasetBindings
-  { pk: 'id', gsis: ['PersonaIdIndex'], pitr: true }, // PersonaKBBindings
-  { pk: 'id', gsis: [], pitr: false, ttl: 'expires_at' }, // Jobs
+const EXISTING_TABLES: { id: string; pk: string; pitr: boolean; ttl?: string }[] = [
+  // Personas（U4 で OwnerIndex を足した。U9 PR 1 で CreatedAtIndex を外した）
+  { id: 'Personas', pk: 'id', pitr: true },
+  // Discussions（U6 で OwnerIndex を足した。U9 PR 1 で CreatedAtIndex を外した）
+  { id: 'Discussions', pk: 'id', pitr: true },
+  // UploadedFiles（U5 で TTL expires_at を足した。U9 PR 1 で UploadedAtIndex を外した）
+  { id: 'UploadedFiles', pk: 'id', pitr: true, ttl: 'expires_at' },
+  { id: 'Jobs', pk: 'id', pitr: false, ttl: 'expires_at' },
 ];
 
 describe('DataStack: Sessions テーブル', () => {
@@ -94,10 +120,7 @@ describe('DataStack: ResourceShares テーブルと OwnerIndex（U4、NFR1.20、
       { AttributeName: 'created_at', KeyType: 'RANGE' },
     ]);
     expect(indexes.OwnerIndex.Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
-    // 既存の GSI の射影は今と同じ（すべての列）
-    for (const name of ['CreatedAtIndex', 'NameIndex', 'OccupationIndex']) {
-      expect(indexes[name].Projection).toEqual({ ProjectionType: 'ALL' });
-    }
+    expect(Object.keys(indexes).sort()).toEqual(EXPECTED_GSIS.Personas);
   });
 });
 
@@ -200,28 +223,20 @@ describe('DataStack: 議論の発言・レポートとインタビュー（U6、
     expect(replica.DeletionProtectionEnabled).toBeUndefined();
   });
 
-  test('Discussions は論理 ID が変わらず（置き換えない）、OwnerIndex（KEYS_ONLY）を足して既存の 3 つの GSI が残る', () => {
-    const discussions = resources().DatabaseDiscussions02268B7D;
+  test('Discussions は論理 ID が変わらず（置き換えない）、GSI は OwnerIndex（KEYS_ONLY）だけ', () => {
+    const discussions = resources()[logicalIdOf('Discussions')];
     expect(discussions).toBeDefined();
     expect(discussions.DeletionPolicy).toBe('Retain');
     expect(discussions.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
     const indexes = Object.fromEntries(
       discussions.Properties.GlobalSecondaryIndexes.map((g: any) => [g.IndexName, g]),
     );
-    expect(Object.keys(indexes).sort()).toEqual([
-      'CreatedAtIndex',
-      'ModeIndex',
-      'OwnerIndex',
-      'TopicIndex',
-    ]);
+    expect(Object.keys(indexes).sort()).toEqual(EXPECTED_GSIS.Discussions);
     expect(indexes.OwnerIndex.KeySchema).toEqual([
       { AttributeName: 'owner_sub', KeyType: 'HASH' },
       { AttributeName: 'created_at', KeyType: 'RANGE' },
     ]);
     expect(indexes.OwnerIndex.Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
-    for (const name of ['CreatedAtIndex', 'TopicIndex', 'ModeIndex']) {
-      expect(indexes[name].Projection).toEqual({ ProjectionType: 'ALL' });
-    }
     const replica = discussions.Properties.Replicas[0];
     expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
     expect(replica.DeletionProtectionEnabled).toBe(true);
@@ -256,10 +271,10 @@ describe('DataStack: カスタムデータの登録情報とアンケートの O
   });
 
   test.each([
-    { id: 'DatabaseSurveyTemplates94E0DB60', name: 'SurveyTemplates' },
-    { id: 'DatabaseSurveysAEB1D8E2', name: 'Surveys' },
-  ])('$name は論理 ID が変わらず（置き換えない）、OwnerIndex（PK owner_sub・SK created_at、KEYS_ONLY）だけを持つ', ({ id }) => {
-    const table = resources()[id];
+    { name: 'SurveyTemplates' },
+    { name: 'Surveys' },
+  ])('$name は論理 ID が変わらず（置き換えない）、OwnerIndex（PK owner_sub・SK created_at、KEYS_ONLY）だけを持つ', ({ name }) => {
+    const table = resources()[logicalIdOf(name)];
     expect(table).toBeDefined();
     expect(table.DeletionPolicy).toBe('Retain');
     expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
@@ -319,26 +334,23 @@ describe('DataStack: アップロード用バケットのライフサイクル�
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つを含めて 19 テーブル。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つを含めて 17 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(19);
+    expect(Object.keys(tables)).toHaveLength(17);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();
     }
   });
 
-  test.each(EXISTING_TABLES)('キーと GSI と PITR が今と同じ（GSI: $gsis）', ({ pk, gsis, pitr, ttl }) => {
-    const tables = Object.values(template.findResources('AWS::DynamoDB::GlobalTable'));
-    const match = tables.find((t) => {
-      const names = (t.Properties.GlobalSecondaryIndexes ?? []).map((g: any) => g.IndexName).sort();
-      const sameTtl = (t.Properties.TimeToLiveSpecification?.AttributeName ?? undefined) === ttl;
-      return t.Properties.KeySchema[0].AttributeName === pk
-        && JSON.stringify(names) === JSON.stringify([...gsis].sort())
-        && sameTtl;
-    });
+  test.each(EXISTING_TABLES)('$id のキーと GSI と PITR と TTL', ({ id, pk, pitr, ttl }) => {
+    const match = template.findResources('AWS::DynamoDB::GlobalTable')[logicalIdOf(id)];
     expect(match).toBeDefined();
-    const replica = match!.Properties.Replicas[0];
+    expect(match.Properties.KeySchema[0].AttributeName).toBe(pk);
+    const names = (match.Properties.GlobalSecondaryIndexes ?? []).map((g: any) => g.IndexName);
+    expect(names.sort()).toEqual([...EXPECTED_GSIS[id]].sort());
+    expect(match.Properties.TimeToLiveSpecification?.AttributeName).toBe(ttl);
+    const replica = match.Properties.Replicas[0];
     expect(Boolean(replica.PointInTimeRecoverySpecification?.PointInTimeRecoveryEnabled)).toBe(pitr);
   });
 });
@@ -430,6 +442,57 @@ describe('DataStack: 秘密', () => {
           ExcludePunctuation: true,
         },
       }),
+    });
+  });
+});
+
+describe('DataStack: 型固定の GSI と古い紐付けの片付け（U9、NFR2.27、NFR2.28）', () => {
+  const tables = () => template.findResources('AWS::DynamoDB::GlobalTable');
+
+  test('テーブルの集合が GSI の期待の一覧と同じ（期待の一覧の漏れを防ぐ）', () => {
+    expect(Object.keys(tables()).sort()).toEqual(Object.keys(EXPECTED_GSIS).map(logicalIdOf).sort());
+  });
+
+  test.each(Object.entries(EXPECTED_GSIS))('%s の GSI の名前の集合', (id, gsis) => {
+    const table = tables()[logicalIdOf(id)];
+    expect(table).toBeDefined();
+    const names = (table.Properties.GlobalSecondaryIndexes ?? []).map((g: any) => g.IndexName);
+    expect(names.sort()).toEqual([...gsis].sort());
+  });
+
+  test('外した GSI（CreatedAtIndex・UploadedAtIndex）を持つテーブルがない', () => {
+    for (const table of Object.values(tables())) {
+      const names = (table.Properties.GlobalSecondaryIndexes ?? []).map((g: any) => g.IndexName);
+      expect(names).not.toContain('CreatedAtIndex');
+      expect(names).not.toContain('UploadedAtIndex');
+    }
+  });
+
+  test('PersonaDatasetBindings・PersonaKBBindings は template にない（RETAIN で AWS には残る）', () => {
+    const ids = Object.keys(template.toJSON().Resources ?? {});
+    expect(ids.filter((id) => /PersonaDatasetBindings|PersonaKBBindings/.test(id))).toEqual([]);
+  });
+});
+
+describe('DataStack: Cognito のパスワードの条件（U9、Q2 A、AwsSolutions-COG1）', () => {
+  test('PASSWORD_POLICY は記号を求め、5 つの値を持つ', () => {
+    expect(PASSWORD_POLICY).toEqual({
+      minLength: 8,
+      requireLowercase: true,
+      requireUppercase: true,
+      requireDigits: true,
+      requireSymbols: true,
+    });
+  });
+
+  test('User Pool の PasswordPolicy は PASSWORD_POLICY と同じ値で、RequireSymbols が true', () => {
+    const pool = Object.values(template.findResources('AWS::Cognito::UserPool'))[0];
+    expect(pool.Properties.Policies.PasswordPolicy).toEqual({
+      MinimumLength: PASSWORD_POLICY.minLength,
+      RequireLowercase: PASSWORD_POLICY.requireLowercase,
+      RequireUppercase: PASSWORD_POLICY.requireUppercase,
+      RequireNumbers: PASSWORD_POLICY.requireDigits,
+      RequireSymbols: true,
     });
   });
 });

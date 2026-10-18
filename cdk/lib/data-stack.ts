@@ -7,6 +7,7 @@ import { Cognito } from './constructs/cognito';
 import { Database } from './constructs/database';
 import { EcrRepository } from './constructs/ecr';
 import { UploadBucket } from './constructs/upload-bucket';
+import { acknowledgeAll, NAG_REASONS } from './nag-reasons';
 
 export interface DataStackProps extends StackProps {
   parameter: AppParameter;
@@ -62,6 +63,10 @@ export class DataStack extends Stack {
       generateSecretString: { passwordLength: 64, excludePunctuation: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    // 2 つの鍵は手で版を足して切り替える（SMG4 の抑止、NFR3.14）
+    for (const secret of [this.tokenEncryptionKeys, this.loginCookieSigningKey]) {
+      acknowledgeAll(secret, ['SMG4'], NAG_REASONS.manualKeyRotation);
+    }
 
     // deploy.sh がイメージを送る先と、最初の admin を作る手順の表示に使う
     new CfnOutput(this, 'EcrRepositoryUri', { value: this.ecr.repository.repositoryUri });

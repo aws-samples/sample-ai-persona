@@ -51,4 +51,3 @@ class Insight:
         Create Insight instance from dictionary.
         """
         return cls(**data)
-

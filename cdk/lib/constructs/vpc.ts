@@ -1,5 +1,6 @@
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 export interface VpcProps {
   envName: string;
@@ -32,5 +33,6 @@ export class Vpc extends Construct {
         S3: { service: ec2.GatewayVpcEndpointAwsService.S3 },
       },
     });
+    acknowledgeAll(this.vpc, ['VPC7'], NAG_REASONS.accessLogs);
   }
 }

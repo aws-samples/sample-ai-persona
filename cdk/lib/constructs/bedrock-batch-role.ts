@@ -1,6 +1,7 @@
 import { Construct } from 'constructs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import { bedrockInferenceArns } from '../bedrock-arns';
 
 export interface BedrockBatchRoleProps {
   bucket: s3.IBucket;
@@ -45,13 +46,13 @@ export class BedrockBatchRole extends Construct {
       })
     );
 
-    // Bedrock model invocation
+    // Bedrock model invocation（U9、NFR7.16: 推論の 3 つの ARN に絞る）
     this.role.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvokeModel',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
-        resources: ['*'],
+        resources: bedrockInferenceArns(this),
       })
     );
   }

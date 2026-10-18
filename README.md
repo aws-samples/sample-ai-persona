@@ -19,6 +19,30 @@
 
 コードのカスタマイズやローカルでの動作確認を行う場合は [ローカル開発ガイド](docs/local_development.md) を参照してください。
 
+### 開発（CI と必須チェック）
+
+`main` と `develop` への PR では、次の 7 つのチェックがすべて通らないとマージできないようにします（ブランチ保護の必須ステータスチェック）。チェックの名前は GitHub Actions のジョブの ID です。ジョブに `name:` を付けたり ID を変えたりすると名前が変わり、ブランチ保護が待ち続けるため変えません。
+
+| チェック | ワークフロー | 内容 |
+|---|---|---|
+| `lint` | `lint.yml` | `ruff check`、`ruff format --check`（整形のずれ）、`mypy src/ web/` |
+| `unit` | `test.yml` | `pytest -m unit`（カバレッジのデータを出す） |
+| `integration` | `test.yml` | `pytest -m integration`（カバレッジのデータを出す） |
+| `api` | `test.yml` | `pytest -m api`（カバレッジのデータを出す） |
+| `ui` | `test.yml` | `pytest -m ui`（Playwright の Chromium。カバレッジには入れない） |
+| `coverage` | `test.yml` | `unit`・`integration`・`api` のカバレッジを合わせ、`src` と `web` の行カバレッジが 80% を下回ったら失敗 |
+| `synth` | `cdk.yml` | `tsc --noEmit`、jest（cdk-nag・IAM の `*`・論理 ID・RETAIN のテストを含む）、`cdk synth --no-staging`。`cdk/` を変えない PR でも動く |
+
+- `coverage` は `unit`・`integration`・`api` のどれかが失敗すると skipped になり、結果を返しません。そのときは失敗したジョブのほうが必須チェックとしてマージを止めます
+- 手元で `coverage` と同じ判定をするには次を流します
+
+  ```bash
+  for m in unit integration api; do COVERAGE_FILE=.coverage.$m uv run pytest -m $m --cov=src --cov=web --cov-report= -q; done
+  uv run coverage combine && uv run coverage report --fail-under=80
+  ```
+
+- ブランチ保護の設定は開発者が GitHub の画面（Settings → Branches）か `gh api` で行います。7 つの名前は、最初の PR でそれぞれが報告されたのを見てから入れます
+
 ## 主要機能
 
 ### インタビュー

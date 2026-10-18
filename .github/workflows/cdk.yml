@@ -1,12 +1,13 @@
 name: CDK
 
+# すべての PR と push で動かす（U9、NFR7.14）。jest に cdk-nag・IAM・論理 ID のテストが入り、
+# cdk/ を変えない PR でも Stage の組み立てを壊していないことを毎回確かめる。
+# ジョブの ID（synth）はブランチ保護の必須チェックの名前なので変えず、name: も付けない
 on:
   push:
     branches: [main, develop]
-    paths: ['cdk/**']
   pull_request:
     branches: [main, develop]
-    paths: ['cdk/**']
 
 permissions:
   contents: read

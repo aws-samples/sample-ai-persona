@@ -25,6 +25,7 @@
     "@aws-cdk/aws-bedrock-agentcore-alpha": "^2.252.0-alpha.0",
     "aws-cdk": "^2.1128.1",
     "aws-cdk-lib": "^2.265.0",
+    "cdk-nag": "^3.0.2",
     "constructs": "^10.4.0",
     "source-map-support": "^0.5.21"
   }
