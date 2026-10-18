@@ -90,7 +90,7 @@ describe('ログイン系の URL のレート制限 LoginRateLimit（U9、NFR4.1
     expect([...LOGIN_RATE_LIMITED_PATHS]).toEqual(['/login', '/auth/callback', '/auth/new-password']);
   });
 
-  test('priority 0 で block、IP ごとに 300 秒 100 件、3 つのパスの完全一致の OR（メソッドは見ない）', () => {
+  test('priority 0 で block、IP ごとに 300 秒 100 件、URL を 1 回デコードした 3 つのパスの完全一致の OR（メソッドは見ない）', () => {
     const rule = ruleNamed(rules(synth({ enableWaf: true })), 'LoginRateLimit');
     expect(rule.Priority).toBe(0);
     expect(rule.Action).toEqual({ Block: {} });
@@ -105,7 +105,9 @@ describe('ログイン系の URL のレート制限 LoginRateLimit（U9、NFR4.1
           FieldToMatch: { UriPath: {} },
           PositionalConstraint: 'EXACTLY',
           SearchString: path,
-          TextTransformations: [{ Priority: 0, Type: 'NONE' }],
+          // アプリ（uvicorn）はパスのエンコードを 1 回戻してからルートを選ぶ。/%6cogin も
+          // /login として数えるため、WAF も比較の前に 1 回戻す
+          TextTransformations: [{ Priority: 0, Type: 'URL_DECODE' }],
         },
       })),
     );

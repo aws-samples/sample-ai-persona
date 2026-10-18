@@ -49,7 +49,9 @@ function loginRateLimitRule(): wafv2.CfnWebACL.RuleProperty {
                 fieldToMatch: { uriPath: {} },
                 positionalConstraint: 'EXACTLY',
                 searchString: path,
-                textTransformations: [{ priority: 0, type: 'NONE' }],
+                // アプリ（uvicorn）はパスのエンコードを 1 回戻してからルートを選ぶ（/%6cogin は
+                // /login）。WAF も比較の前に 1 回戻し、別の表記で制限を外せないようにする
+                textTransformations: [{ priority: 0, type: 'URL_DECODE' }],
               },
             })),
           },

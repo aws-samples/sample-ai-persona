@@ -7,6 +7,7 @@
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -43,6 +44,56 @@ def test_each_rate_limited_path_is_an_auth_route(path):
 def test_new_password_path_matches_the_app_constant():
     assert auth.NEW_PASSWORD_PATH in _waf_paths()
     assert auth.NEW_PASSWORD_PATH == "/auth/new-password"
+
+
+_TRANSFORMATION = re.compile(
+    r"textTransformations:\s*\[\{\s*priority:\s*0,\s*type:\s*'(\w+)'"
+)
+
+
+def test_the_waf_decodes_the_path_once_before_comparing():
+    """The app decodes the path once (``/%6cogin`` is ``/login``); the WAF must too."""
+    text = EDGE_STACK.read_text(encoding="utf-8")
+    login_rule = text[text.index("loginRateLimitRule") :]
+    match = _TRANSFORMATION.search(login_rule)
+    assert match is not None, "the LoginRateLimit text transformation is not found"
+    assert match.group(1) == "URL_DECODE"
+
+
+@pytest.mark.parametrize(
+    ("encoded", "path"),
+    [
+        ("/%6cogin", "/login"),
+        ("/%6Cogin", "/login"),
+        ("/auth/%63allback", "/auth/callback"),
+        ("/auth/new%2dpassword", "/auth/new-password"),
+    ],
+)
+def test_an_encoded_path_reaches_the_same_route_and_is_counted(encoded, path):
+    """An encoded login path is the same route for the app and, after one URL_DECODE,
+    the same rate-limited path for the WAF.
+
+    The ASGI server (uvicorn) puts the once-decoded path in ``scope["path"]`` and the
+    router matches on it, so ``/%6cogin`` is served as ``/login``.
+    """
+    from starlette.routing import Match
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": unquote(encoded),
+        "raw_path": encoded.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [],
+    }
+    matched = {
+        getattr(r, "path", "")
+        for r in auth.router.routes
+        if r.matches(scope)[0] is not Match.NONE
+    }
+    assert matched == {path}
+    assert unquote(encoded) in _waf_paths()
 
 
 def test_the_check_reads_the_auth_routes():
