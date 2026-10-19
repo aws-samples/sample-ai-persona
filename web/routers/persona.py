@@ -75,6 +75,13 @@ templates.env.globals["persona_avatar_url"] = persona_avatar_url
 # スレッドプールエグゼキューター（同期的なAI処理を非同期で実行するため）
 executor = ThreadPoolExecutor(max_workers=8)
 
+
+async def _run(func: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run a synchronous Manager call (DynamoDB / S3) off the event loop (NFR9.20)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+
+
 # シングルトンマネージャーインスタンス（モジュールレベルで共有）
 _persona_manager: PersonaManager | None = None
 _persona_memory_manager: PersonaMemoryManager | None = None
@@ -566,14 +573,18 @@ async def save_persona(
         ]
 
         gen_manager = get_persona_generation_manager()
-        claim = gen_manager.claim_candidates(principal, [persona_id])
+        claim = await _run(gen_manager.claim_candidates, principal, [persona_id])
         result: CandidateSaveResult | None = None
         try:
-            result = get_persona_manager().save_generated_personas(
-                principal, claim, edited=edited, selected_temp_ids=selected
+            result = await _run(
+                get_persona_manager().save_generated_personas,
+                principal,
+                claim,
+                edited=edited,
+                selected_temp_ids=selected,
             )
         finally:
-            gen_manager.finish_candidates(claim, result)
+            await _run(gen_manager.finish_candidates, claim, result)
 
         message = f"ペルソナ「{name}」を保存しました"
         if result.failed_datasets:
@@ -674,7 +685,7 @@ def _not_found_banner(request: Request) -> Any:
     )
 
 
-def _render_edit_form_with_error(
+async def _render_edit_form_with_error(
     request: Request,
     persona_id: str,
     *,
@@ -697,8 +708,8 @@ def _render_edit_form_with_error(
         描画できない場合は ``None``（呼び出し側でトーストに退避する）。
     """
     try:
-        persona = get_persona_manager().get_persona_for_edit(
-            _principal(request), persona_id
+        persona = await _run(
+            get_persona_manager().get_persona_for_edit, _principal(request), persona_id
         )
     except Exception:
         logger.warning("Failed to fetch persona for edit form re-render", exc_info=True)
@@ -740,7 +751,8 @@ async def update_persona(
     try:
         persona_manager = get_persona_manager()
 
-        updated_persona = persona_manager.update_persona(
+        updated_persona = await _run(
+            persona_manager.update_persona,
             _principal(request),
             persona_id=persona_id,
             name=name,
@@ -758,7 +770,9 @@ async def update_persona(
 
         # htmxスワップ用：ヘッダー + ボディを返す。所有者・共有先の行も詳細ページと
         # 同じ値で描く（保存後に行が消えないように、R-07）
-        detail = persona_manager.describe_persona(_principal(request), updated_persona)
+        detail = await _run(
+            persona_manager.describe_persona, _principal(request), updated_persona
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/detail_swap.html",
@@ -782,7 +796,7 @@ async def update_persona(
         if is_correctable(e):
             # 入力を直せば解決するエラーは、送信値を保持したまま編集フォームを
             # 再描画する。汎用パーシャルに置換すると11項目の入力が失われる
-            rendered = _render_edit_form_with_error(
+            rendered = await _render_edit_form_with_error(
                 request,
                 persona_id,
                 message=user_message_for(e),
@@ -1160,7 +1174,8 @@ async def get_persona_memories(
     try:
         memory_manager = get_persona_memory_manager()
 
-        memories, current_page, total_pages = memory_manager.get_memories(
+        memories, current_page, total_pages = await _run(
+            memory_manager.get_memories,
             _principal(request),
             persona_id=persona_id,
             strategy_type=strategy_type,
@@ -1226,8 +1241,8 @@ async def delete_persona_memory(
     """ペルソナの特定の記憶を削除（htmx対応）"""
     memory_manager = get_persona_memory_manager()
     try:
-        success = memory_manager.delete_memory(
-            _principal(request), persona_id, memory_id
+        success = await _run(
+            memory_manager.delete_memory, _principal(request), persona_id, memory_id
         )
 
         if success:
@@ -1295,8 +1310,8 @@ async def delete_all_persona_memories(
     memory_manager = get_persona_memory_manager()
     principal = _principal(request)
     try:
-        deleted_count = memory_manager.delete_all_memories(
-            principal, persona_id, strategy_type
+        deleted_count = await _run(
+            memory_manager.delete_all_memories, principal, persona_id, strategy_type
         )
 
         item_name = "知識" if strategy_type == "semantic" else "記憶"
@@ -1326,8 +1341,8 @@ async def delete_all_persona_memories(
             "Error deleting all memories for persona %s", persona_id, exc_info=True
         )
 
-        memories = memory_manager.safe_get_memories(
-            principal, persona_id, strategy_type
+        memories = await _run(
+            memory_manager.safe_get_memories, principal, persona_id, strategy_type
         )
 
         return templates.TemplateResponse(
@@ -1356,8 +1371,8 @@ async def delete_all_persona_memories(
             "Error deleting all memories for persona %s", persona_id, exc_info=True
         )
 
-        memories = memory_manager.safe_get_memories(
-            principal, persona_id, strategy_type
+        memories = await _run(
+            memory_manager.safe_get_memories, principal, persona_id, strategy_type
         )
 
         return templates.TemplateResponse(
@@ -1388,7 +1403,8 @@ async def add_persona_memory(
     try:
         memory_manager = get_persona_memory_manager()
 
-        memory_manager.add_knowledge(
+        await _run(
+            memory_manager.add_knowledge,
             principal,
             persona_id=persona_id,
             topic_name=topic_name,
@@ -1396,11 +1412,11 @@ async def add_persona_memory(
         )
 
         topic_name_clean = topic_name.strip()
-        logger.info(
-            f"Manual knowledge added for persona {persona_id}: {topic_name_clean}"
-        )
+        # 題名は記憶の中身の一部のためログに出さない（NFR3.11）
+        logger.info(f"Manual knowledge added for persona {persona_id}")
 
-        memories, current_page, total_pages = memory_manager.get_memories(
+        memories, current_page, total_pages = await _run(
+            memory_manager.get_memories,
             principal,
             persona_id=persona_id,
             strategy_type="semantic",
@@ -1483,8 +1499,10 @@ async def upload_knowledge_file_preview(
     """
     try:
         # 変換の前に判定する（共有された人・読めない人は 404）
-        get_persona_memory_manager().ensure_memory_manageable(
-            _principal(request), persona_id
+        await _run(
+            get_persona_memory_manager().ensure_memory_manageable,
+            _principal(request),
+            persona_id,
         )
 
         # ファイル内容を読み込み
@@ -1492,7 +1510,9 @@ async def upload_knowledge_file_preview(
 
         # FileManagerで変換
         file_manager = get_file_manager()
-        markdown_content = file_manager.convert_file_to_markdown(
+        # 変換（PDF 等の読み取り）も重いのでスレッドで行う
+        markdown_content = await _run(
+            file_manager.convert_file_to_markdown,
             file_content,
             file.filename,  # type: ignore[arg-type]
         )
@@ -1589,12 +1609,6 @@ async def upload_knowledge_file_preview(
 
 
 # ナレッジベース紐付け関連エンドポイント
-
-
-async def _run(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Run a synchronous Manager call (DynamoDB / S3) off the event loop."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
 
 
 @router.get("/{persona_id}/kb-binding", response_class=HTMLResponse)
@@ -1801,12 +1815,14 @@ async def save_selected_personas(request: Request, persona_ids: str = Form(...))
     try:
         id_list = [pid.strip() for pid in persona_ids.split(",") if pid.strip()]
         gen_manager = get_persona_generation_manager()
-        claim = gen_manager.claim_candidates(principal, id_list)
+        claim = await _run(gen_manager.claim_candidates, principal, id_list)
         result: CandidateSaveResult | None = None
         try:
-            result = get_persona_manager().save_generated_personas(principal, claim)
+            result = await _run(
+                get_persona_manager().save_generated_personas, principal, claim
+            )
         finally:
-            gen_manager.finish_candidates(claim, result)
+            await _run(gen_manager.finish_candidates, claim, result)
 
         logger.info(f"Completed saving {result.saved_count} personas")
         return templates.TemplateResponse(

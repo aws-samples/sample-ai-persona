@@ -294,6 +294,118 @@ class TestListTemplates:
 
 
 # =============================================================================
+# U7 Loop-back 1: 検索の 500 件の上限（NFR2.21、BR1.2）
+# =============================================================================
+
+
+class TestSearchReadsAtMost500:
+    """A search reads the newest 500 IDs of the tab and never scans (NFR2.21)."""
+
+    @staticmethod
+    def _seed(world: SurveyWorld, owner: str, count: int, *share: str) -> list:
+        """Write ``count`` templates (oldest first) with batch writes.
+
+        One transaction per template takes minutes in moto, so the bodies and
+        the share index items are written in the shape the services write.
+        """
+        from dataclasses import replace
+        from datetime import timedelta
+
+        from src.models.sharing import ResourceShareEntry
+        from tests.unit.survey_world import NOW
+
+        made, bodies, entries = [], [], []
+        for i in range(count):
+            at = NOW + timedelta(minutes=i)
+            template = replace(
+                SurveyTemplate.create_new(
+                    name=f"検索{i:03d}", questions=[Question.create_free_text("Q")]
+                ),
+                created_at=at,
+                updated_at=at,
+            ).owned_by(owner)
+            body = world.db._serialize_survey_template(template)
+            if share:
+                body["shared_group_ids"] = {"SS": sorted(share)}
+                entries += [
+                    ResourceShareEntry(
+                        group, TEMPLATE, template.id, body["created_at"]["S"], owner
+                    )
+                    for group in share
+                ]
+            bodies.append(body)
+            made.append(template)
+        for start in range(0, len(bodies), 25):
+            world.client.batch_write_item(
+                RequestItems={
+                    world.db.survey_templates_table: [
+                        {"PutRequest": {"Item": b}} for b in bodies[start : start + 25]
+                    ]
+                }
+            )
+        world.share_store.put_entries(entries)
+        return made
+
+    @staticmethod
+    def _read_ids(world: SurveyWorld, monkeypatch) -> list:
+        """Record every template ID whose body the manager reads."""
+        read: list = []
+        real = world.db.get_survey_templates_by_ids
+
+        def spy(ids):
+            read.extend(ids)
+            return real(ids)
+
+        monkeypatch.setattr(world.db, "get_survey_templates_by_ids", spy)
+        return read
+
+    def test_501_in_mine_reads_the_newest_500_and_marks_the_cut(
+        self, mgr, survey_world, monkeypatch
+    ):
+        made = self._seed(survey_world, "a", 501)
+        read = self._read_ids(survey_world, monkeypatch)
+        scan = survey_world.spy("scan")
+
+        listing = mgr.list_templates(MEMBER_A, "mine", None, search="検索")
+
+        assert len(read) == 500
+        assert set(read) == {t.id for t in made[1:]}
+        assert listing.search_truncated is True
+        assert listing.counts == {"mine": None}
+        assert scan.call_count == 0
+        # 最も古い 1 件は読まれないため、名前で探しても出ない
+        oldest = mgr.list_templates(MEMBER_A, "mine", None, search="検索000")
+        assert oldest.items == []
+
+    def test_exactly_500_is_not_marked(self, mgr, survey_world, monkeypatch):
+        made = self._seed(survey_world, "a", 500)
+        read = self._read_ids(survey_world, monkeypatch)
+        scan = survey_world.spy("scan")
+
+        listing = mgr.list_templates(MEMBER_A, "mine", None, search="検索000")
+
+        assert set(read) == {t.id for t in made}
+        assert [t.id for t in listing.items] == [made[0].id]
+        assert listing.search_truncated is False
+        assert listing.counts == {"mine": 500}
+        assert scan.call_count == 0
+
+    def test_501_in_shared_reads_the_newest_500_without_a_scan(
+        self, mgr, survey_world, monkeypatch
+    ):
+        made = self._seed(survey_world, "b", 501, "sales")
+        read = self._read_ids(survey_world, monkeypatch)
+        scan = survey_world.spy("scan")
+
+        listing = mgr.list_templates(MEMBER_A, "shared", None, search="検索")
+
+        assert len(read) == 500
+        assert set(read) == {t.id for t in made[1:]}
+        assert listing.search_truncated is True
+        assert scan.call_count == 0
+
+
+# =============================================================================
 # 読む・管理する（BR1.3〜BR1.6、NFR1.67、NFR1.69）
 # =============================================================================
 

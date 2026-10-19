@@ -5,6 +5,7 @@
 """
 
 import json
+import threading
 from dataclasses import replace
 from unittest.mock import Mock, patch
 from io import BytesIO
@@ -1087,6 +1088,25 @@ class TestPersonaMemories:
         response = client.delete("/persona/p1/memories")
         assert response.status_code == 200
 
+    @patch("web.routers.persona.get_persona_memory_manager")
+    def test_adding_knowledge_does_not_log_its_title(
+        self, mock_get_mgr, client, caplog
+    ):
+        """NFR3.11: the knowledge title is memory content and stays out of the logs."""
+        mark = "TOPIC-TITLE-SENTINEL-3b9a"
+        mock_mgr = Mock()
+        mock_mgr.get_memories.return_value = ([], 1, 1)
+        mock_get_mgr.return_value = mock_mgr
+
+        with caplog.at_level("DEBUG"):
+            response = client.post(
+                "/persona/p1/memories",
+                data={"topic_name": f"題名{mark}", "topic_content": "本文"},
+            )
+
+        assert response.status_code == 200
+        assert not [r for r in caplog.records if mark in r.getMessage()]
+
 
 class TestMemoryLookupUnavailableIs503:
     """R-05: a failed decision read on the memory screen is the common 503.
@@ -1892,3 +1912,164 @@ class TestPersonaApiScope:
         response = _login(client, "a").get("/api/personas/p3")
         assert response.status_code == 404
         assert response.json()["error_code"] == "persona_not_found"
+
+
+class _ThreadRecorder:
+    """Record the thread each mocked Manager method ran on (NFR9.20)."""
+
+    def __init__(self) -> None:
+        self.threads: dict[str, list[int]] = {}
+
+    def returning(self, name: str, value=None, error: Exception | None = None):
+        def side_effect(*_args, **_kwargs):
+            self.threads.setdefault(name, []).append(threading.get_ident())
+            if error is not None:
+                raise error
+            return value
+
+        return side_effect
+
+    def assert_off_the_loop(self, client, names: list[str]) -> None:
+        # TestClient のイベントループのスレッド（要求はすべてこのループで処理される）
+        loop_thread = client.portal.call(threading.get_ident)
+        for name in names:
+            assert self.threads.get(name), f"{name} が呼ばれていない"
+            assert loop_thread not in self.threads[name], (
+                f"{name} がイベントループのスレッドで走った"
+            )
+
+
+class TestManagerCallsRunOffTheEventLoop:
+    """NFR9.20: 判定の読み取りを含む Manager の呼び出しはイベントループの外で走る。"""
+
+    @pytest.mark.parametrize(
+        ("method", "path", "kwargs", "expected"),
+        [
+            ("get", "/persona/p1/memories", {}, ["get_memories"]),
+            ("delete", "/persona/p1/memories/m1", {}, ["delete_memory"]),
+            (
+                "delete",
+                "/persona/p1/memories",
+                {},
+                ["delete_all_memories", "safe_get_memories"],
+            ),
+            (
+                "post",
+                "/persona/p1/memories",
+                {"data": {"topic_name": "t", "topic_content": "c"}},
+                ["add_knowledge", "get_memories"],
+            ),
+            (
+                "post",
+                "/persona/p1/memories/upload-preview",
+                {"files": {"file": ("k.txt", b"knowledge", "text/plain")}},
+                ["ensure_memory_manageable", "convert_file_to_markdown"],
+            ),
+        ],
+    )
+    def test_memory_endpoints(self, client, method, path, kwargs, expected):
+        from src.managers.persona_memory_manager import PersonaMemoryManagerError
+
+        rec = _ThreadRecorder()
+        memory = Mock()
+        memory.get_memories.side_effect = rec.returning("get_memories", ([], 1, 1))
+        memory.delete_memory.side_effect = rec.returning("delete_memory", True)
+        # 全件の削除の失敗で、一覧を読み直す側（safe_get_memories）も通す
+        memory.delete_all_memories.side_effect = rec.returning(
+            "delete_all_memories",
+            error=PersonaMemoryManagerError(
+                "service down", code=ErrorCode.MEMORY_SERVICE_UNAVAILABLE
+            ),
+        )
+        memory.safe_get_memories.side_effect = rec.returning("safe_get_memories", [])
+        memory.add_knowledge.side_effect = rec.returning("add_knowledge")
+        memory.ensure_memory_manageable.side_effect = rec.returning(
+            "ensure_memory_manageable"
+        )
+        files = Mock()
+        files.convert_file_to_markdown.side_effect = rec.returning(
+            "convert_file_to_markdown", "# knowledge"
+        )
+        with (
+            patch(
+                "web.routers.persona.get_persona_memory_manager", return_value=memory
+            ),
+            patch("web.routers.persona.get_file_manager", return_value=files),
+        ):
+            response = getattr(client, method)(path, **kwargs)
+
+        assert response.status_code == 200
+        rec.assert_off_the_loop(client, expected)
+
+    @pytest.mark.parametrize(
+        ("path", "data"),
+        [
+            ("/persona/save", TestPersonaSaveEndpoint._FORM),
+            ("/persona/save-selected", {"persona_ids": "cand-1, cand-2"}),
+        ],
+    )
+    def test_candidate_save_endpoints(self, client, path, data):
+        from src.models.persona_candidate import CandidateSaveResult
+
+        rec = _ThreadRecorder()
+        gen = Mock()
+        gen.claim_candidates.side_effect = rec.returning("claim_candidates", "claim")
+        gen.finish_candidates.side_effect = rec.returning("finish_candidates")
+        manager = Mock()
+        manager.save_generated_personas.side_effect = rec.returning(
+            "save_generated_personas",
+            CandidateSaveResult(saved_ids=("cand-1",), saved_persona_ids=("new-1",)),
+        )
+        with (
+            patch(
+                "web.routers.persona.get_persona_generation_manager", return_value=gen
+            ),
+            patch("web.routers.persona.get_persona_manager", return_value=manager),
+        ):
+            response = client.post(path, data=data)
+
+        assert response.status_code == 200
+        rec.assert_off_the_loop(
+            client,
+            ["claim_candidates", "save_generated_personas", "finish_candidates"],
+        )
+
+    def test_update_and_its_form_re_render(self, client, sample_persona):
+        form = {
+            "name": "名前",
+            "age": "30",
+            "occupation": "職業",
+            "background": "背景",
+            "values": "v",
+            "pain_points": "p",
+            "goals": "g",
+        }
+        rec = _ThreadRecorder()
+        manager = Mock()
+        manager.avatar_upload_enabled.return_value = False
+        manager.update_persona.side_effect = rec.returning(
+            "update_persona", sample_persona
+        )
+        manager.describe_persona.side_effect = rec.returning(
+            "describe_persona", _detail(sample_persona)
+        )
+        manager.get_persona_for_edit.side_effect = rec.returning(
+            "get_persona_for_edit", sample_persona
+        )
+        with patch("web.routers.persona.get_persona_manager", return_value=manager):
+            saved = client.put(f"/persona/{sample_persona.id}", data=form)
+            manager.update_persona.side_effect = rec.returning(
+                "update_persona",
+                error=PersonaManagerError(
+                    "too long",
+                    code=ErrorCode.PERSONA_FIELD_TOO_LONG,
+                    context={"field": "occupation", "max_length": 100},
+                ),
+            )
+            rejected = client.put(f"/persona/{sample_persona.id}", data=form)
+
+        assert saved.status_code == 200
+        assert rejected.status_code == 400
+        rec.assert_off_the_loop(
+            client, ["update_persona", "describe_persona", "get_persona_for_edit"]
+        )

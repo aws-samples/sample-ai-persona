@@ -186,12 +186,12 @@ CLASSIFICATION: dict[str, Entry] = {
     "FileManager.preview_url_for_path": CHECKS,  # FileAttachments.readable_file（BR5.8）
     # interview_manager.py — U6（持ち主だけ、BR3.2。手で呼ぶ掃除・生のファイルの経路はなくした）
     "InterviewManager.start_interview_session": CHECKS,  # ai:execute（BR3.1）
-    "InterviewManager.send_user_message": CHECKS,  # is_owner + 参加者の確かめ直し
+    "InterviewManager.send_user_message": CHECKS,  # ensure_owner + 参加者の確かめ直し
     "InterviewManager.send_user_message_streaming": CHECKS,  # 同上
-    "InterviewManager.save_interview_session": CHECKS,  # is_owner + 参加者（BR3.7）
-    "InterviewManager.get_interview_session": CHECKS,  # is_owner（BR3.2）
-    "InterviewManager.end_interview_session": CHECKS,  # is_owner（BR3.2）
-    "InterviewManager.get_session_status": CHECKS,  # is_owner（BR3.2）
+    "InterviewManager.save_interview_session": CHECKS,  # ensure_owner + 参加者（BR3.7）
+    "InterviewManager.get_interview_session": CHECKS,  # ensure_owner（BR3.2）
+    "InterviewManager.end_interview_session": CHECKS,  # ensure_owner（BR3.2）
+    "InterviewManager.get_session_status": CHECKS,  # ensure_owner（BR3.2）
     "InterviewManager.get_active_sessions_count": NO_USER_DATA,  # 手元の件数だけ
     # job_manager.py — U2（submit は ai:execute、get は投入者の照合）
     "JobManager.submit": CHECKS,

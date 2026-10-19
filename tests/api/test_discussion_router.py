@@ -9,6 +9,7 @@ AC2.1.3、AC4.1.1〜AC4.1.3、AC4.1.5、AC4.4.1、AC4.4.2、AC5.1.1〜AC5.1.3。
 
 import json
 import re
+import uuid
 from contextlib import ExitStack
 from unittest.mock import Mock, patch
 
@@ -423,6 +424,61 @@ class TestDetail:
         insights = client.get(f"/discussion/insights/{discussion.id}")
         assert insights.status_code == 200
         assert "regenerate-insights-dialog-open-button" not in insights.text
+
+
+def _same_shape(response, resource_id: str) -> tuple:
+    """Status, toast, content type and body, with ``resource_id`` blanked out."""
+    blank = "<ID>"
+    return (
+        response.status_code,
+        response.headers.get("HX-Trigger"),
+        response.headers.get("content-type"),
+        response.text.replace(resource_id, blank),
+    )
+
+
+class TestMissingLooksLikeUnreadable:
+    """存在しない ID と読めない ID で応答がまったく同じ（NFR1.56、BR2.7、約束 C5）。
+
+    状態コードだけでなく、トースト（``HX-Trigger``）・種類・本文を、ID の文字を
+    同じ値に置き換えてから比べる。Build and Test の Loop-back 1 で足した。
+    """
+
+    @pytest.mark.parametrize(
+        ("path", "headers"),
+        [
+            ("/discussion/{id}", PAGE),
+            ("/discussion/{id}", {}),
+            ("/discussion/result-partial/{id}", {}),
+            ("/discussion/insights/{id}", {}),
+            ("/discussion/{id}/export", {}),
+        ],
+    )
+    def test_discussion_pages(self, aw, client, path, headers):
+        unreadable = aw.discussion(STRANGER).id
+        missing = str(uuid.uuid4())
+        assert aw.world.store.bodies.get(missing) is None
+
+        a = client.get(path.format(id=unreadable), headers=headers)
+        b = client.get(path.format(id=missing), headers=headers)
+
+        assert a.status_code == 404
+        assert _same_shape(a, unreadable) == _same_shape(b, missing)
+
+    @pytest.mark.parametrize("suffix", ["", "/export?format=txt"])
+    def test_reports(self, aw, client, suffix):
+        unreadable = aw.discussion(STRANGER).id
+        report = aw.world.records.save_report(
+            STRANGER, unreadable, "summary", "# 見出し\n本文", None
+        )
+        missing = str(uuid.uuid4())
+        rid = report.report_id
+
+        a = client.get(f"/discussion/{unreadable}/report/{rid}{suffix}")
+        b = client.get(f"/discussion/{missing}/report/{rid}{suffix}")
+
+        assert a.status_code == 404
+        assert _same_shape(a, unreadable) == _same_shape(b, missing)
 
 
 class TestExport:

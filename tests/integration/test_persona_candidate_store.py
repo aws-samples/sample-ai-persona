@@ -138,6 +138,108 @@ class TestWrite:
         assert PersonaCandidateStore.item_size(big) > MAX_CANDIDATE_ITEM_BYTES
 
 
+def _sized(candidate: PersonaCandidate, size: int) -> PersonaCandidate:
+    """The candidate with its generation log padded to exactly ``size`` bytes."""
+    from dataclasses import replace
+
+    def with_log(text: str) -> PersonaCandidate:
+        return replace(
+            candidate, generation_log=[{"type": "thinking", "content": text}]
+        )
+
+    base = PersonaCandidateStore.item_size(with_log(""))
+    padded = with_log("x" * (size - base))  # ASCII は 1 文字 1 バイト
+    assert PersonaCandidateStore.item_size(padded) == size
+    return padded
+
+
+def _count(client: Any) -> int:
+    return client.scan(TableName=TABLE, Select="COUNT")["Count"]
+
+
+class TestSizeBoundary:
+    """NFR2.12（BR1.6）: 直列にした大きさ 358,400 バイトちょうどは書け、1 バイト多いと書かない。"""
+
+    def test_a_candidate_of_exactly_the_limit_is_written(self, store, client):
+        candidate = _sized(_candidate(), MAX_CANDIDATE_ITEM_BYTES)
+        assert MAX_CANDIDATE_ITEM_BYTES == 358_400
+
+        store.put_all([candidate])
+
+        assert store.get(candidate.candidate_id) == candidate
+        assert _count(client) == 1
+
+    @pytest.mark.parametrize(("extra", "written"), [(0, 1), (1, 0)])
+    def test_generation_writes_at_the_limit_and_nothing_one_byte_over(
+        self, store, client, monkeypatch, extra, written
+    ):
+        from unittest.mock import Mock
+
+        from src.managers import persona_generation_manager as mod
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManager,
+            PersonaGenerationManagerError,
+        )
+        from src.models.errors import ErrorCode
+        from tests.conftest import MEMBER_A
+        from tests.error_helpers import raises_code
+
+        # 生成で作られた候補を、ちょうど上限 + extra バイトにする（本番のコードは変えない）
+        original = PersonaCandidate.from_persona
+        monkeypatch.setattr(
+            PersonaCandidate,
+            "from_persona",
+            lambda *a, **k: _sized(original(*a, **k), MAX_CANDIDATE_ITEM_BYTES + extra),
+        )
+        agent = Mock()
+        agent.run_persona_generation.return_value = (
+            mod._PersonaListOutput(
+                personas=[
+                    mod._PersonaOutput(
+                        name="田中",
+                        age=30,
+                        occupation="会社員",
+                        background="背景",
+                        values=["v"],
+                        pain_points=["p"],
+                        goals=["g"],
+                    )
+                ]
+            ),
+            [{"type": "thinking", "content": "考えた"}],
+        )
+        manager = PersonaGenerationManager(
+            agent_service=agent,
+            database_service=Mock(),
+            dataset_analysis_service=Mock(),
+            candidate_store=store,
+            s3_service=Mock(),
+            clock=lambda: NOW,
+        )
+
+        def generate() -> Any:
+            return manager.generate(
+                MEMBER_A.principal(),
+                file_contents=[
+                    ("十分な長さのインタビュー本文です。".encode(), "a.txt")
+                ],
+                data_type="interview",
+                persona_count=1,
+            )
+
+        if written:
+            result = generate()
+            stored = store.get(result.personas[0].id)
+            assert stored is not None
+            assert PersonaCandidateStore.item_size(stored) == MAX_CANDIDATE_ITEM_BYTES
+        else:
+            with raises_code(
+                PersonaGenerationManagerError, ErrorCode.GENERATION_RESULT_TOO_LARGE
+            ):
+                generate()
+        assert _count(client) == written
+
+
 class TestClaim:
     def test_owner_claims_before_expiry(self, store):
         candidate = _candidate()
@@ -277,6 +379,64 @@ class TestConfirmBeforeSave:
         later = NOW + timedelta(minutes=1)
         assert not store.mark_saved(candidate.candidate_id, "tok", later)
         assert store.get(candidate.candidate_id).saved_at == NOW
+
+
+class TestConcurrentClaims:
+    """NFR9.28: 2 つの台が同じ候補を同時に押さえると、通るのはちょうど片方。"""
+
+    def test_only_one_of_two_simultaneous_claims_wins(self, store, client, monkeypatch):
+        import threading
+
+        from moto.dynamodb.models import DynamoDBBackend
+
+        # 本物の DynamoDB は 1 項目への条件付き書き込みを 1 つずつ行うが、moto の
+        # update_item は条件の確認と書き込みの間に別のスレッドが入りうる。本物と同じく
+        # 1 件ずつにして、どちらが通るかを条件だけで決めさせる（時間では待たない）
+        serial = threading.Lock()
+        original_update = DynamoDBBackend.update_item
+
+        def atomic_update(self: Any, *args: Any, **kwargs: Any) -> Any:
+            with serial:
+                return original_update(self, *args, **kwargs)
+
+        monkeypatch.setattr(DynamoDBBackend, "update_item", atomic_update)
+
+        candidate = _candidate()
+        store.put_all([candidate])
+        # 台ごとに別の Store と client（同じ moto のテーブル）。実体のメモリを共有しない
+        hosts = [
+            PersonaCandidateStore(
+                region=REGION,
+                table_name=TABLE,
+                client=boto3.client("dynamodb", region_name=REGION),
+            )
+            for _ in range(2)
+        ]
+        start = threading.Barrier(2)
+        outcomes: dict[str, object] = {}
+
+        def claim(host: PersonaCandidateStore, token: str) -> None:
+            start.wait()
+            try:
+                host.claim(candidate.candidate_id, "sub-a", token, NOW)
+                outcomes[token] = "claimed"
+            except CandidateUnavailable:
+                outcomes[token] = "unavailable"
+            except Exception as e:  # noqa: BLE001 - 想定外の失敗も結果として見る
+                outcomes[token] = e
+
+        threads = [
+            threading.Thread(target=claim, args=(host, f"tok-{i}"))
+            for i, host in enumerate(hosts)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sorted(map(str, outcomes.values())) == ["claimed", "unavailable"]
+        (winner,) = [tok for tok, result in outcomes.items() if result == "claimed"]
+        assert store.get(candidate.candidate_id).claim_token == winner
 
 
 class TestFailures:

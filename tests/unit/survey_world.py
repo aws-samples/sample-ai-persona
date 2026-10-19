@@ -314,6 +314,28 @@ class SurveyWorld:
         return spy
 
 
+def bulk_put_custom_data(
+    client: Any, table_name: str, records: list[CustomPersonaData]
+) -> None:
+    """Write records and their name reservations with batch writes.
+
+    The items are the ones ``CustomPersonaDataStore.put_new`` sends (captured
+    from its transaction), so they have the stored shape; one moto transaction
+    per record is too slow for hundreds of records.
+    """
+    recorder = Mock()
+    store = CustomPersonaDataStore(
+        region=REGION, table_name=table_name, client=recorder
+    )
+    puts: list[dict[str, Any]] = []
+    for record in records:
+        store.put_new(record)
+        items = recorder.transact_write_items.call_args.kwargs["TransactItems"]
+        puts += [{"PutRequest": {"Item": i["Put"]["Item"]}} for i in items]
+    for start in range(0, len(puts), 25):
+        client.batch_write_item(RequestItems={table_name: puts[start : start + 25]})
+
+
 def results_csv(rows: int = 3) -> bytes:
     """A result CSV of the template made by :meth:`SurveyWorld.survey`."""
     header = "persona_id,sex,age,occupation,country,region,prefecture,marital_status"

@@ -6,6 +6,10 @@ NFR1.12・NFR1.17・NFR1.19（失敗の分類）、NFR2.5（まとめ読みと�
 
 moto で起こせない TransactionConflict とスロットリングは、CancellationReasons を
 組み立てたスタブの client で確かめる（reliability-design.md §1）。
+
+NFR9.23（2 つの書き込みを交互に起こしても索引と本体が一致）は、本物の ResourceSharing と
+この Store を moto でつなぎ、1 人目の読みと書きの間に 2 人目の書き込みを差し込んで確かめる
+（TestInterleavedShareWrites。Build and Test の Loop-back 1）。
 """
 
 from typing import Any
@@ -18,8 +22,20 @@ moto = pytest.importorskip("moto", reason="moto is required for DynamoDB tests")
 import boto3  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
 
-from src.models.authz import ResourceType  # noqa: E402
-from src.models.sharing import ResourceShareEntry  # noqa: E402
+from src.managers.components.resource_sharing import ResourceSharing  # noqa: E402
+from src.models.authz import (  # noqa: E402
+    AccessTarget,
+    Department,
+    Principal,
+    ResourceType,
+    Role,
+)
+from src.models.errors import ErrorCode  # noqa: E402
+from src.models.sharing import (  # noqa: E402
+    ResourceShareEntry,
+    ShareChange,
+    SharingTable,
+)
 from src.services.resource_share_store import (  # noqa: E402
     ResourceShareStore,
     ResourceShareStoreError,
@@ -465,6 +481,141 @@ class TestFailureClassification:
         )
         assert exc.value.reason == "failed"
         assert client.transact_write_items.call_count == 1
+
+
+class _InterleavingStore:
+    """Wraps the real store and runs another writer before the first write.
+
+    The wrapped writer reads the body, then — just before its first
+    ``write_shares`` — ``interleave`` runs the second writer to completion. The
+    first write therefore meets a changed body, as two users saving at the same
+    moment would (NFR9.23). No threads and no sleep: the order is fixed.
+    """
+
+    def __init__(self, inner: ResourceShareStore, interleave: Any) -> None:
+        self._inner = inner
+        self._interleave = interleave
+        self.write_calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def write_shares(self, *args: Any, **kwargs: Any) -> None:
+        self.write_calls += 1
+        if self.write_calls == 1:
+            self._interleave()
+        self._inner.write_shares(*args, **kwargs)
+
+
+def _indexed_groups(client: Any, pid: str) -> list[str]:
+    """Department of every ResourceShares row of ``pid`` (duplicates kept)."""
+    items = client.scan(TableName=SHARES)["Items"]
+    return sorted(i["group_id"]["S"] for i in items if i["resource_id"]["S"] == pid)
+
+
+class TestInterleavedShareWrites:
+    """NFR9.23: after two interleaved writes the index equals the body."""
+
+    OWNER = Principal("sub-b", frozenset({Role.MEMBER}), frozenset({"sales", "plan"}))
+
+    def _sharing(self, store: Any) -> ResourceSharing:
+        departments = Mock()
+        departments.list_all.return_value = [
+            Department("sales", "営業部"),
+            Department("plan", "企画部"),
+            Department("hr", "人事部"),
+        ]
+        sharing = ResourceSharing(store, departments, sleep=lambda _s: None)
+        sharing.register(
+            SharingTable(
+                resource_type=PERSONA,
+                table=PERSONAS,
+                name_attribute="name",
+                not_found=ErrorCode.PERSONA_NOT_FOUND,
+                delete_failed=ErrorCode.PERSONA_OPERATION_FAILED,
+                cleanup_attributes=("avatar_path",),
+            )
+        )
+        return sharing
+
+    def _run(
+        self,
+        store: ResourceShareStore,
+        first: ShareChange,
+        second: ShareChange,
+    ) -> tuple[frozenset[str], _InterleavingStore]:
+        target = AccessTarget(PERSONA, "p1")
+        other = self._sharing(store)
+        wrapped = _InterleavingStore(
+            store, lambda: other.update_shares(self.OWNER, target, second)
+        )
+        result = self._sharing(wrapped).update_shares(self.OWNER, target, first)
+        return result, wrapped
+
+    def _body_groups(self, store: ResourceShareStore) -> list[str]:
+        body = store.get_item(PERSONAS, "p1", ATTRS)
+        return sorted(body.get("shared_group_ids", set()))
+
+    def test_add_and_add(self, aws, store):
+        _put_persona(aws, "p1", owner="sub-b")
+
+        result, wrapped = self._run(
+            store,
+            ShareChange(add=frozenset({"sales"})),
+            ShareChange(add=frozenset({"plan"})),
+        )
+
+        # 索引の部署ごとの行が本体の shared_group_ids と一致する（NFR9.23）
+        assert _indexed_groups(aws, "p1") == self._body_groups(store)
+        assert self._body_groups(store) == ["plan", "sales"]
+        assert result == {"sales", "plan"}
+        # 1 回目は条件の失敗、読み直して判定し直した 2 回目で書いた（BR1.9）
+        assert wrapped.write_calls == 2
+
+    def test_remove_and_add(self, aws, store):
+        _put_persona(aws, "p1", owner="sub-b", shared=["sales"])
+        _write_index(aws, "p1", "sales")
+
+        result, wrapped = self._run(
+            store,
+            ShareChange(remove=frozenset({"sales"})),
+            ShareChange(add=frozenset({"plan"})),
+        )
+
+        assert _indexed_groups(aws, "p1") == self._body_groups(store)
+        assert self._body_groups(store) == ["plan"]
+        assert result == {"plan"}
+        assert wrapped.write_calls == 2
+
+    def test_add_and_remove(self, aws, store):
+        _put_persona(aws, "p1", owner="sub-b", shared=["sales"])
+        _write_index(aws, "p1", "sales")
+
+        result, wrapped = self._run(
+            store,
+            ShareChange(add=frozenset({"plan"})),
+            ShareChange(remove=frozenset({"sales"})),
+        )
+
+        assert _indexed_groups(aws, "p1") == self._body_groups(store)
+        assert self._body_groups(store) == ["plan"]
+        assert result == {"plan"}
+        assert wrapped.write_calls == 2
+
+
+def _write_index(client: Any, pid: str, group: str) -> None:
+    """Seed the index row that matches a body already shared with ``group``."""
+    client.put_item(
+        TableName=SHARES,
+        Item={
+            "group_id": {"S": group},
+            "share_key": {"S": f"persona#2026-10-01T09:00:00#{pid}"},
+            "resource_id": {"S": pid},
+            "resource_type": {"S": "persona"},
+            "created_at": {"S": "2026-10-01T09:00:00"},
+            "owner_sub": {"S": "sub-b"},
+        },
+    )
 
 
 class TestPosition:

@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from src.config import config
 from src.managers.auth_manager import AuthManager, AuthSettings, LocalUser
 from src.managers.shared.token_cipher import TokenCipher
-from src.models.errors import ErrorCode
+from src.models.errors import ErrorCode, LookupUnavailableError
 from src.models.password_policy import PasswordPolicy
 from src.services.cognito.cognito_auth_service import (
     CognitoAuthError,
@@ -436,3 +436,200 @@ class TestPasswordNeverLeaks:
             caplog,
             capsys.readouterr().out,
         )
+
+
+# =============================================================================
+# Sessions テーブルに LoginChallenge を書けない・読めない（NFR9.45、Loop-back 1）
+# =============================================================================
+
+#: Cognito が返す session の目印。本物の値ではない。
+COGNITO_SESSION = "cognito-session-SENTINEL-7d2e9b"
+SESSIONS_TABLE = "SessionsLoopBack"
+REGION = "ap-northeast-1"
+
+
+def _sentinel_challenge() -> CognitoChallenge:
+    return CognitoChallenge(
+        name="NEW_PASSWORD_REQUIRED",
+        session=COGNITO_SESSION,
+        parameters={"USER_ID_FOR_SRP": SUB, "requiredAttributes": "[]"},
+    )
+
+
+def _fail(store: Any, operation: str) -> None:
+    """Make one DynamoDB call of the moto-backed store fail like a real outage."""
+    from botocore.exceptions import ClientError
+
+    if not isinstance(store.client, Mock):
+        store.client = Mock(wraps=store.client)
+    getattr(store.client, operation).side_effect = ClientError(
+        {"Error": {"Code": "InternalServerError", "Message": "injected"}},
+        operation,
+    )
+
+
+def _table_items() -> list[dict[str, Any]]:
+    """Every item of the moto Sessions table, read with a client of its own."""
+    import boto3
+
+    return boto3.client("dynamodb", region_name=REGION).scan(TableName=SESSIONS_TABLE)[
+        "Items"
+    ]
+
+
+def _challenge_items() -> list[dict[str, Any]]:
+    return [
+        item
+        for item in _table_items()
+        if item.get("item_type", {}).get("S") == "challenge"
+        or item["session_id_hash"]["S"].startswith("challenge#")
+    ]
+
+
+def _login_tx_payloads(response: Any, browser: Any) -> list[dict[str, Any]]:
+    """Decoded ``login_tx`` cookies of the response and of the client's jar."""
+    values = [
+        c.split(";", 1)[0].split("=", 1)[1]
+        for c in response.headers.get_list("set-cookie")
+        if c.startswith("login_tx=")
+    ]
+    if browser.cookies.get("login_tx"):
+        values.append(browser.cookies.get("login_tx"))
+    payloads = []
+    for value in values:
+        data = value.strip('"').split(".", 1)[0]
+        payloads.append(json.loads(base64.b64decode(data + "=" * (-len(data) % 4))))
+    return payloads
+
+
+def _cookie_texts(response: Any, browser: Any) -> list[str]:
+    return [*response.headers.get_list("set-cookie"), *browser.cookies.values()]
+
+
+class TestChallengeStoreFailureLeavesNothing:
+    """NFR9.45: 503 and the Cognito session is kept nowhere (moto Sessions table)."""
+
+    @pytest.fixture
+    def store(self, monkeypatch) -> Any:
+        moto = pytest.importorskip("moto", reason="moto is required")
+        import boto3
+
+        from src.services.session_store_service import SessionStoreService
+
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        with moto.mock_aws():
+            boto3.client("dynamodb", region_name=REGION).create_table(
+                TableName=SESSIONS_TABLE,
+                KeySchema=[{"AttributeName": "session_id_hash", "KeyType": "HASH"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "session_id_hash", "AttributeType": "S"}
+                ],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            yield SessionStoreService(table_name=SESSIONS_TABLE, region=REGION)
+
+    def _assert_session_nowhere(
+        self, response: Any, browser: Any, caplog: Any, out: str
+    ) -> None:
+        assert_not_leaked(
+            COGNITO_SESSION,
+            response.text,
+            _cookie_texts(response, browser),
+            _login_tx_payloads(response, browser),
+            _table_items(),
+            caplog,
+            out,
+        )
+
+    def test_unwritable_challenge_is_503_and_keeps_no_session(
+        self, browser, admin_manager, cognito, store, caplog, capsys
+    ):
+        caplog.set_level(logging.DEBUG)
+        cognito.initiate_auth.return_value = _sentinel_challenge()
+        _fail(store, "put_item")
+
+        response = _post_login(browser)
+
+        assert response.status_code == 503
+        assert 'data-testid="lookup-unavailable"' in response.text
+        assert "new-password-form" not in response.text
+        assert response.headers.get("location") is None
+        assert store.client.put_item.call_count == 1  # 書き込みは試みた
+        assert _challenge_items() == []
+        assert _session_cookies(response) == []
+        for payload in _login_tx_payloads(response, browser):
+            assert "new_password_challenge" not in payload
+        self._assert_session_nowhere(response, browser, caplog, capsys.readouterr().out)
+        # Manager の例外（文・context・連鎖した原因）にも session が載らない
+        with pytest.raises(LookupUnavailableError) as raised:
+            admin_manager.login_admin_api(
+                email=EMAIL,
+                password=SENTINEL_PASSWORD,
+                next_url="/persona",
+                previous_session_id=None,
+            )
+        assert_not_leaked(COGNITO_SESSION, raised.value)
+        assert_not_leaked(SENTINEL_PASSWORD, raised.value, response.text)
+
+    def test_unreadable_challenge_is_503_and_m3_is_not_shown(
+        self, browser, cognito, store, caplog, capsys
+    ):
+        caplog.set_level(logging.DEBUG)
+        cognito.initiate_auth.return_value = _sentinel_challenge()
+        started = _post_login(browser)
+        assert started.status_code == 303
+        # 対照: 書ければ challenge が 1 件あり、login_tx に challenge の ID が入る
+        assert len(_challenge_items()) == 1
+        assert any(
+            "new_password_challenge" in p for p in _login_tx_payloads(started, browser)
+        )
+        _fail(store, "get_item")
+
+        shown = browser.get("/auth/new-password")
+        sent = _post_new_password(browser)
+
+        for response in (shown, sent):
+            assert response.status_code == 503
+            assert 'data-testid="lookup-unavailable"' in response.text
+            assert "new-password-form" not in response.text
+            assert "password-rules" not in response.text
+        cognito.respond_new_password.assert_not_called()
+        out = capsys.readouterr().out
+        for response in (shown, sent):
+            assert_not_leaked(
+                COGNITO_SESSION,
+                response.text,
+                _cookie_texts(response, browser),
+                _login_tx_payloads(response, browser),
+                caplog,
+                out,
+            )
+
+    def test_failed_take_out_is_503_and_cognito_is_not_called(
+        self, browser, cognito, store, caplog, capsys
+    ):
+        caplog.set_level(logging.DEBUG)
+        cognito.initiate_auth.return_value = _sentinel_challenge()
+        assert _post_login(browser).status_code == 303
+        _fail(store, "delete_item")
+
+        response = _post_new_password(browser)
+
+        assert response.status_code == 503
+        assert 'data-testid="lookup-unavailable"' in response.text
+        assert "new-password-form" not in response.text
+        assert store.client.delete_item.call_count == 1
+        cognito.respond_new_password.assert_not_called()
+        assert _session_cookies(response) == []
+        out = capsys.readouterr().out
+        assert_not_leaked(
+            COGNITO_SESSION,
+            response.text,
+            _cookie_texts(response, browser),
+            _login_tx_payloads(response, browser),
+            caplog,
+            out,
+        )
+        assert_not_leaked(NEW_PASSWORD, response.text, caplog, out)

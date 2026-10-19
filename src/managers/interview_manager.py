@@ -448,17 +448,27 @@ class InterviewManager:
                 f"interview session unreadable ({type(e).__name__})",
                 code=ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
             ) from e
-        # admin でも他人のセッションは使えない（実行中の会話は持ち主だけのもの、BR3.2）
-        if (
-            session is None
-            or not AccessPolicy.is_owner(principal, session.owner_sub)
-            or session.is_expired(self._now())
-        ):
+        # admin でも他人のセッションは使えない（実行中の会話は持ち主だけのもの、BR3.2）。
+        # 存在しない・期限切れは「持ち主なし」として同じ照合に通し、他人のものと同じ
+        # 応答と同じ 1 行の authz.denied にする（NFR1.56、NFR8.22）
+        alive = session if session and not session.is_expired(self._now()) else None
+        try:
+            AccessPolicy.ensure_owner(
+                principal,
+                alive.owner_sub if alive else None,
+                ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            )
+        except CodedError as e:
+            raise InterviewSessionNotFoundError(
+                "interview session not found",
+                code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
+            ) from e
+        if alive is None:  # 持ち主なしは上で断っている。型のための確認
             raise InterviewSessionNotFoundError(
                 "interview session not found",
                 code=ErrorCode.INTERVIEW_SESSION_NOT_FOUND,
             )
-        return session
+        return alive
 
     def _fresh_session(self, session: InterviewSession) -> InterviewSession:
         """``session`` read again (strongly consistent), ownership already checked."""

@@ -583,3 +583,124 @@ def test_member_cannot_manage_even_through_an_access_denied_path(dm):
     with pytest.raises(CodedError) as info:
         dm.delete_custom_dataset(MEMBER_A, "x")
     assert not isinstance(info.value, AccessDeniedError)
+
+
+# =============================================================================
+# U7 Loop-back 1: 別の実体での即時の反映（NFR9.35、NFR9.36）と数百件の規模（NFR9.37）
+# =============================================================================
+
+
+def _second_instance(world: SurveyWorld, batch: Mock) -> SurveyDatasetManager:
+    """Another app task: its own clients, store, lookup and S3 service.
+
+    Only the moto tables and the department copy are shared with ``dm``.
+    """
+    import boto3
+
+    from src.managers.components.resource_lookup import build_resource_lookup
+    from src.services.authz_lookup_service import AuthzLookupService, LookupTable
+    from src.services.custom_persona_data_store import CustomPersonaDataStore
+    from src.services.s3_service import S3Service
+    from tests.unit.survey_world import REGION
+
+    client = boto3.client("dynamodb", region_name=REGION)
+    table = LookupTable(CUSTOM, world.custom_table, "name", hidden_id_prefix="name#")
+    readers = AuthzLookupService(
+        region=REGION, jobs_table_name="U7_Jobs", client=client
+    )
+    return SurveyDatasetManager(
+        survey_batch_service=batch,
+        agent_service=Mock(),
+        ai_service=Mock(),
+        s3_service=S3Service(bucket_name=BUCKET, region_name=REGION),
+        custom_persona_data_store=CustomPersonaDataStore(
+            region=REGION, table_name=world.custom_table, client=client
+        ),
+        resource_lookup=build_resource_lookup(
+            [(CUSTOM, readers.reader(table))], sample_rate=0.0
+        ),
+        departments=world.departments,
+        sleep=lambda _s: None,
+    )
+
+
+class TestScopeChangesReachAnotherInstance:
+    """Decisions read DynamoDB every time; nothing is kept per task (NFR9.35/36)."""
+
+    def test_decision_on_b_changes_right_after_a_changes_the_scope(
+        self, dm, survey_world, batch
+    ):
+        other = _second_instance(survey_world, batch)
+        data = survey_world.custom_data("顧客データ")
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            other.get_custom_persona_data(MEMBER_A, data.id)
+
+        dm.update_scope(ADMIN, data.id, AssetScopeChange(add=frozenset({"sales"})))
+        assert other.get_custom_persona_data(MEMBER_A, data.id).id == data.id
+
+        dm.update_scope(ADMIN, data.id, AssetScopeChange(remove=frozenset({"sales"})))
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            other.get_custom_persona_data(MEMBER_A, data.id)
+
+    def test_department_removed_on_a_leaves_the_list_on_b(
+        self, dm, survey_world, batch
+    ):
+        other = _second_instance(survey_world, batch)
+        both = survey_world.custom_data("両方", "sales", "plan")
+        sales_only = survey_world.custom_data("営業だけ", "sales")
+        assert {d.id for d in other.list_persona_data(MEMBER_A).custom} == {
+            both.id,
+            sales_only.id,
+        }
+
+        dm.update_scope(ADMIN, both.id, AssetScopeChange(remove=frozenset({"sales"})))
+
+        assert [d.id for d in other.list_persona_data(MEMBER_A).custom] == [
+            sales_only.id
+        ]
+        assert [d.id for d in other.list_persona_data(MEMBER_C).custom] == [both.id]
+
+
+class TestHundredsOfAssets:
+    """250 records (with their name reservations) are read page by page (NFR9.37)."""
+
+    def test_member_gets_exactly_the_usable_ones_from_every_page(
+        self, dm, survey_world
+    ):
+        from src.models.custom_persona_data import CustomPersonaData
+        from tests.unit.survey_world import NOW, bulk_put_custom_data
+
+        scopes = [{"sales"}, {"plan"}, set()]
+        made = [
+            CustomPersonaData.create_new(
+                name=f"データ{i:03d}",
+                columns=["sex", "age"],
+                row_count=150,
+                registered_by="admin",
+                shared_group_ids=frozenset(scopes[i % 3]),
+                now=NOW,
+            )
+            for i in range(250)
+        ]
+        bulk_put_custom_data(survey_world.client, survey_world.custom_table, made)
+        real_scan = survey_world.client.scan
+        scanned: list = []
+
+        def paged_scan(**kwargs):
+            scanned.append(kwargs["TableName"])
+            return real_scan(**{**kwargs, "Limit": 7})
+
+        survey_world.client.scan = paged_scan
+
+        member = dm.list_persona_data(MEMBER_A).custom
+        sales = {d.id for d in made if "sales" in d.shared_group_ids}
+        assert len(member) == len(sales) == 84
+        assert {d.id for d in member} == sales
+        # 名前の押さえを含めて 500 項目を、何ページにも分けて読む
+        assert len(scanned) > 500 // 7
+        # member の操作で読むのは組織資産のテーブルだけ（テンプレート・結果は Scan しない）
+        assert set(scanned) == {survey_world.custom_table}
+
+        assert {d.id for d in dm.list_persona_data(ADMIN).custom} == {
+            d.id for d in made
+        }

@@ -319,6 +319,72 @@ class TestOwnerAndExpiry:
 
 
 # =============================================================================
+# 拒否のログ（NFR8.22、BR2.13。Build and Test の Loop-back 1）
+# =============================================================================
+
+
+def _denied(capsys) -> list[dict]:
+    return _events(capsys, "authz.denied")
+
+
+class TestDenialLog:
+    """持ち主の照合で断ったら、U2 の ``authz.denied`` を 1 行書く。
+
+    理由は U2 の ``ensure_readable`` と同じ ``not_found``（応答が NOT_FOUND のため）。
+    インタビューのセッションは ``ResourceType`` に無いので、``resource_type`` は
+    U2 の ``require`` が種類なしで断ったときと同じく書かない。存在しない・期限切れも、
+    U2 で存在しない ID を ``ensure_readable`` が断ったときと同じく 1 行書く。
+    """
+
+    @pytest.mark.parametrize("principal", [PEER, ADMIN])
+    @pytest.mark.parametrize("operation", ["send", "get", "end"])
+    def test_someone_elses_session_logs_one_denial(
+        self, manager, world, capsys, principal, operation
+    ):
+        session = _start(manager, world)
+        capsys.readouterr()
+        call = {
+            "send": lambda: manager.send_user_message(principal, session.id, "やあ"),
+            "get": lambda: manager.get_interview_session(principal, session.id),
+            "end": lambda: manager.end_interview_session(principal, session.id),
+        }[operation]
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            call()
+        out = capsys.readouterr().out
+        lines = [json.loads(x) for x in out.splitlines() if x.startswith("{")]
+        (line,) = [x for x in lines if x.get("event") == "authz.denied"]
+        assert line["reason"] == "not_found"
+        # 種類なし（log_event は None の項目を書かない。U2 の require と同じ）
+        assert line.get("resource_type") is None
+        assert line["sub"] == principal.sub
+        # セッションの ID はログに出さない（NFR8.6）
+        assert session.id not in out
+
+    def test_the_owner_logs_no_denial(self, manager, world, capsys):
+        session = _start(manager, world)
+        manager.send_user_message(OWNER, session.id, "こんにちは")
+        manager.get_interview_session(OWNER, session.id)
+        manager.get_session_status(OWNER, session.id)
+        manager.end_interview_session(OWNER, session.id)
+        assert _denied(capsys) == []
+
+    def test_a_missing_session_logs_one_denial(self, manager, capsys):
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.send_user_message(OWNER, "nonexistent", "こんにちは")
+        (line,) = _denied(capsys)
+        assert (line["reason"], line["sub"]) == ("not_found", OWNER.sub)
+
+    def test_an_expired_session_logs_one_denial(self, manager, world, clock, capsys):
+        session = _start(manager, world)
+        capsys.readouterr()
+        clock.advance(hours=8)
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            manager.get_interview_session(OWNER, session.id)
+        (line,) = _denied(capsys)
+        assert (line["reason"], line["sub"]) == ("not_found", OWNER.sub)
+
+
+# =============================================================================
 # 送信（BR3.3、BR7.2、NFR1.59〜NFR1.61）
 # =============================================================================
 

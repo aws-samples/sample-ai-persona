@@ -7,6 +7,7 @@ NFR1.48、NFR1.54、NFR1.56、NFR1.60、AC2.4.1〜AC2.4.3。
 """
 
 import json
+import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from typing import Any
@@ -212,6 +213,47 @@ class TestOwnerOnly:
         assert events[-1]["type"] == "error"
         assert events[-1]["error_type"] == "conversation_stopped"
         assert iw.store.get(session.id).last_seq == 0
+
+    @pytest.mark.parametrize(
+        ("method", "path", "data"),
+        [
+            ("post", "/interview/{id}/message", {"message": "こんにちは"}),
+            ("post", "/interview/{id}/message/stream", {"message": "こんにちは"}),
+            ("get", "/interview/{id}/messages", None),
+            ("get", "/interview/{id}/status", None),
+            ("get", "/interview/chat/{id}", None),
+        ],
+    )
+    def test_missing_and_someone_elses_look_the_same(
+        self, iw, client, method, path, data
+    ):
+        """存在しない ID と他人の ID で、状態コード・トースト・本文が同じ（NFR1.56）。
+
+        Build and Test の Loop-back 1 で足した。ID の文字を同じ値に置き換えて比べる。
+        """
+        others = iw.start("p1").id
+        missing = str(uuid.uuid4())
+        assert iw.store.get(missing) is None
+        MEMBER_B.login(client)
+
+        def call(session_id: str) -> tuple:
+            url = path.format(id=session_id)
+            response = (
+                getattr(client, method)(url, data=data)
+                if data
+                else getattr(client, method)(url)
+            )
+            return (
+                response.status_code,
+                response.headers.get("HX-Trigger"),
+                response.headers.get("content-type"),
+                response.text.replace(session_id, "<ID>"),
+            )
+
+        a, b = call(others), call(missing)
+
+        assert a[0] in (200, 404)  # SSE は 200 で止まるイベントを返す
+        assert a == b
 
     def test_manual_cleanup_is_gone(self, iw, client):
         assert client.post("/interview/cleanup").status_code in (404, 405)

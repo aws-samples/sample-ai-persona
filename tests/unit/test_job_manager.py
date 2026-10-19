@@ -13,7 +13,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.managers.job_manager import JobManager
+from src.managers.job_manager import JobManager, JobNotFoundError
 from src.models.authz import Principal, Role
 from src.models.errors import (
     AccessDeniedError,
@@ -24,6 +24,7 @@ from src.models.errors import (
 from src.models.job import Job, JobStatus
 from src.services.authz_lookup_service import AuthzLookupError
 from tests.error_helpers import raises_code
+from tests.log_helpers import LogCapture
 
 OWNER = Principal(sub="user-a", roles=frozenset({Role.MEMBER}))
 OTHER = Principal(sub="user-b", roles=frozenset({Role.MEMBER}))
@@ -140,6 +141,57 @@ class TestGet:
         with raises_code(CodedError, ErrorCode.JOB_NOT_FOUND):
             jm.get(OWNER, "job-1")
         assert mock_lookup.get_job.call_count == 2
+
+
+class TestDenialLog:
+    """投入者の照合で断ったら、U2 の ``authz.denied`` を 1 行書く（NFR8.6、BR2.13）。
+
+    Build and Test の Loop-back 2。理由は応答が NOT_FOUND のため ``not_found``。
+    ジョブは ``ResourceType`` に無いので ``resource_type`` は書かない（log_event は
+    None の項目を書かない）。存在しないジョブも、他人のものと同じ 1 行にする。
+    """
+
+    @pytest.mark.parametrize(
+        "stored",
+        [_job(owner_sub="user-a"), _job(owner_sub=None), None],
+        ids=["someone-else", "no-submitter", "missing"],
+    )
+    def test_refused_job_logs_one_denial(self, capsys, stored):
+        jm, _, mock_lookup, _ = _make_manager()
+        mock_lookup.get_job.return_value = stored
+        logs = LogCapture(capsys)
+
+        with raises_code(JobNotFoundError, ErrorCode.JOB_NOT_FOUND):
+            jm.get(OTHER, "job-secret-id")
+
+        (line,) = logs.events("authz.denied")
+        assert line["reason"] == "not_found"
+        assert line["sub"] == OTHER.sub
+        assert line.get("resource_type") is None
+        # ジョブの ID はログに出さない（NFR8.6）
+        assert all("job-secret-id" not in json.dumps(r) for r in logs.records())
+
+    def test_the_owner_logs_no_denial(self, capsys):
+        jm, _, mock_lookup, _ = _make_manager()
+        mock_lookup.get_job.return_value = _job()
+        logs = LogCapture(capsys)
+
+        jm.get(OWNER, "job-1")
+
+        assert logs.events("authz.denied") == []
+
+    def test_unreachable_jobs_table_logs_no_denial(self, capsys):
+        """503 は拒否ではないので ``authz.denied`` を書かない。"""
+        jm, _, mock_lookup, _ = _make_manager()
+        mock_lookup.get_job.side_effect = AuthzLookupError(
+            "jobs table down", reason="unreachable"
+        )
+        logs = LogCapture(capsys)
+
+        with raises_code(LookupUnavailableError, ErrorCode.LOOKUP_UNAVAILABLE):
+            jm.get(OTHER, "job-1")
+
+        assert logs.events("authz.denied") == []
 
 
 class TestAnotherTask:
