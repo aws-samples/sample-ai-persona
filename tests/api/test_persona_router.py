@@ -2073,3 +2073,86 @@ class TestManagerCallsRunOffTheEventLoop:
         rec.assert_off_the_loop(
             client, ["update_persona", "describe_persona", "get_persona_for_edit"]
         )
+
+
+class TestCancelledSaveKeepsTheClaim:
+    """要求が途中で切れても、保存が終わるまで候補の押さえを解放しない。
+
+    押さえ・保存・片付けを別々のスレッドに渡すと、キャンセルで ``finally`` の片付けが
+    保存の途中で走って押さえが外れ、再送で同じ候補をもう一度保存できてしまう。
+    """
+
+    @staticmethod
+    def _run_and_cancel(handler, **kwargs):
+        import asyncio
+        from types import SimpleNamespace
+
+        from src.models.persona_candidate import CandidateSaveResult
+
+        saving = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        order: list[str] = []
+
+        def save(*_args, **_kwargs):
+            order.append("save:start")
+            saving.set()
+            release.wait(5)
+            order.append("save:end")
+            return CandidateSaveResult(saved_ids=("cand-1",), saved_persona_ids=("n",))
+
+        def finish(*_args, **_kwargs):
+            order.append("finish")
+            finished.set()
+
+        gen = Mock()
+        gen.claim_candidates.return_value = "the-claim"
+        gen.finish_candidates.side_effect = finish
+        manager = Mock()
+        manager.save_generated_personas.side_effect = save
+        request = SimpleNamespace(state=SimpleNamespace(principal=Mock()))
+
+        async def scenario():
+            task = asyncio.create_task(handler(request, **kwargs))
+            assert await asyncio.to_thread(saving.wait, 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            # 要求が切れた時点では、保存の途中なので押さえはまだ外さない
+            assert not await asyncio.to_thread(finished.wait, 0.3)
+            release.set()
+            assert await asyncio.to_thread(finished.wait, 5)
+
+        with (
+            patch(
+                "web.routers.persona.get_persona_generation_manager", return_value=gen
+            ),
+            patch("web.routers.persona.get_persona_manager", return_value=manager),
+        ):
+            asyncio.run(scenario())
+
+        assert order == ["save:start", "save:end", "finish"]
+        gen.finish_candidates.assert_called_once()
+        assert gen.finish_candidates.call_args.args[0] == "the-claim"
+
+    def test_save_one(self):
+        from web.routers.persona import save_persona
+
+        form = {
+            k: v for k, v in TestPersonaSaveEndpoint._FORM.items() if k != "persona_id"
+        }
+        self._run_and_cancel(
+            save_persona,
+            persona_id="cand-1",
+            **form,
+            gender="",
+            country="",
+            city="",
+            tags="",
+            selected_behavior_datasets="",
+        )
+
+    def test_save_selected(self):
+        from web.routers.persona import save_selected_personas
+
+        self._run_and_cancel(save_selected_personas, persona_ids="cand-1")

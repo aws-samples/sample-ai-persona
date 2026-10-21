@@ -103,6 +103,28 @@ def _principal(request: Request) -> Principal:
     return principal
 
 
+def _save_candidates(
+    principal: Principal, candidate_ids: list[str], **save_kwargs: Any
+) -> CandidateSaveResult:
+    """Claim, save and finish candidates in one worker thread.
+
+    The three steps must not be separate awaits: if the request is cancelled
+    while the save runs, a ``finally`` on the event loop would release the
+    claim mid-save and a resubmission could save the same candidate twice.
+    In one synchronous call the claim is released only after the save returns.
+    """
+    gen_manager = get_persona_generation_manager()
+    claim = gen_manager.claim_candidates(principal, candidate_ids)
+    result: CandidateSaveResult | None = None
+    try:
+        result = get_persona_manager().save_generated_personas(
+            principal, claim, **save_kwargs
+        )
+    finally:
+        gen_manager.finish_candidates(claim, result)
+    return result
+
+
 def get_persona_memory_manager() -> PersonaMemoryManager:
     """PersonaMemoryManagerのシングルトンインスタンスを取得"""
     global _persona_memory_manager
@@ -549,7 +571,8 @@ async def save_persona(
 ) -> Any:
     """生成候補を 1 体保存する（htmx対応、WF2）。
 
-    押さえ → 保存 → 片付けの 3 つを順に呼ぶだけ（片付けは成否にかかわらず必ず呼ぶ）。
+    押さえ → 保存 → 片付けを 1 つのスレッドで順に呼ぶ（片付けは成否にかかわらず必ず呼ぶ。
+    要求が途中で切れても、片付けは保存が終わってから）。
     persona_id は候補の ID。他人の候補・期限切れ・二重送信は同じ 404 のトースト（BR1.3）。
     """
     principal = _principal(request)
@@ -572,19 +595,13 @@ async def save_persona(
             t.strip() for t in selected_behavior_datasets.split(",") if t.strip()
         ]
 
-        gen_manager = get_persona_generation_manager()
-        claim = await _run(gen_manager.claim_candidates, principal, [persona_id])
-        result: CandidateSaveResult | None = None
-        try:
-            result = await _run(
-                get_persona_manager().save_generated_personas,
-                principal,
-                claim,
-                edited=edited,
-                selected_temp_ids=selected,
-            )
-        finally:
-            await _run(gen_manager.finish_candidates, claim, result)
+        result = await _run(
+            _save_candidates,
+            principal,
+            [persona_id],
+            edited=edited,
+            selected_temp_ids=selected,
+        )
 
         message = f"ペルソナ「{name}」を保存しました"
         if result.failed_datasets:
@@ -1808,21 +1825,13 @@ async def export_persona(request: Request, persona_id: str) -> Any:
 async def save_selected_personas(request: Request, persona_ids: str = Form(...)) -> Any:
     """選択された複数の候補を保存する（htmx対応、WF2、BR1.9）。
 
-    押さえ → 保存 → 片付けを順に呼ぶだけ。1 件でも押さえられなければ何も保存しない。
+    押さえ → 保存 → 片付けを 1 つのスレッドで順に呼ぶ。1 件でも押さえられなければ何も保存しない。
     保存できた件数と、保存できなかった候補の名前を出す。
     """
     principal = _principal(request)
     try:
         id_list = [pid.strip() for pid in persona_ids.split(",") if pid.strip()]
-        gen_manager = get_persona_generation_manager()
-        claim = await _run(gen_manager.claim_candidates, principal, id_list)
-        result: CandidateSaveResult | None = None
-        try:
-            result = await _run(
-                get_persona_manager().save_generated_personas, principal, claim
-            )
-        finally:
-            await _run(gen_manager.finish_candidates, claim, result)
+        result = await _run(_save_candidates, principal, id_list)
 
         logger.info(f"Completed saving {result.saved_count} personas")
         return templates.TemplateResponse(
