@@ -284,3 +284,129 @@ class TestAssetFilter:
         assert agent.create_persona_agent.call_args.kwargs["additional_tools"] == [
             "tool-ds-own"
         ]
+
+
+# =============================================================================
+# U7 Loop-back 1: 利用範囲を外した後の KB（NFR1.75、BR5.4、BR5.5、AC4.2.3、AC5.3.2、
+# AC5.3.3）。KB の本体と利用範囲、紐付けは moto（tests/unit/survey_world.py）、
+# 利用範囲の変更は本物の SettingsManager、判定は本物の ResourceLookup・AccessPolicy。
+# =============================================================================
+
+from src.managers.settings_manager import SettingsManager  # noqa: E402
+from src.models.sharing import AssetScopeChange  # noqa: E402
+from src.services.persona_binding_store import PersonaBindingStore  # noqa: E402
+from tests.unit.survey_world import (  # noqa: E402
+    ADMIN as _U7_ADMIN,
+    MEMBER_A as _SALES_MEMBER,
+    MEMBER_C as _PLAN_MEMBER,
+)
+
+_BINDINGS_TABLE = "U7_PersonaBindings"
+
+
+def _bindings_store(world) -> PersonaBindingStore:
+    world.client.create_table(
+        TableName=_BINDINGS_TABLE,
+        KeySchema=[
+            {"AttributeName": "persona_id", "KeyType": "HASH"},
+            {"AttributeName": "target_key", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "persona_id", "AttributeType": "S"},
+            {"AttributeName": "target_key", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    return PersonaBindingStore(
+        region="us-east-1",
+        table_name=_BINDINGS_TABLE,
+        client=world.client,
+        sleep=lambda _s: None,
+    )
+
+
+class _ScopedKbWorld:
+    """A KB in the ``sales`` scope bound to member A's persona ``p1``."""
+
+    def __init__(self, world) -> None:
+        self.world = world
+        self.kb = world.knowledge_base("sales")
+        self.bindings = _bindings_store(world)
+        self.bindings.put(PersonaBinding.for_kb("p1", self.kb.id, now=_NOW))
+        self.settings = SettingsManager(
+            database_service=world.db, departments=world.departments
+        )
+        self.agent = Mock()
+        self.agent.get_kb_tools.side_effect = lambda b, k: (
+            (
+                [f"kb-tool:{k.id}"],
+                {"name": k.name, "description": "", "metadata_filters": {}},
+            )
+            if b is not None and k is not None
+            else ([], None)
+        )
+        self.component = PersonaAgentIntegration(
+            database_service=world.db,
+            agent_service=self.agent,
+            dataset_analysis_service=Mock(),
+            binding_store=self.bindings,
+            resource_lookup=world.lookup,
+        )
+
+    def remove_sales(self) -> None:
+        self.settings.update_scope(
+            _U7_ADMIN, self.kb.id, AssetScopeChange(remove=frozenset({"sales"}))
+        )
+
+    def tools_for(self, principal: Principal) -> tuple[list, str]:
+        """The tools and the prompt of an interview or discussion agent."""
+        self.agent.create_persona_agent.reset_mock()
+        self.component.build_agent(
+            _context(principal),
+            _persona_obj(),
+            "SYSTEM",
+            enable_memory=False,
+            session_id="s1",
+            memory_mode="disabled",
+            enable_dataset=False,
+            enable_kb=True,
+        )
+        kwargs = self.agent.create_persona_agent.call_args.kwargs
+        return kwargs["additional_tools"] or [], kwargs["system_prompt"]
+
+
+@pytest.mark.unit
+class TestKbAfterTheScopeIsRemoved:
+    """NFR1.75: removing a department keeps the binding but drops the KB tool."""
+
+    def test_member_loses_the_kb_tool_but_keeps_the_binding(self, survey_world, capsys):
+        scoped = _ScopedKbWorld(survey_world)
+        tool = f"kb-tool:{scoped.kb.id}"
+        tools, prompt = scoped.tools_for(_SALES_MEMBER)
+        assert tools == [tool]
+        assert scoped.kb.name in prompt
+
+        scoped.remove_sales()
+        logs = LogCapture(capsys)
+        tools, prompt = scoped.tools_for(_SALES_MEMBER)
+
+        assert tools == []
+        assert scoped.kb.name not in prompt
+        assert [b.target_id for b in scoped.bindings.list_for_persona("p1")] == [
+            scoped.kb.id
+        ]
+        excluded = logs.events("agent.asset_excluded")
+        assert [(e["asset_id"], e["reason"]) for e in excluded] == [
+            (scoped.kb.id, "not_usable")
+        ]
+
+    def test_member_of_another_department_never_gets_it(self, survey_world):
+        scoped = _ScopedKbWorld(survey_world)
+        assert scoped.tools_for(_PLAN_MEMBER)[0] == []
+        scoped.remove_sales()
+        assert scoped.tools_for(_PLAN_MEMBER)[0] == []
+
+    def test_admin_still_gets_it_after_the_removal(self, survey_world):
+        scoped = _ScopedKbWorld(survey_world)
+        scoped.remove_sales()
+        assert scoped.tools_for(_U7_ADMIN)[0] == [f"kb-tool:{scoped.kb.id}"]

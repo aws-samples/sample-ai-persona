@@ -222,3 +222,76 @@ class TestFailureClassification:
         with pytest.raises(UploadedFileStoreError) as exc_info:
             store.transact_attach("s", ["a"], "discussion", "d", NOW_EPOCH)
         assert not isinstance(exc_info.value, (AttachConflict, AttachConditionFailed))
+
+
+BUCKET = "u5-hosts-bucket"
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+
+class _Host:
+    """One app instance: its own S3 / DynamoDB clients, Store, FileAttachments and FileManager."""
+
+    def __init__(self) -> None:
+        from src.managers.components.file_attachments import FileAttachments
+        from src.managers.file_manager import FileManager
+        from src.services.s3_service import S3Service
+
+        self.s3 = S3Service(BUCKET, REGION)
+        self.store = UploadedFileStore(
+            region=REGION,
+            table_name=TABLE,
+            client=boto3.client("dynamodb", region_name=REGION),
+        )
+        self.attachments = FileAttachments(
+            self.store, self.s3, clock=lambda: NOW.timestamp()
+        )
+        self.files = FileManager(
+            Mock(),
+            s3_service=self.s3,
+            file_store=self.store,
+            attachments=self.attachments,
+            clock=lambda: NOW,
+        )
+
+
+class TestAcrossInstances:
+    """NFR9.29: アップロード・紐付け・配信を別の台で行っても動く（台のメモリに頼らない）。"""
+
+    def test_upload_attach_and_serve_on_three_instances(self, client):
+        from src.managers.file_manager import FileUploadError
+        from src.models.errors import ErrorCode
+        from tests.conftest import MEMBER_A, MEMBER_B
+
+        boto3.client("s3", region_name=REGION).create_bucket(
+            Bucket=BUCKET,
+            CreateBucketConfiguration={"LocationConstraint": REGION},
+        )
+        uploader, saver, server = _Host(), _Host(), _Host()
+        owner = MEMBER_A.principal()
+
+        uploaded = uploader.files.upload_survey_image(owner, _PNG, "画像.png")
+        result = saver.attachments.attach_all(
+            owner, [uploaded.file_id], "survey_template", "tpl-1"
+        )
+        server.attachments.register_parent(
+            "survey_template", lambda p, parent_id: parent_id == "tpl-1"
+        )
+        url = server.files.preview_url_for_path(
+            MEMBER_B.principal(), uploaded.file_path
+        )
+
+        assert result.file_ids == (uploaded.file_id,)
+        assert url.startswith("https://")
+        stored = server.store.get(uploaded.file_id)
+        assert (stored.parent_type, stored.parent_id) == ("survey_template", "tpl-1")
+        assert stored.expires_at is None
+        # 紐付けた台がタグを外したことが、配信する台の S3 からも見える
+        assert server.s3.get_object_tags(stored.s3_key) == {}
+        # 親の判定は配信する台に登録したもので決まる（親を読めなければ配信しない）
+        refusing = _Host()
+        refusing.attachments.register_parent("survey_template", lambda p, _id: False)
+        with pytest.raises(FileUploadError) as exc_info:
+            refusing.files.preview_url_for_path(
+                MEMBER_B.principal(), uploaded.file_path
+            )
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND

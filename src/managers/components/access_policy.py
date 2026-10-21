@@ -47,6 +47,7 @@ DECISION_FUNCTIONS: frozenset[str] = frozenset(
         "can_use_asset",
         "shareable_groups",
         "is_owner",
+        "ensure_owner",
     }
 )
 
@@ -90,6 +91,39 @@ class AccessPolicy:
         if not AccessPolicy._allowed(principal) or not owner_sub:
             return False
         return owner_sub == principal.sub
+
+    @staticmethod
+    def ensure_owner(
+        principal: Principal,
+        owner_sub: str | None,
+        not_found: ErrorCode,
+        *,
+        resource_type: ResourceType | None = None,
+    ) -> None:
+        """Raise ``not_found`` unless ``principal`` owns it (owner-only things).
+
+        For things only the owner may use, even with ``resource:read_all``
+        (an interview session, BR3.2). A missing thing is passed as
+        ``owner_sub=None`` and gets the same answer and the same one
+        ``authz.denied`` line as someone else's (NFR1.4, BR2.13).
+
+        Args:
+            principal: The user.
+            owner_sub: Owner of the thing; ``None`` when it does not exist.
+            not_found: The caller's resource-specific NOT_FOUND code.
+            resource_type: For the denial log only.
+
+        Raises:
+            CodedError: ``not_found`` when ``principal`` is not the owner.
+        """
+        if AccessPolicy.is_owner(principal, owner_sub):
+            return
+        _deny(
+            "not_found",
+            principal,
+            resource_type,
+            CodedError("caller is not the owner", code=not_found),
+        )
 
     @staticmethod
     def require(

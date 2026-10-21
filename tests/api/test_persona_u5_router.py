@@ -308,6 +308,36 @@ def test_avatar_redirect_needs_read_access(client, u5, who, expected):
     assert ("location" in response.headers) is (expected == 302)
 
 
+def test_avatar_redirect_reads_the_persona_once(client, u5, monkeypatch):
+    """NFR2.14: 判定のための本体の読みは 1 回だけで、画像は配信 URL へ移す（中継しない）。"""
+    from src.models.authz import ResourceType
+    from tests.unit.persona_u5_world import _Reader
+
+    lookups: list[ResourceType] = []
+    original_read = _Reader.read
+
+    def counting_read(self, ids, deadline):
+        lookups.append(self.kind)
+        return original_read(self, ids, deadline)
+
+    monkeypatch.setattr(_Reader, "read", counting_read)
+    u5.world.db.reset_mock()  # side_effect は残る
+
+    response = _as(client, "peer").get(
+        f"/persona/{u5.persona.id}/avatar", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://signed/a.webp"
+    # 本体の読みは強い整合性の 1 回だけ（ほかの読み・判定の読み取りを足さない）
+    reads = [name for name, _args, _kwargs in u5.world.db.method_calls]
+    assert reads == ["get_persona"]
+    assert u5.world.db.get_persona.call_args.kwargs == {"consistent": True}
+    assert lookups.count(ResourceType.PERSONA) == 0
+    u5.world.s3.generate_presigned_url.assert_called_once()
+    u5.world.s3.download_file.assert_not_called()  # 画像の中身を読まない
+
+
 @pytest.mark.parametrize(("who", "expected"), [("peer", 403), ("stranger", 404)])
 def test_avatar_change_needs_manage_access(client, u5, who, expected):
     pid = u5.persona.id

@@ -199,3 +199,73 @@ def test_m3_can_be_sent_with_the_keyboard_and_disables_the_button(
     button = page.get_by_test_id("new-password-submit-button")
     assert button.is_disabled()
     assert "設定中..." in button.inner_text()
+
+
+# --- 640px 未満で入力欄とボタンが 44px 以上（NFR6.23、Loop-back 1） -----------------
+
+#: 要件は「640px 未満」。境界のすぐ下と、よくあるスマートフォンの幅で確かめる。
+NARROW_WIDTHS = [639, 375]
+MIN_TARGET_PX = 44
+
+M2_CONTROLS = ["login-email-input", "login-password-input", "login-submit-button"]
+M3_CONTROLS = [
+    "new-password-input",
+    "new-password-confirmation-input",
+    "new-password-submit-button",
+]
+
+
+def _heights_below_minimum(
+    ui: UiHarness, html: str, width: int, testids: list[str]
+) -> dict[str, float]:
+    """Open ``html`` at ``width`` px and return the controls shorter than 44px."""
+    ui.page.set_viewport_size({"width": width, "height": 800})
+    ui.load(html)
+    ui.settle()
+    heights: dict[str, float] = {}
+    for testid in testids:
+        box = ui.page.get_by_test_id(testid).bounding_box()
+        assert box is not None, f"{testid} is not rendered"
+        heights[testid] = box["height"]
+    return {k: v for k, v in heights.items() if v < MIN_TARGET_PX}
+
+
+@pytest.mark.parametrize("width", NARROW_WIDTHS)
+@pytest.mark.parametrize(
+    "html",
+    [
+        pytest.param(lambda: _m2(), id="m2-initial"),
+        pytest.param(
+            lambda: _m2(
+                email="yamada@example.com",
+                error="メールアドレスまたはパスワードが違います",
+            ),
+            id="m2-failed",
+        ),
+    ],
+)
+def test_m2_controls_are_at_least_44px_tall_below_640px(
+    ui: UiHarness, html: Any, width: int
+) -> None:
+    assert _heights_below_minimum(ui, html(), width, M2_CONTROLS) == {}
+
+
+@pytest.mark.parametrize("width", NARROW_WIDTHS)
+@pytest.mark.parametrize(
+    "html",
+    [
+        pytest.param(lambda: _m3(), id="m3-initial"),
+        pytest.param(
+            lambda: _m3(
+                missed={"uppercase"},
+                error="パスワードが条件を満たしていません",
+                error_field="new_password",
+            ),
+            id="m3-policy-miss",
+        ),
+    ],
+)
+def test_m3_controls_are_at_least_44px_tall_below_640px(
+    ui: UiHarness, html: Any, width: int
+) -> None:
+    assert _heights_below_minimum(ui, html(), width, M3_CONTROLS) == {}

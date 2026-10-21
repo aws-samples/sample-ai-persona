@@ -177,6 +177,42 @@ class TestEnsure:
         AccessPolicy.ensure_manageable(MEMBER, _persona(), ErrorCode.PERSONA_NOT_FOUND)
 
 
+class TestEnsureOwner:
+    """持ち主だけが使えるもの（インタビューのセッション、BR3.2）の照合。"""
+
+    def test_owner_passes_and_logs_nothing(self, capsys):
+        AccessPolicy.ensure_owner(
+            MEMBER, "user-a", ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+        )
+        assert _denied_lines(capsys) == []
+
+    @pytest.mark.parametrize(
+        ("principal", "owner_sub"),
+        [(OTHER, "user-a"), (ADMIN, "user-a"), (MEMBER, None), (MEMBER, "")],
+    )
+    def test_anyone_else_gets_not_found_and_one_log(self, capsys, principal, owner_sub):
+        """admin も他人のものは使えない。持ち主なし（存在しない）も同じ。"""
+        with raises_code(CodedError, ErrorCode.INTERVIEW_SESSION_NOT_FOUND):
+            AccessPolicy.ensure_owner(
+                principal, owner_sub, ErrorCode.INTERVIEW_SESSION_NOT_FOUND
+            )
+        (line,) = _denied_lines(capsys)
+        assert line["reason"] == "not_found"
+        assert line.get("resource_type") is None  # None の項目は書かれない
+        assert line["sub"] == principal.sub
+
+    def test_resource_type_goes_to_the_log(self, capsys):
+        with pytest.raises(CodedError):
+            AccessPolicy.ensure_owner(
+                OTHER,
+                "user-a",
+                ErrorCode.DISCUSSION_NOT_FOUND,
+                resource_type=ResourceType.DISCUSSION,
+            )
+        (line,) = _denied_lines(capsys)
+        assert line["resource_type"] == "discussion"
+
+
 class TestDeniedLog:
     """authz.denied を理由ごとに 1 行出し、ID を含めない（BR2.13、NFR8.6）。"""
 

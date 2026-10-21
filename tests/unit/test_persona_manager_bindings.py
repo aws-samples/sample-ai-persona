@@ -138,6 +138,51 @@ class TestListBindings:
 
         assert calls.count(ResourceType.KNOWLEDGE_BASE) <= 2  # bound + choices
 
+    def test_ten_bindings_read_each_asset_kind_once(self, world, shared, monkeypatch):
+        """NFR2.10: 名前と利用範囲は種類ごとに 1 回でまとめて読む（紐付けごとに読まない）。
+
+        KB の紐付けはペルソナに 1 つ（固定キー ``KB``、BR2.9）なので、10 件はデータセット 9 と KB 1。
+        共有された人で見る（管理できないので選択肢の読みはない）。
+        """
+        from src.models.authz import ResourceType
+        from tests.unit.persona_u5_world import _Reader
+
+        datasets = [world.add_dataset(scope=["sales"], name=f"d{i}") for i in range(9)]
+        for d in datasets:
+            world.bindings.put(PersonaBinding.for_dataset(shared.id, d.id, now=NOW))
+        kb = world.add_kb(scope=["sales"])
+        world.bindings.put(PersonaBinding.for_kb(shared.id, kb.id, now=NOW))
+        assert len(world.bindings.list_for_persona(shared.id)) == 10
+
+        reads: list[tuple[ResourceType, tuple[str, ...]]] = []
+        original_read = _Reader.read
+
+        def counting_read(self, ids, deadline):
+            reads.append((self.kind, tuple(ids)))
+            return original_read(self, ids, deadline)
+
+        singles: list[tuple[object, str]] = []
+        original_get = world.lookup.get
+
+        def counting_get(kind, resource_id):
+            singles.append((kind, resource_id))
+            return original_get(kind, resource_id)
+
+        monkeypatch.setattr(_Reader, "read", counting_read)
+        monkeypatch.setattr(world.lookup, "get", counting_get)
+        manager = world.manager()
+
+        dataset_view = manager.get_dataset_bindings(SALES_PEER, shared.id)
+        kb_view = manager.get_kb_binding(SALES_PEER, shared.id)
+
+        assert len(dataset_view.bindings) == 9 and kb_view.binding is not None
+        dataset_reads = [ids for kind, ids in reads if kind is ResourceType.DATASET]
+        kb_reads = [ids for kind, ids in reads if kind is ResourceType.KNOWLEDGE_BASE]
+        assert len(dataset_reads) == 1  # 9 件を 1 回の読みで
+        assert set(dataset_reads[0]) == {d.id for d in datasets}
+        assert kb_reads == [(kb.id,)]
+        assert singles == []  # 1 件ずつの get を呼ばない
+
 
 # =============================================================================
 # 作成・削除（BR2.2〜BR2.5、BR2.9、BR6.4）

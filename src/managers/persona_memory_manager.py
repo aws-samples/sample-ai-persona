@@ -177,8 +177,9 @@ class PersonaMemoryManager:
                 metadata={"source": "manual", "topic_name": topic_name.strip()},
             )
 
+            # 題名は記憶の中身の一部なのでログに出さない（ID だけ、NFR3.11）
             self.logger.info(
-                f"Knowledge added for persona {persona_id}: {topic_name.strip()} (memory_id: {memory_id})"
+                f"Knowledge added for persona {persona_id} (memory_id: {memory_id})"
             )
             return memory_id
 

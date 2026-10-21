@@ -104,7 +104,9 @@ class JobManager:
         """Return the job if ``principal`` submitted it (BR2.12).
 
         A missing job, a job without a submitter and someone else's job all
-        raise the same ``JOB_NOT_FOUND``. Nothing is cached.
+        raise the same ``JOB_NOT_FOUND`` and write the same one
+        ``authz.denied`` line (NFR8.6, BR2.13). An unreachable Jobs table is
+        not a denial and writes none. Nothing is cached.
 
         Raises:
             JobNotFoundError: Not this user's job (404).
@@ -114,8 +116,16 @@ class JobManager:
             job: Optional[Job] = self._lookup.get_job(job_id)
         except AuthzLookupError as e:
             raise LookupUnavailableError("jobs table unreachable") from e
-        if job is None or not AccessPolicy.is_owner(principal, job.owner_sub):
-            raise JobNotFoundError("job not found for this user")
+        # 存在しないジョブは持ち主なしとして同じ照合に通す（他人のものと区別しない）
+        try:
+            AccessPolicy.ensure_owner(
+                principal,
+                job.owner_sub if job else None,
+                ErrorCode.JOB_NOT_FOUND,
+            )
+        except CodedError as e:
+            raise JobNotFoundError("job not found for this user") from e
+        assert job is not None  # ensure_owner は持ち主なしを必ず断る
         return job
 
     def _run(

@@ -595,3 +595,88 @@ class TestMemoryAccess:
         )
         with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.get_memories(MEMBER_B.principal(), "p1")
+
+
+#: 記憶の中身・知識の本文に入れる目印（NFR3.11）。ログ・例外に出てはならない
+_CONTENT_MARK = "MEMO-CONTENT-SENTINEL-7d1e"
+
+
+@pytest.mark.unit
+class TestMemoryContentStaysOutOfLogs:
+    """NFR3.11: 記憶の中身（知識の題名と本文を含む）をログ・例外に出さない。
+
+    ログに入れてよいのはペルソナ・記憶の ID、件数、例外の種類だけ。
+    """
+
+    @staticmethod
+    def _entries() -> list[MemoryEntry]:
+        return [
+            MemoryEntry(
+                id="m-summary",
+                actor_id="p1",
+                session_id="s1",
+                content=f"議論の要約 {_CONTENT_MARK}",
+                metadata={"strategy_type": "summary"},
+                created_at=datetime(2026, 10, 1),
+            ),
+            MemoryEntry(
+                id="m-semantic",
+                actor_id="p1",
+                session_id="s1",
+                content=(
+                    f'<topic name="題名{_CONTENT_MARK}">本文 {_CONTENT_MARK}</topic>'
+                ),
+                metadata={"strategy_type": "semantic"},
+                created_at=datetime(2026, 10, 1),
+            ),
+        ]
+
+    def test_content_is_not_logged_or_raised(
+        self, manager, mock_memory_service, caplog, capsys
+    ):
+        import logging
+
+        from tests.log_helpers import assert_not_leaked
+
+        caplog.set_level(logging.DEBUG)
+        logs = LogCapture(capsys)
+        raised: list[BaseException] = []
+
+        def attempt(call: Any) -> None:
+            try:
+                call()
+            except Exception as e:  # noqa: BLE001 - 上がった例外も調べる
+                raised.append(e)
+
+        service = mock_memory_service
+        service.list_memories.return_value = self._entries()
+        topic, body = f"題名{_CONTENT_MARK}", f"本文 {_CONTENT_MARK}"
+
+        # 成功の経路: 一覧・追加・1 件の削除・全件の削除
+        attempt(lambda: manager.get_memories(OWNER, "p1", strategy_type="summary"))
+        attempt(lambda: manager.get_memories(OWNER, "p1", strategy_type="semantic"))
+        attempt(lambda: manager.add_knowledge(OWNER, "p1", topic, body))
+        attempt(lambda: manager.delete_memory(OWNER, "p1", "m-summary"))
+        attempt(lambda: manager.delete_all_memories(OWNER, "p1", "semantic"))
+        attempt(lambda: manager.safe_get_memories(OWNER, "p1", "semantic"))
+        assert not raised
+
+        # Service が失敗する経路
+        service.save_knowledge.side_effect = MemoryServiceError("save failed")
+        attempt(lambda: manager.add_knowledge(OWNER, "p1", topic, body))
+        service.save_knowledge.side_effect = ConnectionError("timeout")
+        attempt(lambda: manager.add_knowledge(OWNER, "p1", topic, body))
+        service.delete_owned_memory.side_effect = MemoryServiceError("delete failed")
+        attempt(lambda: manager.delete_memory(OWNER, "p1", "m-summary"))
+        service.delete_memory.side_effect = MemoryServiceError("delete failed")
+        attempt(lambda: manager.delete_all_memories(OWNER, "p1", "semantic"))
+        service.list_memories.side_effect = MemoryServiceError("list failed")
+        attempt(lambda: manager.get_memories(OWNER, "p1"))
+        attempt(lambda: manager.delete_all_memories(OWNER, "p1", "summary"))
+        attempt(lambda: manager.safe_get_memories(OWNER, "p1"))
+        # 失敗はコード付きの例外で上がる（全件の削除の 1 件ずつの失敗は件数に数えないだけ、
+        # safe_get_memories は空を返す）
+        assert len(raised) == 5
+
+        assert caplog.records  # 何も記録しない状態での空振りを防ぐ
+        assert_not_leaked(_CONTENT_MARK, caplog, logs.records(), raised)

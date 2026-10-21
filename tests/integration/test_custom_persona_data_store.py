@@ -151,6 +151,39 @@ class TestReads:
         assert {d.id for d in listed} == {d.id for d in made}
         assert len(limits) > 1
 
+    def test_250_records_are_all_listed_with_their_scopes(self, store, client):
+        """NFR9.37: hundreds of assets are read page by page, nothing is lost."""
+        from tests.unit.survey_world import bulk_put_custom_data
+
+        scopes = [{"sales"}, {"plan"}, {"sales", "plan"}, set()]
+        made = [
+            _data(f"規模{i:03d}", shared_group_ids=frozenset(scopes[i % 4]))
+            for i in range(250)
+        ]
+        bulk_put_custom_data(client, TABLE, made)
+        # 名前の押さえ（予約中の項目）も同じテーブルにある
+        assert all(_raw(client, reservation_id(d.name)) for d in made[:3])
+        real_scan = client.scan
+        pages: list[int] = []
+
+        def paged_scan(**kwargs: Any) -> dict:
+            response = real_scan(**{**kwargs, "Limit": 7})
+            pages.append(len(response.get("Items", [])))
+            return response
+
+        client.scan = paged_scan
+        listed = store.list_all()
+
+        assert len(listed) == 250
+        assert {d.id for d in listed} == {d.id for d in made}
+        assert {d.id: d.shared_group_ids for d in listed} == {
+            d.id: d.shared_group_ids for d in made
+        }
+        assert len(pages) > 500 // 7
+        sales = {d.id for d in listed if "sales" in d.shared_group_ids}
+        assert sales == {d.id for i, d in enumerate(made) if i % 4 in (0, 2)}
+        assert len(sales) == 125
+
 
 class TestRename:
     def test_moves_the_reservation_and_the_name_together(self, store, client):
