@@ -1,6 +1,6 @@
 [project]
 name = "ai-persona-system"
-version = "0.19.0"
+version = "0.19.1"
 description = "AIペルソナシステム - インタビューからペルソナを生成し、議論を通じてインサイトを生成"
 authors = [
     {name = "AI Persona Team"}
@@ -17,7 +17,6 @@ dependencies = [
     "jinja2>=3.1.0",
     "python-multipart>=0.0.31",
     "bedrock-agentcore>=1.18.1",
-    "strands-agents-tools>=0.2.19",
     "markitdown[pdf,docx,pptx,xlsx]>=0.1.4",
     "cachetools>=5.3.0",
     "datasets>=3.0.0",
@@ -25,7 +24,7 @@ dependencies = [
     "polars>=1.0.0",
     "markdown>=3.5.0",
     "nh3>=0.2.0",
-    "Pillow>=12.3.0",
+    "Pillow>=13.0.0",
     "pycountry>=24.0.0",
     "authlib>=1.8.0",
     "itsdangerous>=2.2.0",
