@@ -138,12 +138,16 @@ def test_analysis_and_delete_share_the_one_instance():
     try:
         analysis = SurveyAnalysisManager(
             database_service=Mock(),
+            survey_template_store=Mock(),
             s3_service=Mock(),
             ai_service=Mock(),
             survey_batch_service=Mock(),
         )
         execution = SurveyExecutionManager(
-            database_service=Mock(), survey_batch_service=Mock(), s3_service=Mock()
+            database_service=Mock(),
+            survey_template_store=Mock(),
+            survey_batch_service=Mock(),
+            s3_service=Mock(),
         )
         assert analysis.result_cache is shared_result_cache()
         assert execution.result_cache is shared_result_cache()

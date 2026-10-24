@@ -1,8 +1,8 @@
 """Shared world for the U7 Manager tests (surveys, templates, organization assets).
 
-DynamoDB and S3 are moto; ``DatabaseService``, ``ResourceShareStore``,
-``CustomPersonaDataStore``, ``AuthzLookupService`` and ``S3Service`` are the real
-services on it. ``AccessPolicy``, ``ResourceSharing``, ``ResourceLookup`` and
+DynamoDB and S3 are moto; ``DatabaseService``, ``SurveyTemplateStore``,
+``ResourceShareStore``, ``CustomPersonaDataStore``, ``AuthzLookupService`` and
+``S3Service`` are the real services on it. ``AccessPolicy``, ``ResourceSharing``, ``ResourceLookup`` and
 ``DepartmentDirectory`` are the real components (decisions are never mocked).
 ``FileAttachments`` and ``OwnerDirectory`` are fakes; AI is mocked by each test.
 
@@ -38,6 +38,7 @@ from src.services.dataset_store import DatasetStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.services.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
+from src.services.survey_template_store import SurveyTemplateStore
 
 REGION = "us-east-1"
 BUCKET = "u7-test-bucket"
@@ -94,6 +95,10 @@ class SurveyWorld:
         self.db = DatabaseService(table_prefix="U7", region=REGION)
         self.client = self.db.dynamodb_client
         self.kb_table = "U7_KnowledgeBases"
+        self.templates_table = "U7_SurveyTemplates"
+        self.template_store = SurveyTemplateStore(
+            region=REGION, table_name=self.templates_table, client=self.client
+        )
         self.datasets_table = "U7_Datasets"
         self.dataset_store = DatasetStore(
             region=REGION, table_name=self.datasets_table, client=self.client
@@ -118,7 +123,7 @@ class SurveyWorld:
             self.share_store, self.departments, sleep=lambda _s: None
         )
         tables = {
-            ResourceType.SURVEY_TEMPLATE: self.db.survey_templates_table,
+            ResourceType.SURVEY_TEMPLATE: self.templates_table,
             ResourceType.SURVEY: self.db.surveys_table,
         }
         for table in default_sharing_tables():
@@ -128,9 +133,7 @@ class SurveyWorld:
             region=REGION, jobs_table_name="U7_Jobs", client=self.client
         )
         lookup_tables = [
-            LookupTable(
-                ResourceType.SURVEY_TEMPLATE, self.db.survey_templates_table, "name"
-            ),
+            LookupTable(ResourceType.SURVEY_TEMPLATE, self.templates_table, "name"),
             LookupTable(ResourceType.SURVEY, self.db.surveys_table, "name"),
             LookupTable(ResourceType.DATASET, self.datasets_table, "name"),
             LookupTable(ResourceType.KNOWLEDGE_BASE, self.kb_table, "name"),
@@ -170,7 +173,7 @@ class SurveyWorld:
                 **extra,
             )
 
-        table(self.db.survey_templates_table, owner_index=True)
+        table(self.templates_table, owner_index=True)
         table(self.db.surveys_table, owner_index=True)
         table(self.datasets_table)
         table(self.kb_table)
@@ -195,7 +198,7 @@ class SurveyWorld:
     ) -> None:
         """Share a resource with departments (as ResourceSharing would)."""
         table = (
-            self.db.survey_templates_table
+            self.templates_table
             if resource_type is ResourceType.SURVEY_TEMPLATE
             else self.db.surveys_table
         )
@@ -233,7 +236,7 @@ class SurveyWorld:
             template = replace(template, created_at=created_at, updated_at=created_at)
         if owner:
             template = template.owned_by(owner)
-        self.db.put_new_survey_template(template)
+        self.template_store.put_new(template)
         return template
 
     def survey(

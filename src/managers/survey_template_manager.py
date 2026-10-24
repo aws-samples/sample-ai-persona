@@ -6,8 +6,8 @@ v1.0.0 U7: every entry point takes the signed-in user (``Principal``) and
 decides with ``AccessPolicy`` (``functional-design/rules.md``):
 
 - BR1.1: the creator owns a new template; it starts unshared. The body is
-  written "id does not exist yet" (one transaction with the caller's index
-  items), then the images are attached; a failed attach removes the body.
+  written "id does not exist yet" (no shares yet, so no index items), then
+  the images are attached; a failed attach removes the body.
 - BR1.2: lists are tabbed (``ResourceSharing``); bodies are read again
   strongly and checked with ``can_read``; a search reads the newest 500 of
   the tab. Members never scan.
@@ -37,11 +37,11 @@ from ..prompts.survey_prompts import (
     SURVEY_DRAFT_SYSTEM_PROMPT,
 )
 from ..services.ai_service import AIService
-from ..services.database_service import (
-    DatabaseError,
-    DatabaseService,
-)
 from ..services.service_factory import service_factory
+from ..services.survey_template_store import (
+    SurveyTemplateStore,
+    SurveyTemplateStoreError,
+)
 from .components.access_policy import AccessPolicy
 from .components.file_attachments import FileAttachments
 from .components.owner_directory import OwnerDirectory
@@ -82,7 +82,7 @@ class SurveyTemplateManager:
 
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
+        survey_template_store: Optional[SurveyTemplateStore] = None,
         ai_service: Optional[AIService] = None,
         file_attachments: Optional[FileAttachments] = None,
         resource_sharing: Optional[ResourceSharing] = None,
@@ -93,7 +93,7 @@ class SurveyTemplateManager:
         """Create the manager.
 
         Args:
-            database_service: Template bodies (the singleton when omitted).
+            survey_template_store: Template bodies (the singleton when omitted).
             ai_service: AI generation (the singleton when omitted).
             file_attachments: The per-task ``FileAttachments`` (U5).
             resource_sharing: The per-task ``ResourceSharing`` (tabs, delete).
@@ -101,7 +101,9 @@ class SurveyTemplateManager:
             resource_lookup: The per-task ``ResourceLookup`` (decisions).
             sleep: Wait between cleanup attempts (tests).
         """
-        self.db = database_service or service_factory.get_database_service()
+        self._templates = (
+            survey_template_store or service_factory.get_survey_template_store()
+        )
         self.ai_service = ai_service or service_factory.get_ai_service()
         self._attachments = file_attachments
         self._sharing = resource_sharing
@@ -169,8 +171,8 @@ class SurveyTemplateManager:
         ).owned_by(principal.sub)
         self._check_size(template)
         try:
-            self.db.put_new_survey_template(template)
-        except DatabaseError as e:
+            self._templates.put_new(template)
+        except SurveyTemplateStoreError as e:
             logger.error("Template save failed: %s", type(e).__name__)
             raise SurveyTemplateManagerError(
                 "template save failed", code=ErrorCode.SURVEY_OPERATION_FAILED
@@ -206,7 +208,7 @@ class SurveyTemplateManager:
             )
 
     def _check_size(self, template: SurveyTemplate) -> None:
-        if self.db.item_size(template.to_dict()) > MAX_TEMPLATE_BYTES:
+        if self._templates.item_size(template.to_dict()) > MAX_TEMPLATE_BYTES:
             raise SurveyTemplateManagerError(
                 "the template body exceeds 200KB",
                 code=ErrorCode.SURVEY_TEMPLATE_TOO_LARGE,
@@ -262,8 +264,8 @@ class SurveyTemplateManager:
         if not template_ids:
             return []
         try:
-            found = self.db.get_survey_templates_by_ids(template_ids)
-        except DatabaseError as e:
+            found = self._templates.get_many(template_ids)
+        except SurveyTemplateStoreError as e:
             raise LookupUnavailableError("template bodies unreadable") from e
         bodies = [found[i] for i in dict.fromkeys(template_ids) if i in found]
         return [
@@ -389,8 +391,8 @@ class SurveyTemplateManager:
 
     def _body(self, template_id: str) -> SurveyTemplate:
         try:
-            template = self.db.get_survey_template(template_id, consistent=True)
-        except DatabaseError as e:
+            template = self._templates.get(template_id, consistent=True)
+        except SurveyTemplateStoreError as e:
             raise LookupUnavailableError("template body unreadable") from e
         if template is None:
             raise SurveyTemplateManagerError(
@@ -445,8 +447,8 @@ class SurveyTemplateManager:
                     context=e.context,
                 ) from e
         try:
-            written = self.db.update_survey_template_content(updated)
-        except DatabaseError as e:
+            written = self._templates.update_content(updated)
+        except SurveyTemplateStoreError as e:
             if attached is not None:
                 self._files.detach(attached)
             raise SurveyTemplateManagerError(

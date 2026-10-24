@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .persona_binding_store import PersonaBindingStore
     from .persona_candidate_store import PersonaCandidateStore
     from .resource_share_store import ResourceShareStore
+    from .survey_template_store import SurveyTemplateStore
     from .uploaded_file_store import UploadedFileStore
     from .discussion_store import DiscussionStore
     from .interview_session_store import InterviewSessionStore
@@ -79,6 +80,7 @@ class ServiceFactory:
         self._persona_binding_store: Optional["PersonaBindingStore"] = None
         self._job_store: Optional["JobStore"] = None
         self._dataset_store: Optional["DatasetStore"] = None
+        self._survey_template_store: Optional["SurveyTemplateStore"] = None
         self._knowledge_base_store: Optional["KnowledgeBaseStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._discussion_store: Optional["DiscussionStore"] = None
@@ -527,6 +529,20 @@ class ServiceFactory:
                         table_name=config.table_name("Datasets"),
                     )
         return self._dataset_store
+
+    def get_survey_template_store(self) -> "SurveyTemplateStore":
+        """Return the store of survey template bodies (U7)."""
+        if self._survey_template_store is None:
+            with self._lock:
+                if self._survey_template_store is None:
+                    from .survey_template_store import SurveyTemplateStore
+
+                    self.logger.info("Creating new SurveyTemplateStore instance")
+                    self._survey_template_store = SurveyTemplateStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.table_name("SurveyTemplates"),
+                    )
+        return self._survey_template_store
 
     def get_knowledge_base_store(self) -> "KnowledgeBaseStore":
         """Return the store of registered knowledge bases (U7)."""

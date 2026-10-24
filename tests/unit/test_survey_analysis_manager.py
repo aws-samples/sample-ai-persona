@@ -19,6 +19,7 @@ from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
 from src.models.survey_template import Question, SurveyTemplate
+from src.services.survey_template_store import SurveyTemplateStore
 from tests.error_helpers import raises_code
 from tests.unit.survey_world import (
     ADMIN,
@@ -83,6 +84,7 @@ def cache() -> ResultCsvCache:
 def am(survey_world: SurveyWorld, ai, batch, cache) -> SurveyAnalysisManager:
     return SurveyAnalysisManager(
         database_service=survey_world.db,
+        survey_template_store=survey_world.template_store,
         s3_service=survey_world.s3,
         ai_service=ai,
         survey_batch_service=batch,
@@ -117,7 +119,7 @@ class TestVisualAnalysis:
         survey = _survey(survey_world, sample_template)
         survey_world.share(SURVEY, survey.id, "sales")
         # テンプレートは保存されていない（共有もされていない）が、写しで分析が出る
-        assert survey_world.db.get_survey_template(sample_template.id) is None
+        assert survey_world.template_store.get(sample_template.id) is None
         result = am.get_visual_analysis(MEMBER_B, survey.id)
         assert result.multiple_choice_charts[0]["question_text"] == "好きな色は？"
 
@@ -150,7 +152,7 @@ class TestVisualAnalysis:
         self, am, survey_world, sample_template
     ):
         template = sample_template.owned_by("c")
-        survey_world.db.put_new_survey_template(template)
+        survey_world.template_store.put_new(template)
         legacy = survey_world.survey(
             None, template, snapshot=False, csv=_make_csv_bytes(template)
         )
@@ -327,6 +329,7 @@ class TestComputeVisualAnalysis:
         ]
         mgr = SurveyAnalysisManager(
             database_service=Mock(),
+            survey_template_store=Mock(spec=SurveyTemplateStore),
             s3_service=Mock(),
             ai_service=Mock(),
             survey_batch_service=Mock(),

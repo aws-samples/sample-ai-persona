@@ -153,7 +153,7 @@ class TestTemplateAccess:
         )
         assert response.status_code == 404
         assert client.delete(f"/survey/templates/{template.id}").status_code == 404
-        assert aw.world.db.get_survey_template(template.id) is not None
+        assert aw.world.template_store.get(template.id) is not None
 
     def test_create_records_me_as_the_owner(self, aw, client):
         response = client.post(
@@ -171,9 +171,9 @@ class TestTemplateAccess:
             data={"name": "新", "questions_json": _QUESTIONS},
         )
         assert response.status_code == 200
-        assert aw.world.db.get_survey_template(template.id).name == "新"
+        assert aw.world.template_store.get(template.id).name == "新"
         assert client.delete(f"/survey/templates/{template.id}").status_code == 200
-        assert aw.world.db.get_survey_template(template.id) is None
+        assert aw.world.template_store.get(template.id) is None
 
     def test_image_that_cannot_be_attached_is_not_found(self, aw, client):
         from src.models.errors import CodedError, ErrorCode

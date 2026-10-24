@@ -27,7 +27,6 @@ from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 
 if TYPE_CHECKING:
-    from ..models.survey_template import SurveyTemplate
     from ..models.survey import Survey
 
 
@@ -166,7 +165,6 @@ class DatabaseService:
         self.personas_table = name_of("Personas")
         self.discussions_table = name_of("Discussions")
         self.files_table = name_of("UploadedFiles")
-        self.survey_templates_table = name_of("SurveyTemplates")
         self.surveys_table = name_of("Surveys")
 
     def _execute_with_retry(
@@ -876,116 +874,7 @@ class DatabaseService:
 
     # Datasets are DatasetStore (U5, U7).
 
-    # ========== SurveyTemplate CRUD ==========
-
-    def _serialize_survey_template(self, template: "SurveyTemplate") -> Dict[str, Any]:
-        """Serialize SurveyTemplate to DynamoDB item format.
-
-        ``shared_group_ids`` is left out: only ``ResourceSharing`` writes it,
-        together with ``ResourceShares`` (contract C7).
-        """
-        data = template.to_dict()
-        data.pop("shared_group_ids", None)
-        return {k: self.serializer.serialize(v) for k, v in data.items()}
-
-    def _deserialize_survey_template(self, item: Dict[str, Any]) -> "SurveyTemplate":
-        """Deserialize DynamoDB item to SurveyTemplate."""
-        from ..models.survey_template import SurveyTemplate
-
-        deserialized = {k: self.deserializer.deserialize(v) for k, v in item.items()}
-        # Convert Decimal scale values back to int inside questions
-        for q in deserialized.get("questions", []):
-            if "scale_min" in q:
-                q["scale_min"] = int(q["scale_min"])
-            if "scale_max" in q:
-                q["scale_max"] = int(q["scale_max"])
-        return SurveyTemplate.from_dict(deserialized)
-
-    def put_new_survey_template(
-        self,
-        template: "SurveyTemplate",
-        extra_items: Sequence[Dict[str, Any]] = (),
-    ) -> None:
-        """Write a new template with the caller's items in one transaction (U7 BR1.1).
-
-        Conditioned on the ID not existing yet. ``shared_group_ids`` is never
-        written here (only ``ResourceSharing`` writes it, contract C7).
-
-        Raises:
-            DatabaseConditionFailed: The ID exists (or an extra item's
-                condition failed); nothing was written.
-            DatabaseError: Anything else.
-        """
-        self._transact_new(
-            self.survey_templates_table,
-            self._serialize_survey_template(template),
-            extra_items,
-            operation=f"put_new_survey_template({template.id})",
-        )
-
-    def update_survey_template_content(self, template: "SurveyTemplate") -> bool:
-        """Write only the name, questions, images and ``updated_at`` (U7 BR1.5).
-
-        ``owner_sub``, ``shared_group_ids`` and ``created_at`` are never part of
-        the write. Conditioned on the template still existing.
-
-        Returns:
-            ``False`` when the template does not exist (nothing is created).
-        """
-        data = template.to_dict()
-        fields: Dict[str, Any] = {
-            "name": data["name"],
-            "questions": data["questions"],
-            "updated_at": data["updated_at"],
-        }
-        remove: tuple[str, ...] = ()
-        if data.get("images"):
-            fields["images"] = data["images"]
-        else:
-            remove = ("images",)
-        return self._update_columns(
-            self.survey_templates_table,
-            template.id,
-            fields,
-            remove=remove,
-            operation="update_survey_template_content",
-        )
-
-    def get_survey_template(
-        self, template_id: str, *, consistent: bool = False
-    ) -> Optional["SurveyTemplate"]:
-        """Get a SurveyTemplate by ID (strongly consistent for decisions, U7)."""
-
-        def _get() -> Optional["SurveyTemplate"]:
-            response = self.dynamodb_client.get_item(
-                TableName=self.survey_templates_table,
-                Key={"id": self.serializer.serialize(template_id)},
-                ConsistentRead=consistent,
-            )
-            if "Item" not in response:
-                return None
-            return self._deserialize_survey_template(response["Item"])
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_survey_template({template_id})"
-        )
-
-    def get_survey_templates_by_ids(
-        self, template_ids: Sequence[str]
-    ) -> Dict[str, "SurveyTemplate"]:
-        """Read templates with strongly consistent ``BatchGetItem`` calls (NFR2.21).
-
-        Returns:
-            id -> SurveyTemplate for the IDs that exist.
-
-        Raises:
-            DatabaseError: The read failed or keys stayed unprocessed.
-        """
-        items = self._batch_get_items(self.survey_templates_table, template_ids)
-        return {
-            item_id: self._deserialize_survey_template(item)
-            for item_id, item in items.items()
-        }
+    # Survey templates are SurveyTemplateStore (U7).
 
     # ========== Survey CRUD ==========
 
