@@ -126,7 +126,7 @@ class TestAgentDiscussionManagerFullFlow:
         self.mock_agent_service = Mock()
         self.mock_db = Mock()
         self.manager = AgentDiscussionManager(
-            agent_service=self.mock_agent_service, database_service=self.mock_db
+            agent_service=self.mock_agent_service, dataset_store=self.mock_db
         )
         self.personas = [_make_persona("p1", "太郎"), _make_persona("p2", "花子")]
 

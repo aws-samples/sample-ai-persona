@@ -57,7 +57,7 @@ class PersonaAgentIntegration:
 
     def __init__(
         self,
-        database_service: Any,
+        dataset_store: Any,
         knowledge_base_store: Any,
         agent_service: Any,
         dataset_analysis_service: Any,
@@ -66,7 +66,7 @@ class PersonaAgentIntegration:
     ) -> None:
         """
         Args:
-            database_service: Reads datasets.
+            dataset_store: Reads the bound datasets.
             knowledge_base_store: Reads the bound knowledge base.
             agent_service: Builds the KB tool and the agent.
             dataset_analysis_service: Builds the dataset tools.
@@ -75,7 +75,7 @@ class PersonaAgentIntegration:
             resource_lookup: Usage scopes of the organization assets (U6).
                 Without it no organization asset is handed over (fail closed).
         """
-        self._database_service = database_service
+        self._datasets = dataset_store
         self._knowledge_bases = knowledge_base_store
         self._agent_service = agent_service
         self._dataset_analysis_service = dataset_analysis_service
@@ -296,7 +296,7 @@ class PersonaAgentIntegration:
             return [], []
 
         dataset_ids = list({b.target_id for b in accepted})
-        datasets = [self._database_service.get_dataset(did) for did in dataset_ids]
+        datasets = [self._datasets.get(did) for did in dataset_ids]
         datasets = [d for d in datasets if d is not None]
 
         accepted_bindings = [

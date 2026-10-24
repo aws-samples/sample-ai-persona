@@ -36,7 +36,7 @@ def test_given_physical_names_are_used():
     assert service.personas_table == "AIPersonaDev-Data-Personas1"
     assert service.surveys_table == "AIPersonaDev-Data-Surveys2"
     # 渡されなかったものは接頭辞から組み立てる
-    assert service.datasets_table == "Local_Datasets"
+    assert service.survey_templates_table == "Local_SurveyTemplates"
 
 
 def test_factory_passes_the_configured_names(monkeypatch):

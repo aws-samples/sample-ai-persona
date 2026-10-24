@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .cognito.cognito_auth_service import CognitoAuthService
     from .cognito.oidc_service import OidcService
     from .custom_persona_data_store import CustomPersonaDataStore
+    from .dataset_store import DatasetStore
     from .job_store import JobStore
     from .knowledge_base_store import KnowledgeBaseStore
     from .persona_binding_store import PersonaBindingStore
@@ -77,6 +78,7 @@ class ServiceFactory:
         self._persona_candidate_store: Optional["PersonaCandidateStore"] = None
         self._persona_binding_store: Optional["PersonaBindingStore"] = None
         self._job_store: Optional["JobStore"] = None
+        self._dataset_store: Optional["DatasetStore"] = None
         self._knowledge_base_store: Optional["KnowledgeBaseStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._discussion_store: Optional["DiscussionStore"] = None
@@ -511,6 +513,20 @@ class ServiceFactory:
                         table_name=config.table_name("Jobs"),
                     )
         return self._job_store
+
+    def get_dataset_store(self) -> "DatasetStore":
+        """Return the store of registered datasets (U5, U7)."""
+        if self._dataset_store is None:
+            with self._lock:
+                if self._dataset_store is None:
+                    from .dataset_store import DatasetStore
+
+                    self.logger.info("Creating new DatasetStore instance")
+                    self._dataset_store = DatasetStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.table_name("Datasets"),
+                    )
+        return self._dataset_store
 
     def get_knowledge_base_store(self) -> "KnowledgeBaseStore":
         """Return the store of registered knowledge bases (U7)."""

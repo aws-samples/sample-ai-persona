@@ -152,7 +152,7 @@ class TestCleanupFailuresAreLoggedNotRaised:
         assert world.dedicated_id in world.datasets  # cannot be found: logged
 
     def test_dataset_and_avatar_failures(self, world, persona, logs):
-        world.db.delete_dataset.side_effect = RuntimeError("db down")
+        world.dataset_store.delete.side_effect = RuntimeError("db down")
         world.s3.delete_file.side_effect = RuntimeError("s3 down")
         assert world.manager().delete_persona(A, persona.id)
 

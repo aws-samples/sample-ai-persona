@@ -150,7 +150,7 @@ def _manager(store, world, clock, agents, **kwargs) -> InterviewManager:
     agent_service.create_persona_agent.side_effect = agents.make
     return InterviewManager(
         agent_service=agent_service,
-        database_service=Mock(),
+        dataset_store=Mock(),
         dataset_analysis_service=Mock(build_binding_tools=Mock(return_value=([], []))),
         binding_store=Mock(list_for_persona=Mock(return_value=[])),
         session_store=store,

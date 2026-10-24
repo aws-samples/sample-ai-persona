@@ -27,7 +27,6 @@ from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 
 if TYPE_CHECKING:
-    from ..models.dataset import Dataset
     from ..models.survey_template import SurveyTemplate
     from ..models.survey import Survey
 
@@ -167,27 +166,8 @@ class DatabaseService:
         self.personas_table = name_of("Personas")
         self.discussions_table = name_of("Discussions")
         self.files_table = name_of("UploadedFiles")
-        self.datasets_table = name_of("Datasets")
         self.survey_templates_table = name_of("SurveyTemplates")
         self.surveys_table = name_of("Surveys")
-
-    def _get_table_name(self, entity_type: str) -> str:
-        """
-        Get full table name for entity type.
-
-        Args:
-            entity_type: Type of entity ('personas', 'discussions', 'files', 'datasets')
-
-        Returns:
-            Full table name with prefix
-        """
-        table_map = {
-            "personas": self.personas_table,
-            "discussions": self.discussions_table,
-            "files": self.files_table,
-            "datasets": self.datasets_table,
-        }
-        return table_map.get(entity_type, f"{self.table_prefix}_{entity_type}")
 
     def _execute_with_retry(
         self,
@@ -894,145 +874,7 @@ class DatabaseService:
     # Upload metadata (UploadedFiles) is read and written by UploadedFileStore
     # with strong reads and transactional attach / detach (U5, BR5).
 
-    # ==================== Dataset Operations ====================
-
-    def save_dataset(self, dataset: "Dataset") -> "Dataset":
-        """Save a new dataset ("id does not exist yet").
-
-        Never overwrites a stored dataset, so its usage scope stays (U7 BR1.5).
-        Edits go through :meth:`update_dataset_fields`.
-
-        Raises:
-            DatabaseError: The write failed or the ID exists already.
-        """
-
-        def _save() -> "Dataset":
-            item = {
-                "id": self.serializer.serialize(dataset.id),
-                "name": self.serializer.serialize(dataset.name),
-                "description": self.serializer.serialize(dataset.description),
-                "s3_path": self.serializer.serialize(dataset.s3_path),
-                "columns": self.serializer.serialize(
-                    [
-                        {
-                            "name": c.name,
-                            "data_type": c.data_type,
-                            "description": c.description,
-                        }
-                        for c in dataset.columns
-                    ]
-                ),
-                "row_count": self.serializer.serialize(dataset.row_count),
-                "created_at": self.serializer.serialize(dataset.created_at.isoformat()),
-                "updated_at": self.serializer.serialize(dataset.updated_at.isoformat()),
-                "notes": self.serializer.serialize(dataset.notes),
-            }
-            # Persona-dedicated datasets only (U5 BR6.1); org assets have no column
-            if dataset.owner_persona_id:
-                item["owner_persona_id"] = self.serializer.serialize(
-                    dataset.owner_persona_id
-                )
-            self.dynamodb_client.put_item(
-                TableName=self.datasets_table,
-                Item=item,
-                ConditionExpression="attribute_not_exists(id)",
-            )
-            return dataset
-
-        return self._execute_with_retry(
-            _save, operation_name=f"save_dataset({dataset.id})"
-        )
-
-    def _deserialize_dataset(self, raw_item: Dict[str, Any]) -> "Dataset":
-        from ..models.dataset import Dataset
-
-        item = {k: self.deserializer.deserialize(v) for k, v in raw_item.items()}
-        item["row_count"] = int(item.get("row_count", 0))
-        return Dataset.from_dict(item)
-
-    def get_dataset(
-        self, dataset_id: str, *, consistent: bool = False
-    ) -> Optional["Dataset"]:
-        """Get dataset by ID (strongly consistent for decisions, U7)."""
-
-        def _get() -> Optional["Dataset"]:
-            response = self.dynamodb_client.get_item(
-                TableName=self.datasets_table,
-                Key={"id": self.serializer.serialize(dataset_id)},
-                ConsistentRead=consistent,
-            )
-            if "Item" not in response:
-                return None
-            return self._deserialize_dataset(response["Item"])
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_dataset({dataset_id})"
-        )
-
-    def update_dataset_fields(
-        self,
-        dataset_id: str,
-        *,
-        updated_at: datetime,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        notes: Optional[str] = None,
-        columns: Optional[List[Any]] = None,
-    ) -> bool:
-        """Write only the given columns of a dataset (U7 BR1.5, NFR1.77).
-
-        ``shared_group_ids``, ``owner_persona_id`` and ``created_at`` are never
-        part of the write, so a rename and a scope change both survive.
-
-        Returns:
-            ``False`` when the dataset does not exist (nothing is created).
-        """
-        fields: Dict[str, Any] = {"updated_at": updated_at.isoformat()}
-        if name is not None:
-            fields["name"] = name
-        if description is not None:
-            fields["description"] = description
-        if notes is not None:
-            fields["notes"] = notes
-        if columns is not None:
-            fields["columns"] = [
-                {"name": c.name, "data_type": c.data_type, "description": c.description}
-                for c in columns
-            ]
-        return self._update_columns(
-            self.datasets_table, dataset_id, fields, operation="update_dataset_fields"
-        )
-
-    def get_all_datasets(self) -> List["Dataset"]:
-        """Get every organization-asset dataset.
-
-        Persona-dedicated datasets (``owner_persona_id`` set) are left out in
-        the scan itself (U5 BR6.2). The table holds organization assets only,
-        so a scan stays small (not a per-user listing, NFR2).
-        """
-
-        def _get_all() -> List["Dataset"]:
-            items = self._scan_items(
-                self.datasets_table,
-                FilterExpression="attribute_not_exists(owner_persona_id)",
-            )
-            return [self._deserialize_dataset(item) for item in items]
-
-        return self._execute_with_retry(_get_all, operation_name="get_all_datasets")
-
-    def delete_dataset(self, dataset_id: str) -> bool:
-        """Delete dataset by ID."""
-
-        def _delete() -> bool:
-            self.dynamodb_client.delete_item(
-                TableName=self.datasets_table,
-                Key={"id": self.serializer.serialize(dataset_id)},
-            )
-            return True
-
-        return self._execute_with_retry(
-            _delete, operation_name=f"delete_dataset({dataset_id})"
-        )
+    # Datasets are DatasetStore (U5, U7).
 
     # ========== SurveyTemplate CRUD ==========
 
@@ -1238,66 +1080,6 @@ class DatabaseService:
 
     # Knowledge bases are KnowledgeBaseStore (U7).
 
-    # ==================== Organization asset scope (U7) ====================
-
-    def update_asset_scope(
-        self,
-        kind: str,
-        asset_id: str,
-        *,
-        add: frozenset[str],
-        remove: frozenset[str],
-    ) -> None:
-        """``ADD`` then ``DELETE`` on an asset's ``shared_group_ids`` (U7 BR5.2).
-
-        Two separate updates (DynamoDB refuses both actions on one attribute in
-        one expression), each conditioned on the asset existing and, for a
-        dataset, being an organization asset (BR5.6). A side with no department
-        is not sent; when the second update fails the first one stays (the
-        screen reads the scope again). Removing every department drops the
-        column: the asset is admin only again.
-
-        Args:
-            kind: ``"dataset"`` (knowledge bases are
-                ``KnowledgeBaseStore.update_scope``).
-
-        Raises:
-            ValueError: ``kind`` is not ``"dataset"``.
-            DatabaseConditionFailed: The asset does not exist (or is
-                persona-dedicated); nothing was created.
-            DatabaseError: Anything else.
-        """
-        if kind == "dataset":
-            table = self.datasets_table
-            condition = (
-                "attribute_exists(id) AND attribute_not_exists(owner_persona_id)"
-            )
-        else:
-            raise ValueError(f"no usage scope for {kind!r}")
-        for action, groups in (("ADD", add), ("DELETE", remove)):
-            if not groups:
-                continue
-            params: Dict[str, Any] = {
-                "TableName": table,
-                "Key": {"id": {"S": asset_id}},
-                "UpdateExpression": f"{action} #shared :groups",
-                "ConditionExpression": condition,
-                "ExpressionAttributeNames": {"#shared": "shared_group_ids"},
-                "ExpressionAttributeValues": {":groups": {"SS": sorted(groups)}},
-            }
-
-            def _write(params: Dict[str, Any] = params) -> Any:
-                return self.dynamodb_client.update_item(**params)
-
-            written = self._conditional_write(
-                _write, operation=f"update_asset_scope({kind}, {asset_id})"
-            )
-            if not written:
-                raise DatabaseConditionFailed(
-                    f"{kind} {asset_id} does not exist",
-                    code=ErrorCode.DATABASE_OPERATION_FAILED,
-                )
-
     # ==================== Shared helpers (U7) ====================
 
     @staticmethod
@@ -1433,18 +1215,6 @@ class DatabaseService:
             f"BatchGetItem left {len(keys)} keys unprocessed after three re-reads",
             code=ErrorCode.DATABASE_OPERATION_FAILED,
         )
-
-    def _scan_items(self, table: str, **params: Any) -> List[Dict[str, Any]]:
-        """Every item of a scan, following ``LastEvaluatedKey``."""
-        request: Dict[str, Any] = {"TableName": table, **params}
-        items: List[Dict[str, Any]] = []
-        while True:
-            response = self.dynamodb_client.scan(**request)
-            items.extend(response.get("Items", []))
-            last = response.get("LastEvaluatedKey")
-            if not last:
-                return items
-            request["ExclusiveStartKey"] = last
 
     # Persona bindings (KB / datasets) live in PersonaBindings and are read and
     # written by PersonaBindingStore (U5, ADR-007).

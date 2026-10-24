@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 from unittest.mock import Mock
 
+from src.services.dataset_store import DatasetStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.managers.components.resource_lookup import ResourceLookup
 from src.managers.persona_manager import PersonaManager
@@ -130,12 +131,13 @@ class World:
             lambda pid, consistent=False: self.personas.get(pid)
         )
         self.db.save_persona.side_effect = self._save_persona
-        self.db.get_dataset.side_effect = lambda did: self.datasets.get(did)
-        self.db.save_dataset.side_effect = self._save_dataset
-        self.db.delete_dataset.side_effect = (
-            lambda did: self.datasets.pop(did, None) is not None
+        self.dataset_store = Mock(spec=DatasetStore)
+        self.dataset_store.get.side_effect = (
+            lambda did, consistent=False: self.datasets.get(did)
         )
-        self.db.get_all_datasets.side_effect = lambda: [
+        self.dataset_store.put_new.side_effect = self._save_dataset
+        self.dataset_store.delete.side_effect = lambda did: self.datasets.pop(did, None)
+        self.dataset_store.list_org_assets.side_effect = lambda: [
             d for d in self.datasets.values() if not d.owner_persona_id
         ]
         self.kb_store = Mock(spec=KnowledgeBaseStore)
@@ -197,9 +199,8 @@ class World:
         self.personas[persona.id] = persona
         return persona.id
 
-    def _save_dataset(self, dataset: Dataset) -> Dataset:
+    def _save_dataset(self, dataset: Dataset) -> None:
         self.datasets[dataset.id] = dataset
-        return dataset
 
     def _delete_with_shares(
         self, principal: Principal, rtype: ResourceType, pid: str
@@ -227,6 +228,7 @@ class World:
         options: dict[str, Any] = {
             "database_service": self.db,
             "knowledge_base_store": self.kb_store,
+            "dataset_store": self.dataset_store,
             "s3_service": self.s3,
             "resource_sharing": self.sharing,
             "owners": Mock(),

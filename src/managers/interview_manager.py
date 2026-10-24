@@ -64,7 +64,6 @@ from ..services.agent_service import (
     AgentService,
     PersonaAgent,
 )
-from ..services.database_service import DatabaseService
 from ..services.interview_session_store import (
     InterviewConflict,
     InterviewSessionStore,
@@ -93,6 +92,7 @@ from .shared.structured_log import log_event
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
+    from ..services.dataset_store import DatasetStore
     from ..services.knowledge_base_store import KnowledgeBaseStore
     from ..services.s3_service import S3Service
 
@@ -228,7 +228,7 @@ class InterviewManager:
     def __init__(
         self,
         agent_service: AgentService | None = None,
-        database_service: Optional[DatabaseService] = None,
+        dataset_store: Optional["DatasetStore"] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
         knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         binding_store: Any = None,
@@ -245,7 +245,7 @@ class InterviewManager:
 
         Args:
             agent_service: Agent service (the singleton when omitted)
-            database_service: Database service (the singleton when omitted)
+            dataset_store: Datasets for the dataset tools (the singleton when omitted)
             dataset_analysis_service: Dataset tools (the singleton when omitted)
             knowledge_base_store: Registered knowledge bases for the KB tool
                 (the singleton when omitted)
@@ -260,15 +260,13 @@ class InterviewManager:
         """
         self.logger = logging.getLogger(__name__)
         self.agent_service = agent_service or service_factory.get_agent_service()
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
+        self.dataset_store = dataset_store or service_factory.get_dataset_store()
         self.dataset_analysis_service = (
             dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
         self._resource_lookup = resource_lookup
         self._agent_integration = PersonaAgentIntegration(
-            database_service=self.database_service,
+            dataset_store=self.dataset_store,
             knowledge_base_store=knowledge_base_store
             or service_factory.get_knowledge_base_store(),
             agent_service=self.agent_service,

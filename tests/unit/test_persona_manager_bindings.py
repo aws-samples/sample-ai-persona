@@ -304,7 +304,7 @@ class TestDeleteBinding:
                 private.id, dedicated.id, dedicated=True, now=NOW
             )
         )
-        world.db.delete_dataset.side_effect = RuntimeError("down")
+        world.dataset_store.delete.side_effect = RuntimeError("down")
 
         world.manager().delete_dataset_binding(A, private.id, dedicated.id)
 
