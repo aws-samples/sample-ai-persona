@@ -1143,9 +1143,9 @@ class TestPersistedFailuresDoNotLeak:
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "update_job_failed"
+            and node.func.attr == "update_failed"
         ]
-        assert calls, "update_job_failed の呼び出しが見つからない"
+        assert calls, "update_failed の呼び出しが見つからない"
         for call in calls:
             assert not any(_stringifies_something(arg) for arg in call.args)
 
@@ -1336,7 +1336,7 @@ class TestAuthzErrorBodies:
         monkeypatch.setattr(
             api,
             "_job_manager",
-            JobManager(database_service=Mock(), lookup_service=lookup),
+            JobManager(job_store=Mock(), lookup_service=lookup),
         )
         return lookup
 

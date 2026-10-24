@@ -27,9 +27,6 @@ from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 
 if TYPE_CHECKING:
-    from ..models.job import Job
-
-if TYPE_CHECKING:
     from ..models.dataset import Dataset
     from ..models.survey_template import SurveyTemplate
     from ..models.survey import Survey
@@ -175,7 +172,6 @@ class DatabaseService:
         self.survey_templates_table = name_of("SurveyTemplates")
         self.surveys_table = name_of("Surveys")
         self.kb_table = name_of("KnowledgeBases")
-        self.jobs_table = name_of("Jobs")
 
     def _get_table_name(self, entity_type: str) -> str:
         """
@@ -1530,123 +1526,4 @@ class DatabaseService:
     # Persona bindings (KB / datasets) live in PersonaBindings and are read and
     # written by PersonaBindingStore (U5, ADR-007).
 
-    # =========================================================================
-    # Jobs CRUD
-    # =========================================================================
-
-    def save_job(
-        self,
-        job_id: str,
-        status: str,
-        expires_at: int,
-        owner_sub: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> None:
-        """Save a new job record.
-
-        Args:
-            owner_sub: ``sub`` of the submitter (contract C14). Results are
-                returned only to this user.
-            job_type: What the job does (for logs).
-        """
-        now = datetime.now().isoformat()
-        item: Dict[str, Any] = {
-            "id": {"S": job_id},
-            "status": {"S": status},
-            "created_at": {"S": now},
-            "updated_at": {"S": now},
-            "expires_at": {"N": str(expires_at)},
-        }
-        if owner_sub:
-            item["owner_sub"] = {"S": owner_sub}
-        if job_type:
-            item["job_type"] = {"S": job_type}
-
-        def _save() -> None:
-            self.dynamodb_client.put_item(TableName=self.jobs_table, Item=item)
-
-        self._execute_with_retry(_save, operation_name=f"save_job({job_id})")
-
-    def get_job(self, job_id: str) -> "Job | None":
-        """Get a job record. Returns Job object or None."""
-        from ..models.job import Job, JobStatus
-        import json as _json
-
-        def _get() -> dict | None:
-            response = self.dynamodb_client.get_item(
-                TableName=self.jobs_table,
-                Key={"id": {"S": job_id}},
-            )
-            item: dict | None = response.get("Item")  # type: ignore[assignment]
-            return item
-
-        item = self._execute_with_retry(_get, operation_name=f"get_job({job_id})")  # type: ignore[no-any-return]
-        if not item:
-            return None
-
-        result_str = item.get("result", {}).get("S")
-        return Job(
-            id=item["id"]["S"],
-            status=JobStatus(item["status"]["S"]),
-            created_at=datetime.fromisoformat(item["created_at"]["S"]),
-            updated_at=datetime.fromisoformat(item["updated_at"]["S"]),
-            result=_json.loads(result_str) if result_str else None,
-            # 古いジョブの例外文（error）は読まない。コードだけを返す（BR8.3）
-            error_code=item.get("error_code", {}).get("S")
-            or ("unknown" if "error" in item else None),
-        )
-
-    def update_job_status(self, job_id: str, status: str) -> None:
-        """Update job status."""
-
-        def _update() -> None:
-            self.dynamodb_client.update_item(
-                TableName=self.jobs_table,
-                Key={"id": {"S": job_id}},
-                UpdateExpression="SET #s = :s, updated_at = :u",
-                ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={
-                    ":s": {"S": status},
-                    ":u": {"S": datetime.now().isoformat()},
-                },
-            )
-
-        self._execute_with_retry(_update, operation_name=f"update_job_status({job_id})")
-
-    def update_job_completed(self, job_id: str, result_json: str) -> None:
-        """Update job as completed with result."""
-
-        def _update() -> None:
-            self.dynamodb_client.update_item(
-                TableName=self.jobs_table,
-                Key={"id": {"S": job_id}},
-                UpdateExpression="SET #s = :s, #r = :r, updated_at = :u",
-                ExpressionAttributeNames={"#s": "status", "#r": "result"},
-                ExpressionAttributeValues={
-                    ":s": {"S": "completed"},
-                    ":r": {"S": result_json},
-                    ":u": {"S": datetime.now().isoformat()},
-                },
-            )
-
-        self._execute_with_retry(
-            _update, operation_name=f"update_job_completed({job_id})"
-        )
-
-    def update_job_failed(self, job_id: str, error_code: str) -> None:
-        """Mark a job as failed with an ``ErrorCode`` value (never exception text, BR8.3)."""
-
-        def _update() -> None:
-            self.dynamodb_client.update_item(
-                TableName=self.jobs_table,
-                Key={"id": {"S": job_id}},
-                UpdateExpression="SET #s = :s, #e = :e, updated_at = :u",
-                ExpressionAttributeNames={"#s": "status", "#e": "error_code"},
-                ExpressionAttributeValues={
-                    ":s": {"S": "failed"},
-                    ":e": {"S": error_code},
-                    ":u": {"S": datetime.now().isoformat()},
-                },
-            )
-
-        self._execute_with_retry(_update, operation_name=f"update_job_failed({job_id})")
+    # Job records are written by JobStore (contract C14).

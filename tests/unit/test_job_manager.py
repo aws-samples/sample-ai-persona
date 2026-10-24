@@ -23,6 +23,7 @@ from src.models.errors import (
 )
 from src.models.job import Job, JobStatus
 from src.services.authz_lookup_service import AuthzLookupError
+from src.services.job_store import JobStore
 from tests.error_helpers import raises_code
 from tests.log_helpers import LogCapture
 
@@ -33,7 +34,7 @@ NO_ROLE = Principal(sub="user-c")
 
 def _make_manager() -> tuple[JobManager, Mock, Mock, threading.Event]:
     """Mocks for both services and an Event set when a job finishes."""
-    mock_db = Mock()
+    mock_db = Mock(spec=JobStore)
     mock_lookup = Mock()
     mock_lookup.get_job.return_value = None
     done = threading.Event()
@@ -41,9 +42,9 @@ def _make_manager() -> tuple[JobManager, Mock, Mock, threading.Event]:
     def _on_finished(*args: object) -> None:
         done.set()
 
-    mock_db.update_job_completed.side_effect = _on_finished
-    mock_db.update_job_failed.side_effect = _on_finished
-    manager = JobManager(database_service=mock_db, lookup_service=mock_lookup)
+    mock_db.update_completed.side_effect = _on_finished
+    mock_db.update_failed.side_effect = _on_finished
+    manager = JobManager(job_store=mock_db, lookup_service=mock_lookup)
     return manager, mock_db, mock_lookup, done
 
 
@@ -66,8 +67,8 @@ class TestSubmit:
         job_id = jm.submit(OWNER, "discussion", lambda principal: "result")
 
         assert isinstance(job_id, str) and job_id
-        kwargs = mock_db.save_job.call_args.kwargs
-        assert kwargs["job_id"] == job_id
+        assert mock_db.create.call_args.args == (job_id,)
+        kwargs = mock_db.create.call_args.kwargs
         assert kwargs["status"] == "pending"
         assert kwargs["owner_sub"] == "user-a"
         assert kwargs["job_type"] == "discussion"
@@ -84,13 +85,13 @@ class TestSubmit:
         assert done.wait(timeout=5)
 
         assert seen == [OWNER]
-        assert json.loads(mock_db.update_job_completed.call_args[0][1]) == {"value": 6}
+        assert json.loads(mock_db.update_completed.call_args[0][1]) == {"value": 6}
 
     def test_needs_the_ai_permission(self):
         jm, mock_db, _, _ = _make_manager()
         with raises_code(AccessDeniedError, ErrorCode.ACCESS_DENIED):
             jm.submit(NO_ROLE, "discussion", lambda principal: None)
-        mock_db.save_job.assert_not_called()
+        mock_db.create.assert_not_called()
 
 
 class TestGet:
@@ -204,9 +205,9 @@ class TestAnotherTask:
         table: dict[str, Job] = {}
         done = threading.Event()
 
-        db = Mock()
+        db = Mock(spec=JobStore)
 
-        def save_job(*, job_id, status, expires_at, owner_sub, job_type):
+        def create(job_id, *, status, expires_at, owner_sub, job_type):
             table[job_id] = _job(
                 owner_sub=owner_sub, id=job_id, status=JobStatus(status)
             )
@@ -219,13 +220,13 @@ class TestAnotherTask:
             )
             done.set()
 
-        db.save_job.side_effect = save_job
-        db.update_job_completed.side_effect = completed
+        db.create.side_effect = create
+        db.update_completed.side_effect = completed
         lookup = Mock()
         lookup.get_job.side_effect = table.get
 
-        submitting = JobManager(database_service=db, lookup_service=lookup)
-        reading = JobManager(database_service=Mock(), lookup_service=lookup)
+        submitting = JobManager(job_store=db, lookup_service=lookup)
+        reading = JobManager(job_store=Mock(spec=JobStore), lookup_service=lookup)
         job_id = submitting.submit(OWNER, "discussion", lambda principal: {"n": 1})
         assert done.wait(timeout=5)
 
@@ -240,10 +241,10 @@ class TestRun:
         jm.submit(OWNER, "discussion", lambda principal: {"data": "ok"})
         assert done.wait(timeout=5)
 
-        mock_db.update_job_status.assert_called_once()
-        assert mock_db.update_job_status.call_args[0][1] == "running"
-        mock_db.update_job_completed.assert_called_once()
-        result_json = mock_db.update_job_completed.call_args[0][1]
+        mock_db.update_status.assert_called_once()
+        assert mock_db.update_status.call_args[0][1] == "running"
+        mock_db.update_completed.assert_called_once()
+        result_json = mock_db.update_completed.call_args[0][1]
         assert json.loads(result_json) == {"data": "ok"}
 
     def test_failed_job_calls_update_failed(self):
@@ -254,10 +255,10 @@ class TestRun:
         jm.submit(OWNER, "discussion", failing)
         assert done.wait(timeout=5)
 
-        mock_db.update_job_status.assert_called_once()
-        mock_db.update_job_failed.assert_called_once()
+        mock_db.update_status.assert_called_once()
+        mock_db.update_failed.assert_called_once()
         # U6 BR8.3: 例外文ではなくエラーコードを保存する（コードのない例外は UNKNOWN）
-        assert mock_db.update_job_failed.call_args[0][1] == ErrorCode.UNKNOWN.value
+        assert mock_db.update_failed.call_args[0][1] == ErrorCode.UNKNOWN.value
 
     def test_failed_job_saves_the_coded_errors_code(self):
         def failing(principal: Principal) -> None:
@@ -270,6 +271,6 @@ class TestRun:
         jm.submit(OWNER, "discussion", failing)
         assert done.wait(timeout=5)
 
-        (_job_id, saved) = mock_db.update_job_failed.call_args[0]
+        (_job_id, saved) = mock_db.update_failed.call_args[0]
         assert saved == ErrorCode.DISCUSSION_TOO_LARGE.value
         assert "secret" not in saved

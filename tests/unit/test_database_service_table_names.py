@@ -21,7 +21,7 @@ def aws(monkeypatch):
 def test_prefix_builds_every_name_when_no_names_are_given():
     service = DatabaseService(table_prefix="Local", region=REGION)
     assert service.personas_table == "Local_Personas"
-    assert service.jobs_table == "Local_Jobs"
+    assert service.surveys_table == "Local_Surveys"
 
 
 def test_given_physical_names_are_used():

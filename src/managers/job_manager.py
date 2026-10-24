@@ -45,21 +45,21 @@ class JobManager:
 
     def __init__(
         self,
-        database_service: Any = None,
+        job_store: Any = None,
         lookup_service: Any = None,
     ) -> None:
         """Create the manager.
 
         Args:
-            database_service: Writes job records (``DatabaseService``).
+            job_store: Writes job records (``JobStore``).
             lookup_service: Reads job records for the owner check
                 (``AuthzLookupService``).
         """
-        if database_service is None:
-            database_service = ServiceFactory().get_database_service()
+        if job_store is None:
+            job_store = ServiceFactory().get_job_store()
         if lookup_service is None:
             lookup_service = ServiceFactory().get_authz_lookup_service()
-        self._db = database_service
+        self._jobs = job_store
         self._lookup = lookup_service
 
     def submit(
@@ -84,8 +84,8 @@ class JobManager:
         now = datetime.now()
         expires_at = int(now.timestamp()) + TTL_SECONDS
 
-        self._db.save_job(
-            job_id=job_id,
+        self._jobs.create(
+            job_id,
             status=JobStatus.PENDING.value,
             expires_at=expires_at,
             owner_sub=principal.sub,
@@ -135,15 +135,15 @@ class JobManager:
         args: tuple,
         kwargs: dict,
     ) -> None:
-        self._db.update_job_status(job_id, JobStatus.RUNNING.value)
+        self._jobs.update_status(job_id, JobStatus.RUNNING.value)
 
         try:
             result = func(*args, **kwargs)
             result_json = json.dumps(result, ensure_ascii=False, default=str)
-            self._db.update_job_completed(job_id, result_json)
+            self._jobs.update_completed(job_id, result_json)
             logger.info(f"Job {job_id} completed")
         except Exception as e:
             # U6 BR8.3: 保存するのはエラーコードだけ（例外文は画面・API に出さない）
             code = e.code if isinstance(e, CodedError) else ErrorCode.UNKNOWN
-            self._db.update_job_failed(job_id, code.value)
+            self._jobs.update_failed(job_id, code.value)
             logger.error(f"Job {job_id} failed: {type(e).__name__}", exc_info=True)
