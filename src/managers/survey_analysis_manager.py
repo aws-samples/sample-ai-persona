@@ -31,10 +31,10 @@ from ..models.survey import (
 )
 from ..prompts.survey_prompts import INSIGHT_REPORT_SYSTEM_PROMPT, build_insight_prompt
 from ..services.ai_service import AIService
-from ..services.database_service import DatabaseError, DatabaseService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
+from ..services.survey_store import SurveyStore, SurveyStoreError
 from ..services.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
@@ -65,7 +65,7 @@ class SurveyAnalysisManager:
 
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
+        survey_store: Optional[SurveyStore] = None,
         survey_template_store: Optional[SurveyTemplateStore] = None,
         s3_service: Optional[S3Service] = None,
         ai_service: Optional[AIService] = None,
@@ -77,7 +77,7 @@ class SurveyAnalysisManager:
         """Create the manager.
 
         Args:
-            database_service: Survey bodies.
+            survey_store: Survey bodies.
             survey_template_store: Templates of surveys made before v1.0.0.
             s3_service: Result CSVs.
             ai_service: Insight reports.
@@ -86,7 +86,7 @@ class SurveyAnalysisManager:
             resource_sharing: The per-task ``ResourceSharing``.
             result_cache: The per-process result CSV cache.
         """
-        self.db = database_service or service_factory.get_database_service()
+        self._surveys = survey_store or service_factory.get_survey_store()
         self._templates = (
             survey_template_store or service_factory.get_survey_template_store()
         )
@@ -137,8 +137,8 @@ class SurveyAnalysisManager:
 
     def _body(self, survey_id: str) -> Survey:
         try:
-            survey = self.db.get_survey(survey_id, consistent=True)
-        except DatabaseError as e:
+            survey = self._surveys.get(survey_id, consistent=True)
+        except SurveyStoreError as e:
             raise LookupUnavailableError("survey body unreadable") from e
         if survey is None:
             raise SurveyAnalysisManagerError(
@@ -499,20 +499,20 @@ class SurveyAnalysisManager:
         report = InsightReport.create_new(survey_id=survey.id, content=content)
         with_report = survey.to_dict()
         with_report["insight_report"] = report.to_dict()
-        if self.db.item_size(with_report) > MAX_SURVEY_BYTES:
+        if self._surveys.item_size(with_report) > MAX_SURVEY_BYTES:
             raise SurveyAnalysisManagerError(
                 "the report pushes the survey over 350KB",
                 code=ErrorCode.SURVEY_REPORT_TOO_LARGE,
             )
         try:
-            written = self.db.update_survey_fields(
+            written = self._surveys.update_fields(
                 survey.id,
                 {
                     "insight_report": report.to_dict(),
                     "updated_at": datetime.now().isoformat(),
                 },
             )
-        except DatabaseError as e:
+        except SurveyStoreError as e:
             raise SurveyAnalysisManagerError(
                 "insight report could not be saved",
                 code=ErrorCode.SURVEY_OPERATION_FAILED,

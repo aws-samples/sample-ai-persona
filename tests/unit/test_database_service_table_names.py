@@ -21,7 +21,7 @@ def aws(monkeypatch):
 def test_prefix_builds_every_name_when_no_names_are_given():
     service = DatabaseService(table_prefix="Local", region=REGION)
     assert service.personas_table == "Local_Personas"
-    assert service.surveys_table == "Local_Surveys"
+    assert service.discussions_table == "Local_Discussions"
 
 
 def test_given_physical_names_are_used():
@@ -30,13 +30,13 @@ def test_given_physical_names_are_used():
         region=REGION,
         table_names={
             "Personas": "AIPersonaDev-Data-Personas1",
-            "Surveys": "AIPersonaDev-Data-Surveys2",
+            "Discussions": "AIPersonaDev-Data-Discussions2",
         },
     )
     assert service.personas_table == "AIPersonaDev-Data-Personas1"
-    assert service.surveys_table == "AIPersonaDev-Data-Surveys2"
+    assert service.discussions_table == "AIPersonaDev-Data-Discussions2"
     # 渡されなかったものは接頭辞から組み立てる
-    assert service.discussions_table == "Local_Discussions"
+    assert service.files_table == "Local_UploadedFiles"
 
 
 def test_factory_passes_the_configured_names(monkeypatch):

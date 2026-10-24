@@ -42,12 +42,13 @@ from src.prompts.survey_prompts import (
     build_persona_system_prompt,
     STANDARD_COLUMNS,
 )
+from src.services.survey_store import SurveyStore
 from src.services.survey_template_store import SurveyTemplateStore
 
 
 @pytest.fixture
 def mock_db() -> Mock:
-    return Mock()
+    return Mock(spec=SurveyStore)
 
 
 @pytest.fixture
@@ -71,7 +72,7 @@ def mgr(
     mock_db: Mock, mock_batch_service: Mock, mock_s3_service: Mock
 ) -> SurveyExecutionManager:
     return SurveyExecutionManager(
-        database_service=mock_db,
+        survey_store=mock_db,
         survey_template_store=Mock(spec=SurveyTemplateStore),
         survey_batch_service=mock_batch_service,
         s3_service=mock_s3_service,
@@ -722,7 +723,7 @@ def started() -> list:
 @pytest.fixture
 def em(survey_world: SurveyWorld, batch: Mock, cache: Mock) -> SurveyExecutionManager:
     return SurveyExecutionManager(
-        database_service=survey_world.db,
+        survey_store=survey_world.survey_store,
         survey_template_store=survey_world.template_store,
         survey_batch_service=batch,
         s3_service=survey_world.s3,
@@ -741,7 +742,7 @@ def logs(capsys) -> LogCapture:
 
 
 def _surveys(world: SurveyWorld) -> int:
-    return world.client.scan(TableName=world.db.surveys_table)["Count"]
+    return world.client.scan(TableName=world.surveys_table)["Count"]
 
 
 def _image(world: SurveyWorld, *, upload: bool = True) -> TemplateImage:
@@ -782,7 +783,7 @@ class TestCreateSurveyDecisions:
         start = em.create_survey(MEMBER_B, template.id)
 
         assert isinstance(start, SurveyStart)
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.owner_sub == "b"
         assert survey.shared_group_ids == frozenset()
         assert survey.status == "pending"
@@ -916,7 +917,7 @@ class TestBackgroundRun:
 
         start.run()
 
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.status == "completed"
         assert survey.s3_result_path == (
             f"s3://{BUCKET}/survey-results/{survey.id}/results.csv"
@@ -948,7 +949,7 @@ class TestBackgroundRun:
 
         start.run()
 
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.status == "error"
         assert survey.error_code == ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND.value
         batch.execute_batch_inference.assert_not_called()
@@ -965,7 +966,7 @@ class TestBackgroundRun:
 
         start.run()
 
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.status == "error"
         assert survey.error_code == ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE.value
         batch.execute_batch_inference.assert_not_called()
@@ -985,7 +986,7 @@ class TestBackgroundRun:
 
         def delete_then_answer(prompts):
             survey_world.client.delete_item(
-                TableName=survey_world.db.surveys_table,
+                TableName=survey_world.surveys_table,
                 Key={"id": {"S": start.survey.id}},
             )
             return _batch().execute_batch_inference(prompts)
@@ -994,7 +995,7 @@ class TestBackgroundRun:
 
         start.run()
 
-        assert survey_world.db.get_survey(start.survey.id) is None
+        assert survey_world.survey_store.get(start.survey.id) is None
         listed = survey_world.s3.s3_client.list_objects_v2(
             Bucket=BUCKET, Prefix="survey-results/"
         )
@@ -1003,14 +1004,16 @@ class TestBackgroundRun:
 
     def test_failed_final_update_removes_the_csv(self, em, survey_world, monkeypatch):
         start = self._start(em, survey_world)
-        real = survey_world.db.update_survey_fields
+        real = survey_world.survey_store.update_fields
 
         def gone_at_completion(survey_id, fields, **kwargs):
             if fields.get("status") == "completed":
                 return False
             return real(survey_id, fields, **kwargs)
 
-        monkeypatch.setattr(survey_world.db, "update_survey_fields", gone_at_completion)
+        monkeypatch.setattr(
+            survey_world.survey_store, "update_fields", gone_at_completion
+        )
 
         start.run()
 
@@ -1029,7 +1032,7 @@ class TestBackgroundRun:
 
         start.run()
 
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.status == "error"
         assert survey.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
         assert "secret" not in str(survey.to_dict())
@@ -1044,7 +1047,7 @@ class TestBackgroundRun:
             "role missing", code=ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED
         )
         start.run()
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.error_code == ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED.value
 
     def test_too_few_sampled_without_filters_points_at_the_dataset(
@@ -1053,7 +1056,7 @@ class TestBackgroundRun:
         start = self._start(em, survey_world)
         batch.filter_and_sample_personas.side_effect = lambda *a, **k: _sampled(2)
         start.run()
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.error_code == ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS.value
         assert survey.error_context == {"row_count": 2, "min_rows": 100}
         batch.execute_batch_inference.assert_not_called()
@@ -1064,17 +1067,17 @@ class TestBackgroundRun:
         start = self._start(em, survey_world, filters={"性別": "男性"})
         batch.filter_and_sample_personas.side_effect = lambda *a, **k: _sampled(2)
         start.run()
-        survey = survey_world.db.get_survey(start.survey.id, consistent=True)
+        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.error_code == ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW.value
 
     def test_a_vanished_survey_is_logged_and_left_alone(self, em, survey_world, logs):
         start = self._start(em, survey_world)
         survey_world.client.delete_item(
-            TableName=survey_world.db.surveys_table,
+            TableName=survey_world.surveys_table,
             Key={"id": {"S": start.survey.id}},
         )
         start.run()
-        assert survey_world.db.get_survey(start.survey.id) is None
+        assert survey_world.survey_store.get(start.survey.id) is None
         assert logs.events("survey.dependency_missing")[0]["missing"] == "survey"
 
 
@@ -1224,7 +1227,7 @@ class TestDeleteSurvey:
 
         em.delete_survey(MEMBER_A, survey.id)
 
-        assert survey_world.db.get_survey(survey.id) is None
+        assert survey_world.survey_store.get(survey.id) is None
         assert (
             survey_world.client.scan(TableName=survey_world.shares_table)["Count"] == 0
         )
@@ -1241,7 +1244,7 @@ class TestDeleteSurvey:
             em.delete_survey(MEMBER_B, survey.id)
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
             em.delete_survey(MEMBER_C, survey.id)
-        assert survey_world.db.get_survey(survey.id) is not None
+        assert survey_world.survey_store.get(survey.id) is not None
 
     def test_missing_survey_is_not_found(self, em):
         with raises_code(SurveyExecutionManagerError, ErrorCode.SURVEY_NOT_FOUND):
@@ -1255,7 +1258,7 @@ class TestDeleteSurvey:
             survey_world.s3, "delete_file", Mock(side_effect=RuntimeError("down"))
         )
         em.delete_survey(MEMBER_A, survey.id)
-        assert survey_world.db.get_survey(survey.id) is None
+        assert survey_world.survey_store.get(survey.id) is None
         assert survey_world.s3.delete_file.call_count == 3
         events = logs.events("survey.cleanup_failed")
         assert events[0]["step"] == "results"

@@ -26,8 +26,8 @@ has no ``ListBucket`` on these prefixes and no ``Scan``)::
     uv run python scripts/cleanup_survey_orphans.py [--apply]
 
 The bucket and table names default to the app's settings (``S3_BUCKET_NAME``,
-``DYNAMODB_TABLE_PREFIX``, ``CUSTOM_PERSONA_DATA_TABLE_NAME``; see
-``src/config.py``).
+``SURVEYS_TABLE_NAME`` or ``DYNAMODB_TABLE_PREFIX``,
+``CUSTOM_PERSONA_DATA_TABLE_NAME``; see ``src/config.py``).
 """
 
 from __future__ import annotations
@@ -55,9 +55,9 @@ _CUSTOM_KEY = re.compile(rf"^{CUSTOM_PREFIX}({_UUID})\.parquet$")
 
 
 class Surveys(Protocol):
-    """What the script needs from ``DatabaseService``."""
+    """What the script needs from ``SurveyStore``."""
 
-    def get_surveys_by_ids(self, survey_ids: Sequence[str]) -> Mapping[str, Any]: ...
+    def get_many(self, survey_ids: Sequence[str]) -> Mapping[str, Any]: ...
 
 
 class CustomData(Protocol):
@@ -138,7 +138,7 @@ def plan_cleanup(
             plan.skipped += 1
             continue
         by_survey.setdefault(match.group(1), []).append(stored)
-    alive = _existing(surveys, "get_surveys_by_ids", sorted(by_survey))
+    alive = _existing(surveys, "get_many", sorted(by_survey))
     for survey_id, stored in sorted(by_survey.items()):
         if survey_id in alive:
             continue
@@ -190,7 +190,7 @@ def apply_plan(
     """
     kept: list[str] = []
     for survey_id, keys in plan.result_keys.items():
-        if _existing(surveys, "get_surveys_by_ids", [survey_id]):
+        if _existing(surveys, "get_many", [survey_id]):
             kept.append(survey_id)
             continue
         _delete_keys(objects, keys)
@@ -228,13 +228,13 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _default_services(region: str) -> tuple[Surveys, CustomData, Objects]:
     from src.services.custom_persona_data_store import CustomPersonaDataStore
-    from src.services.database_service import DatabaseService
     from src.services.s3_service import S3Service
+    from src.services.survey_store import SurveyStore
 
     if not config.S3_BUCKET_NAME:
         raise SystemExit("S3_BUCKET_NAME が設定されていません")
     return (
-        DatabaseService(table_prefix=config.DYNAMODB_TABLE_PREFIX, region=region),
+        SurveyStore(region=region, table_name=config.table_name("Surveys")),
         CustomPersonaDataStore(
             region=region, table_name=config.CUSTOM_PERSONA_DATA_TABLE_NAME
         ),

@@ -41,10 +41,10 @@ from ..services.custom_persona_data_store import (
     CustomPersonaDataStore,
     CustomPersonaDataStoreError,
 )
-from ..services.database_service import DatabaseError, DatabaseService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
+from ..services.survey_store import SurveyStore, SurveyStoreError
 from ..services.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
@@ -122,7 +122,7 @@ class SurveyExecutionManager:
 
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
+        survey_store: Optional[SurveyStore] = None,
         survey_template_store: Optional[SurveyTemplateStore] = None,
         survey_batch_service: Optional[SurveyBatchService] = None,
         s3_service: Optional[S3Service] = None,
@@ -136,7 +136,7 @@ class SurveyExecutionManager:
         """Create the manager.
 
         Args:
-            database_service: Survey bodies.
+            survey_store: Survey bodies.
             survey_template_store: Template bodies (copied into new surveys).
             survey_batch_service: Persona sampling and batch inference.
             s3_service: Result CSVs, images and custom data files.
@@ -147,7 +147,7 @@ class SurveyExecutionManager:
             result_cache: The per-task cache of result CSVs (evicted on delete).
             sleep: Wait between cleanup attempts (tests).
         """
-        self.db = database_service or service_factory.get_database_service()
+        self._surveys = survey_store or service_factory.get_survey_store()
         self._templates = (
             survey_template_store or service_factory.get_survey_template_store()
         )
@@ -247,14 +247,14 @@ class SurveyExecutionManager:
             template_snapshot=TemplateSnapshot.from_template(template),
             datasource_name=datasource_name,
         )
-        if self.db.item_size(survey.to_dict()) > MAX_SURVEY_BYTES:
+        if self._surveys.item_size(survey.to_dict()) > MAX_SURVEY_BYTES:
             raise SurveyExecutionValidationError(
                 "the survey body exceeds 350KB",
                 code=ErrorCode.SURVEY_TEMPLATE_TOO_LARGE,
             )
         try:
-            self.db.put_new_survey(survey)
-        except DatabaseError as e:
+            self._surveys.put_new(survey)
+        except SurveyStoreError as e:
             logger.error("Survey save failed: %s", type(e).__name__)
             raise SurveyExecutionError(
                 "survey save failed", code=ErrorCode.SURVEY_OPERATION_FAILED
@@ -490,8 +490,8 @@ class SurveyExecutionManager:
         logger.error("Survey execution failed: %s", type(exc).__name__)
         log_event("survey.execution_failed", survey_id=survey_id, error_code=code.value)
         try:
-            self.db.update_survey_fields(survey_id, fields, remove=remove)
-        except DatabaseError:
+            self._surveys.update_fields(survey_id, fields, remove=remove)
+        except SurveyStoreError:
             logger.error("Recording the survey failure failed", exc_info=True)
 
     def _dependency_missing(self, survey_id: str, missing: str) -> None:
@@ -504,12 +504,12 @@ class SurveyExecutionManager:
 
     def _read_survey(self, survey_id: str) -> Optional[Survey]:
         try:
-            return self.db.get_survey(survey_id, consistent=True)
-        except DatabaseError as e:
+            return self._surveys.get(survey_id, consistent=True)
+        except SurveyStoreError as e:
             raise LookupUnavailableError("survey body unreadable") from e
 
     def _update(self, survey_id: str, fields: Dict[str, Any]) -> bool:
-        return self.db.update_survey_fields(survey_id, fields)
+        return self._surveys.update_fields(survey_id, fields)
 
     def _ensure_parquet_uri(self, datasource: str) -> None:
         """nemotron使用時、batch_serviceにS3 URIをセットする。"""
@@ -759,8 +759,8 @@ class SurveyExecutionManager:
         if not survey_ids:
             return []
         try:
-            found = self.db.get_surveys_by_ids(survey_ids)
-        except DatabaseError as e:
+            found = self._surveys.get_many(survey_ids)
+        except SurveyStoreError as e:
             raise LookupUnavailableError("survey bodies unreadable") from e
         bodies = [found[i] for i in dict.fromkeys(survey_ids) if i in found]
         return [

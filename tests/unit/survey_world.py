@@ -1,6 +1,6 @@
 """Shared world for the U7 Manager tests (surveys, templates, organization assets).
 
-DynamoDB and S3 are moto; ``DatabaseService``, ``SurveyTemplateStore``,
+DynamoDB and S3 are moto; ``DatabaseService``, ``SurveyStore``, ``SurveyTemplateStore``,
 ``ResourceShareStore``, ``CustomPersonaDataStore``, ``AuthzLookupService`` and
 ``S3Service`` are the real services on it. ``AccessPolicy``, ``ResourceSharing``, ``ResourceLookup`` and
 ``DepartmentDirectory`` are the real components (decisions are never mocked).
@@ -38,6 +38,7 @@ from src.services.dataset_store import DatasetStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.services.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
+from src.services.survey_store import SurveyStore
 from src.services.survey_template_store import SurveyTemplateStore
 
 REGION = "us-east-1"
@@ -96,6 +97,10 @@ class SurveyWorld:
         self.client = self.db.dynamodb_client
         self.kb_table = "U7_KnowledgeBases"
         self.templates_table = "U7_SurveyTemplates"
+        self.surveys_table = "U7_Surveys"
+        self.survey_store = SurveyStore(
+            region=REGION, table_name=self.surveys_table, client=self.client
+        )
         self.template_store = SurveyTemplateStore(
             region=REGION, table_name=self.templates_table, client=self.client
         )
@@ -124,7 +129,7 @@ class SurveyWorld:
         )
         tables = {
             ResourceType.SURVEY_TEMPLATE: self.templates_table,
-            ResourceType.SURVEY: self.db.surveys_table,
+            ResourceType.SURVEY: self.surveys_table,
         }
         for table in default_sharing_tables():
             if table.resource_type in tables:
@@ -134,7 +139,7 @@ class SurveyWorld:
         )
         lookup_tables = [
             LookupTable(ResourceType.SURVEY_TEMPLATE, self.templates_table, "name"),
-            LookupTable(ResourceType.SURVEY, self.db.surveys_table, "name"),
+            LookupTable(ResourceType.SURVEY, self.surveys_table, "name"),
             LookupTable(ResourceType.DATASET, self.datasets_table, "name"),
             LookupTable(ResourceType.KNOWLEDGE_BASE, self.kb_table, "name"),
             LookupTable(
@@ -174,7 +179,7 @@ class SurveyWorld:
             )
 
         table(self.templates_table, owner_index=True)
-        table(self.db.surveys_table, owner_index=True)
+        table(self.surveys_table, owner_index=True)
         table(self.datasets_table)
         table(self.kb_table)
         table(self.custom_table)
@@ -200,7 +205,7 @@ class SurveyWorld:
         table = (
             self.templates_table
             if resource_type is ResourceType.SURVEY_TEMPLATE
-            else self.db.surveys_table
+            else self.surveys_table
         )
         body = self.share_store.get_item(
             table, resource_id, ["id", "owner_sub", "shared_group_ids", "created_at"]
@@ -271,7 +276,7 @@ class SurveyWorld:
         if status == "completed":
             key = f"survey-results/{survey.id}/results.csv"
             survey.s3_result_path = self.s3.upload_file(csv or results_csv(), key)
-        self.db.put_new_survey(survey)
+        self.survey_store.put_new(survey)
         return survey
 
     def custom_data(

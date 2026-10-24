@@ -234,7 +234,7 @@ class TestStart:
         )
         assert response.status_code == 404
         aw.batch.get_filtered_count.assert_not_called()
-        assert aw.world.client.scan(TableName=aw.world.db.surveys_table)["Count"] == 0
+        assert aw.world.client.scan(TableName=aw.world.surveys_table)["Count"] == 0
 
     def test_execute_with_unusable_custom_data_is_404(self, aw, client):
         template = aw.template()
@@ -248,7 +248,7 @@ class TestStart:
             },
         )
         assert response.status_code == 404
-        assert aw.world.client.scan(TableName=aw.world.db.surveys_table)["Count"] == 0
+        assert aw.world.client.scan(TableName=aw.world.surveys_table)["Count"] == 0
 
     def test_execute_starts_my_survey(self, aw, client):
         template = aw.template(name="使う")
@@ -385,7 +385,7 @@ class TestResults:
     def test_owner_deletes(self, aw, client):
         survey = aw.survey()
         assert client.delete(f"/survey/results/{survey.id}").status_code == 200
-        assert aw.world.db.get_survey(survey.id) is None
+        assert aw.world.survey_store.get(survey.id) is None
 
 
 # =============================================================================
