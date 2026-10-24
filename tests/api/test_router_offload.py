@@ -120,14 +120,6 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
         "custom_dataset_detail",
         "get_standard_columns",
     ): f"固定の列定義を返すだけで{_NO_IO}",
-    (
-        "survey.py",
-        "event_generator",
-        "upload_temp_file",
-    ): (
-        f"{_OUT_OF_SCOPE}。DWH の抽出結果の CSV を S3 に置く書き込みで、判定の読み取り"
-        "ではない（ロールだけを見る）。v1 より前からストリーミングの生成器の中で直接呼んでいる"
-    ),
     # api.py
     (
         "api.py",
@@ -302,6 +294,125 @@ class TestManagerCallsAreOffloaded:
 
     def test_every_allowed_call_has_a_reason(self):
         assert all(reason.strip() for reason in ALLOWED_DIRECT_CALLS.values())
+
+
+#: ``queue.Queue`` の待つメソッド。``get_nowait`` / ``put_nowait`` / ``empty`` は待たない
+_BLOCKING_QUEUE_METHODS = {"get", "put", "join"}
+
+
+def _is_queue_ctor(node: ast.AST) -> bool:
+    """``queue.Queue()`` / ``queue_mod.Queue()`` / ``Queue()`` (thread queues).
+
+    ``asyncio.Queue()`` is awaited, not waited on, so it is excluded.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "Queue"
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "Queue"
+        and not (isinstance(func.value, ast.Name) and func.value.id == "asyncio")
+    )
+
+
+def _queue_names(body: list[ast.stmt]) -> set[str]:
+    """Variables that hold a thread ``Queue`` in this scope."""
+    names: set[str] = set()
+    for node in _same_scope(body):
+        if isinstance(node, ast.Assign) and _is_queue_ctor(node.value):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and _is_queue_ctor(node.value)
+            and isinstance(node.target, ast.Name)
+        ):
+            names.add(node.target.id)
+    return names
+
+
+def scan_blocking_queue_calls(
+    source: str, filename: str
+) -> dict[tuple[str, str, str], list[int]]:
+    """Waiting ``Queue`` calls made directly in an ``async def`` (on the event loop).
+
+    A thread queue's ``get(timeout=...)`` blocks the whole loop while it waits,
+    so every other request stalls. Passing the method by reference
+    (``asyncio.to_thread(q.get, ...)``) is not a call and is not counted.
+    """
+    tree = ast.parse(source)
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    found: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        names = _queue_names(fn.body)
+        parent = parents.get(fn)
+        while parent is not None:
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names |= _queue_names(parent.body)
+            parent = parents.get(parent)
+        for node in _same_scope(fn.body):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _BLOCKING_QUEUE_METHODS
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in names
+            ):
+                found[(filename, fn.name, node.func.attr)].append(node.lineno)
+    return dict(found)
+
+
+class TestQueueWaitsAreOffloaded:
+    """SSE の生成器がスレッドの Queue を待つ間、イベントループを止めない。"""
+
+    def test_no_blocking_queue_call_on_the_event_loop(self):
+        found: dict[tuple[str, str, str], list[int]] = {}
+        for path in sorted(_ROUTERS_DIR.glob("*.py")):
+            found.update(
+                scan_blocking_queue_calls(path.read_text(encoding="utf-8"), path.name)
+            )
+        assert not found, (
+            "async の中でスレッドの Queue を待っている（待つ間ほかの要求が止まる）。"
+            "asyncio.to_thread(q.get, timeout=...) のようにスレッドで待つ:\n"
+            + _describe(found)
+        )
+
+    def test_scanner_flags_waits_and_skips_offloaded_ones(self):
+        source = """
+import asyncio
+import queue as queue_mod
+
+async def endpoint(request):
+    q: queue_mod.Queue = queue_mod.Queue()
+
+    async def gen():
+        q.get(timeout=0.3)
+        q.get_nowait()
+        q.empty()
+        await asyncio.to_thread(q.get, timeout=0.3)
+
+    def worker():
+        q.put({"type": "thinking"})
+
+    return gen()
+
+async def other(request):
+    d = {}
+    d.get("key")
+    aq = asyncio.Queue()
+    await asyncio.wait_for(aq.get(), timeout=15)
+"""
+        assert scan_blocking_queue_calls(source, "fake.py") == {
+            ("fake.py", "gen", "get"): [9],
+        }
 
 
 class TestScannerIsNotVacuous:

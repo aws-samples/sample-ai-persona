@@ -301,6 +301,39 @@ class TestPersonaGenerateEndpoint:
         assert response.status_code == 200
         assert "event: error" in response.text
 
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_dwh_streams_agent_events_unbuffered(
+        self, mock_get_gen_manager, client, sample_persona
+    ):
+        """DWH 生成はエージェントの途中経過を流し、プロキシにためさせない（SSE）"""
+        from src.managers.persona_generation_manager import GenerationResult
+
+        def fake_generate(principal, **kwargs):
+            kwargs["event_queue"].put(
+                {"type": "tool_call", "content": "query_dwh", "detail": "SELECT 1"}
+            )
+            return GenerationResult([sample_persona], [])
+
+        mock_manager = Mock()
+        mock_manager.generate.side_effect = fake_generate
+        mock_get_gen_manager.return_value = mock_manager
+
+        response = client.post(
+            "/persona/generate",
+            data={
+                "data_type": "dwh",
+                "persona_count": 1,
+                "analysis_angle": "購買頻度",
+                "custom_prompt": "",
+            },
+        )
+
+        assert response.status_code == 200
+        # Cache-Control は web/main.py のミドルウェアが no-store に揃える
+        assert response.headers["X-Accel-Buffering"] == "no"
+        assert "query_dwh" in response.text
+        assert "event: result" in response.text
+
 
 class TestPersonaSaveEndpoint:
     """ペルソナ保存エンドポイントのテスト"""
