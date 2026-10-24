@@ -35,7 +35,7 @@ def lookup(monkeypatch) -> Mock:
     monkeypatch.setattr(
         api,
         "_job_manager",
-        JobManager(database_service=Mock(), lookup_service=service),
+        JobManager(job_store=Mock(), lookup_service=service),
     )
     return service
 

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .cognito.cognito_auth_service import CognitoAuthService
     from .cognito.oidc_service import OidcService
     from .custom_persona_data_store import CustomPersonaDataStore
+    from .job_store import JobStore
     from .persona_binding_store import PersonaBindingStore
     from .persona_candidate_store import PersonaCandidateStore
     from .resource_share_store import ResourceShareStore
@@ -74,6 +75,7 @@ class ServiceFactory:
         self._user_directory_service: Optional["UserDirectoryService"] = None
         self._persona_candidate_store: Optional["PersonaCandidateStore"] = None
         self._persona_binding_store: Optional["PersonaBindingStore"] = None
+        self._job_store: Optional["JobStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._discussion_store: Optional["DiscussionStore"] = None
         self._interview_session_store: Optional["InterviewSessionStore"] = None
@@ -493,6 +495,20 @@ class ServiceFactory:
                         table_name=config.PERSONA_BINDINGS_TABLE_NAME,
                     )
         return self._persona_binding_store
+
+    def get_job_store(self) -> "JobStore":
+        """Return the writer of job records (contract C14)."""
+        if self._job_store is None:
+            with self._lock:
+                if self._job_store is None:
+                    from .job_store import JobStore
+
+                    self.logger.info("Creating new JobStore instance")
+                    self._job_store = JobStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.table_name("Jobs"),
+                    )
+        return self._job_store
 
     def get_custom_persona_data_store(self) -> "CustomPersonaDataStore":
         """Return the store of custom persona data records (U7)."""
