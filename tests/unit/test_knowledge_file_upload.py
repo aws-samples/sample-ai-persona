@@ -78,7 +78,7 @@ class _Reader:
     def read(self, ids, deadline):
         found = {}
         for i in ids:
-            persona = self.db.get_persona(i)
+            persona = self.db.get(i)
             if persona is not None:
                 found[i] = AccessTarget(ResourceType.PERSONA, i, persona.owner_sub)
         return found
@@ -95,7 +95,7 @@ class TestPersonaKnowledgeAddition:
     @pytest.fixture
     def mock_db(self, sample_persona):
         mock = Mock()
-        mock.get_persona.return_value = sample_persona
+        mock.get.return_value = sample_persona
         return mock
 
     @pytest.fixture

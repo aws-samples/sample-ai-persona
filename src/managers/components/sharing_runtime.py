@@ -217,7 +217,7 @@ def build_discussion_parts(
 
     Args:
         store: ``DiscussionStore``.
-        persona_bodies: Batch reads of persona bodies (``DatabaseService``).
+        persona_bodies: Batch reads of persona bodies (``PersonaStore``).
         sharing: The per-task ``ResourceSharing``.
         access: The per-task lookup and file attachments.
     """
@@ -256,7 +256,7 @@ class PartsSources(Protocol):
 
     def get_discussion_store(self) -> Any: ...
 
-    def get_database_service(self) -> Any: ...
+    def get_persona_store(self) -> Any: ...
 
 
 def access_parts_from(sources: PartsSources) -> AccessParts:
@@ -288,7 +288,7 @@ def discussion_parts_from(sources: PartsSources) -> DiscussionParts:
     return shared_discussion_parts(
         lambda: build_discussion_parts(
             sources.get_discussion_store(),
-            sources.get_database_service(),
+            sources.get_persona_store(),
             sharing.sharing,
             access,
         )

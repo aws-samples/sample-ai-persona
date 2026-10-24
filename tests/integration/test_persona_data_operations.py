@@ -62,10 +62,10 @@ class TestPersonaDataOperations:
             self.personas_storage.clear()
             return count
 
-        self.mock_db_service.save_persona.side_effect = mock_save_persona
-        self.mock_db_service.get_persona.side_effect = mock_get_persona
+        self.mock_db_service.put_new.side_effect = mock_save_persona
+        self.mock_db_service.get.side_effect = mock_get_persona
         self.mock_db_service.get_all_personas.side_effect = mock_get_all_personas
-        self.mock_db_service.update_persona.side_effect = mock_update_persona
+        self.mock_db_service.update_editable.side_effect = mock_update_persona
         self.mock_db_service.delete_persona.side_effect = mock_delete_persona
         self.mock_db_service.persona_exists.side_effect = mock_persona_exists
         self.mock_db_service.get_persona_count.side_effect = mock_get_persona_count
@@ -95,14 +95,14 @@ class TestPersonaDataOperations:
         )
 
         # 1. Save persona
-        saved_id = self.mock_db_service.save_persona(persona)
+        saved_id = self.mock_db_service.put_new(persona)
         assert saved_id == persona.id
 
         # 2. Verify persona exists
         assert self.mock_db_service.persona_exists(persona.id)
 
         # 3. Retrieve persona
-        retrieved_persona = self.mock_db_service.get_persona(persona.id)
+        retrieved_persona = self.mock_db_service.get(persona.id)
         assert retrieved_persona is not None
         assert retrieved_persona.name == "田中太郎"
         assert retrieved_persona.age == 35
@@ -116,11 +116,11 @@ class TestPersonaDataOperations:
             age=36,
             values=["ユーザー体験", "データ分析", "チームワーク", "イノベーション"],
         )
-        update_result = self.mock_db_service.update_persona(updated_persona)
+        update_result = self.mock_db_service.update_editable(updated_persona)
         assert update_result
 
         # 5. Verify update
-        updated_retrieved = self.mock_db_service.get_persona(persona.id)
+        updated_retrieved = self.mock_db_service.get(persona.id)
         assert updated_retrieved.age == 36
         assert len(updated_retrieved.values) == 4
         assert "イノベーション" in updated_retrieved.values
@@ -134,7 +134,7 @@ class TestPersonaDataOperations:
 
         # 8. Verify deletion
         assert not self.mock_db_service.persona_exists(persona.id)
-        assert self.mock_db_service.get_persona(persona.id) is None
+        assert self.mock_db_service.get(persona.id) is None
         assert self.mock_db_service.get_persona_count() == 0
 
     def test_multiple_personas_management(self):
@@ -152,7 +152,7 @@ class TestPersonaDataOperations:
                 goals=[f"目標{i + 1}"],
             )
             personas.append(persona)
-            self.mock_db_service.save_persona(persona)
+            self.mock_db_service.put_new(persona)
 
         # Verify all personas are saved
         assert self.mock_db_service.get_persona_count() == 5
@@ -201,7 +201,7 @@ class TestPersonaDataOperations:
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
-            self.mock_db_service.save_persona(invalid_persona)
+            self.mock_db_service.put_new(invalid_persona)
 
         # Invalid age (negative)
         with pytest.raises(ValueError):
@@ -217,7 +217,7 @@ class TestPersonaDataOperations:
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
-            self.mock_db_service.save_persona(invalid_persona)
+            self.mock_db_service.put_new(invalid_persona)
 
         # Invalid age (too high)
         with pytest.raises(ValueError):
@@ -233,7 +233,7 @@ class TestPersonaDataOperations:
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
-            self.mock_db_service.save_persona(invalid_persona)
+            self.mock_db_service.put_new(invalid_persona)
 
         # Invalid values (not a list)
         with pytest.raises(ValueError):
@@ -249,7 +249,7 @@ class TestPersonaDataOperations:
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
-            self.mock_db_service.save_persona(invalid_persona)
+            self.mock_db_service.put_new(invalid_persona)
 
         # Invalid values content (non-string in list)
         with pytest.raises(ValueError):
@@ -265,7 +265,7 @@ class TestPersonaDataOperations:
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
-            self.mock_db_service.save_persona(invalid_persona)
+            self.mock_db_service.put_new(invalid_persona)
 
     def test_japanese_text_handling(self):
         """Test handling of Japanese text in persona data."""
@@ -285,8 +285,8 @@ class TestPersonaDataOperations:
         )
 
         # Save and retrieve
-        self.mock_db_service.save_persona(persona)
-        retrieved = self.mock_db_service.get_persona(persona.id)
+        self.mock_db_service.put_new(persona)
+        retrieved = self.mock_db_service.get(persona.id)
 
         # Verify Japanese text is preserved correctly
         assert retrieved.name == "山田花子"
@@ -317,8 +317,8 @@ class TestPersonaDataOperations:
             pain_points=[],
             goals=[],
         )
-        self.mock_db_service.save_persona(persona_min_age)
-        retrieved = self.mock_db_service.get_persona(persona_min_age.id)
+        self.mock_db_service.put_new(persona_min_age)
+        retrieved = self.mock_db_service.get(persona_min_age.id)
         assert retrieved.age == 0
 
         # Test maximum age
@@ -331,8 +331,8 @@ class TestPersonaDataOperations:
             pain_points=[],
             goals=[],
         )
-        self.mock_db_service.save_persona(persona_max_age)
-        retrieved = self.mock_db_service.get_persona(persona_max_age.id)
+        self.mock_db_service.put_new(persona_max_age)
+        retrieved = self.mock_db_service.get(persona_max_age.id)
         assert retrieved.age == 150
 
         # Test empty lists (valid)
@@ -345,8 +345,8 @@ class TestPersonaDataOperations:
             pain_points=[],
             goals=[],
         )
-        self.mock_db_service.save_persona(persona_empty_lists)
-        retrieved = self.mock_db_service.get_persona(persona_empty_lists.id)
+        self.mock_db_service.put_new(persona_empty_lists)
+        retrieved = self.mock_db_service.get(persona_empty_lists.id)
         assert len(retrieved.values) == 0
         assert len(retrieved.pain_points) == 0
         assert len(retrieved.goals) == 0
@@ -362,8 +362,8 @@ class TestPersonaDataOperations:
             pain_points=["文字数制限"],
             goals=["簡潔性"],
         )
-        self.mock_db_service.save_persona(persona_long_text)
-        retrieved = self.mock_db_service.get_persona(persona_long_text.id)
+        self.mock_db_service.put_new(persona_long_text)
+        retrieved = self.mock_db_service.get(persona_long_text.id)
         assert len(retrieved.background) == len(long_background)
 
     def test_concurrent_operations_simulation(self):
@@ -378,16 +378,16 @@ class TestPersonaDataOperations:
             pain_points=["競合状態"],
             goals=["データ整合性"],
         )
-        self.mock_db_service.save_persona(persona)
+        self.mock_db_service.put_new(persona)
 
         # Simulate multiple updates
         for i in range(10):
-            retrieved = self.mock_db_service.get_persona(persona.id)
+            retrieved = self.mock_db_service.get(persona.id)
             updated = retrieved.update(age=30 + i)
-            self.mock_db_service.update_persona(updated)
+            self.mock_db_service.update_editable(updated)
 
         # Verify final state
-        final_persona = self.mock_db_service.get_persona(persona.id)
+        final_persona = self.mock_db_service.get(persona.id)
         assert final_persona.age == 39  # 30 + 9
 
         # Verify persona still exists and is valid

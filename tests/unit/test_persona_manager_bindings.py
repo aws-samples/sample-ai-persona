@@ -411,14 +411,14 @@ class TestSaveGeneratedPersonas:
 
     def test_one_failure_does_not_stop_the_others(self, world):
         good, bad = _candidate(world), _candidate(world, name="壊れた")
-        original = world.db.save_persona.side_effect
+        original = world.db.put_new.side_effect
 
         def flaky(persona):
             if persona.name == "壊れた":
                 raise RuntimeError("down")
             return original(persona)
 
-        world.db.save_persona.side_effect = flaky
+        world.db.put_new.side_effect = flaky
         result = world.manager().save_generated_personas(A, _claim(good, bad))
 
         assert result.saved_ids == (good.candidate_id,)

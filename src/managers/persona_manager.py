@@ -44,7 +44,7 @@ from ..models.persona_candidate import (
 from ..models.demographics import VALID_GENDERS
 from ..models.sharing import ListTab, TabbedList
 from ..services import country_service
-from ..services.database_service import DatabaseService, DatabaseError
+from ..services.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
@@ -206,7 +206,7 @@ class PersonaManager:
 
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
+        persona_store: Optional[PersonaStore] = None,
         knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         dataset_store: Optional["DatasetStore"] = None,
         s3_service: Optional["S3Service"] = None,
@@ -222,7 +222,7 @@ class PersonaManager:
     ):
         """
         Args:
-            database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            persona_store: Persona bodies (optional, the singleton when omitted)
             knowledge_base_store: Registered knowledge bases, the choices of a
                 KB binding (optional, built on first use)
             dataset_store: Registered datasets: the choices of a dataset
@@ -248,9 +248,7 @@ class PersonaManager:
                 decision (U6; built on first use)
         """
         self.logger = logging.getLogger(__name__)
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
+        self._personas = persona_store or service_factory.get_persona_store()
         if s3_service is not None:
             self.s3_service: Optional["S3Service"] = s3_service
         else:
@@ -273,9 +271,7 @@ class PersonaManager:
     @property
     def _participant_reader(self) -> ParticipantReader:
         if self._reader is None:
-            self._reader = ParticipantReader(
-                self._resource_lookup, self.database_service
-            )
+            self._reader = ParticipantReader(self._resource_lookup, self._personas)
         return self._reader
 
     @property
@@ -383,13 +379,14 @@ class PersonaManager:
         persona = persona.owned_by(principal.sub)
 
         try:
-            persona_id = self.database_service.save_persona(persona)
+            self._personas.put_new(persona)
+            persona_id = persona.id
             self.logger.info(
                 f"Persona saved successfully: {persona.name} (ID: {persona_id})"
             )
             return persona_id
 
-        except DatabaseError as e:
+        except PersonaStoreError as e:
             self.logger.error("Database error while saving persona", exc_info=True)
             raise PersonaManagerError(
                 f"persona save failed ({type(e).__name__})",
@@ -624,18 +621,14 @@ class PersonaManager:
                 "persona id is blank", code=ErrorCode.PERSONA_ID_INVALID
             )
         return self._read_bodies(
-            lambda: self.database_service.get_persona(
-                persona_id.strip(), consistent=True
-            )
+            lambda: self._personas.get(persona_id.strip(), consistent=True)
         )
 
     def _readable(self, principal: Principal, ids: List[str]) -> List[Persona]:
         """Bodies of ``ids`` (in order) that the user can still read (BR3.7)."""
         if not ids:
             return []
-        found = self._read_bodies(
-            lambda: self.database_service.get_personas_by_ids(ids)
-        )
+        found = self._read_bodies(lambda: self._personas.get_many(ids))
         return [
             p
             for i in ids
@@ -644,7 +637,7 @@ class PersonaManager:
         ]
 
     def _scan_all(self) -> List[Persona]:
-        return self._read_bodies(self.database_service.scan_all_personas)
+        return self._read_bodies(self._personas.scan_all)
 
     def _read_bodies(self, read: Callable[[], _T]) -> _T:
         """Run a body read; failures become ``PERSONA_OPERATION_FAILED``."""
@@ -952,7 +945,7 @@ class PersonaManager:
             self._validate_persona_for_save(updated_persona)
 
             # Save updated persona
-            success = self.database_service.update_persona(updated_persona)
+            success = self._personas.update_editable(updated_persona)
             if success:
                 self.logger.info(
                     f"Persona edited successfully: {updated_persona.name} (ID: {persona_id})"
@@ -1131,7 +1124,7 @@ class PersonaManager:
                 PERSONA_UPDATE_FAILED if the write itself failed
         """
         try:
-            written = self.database_service.update_persona_avatar(
+            written = self._personas.update_avatar(
                 current.id,
                 new_path=updated.avatar_path,
                 expected_path=current.avatar_path,

@@ -40,9 +40,9 @@ _PERSONA = ResourceType.PERSONA
 
 
 class PersonaBodies(Protocol):
-    """What this component needs from ``DatabaseService``."""
+    """What this component needs from ``PersonaStore``."""
 
-    def get_personas_by_ids(self, persona_ids: list[str]) -> dict[str, Persona]: ...
+    def get_many(self, persona_ids: Sequence[str]) -> dict[str, Persona]: ...
 
 
 class ParticipantReader:
@@ -53,7 +53,7 @@ class ParticipantReader:
 
         Args:
             lookup: The per-task ``ResourceLookup`` (persona reader registered).
-            bodies: Batch reads of persona bodies (``DatabaseService``).
+            bodies: Batch reads of persona bodies (``PersonaStore``).
         """
         self._lookup = lookup
         self._bodies = bodies
@@ -117,7 +117,7 @@ class ParticipantReader:
         if not ids:
             return []
         try:
-            found = self._bodies.get_personas_by_ids(ids)
+            found = self._bodies.get_many(ids)
         except Exception as e:
             logger.warning("Reading participant bodies failed: %s", type(e).__name__)
             raise LookupUnavailableError("participant bodies unreadable") from e
@@ -155,7 +155,7 @@ class ParticipantReader:
         if not readable:
             return statuses, {}
         try:
-            bodies = self._bodies.get_personas_by_ids(readable)
+            bodies = self._bodies.get_many(readable)
         except Exception as e:
             # 表示用だけなので、読めなくても参加者の状態は出す
             logger.warning("Reading participant bodies failed: %s", type(e).__name__)
