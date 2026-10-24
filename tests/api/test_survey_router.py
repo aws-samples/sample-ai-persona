@@ -562,9 +562,7 @@ class TestSurveyImages:
         attachments.readable_file.side_effect = CodedError(
             "unreadable", code=ErrorCode.FILE_NOT_FOUND
         )
-        manager = FileManager(
-            db_service=Mock(), s3_service=s3, file_store=store, attachments=attachments
-        )
+        manager = FileManager(s3_service=s3, file_store=store, attachments=attachments)
         with patch("web.routers.survey.get_file_manager", return_value=manager):
             resp = client.get("/survey/image-preview", params={"file_path": path})
 

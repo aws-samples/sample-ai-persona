@@ -9,7 +9,7 @@ Limits (``reliability-design.md``, NFR9.18, NFR9.22):
 
 - One call: connect 0.5 s, read 0.5 s, two attempts in botocore's ``standard``
   retry mode (:data:`CLIENT_CONFIG`). This client is separate from the
-  ``DatabaseService`` client used for the resource bodies.
+  clients of the table stores that read the resource bodies.
 - Deadline: ``read_targets`` receives the caller's deadline (a
   ``time.monotonic`` value). Before every call -- including the single re-read
   of ``UnprocessedKeys`` -- the remaining time is checked, and with less than

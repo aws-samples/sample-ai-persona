@@ -19,9 +19,7 @@ reports both a failed condition and a concurrent transaction as
   :class:`ShareConditionFailed`
 - anything else -> :class:`ResourceShareStoreError` (``reason="failed"``)
 
-The caller re-reads and retries on a condition failure or a conflict. The
-generic ``DatabaseService._execute_with_retry`` is not used for transactions
-because it only looks at the top-level error code.
+The caller re-reads and retries on a condition failure or a conflict.
 """
 
 import base64

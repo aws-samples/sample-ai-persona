@@ -47,9 +47,7 @@ def test_complete_document_flow(tmp_path, upload_store):
 
     # Setup with mock services (the files themselves are stored locally)
     attachments = FileAttachments(upload_store, None)
-    file_manager = FileManager(
-        db_service=Mock(), file_store=upload_store, attachments=attachments
-    )
+    file_manager = FileManager(file_store=upload_store, attachments=attachments)
     file_manager.discussion_doc_dir = tmp_path / "discussion_documents"
     file_manager.discussion_doc_dir.mkdir()
     uploader = OWNER
@@ -94,7 +92,6 @@ def test_complete_document_flow(tmp_path, upload_store):
     mock_ai_service.extract_insights.return_value = []
     manager = DiscussionManager(
         ai_service=mock_ai_service,
-        database_service=Mock(),
         file_attachments=attachments,
         discussion_records=world.records,
         participants=world.participants,

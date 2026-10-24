@@ -414,7 +414,7 @@ class TestCheckerItself:
         f = self._write(
             tmp_path,
             "web/routers/foo.py",
-            "from src.services.database_service import DatabaseService\n",
+            "from src.services.persona_store import PersonaStore\n",
         )
         assert _violations_for(f, _ROUTERS_DIR)
 

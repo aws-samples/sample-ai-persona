@@ -479,8 +479,6 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.AI_BEDROCK_CONNECTION_FAILED: "Bedrockへの接続に失敗しました",
     ErrorCode.AI_BEDROCK_API_FAILED: "Bedrock APIの呼び出しに失敗しました",
     ErrorCode.AI_OPERATION_FAILED: "AI処理中にエラーが発生しました",
-    ErrorCode.DATABASE_CREDENTIALS_INVALID: "データベース認証情報が無効です",
-    ErrorCode.DATABASE_TABLES_NOT_FOUND: "データベーステーブルが見つかりません",
     ErrorCode.DATABASE_OPERATION_FAILED: "データベース処理中にエラーが発生しました",
     ErrorCode.S3_OPERATION_FAILED: "S3処理中にエラーが発生しました",
     ErrorCode.S3_OBJECT_NOT_FOUND: "S3オブジェクトが見つかりません",

@@ -377,10 +377,11 @@ class TestTableNames:
             assert config.table_name("Discussions") == "Local_Discussions"
 
     def test_prefix_is_the_fallback_for_every_table(self):
-        from src.config import Config
+        from src.config import TABLE_NAME_SETTINGS, Config
 
         with patch.dict(os.environ, {"DYNAMODB_TABLE_PREFIX": "Local"}, clear=True):
-            names = Config().table_names()
+            config = Config()
+            names = {kind: config.table_name(kind) for kind in TABLE_NAME_SETTINGS}
         # U5: 古い 2 つの紐付けのテーブルは読まない（PersonaBindings にまとめた）
         assert len(names) == 8
         assert names["Jobs"] == "Local_Jobs"
@@ -418,7 +419,8 @@ class TestResourceSharesTableName:
 
         assert "ResourceShares" not in TABLE_NAME_SETTINGS
         with patch.dict(os.environ, {}, clear=True):
-            assert "ResourceShares" not in Config().table_names()
+            with pytest.raises(KeyError):
+                Config().table_name("ResourceShares")
 
 
 class TestPersonaU5Tables:

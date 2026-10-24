@@ -210,14 +210,13 @@ def mock_agent_service() -> Mock:
 
 
 @pytest.fixture
-def mock_database_service() -> Mock:
-    """モック化されたDatabaseServiceを提供"""
-    mock = Mock()
+def mock_persona_store() -> Mock:
+    """モック化されたPersonaStoreを提供"""
+    from src.services.persona_store import PersonaStore
+
+    mock = Mock(spec=PersonaStore)
     mock.put_new.return_value = None
     mock.get.return_value = None
-    mock.save_discussion.return_value = "test-discussion-id"
-    mock.get_discussion.return_value = None
-    mock.get_discussions.return_value = []
     return mock
 
 
@@ -228,9 +227,7 @@ def file_manager(temp_upload_dir) -> Generator:
     from pathlib import Path
     from unittest.mock import Mock
 
-    # モックDBサービスを使用してAWS接続を回避
-    mock_db = Mock()
-    manager = FileManager(db_service=mock_db)
+    manager = FileManager(s3_service=Mock())
     manager.upload_dir = Path(temp_upload_dir)
     manager.knowledge_files_dir = Path(temp_upload_dir) / "knowledge_files"
     manager.knowledge_files_dir.mkdir(exist_ok=True)
@@ -239,11 +236,11 @@ def file_manager(temp_upload_dir) -> Generator:
 
 
 @pytest.fixture
-def persona_manager(mock_database_service) -> Generator:
+def persona_manager(mock_persona_store) -> Generator:
     """テスト用PersonaManagerを提供"""
     from src.managers.persona_manager import PersonaManager
 
-    manager = PersonaManager(persona_store=mock_database_service)
+    manager = PersonaManager(persona_store=mock_persona_store)
     yield manager
 
 

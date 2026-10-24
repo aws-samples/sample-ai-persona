@@ -123,7 +123,6 @@ def mock_memory_service():
 @pytest.fixture
 def manager(mock_db, mock_memory_service):
     return PersonaMemoryManager(
-        database_service=mock_db,
         memory_service=mock_memory_service,
         resource_lookup=_lookup(mock_db),
     )
@@ -182,7 +181,6 @@ class TestAddKnowledge:
 
     def test_memory_service_disabled(self, mock_db):
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
@@ -284,7 +282,6 @@ class TestGetMemories:
 
     def test_memory_disabled_returns_empty(self, mock_db):
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
@@ -316,7 +313,6 @@ class TestDeleteMemory:
         """R-01: persona A's ID with persona B's record ID leaves B's record."""
         service, client = _real_memory_service(monkeypatch)
         manager = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=service,
             resource_lookup=_lookup(mock_db),
         )
@@ -339,7 +335,6 @@ class TestDeleteMemory:
     def test_own_record_is_deleted(self, mock_db, monkeypatch):
         service, client = _real_memory_service(monkeypatch)
         manager = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=service,
             resource_lookup=_lookup(mock_db),
         )
@@ -363,7 +358,6 @@ class TestDeleteMemory:
 
     def test_memory_disabled(self, mock_db):
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
@@ -423,7 +417,6 @@ class TestDeleteAllMemories:
 
     def test_memory_disabled(self, mock_db):
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
@@ -476,7 +469,6 @@ class TestSafeGetMemories:
 
     def test_memory_disabled_returns_empty(self, mock_db):
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )
@@ -538,7 +530,6 @@ class TestMemoryAccess:
     @pytest.mark.parametrize("call", range(5))
     def test_shared_reader_gets_not_found(self, shared_db, mock_memory_service, call):
         manager = PersonaMemoryManager(
-            database_service=shared_db,
             memory_service=mock_memory_service,
             resource_lookup=_lookup(shared_db),
         )
@@ -575,7 +566,6 @@ class TestMemoryAccess:
     def test_denial_is_logged(self, shared_db, mock_memory_service, capsys):
         logs = LogCapture(capsys)
         manager = PersonaMemoryManager(
-            database_service=shared_db,
             memory_service=mock_memory_service,
             resource_lookup=_lookup(shared_db),
         )
@@ -587,7 +577,6 @@ class TestMemoryAccess:
 
     def test_access_check_comes_before_the_disabled_feature(self, mock_db):
         manager = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )

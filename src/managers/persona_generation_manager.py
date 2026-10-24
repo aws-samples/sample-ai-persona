@@ -31,7 +31,6 @@ from ..services.agent_service import (
     AgentServiceError,
     GenerationCapacityError,
 )
-from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from ..prompts.persona_generation_prompts import (
     CSV_ANALYSIS_INSTRUCTIONS,
@@ -153,7 +152,6 @@ class PersonaGenerationManager:
     def __init__(
         self,
         agent_service: AgentService | None = None,
-        database_service: DatabaseService | None = None,
         dataset_analysis_service: "DatasetAnalysisService | None" = None,
         candidate_store: "PersonaCandidateStore | None" = None,
         s3_service: Any = _UNSET,
@@ -162,7 +160,6 @@ class PersonaGenerationManager:
         """
         Args:
             agent_service: Generation agents (optional, singleton when omitted)
-            database_service: Kept for compatibility (optional)
             dataset_analysis_service: CSV analysis tools (optional)
             candidate_store: ``PersonaCandidates`` (optional, built on first use)
             s3_service: The temporary CSV area; ``None`` disables behaviour
@@ -170,9 +167,6 @@ class PersonaGenerationManager:
             clock: Aware-UTC clock (tests)
         """
         self.agent_service = agent_service or service_factory.get_agent_service()
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
         self.dataset_analysis_service = (
             dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )

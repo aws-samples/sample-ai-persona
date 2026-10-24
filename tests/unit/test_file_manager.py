@@ -28,56 +28,6 @@ class TestFileManager:
         # テスト用の一時ディレクトリを作成
         self.temp_dir = tempfile.mkdtemp()
 
-        # ファイル情報を保存する辞書（テスト用のインメモリストレージ）
-        self.uploaded_files = {}
-
-        # モックデータベースサービスを作成
-        self.mock_db_service = Mock()
-
-        # save_uploaded_file_infoのモック実装
-        def mock_save_file(
-            file_id,
-            filename,
-            file_path,
-            file_size=None,
-            file_hash=None,
-            mime_type=None,
-            uploaded_at=None,
-            original_filename=None,
-            file_type="persona_interview",
-        ):
-            self.uploaded_files[file_id] = {
-                "id": file_id,
-                "filename": filename,
-                "original_filename": original_filename or filename,
-                "file_path": file_path,
-                "file_size": file_size,
-                "file_hash": file_hash,
-                "mime_type": mime_type,
-                "uploaded_at": uploaded_at or datetime.now(),
-            }
-            return file_id
-
-        # get_uploaded_file_infoのモック実装
-        def mock_get_file(file_id):
-            return self.uploaded_files.get(file_id)
-
-        # get_all_uploaded_filesのモック実装
-        def mock_get_all_files():
-            return list(self.uploaded_files.values())
-
-        # delete_uploaded_file_infoのモック実装
-        def mock_delete_file(file_id):
-            if file_id in self.uploaded_files:
-                del self.uploaded_files[file_id]
-                return True
-            return False
-
-        self.mock_db_service.save_uploaded_file_info.side_effect = mock_save_file
-        self.mock_db_service.get_uploaded_file_info.side_effect = mock_get_file
-        self.mock_db_service.get_all_uploaded_files.side_effect = mock_get_all_files
-        self.mock_db_service.delete_uploaded_file_info.side_effect = mock_delete_file
-
         # Configをモック化してテスト用ディレクトリを使用
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.upload_dir = Path(self.temp_dir)
@@ -89,9 +39,7 @@ class TestFileManager:
             )
 
             # FileManagerを作成
-            self.file_manager = FileManager(
-                self.mock_db_service, file_store=Mock(), attachments=Mock()
-            )
+            self.file_manager = FileManager(file_store=Mock(), attachments=Mock())
 
     def teardown_method(self):
         """各テストメソッドの後に実行されるクリーンアップ処理"""
@@ -232,16 +180,12 @@ class TestFileManagerSurveyImage:
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.mock_db_service = Mock()
-        self.mock_db_service.save_uploaded_file_info.return_value = "f1"
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.upload_dir = Path(self.temp_dir)
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(
-                self.mock_db_service, file_store=Mock(), attachments=Mock()
-            )
+            self.file_manager = FileManager(file_store=Mock(), attachments=Mock())
             self.file_manager.survey_images_dir = Path(self.temp_dir) / "survey_images"
             self.file_manager.survey_images_dir.mkdir(exist_ok=True)
 
@@ -285,11 +229,9 @@ class TestFileManagerKnowledgeFile:
     """
 
     def setup_method(self):
-        self.mock_db_service = Mock()
         self.file_store = Mock()
         self.s3 = Mock()
         self.file_manager = FileManager(
-            self.mock_db_service,
             s3_service=self.s3,
             file_store=self.file_store,
             attachments=Mock(),
@@ -306,7 +248,6 @@ class TestFileManagerKnowledgeFile:
         assert "テスト知識ファイル" in markdown_text
         self.s3.upload_file.assert_not_called()
         self.file_store.put.assert_not_called()
-        self.mock_db_service.assert_not_called()
 
     def test_invalid_format(self):
         with pytest.raises(FileUploadError):
@@ -334,15 +275,12 @@ class TestFileManagerConvertToMarkdown:
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.mock_db_service = Mock()
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.upload_dir = Path(self.temp_dir)
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(
-                self.mock_db_service, file_store=Mock(), attachments=Mock()
-            )
+            self.file_manager = FileManager(file_store=Mock(), attachments=Mock())
 
     def test_convert_txt_to_markdown(self):
         content = "テストテキスト内容です。".encode("utf-8")
@@ -371,16 +309,12 @@ class TestFileManagerUtilities:
 
     def setup_method(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.mock_db_service = Mock()
-        self.mock_db_service.get_all_uploaded_files.return_value = []
         with patch("src.managers.file_manager.config") as mock_config:
             mock_config.upload_dir = Path(self.temp_dir)
             mock_config.MAX_FILE_SIZE = 10 * 1024 * 1024
             mock_config.ALLOWED_FILE_EXTENSIONS = (".txt", ".md")
             mock_config.is_allowed_file_extension = lambda f: False
-            self.file_manager = FileManager(
-                self.mock_db_service, file_store=Mock(), attachments=Mock()
-            )
+            self.file_manager = FileManager(file_store=Mock(), attachments=Mock())
 
     def teardown_method(self):
         import shutil
@@ -453,7 +387,6 @@ def u5_files(monkeypatch):
         clock = {"now": _U5_NOW.timestamp()}
         attachments = FileAttachments(store, s3, clock=lambda: clock["now"])
         manager = FileManager(
-            Mock(),
             s3_service=s3,
             file_store=store,
             attachments=attachments,

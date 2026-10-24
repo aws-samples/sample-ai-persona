@@ -29,7 +29,6 @@ class TestAutoLinkBehaviorFlag:
         mock_agent_service = Mock()
         mgr = PersonaGenerationManager(
             agent_service=mock_agent_service,
-            database_service=Mock(),
             candidate_store=Mock(),
             s3_service=None,
         )
@@ -216,7 +215,7 @@ class TestBuildBehaviorDatasetCandidates:
         csv_content = b"user_id,purchase_date,amount\nU001,2024-01-01,5000\nU001,2024-01-15,3000\n"
         mock_download.return_value = csv_content
 
-        mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        mgr = PersonaGenerationManager(agent_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
             csv_urls=["https://s3.amazonaws.com/bucket/file.csv"],
             persona_name="田中太郎",
@@ -236,7 +235,7 @@ class TestBuildBehaviorDatasetCandidates:
 
         mock_download.return_value = b"col1\n"
 
-        mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        mgr = PersonaGenerationManager(agent_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
             csv_urls=["https://s3.amazonaws.com/bucket/empty.csv"],
             persona_name="テスト",
@@ -252,7 +251,7 @@ class TestBuildBehaviorDatasetCandidates:
 
         mock_download.side_effect = Exception("Download failed")
 
-        mgr = PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        mgr = PersonaGenerationManager(agent_service=Mock())
         candidates = mgr._build_behavior_dataset_candidates(
             csv_urls=["https://s3.amazonaws.com/bucket/fail.csv"],
             persona_name="テスト",
@@ -269,7 +268,7 @@ class TestExtractUserIdFromLog:
     def _make_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        return PersonaGenerationManager(agent_service=Mock())
 
     def test_extracts_customer_id_from_thinking_log(self):
         mgr = self._make_manager()
@@ -319,7 +318,7 @@ class TestExtractLabelFromToolCall:
     def _make_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        return PersonaGenerationManager(agent_service=Mock())
 
     def test_extracts_label_from_csv_export_request(self):
         mgr = self._make_manager()

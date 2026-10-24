@@ -19,7 +19,6 @@ class TestServiceFactory:
         ServiceFactory._instance = None
         ServiceFactory._ai_service = None
         ServiceFactory._agent_service = None
-        ServiceFactory._database_service = None
 
     def test_singleton_pattern(self):
         """シングルトンパターンが正しく動作することを確認"""
@@ -88,35 +87,6 @@ class TestServiceFactory:
 
         assert service1 is service2
         mock_agent_service_class.assert_called_once()
-
-    @patch("src.services.service_factory.DatabaseService")
-    def test_get_database_service_creates_instance(self, mock_db_service_class):
-        """DatabaseServiceインスタンスが作成されることを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_db_service = Mock()
-        mock_db_service_class.return_value = mock_db_service
-
-        factory = ServiceFactory()
-        service = factory.get_database_service()
-
-        assert service is mock_db_service
-        mock_db_service_class.assert_called_once()
-
-    @patch("src.services.service_factory.DatabaseService")
-    def test_get_database_service_returns_same_instance(self, mock_db_service_class):
-        """DatabaseServiceが同じインスタンスを返すことを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_db_service = Mock()
-        mock_db_service_class.return_value = mock_db_service
-
-        factory = ServiceFactory()
-        service1 = factory.get_database_service()
-        service2 = factory.get_database_service()
-
-        assert service1 is service2
-        mock_db_service_class.assert_called_once()
 
     @patch("src.services.service_factory.AIService")
     def test_ai_service_creation_error_handling(self, mock_ai_service_class):
@@ -329,7 +299,6 @@ class TestServiceFactoryModuleLevelInstance:
         ServiceFactory._instance = None
         ServiceFactory._ai_service = None
         ServiceFactory._agent_service = None
-        ServiceFactory._database_service = None
 
     def test_module_level_instance_exists(self):
         """モジュールレベルのインスタンスが存在することを確認"""

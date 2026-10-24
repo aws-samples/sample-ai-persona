@@ -25,7 +25,7 @@ class TestPersonaManagerIntegration:
     """Integration tests for PersonaManager class."""
 
     @pytest.fixture
-    def mock_database_service(self):
+    def mock_persona_store(self):
         """Create a mock database service for testing."""
         personas_storage = {}
         mock_db = Mock()
@@ -86,20 +86,15 @@ class TestPersonaManagerIntegration:
         return mock_db
 
     @pytest.fixture
-    def database_service(self, mock_database_service):
-        """Alias for mock_database_service for backward compatibility."""
-        return mock_database_service
-
-    @pytest.fixture
     def mock_ai_service(self):
         """Create a mock AI service for testing (kept for backward compat)."""
         mock_service = Mock(spec=AIService)
         return mock_service
 
     @pytest.fixture
-    def persona_manager(self, database_service):
+    def persona_manager(self, mock_persona_store):
         """Create a persona manager whose deletes go through a fake ResourceSharing."""
-        storage = database_service.storage
+        storage = mock_persona_store.storage
 
         def delete_with_shares(principal, resource_type, persona_id):
             deleted = storage.pop(persona_id, None)
@@ -110,7 +105,7 @@ class TestPersonaManagerIntegration:
         bindings = Mock()
         bindings.list_for_persona.return_value = []
         return PersonaManager(
-            persona_store=database_service,
+            persona_store=mock_persona_store,
             resource_sharing=sharing,
             binding_store=bindings,
             memory_service=None,
@@ -168,17 +163,17 @@ class TestPersonaManagerIntegration:
         }
 
     @patch("src.managers.persona_manager.service_factory")
-    def test_persona_manager_initialization(self, mock_sf, mock_database_service):
+    def test_persona_manager_initialization(self, mock_sf, mock_persona_store):
         """Test persona manager initialization."""
-        mock_sf.get_persona_store.return_value = mock_database_service
+        mock_sf.get_persona_store.return_value = mock_persona_store
 
         # Test with default services
         manager = PersonaManager()
-        assert manager._personas is mock_database_service
+        assert manager._personas is mock_persona_store
 
         # Test with custom services
-        manager = PersonaManager(persona_store=mock_database_service)
-        assert manager._personas is mock_database_service
+        manager = PersonaManager(persona_store=mock_persona_store)
+        assert manager._personas is mock_persona_store
 
     def test_save_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona saving."""
@@ -375,13 +370,13 @@ class TestPersonaManagerIntegration:
         result = persona_manager.update_persona(ADMIN, persona.id, name="管理者が編集")
         assert result.owner_sub == OWNER.sub
 
-    def test_database_error_handling(self, mock_database_service):
+    def test_database_error_handling(self, mock_persona_store):
         """Test handling of database errors."""
         # Create a mock database service that raises an error
-        error_db_service = Mock()
-        error_db_service.put_new.side_effect = PersonaStoreError("Database save failed")
+        failing_store = Mock()
+        failing_store.put_new.side_effect = PersonaStoreError("Database save failed")
 
-        manager = PersonaManager(persona_store=error_db_service)
+        manager = PersonaManager(persona_store=failing_store)
 
         # Test that database errors are properly handled
         persona = Persona.create_new(

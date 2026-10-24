@@ -9,6 +9,8 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from src.models.dataset import Dataset, DatasetColumn
 from src.models.memory import DeleteAllResult
@@ -320,6 +322,39 @@ class TestUploadedFile:
         assert "expires_at" not in data
         assert None not in data.values()
         assert UploadedFile.from_dict(data) == f
+
+    @given(
+        filename=st.text(
+            min_size=1,
+            max_size=100,
+            alphabet=st.characters(blacklist_categories=("Cs",)),
+        ),
+        file_size=st.integers(min_value=0, max_value=1000000000),
+        mime_type=st.sampled_from(
+            ["text/plain", "application/json", "image/png", "application/pdf"]
+        ),
+        uploaded_at=st.datetimes(
+            min_value=datetime(2020, 1, 1), max_value=datetime(2030, 12, 31)
+        ),
+        attached=st.booleans(),
+    )
+    @settings(max_examples=100, deadline=None)
+    def test_round_trip_property(
+        self, filename, file_size, mime_type, uploaded_at, attached
+    ):
+        uploaded = UploadedFile.create_new(
+            owner_sub="sub-a",
+            file_type="discussion_document",
+            original_filename=filename,
+            file_size=file_size,
+            file_hash="h",
+            mime_type=mime_type,
+            now=uploaded_at,
+        ).with_path("s3://bucket/key")
+        if attached:
+            uploaded = uploaded.attached_to("discussion", "d1")
+
+        assert UploadedFile.from_dict(uploaded.to_dict()) == uploaded
 
     def test_usable_before_attach_only_by_owner_before_expiry(self):
         f = self._file()

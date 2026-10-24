@@ -29,7 +29,6 @@ from ..prompts.report_prompts import (
 )
 from ..services.agent_service import AgentService
 from ..services.ai_service import AIService
-from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.discussion_records import DiscussionRecords
@@ -64,15 +63,11 @@ class ReportManager:
         self,
         ai_service: Optional[AIService] = None,
         agent_service: Optional[AgentService] = None,
-        database_service: Optional[DatabaseService] = None,
         discussion_records: Optional[DiscussionRecords] = None,
         participants: Optional[ParticipantReader] = None,
     ):
         self.ai_service = ai_service or service_factory.get_ai_service()
         self.agent_service = agent_service or service_factory.get_agent_service()
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
         self._records = discussion_records
         self._reader = participants
         self.logger = logging.getLogger(__name__)

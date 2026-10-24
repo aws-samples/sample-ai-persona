@@ -53,7 +53,7 @@ class TestCombineIntegration:
     def test_is_pure_no_service_or_db_arguments(self):
         """combine_integration は base_prompt / sections / tool_groups のみを受け取る。
 
-        （service / database_service / flag を引数に取らない = 純粋性の担保）
+        （service / store / flag を引数に取らない = 純粋性の担保）
         """
         import inspect
 

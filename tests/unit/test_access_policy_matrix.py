@@ -401,9 +401,7 @@ def _memory_manager(world):
 
     memory = world.memory
     memory.list_memories.return_value = []
-    return PersonaMemoryManager(
-        database_service=world.db, memory_service=memory, resource_lookup=world.lookup
-    )
+    return PersonaMemoryManager(memory_service=memory, resource_lookup=world.lookup)
 
 
 #: Actors of the U5 rows: the member is in ``sales``; the ``shared`` persona
@@ -627,7 +625,6 @@ def _u6_call(op: str, world, principal: Principal, discussion_id: str) -> None:
     ai.generate_standard_report_streaming.side_effect = lambda **kw: iter(["r"])
     discussions = DiscussionManager(
         ai_service=ai,
-        database_service=Mock(),
         file_attachments=Mock(),
         discussion_records=world.records,
         participants=world.participants,
@@ -638,7 +635,6 @@ def _u6_call(op: str, world, principal: Principal, discussion_id: str) -> None:
     reports = ReportManager(
         ai_service=ai,
         agent_service=Mock(),
-        database_service=Mock(),
         discussion_records=world.records,
         participants=world.participants,
     )

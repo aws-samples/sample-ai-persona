@@ -1,6 +1,6 @@
 """PersonaManager の所有と共有・判定の単体テスト（U4）。
 
-ResourceSharing と AccessPolicy は本物、Store はメモリ上の偽物、DatabaseService と
+ResourceSharing と AccessPolicy は本物、Store はメモリ上の偽物、PersonaStore と
 OwnerDirectory はモックにする。対応: BR3.7、BR3.8、BR6.1〜BR6.7、NFR1.13、NFR1.15、
 NFR2.3、AC3.1.4、AC4.1.3、AC4.1.4、AC5.1.2、AC5.1.4。
 """
@@ -44,16 +44,18 @@ class World:
     def __init__(self) -> None:
         self.store = FakeStore()
         self.personas: dict[str, Persona] = {}
-        self.db = Mock()
-        self.db.get.side_effect = lambda pid, consistent=False: self._get(pid)
-        self.db.get_many.side_effect = lambda ids: {
+        self.persona_store = Mock()
+        self.persona_store.get.side_effect = lambda pid, consistent=False: self._get(
+            pid
+        )
+        self.persona_store.get_many.side_effect = lambda ids: {
             i: p for i in ids if (p := self._get(i)) is not None
         }
-        self.db.scan_all.side_effect = lambda: [
+        self.persona_store.scan_all.side_effect = lambda: [
             p for i in sorted(self.store.bodies) if (p := self._get(i))
         ]
-        self.db.put_new.side_effect = lambda p: p.id
-        self.db.update_editable.return_value = True
+        self.persona_store.put_new.side_effect = lambda p: p.id
+        self.persona_store.update_editable.return_value = True
 
     def _get(self, pid: str) -> Persona | None:
         body = self.store.bodies.get(pid)
@@ -120,7 +122,7 @@ def manager(world, owners, s3) -> PersonaManager:
     bindings = Mock()
     bindings.list_for_persona.return_value = []
     return PersonaManager(
-        persona_store=world.db,
+        persona_store=world.persona_store,
         s3_service=s3,
         resource_sharing=sharing,
         owners=owners,
@@ -142,7 +144,7 @@ def _ids(listing: Any) -> list[str]:
 class TestSave:
     def test_saved_persona_is_owned_by_the_saver(self, manager, world, world_persona):
         manager.save_persona(MEMBER_A, world_persona)
-        (saved,) = world.db.put_new.call_args.args
+        (saved,) = world.persona_store.put_new.call_args.args
         assert saved.owner_sub == MEMBER_A.sub
         assert saved.shared_group_ids == frozenset()
 
@@ -151,7 +153,7 @@ class TestSave:
     ):
         with pytest.raises(AccessDeniedError):
             manager.save_persona(NO_ROLE, world_persona)
-        world.db.put_new.assert_not_called()
+        world.persona_store.put_new.assert_not_called()
 
 
 @pytest.fixture
@@ -182,7 +184,7 @@ class TestList:
 
         assert listing.tab is ListTab.MINE
         assert _ids(listing) == ["new", "old"]
-        world.db.get_many.assert_called_once()
+        world.persona_store.get_many.assert_called_once()
         assert listing.counts == {"mine": 2, "shared": 0}
         assert not listing.show_all
         assert listing.manageable == {"new", "old"}
@@ -275,7 +277,7 @@ class TestList:
 
     def test_body_read_failure_is_a_persona_error(self, manager, world):
         world.add("p1", MEMBER_A.sub)
-        world.db.get_many.side_effect = RuntimeError("down")
+        world.persona_store.get_many.side_effect = RuntimeError("down")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.list_personas(MEMBER_A, "mine", None)
 
@@ -351,7 +353,7 @@ class TestSearch:
         world.add("p2", MEMBER_B.sub)
         listing = manager.search_personas(ADMIN, "all", "名前")
         assert set(_ids(listing)) == {"p1", "p2"}
-        world.db.scan_all.assert_called_once_with()
+        world.persona_store.scan_all.assert_called_once_with()
 
 
 # =============================================================================
@@ -365,7 +367,7 @@ class TestDetail:
         detail = manager.get_persona_detail(MEMBER_B, "p1")
         assert detail.persona.id == "p1" and not detail.manageable
         assert detail.owner_label == f"氏名-{MEMBER_A.sub}"
-        world.db.get.assert_called_with("p1", consistent=True)
+        world.persona_store.get.assert_called_with("p1", consistent=True)
 
     def test_unreadable_and_missing_are_the_same_not_found(self, manager, world):
         world.add("p1", MEMBER_A.sub)
@@ -388,14 +390,14 @@ class TestDetail:
         """R-07: the edit response gets the same rows as the detail page."""
         world.add("p1", MEMBER_A.sub, {"sales", "plan"})
         updated = manager.update_persona(MEMBER_A, "p1", name="新しい名前")
-        world.db.get.reset_mock()
+        world.persona_store.get.reset_mock()
 
         detail = manager.describe_persona(MEMBER_A, updated)
 
         assert detail.persona.name == "新しい名前" and detail.manageable
         assert detail.owner_label == f"氏名-{MEMBER_A.sub}"
         assert detail.shared_with == ["企画部", "営業部"]
-        world.db.get.assert_not_called()  # 読み直さない
+        world.persona_store.get.assert_not_called()  # 読み直さない
 
     def test_describe_refuses_an_unreadable_persona(self, manager, world, owners):
         world.add("p1", MEMBER_A.sub)
@@ -419,7 +421,7 @@ class TestUpdate:
         world.add("p1", MEMBER_A.sub, {"sales"})
         with pytest.raises(AccessDeniedError):
             manager.update_persona(MEMBER_B, "p1", name="新しい名前")
-        world.db.update_editable.assert_not_called()
+        world.persona_store.update_editable.assert_not_called()
 
     def test_unrelated_member_gets_not_found(self, manager, world):
         world.add("p1", MEMBER_A.sub)
@@ -429,14 +431,14 @@ class TestUpdate:
     def test_admin_update_keeps_the_owner_and_shares(self, manager, world):
         world.add("p1", MEMBER_A.sub, {"sales"})
         updated = manager.update_persona(ADMIN, "p1", name="新しい名前")
-        (written,) = world.db.update_editable.call_args.args
+        (written,) = world.persona_store.update_editable.call_args.args
         assert written.name == "新しい名前"
         assert written.owner_sub == MEMBER_A.sub == updated.owner_sub
         assert written.shared_group_ids == {"sales"}
 
     def test_persona_deleted_while_editing_is_not_found(self, manager, world):
         world.add("p1", MEMBER_A.sub)
-        world.db.update_editable.return_value = False
+        world.persona_store.update_editable.return_value = False
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.update_persona(MEMBER_A, "p1", name="新しい名前")
 

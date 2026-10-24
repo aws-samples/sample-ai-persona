@@ -349,10 +349,6 @@ class Config:
         """
         return {name: getattr(self, name) for name in PASSWORD_POLICY_SETTINGS}
 
-    def table_names(self) -> dict[str, str]:
-        """Physical names of the eight bulk-granted tables, keyed by kind."""
-        return {kind: self.table_name(kind) for kind in TABLE_NAME_SETTINGS}
-
     def _ensure_directories(self) -> None:
         """必要なディレクトリが存在することを確認し、なければ作成"""
         directories = [

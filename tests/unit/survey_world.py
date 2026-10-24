@@ -1,6 +1,6 @@
 """Shared world for the U7 Manager tests (surveys, templates, organization assets).
 
-DynamoDB and S3 are moto; ``DatabaseService``, ``SurveyStore``, ``SurveyTemplateStore``,
+DynamoDB and S3 are moto; ``SurveyStore``, ``SurveyTemplateStore``,
 ``ResourceShareStore``, ``CustomPersonaDataStore``, ``AuthzLookupService`` and
 ``S3Service`` are the real services on it. ``AccessPolicy``, ``ResourceSharing``, ``ResourceLookup`` and
 ``DepartmentDirectory`` are the real components (decisions are never mocked).
@@ -33,7 +33,6 @@ from src.models.survey_template import Question, SurveyTemplate, TemplateImage
 from src.models.uploaded_file import AttachResult
 from src.services.authz_lookup_service import AuthzLookupService, LookupTable
 from src.services.custom_persona_data_store import CustomPersonaDataStore
-from src.services.database_service import DatabaseService
 from src.services.dataset_store import DatasetStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.services.resource_share_store import ResourceShareStore
@@ -93,8 +92,7 @@ class SurveyWorld:
     """Everything a U7 Manager test wires together (inside ``mock_aws``)."""
 
     def __init__(self) -> None:
-        self.db = DatabaseService(table_prefix="U7", region=REGION)
-        self.client = self.db.dynamodb_client
+        self.client = boto3.client("dynamodb", region_name=REGION)
         self.kb_table = "U7_KnowledgeBases"
         self.templates_table = "U7_SurveyTemplates"
         self.surveys_table = "U7_Surveys"

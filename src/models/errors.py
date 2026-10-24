@@ -680,11 +680,6 @@ class ErrorCode(StrEnum):
     )
     AI_BEDROCK_API_FAILED = ("ai_bedrock_api_failed", ErrorKind.TRANSIENT)
     AI_OPERATION_FAILED = ("ai_operation_failed", ErrorKind.TRANSIENT)
-    DATABASE_CREDENTIALS_INVALID = (
-        "database_credentials_invalid",
-        ErrorKind.CONFIG,
-    )
-    DATABASE_TABLES_NOT_FOUND = ("database_tables_not_found", ErrorKind.CONFIG)
     DATABASE_OPERATION_FAILED = ("database_operation_failed", ErrorKind.TRANSIENT)
     S3_OPERATION_FAILED = ("s3_operation_failed", ErrorKind.TRANSIENT)
     S3_OBJECT_NOT_FOUND = ("s3_object_not_found", ErrorKind.NOT_FOUND)
