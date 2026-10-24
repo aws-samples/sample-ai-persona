@@ -155,6 +155,26 @@ def test_knowledge_preview_converts_without_saving(client, u5):
     u5.files.convert_file_to_markdown.assert_called_once_with(b"text", "知識.txt")
 
 
+def test_knowledge_preview_over_the_limit_uses_the_catalog(client, u5):
+    """The length rule lives in the Manager; the wording comes from the catalog."""
+    from src.models.errors import ErrorCode
+    from web.error_messages import user_message_for_code
+
+    u5.files.convert_file_to_markdown.return_value = "A" * 10001
+    response = _as(client, "owner").post(
+        f"/persona/{u5.persona.id}/memories/upload-preview",
+        files={"file": ("知識.txt", BytesIO(b"text"), "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert "AAAAAAAAAA" not in response.text  # no preview of the content
+    expected = user_message_for_code(
+        ErrorCode.KNOWLEDGE_FILE_CONTENT_TOO_LONG,
+        {"max_length": 10000, "content_length": 10001},
+    )
+    assert expected in response.text
+
+
 # =============================================================================
 # 紐付け: 読める人は一覧、管理できる人だけ作成・削除（BR2.1〜BR2.5、BR4.2）
 # =============================================================================

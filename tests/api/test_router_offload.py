@@ -60,6 +60,11 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
         "_render_avatar_editor",
         "avatar_upload_enabled",
     ): f"S3 の設定があるかを属性で見るだけで{_NO_IO}",
+    (
+        "persona.py",
+        "upload_knowledge_file_preview",
+        "check_knowledge_file_content",
+    ): f"変換した文字列の長さを見るだけで{_NO_IO}",
     # auth.py
     (
         "auth.py",
