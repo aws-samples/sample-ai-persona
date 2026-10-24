@@ -602,9 +602,10 @@ async def dwh_extract(request: Request) -> Any:
 
         future = executor.submit(_run_extraction)
 
+        # 待つのはスレッドで行う（イベントループの上で待つと他の要求が止まる）
         while not future.done():
             try:
-                evt = event_queue.get(timeout=0.3)
+                evt = await asyncio.to_thread(event_queue.get, timeout=0.3)
                 evt_type = evt.get("type", "")
                 content = evt.get("content", "")
                 if evt_type == "tool_call":
@@ -646,7 +647,9 @@ async def dwh_extract(request: Request) -> Any:
         try:
             result = future.result()
             temp_key = f"persona-dataset/temp/dwh-{uuid.uuid4().hex[:8]}.csv"
-            manager.upload_temp_file(principal, result["csv_bytes"], temp_key)
+            await _run(
+                manager.upload_temp_file, principal, result["csv_bytes"], temp_key
+            )
 
             yield _survey_sse_event(
                 "complete",

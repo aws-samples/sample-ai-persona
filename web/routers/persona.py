@@ -303,10 +303,11 @@ async def generate_persona(
             future = executor.submit(_run_dwh_generation)
 
             # Agent 実行中: queue からリアルタイムイベントを読み出す。
+            # 待つのはスレッドで行う（イベントループの上で待つと他の要求が止まる）。
             # 行動データの CSV（csv_url）は Manager が控えて候補に置く（BR1.2）
             while not future.done():
                 try:
-                    evt = event_queue.get(timeout=0.3)
+                    evt = await asyncio.to_thread(event_queue.get, timeout=0.3)
                     evt_type = evt.get("type", "")
                     content = evt.get("content", "")
                     if evt_type == "tool_call":
@@ -420,7 +421,15 @@ async def generate_persona(
                     ),
                 )
 
-        return StreamingResponse(dwh_event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            dwh_event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # ファイル読み込み（既存フロー）
     # 形式・サイズ・空は生バイト時点で判定できる粗ガードとしてここで検証する。
