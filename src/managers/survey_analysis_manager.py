@@ -35,6 +35,10 @@ from ..services.database_service import DatabaseError, DatabaseService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
+from ..services.survey_template_store import (
+    SurveyTemplateStore,
+    SurveyTemplateStoreError,
+)
 from .components.access_policy import AccessPolicy
 from .components.resource_lookup import ResourceLookup
 from .components.resource_sharing import ResourceSharing
@@ -62,6 +66,7 @@ class SurveyAnalysisManager:
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
+        survey_template_store: Optional[SurveyTemplateStore] = None,
         s3_service: Optional[S3Service] = None,
         ai_service: Optional[AIService] = None,
         survey_batch_service: Optional[SurveyBatchService] = None,
@@ -72,7 +77,8 @@ class SurveyAnalysisManager:
         """Create the manager.
 
         Args:
-            database_service: Survey and template bodies.
+            database_service: Survey bodies.
+            survey_template_store: Templates of surveys made before v1.0.0.
             s3_service: Result CSVs.
             ai_service: Insight reports.
             survey_batch_service: Statistical summaries.
@@ -81,6 +87,9 @@ class SurveyAnalysisManager:
             result_cache: The per-process result CSV cache.
         """
         self.db = database_service or service_factory.get_database_service()
+        self._templates = (
+            survey_template_store or service_factory.get_survey_template_store()
+        )
         self.s3_service: S3Service = s3_service or service_factory.get_s3_service()
         self.ai_service = ai_service or service_factory.get_ai_service()
         self.batch_service = (
@@ -154,10 +163,8 @@ class SurveyAnalysisManager:
         template = None
         if AccessPolicy.can_read(principal, target):
             try:
-                template = self.db.get_survey_template(
-                    survey.template_id, consistent=True
-                )
-            except DatabaseError as e:
+                template = self._templates.get(survey.template_id, consistent=True)
+            except SurveyTemplateStoreError as e:
                 raise LookupUnavailableError("template body unreadable") from e
         if template is None:
             raise SurveyAnalysisManagerError(

@@ -839,7 +839,7 @@ def _u7_call(world, op: str, principal: Principal, resource_id: str) -> None:
         return
     if resource == "template":
         templates = SurveyTemplateManager(
-            database_service=world.db,
+            survey_template_store=world.template_store,
             ai_service=Mock(),
             file_attachments=world.files,
             resource_sharing=world.sharing,
@@ -856,6 +856,7 @@ def _u7_call(world, op: str, principal: Principal, resource_id: str) -> None:
         return
     surveys = SurveyExecutionManager(
         database_service=world.db,
+        survey_template_store=world.template_store,
         survey_batch_service=Mock(),
         s3_service=world.s3,
         resource_sharing=world.sharing,

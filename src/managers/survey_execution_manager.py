@@ -45,6 +45,10 @@ from ..services.database_service import DatabaseError, DatabaseService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
+from ..services.survey_template_store import (
+    SurveyTemplateStore,
+    SurveyTemplateStoreError,
+)
 from .components.access_policy import AccessPolicy
 from .components.owner_directory import OwnerDirectory
 from .components.resource_lookup import ResourceLookup
@@ -119,6 +123,7 @@ class SurveyExecutionManager:
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
+        survey_template_store: Optional[SurveyTemplateStore] = None,
         survey_batch_service: Optional[SurveyBatchService] = None,
         s3_service: Optional[S3Service] = None,
         resource_sharing: Optional[ResourceSharing] = None,
@@ -131,7 +136,8 @@ class SurveyExecutionManager:
         """Create the manager.
 
         Args:
-            database_service: Survey and template bodies.
+            database_service: Survey bodies.
+            survey_template_store: Template bodies (copied into new surveys).
             survey_batch_service: Persona sampling and batch inference.
             s3_service: Result CSVs, images and custom data files.
             resource_sharing: The per-task ``ResourceSharing`` (tabs, delete).
@@ -142,6 +148,9 @@ class SurveyExecutionManager:
             sleep: Wait between cleanup attempts (tests).
         """
         self.db = database_service or service_factory.get_database_service()
+        self._templates = (
+            survey_template_store or service_factory.get_survey_template_store()
+        )
         self.batch_service = (
             survey_batch_service or service_factory.get_survey_batch_service()
         )
@@ -277,8 +286,8 @@ class SurveyExecutionManager:
 
     def _read_template(self, template_id: str) -> Any:
         try:
-            return self.db.get_survey_template(template_id, consistent=True)
-        except DatabaseError as e:
+            return self._templates.get(template_id, consistent=True)
+        except SurveyTemplateStoreError as e:
             raise LookupUnavailableError("template body unreadable") from e
 
     # =========================================================================

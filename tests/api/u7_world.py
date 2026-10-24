@@ -63,7 +63,7 @@ class ApiWorld:
         )
         self.cache = ResultCsvCache()
         self.templates = SurveyTemplateManager(
-            database_service=world.db,
+            survey_template_store=world.template_store,
             ai_service=self.ai,
             file_attachments=world.files,
             resource_sharing=world.sharing,
@@ -73,6 +73,7 @@ class ApiWorld:
         )
         self.executions = SurveyExecutionManager(
             database_service=world.db,
+            survey_template_store=world.template_store,
             survey_batch_service=self.batch,
             s3_service=world.s3,
             resource_sharing=world.sharing,
@@ -84,6 +85,7 @@ class ApiWorld:
         )
         self.analysis = SurveyAnalysisManager(
             database_service=world.db,
+            survey_template_store=world.template_store,
             s3_service=world.s3,
             ai_service=self.ai,
             survey_batch_service=self.batch,

@@ -42,6 +42,7 @@ from src.prompts.survey_prompts import (
     build_persona_system_prompt,
     STANDARD_COLUMNS,
 )
+from src.services.survey_template_store import SurveyTemplateStore
 
 
 @pytest.fixture
@@ -71,6 +72,7 @@ def mgr(
 ) -> SurveyExecutionManager:
     return SurveyExecutionManager(
         database_service=mock_db,
+        survey_template_store=Mock(spec=SurveyTemplateStore),
         survey_batch_service=mock_batch_service,
         s3_service=mock_s3_service,
     )
@@ -721,6 +723,7 @@ def started() -> list:
 def em(survey_world: SurveyWorld, batch: Mock, cache: Mock) -> SurveyExecutionManager:
     return SurveyExecutionManager(
         database_service=survey_world.db,
+        survey_template_store=survey_world.template_store,
         survey_batch_service=batch,
         s3_service=survey_world.s3,
         resource_sharing=survey_world.sharing,
@@ -907,7 +910,7 @@ class TestBackgroundRun:
         start = em.create_survey(MEMBER_A, template.id)
         # 開始のあとでテンプレートが消えても、写しで最後まで進む（BR2.2）
         survey_world.client.delete_item(
-            TableName=survey_world.db.survey_templates_table,
+            TableName=survey_world.templates_table,
             Key={"id": {"S": template.id}},
         )
 
@@ -1157,7 +1160,7 @@ class TestReadSurvey:
         assert detail.template_name == "C のテンプレート"
         assert detail.analysis_available is True
         survey_world.client.delete_item(
-            TableName=survey_world.db.survey_templates_table,
+            TableName=survey_world.templates_table,
             Key={"id": {"S": template.id}},
         )
         detail = em.get_survey_detail(ADMIN, legacy.id)

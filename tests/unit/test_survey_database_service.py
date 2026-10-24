@@ -1,5 +1,5 @@
 """
-Unit tests for DatabaseService Survey/SurveyTemplate CRUD operations.
+Unit tests for DatabaseService Survey CRUD operations.
 """
 
 from unittest.mock import Mock, patch
@@ -22,25 +22,6 @@ def _make_service():
     return service, mock_client
 
 
-def _sample_template() -> SurveyTemplate:
-    return SurveyTemplate(
-        id="tmpl-001",
-        name="顧客満足度調査",
-        questions=[
-            Question(id="q1", text="満足度は？", question_type="scale_rating"),
-            Question(
-                id="q2",
-                text="好きな色は？",
-                question_type="multiple_choice",
-                options=["赤", "青", "緑"],
-            ),
-            Question(id="q3", text="ご意見をどうぞ", question_type="free_text"),
-        ],
-        created_at=datetime(2025, 1, 1, 12, 0, 0),
-        updated_at=datetime(2025, 1, 2, 12, 0, 0),
-    )
-
-
 def _sample_survey() -> Survey:
     return Survey(
         id="srv-001",
@@ -61,53 +42,6 @@ def _sample_survey() -> Survey:
         updated_at=datetime(2025, 1, 2, 12, 0, 0),
         error_code=None,
     )
-
-
-class TestSurveyTemplateCRUD:
-    """Test SurveyTemplate CRUD operations on DatabaseService."""
-
-    def test_get_survey_template_found(self):
-        service, mock_client = _make_service()
-        template = _sample_template()
-        serialized = service._serialize_survey_template(template)
-        mock_client.get_item.return_value = {"Item": serialized}
-
-        result = service.get_survey_template("tmpl-001")
-
-        assert result is not None
-        assert result.id == "tmpl-001"
-        assert result.name == "顧客満足度調査"
-        assert len(result.questions) == 3
-        assert result.questions[1].options == ["赤", "青", "緑"]
-
-    def test_get_survey_template_not_found(self):
-        service, mock_client = _make_service()
-        mock_client.get_item.return_value = {}
-
-        result = service.get_survey_template("nonexistent")
-
-        assert result is None
-
-    def test_serialization_round_trip(self):
-        """Verify serialize → deserialize produces equivalent object."""
-        service, _ = _make_service()
-        template = _sample_template()
-
-        serialized = service._serialize_survey_template(template)
-        restored = service._deserialize_survey_template(serialized)
-
-        assert restored.id == template.id
-        assert restored.name == template.name
-        assert len(restored.questions) == len(template.questions)
-        for orig, rest in zip(template.questions, restored.questions):
-            assert orig.id == rest.id
-            assert orig.text == rest.text
-            assert orig.question_type == rest.question_type
-            assert orig.options == rest.options
-            assert orig.scale_min == rest.scale_min
-            assert orig.scale_max == rest.scale_max
-        assert restored.created_at == template.created_at
-        assert restored.updated_at == template.updated_at
 
 
 class TestSurveyCRUD:
@@ -194,7 +128,7 @@ def moto_survey_service(monkeypatch):
     with moto.mock_aws():
         service = DatabaseService(table_prefix="SvTest", region="us-east-1")
         client = boto3.client("dynamodb", region_name="us-east-1")
-        for table in (service.survey_templates_table, service.surveys_table):
+        for table in (service.surveys_table,):
             client.create_table(
                 TableName=table,
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
@@ -241,152 +175,6 @@ def _share(service: DatabaseService, table: str, item_id: str) -> None:
         UpdateExpression="SET shared_group_ids = :s",
         ExpressionAttributeValues={":s": {"SS": ["sales"]}},
     )
-
-
-class TestTemplateWrites:
-    def test_put_new_writes_owner_without_shares_and_lands_in_owner_index(
-        self, moto_survey_service
-    ):
-        template = _owned_template()
-        template = SurveyTemplate.from_dict(
-            {**template.to_dict(), "shared_group_ids": ["sales"]}
-        )
-        moto_survey_service.put_new_survey_template(template)
-
-        item = _raw(
-            moto_survey_service, moto_survey_service.survey_templates_table, template.id
-        )
-        assert item["owner_sub"] == {"S": "user-a"}
-        assert "shared_group_ids" not in item
-        owned = moto_survey_service.dynamodb_client.query(
-            TableName=moto_survey_service.survey_templates_table,
-            IndexName="OwnerIndex",
-            KeyConditionExpression="owner_sub = :o",
-            ExpressionAttributeValues={":o": {"S": "user-a"}},
-        )["Items"]
-        assert [i["id"]["S"] for i in owned] == [template.id]
-
-    def test_put_new_refuses_an_existing_id(self, moto_survey_service):
-        template = _owned_template()
-        moto_survey_service.put_new_survey_template(template)
-        with pytest.raises(DatabaseConditionFailed):
-            moto_survey_service.put_new_survey_template(template.owned_by("other"))
-        item = _raw(
-            moto_survey_service, moto_survey_service.survey_templates_table, template.id
-        )
-        assert item["owner_sub"] == {"S": "user-a"}
-
-    def test_put_new_writes_the_callers_items_in_the_same_transaction(
-        self, moto_survey_service
-    ):
-        template = _owned_template()
-        extra = {
-            "Put": {
-                "TableName": moto_survey_service.survey_templates_table,
-                "Item": {"id": {"S": "extra-item"}},
-                "ConditionExpression": "attribute_not_exists(id)",
-            }
-        }
-        moto_survey_service.put_new_survey_template(template, extra_items=[extra])
-        assert _raw(
-            moto_survey_service,
-            moto_survey_service.survey_templates_table,
-            "extra-item",
-        )
-        # 2 回目は本体も追加の項目も書かれない
-        second = _owned_template()
-        with pytest.raises(DatabaseConditionFailed):
-            moto_survey_service.put_new_survey_template(second, extra_items=[extra])
-        assert (
-            _raw(
-                moto_survey_service,
-                moto_survey_service.survey_templates_table,
-                second.id,
-            )
-            is None
-        )
-
-    def test_update_content_keeps_owner_shares_and_created_at(
-        self, moto_survey_service
-    ):
-        template = _owned_template()
-        moto_survey_service.put_new_survey_template(template)
-        _share(
-            moto_survey_service, moto_survey_service.survey_templates_table, template.id
-        )
-        edited = SurveyTemplate.from_dict(
-            {
-                **{
-                    k: v
-                    for k, v in template.to_dict().items()
-                    if k not in ("owner_sub", "created_at")
-                },
-                "created_at": "2030-01-01T00:00:00",
-            }
-        ).edited(name="編集後", questions=[Question.create_free_text("Q2")], images=[])
-
-        spy = Mock(wraps=moto_survey_service.dynamodb_client.put_item)
-        moto_survey_service.dynamodb_client.put_item = spy
-        assert moto_survey_service.update_survey_template_content(edited) is True
-        assert spy.call_count == 0
-
-        stored = moto_survey_service.get_survey_template(template.id, consistent=True)
-        assert stored.name == "編集後"
-        assert stored.owner_sub == "user-a"
-        assert stored.shared_group_ids == frozenset({"sales"})
-        assert stored.created_at == template.created_at
-
-    def test_update_content_of_a_deleted_template_creates_nothing(
-        self, moto_survey_service
-    ):
-        template = _owned_template()
-        assert moto_survey_service.update_survey_template_content(template) is False
-        assert (
-            _raw(
-                moto_survey_service,
-                moto_survey_service.survey_templates_table,
-                template.id,
-            )
-            is None
-        )
-
-    def test_update_content_removes_emptied_images(self, moto_survey_service):
-        from src.models.survey_template import TemplateImage
-
-        image = TemplateImage.create_new("img", "s3://b/k.png", "image/png", "k.png")
-        template = SurveyTemplate.create_new(
-            name="t", questions=[Question.create_free_text("Q")], images=[image]
-        ).owned_by("user-a")
-        moto_survey_service.put_new_survey_template(template)
-        moto_survey_service.update_survey_template_content(
-            template.edited(name="t", questions=template.questions, images=[])
-        )
-        item = _raw(
-            moto_survey_service, moto_survey_service.survey_templates_table, template.id
-        )
-        assert "images" not in item
-
-    def test_batch_read_is_strong_and_rereads_unprocessed(self, moto_survey_service):
-        first, second = _owned_template(), _owned_template()
-        for template in (first, second):
-            moto_survey_service.put_new_survey_template(template)
-        client = moto_survey_service.dynamodb_client
-        real = client.batch_get_item
-        calls: list[dict] = []
-
-        def flaky(**kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                return {"Responses": {}, "UnprocessedKeys": kwargs["RequestItems"]}
-            return real(**kwargs)
-
-        client.batch_get_item = flaky
-        found = moto_survey_service.get_survey_templates_by_ids(
-            [first.id, second.id, "missing"]
-        )
-        assert set(found) == {first.id, second.id}
-        table = moto_survey_service.survey_templates_table
-        assert calls[0]["RequestItems"][table]["ConsistentRead"] is True
 
 
 class TestSurveyWrites:

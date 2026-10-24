@@ -45,7 +45,7 @@ def ai() -> Mock:
 @pytest.fixture
 def mgr(survey_world: SurveyWorld, ai: Mock) -> SurveyTemplateManager:
     return SurveyTemplateManager(
-        database_service=survey_world.db,
+        survey_template_store=survey_world.template_store,
         ai_service=ai,
         file_attachments=survey_world.files,
         resource_sharing=survey_world.sharing,
@@ -79,7 +79,7 @@ def _image(file_id: str, owner: str = "a") -> TemplateImage:
 
 
 def _stored(world: SurveyWorld, template_id: str) -> dict | None:
-    return world.raw(world.db.survey_templates_table, template_id)
+    return world.raw(world.templates_table, template_id)
 
 
 # =============================================================================
@@ -103,9 +103,7 @@ class TestCreateTemplate:
         with pytest.raises(AccessDeniedError):
             mgr.create_template(NO_ROLE, "テスト", sample_questions)
         assert (
-            survey_world.client.scan(TableName=survey_world.db.survey_templates_table)[
-                "Count"
-            ]
+            survey_world.client.scan(TableName=survey_world.templates_table)["Count"]
             == 0
         )
 
@@ -115,9 +113,7 @@ class TestCreateTemplate:
         with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_TOO_LARGE):
             mgr.create_template(MEMBER_A, "大きい", questions, [_image(FILE_1)])
         assert (
-            survey_world.client.scan(TableName=survey_world.db.survey_templates_table)[
-                "Count"
-            ]
+            survey_world.client.scan(TableName=survey_world.templates_table)["Count"]
             == 0
         )
         survey_world.files.attach_all.assert_not_called()
@@ -143,9 +139,7 @@ class TestCreateTemplate:
         with raises_code(SurveyTemplateManagerError, ErrorCode.FILE_NOT_FOUND):
             mgr.create_template(MEMBER_A, "画像", sample_questions, [_image(FILE_1)])
         assert (
-            survey_world.client.scan(TableName=survey_world.db.survey_templates_table)[
-                "Count"
-            ]
+            survey_world.client.scan(TableName=survey_world.templates_table)["Count"]
             == 0
         )
 
@@ -157,9 +151,7 @@ class TestCreateTemplate:
                 MEMBER_A, "画像", sample_questions, [_image(FILE_1, owner="b")]
             )
         assert (
-            survey_world.client.scan(TableName=survey_world.db.survey_templates_table)[
-                "Count"
-            ]
+            survey_world.client.scan(TableName=survey_world.templates_table)["Count"]
             == 0
         )
 
@@ -273,7 +265,7 @@ class TestListTemplates:
     ):
         # 共有の索引が残っていても、本体を読み直して can_read で落とす（BR1.2）
         survey_world.client.update_item(
-            TableName=survey_world.db.survey_templates_table,
+            TableName=survey_world.templates_table,
             Key={"id": {"S": seeded["b"].id}},
             UpdateExpression="REMOVE shared_group_ids",
         )
@@ -324,7 +316,7 @@ class TestSearchReadsAtMost500:
                 created_at=at,
                 updated_at=at,
             ).owned_by(owner)
-            body = world.db._serialize_survey_template(template)
+            body = world.template_store._item(template.to_dict())
             if share:
                 body["shared_group_ids"] = {"SS": sorted(share)}
                 entries += [
@@ -338,7 +330,7 @@ class TestSearchReadsAtMost500:
         for start in range(0, len(bodies), 25):
             world.client.batch_write_item(
                 RequestItems={
-                    world.db.survey_templates_table: [
+                    world.templates_table: [
                         {"PutRequest": {"Item": b}} for b in bodies[start : start + 25]
                     ]
                 }
@@ -350,13 +342,13 @@ class TestSearchReadsAtMost500:
     def _read_ids(world: SurveyWorld, monkeypatch) -> list:
         """Record every template ID whose body the manager reads."""
         read: list = []
-        real = world.db.get_survey_templates_by_ids
+        real = world.template_store.get_many
 
         def spy(ids):
             read.extend(ids)
             return real(ids)
 
-        monkeypatch.setattr(world.db, "get_survey_templates_by_ids", spy)
+        monkeypatch.setattr(world.template_store, "get_many", spy)
         return read
 
     def test_501_in_mine_reads_the_newest_500_and_marks_the_cut(
@@ -453,7 +445,7 @@ class TestUpdateTemplate:
 
         assert updated.name == "新名"
         assert put.call_count == 0
-        stored = survey_world.db.get_survey_template(template.id, consistent=True)
+        stored = survey_world.template_store.get(template.id, consistent=True)
         assert stored.name == "新名"
         assert stored.owner_sub == "a"
         assert stored.shared_group_ids == frozenset({"sales"})
@@ -462,7 +454,7 @@ class TestUpdateTemplate:
     def test_admin_update_keeps_the_owner(self, mgr, survey_world, sample_questions):
         template = survey_world.template("a")
         mgr.update_template(ADMIN, template.id, "admin が直した", sample_questions)
-        stored = survey_world.db.get_survey_template(template.id, consistent=True)
+        stored = survey_world.template_store.get(template.id, consistent=True)
         assert stored.owner_sub == "a"
 
     def test_shared_reader_gets_403_and_stranger_404(
@@ -474,7 +466,7 @@ class TestUpdateTemplate:
             mgr.update_template(MEMBER_B, template.id, "x", sample_questions)
         with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_NOT_FOUND):
             mgr.update_template(MEMBER_C, template.id, "x", sample_questions)
-        stored = survey_world.db.get_survey_template(template.id, consistent=True)
+        stored = survey_world.template_store.get(template.id, consistent=True)
         assert stored.name == template.name
 
     def test_missing_template_is_not_found_and_not_created(
@@ -515,7 +507,7 @@ class TestUpdateTemplate:
         questions = [Question.create_free_text("あ" * 3000) for _ in range(30)]
         with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_TOO_LARGE):
             mgr.update_template(MEMBER_A, template.id, "大", questions)
-        stored = survey_world.db.get_survey_template(template.id, consistent=True)
+        stored = survey_world.template_store.get(template.id, consistent=True)
         assert stored.name == template.name
 
 
