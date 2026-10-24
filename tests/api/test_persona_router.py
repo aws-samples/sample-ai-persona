@@ -1801,6 +1801,35 @@ class TestPersonaDetailAuthz:
         # the region's content only, not the region itself (innerHTML swap)
         assert 'id="persona-detail-header"' not in response.text
 
+    def test_detail_header_and_update_show_the_same_owner_line(self, client, world):
+        """The page, the header reload and the edit swap draw the same rows (R-07)."""
+        import re
+
+        world.add("p1", A_SUB, {"plan"})
+        client = _login(client, "a")
+        form = dict(TestPersonaUpdateValidationPreservesInput._SUBMITTED)
+
+        def owner_line(html: str) -> str:
+            line = re.search(
+                r'<p[^>]*data-testid="persona-owner-line"[^>]*>(.*?)</p>', html, re.S
+            )
+            assert line, "owner line missing"
+            return " ".join(line.group(1).split())
+
+        lines = [
+            owner_line(client.get("/persona/p1").text),
+            owner_line(
+                client.get("/persona/p1/header", headers={"HX-Request": "true"}).text
+            ),
+            owner_line(
+                client.put(
+                    "/persona/p1", data=form, headers={"HX-Request": "true"}
+                ).text
+            ),
+        ]
+        assert lines[0] == lines[1] == lines[2]
+        assert f"所有者: 氏名-{A_SUB}" in lines[0] and "共有: 企画部" in lines[0]
+
     @pytest.mark.parametrize(("who", "expected"), [("b", 200), ("d", 404)])
     def test_header_partial_needs_read_access(self, client, world, who, expected):
         world.add("p1", A_SUB, {"sales"})
