@@ -1,6 +1,6 @@
 """
 Integration tests for Persona Manager.
-Tests the complete persona management workflow including AI service and database integration.
+Tests the persona management workflow with an in-memory persona store.
 """
 
 import pytest
@@ -13,8 +13,7 @@ from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.authz import Principal, Role
 from src.models.errors import CodedError
 from src.models.persona import Persona
-from src.services.ai_service import AIService
-from src.services.persona_store import PersonaStoreError
+from src.services.persona_store import PersonaStore, PersonaStoreError
 
 #: The saver / owner and an admin (U4: saving and editing take the user).
 OWNER = Principal("local:owner@example.com", frozenset({Role.MEMBER}))
@@ -26,70 +25,26 @@ class TestPersonaManagerIntegration:
 
     @pytest.fixture
     def mock_persona_store(self):
-        """Create a mock database service for testing."""
+        """An in-memory stand-in for ``PersonaStore`` (only its real methods)."""
         personas_storage = {}
-        mock_db = Mock()
+        store = Mock(spec=PersonaStore)
 
-        # Dynamic mock implementations
-        def mock_save_persona(persona):
+        def put_new(persona):
             personas_storage[persona.id] = persona
-            return persona.id
 
-        def mock_get_persona(persona_id, consistent=False):
-            return personas_storage.get(persona_id)
-
-        def mock_get_all_personas(limit=20, cursor=None, search_all=False):
-            return list(personas_storage.values()), None
-
-        def mock_update_persona(persona):
+        def update_editable(persona):
             if persona.id in personas_storage:
                 personas_storage[persona.id] = persona
                 return True
             return False
 
-        def mock_delete_persona_returning_old(persona_id):
-            return personas_storage.pop(persona_id, None)
-
-        def mock_persona_exists(persona_id):
-            return persona_id in personas_storage
-
-        def mock_get_persona_count():
-            return len(personas_storage)
-
-        def mock_get_personas_by_name(name_pattern):
-            return [
-                p
-                for p in personas_storage.values()
-                if name_pattern.lower() in p.name.lower()
-            ]
-
-        def mock_get_personas_by_occupation(occupation_pattern):
-            return [
-                p
-                for p in personas_storage.values()
-                if occupation_pattern.lower() in p.occupation.lower()
-            ]
-
-        mock_db.put_new.side_effect = mock_save_persona
-        mock_db.get.side_effect = mock_get_persona
-        mock_db.get_all_personas.side_effect = mock_get_all_personas
-        mock_db.update_editable.side_effect = mock_update_persona
-        mock_db.delete_persona_returning_old.side_effect = (
-            mock_delete_persona_returning_old
+        store.put_new.side_effect = put_new
+        store.get.side_effect = lambda persona_id, consistent=False: (
+            personas_storage.get(persona_id)
         )
-        mock_db.persona_exists.side_effect = mock_persona_exists
-        mock_db.get_persona_count.side_effect = mock_get_persona_count
-        mock_db.get_personas_by_name.side_effect = mock_get_personas_by_name
-        mock_db.get_personas_by_occupation.side_effect = mock_get_personas_by_occupation
-        mock_db.storage = personas_storage
-
-        return mock_db
-
-    @pytest.fixture
-    def mock_ai_service(self):
-        """Create a mock AI service for testing (kept for backward compat)."""
-        mock_service = Mock(spec=AIService)
-        return mock_service
+        store.update_editable.side_effect = update_editable
+        store.storage = personas_storage
+        return store
 
     @pytest.fixture
     def persona_manager(self, mock_persona_store):

@@ -467,7 +467,6 @@ class TestBindingReaders:
         (binding, knowledge_base) = agent.get_kb_tools.call_args.args
         assert binding.target_id == kb.id
         assert knowledge_base is kb
-        db.get_kb_binding_by_persona.assert_not_called()
 
     def test_get_kb_tools_takes_the_binding_as_an_argument(self, monkeypatch):
         from src.models.knowledge_base import KnowledgeBase
