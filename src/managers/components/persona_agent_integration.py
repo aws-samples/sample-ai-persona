@@ -58,6 +58,7 @@ class PersonaAgentIntegration:
     def __init__(
         self,
         database_service: Any,
+        knowledge_base_store: Any,
         agent_service: Any,
         dataset_analysis_service: Any,
         binding_store: Any = None,
@@ -65,7 +66,8 @@ class PersonaAgentIntegration:
     ) -> None:
         """
         Args:
-            database_service: Reads datasets and knowledge bases.
+            database_service: Reads datasets.
+            knowledge_base_store: Reads the bound knowledge base.
             agent_service: Builds the KB tool and the agent.
             dataset_analysis_service: Builds the dataset tools.
             binding_store: ``PersonaBindingStore`` (U5): bindings are read
@@ -74,6 +76,7 @@ class PersonaAgentIntegration:
                 Without it no organization asset is handed over (fail closed).
         """
         self._database_service = database_service
+        self._knowledge_bases = knowledge_base_store
         self._agent_service = agent_service
         self._dataset_analysis_service = dataset_analysis_service
         self._binding_store = binding_store
@@ -240,7 +243,7 @@ class PersonaAgentIntegration:
                 (b for b in bindings if b.target_type is BindingTargetType.KB), None
             )
             knowledge_base = (
-                self._database_service.get_knowledge_base(kb_binding.target_id)
+                self._knowledge_bases.get(kb_binding.target_id)
                 if kb_binding is not None
                 else None
             )

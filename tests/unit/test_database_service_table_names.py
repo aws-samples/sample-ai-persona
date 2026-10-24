@@ -30,13 +30,13 @@ def test_given_physical_names_are_used():
         region=REGION,
         table_names={
             "Personas": "AIPersonaDev-Data-Personas1",
-            "KnowledgeBases": "AIPersonaDev-Data-Kb2",
+            "Surveys": "AIPersonaDev-Data-Surveys2",
         },
     )
     assert service.personas_table == "AIPersonaDev-Data-Personas1"
-    assert service.kb_table == "AIPersonaDev-Data-Kb2"
+    assert service.surveys_table == "AIPersonaDev-Data-Surveys2"
     # 渡されなかったものは接頭辞から組み立てる
-    assert service.surveys_table == "Local_Surveys"
+    assert service.datasets_table == "Local_Datasets"
 
 
 def test_factory_passes_the_configured_names(monkeypatch):

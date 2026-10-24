@@ -69,6 +69,7 @@ from .shared.image_normalize import (
 )
 
 if TYPE_CHECKING:
+    from ..services.knowledge_base_store import KnowledgeBaseStore
     from ..services.persona_binding_store import PersonaBindingStore
     from ..services.persona_candidate_store import PersonaCandidateStore
     from ..services.s3_service import S3Service
@@ -205,6 +206,7 @@ class PersonaManager:
     def __init__(
         self,
         database_service: Optional[DatabaseService] = None,
+        knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         s3_service: Optional["S3Service"] = None,
         resource_sharing: Optional[ResourceSharing] = None,
         owners: Optional[OwnerDirectory] = None,
@@ -219,6 +221,8 @@ class PersonaManager:
         """
         Args:
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
+            knowledge_base_store: Registered knowledge bases, the choices of a
+                KB binding (optional, built on first use)
             s3_service: S3 service for avatar images (optional, uses singleton if not provided;
                 None when S3_BUCKET_NAME is not configured, which disables avatar upload)
             resource_sharing: Sharing component (optional; the per-task
@@ -252,6 +256,7 @@ class PersonaManager:
         self._sharing = resource_sharing
         self._owner_directory = owners
         self._binding_store = binding_store
+        self._kb_store = knowledge_base_store
         self._lookup = resource_lookup
         self._memory = memory_service
         self._preview = preview_service
@@ -278,6 +283,12 @@ class PersonaManager:
         if self._binding_store is None:
             self._binding_store = service_factory.get_persona_binding_store()
         return self._binding_store
+
+    @property
+    def _knowledge_bases(self) -> "KnowledgeBaseStore":
+        if self._kb_store is None:
+            self._kb_store = service_factory.get_knowledge_base_store()
+        return self._kb_store
 
     @property
     def _resource_lookup(self) -> ResourceLookup:
@@ -1381,7 +1392,7 @@ class PersonaManager:
                 )
         choices: List[KnowledgeBase] = []
         if manageable:
-            kbs = self.database_service.get_all_knowledge_bases()
+            kbs = self._knowledge_bases.list_all()
             usable = self._asset_targets(
                 ResourceType.KNOWLEDGE_BASE, [kb.id for kb in kbs]
             )

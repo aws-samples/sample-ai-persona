@@ -154,8 +154,9 @@ def _integration(
         ]
     )
     db = Mock()
-    db.get_knowledge_base.return_value = kb
     db.get_dataset.side_effect = lambda did: Mock(id=did)
+    kbs = Mock()
+    kbs.get.return_value = kb
     agent = Mock()
     agent.get_kb_tools.side_effect = lambda b, k: (
         (["kb-tool"], {"name": "社内KB", "description": "", "metadata_filters": {}})
@@ -183,6 +184,7 @@ def _integration(
     )
     component = PersonaAgentIntegration(
         database_service=db,
+        knowledge_base_store=kbs,
         agent_service=agent,
         dataset_analysis_service=datasets,
         binding_store=store,
@@ -334,7 +336,7 @@ class _ScopedKbWorld:
         self.bindings = _bindings_store(world)
         self.bindings.put(PersonaBinding.for_kb("p1", self.kb.id, now=_NOW))
         self.settings = SettingsManager(
-            database_service=world.db, departments=world.departments
+            knowledge_base_store=world.kb_store, departments=world.departments
         )
         self.agent = Mock()
         self.agent.get_kb_tools.side_effect = lambda b, k: (
@@ -347,6 +349,7 @@ class _ScopedKbWorld:
         )
         self.component = PersonaAgentIntegration(
             database_service=world.db,
+            knowledge_base_store=world.kb_store,
             agent_service=self.agent,
             dataset_analysis_service=Mock(),
             binding_store=self.bindings,

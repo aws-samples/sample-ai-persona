@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 from unittest.mock import Mock
 
+from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.managers.components.resource_lookup import ResourceLookup
 from src.managers.persona_manager import PersonaManager
 from src.models.authz import AccessTarget, Principal, ResourceType, Role
@@ -137,8 +138,9 @@ class World:
         self.db.get_all_datasets.side_effect = lambda: [
             d for d in self.datasets.values() if not d.owner_persona_id
         ]
-        self.db.get_all_knowledge_bases.side_effect = lambda: list(self.kbs.values())
-        self.db.get_knowledge_base.side_effect = lambda kid: self.kbs.get(kid)
+        self.kb_store = Mock(spec=KnowledgeBaseStore)
+        self.kb_store.list_all.side_effect = lambda: list(self.kbs.values())
+        self.kb_store.get.side_effect = lambda kid, consistent=False: self.kbs.get(kid)
         self.db.update_persona_avatar.return_value = True
         self.s3 = Mock()
         self.s3.path_of.side_effect = lambda key: f"s3://bucket/{key}"
@@ -224,6 +226,7 @@ class World:
     def manager(self, **overrides: Any) -> PersonaManager:
         options: dict[str, Any] = {
             "database_service": self.db,
+            "knowledge_base_store": self.kb_store,
             "s3_service": self.s3,
             "resource_sharing": self.sharing,
             "owners": Mock(),
