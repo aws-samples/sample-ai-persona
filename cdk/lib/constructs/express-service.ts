@@ -195,7 +195,9 @@ export class ExpressService extends Construct {
     });
 
     // Expose managed resource ARNs for manual Cognito auth setup
-    this.endpoint = this.service.attrEndpoint;
+    // Endpoint は `https://` 付きで返ることがあり、CloudFront のオリジン名にコロンは使えない。
+    // 付いていてもいなくてもホスト名だけにする（2026-10-23 の dev デプロイ失敗）
+    this.endpoint = cdk.Fn.join('', cdk.Fn.split('https://', this.service.attrEndpoint));
     this.loadBalancerArn = this.service.attrEcsManagedResourceArnsIngressPathLoadBalancerArn;
     this.listenerArn = this.service.attrEcsManagedResourceArnsIngressPathListenerArn;
     this.certificateArn = this.service.attrEcsManagedResourceArnsIngressPathCertificateArn;

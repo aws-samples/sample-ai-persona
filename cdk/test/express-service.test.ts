@@ -11,9 +11,9 @@ import { ExpressService, ExpressServiceProps } from '../lib/constructs/express-s
  * true / false / 未指定（既定 true・"undefined" にならないこと）の3ケースを確認する。
  */
 
-function synthEnvironment(
+function buildService(
   overrides: Partial<ExpressServiceProps>,
-): { Name: string; Value: string }[] {
+): { stack: cdk.Stack; service: ExpressService } {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'TestStack', {
     env: { account: '123456789012', region: 'us-east-1' },
@@ -26,7 +26,7 @@ function synthEnvironment(
     partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
   });
 
-  new ExpressService(stack, 'Service', {
+  const service = new ExpressService(stack, 'Service', {
     vpc,
     ecrRepository,
     envName: 'test',
@@ -42,7 +42,13 @@ function synthEnvironment(
     batchInferenceModelId: 'batch-model',
     ...overrides,
   });
+  return { stack, service };
+}
 
+function synthEnvironment(
+  overrides: Partial<ExpressServiceProps>,
+): { Name: string; Value: string }[] {
+  const { stack } = buildService(overrides);
   const template = Template.fromStack(stack);
   const resources = template.toJSON().Resources as Record<string, any>;
   for (const key of Object.keys(resources)) {
@@ -74,5 +80,48 @@ describe('ExpressService ENABLE_DATASET_ANALYSIS wiring', () => {
     const value = datasetAnalysisValue(env);
     expect(value).toBe('true');
     expect(value).not.toBe('undefined');
+  });
+});
+
+/**
+ * Express の Endpoint 属性は `https://` 付きで返ることがある（2026-10-23 の dev デプロイで
+ * CloudFront が "origin name cannot contain a colon" で失敗した）。CloudFront のオリジンに
+ * 渡す endpoint は、付いていてもいなくてもホスト名だけになることを検証する。
+ */
+
+/** Evaluate the Fn::Join / Fn::Split / Fn::GetAtt subset with a given Endpoint value. */
+function evaluate(expr: any, endpoint: string): any {
+  if (typeof expr === 'string') return expr;
+  if (expr['Fn::GetAtt']) return endpoint;
+  if (expr['Fn::Split']) {
+    const [delimiter, source] = expr['Fn::Split'];
+    return (evaluate(source, endpoint) as string).split(delimiter);
+  }
+  if (expr['Fn::Join']) {
+    const [delimiter, parts] = expr['Fn::Join'];
+    const values = Array.isArray(parts) ? parts.map((p: any) => evaluate(p, endpoint)) : evaluate(parts, endpoint);
+    return values.flat().join(delimiter);
+  }
+  throw new Error(`unsupported expression: ${JSON.stringify(expr)}`);
+}
+
+describe('ExpressService endpoint', () => {
+  function endpointExpression(): any {
+    const { stack, service } = buildService({});
+    new cdk.CfnOutput(stack, 'EndpointOut', { value: service.endpoint });
+    return Template.fromStack(stack).toJSON().Outputs.EndpointOut.Value;
+  }
+
+  test('Endpoint 属性を参照している', () => {
+    expect(JSON.stringify(endpointExpression())).toContain('"Endpoint"');
+  });
+
+  test.each([
+    ['https:// 付き', 'https://ai-xxxx.ecs.us-east-1.on.aws'],
+    ['ホスト名だけ', 'ai-xxxx.ecs.us-east-1.on.aws'],
+  ])('%s → ホスト名だけになる', (_label, raw) => {
+    const host = evaluate(endpointExpression(), raw);
+    expect(host).toBe('ai-xxxx.ecs.us-east-1.on.aws');
+    expect(host).not.toContain(':');
   });
 });
