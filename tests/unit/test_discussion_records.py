@@ -235,7 +235,7 @@ def records(store, files) -> DiscussionRecords:
     )
     bodies = Mock()
     # 参加者のカード（BR7.3）: 読めるペルソナの本体だけを返す
-    bodies.get_personas_by_ids.side_effect = lambda ids: {
+    bodies.get_many.side_effect = lambda ids: {
         i: _participant_persona(i) for i in ids if i in ("p1", "p2")
     }
     participants = ParticipantReader(lookup, bodies)
@@ -415,7 +415,7 @@ class TestGet:
         assert cards["p1"] is not None and cards["p1"].occupation == "会社員"
         assert cards["p2"] is not None
         assert cards["p3"] is None
-        records.persona_bodies.get_personas_by_ids.assert_called_once_with(["p1", "p2"])
+        records.persona_bodies.get_many.assert_called_once_with(["p1", "p2"])
 
     def test_unreadable_participants_bodies_are_not_read(self, records, store):
         saved = _saved(records)
@@ -425,7 +425,7 @@ class TestGet:
         assert "p1" not in readable
         for p in view.participants:
             assert (p.persona is not None) == (p.status == "readable")
-        (ids,), _ = records.persona_bodies.get_personas_by_ids.call_args
+        (ids,), _ = records.persona_bodies.get_many.call_args
         assert ids == readable
 
     def test_shared_reader_sees_it_but_cannot_manage(self, records, store):

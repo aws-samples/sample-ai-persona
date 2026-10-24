@@ -213,9 +213,8 @@ def mock_agent_service() -> Mock:
 def mock_database_service() -> Mock:
     """モック化されたDatabaseServiceを提供"""
     mock = Mock()
-    mock.save_persona.return_value = "test-persona-id"
-    mock.get_persona.return_value = None
-    mock.get_all_personas.return_value = []
+    mock.put_new.return_value = None
+    mock.get.return_value = None
     mock.save_discussion.return_value = "test-discussion-id"
     mock.get_discussion.return_value = None
     mock.get_discussions.return_value = []
@@ -244,7 +243,7 @@ def persona_manager(mock_database_service) -> Generator:
     """テスト用PersonaManagerを提供"""
     from src.managers.persona_manager import PersonaManager
 
-    manager = PersonaManager(database_service=mock_database_service)
+    manager = PersonaManager(persona_store=mock_database_service)
     yield manager
 
 

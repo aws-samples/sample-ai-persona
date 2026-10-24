@@ -75,7 +75,7 @@ class InterviewWorld:
             resource_lookup=w.lookup,
         )
         self.personas = PersonaManager(
-            database_service=Mock(), participants=w.participants
+            persona_store=Mock(), participants=w.participants
         )
         self.files = Mock()
 

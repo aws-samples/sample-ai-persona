@@ -52,7 +52,7 @@ class StubBodies:
         self.calls: list[list[str]] = []
         self.error = error
 
-    def get_personas_by_ids(self, ids: list[str]) -> dict[str, Persona]:
+    def get_many(self, ids: list[str]) -> dict[str, Persona]:
         self.calls.append(list(ids))
         if self.error is not None:
             raise self.error

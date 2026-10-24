@@ -14,6 +14,7 @@ from typing import Any, Sequence
 from unittest.mock import Mock
 
 from src.services.dataset_store import DatasetStore
+from src.services.persona_store import PersonaStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.managers.components.resource_lookup import ResourceLookup
 from src.managers.persona_manager import PersonaManager
@@ -126,11 +127,9 @@ class World:
         #: Usage scope of organization assets (U7 adds the column).
         self.scopes: dict[str, frozenset[str]] = {}
         self.bindings = FakeBindingStore()
-        self.db = Mock()
-        self.db.get_persona.side_effect = (
-            lambda pid, consistent=False: self.personas.get(pid)
-        )
-        self.db.save_persona.side_effect = self._save_persona
+        self.db = Mock(spec=PersonaStore)
+        self.db.get.side_effect = lambda pid, consistent=False: self.personas.get(pid)
+        self.db.put_new.side_effect = self._save_persona
         self.dataset_store = Mock(spec=DatasetStore)
         self.dataset_store.get.side_effect = (
             lambda did, consistent=False: self.datasets.get(did)
@@ -143,7 +142,7 @@ class World:
         self.kb_store = Mock(spec=KnowledgeBaseStore)
         self.kb_store.list_all.side_effect = lambda: list(self.kbs.values())
         self.kb_store.get.side_effect = lambda kid, consistent=False: self.kbs.get(kid)
-        self.db.update_persona_avatar.return_value = True
+        self.db.update_avatar.return_value = True
         self.s3 = Mock()
         self.s3.path_of.side_effect = lambda key: f"s3://bucket/{key}"
         self.s3.key_of.side_effect = lambda path: path.removeprefix("s3://bucket/")
@@ -195,9 +194,8 @@ class World:
         self.scopes[kb.id] = frozenset(scope)
         return kb
 
-    def _save_persona(self, persona: Persona) -> str:
+    def _save_persona(self, persona: Persona) -> None:
         self.personas[persona.id] = persona
-        return persona.id
 
     def _save_dataset(self, dataset: Dataset) -> None:
         self.datasets[dataset.id] = dataset
@@ -226,7 +224,7 @@ class World:
 
     def manager(self, **overrides: Any) -> PersonaManager:
         options: dict[str, Any] = {
-            "database_service": self.db,
+            "persona_store": self.db,
             "knowledge_base_store": self.kb_store,
             "dataset_store": self.dataset_store,
             "s3_service": self.s3,

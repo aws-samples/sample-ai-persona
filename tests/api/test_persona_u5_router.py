@@ -351,8 +351,8 @@ def test_avatar_redirect_reads_the_persona_once(client, u5, monkeypatch):
     assert response.headers["location"] == "https://signed/a.webp"
     # 本体の読みは強い整合性の 1 回だけ（ほかの読み・判定の読み取りを足さない）
     reads = [name for name, _args, _kwargs in u5.world.db.method_calls]
-    assert reads == ["get_persona"]
-    assert u5.world.db.get_persona.call_args.kwargs == {"consistent": True}
+    assert reads == ["get"]
+    assert u5.world.db.get.call_args.kwargs == {"consistent": True}
     assert lookups.count(ResourceType.PERSONA) == 0
     u5.world.s3.generate_presigned_url.assert_called_once()
     u5.world.s3.download_file.assert_not_called()  # 画像の中身を読まない

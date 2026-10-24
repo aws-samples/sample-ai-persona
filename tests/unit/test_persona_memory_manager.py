@@ -72,7 +72,7 @@ def _record_response(record_id: str, namespace: str) -> dict[str, Any]:
 @pytest.fixture
 def mock_db():
     mock = Mock()
-    mock.get_persona.return_value = Persona.create_new(
+    mock.get.return_value = Persona.create_new(
         name="テスト",
         age=30,
         occupation="会社員",
@@ -93,7 +93,7 @@ class _PersonaReader:
     def read(self, ids, deadline):
         found = {}
         for i in ids:
-            persona = self.db.get_persona(i)
+            persona = self.db.get(i)
             if persona is not None:
                 found[i] = AccessTarget(
                     ResourceType.PERSONA,
@@ -176,7 +176,7 @@ class TestAddKnowledge:
             manager.add_knowledge(OWNER, "p1", "topic", "x" * 10001)
 
     def test_persona_not_found(self, manager, mock_db):
-        mock_db.get_persona.return_value = None
+        mock_db.get.return_value = None
         with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.add_knowledge(OWNER, "p1", "topic", "content")
 
@@ -278,7 +278,7 @@ class TestGetMemories:
             manager.get_memories(OWNER, "")
 
     def test_persona_not_found(self, manager, mock_db):
-        mock_db.get_persona.return_value = None
+        mock_db.get.return_value = None
         with raises_code(PersonaMemoryManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.get_memories(OWNER, "p1")
 
@@ -516,12 +516,10 @@ SHARED_READER = Principal(
 
 @pytest.fixture
 def shared_db(mock_db):
-    persona = mock_db.get_persona.return_value
+    persona = mock_db.get.return_value
     from dataclasses import replace
 
-    mock_db.get_persona.return_value = replace(
-        persona, shared_group_ids=frozenset({"sales"})
-    )
+    mock_db.get.return_value = replace(persona, shared_group_ids=frozenset({"sales"}))
     return mock_db
 
 

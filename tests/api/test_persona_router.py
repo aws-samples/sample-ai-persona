@@ -1564,7 +1564,7 @@ def real_manager(world):
 
     # 紐付けと長期記憶は偽物・なしにする（削除の後始末で本物の AWS に触れない）
     manager = PersonaManager(
-        database_service=world.db,
+        persona_store=world.db,
         s3_service=Mock(),
         resource_sharing=sharing,
         owners=owners,

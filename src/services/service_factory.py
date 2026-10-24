@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from .knowledge_base_store import KnowledgeBaseStore
     from .persona_binding_store import PersonaBindingStore
     from .persona_candidate_store import PersonaCandidateStore
+    from .persona_store import PersonaStore
     from .resource_share_store import ResourceShareStore
     from .survey_store import SurveyStore
     from .survey_template_store import SurveyTemplateStore
@@ -83,6 +84,7 @@ class ServiceFactory:
         self._dataset_store: Optional["DatasetStore"] = None
         self._survey_template_store: Optional["SurveyTemplateStore"] = None
         self._survey_store: Optional["SurveyStore"] = None
+        self._persona_store: Optional["PersonaStore"] = None
         self._knowledge_base_store: Optional["KnowledgeBaseStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
         self._discussion_store: Optional["DiscussionStore"] = None
@@ -531,6 +533,20 @@ class ServiceFactory:
                         table_name=config.table_name("Datasets"),
                     )
         return self._dataset_store
+
+    def get_persona_store(self) -> "PersonaStore":
+        """Return the store of persona bodies (U4, U5)."""
+        if self._persona_store is None:
+            with self._lock:
+                if self._persona_store is None:
+                    from .persona_store import PersonaStore
+
+                    self.logger.info("Creating new PersonaStore instance")
+                    self._persona_store = PersonaStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.table_name("Personas"),
+                    )
+        return self._persona_store
 
     def get_survey_store(self) -> "SurveyStore":
         """Return the store of survey bodies (U7)."""
