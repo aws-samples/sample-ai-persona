@@ -194,7 +194,7 @@ def _agent_manager(world: World) -> AgentDiscussionManager:
     ai.extract_insights.return_value = []
     return AgentDiscussionManager(
         agent_service=agent_service,
-        database_service=Mock(),
+        dataset_store=Mock(),
         dataset_analysis_service=Mock(),
         file_attachments=world.files,
         binding_store=Mock(list_for_persona=Mock(return_value=[])),
@@ -452,7 +452,7 @@ class TestBindingReaders:
                 return {i: AccessTarget(ResourceType.KNOWLEDGE_BASE, i) for i in ids}
 
         component = pai.PersonaAgentIntegration(
-            database_service=db,
+            dataset_store=db,
             knowledge_base_store=kbs,
             agent_service=agent,
             dataset_analysis_service=Mock(),

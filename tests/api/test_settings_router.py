@@ -70,7 +70,7 @@ class TestAdminScreens:
         kb = aw.world.knowledge_base()
         assert client.delete(f"/settings/datasets/{dataset.id}").status_code == 200
         assert client.delete(f"/settings/knowledge-bases/{kb.id}").status_code == 200
-        assert aw.world.db.get_dataset(dataset.id) is None
+        assert aw.world.dataset_store.get(dataset.id, consistent=True) is None
         assert aw.world.kb_store.get(kb.id, consistent=True) is None
 
 
@@ -110,9 +110,9 @@ class TestScopeDialog:
         assert response.status_code == 200
         assert "dialogClose" in response.headers["HX-Trigger"]
         assert "listReload" in response.headers["HX-Trigger"]
-        assert aw.world.db.get_dataset(dataset.id).shared_group_ids == frozenset(
-            {"plan"}
-        )
+        assert aw.world.dataset_store.get(
+            dataset.id, consistent=True
+        ).shared_group_ids == frozenset({"plan"})
 
     def test_save_for_a_knowledge_base(self, aw, client):
         kb = aw.world.knowledge_base()
@@ -132,7 +132,10 @@ class TestScopeDialog:
             data={"departments": "unknown"},
         )
         assert response.status_code == 400
-        assert aw.world.db.get_dataset(dataset.id).shared_group_ids == frozenset()
+        assert (
+            aw.world.dataset_store.get(dataset.id, consistent=True).shared_group_ids
+            == frozenset()
+        )
 
     def test_missing_asset_is_404(self, aw, client):
         assert client.get("/settings/datasets/missing/scope").status_code == 404
@@ -205,7 +208,7 @@ def test_member_gets_404_on_every_settings_route_and_nothing_changes(
     )
 
     assert response.status_code == 404
-    assert aw.world.db.get_dataset(dataset.id) == dataset
+    assert aw.world.dataset_store.get(dataset.id, consistent=True) == dataset
     assert aw.world.kb_store.get(kb.id, consistent=True).shared_group_ids == frozenset()
     assert len(aw.world.kb_store.list_all()) == 1
     assert "arn:x" not in response.text

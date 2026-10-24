@@ -50,7 +50,6 @@ from ..services.agent_service import (
     AgentInitializationError,
     AgentCommunicationError,
 )
-from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from .components import discussion_validation
 from .components.access_policy import AccessPolicy
@@ -75,6 +74,7 @@ from .shared.model_validation import (
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
     from ..services.persona_binding_store import PersonaBindingStore
+    from ..services.dataset_store import DatasetStore
     from ..services.knowledge_base_store import KnowledgeBaseStore
 
 
@@ -115,7 +115,7 @@ class AgentDiscussionManager:
     def __init__(
         self,
         agent_service: AgentService | None = None,
-        database_service: Optional[DatabaseService] = None,
+        dataset_store: Optional["DatasetStore"] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
         knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         file_attachments: Optional[FileAttachments] = None,
@@ -130,7 +130,7 @@ class AgentDiscussionManager:
 
         Args:
             agent_service: Agent service (the singleton when omitted)
-            database_service: Database service (the singleton when omitted)
+            dataset_store: Datasets for the dataset tools (the singleton when omitted)
             dataset_analysis_service: Dataset tools (the singleton when omitted)
             knowledge_base_store: Registered knowledge bases for the KB tool
                 (the singleton when omitted)
@@ -143,14 +143,12 @@ class AgentDiscussionManager:
         """
         self.logger = logging.getLogger(__name__)
         self.agent_service = agent_service or service_factory.get_agent_service()
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
+        self.dataset_store = dataset_store or service_factory.get_dataset_store()
         self.dataset_analysis_service = (
             dataset_analysis_service or service_factory.get_dataset_analysis_service()
         )
         self._agent_integration = PersonaAgentIntegration(
-            database_service=self.database_service,
+            dataset_store=self.dataset_store,
             knowledge_base_store=knowledge_base_store
             or service_factory.get_knowledge_base_store(),
             agent_service=self.agent_service,

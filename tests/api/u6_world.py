@@ -103,7 +103,7 @@ class ApiWorld:
         )
         self.agent_discussions = AgentDiscussionManager(
             agent_service=self.agent_service,
-            database_service=Mock(),
+            dataset_store=Mock(),
             dataset_analysis_service=Mock(),
             file_attachments=w.files,
             binding_store=Mock(list_for_persona=Mock(return_value=[])),

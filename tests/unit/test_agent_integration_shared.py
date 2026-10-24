@@ -154,7 +154,7 @@ def _integration(
         ]
     )
     db = Mock()
-    db.get_dataset.side_effect = lambda did: Mock(id=did)
+    db.get.side_effect = lambda did: Mock(id=did)
     kbs = Mock()
     kbs.get.return_value = kb
     agent = Mock()
@@ -183,7 +183,7 @@ def _integration(
         sample_rate=0.0,
     )
     component = PersonaAgentIntegration(
-        database_service=db,
+        dataset_store=db,
         knowledge_base_store=kbs,
         agent_service=agent,
         dataset_analysis_service=datasets,
@@ -348,7 +348,7 @@ class _ScopedKbWorld:
             else ([], None)
         )
         self.component = PersonaAgentIntegration(
-            database_service=world.db,
+            dataset_store=world.dataset_store,
             knowledge_base_store=world.kb_store,
             agent_service=self.agent,
             dataset_analysis_service=Mock(),

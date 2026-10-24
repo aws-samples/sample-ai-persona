@@ -88,7 +88,7 @@ class TestInterviewChatIntegration:
             agent_service.create_persona_agent.side_effect = make_agent
             manager = InterviewManager(
                 agent_service=agent_service,
-                database_service=Mock(),
+                dataset_store=Mock(),
                 dataset_analysis_service=Mock(),
                 binding_store=Mock(list_for_persona=Mock(return_value=[])),
                 session_store=InterviewSessionStore(

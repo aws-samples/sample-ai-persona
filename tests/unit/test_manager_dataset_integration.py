@@ -58,7 +58,7 @@ def _component(db, ds_service, agent_service=None):
         getattr(db, "bindings", [])
     )
     return PersonaAgentIntegration(
-        database_service=db,
+        dataset_store=db,
         knowledge_base_store=Mock(),
         agent_service=agent_service or Mock(),
         dataset_analysis_service=ds_service,
@@ -81,7 +81,7 @@ class TestResolveDatasetBindings:
             _binding("p1", "ds-dup", {"user_id": "U2"}),  # 同 dataset に2 binding
             _binding("p1", "ds-ok", {"user_id": "U9"}),
         ]
-        db.get_dataset.side_effect = _dataset
+        db.get.side_effect = _dataset
         comp = _component(db, Mock())
 
         accepted, datasets = comp._resolve_dataset_bindings("p1")
@@ -94,7 +94,7 @@ class TestResolveDatasetBindings:
     def test_unique_empty_binding_keys_allowed(self):
         db = Mock()
         db.bindings = [_binding("p1", "ds-all", {})]
-        db.get_dataset.side_effect = _dataset
+        db.get.side_effect = _dataset
         comp = _component(db, Mock())
 
         accepted, _ = comp._resolve_dataset_bindings("p1")
@@ -111,7 +111,7 @@ class TestKillSwitchAndGate:
     def _db_with_binding(self):
         db = Mock()
         db.bindings = [_binding("p1", "ds-ok", {"user_id": "U1"})]
-        db.get_dataset.side_effect = _dataset
+        db.get.side_effect = _dataset
         return db
 
     def test_enabled_both_flags_builds_tools_and_prompt(self, monkeypatch):
@@ -190,19 +190,19 @@ MANAGER_CLASSES = [
 @pytest.mark.parametrize("cls", MANAGER_CLASSES)
 def test_constructor_accepts_dataset_analysis_service(cls):
     ds = Mock()
-    mgr = cls(
-        agent_service=Mock(), database_service=Mock(), dataset_analysis_service=ds
-    )
+    mgr = cls(agent_service=Mock(), dataset_store=Mock(), dataset_analysis_service=ds)
     assert mgr.dataset_analysis_service is ds
 
 
 @pytest.mark.parametrize("cls", MANAGER_CLASSES)
 def test_manager_wires_agent_integration_component(cls):
-    db, agent_svc, ds = Mock(), Mock(), Mock()
-    mgr = cls(agent_service=agent_svc, database_service=db, dataset_analysis_service=ds)
+    datasets, agent_svc, ds = Mock(), Mock(), Mock()
+    mgr = cls(
+        agent_service=agent_svc, dataset_store=datasets, dataset_analysis_service=ds
+    )
     comp = mgr._agent_integration
     assert isinstance(comp, PersonaAgentIntegration)
     # Manager の各 Service が Component に注入されていること。
-    assert comp._database_service is db
+    assert comp._datasets is datasets
     assert comp._agent_service is agent_svc
     assert comp._dataset_analysis_service is ds

@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from datetime import datetime
 from dataclasses import asdict
 
+from src.services.dataset_store import DatasetStore
 from src.models.dataset import Dataset, DatasetColumn
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange
@@ -186,7 +187,7 @@ class TestDatasetManagerSchemaAnalysis:
 
         return DatasetManager(
             survey_batch_service=Mock(),
-            database_service=Mock(),
+            dataset_store=Mock(spec=DatasetStore),
             s3_service=Mock(),
             departments=Mock(),
         )
@@ -283,7 +284,7 @@ def ds_mgr(survey_world: SurveyWorld):
 
     return DatasetManager(
         survey_batch_service=Mock(),
-        database_service=survey_world.db,
+        dataset_store=survey_world.dataset_store,
         s3_service=survey_world.s3,
         departments=survey_world.departments,
     )
@@ -383,7 +384,7 @@ class TestDatasetManagerCRUD:
 
     def test_update_of_a_missing_dataset(self, ds_mgr, survey_world):
         assert ds_mgr.update_dataset(ADMIN, "missing", name="x") is None
-        assert survey_world.raw(survey_world.db.datasets_table, "missing") is None
+        assert survey_world.raw(survey_world.datasets_table, "missing") is None
 
     def test_scope_change_then_rename_both_stay(self, ds_mgr, survey_world):
         dataset = survey_world.dataset()
@@ -448,7 +449,7 @@ class TestDatasetScope:
             ds_mgr.update_scope(
                 ADMIN, "missing", AssetScopeChange(add=frozenset({"sales"}))
             )
-        assert survey_world.raw(survey_world.db.datasets_table, "missing") is None
+        assert survey_world.raw(survey_world.datasets_table, "missing") is None
 
     def test_member_in_scope_can_then_use_it(self, ds_mgr, survey_world):
         """利用範囲の変更は次の判定から効く（AccessPolicy.can_use_asset、NFR9.36）。"""

@@ -743,7 +743,7 @@ def test_u6_interview_sessions(actor, state, expected):
     world = World()
     manager = InterviewManager(
         agent_service=Mock(),
-        database_service=Mock(),
+        dataset_store=Mock(),
         dataset_analysis_service=Mock(),
         binding_store=Mock(),
         session_store=store,

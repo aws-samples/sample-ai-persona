@@ -34,6 +34,7 @@ from src.models.uploaded_file import AttachResult
 from src.services.authz_lookup_service import AuthzLookupService, LookupTable
 from src.services.custom_persona_data_store import CustomPersonaDataStore
 from src.services.database_service import DatabaseService
+from src.services.dataset_store import DatasetStore
 from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.services.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
@@ -93,6 +94,10 @@ class SurveyWorld:
         self.db = DatabaseService(table_prefix="U7", region=REGION)
         self.client = self.db.dynamodb_client
         self.kb_table = "U7_KnowledgeBases"
+        self.datasets_table = "U7_Datasets"
+        self.dataset_store = DatasetStore(
+            region=REGION, table_name=self.datasets_table, client=self.client
+        )
         self.kb_store = KnowledgeBaseStore(
             region=REGION, table_name=self.kb_table, client=self.client
         )
@@ -127,7 +132,7 @@ class SurveyWorld:
                 ResourceType.SURVEY_TEMPLATE, self.db.survey_templates_table, "name"
             ),
             LookupTable(ResourceType.SURVEY, self.db.surveys_table, "name"),
-            LookupTable(ResourceType.DATASET, self.db.datasets_table, "name"),
+            LookupTable(ResourceType.DATASET, self.datasets_table, "name"),
             LookupTable(ResourceType.KNOWLEDGE_BASE, self.kb_table, "name"),
             LookupTable(
                 ResourceType.CUSTOM_PERSONA_DATA,
@@ -167,7 +172,7 @@ class SurveyWorld:
 
         table(self.db.survey_templates_table, owner_index=True)
         table(self.db.surveys_table, owner_index=True)
-        table(self.db.datasets_table)
+        table(self.datasets_table)
         table(self.kb_table)
         table(self.custom_table)
         self.client.create_table(
@@ -291,10 +296,10 @@ class SurveyWorld:
             row_count=3,
             owner_persona_id=owner_persona_id,
         )
-        self.db.save_dataset(dataset)
+        self.dataset_store.put_new(dataset)
         if groups:
-            self.db.update_asset_scope(
-                "dataset", dataset.id, add=frozenset(groups), remove=frozenset()
+            self.dataset_store.update_scope(
+                dataset.id, add=frozenset(groups), remove=frozenset()
             )
         return dataset
 

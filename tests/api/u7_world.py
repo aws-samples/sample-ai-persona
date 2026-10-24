@@ -103,7 +103,7 @@ class ApiWorld:
         )
         self.settings_datasets = DatasetManager(
             survey_batch_service=self.batch,
-            database_service=world.db,
+            dataset_store=world.dataset_store,
             s3_service=world.s3,
             departments=world.departments,
         )

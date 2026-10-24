@@ -46,7 +46,7 @@ def _readable_participants() -> Mock:
 
 def _manager(**kwargs) -> AgentDiscussionManager:
     kwargs.setdefault("agent_service", Mock())
-    kwargs.setdefault("database_service", Mock())
+    kwargs.setdefault("dataset_store", Mock())
     kwargs.setdefault("dataset_analysis_service", Mock())
     kwargs.setdefault("binding_store", Mock())
     kwargs.setdefault("participants", _readable_participants())
@@ -101,29 +101,29 @@ class TestAgentDiscussionManagerInitialization:
     @patch("src.managers.agent_discussion_manager.service_factory")
     def test_initialization_success(self, mock_service_factory):
         """正常な初期化を確認"""
-        mock_db_service = Mock()
+        mock_dataset_store = Mock()
         mock_agent_service = Mock()
 
-        mock_service_factory.get_database_service.return_value = mock_db_service
+        mock_service_factory.get_dataset_store.return_value = mock_dataset_store
         mock_service_factory.get_agent_service.return_value = mock_agent_service
 
         manager = AgentDiscussionManager()
 
         assert manager is not None
-        assert manager.database_service is mock_db_service
+        assert manager.dataset_store is mock_dataset_store
         assert manager.agent_service is mock_agent_service
 
     def test_initialization_with_custom_services(self):
         """カスタムサービスでの初期化を確認"""
         mock_agent_service = Mock()
-        mock_db_service = Mock()
+        mock_dataset_store = Mock()
 
         manager = _manager(
-            agent_service=mock_agent_service, database_service=mock_db_service
+            agent_service=mock_agent_service, dataset_store=mock_dataset_store
         )
 
         assert manager.agent_service == mock_agent_service
-        assert manager.database_service == mock_db_service
+        assert manager.dataset_store == mock_dataset_store
 
 
 class TestCreatePersonaAgents:
@@ -823,7 +823,7 @@ def u6_manager(u6_world):
     ]
     manager = AgentDiscussionManager(
         agent_service=agent_service,
-        database_service=Mock(),
+        dataset_store=Mock(),
         dataset_analysis_service=Mock(),
         file_attachments=u6_world.files,
         binding_store=Mock(list_for_persona=Mock(return_value=[])),

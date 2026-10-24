@@ -27,7 +27,7 @@ from ..models.authz import Permission, Principal, ResourceType
 from ..models.dataset import Dataset, DatasetColumn
 from ..models.errors import CodedError, ErrorCode
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
-from ..services.database_service import DatabaseConditionFailed, DatabaseService
+from ..services.dataset_store import DatasetStore
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory
@@ -53,7 +53,7 @@ class DatasetManager:
     def __init__(
         self,
         survey_batch_service: Any = None,
-        database_service: Optional[DatabaseService] = None,
+        dataset_store: Optional[DatasetStore] = None,
         s3_service: Any = None,
         departments: Optional[DepartmentDirectory] = None,
     ) -> None:
@@ -61,11 +61,11 @@ class DatasetManager:
 
         Args:
             survey_batch_service: Batch service (the singleton when omitted).
-            database_service: Dataset records (the singleton when omitted).
+            dataset_store: Dataset records (the singleton when omitted).
             s3_service: The CSV files (``None`` without S3: local files).
             departments: The per-task department copy (scope choices, C4).
         """
-        self.db_service = database_service or service_factory.get_database_service()
+        self._datasets = dataset_store or service_factory.get_dataset_store()
         self.s3_service = (
             s3_service if s3_service is not None else service_factory.get_s3_service()
         )
@@ -231,14 +231,14 @@ class DatasetManager:
             row_count=row_count,
             notes=notes,
         )
-        self.db_service.save_dataset(dataset)
+        self._datasets.put_new(dataset)
         logger.info("Dataset created: %s", dataset.id)
         return dataset
 
     def get_datasets(self, principal: Principal) -> ScopedAssets[Dataset]:
         """組織資産のデータセットと利用範囲（ペルソナ専用を除く、BR5.6）"""
         self._require_manage(principal)
-        datasets = self.db_service.get_all_datasets()
+        datasets = self._datasets.list_org_assets()
         departments = self._department_directory.list_all() if datasets else []
         return ScopedAssets(
             items=datasets,
@@ -254,7 +254,7 @@ class DatasetManager:
         return self._org_dataset(dataset_id)
 
     def _org_dataset(self, dataset_id: str) -> Optional[Dataset]:
-        dataset = self.db_service.get_dataset(dataset_id, consistent=True)
+        dataset = self._datasets.get(dataset_id, consistent=True)
         if dataset is None or not dataset.is_org_asset:
             return None
         return dataset
@@ -272,7 +272,7 @@ class DatasetManager:
         self._require_manage(principal)
         if self._org_dataset(dataset_id) is None:
             return None
-        written = self.db_service.update_dataset_fields(
+        written = self._datasets.update_fields(
             dataset_id,
             updated_at=datetime.now(),
             name=name,
@@ -299,7 +299,7 @@ class DatasetManager:
                 logger.warning("Failed to delete S3 file: %s", type(e).__name__)
 
         # DB削除
-        self.db_service.delete_dataset(dataset_id)
+        self._datasets.delete(dataset_id)
         logger.info("Dataset deleted: %s", dataset_id)
         return True
 
@@ -341,14 +341,12 @@ class DatasetManager:
                 "a department that does not exist was sent",
                 code=ErrorCode.SHARE_SCOPE_INVALID,
             )
-        try:
-            self.db_service.update_asset_scope(
-                "dataset", dataset_id, add=change.add, remove=change.remove
-            )
-        except DatabaseConditionFailed as e:
+        if not self._datasets.update_scope(
+            dataset_id, add=change.add, remove=change.remove
+        ):
             raise DatasetManagerError(
                 "no such dataset", code=ErrorCode.DATASET_NOT_FOUND
-            ) from e
+            )
         log_event(
             "asset.scope_changed",
             resource_type=_DATASET.value,

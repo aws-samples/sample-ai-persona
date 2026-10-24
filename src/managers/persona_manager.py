@@ -69,6 +69,7 @@ from .shared.image_normalize import (
 )
 
 if TYPE_CHECKING:
+    from ..services.dataset_store import DatasetStore
     from ..services.knowledge_base_store import KnowledgeBaseStore
     from ..services.persona_binding_store import PersonaBindingStore
     from ..services.persona_candidate_store import PersonaCandidateStore
@@ -207,6 +208,7 @@ class PersonaManager:
         self,
         database_service: Optional[DatabaseService] = None,
         knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
+        dataset_store: Optional["DatasetStore"] = None,
         s3_service: Optional["S3Service"] = None,
         resource_sharing: Optional[ResourceSharing] = None,
         owners: Optional[OwnerDirectory] = None,
@@ -223,6 +225,9 @@ class PersonaManager:
             database_service: Database service instance for persistence (optional, uses singleton if not provided)
             knowledge_base_store: Registered knowledge bases, the choices of a
                 KB binding (optional, built on first use)
+            dataset_store: Registered datasets: the choices of a dataset
+                binding and the persona-dedicated ones (optional, built on
+                first use)
             s3_service: S3 service for avatar images (optional, uses singleton if not provided;
                 None when S3_BUCKET_NAME is not configured, which disables avatar upload)
             resource_sharing: Sharing component (optional; the per-task
@@ -257,6 +262,7 @@ class PersonaManager:
         self._owner_directory = owners
         self._binding_store = binding_store
         self._kb_store = knowledge_base_store
+        self._dataset_store = dataset_store
         self._lookup = resource_lookup
         self._memory = memory_service
         self._preview = preview_service
@@ -283,6 +289,12 @@ class PersonaManager:
         if self._binding_store is None:
             self._binding_store = service_factory.get_persona_binding_store()
         return self._binding_store
+
+    @property
+    def _datasets(self) -> "DatasetStore":
+        if self._dataset_store is None:
+            self._dataset_store = service_factory.get_dataset_store()
+        return self._dataset_store
 
     @property
     def _knowledge_bases(self) -> "KnowledgeBaseStore":
@@ -834,14 +846,14 @@ class PersonaManager:
         for binding in bindings:
             if not binding.is_dataset:
                 continue
-            dataset = self.database_service.get_dataset(binding.target_id)
+            dataset = self._datasets.get(binding.target_id)
             if dataset is not None and dataset.is_dedicated_to(persona_id):
                 found.append(dataset)
         return found
 
     def _delete_dedicated_dataset(self, dataset: Dataset) -> None:
         """Delete a dedicated dataset's registration and CSV (raises on failure)."""
-        self.database_service.delete_dataset(dataset.id)
+        self._datasets.delete(dataset.id)
         if self.s3_service is not None and dataset.s3_path.startswith("s3://"):
             self.s3_service.delete_file(dataset.s3_path)
 
@@ -1485,7 +1497,7 @@ class PersonaManager:
         if manageable:
             bound = {b.target_id for b in bindings}
             datasets = [
-                d for d in self.database_service.get_all_datasets() if d.id not in bound
+                d for d in self._datasets.list_org_assets() if d.id not in bound
             ]
             usable = self._asset_targets(ResourceType.DATASET, [d.id for d in datasets])
             choices = [
@@ -1577,7 +1589,7 @@ class PersonaManager:
             )
         self.logger.info(f"Deleted dataset binding: persona={persona_id}")
         try:
-            dataset = self.database_service.get_dataset(dataset_id)
+            dataset = self._datasets.get(dataset_id)
             if dataset is not None and dataset.is_dedicated_to(persona_id):
                 self._delete_dedicated_dataset(dataset)
         except Exception as e:
@@ -1661,7 +1673,7 @@ class PersonaManager:
 
     def _read_dataset(self, dataset_id: str) -> Optional[Dataset]:
         try:
-            return self.database_service.get_dataset(dataset_id)
+            return self._datasets.get(dataset_id)
         except Exception as e:
             self.logger.error("Failed to read a dataset", exc_info=True)
             raise PersonaManagerError(
@@ -1840,7 +1852,7 @@ class PersonaManager:
         registered = False
         try:
             copied = self.s3_service.copy_object(behavior.temp_s3_key, dest_key)
-            self.database_service.save_dataset(
+            self._datasets.put_new(
                 Dataset.create_new(
                     name=behavior.name,
                     description=f"{behavior.data_type_label}（自動取得）",
@@ -1865,7 +1877,7 @@ class PersonaManager:
             self.logger.warning("A dedicated dataset could not be made", exc_info=True)
             try:
                 if registered:
-                    self.database_service.delete_dataset(dataset_id)
+                    self._datasets.delete(dataset_id)
                 if copied:
                     self.s3_service.delete_file(copied)
             except Exception as cleanup_error:

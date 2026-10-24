@@ -96,7 +96,7 @@ class TestManagerBuildPersonaPrompt:
         from src.managers.agent_discussion_manager import AgentDiscussionManager
 
         self.manager = AgentDiscussionManager(
-            agent_service=Mock(), database_service=Mock()
+            agent_service=Mock(), dataset_store=Mock()
         )
 
     def test_first_round_no_context(self):
@@ -201,7 +201,7 @@ class TestManagerBuildSummaryPrompt:
         from src.managers.agent_discussion_manager import AgentDiscussionManager
 
         self.manager = AgentDiscussionManager(
-            agent_service=Mock(), database_service=Mock()
+            agent_service=Mock(), dataset_store=Mock()
         )
 
     def test_summary_prompt_contains_structure(self):
@@ -268,7 +268,7 @@ class TestAgentDiscussionContextManagement:
 
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service,
-            database_service=mock_db_service,
+            dataset_store=mock_db_service,
             # U6: 発言の直前の確かめ直しは常に通す
             participants=Mock(can_read_all=Mock(return_value=True)),
         )
