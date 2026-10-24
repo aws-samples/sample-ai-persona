@@ -56,7 +56,7 @@ class TestKnowledgeFileContentLimit:
 
     @pytest.fixture
     def memory_manager(self):
-        return PersonaMemoryManager(database_service=Mock(), memory_service=Mock())
+        return PersonaMemoryManager(memory_service=Mock())
 
     def test_over_the_limit_is_rejected_with_the_lengths(self, memory_manager):
         with raises_code(
@@ -108,7 +108,6 @@ class TestPersonaKnowledgeAddition:
     @pytest.fixture
     def memory_manager(self, mock_db, mock_memory_svc):
         return PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=mock_memory_svc,
             resource_lookup=_lookup(mock_db),
         )
@@ -159,7 +158,6 @@ class TestPersonaKnowledgeAddition:
     def test_add_knowledge_memory_disabled(self, mock_db, sample_persona):
         """Test that disabled memory service raises error"""
         mgr = PersonaMemoryManager(
-            database_service=mock_db,
             memory_service=None,
             resource_lookup=_lookup(mock_db),
         )

@@ -469,9 +469,9 @@ Rate limit exceeded
 
 #### 問題: DynamoDBテーブルが見つからない
 
-**症状:**
+**症状:** ログに次のような警告が出て、画面にはデータベースのエラーが表示される。
 ```
-DatabaseError: Required DynamoDB tables not found
+get_item on personas failed: ResourceNotFoundException
 ```
 
 **解決方法:**
@@ -495,15 +495,15 @@ aws dynamodb list-tables --region $DYNAMODB_REGION | grep $DYNAMODB_TABLE_PREFIX
 #### 問題: データベース接続エラー
 
 **解決方法:**
-1. 健全性チェックとDB情報の確認
+1. アプリが使うテーブル名を表示し、それぞれの状態を確認
 ```bash
 uv run python -c "
-from src.services.service_factory import service_factory
-import json
-db = service_factory.get_database_service()
-print('健全性:', db.check_database_health())
-print(json.dumps(db.get_database_info(), indent=2, ensure_ascii=False))
+from src.config import TABLE_NAME_SETTINGS, config
+for kind in TABLE_NAME_SETTINGS:
+    print(config.table_name(kind))
 "
+aws dynamodb describe-table --table-name <表示されたテーブル名> \
+  --region $DYNAMODB_REGION --query Table.TableStatus
 ```
 
 2. 環境変数の確認

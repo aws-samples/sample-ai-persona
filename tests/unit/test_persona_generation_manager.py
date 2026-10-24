@@ -48,7 +48,6 @@ def _manager(dataset_service=None, run_side_effect=None):
         ds.build_source_tools.return_value = [Mock()]
     return mod.PersonaGenerationManager(
         agent_service=agent_service,
-        database_service=Mock(),
         dataset_analysis_service=ds,
         candidate_store=Mock(),
         s3_service=None,
@@ -222,7 +221,6 @@ class TestConstructorDI:
         ds = Mock()
         mgr = mod.PersonaGenerationManager(
             agent_service=Mock(),
-            database_service=Mock(),
             dataset_analysis_service=ds,
         )
         assert mgr.dataset_analysis_service is ds

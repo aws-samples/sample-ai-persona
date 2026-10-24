@@ -3,7 +3,7 @@
 投入時に投入者（owner_sub）を記録し、処理の関数に投入者の principal を渡す。結果は
 本人にだけ返し、他人・投入者なし・存在しないは同じ JOB_NOT_FOUND（NFR1.5）。Jobs に
 届かなければ 503 で結果を返さない（NFR9.22）。照合の結果はキャッシュしない。
-DatabaseService（書き込み）と AuthzLookupService（読み取り）はモックを注入する。
+JobStore（書き込み）と AuthzLookupService（読み取り）はモックを注入する。
 """
 
 import json

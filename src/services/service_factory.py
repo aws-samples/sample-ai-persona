@@ -9,7 +9,6 @@ from threading import Lock
 
 from .ai_service import AIService
 from .agent_service import AgentService
-from .database_service import DatabaseService
 from ..config import config
 from ..models.errors import CodedError, ErrorCode
 
@@ -65,7 +64,6 @@ class ServiceFactory:
         self.logger = logging.getLogger(__name__)
         self._ai_service: Optional[AIService] = None
         self._agent_service: Optional[AgentService] = None
-        self._database_service: Optional[DatabaseService] = None
         self._memory_service: Optional["MemoryService"] = None
         self._memory_service_attempted: bool = False
         self._s3_service: Optional["S3Service"] = None
@@ -121,28 +119,6 @@ class ServiceFactory:
                     self.logger.info("Creating new AgentService instance")
                     self._agent_service = AgentService()
         return self._agent_service
-
-    def get_database_service(self) -> DatabaseService:
-        """
-        DatabaseServiceのシングルトンインスタンスを取得
-
-        Returns:
-            DatabaseService: データベースサービスインスタンス
-        """
-        if self._database_service is None:
-            with self._lock:
-                if self._database_service is None:
-                    self.logger.info(
-                        f"Creating new DatabaseService instance "
-                        f"(region: {config.DYNAMODB_REGION}, prefix: {config.DYNAMODB_TABLE_PREFIX})"
-                    )
-                    self._database_service = DatabaseService(
-                        table_prefix=config.DYNAMODB_TABLE_PREFIX,
-                        region=config.DYNAMODB_REGION,
-                        # CDK が渡したテーブルごとの物理名（なければ接頭辞から組み立てる）
-                        table_names=config.table_names(),
-                    )
-        return self._database_service
 
     def is_memory_enabled(self) -> bool:
         """
@@ -422,7 +398,7 @@ class ServiceFactory:
         """Return the reader of authorization columns and of the Jobs table.
 
         Its DynamoDB client has the short limits of ``reliability-design.md``
-        and is separate from :meth:`get_database_service`'s client.
+        and is separate from the clients of the table stores.
         """
         if self._authz_lookup_service is None:
             with self._lock:

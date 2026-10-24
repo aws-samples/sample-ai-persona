@@ -127,9 +127,11 @@ class World:
         #: Usage scope of organization assets (U7 adds the column).
         self.scopes: dict[str, frozenset[str]] = {}
         self.bindings = FakeBindingStore()
-        self.db = Mock(spec=PersonaStore)
-        self.db.get.side_effect = lambda pid, consistent=False: self.personas.get(pid)
-        self.db.put_new.side_effect = self._save_persona
+        self.persona_store = Mock(spec=PersonaStore)
+        self.persona_store.get.side_effect = (
+            lambda pid, consistent=False: self.personas.get(pid)
+        )
+        self.persona_store.put_new.side_effect = self._save_persona
         self.dataset_store = Mock(spec=DatasetStore)
         self.dataset_store.get.side_effect = (
             lambda did, consistent=False: self.datasets.get(did)
@@ -142,7 +144,7 @@ class World:
         self.kb_store = Mock(spec=KnowledgeBaseStore)
         self.kb_store.list_all.side_effect = lambda: list(self.kbs.values())
         self.kb_store.get.side_effect = lambda kid, consistent=False: self.kbs.get(kid)
-        self.db.update_avatar.return_value = True
+        self.persona_store.update_avatar.return_value = True
         self.s3 = Mock()
         self.s3.path_of.side_effect = lambda key: f"s3://bucket/{key}"
         self.s3.key_of.side_effect = lambda path: path.removeprefix("s3://bucket/")
@@ -224,7 +226,7 @@ class World:
 
     def manager(self, **overrides: Any) -> PersonaManager:
         options: dict[str, Any] = {
-            "persona_store": self.db,
+            "persona_store": self.persona_store,
             "knowledge_base_store": self.kb_store,
             "dataset_store": self.dataset_store,
             "s3_service": self.s3,

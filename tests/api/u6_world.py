@@ -93,7 +93,6 @@ class ApiWorld:
         self.s3.generate_presigned_url.return_value = "https://signed"
         self.discussions = DiscussionManager(
             ai_service=self.ai,
-            database_service=Mock(),
             file_attachments=w.files,
             discussion_records=w.records,
             participants=w.participants,
@@ -115,7 +114,6 @@ class ApiWorld:
         self.reports = ReportManager(
             ai_service=self.ai,
             agent_service=self.agent_service,
-            database_service=Mock(),
             discussion_records=w.records,
             participants=w.participants,
         )

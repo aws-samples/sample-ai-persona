@@ -39,7 +39,6 @@ from ..models.message import Message
 from ..models.persona import Persona
 from ..models.sharing import ListTab, TabbedList
 from ..services.ai_service import AIService, AIServiceError
-from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from .components import discussion_validation
 from .components.access_policy import AccessPolicy
@@ -89,7 +88,6 @@ class DiscussionManager:
     def __init__(
         self,
         ai_service: AIService | None = None,
-        database_service: Optional[DatabaseService] = None,
         file_attachments: Optional[FileAttachments] = None,
         discussion_records: Optional[DiscussionRecords] = None,
         participants: Optional[ParticipantReader] = None,
@@ -102,7 +100,6 @@ class DiscussionManager:
 
         Args:
             ai_service: AI service (the singleton when omitted)
-            database_service: Database service (the singleton when omitted)
             file_attachments: The per-task ``FileAttachments`` (U5)
             discussion_records: The per-task ``DiscussionRecords`` (U6)
             participants: The per-task ``ParticipantReader`` (U6)
@@ -112,9 +109,6 @@ class DiscussionManager:
         """
         self.logger = logging.getLogger(__name__)
         self.ai_service = ai_service or service_factory.get_ai_service()
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
         self._attachments = file_attachments
         self._records = discussion_records
         self._reader = participants

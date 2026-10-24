@@ -77,7 +77,6 @@ def ai(world) -> Mock:
 def manager(world, ai) -> DiscussionManager:
     return DiscussionManager(
         ai_service=ai,
-        database_service=Mock(),
         file_attachments=world.files,
         discussion_records=world.records,
         participants=world.participants,

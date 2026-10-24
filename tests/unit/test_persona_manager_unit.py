@@ -43,7 +43,7 @@ class TestGeneratePersonas:
     def gen_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        return PersonaGenerationManager(agent_service=Mock())
 
     def test_invalid_count_zero(self, gen_manager):
         from src.managers.persona_generation_manager import (
@@ -111,9 +111,7 @@ class TestGeneratePersonas:
         agent_service.run_persona_generation.side_effect = GenerationCapacityError(
             "生成するデータ量が大きすぎて処理しきれませんでした。"
         )
-        gen_manager = PersonaGenerationManager(
-            agent_service=agent_service, database_service=Mock()
-        )
+        gen_manager = PersonaGenerationManager(agent_service=agent_service)
 
         with pytest.raises(PersonaGenerationCapacityError):
             gen_manager.generate(
@@ -131,7 +129,7 @@ class TestExtractFileTexts:
     def gen_manager(self):
         from src.managers.persona_generation_manager import PersonaGenerationManager
 
-        return PersonaGenerationManager(agent_service=Mock(), database_service=Mock())
+        return PersonaGenerationManager(agent_service=Mock())
 
     def test_content_too_short_raises(self, gen_manager):
         from src.managers.persona_generation_manager import (

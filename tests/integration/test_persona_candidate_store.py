@@ -210,7 +210,6 @@ class TestSizeBoundary:
         )
         manager = PersonaGenerationManager(
             agent_service=agent,
-            database_service=Mock(),
             dataset_analysis_service=Mock(),
             candidate_store=store,
             s3_service=Mock(),

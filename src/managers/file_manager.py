@@ -25,7 +25,6 @@ from ..config import config
 from ..models.authz import Permission, Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.uploaded_file import PENDING_TAG, UploadedFile, file_id_from_key
-from ..services.database_service import DatabaseService
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.file_attachments import FileAttachments
@@ -118,7 +117,6 @@ class FileManager:
 
     def __init__(
         self,
-        db_service: Optional[DatabaseService] = None,
         s3_service: Optional["S3Service"] = None,
         file_store: Optional["UploadedFileStore"] = None,
         attachments: Optional[FileAttachments] = None,
@@ -127,7 +125,6 @@ class FileManager:
         """ファイルマネージャーの初期化
 
         Args:
-            db_service: 互換のため受け取る（U5 からメタデータは UploadedFileStore）
             s3_service: S3（未設定ならローカルに保存する）
             file_store: Upload metadata (optional, built on first use)
             attachments: The per-task ``FileAttachments`` (optional)
@@ -144,8 +141,6 @@ class FileManager:
             except RuntimeError:
                 self.s3_service = None  # type: ignore[assignment]
 
-        # Use singleton database service if not provided
-        self.db_service = db_service or service_factory.get_database_service()
         self._file_store = file_store
         self._attachments = attachments
         self._clock = clock or (lambda: datetime.now(timezone.utc))

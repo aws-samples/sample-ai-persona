@@ -246,7 +246,6 @@ class _Host:
             self.store, self.s3, clock=lambda: NOW.timestamp()
         )
         self.files = FileManager(
-            Mock(),
             s3_service=self.s3,
             file_store=self.store,
             attachments=self.attachments,

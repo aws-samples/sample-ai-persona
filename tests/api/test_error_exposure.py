@@ -447,7 +447,7 @@ class TestTransientErrorsUseToast:
 
         Manager クラスではなく Router の `get_*_manager()` を差し替えるのは、
         実インスタンスの生成（AWS認証を要する）を避けるため。CI には認証情報が
-        ないので、クラスメソッドを patch すると生成時に DatabaseError になり
+        ないので、クラスメソッドを patch すると生成時に PersonaStoreError になり
         意図した経路に到達しない。
         """
         manager = Mock()
@@ -459,7 +459,7 @@ class TestTransientErrorsUseToast:
         """入力フォームを消さないため本文を返さない。"""
         mock_get_manager.return_value = self._manager_raising(
             PersonaManagerError(
-                "persona update failed (DatabaseError)",
+                "persona update failed (PersonaStoreError)",
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             )
         )

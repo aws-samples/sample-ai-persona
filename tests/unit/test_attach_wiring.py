@@ -77,7 +77,6 @@ class TestClassicDiscussionSave:
         return (
             DiscussionManager(
                 ai_service=ai,
-                database_service=Mock(),
                 file_attachments=world.files,
                 discussion_records=world.records,
                 participants=world.participants,
@@ -153,15 +152,11 @@ class TestClassicDiscussionSave:
             if principal is A and fid == FILE_1
             else (_ for _ in ()).throw(CodedError("x", code=ErrorCode.FILE_NOT_FOUND))
         )
-        db = Mock()
-        manager = DiscussionManager(
-            ai_service=Mock(), database_service=db, file_attachments=files
-        )
+        manager = DiscussionManager(ai_service=Mock(), file_attachments=files)
 
         data, documents = manager._load_documents([FILE_1], A)
         assert documents[0].id == FILE_1
         assert data[0]["file_path"] == "s3://bucket/key"
-        db.get_uploaded_file_info.assert_not_called()
         files.readable_file.assert_not_called()
 
         # R-02: the same code as the save's attach_all
@@ -336,7 +331,6 @@ class TestDocumentsAttachedElsewhere:
         ai = Mock()
         manager = DiscussionManager(
             ai_service=ai,
-            database_service=Mock(),
             file_attachments=_attached_elsewhere_files(),
             discussion_records=world.records,
             participants=world.participants,
@@ -402,7 +396,6 @@ class TestDocumentsAttachedElsewhere:
 
         manager = DiscussionManager(
             ai_service=Mock(),
-            database_service=Mock(),
             file_attachments=FileAttachments(_FakeFileStore(_upload()), None),
         )
         _data, documents = manager._load_documents([FILE_1], A)

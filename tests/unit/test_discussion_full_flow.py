@@ -43,7 +43,6 @@ class TestDiscussionManagerFullFlow:
         self.mock_ai = Mock()
         self.manager = DiscussionManager(
             ai_service=self.mock_ai,
-            database_service=Mock(),
             file_attachments=self.world.files,
             discussion_records=self.world.records,
             participants=self.world.participants,

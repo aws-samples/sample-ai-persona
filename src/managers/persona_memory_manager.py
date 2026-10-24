@@ -14,7 +14,6 @@ from ..models.errors import (
     ErrorCode,
     LookupUnavailableError,
 )
-from ..services.database_service import DatabaseService
 from ..services.memory.memory_service import MemoryService, MemoryServiceError
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
@@ -51,21 +50,16 @@ class PersonaMemoryManager:
 
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
         memory_service: Optional[MemoryService] = None,
         resource_lookup: Optional[ResourceLookup] = None,
     ):
         """
         Args:
-            database_service: 互換のため受け取る（optional, service_factory経由）
             memory_service: 記憶操作用（optional, service_factory経由。Noneの場合は遅延取得）
             resource_lookup: Decision reads of personas (optional; the per-task
                 instance)
         """
         self.logger = logging.getLogger(__name__)
-        self.database_service = (
-            database_service or service_factory.get_database_service()
-        )
         self._memory_service = memory_service
         self._memory_service_resolved = memory_service is not None
         self._lookup = resource_lookup

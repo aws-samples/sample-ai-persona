@@ -52,16 +52,10 @@ def agent_service() -> Mock:
 
 
 @pytest.fixture
-def database() -> Mock:
-    return Mock()
-
-
-@pytest.fixture
-def manager(world, ai, agent_service, database) -> ReportManager:
+def manager(world, ai, agent_service) -> ReportManager:
     return ReportManager(
         ai_service=ai,
         agent_service=agent_service,
-        database_service=database,
         discussion_records=world.records,
         participants=world.participants,
     )
@@ -132,9 +126,7 @@ class TestGenerate:
         with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
             _generate(manager, OWNER, "nonexistent")
 
-    def test_profiles_come_from_readable_participants_only(
-        self, manager, world, ai, database
-    ):
+    def test_profiles_come_from_readable_participants_only(self, manager, world, ai):
         discussion = _seed(world, participants=("p1", "p2", "p3"))
         _generate(manager, OWNER, discussion.id)
         text = ai.generate_standard_report_streaming.call_args.kwargs[
@@ -143,7 +135,6 @@ class TestGenerate:
         # p1 は本人の、p2 は営業部に共有。p3 は読めない
         assert "### 佐藤" in text and "### 鈴木" in text
         assert "### 田中" not in text
-        database.get_persona.assert_not_called()
 
     def test_data_driven_uses_a_session_of_the_discussion_and_user(
         self, manager, world, agent_service

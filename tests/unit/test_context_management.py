@@ -262,13 +262,11 @@ class TestAgentDiscussionContextManagement:
 
     def _setup_manager_and_mocks(self, sample_persona, sample_persona_2, rounds=2):
         """共通セットアップ"""
-        mock_db_service = Mock()
-        mock_db_service.initialize_database.return_value = None
         mock_agent_service = Mock()
 
         manager = AgentDiscussionManager(
             agent_service=mock_agent_service,
-            dataset_store=mock_db_service,
+            dataset_store=Mock(),
             # U6: 発言の直前の確かめ直しは常に通す
             participants=Mock(can_read_all=Mock(return_value=True)),
         )

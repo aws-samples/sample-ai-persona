@@ -1,6 +1,6 @@
 """
 Integration tests for Discussion Manager.
-Tests the discussion manager with mocked database and AI service.
+Tests the discussion manager with a mocked AI service.
 """
 
 from unittest.mock import Mock
@@ -16,87 +16,12 @@ class TestDiscussionManagerIntegration:
 
     def setup_method(self):
         """Set up test fixtures with mocked services."""
-        # Create mock database service
-        self.discussions_storage = {}
-        self.mock_database_service = Mock()
-
-        def mock_save_discussion(discussion):
-            self.discussions_storage[discussion.id] = discussion
-            return discussion.id
-
-        def mock_get_discussion(discussion_id):
-            return self.discussions_storage.get(discussion_id)
-
-        def mock_get_discussions(
-            limit=21, cursor=None, mode=None, sort_ascending=False, search_all=False
-        ):
-            return list(self.discussions_storage.values()), None
-
-        def mock_discussion_exists(discussion_id):
-            return discussion_id in self.discussions_storage
-
-        def mock_get_discussion_count():
-            return len(self.discussions_storage)
-
-        def mock_delete_discussion(discussion_id):
-            if discussion_id in self.discussions_storage:
-                del self.discussions_storage[discussion_id]
-                return True
-            return False
-
-        def mock_update_discussion_insights(discussion_id, insights):
-            if discussion_id in self.discussions_storage:
-                discussion = self.discussions_storage[discussion_id]
-                # Create updated discussion with new insights
-                from dataclasses import replace
-
-                updated = replace(discussion, insights=insights)
-                self.discussions_storage[discussion_id] = updated
-                return True
-            return False
-
-        def mock_get_discussions_by_topic(topic_pattern):
-            return [
-                d for d in self.discussions_storage.values() if topic_pattern in d.topic
-            ]
-
-        def mock_get_discussions_by_participant(persona_id):
-            return [
-                d
-                for d in self.discussions_storage.values()
-                if persona_id in d.participants
-            ]
-
-        self.mock_database_service.save_discussion.side_effect = mock_save_discussion
-        self.mock_database_service.get_discussion.side_effect = mock_get_discussion
-        self.mock_database_service.get_discussions.side_effect = mock_get_discussions
-        self.mock_database_service.discussion_exists.side_effect = (
-            mock_discussion_exists
-        )
-        self.mock_database_service.get_discussion_count.side_effect = (
-            mock_get_discussion_count
-        )
-        self.mock_database_service.delete_discussion.side_effect = (
-            mock_delete_discussion
-        )
-        self.mock_database_service.update_discussion_insights.side_effect = (
-            mock_update_discussion_insights
-        )
-        self.mock_database_service.get_discussions_by_topic.side_effect = (
-            mock_get_discussions_by_topic
-        )
-        self.mock_database_service.get_discussions_by_participant.side_effect = (
-            mock_get_discussions_by_participant
-        )
-
         # Create mocked AI service
         self.mock_ai_service = Mock(spec=AIService)
-        # Create discussion manager with real database and mocked AI
-        self.discussion_manager = DiscussionManager(
-            ai_service=self.mock_ai_service, database_service=self.mock_database_service
-        )
+        # Create discussion manager with mocked AI
+        self.discussion_manager = DiscussionManager(ai_service=self.mock_ai_service)
 
-        # Create test personas and save them to database
+        # Create test personas
         self.persona1 = Persona.create_new(
             name="田中花子",
             age=30,
@@ -116,10 +41,6 @@ class TestDiscussionManagerIntegration:
             pain_points=["予算制約", "技術的課題", "市場の変化"],
             goals=["新商品開発", "市場拡大", "技術力向上"],
         )
-
-        # Save personas to database
-        self.mock_database_service.put_new(self.persona1)
-        self.mock_database_service.put_new(self.persona2)
 
         # Create realistic test messages
         self.test_messages = [

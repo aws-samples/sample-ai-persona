@@ -49,7 +49,6 @@ class U5:
         memory.save_knowledge.return_value = "m2"
         memory.is_semantic_enabled = True
         self.memory_manager = PersonaMemoryManager(
-            database_service=self.world.db,
             memory_service=memory,
             resource_lookup=self.world.lookup,
         )
@@ -341,7 +340,7 @@ def test_avatar_redirect_reads_the_persona_once(client, u5, monkeypatch):
         return original_read(self, ids, deadline)
 
     monkeypatch.setattr(_Reader, "read", counting_read)
-    u5.world.db.reset_mock()  # side_effect は残る
+    u5.world.persona_store.reset_mock()  # side_effect は残る
 
     response = _as(client, "peer").get(
         f"/persona/{u5.persona.id}/avatar", follow_redirects=False
@@ -350,9 +349,9 @@ def test_avatar_redirect_reads_the_persona_once(client, u5, monkeypatch):
     assert response.status_code == 302
     assert response.headers["location"] == "https://signed/a.webp"
     # 本体の読みは強い整合性の 1 回だけ（ほかの読み・判定の読み取りを足さない）
-    reads = [name for name, _args, _kwargs in u5.world.db.method_calls]
+    reads = [name for name, _args, _kwargs in u5.world.persona_store.method_calls]
     assert reads == ["get"]
-    assert u5.world.db.get.call_args.kwargs == {"consistent": True}
+    assert u5.world.persona_store.get.call_args.kwargs == {"consistent": True}
     assert lookups.count(ResourceType.PERSONA) == 0
     u5.world.s3.generate_presigned_url.assert_called_once()
     u5.world.s3.download_file.assert_not_called()  # 画像の中身を読まない
@@ -488,7 +487,6 @@ class Saving:
         )
         self.gen = PersonaGenerationManager(
             agent_service=Mock(),
-            database_service=Mock(),
             dataset_analysis_service=Mock(),
             candidate_store=self.store,
             s3_service=None,
