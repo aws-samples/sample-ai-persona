@@ -6,17 +6,13 @@ Handles DynamoDB database operations with retry logic and error handling.
 import logging
 import random
 import time
-from decimal import Decimal
 from typing import (
     List,
     Optional,
     Dict,
     Any,
     Callable,
-    Mapping,
-    Sequence,
     TypeVar,
-    TYPE_CHECKING,
 )
 from datetime import datetime
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
@@ -26,9 +22,6 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 
-if TYPE_CHECKING:
-    from ..models.survey import Survey
-
 
 class DatabaseError(CodedError):
     """Custom exception for database-related errors."""
@@ -36,59 +29,7 @@ class DatabaseError(CodedError):
     pass
 
 
-class DatabaseConditionFailed(DatabaseError):
-    """A conditional write found the item missing or already there (U7)."""
-
-
 _T = TypeVar("_T")
-
-#: Columns ``update_survey_fields`` never writes: the owner and the shares
-#: belong to ``ResourceSharing`` (contract C7), the keys never change (BR1.5).
-_PROTECTED_COLUMNS = frozenset(
-    {"id", "owner_sub", "shared_group_ids", "created_at", "template_snapshot"}
-)
-
-
-def _to_dynamo(value: Any) -> Any:
-    """Floats become ``Decimal`` (``TypeSerializer`` refuses floats)."""
-    if isinstance(value, float):
-        return Decimal(str(value))
-    if isinstance(value, Mapping):
-        return {k: _to_dynamo(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_dynamo(v) for v in value]
-    return value
-
-
-def _attribute_size(value: Mapping[str, Any]) -> int:
-    """Approximate DynamoDB size of one typed attribute value."""
-    ((kind, inner),) = value.items()
-    if kind == "S":
-        return len(str(inner).encode("utf-8"))
-    if kind == "N":
-        return len(str(inner)) // 2 + 2
-    if kind == "B":
-        return len(inner)
-    if kind in ("BOOL", "NULL"):
-        return 1
-    if kind == "M":
-        return 3 + sum(
-            len(k.encode("utf-8")) + _attribute_size(v) + 1 for k, v in inner.items()
-        )
-    if kind == "L":
-        return 3 + sum(_attribute_size(v) + 1 for v in inner)
-    return sum(len(str(v).encode("utf-8")) for v in inner)  # SS / NS / BS
-
-
-def _only_conditions_failed(error: ClientError) -> bool:
-    """Whether a write failed only because a condition did not hold."""
-    code = error.response.get("Error", {}).get("Code")
-    if code == "ConditionalCheckFailedException":
-        return True
-    reasons = [r.get("Code") for r in error.response.get("CancellationReasons") or []]
-    return "ConditionalCheckFailed" in reasons and all(
-        r in ("ConditionalCheckFailed", "None", None) for r in reasons
-    )
 
 
 class DatabaseService:
@@ -165,7 +106,6 @@ class DatabaseService:
         self.personas_table = name_of("Personas")
         self.discussions_table = name_of("Discussions")
         self.files_table = name_of("UploadedFiles")
-        self.surveys_table = name_of("Surveys")
 
     def _execute_with_retry(
         self,
@@ -876,234 +816,7 @@ class DatabaseService:
 
     # Survey templates are SurveyTemplateStore (U7).
 
-    # ========== Survey CRUD ==========
-
-    def _serialize_survey(self, survey: "Survey") -> Dict[str, Any]:
-        """Serialize Survey to DynamoDB item format (shares left out, contract C7)."""
-        data = survey.to_dict()
-        data.pop("shared_group_ids", None)
-        return {
-            k: self.serializer.serialize(v) for k, v in data.items() if v is not None
-        }
-
-    def _deserialize_survey(self, item: Dict[str, Any]) -> "Survey":
-        """Deserialize DynamoDB item to Survey."""
-        from ..models.survey import Survey
-
-        deserialized = {k: self.deserializer.deserialize(v) for k, v in item.items()}
-        # Convert Decimal persona_count back to int
-        deserialized["persona_count"] = int(deserialized["persona_count"])
-        return Survey.from_dict(deserialized)
-
-    def put_new_survey(
-        self, survey: "Survey", extra_items: Sequence[Dict[str, Any]] = ()
-    ) -> None:
-        """Write a new survey with the caller's items in one transaction (U7 BR1.1).
-
-        Raises:
-            DatabaseConditionFailed: The ID exists; nothing was written.
-            DatabaseError: Anything else.
-        """
-        self._transact_new(
-            self.surveys_table,
-            self._serialize_survey(survey),
-            extra_items,
-            operation=f"put_new_survey({survey.id})",
-        )
-
-    def update_survey_fields(
-        self,
-        survey_id: str,
-        fields: Mapping[str, Any],
-        *,
-        remove: Sequence[str] = (),
-    ) -> bool:
-        """Write only the given columns of a survey (U7 BR1.5, NFR1.87).
-
-        Args:
-            survey_id: The survey.
-            fields: Column -> new value (status, results, report, ...).
-            remove: Columns to remove.
-
-        Returns:
-            ``False`` when the survey does not exist (nothing is created).
-
-        Raises:
-            ValueError: A column the survey's owner, shares or keys live in.
-        """
-        protected = set(fields) | set(remove)
-        refused = protected & _PROTECTED_COLUMNS
-        if refused:
-            raise ValueError(f"columns not updatable here: {sorted(refused)}")
-        return self._update_columns(
-            self.surveys_table,
-            survey_id,
-            dict(fields),
-            remove=tuple(remove),
-            operation="update_survey_fields",
-        )
-
-    def get_survey(
-        self, survey_id: str, *, consistent: bool = False
-    ) -> Optional["Survey"]:
-        """Get a Survey by ID (strongly consistent for decisions, U7)."""
-
-        def _get() -> Optional["Survey"]:
-            response = self.dynamodb_client.get_item(
-                TableName=self.surveys_table,
-                Key={"id": self.serializer.serialize(survey_id)},
-                ConsistentRead=consistent,
-            )
-            if "Item" not in response:
-                return None
-            return self._deserialize_survey(response["Item"])
-
-        return self._execute_with_retry(_get, operation_name=f"get_survey({survey_id})")
-
-    def get_surveys_by_ids(self, survey_ids: Sequence[str]) -> Dict[str, "Survey"]:
-        """Read surveys with strongly consistent ``BatchGetItem`` calls (NFR2.21)."""
-        items = self._batch_get_items(self.surveys_table, survey_ids)
-        return {
-            item_id: self._deserialize_survey(item) for item_id, item in items.items()
-        }
-
-    # Knowledge bases are KnowledgeBaseStore (U7).
-
-    # ==================== Shared helpers (U7) ====================
-
-    @staticmethod
-    def item_size(body: Mapping[str, Any]) -> int:
-        """Approximate DynamoDB size of ``body`` as an item (U7 NFR2.25)."""
-        serializer = TypeSerializer()
-        return sum(
-            len(str(name).encode("utf-8"))
-            + _attribute_size(serializer.serialize(_to_dynamo(value)))
-            for name, value in body.items()
-            if value is not None
-        )
-
-    def _conditional_write(self, write: Callable[[], Any], *, operation: str) -> bool:
-        """Run ``write``; ``False`` when its condition failed (other errors raise)."""
-
-        def _run() -> bool:
-            try:
-                write()
-                return True
-            except ClientError as e:
-                code = e.response.get("Error", {}).get("Code")
-                if code in (
-                    "ConditionalCheckFailedException",
-                    "TransactionCanceledException",
-                ) and _only_conditions_failed(e):
-                    return False
-                raise
-
-        return self._execute_with_retry(_run, operation_name=operation)
-
-    def _update_columns(
-        self,
-        table: str,
-        item_id: str,
-        fields: Mapping[str, Any],
-        *,
-        remove: Sequence[str] = (),
-        operation: str,
-    ) -> bool:
-        """``SET`` / ``REMOVE`` columns of an existing item; ``False`` when missing."""
-        names: Dict[str, str] = {}
-        values: Dict[str, Any] = {}
-        sets: List[str] = []
-        for index, (column, value) in enumerate(fields.items()):
-            names[f"#f{index}"] = column
-            values[f":f{index}"] = self.serializer.serialize(_to_dynamo(value))
-            sets.append(f"#f{index} = :f{index}")
-        removes: List[str] = []
-        for index, column in enumerate(remove):
-            names[f"#r{index}"] = column
-            removes.append(f"#r{index}")
-        expression = ""
-        if sets:
-            expression = "SET " + ", ".join(sets)
-        if removes:
-            expression += (" " if expression else "") + "REMOVE " + ", ".join(removes)
-        if not expression:
-            return True
-        params: Dict[str, Any] = {
-            "TableName": table,
-            "Key": {"id": {"S": item_id}},
-            "UpdateExpression": expression,
-            "ConditionExpression": "attribute_exists(id)",
-            "ExpressionAttributeNames": names,
-        }
-        if values:
-            params["ExpressionAttributeValues"] = values
-        return self._conditional_write(
-            lambda: self.dynamodb_client.update_item(**params),
-            operation=f"{operation}({item_id})",
-        )
-
-    def _transact_new(
-        self,
-        table: str,
-        item: Dict[str, Any],
-        extra_items: Sequence[Dict[str, Any]],
-        *,
-        operation: str,
-    ) -> None:
-        put = {
-            "Put": {
-                "TableName": table,
-                "Item": item,
-                "ConditionExpression": "attribute_not_exists(id)",
-            }
-        }
-        written = self._conditional_write(
-            lambda: self.dynamodb_client.transact_write_items(
-                TransactItems=[put, *extra_items]
-            ),
-            operation=operation,
-        )
-        if not written:
-            raise DatabaseConditionFailed(
-                f"{operation}: the item exists already",
-                code=ErrorCode.DATABASE_OPERATION_FAILED,
-            )
-
-    def _batch_get_items(
-        self, table: str, item_ids: Sequence[str]
-    ) -> Dict[str, Dict[str, Any]]:
-        """Strongly consistent ``BatchGetItem``s, 100 IDs each, unprocessed re-read."""
-        ids = [i for i in dict.fromkeys(item_ids) if i]
-        found: Dict[str, Dict[str, Any]] = {}
-        for start in range(0, len(ids), 100):
-            chunk = ids[start : start + 100]
-
-            def _read(chunk: List[str] = chunk) -> Dict[str, Dict[str, Any]]:
-                return self._batch_get_chunk(table, chunk)
-
-            found.update(
-                self._execute_with_retry(_read, operation_name=f"batch_get({table})")
-            )
-        return found
-
-    def _batch_get_chunk(self, table: str, ids: List[str]) -> Dict[str, Dict[str, Any]]:
-        keys: List[Dict[str, Any]] = [{"id": {"S": i}} for i in ids]
-        found: Dict[str, Dict[str, Any]] = {}
-        for attempt, backoff in enumerate((0.0, 0.05, 0.1, 0.2)):
-            if attempt:
-                time.sleep(backoff * (0.5 + random.random()))  # noqa: S311
-            response = self.dynamodb_client.batch_get_item(
-                RequestItems={table: {"Keys": keys, "ConsistentRead": True}}
-            )
-            for item in response.get("Responses", {}).get(table, []):
-                found[item["id"]["S"]] = item
-            keys = response.get("UnprocessedKeys", {}).get(table, {}).get("Keys", [])
-            if not keys:
-                return found
-        raise DatabaseError(
-            f"BatchGetItem left {len(keys)} keys unprocessed after three re-reads",
-            code=ErrorCode.DATABASE_OPERATION_FAILED,
-        )
+    # Surveys are SurveyStore (U7).
 
     # Persona bindings (KB / datasets) live in PersonaBindings and are read and
     # written by PersonaBindingStore (U5, ADR-007).

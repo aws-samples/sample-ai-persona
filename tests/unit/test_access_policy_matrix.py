@@ -855,7 +855,7 @@ def _u7_call(world, op: str, principal: Principal, resource_id: str) -> None:
             )
         return
     surveys = SurveyExecutionManager(
-        database_service=world.db,
+        survey_store=world.survey_store,
         survey_template_store=world.template_store,
         survey_batch_service=Mock(),
         s3_service=world.s3,

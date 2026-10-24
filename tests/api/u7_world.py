@@ -72,7 +72,7 @@ class ApiWorld:
             sleep=lambda _s: None,
         )
         self.executions = SurveyExecutionManager(
-            database_service=world.db,
+            survey_store=world.survey_store,
             survey_template_store=world.template_store,
             survey_batch_service=self.batch,
             s3_service=world.s3,
@@ -84,7 +84,7 @@ class ApiWorld:
             sleep=lambda _s: None,
         )
         self.analysis = SurveyAnalysisManager(
-            database_service=world.db,
+            survey_store=world.survey_store,
             survey_template_store=world.template_store,
             s3_service=world.s3,
             ai_service=self.ai,

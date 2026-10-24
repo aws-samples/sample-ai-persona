@@ -19,6 +19,7 @@ from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
 from src.models.survey_template import Question, SurveyTemplate
+from src.services.survey_store import SurveyStore
 from src.services.survey_template_store import SurveyTemplateStore
 from tests.error_helpers import raises_code
 from tests.unit.survey_world import (
@@ -83,7 +84,7 @@ def cache() -> ResultCsvCache:
 @pytest.fixture
 def am(survey_world: SurveyWorld, ai, batch, cache) -> SurveyAnalysisManager:
     return SurveyAnalysisManager(
-        database_service=survey_world.db,
+        survey_store=survey_world.survey_store,
         survey_template_store=survey_world.template_store,
         s3_service=survey_world.s3,
         ai_service=ai,
@@ -201,7 +202,7 @@ class TestPersonaStatistics:
         survey = _survey(survey_world, sample_template)
         am.get_persona_statistics(MEMBER_A, survey.id)
         survey_world.client.delete_item(
-            TableName=survey_world.db.surveys_table, Key={"id": {"S": survey.id}}
+            TableName=survey_world.surveys_table, Key={"id": {"S": survey.id}}
         )
         cache.evict(survey.id)
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
@@ -224,7 +225,7 @@ class TestInsightReport:
         report = am.generate_insight_report(MEMBER_A, survey.id)
 
         assert isinstance(report, InsightReport)
-        stored = survey_world.db.get_survey(survey.id, consistent=True)
+        stored = survey_world.survey_store.get(survey.id, consistent=True)
         assert stored.insight_report.content == "# レポート"
         assert stored.owner_sub == "a"
         assert stored.shared_group_ids == frozenset({"sales"})
@@ -268,7 +269,7 @@ class TestInsightReport:
         survey_world.share(SURVEY, survey.id, "sales")
         report = am.save_insight_report(MEMBER_A, survey.id, "# 内容")
         assert report.content == "# 内容"
-        stored = survey_world.db.get_survey(survey.id, consistent=True)
+        stored = survey_world.survey_store.get(survey.id, consistent=True)
         assert stored.insight_report.content == "# 内容"
         assert stored.shared_group_ids == frozenset({"sales"})
         assert stored.template_snapshot is not None
@@ -277,7 +278,7 @@ class TestInsightReport:
         survey = _survey(survey_world, sample_template)
         with raises_code(CodedError, ErrorCode.SURVEY_REPORT_TOO_LARGE):
             am.save_insight_report(MEMBER_A, survey.id, "あ" * (MAX_SURVEY_BYTES // 2))
-        stored = survey_world.db.get_survey(survey.id, consistent=True)
+        stored = survey_world.survey_store.get(survey.id, consistent=True)
         assert stored.insight_report is None
 
     def test_admin_may_generate_for_an_ownerless_survey(
@@ -328,7 +329,7 @@ class TestComputeVisualAnalysis:
             {f"{q_scale.id}_answer": "3", "sex": "男性", "age": "45"},
         ]
         mgr = SurveyAnalysisManager(
-            database_service=Mock(),
+            survey_store=Mock(spec=SurveyStore),
             survey_template_store=Mock(spec=SurveyTemplateStore),
             s3_service=Mock(),
             ai_service=Mock(),

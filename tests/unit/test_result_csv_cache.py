@@ -137,14 +137,14 @@ def test_analysis_and_delete_share_the_one_instance():
     reset_result_cache()
     try:
         analysis = SurveyAnalysisManager(
-            database_service=Mock(),
+            survey_store=Mock(),
             survey_template_store=Mock(),
             s3_service=Mock(),
             ai_service=Mock(),
             survey_batch_service=Mock(),
         )
         execution = SurveyExecutionManager(
-            database_service=Mock(),
+            survey_store=Mock(),
             survey_template_store=Mock(),
             survey_batch_service=Mock(),
             s3_service=Mock(),

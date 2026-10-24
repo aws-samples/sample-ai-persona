@@ -44,7 +44,7 @@ def _orphan_custom(world: SurveyWorld) -> str:
 def _run(world: SurveyWorld, *argv: str, now: float = LATER) -> int:
     return main(
         list(argv),
-        surveys=world.db,
+        surveys=world.survey_store,
         custom_data=world.custom_store,
         objects=world.s3,
         now=now,
@@ -61,7 +61,7 @@ class TestPlan:
         orphan_custom = _orphan_custom(survey_world)
 
         plan = plan_cleanup(
-            survey_world.db,
+            survey_world.survey_store,
             survey_world.custom_store,
             survey_world.s3,
             now=LATER,
@@ -78,7 +78,10 @@ class TestPlan:
         data_id = _orphan_custom(survey_world)
 
         plan = plan_cleanup(
-            survey_world.db, survey_world.custom_store, survey_world.s3, now=SOON
+            survey_world.survey_store,
+            survey_world.custom_store,
+            survey_world.s3,
+            now=SOON,
         )
 
         assert plan.results == {} and plan.custom_files == []
@@ -99,7 +102,10 @@ class TestPlan:
         survey_world.s3.upload_file(b"tmp", "persona-dataset/temp/x.csv")
 
         plan = plan_cleanup(
-            survey_world.db, survey_world.custom_store, survey_world.s3, now=LATER
+            survey_world.survey_store,
+            survey_world.custom_store,
+            survey_world.s3,
+            now=LATER,
         )
 
         assert plan.is_clean
@@ -146,13 +152,16 @@ class TestApply:
         survey_id = _orphan_result(survey_world)
         data_id = _orphan_custom(survey_world)
         plan = plan_cleanup(
-            survey_world.db, survey_world.custom_store, survey_world.s3, now=LATER
+            survey_world.survey_store,
+            survey_world.custom_store,
+            survey_world.s3,
+            now=LATER,
         )
 
         appeared: Any = {"survey": {survey_id}, "custom": {data_id}}
 
         class Surveys:
-            def get_surveys_by_ids(self, ids):
+            def get_many(self, ids):
                 return {i: object() for i in ids if i in appeared["survey"]}
 
         class Records:

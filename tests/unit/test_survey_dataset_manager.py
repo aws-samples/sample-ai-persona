@@ -415,7 +415,7 @@ class TestDeleteAndRename:
         data = _upload(dm)
         survey = survey_world.survey("a", datasource=f"custom:{data.id}")
         dm.delete_custom_dataset(ADMIN, data.id)
-        assert survey_world.db.get_survey(survey.id) is not None
+        assert survey_world.survey_store.get(survey.id) is not None
 
     def test_rename(self, dm, survey_world):
         data = _upload(dm, name="旧")

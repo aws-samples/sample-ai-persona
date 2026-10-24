@@ -529,7 +529,7 @@ class TestDeleteTemplate:
         template = survey_world.template("a")
         survey = survey_world.survey("a", template)
         mgr.delete_template(MEMBER_A, template.id)
-        assert survey_world.db.get_survey(survey.id) is not None
+        assert survey_world.survey_store.get(survey.id) is not None
 
     def test_shared_reader_gets_403_and_stranger_404(self, mgr, survey_world):
         template = survey_world.template("a")
