@@ -12,6 +12,7 @@ from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange
 from tests.error_helpers import raises_code
+from src.services.knowledge_base_store import KnowledgeBaseStore
 from tests.log_helpers import LogCapture
 from tests.unit.survey_world import ADMIN, MEMBER_A, SurveyWorld
 
@@ -19,7 +20,8 @@ from tests.unit.survey_world import ADMIN, MEMBER_A, SurveyWorld
 @pytest.fixture
 def manager(survey_world: SurveyWorld) -> SettingsManager:
     return SettingsManager(
-        database_service=survey_world.db, departments=survey_world.departments
+        knowledge_base_store=survey_world.kb_store,
+        departments=survey_world.departments,
     )
 
 
@@ -138,7 +140,7 @@ class TestKnowledgeBaseScope:
             )
         with raises_code(CodedError, ErrorCode.SETTINGS_NOT_FOUND):
             manager.scope_dialog(ADMIN, "missing")
-        assert survey_world.raw(survey_world.db.kb_table, "missing") is None
+        assert survey_world.raw(survey_world.kb_table, "missing") is None
 
 
 @pytest.mark.unit
@@ -146,9 +148,8 @@ class TestSettingsManagerDataAgent:
     """データ分析エージェント接続テストのテスト。"""
 
     def setup_method(self):
-        self.mock_db = Mock()
         self.manager = SettingsManager(
-            database_service=self.mock_db, departments=Mock()
+            knowledge_base_store=Mock(spec=KnowledgeBaseStore), departments=Mock()
         )
 
     @patch("src.managers.settings_manager.config")

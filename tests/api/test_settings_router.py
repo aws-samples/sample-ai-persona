@@ -71,7 +71,7 @@ class TestAdminScreens:
         assert client.delete(f"/settings/datasets/{dataset.id}").status_code == 200
         assert client.delete(f"/settings/knowledge-bases/{kb.id}").status_code == 200
         assert aw.world.db.get_dataset(dataset.id) is None
-        assert aw.world.db.get_knowledge_base(kb.id) is None
+        assert aw.world.kb_store.get(kb.id, consistent=True) is None
 
 
 # =============================================================================
@@ -121,9 +121,9 @@ class TestScopeDialog:
             data={"departments": "sales"},
         )
         assert response.status_code == 200
-        assert aw.world.db.get_knowledge_base(kb.id).shared_group_ids == frozenset(
-            {"sales"}
-        )
+        assert aw.world.kb_store.get(
+            kb.id, consistent=True
+        ).shared_group_ids == frozenset({"sales"})
 
     def test_unknown_department_is_refused_inside_the_dialog(self, aw, client):
         dataset = aw.world.dataset()
@@ -206,8 +206,8 @@ def test_member_gets_404_on_every_settings_route_and_nothing_changes(
 
     assert response.status_code == 404
     assert aw.world.db.get_dataset(dataset.id) == dataset
-    assert aw.world.db.get_knowledge_base(kb.id).shared_group_ids == frozenset()
-    assert len(aw.world.db.get_all_knowledge_bases()) == 1
+    assert aw.world.kb_store.get(kb.id, consistent=True).shared_group_ids == frozenset()
+    assert len(aw.world.kb_store.list_all()) == 1
     assert "arn:x" not in response.text
 
 

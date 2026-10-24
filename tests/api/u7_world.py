@@ -108,7 +108,7 @@ class ApiWorld:
             departments=world.departments,
         )
         self.settings = SettingsManager(
-            database_service=world.db, departments=world.departments
+            knowledge_base_store=world.kb_store, departments=world.departments
         )
         self.sharing = SharingManager(world.sharing)
         self.file_manager = Mock()

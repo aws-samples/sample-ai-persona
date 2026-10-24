@@ -1240,59 +1240,9 @@ class TestPersonaCRUDOperationsProperties:
         assert retrieved2_still_exists.id == persona2.id
 
 
-class TestKnowledgeBaseCRUDOperations:
-    """KnowledgeBase / PersonaKBBinding の DatabaseService CRUD テスト"""
-
-    @patch("boto3.client")
-    def _make_service(self, mock_boto3_client):
-        mock_client = Mock()
-        mock_boto3_client.return_value = mock_client
-        mock_client.list_tables.return_value = {"TableNames": []}
-        return DatabaseService(table_prefix="Test", region="us-east-1"), mock_client
-
-    def test_save_and_get_knowledge_base(self):
-        from src.models.knowledge_base import KnowledgeBase
-
-        service, mock_client = self._make_service()
-        kb = KnowledgeBase.create_new("KB123", "テストKB", "説明")
-
-        stored = {}
-
-        def put_item(**kwargs):
-            stored[kwargs["Item"]["id"]["S"]] = kwargs["Item"]
-            return {}
-
-        def get_item(**kwargs):
-            item_id = kwargs["Key"]["id"]["S"]
-            if item_id in stored:
-                return {"Item": stored[item_id]}
-            return {}
-
-        mock_client.put_item.side_effect = put_item
-        mock_client.get_item.side_effect = get_item
-
-        service.save_knowledge_base(kb)
-        mock_client.put_item.assert_called_once()
-
-        result = service.get_knowledge_base(kb.id)
-        assert result is not None
-        assert result.knowledge_base_id == "KB123"
-
-    def test_get_knowledge_base_not_found(self):
-        service, mock_client = self._make_service()
-        mock_client.get_item.return_value = {}
-        result = service.get_knowledge_base("nonexistent")
-        assert result is None
-
-    def test_delete_knowledge_base(self):
-        service, mock_client = self._make_service()
-        mock_client.delete_item.return_value = {}
-        result = service.delete_knowledge_base("kb-1")
-        assert result is True
-        mock_client.delete_item.assert_called_once()
-
-    # U5: KB bindings are PersonaBindings (tests/integration/test_persona_binding_store.py)
-    # and upload metadata is UploadedFileStore (tests/integration/test_uploaded_file_store.py).
+# Knowledge bases are KnowledgeBaseStore (tests/integration/test_knowledge_base_store.py),
+# KB bindings are PersonaBindings (tests/integration/test_persona_binding_store.py)
+# and upload metadata is UploadedFileStore (tests/integration/test_uploaded_file_store.py).
 
 
 # Job records are written by JobStore (tests/integration/test_job_store.py).
@@ -1705,13 +1655,12 @@ def moto_asset_service(monkeypatch):
     with moto.mock_aws():
         service = DatabaseService(table_prefix="AsTest", region="us-east-1")
         client = boto3.client("dynamodb", region_name="us-east-1")
-        for table in (service.datasets_table, service.kb_table):
-            client.create_table(
-                TableName=table,
-                KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
-                AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
-                BillingMode="PAY_PER_REQUEST",
-            )
+        client.create_table(
+            TableName=service.datasets_table,
+            KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
         yield service
 
 
@@ -1728,12 +1677,6 @@ def _org_dataset(**kwargs):
     )
 
 
-def _kb():
-    from src.models.knowledge_base import KnowledgeBase
-
-    return KnowledgeBase.create_new("KB123", "社内資料", "説明")
-
-
 def _item(service, table, item_id):
     return service.dynamodb_client.get_item(
         TableName=table, Key={"id": {"S": item_id}}
@@ -1741,33 +1684,23 @@ def _item(service, table, item_id):
 
 
 class TestAssetScope:
-    @pytest.mark.parametrize("kind", ["dataset", "knowledge_base"])
-    def test_add_then_remove_as_two_set_updates(self, moto_asset_service, kind):
-        asset = _org_dataset() if kind == "dataset" else _kb()
-        save = (
-            moto_asset_service.save_dataset
-            if kind == "dataset"
-            else moto_asset_service.save_knowledge_base
-        )
-        save(asset)
+    def test_add_then_remove_as_two_set_updates(self, moto_asset_service):
+        asset = _org_dataset()
+        moto_asset_service.save_dataset(asset)
         spy = Mock(wraps=moto_asset_service.dynamodb_client.update_item)
         moto_asset_service.dynamodb_client.update_item = spy
 
         moto_asset_service.update_asset_scope(
-            kind, asset.id, add=frozenset({"sales", "plan"}), remove=frozenset()
+            "dataset", asset.id, add=frozenset({"sales", "plan"}), remove=frozenset()
         )
         moto_asset_service.update_asset_scope(
-            kind, asset.id, add=frozenset({"dev"}), remove=frozenset({"plan"})
+            "dataset", asset.id, add=frozenset({"dev"}), remove=frozenset({"plan"})
         )
 
         expressions = [c.kwargs["UpdateExpression"] for c in spy.call_args_list]
         assert len(expressions) == 3
         assert expressions[1].startswith("ADD") and expressions[2].startswith("DELETE")
-        table = (
-            moto_asset_service.datasets_table
-            if kind == "dataset"
-            else moto_asset_service.kb_table
-        )
+        table = moto_asset_service.datasets_table
         assert set(
             _item(moto_asset_service, table, asset.id)["shared_group_ids"]["SS"]
         ) == {
@@ -1776,15 +1709,15 @@ class TestAssetScope:
         }
 
     def test_removing_every_department_drops_the_column(self, moto_asset_service):
-        kb = _kb()
-        moto_asset_service.save_knowledge_base(kb)
+        dataset = _org_dataset()
+        moto_asset_service.save_dataset(dataset)
         moto_asset_service.update_asset_scope(
-            "knowledge_base", kb.id, add=frozenset({"sales"}), remove=frozenset()
+            "dataset", dataset.id, add=frozenset({"sales"}), remove=frozenset()
         )
         moto_asset_service.update_asset_scope(
-            "knowledge_base", kb.id, add=frozenset(), remove=frozenset({"sales"})
+            "dataset", dataset.id, add=frozenset(), remove=frozenset({"sales"})
         )
-        stored = moto_asset_service.get_knowledge_base(kb.id, consistent=True)
+        stored = moto_asset_service.get_dataset(dataset.id, consistent=True)
         assert stored.shared_group_ids == frozenset()
 
     def test_empty_change_sends_nothing(self, moto_asset_service):
@@ -1819,10 +1752,12 @@ class TestAssetScope:
             moto_asset_service, moto_asset_service.datasets_table, dedicated.id
         )
 
-    def test_unknown_kind_is_a_caller_bug(self, moto_asset_service):
+    @pytest.mark.parametrize("kind", ["persona", "knowledge_base"])
+    def test_unknown_kind_is_a_caller_bug(self, moto_asset_service, kind):
+        """Knowledge bases are scoped by KnowledgeBaseStore.update_scope."""
         with pytest.raises(ValueError):
             moto_asset_service.update_asset_scope(
-                "persona", "x", add=frozenset({"a"}), remove=frozenset()
+                kind, "x", add=frozenset({"a"}), remove=frozenset()
             )
 
 
@@ -1887,12 +1822,6 @@ class TestAssetPartialUpdates:
             {"sales"}
         )
 
-    def test_save_knowledge_base_never_overwrites(self, moto_asset_service):
-        kb = _kb()
-        moto_asset_service.save_knowledge_base(kb)
-        with pytest.raises(DatabaseError):
-            moto_asset_service.save_knowledge_base(kb)
-
     def test_scope_change_and_rename_both_survive(self, moto_asset_service):
         dataset = _org_dataset()
         moto_asset_service.save_dataset(dataset)
@@ -1921,13 +1850,3 @@ class TestAssetListings:
         assert [d.id for d in listed] == [org.id]
         assert listed[0].shared_group_ids == frozenset({"plan"})
         assert isinstance(listed[0].shared_group_ids, frozenset)
-
-    def test_kb_listing_reads_every_page(self, moto_asset_service):
-        made = [_kb() for _ in range(5)]
-        for kb in made:
-            moto_asset_service.save_knowledge_base(kb)
-        client = moto_asset_service.dynamodb_client
-        real = client.scan
-        client.scan = lambda **kw: real(**{**kw, "Limit": 2})
-        listed = moto_asset_service.get_all_knowledge_bases()
-        assert {k.id for k in listed} == {k.id for k in made}

@@ -440,7 +440,8 @@ class TestBindingReaders:
             PersonaBinding.for_kb("p1", kb.id, metadata_filters={"a": "b"}, now=NOW)
         ]
         db = Mock()
-        db.get_knowledge_base.return_value = kb
+        kbs = Mock()
+        kbs.get.return_value = kb
         agent = Mock()
         agent.get_kb_tools.return_value = ([], None)
         from src.managers.components.resource_lookup import build_resource_lookup
@@ -452,6 +453,7 @@ class TestBindingReaders:
 
         component = pai.PersonaAgentIntegration(
             database_service=db,
+            knowledge_base_store=kbs,
             agent_service=agent,
             dataset_analysis_service=Mock(),
             binding_store=store,

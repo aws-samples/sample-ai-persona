@@ -545,6 +545,23 @@ class TestServiceFactoryAuthzServices:
         assert jobs.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
+    def test_knowledge_base_store_uses_its_table(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.table_name.return_value = "Kb-physical"
+
+        factory = ServiceFactory()
+        kbs = factory.get_knowledge_base_store()
+
+        assert kbs is factory.get_knowledge_base_store()
+        assert kbs.table_name == "Kb-physical"
+        mock_config.table_name.assert_called_with("KnowledgeBases")
+        assert kbs.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
     def test_u6_stores_use_their_tables(self, mock_config, monkeypatch):
         """U6 の 2 つの Service（議論・インタビュー）。"""
         from src.services.service_factory import ServiceFactory

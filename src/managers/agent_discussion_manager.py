@@ -75,6 +75,7 @@ from .shared.model_validation import (
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
     from ..services.persona_binding_store import PersonaBindingStore
+    from ..services.knowledge_base_store import KnowledgeBaseStore
 
 
 class AgentDiscussionManagerError(CodedError):
@@ -116,6 +117,7 @@ class AgentDiscussionManager:
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
+        knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         file_attachments: Optional[FileAttachments] = None,
         binding_store: Optional["PersonaBindingStore"] = None,
         discussion_records: Optional[DiscussionRecords] = None,
@@ -130,6 +132,8 @@ class AgentDiscussionManager:
             agent_service: Agent service (the singleton when omitted)
             database_service: Database service (the singleton when omitted)
             dataset_analysis_service: Dataset tools (the singleton when omitted)
+            knowledge_base_store: Registered knowledge bases for the KB tool
+                (the singleton when omitted)
             file_attachments: The per-task ``FileAttachments`` (U5)
             binding_store: ``PersonaBindings`` for KB / dataset tools (U5)
             discussion_records: The per-task ``DiscussionRecords`` (U6)
@@ -147,6 +151,8 @@ class AgentDiscussionManager:
         )
         self._agent_integration = PersonaAgentIntegration(
             database_service=self.database_service,
+            knowledge_base_store=knowledge_base_store
+            or service_factory.get_knowledge_base_store(),
             agent_service=self.agent_service,
             dataset_analysis_service=self.dataset_analysis_service,
             binding_store=binding_store or service_factory.get_persona_binding_store(),

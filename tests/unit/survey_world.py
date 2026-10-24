@@ -34,6 +34,7 @@ from src.models.uploaded_file import AttachResult
 from src.services.authz_lookup_service import AuthzLookupService, LookupTable
 from src.services.custom_persona_data_store import CustomPersonaDataStore
 from src.services.database_service import DatabaseService
+from src.services.knowledge_base_store import KnowledgeBaseStore
 from src.services.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
 
@@ -91,6 +92,10 @@ class SurveyWorld:
     def __init__(self) -> None:
         self.db = DatabaseService(table_prefix="U7", region=REGION)
         self.client = self.db.dynamodb_client
+        self.kb_table = "U7_KnowledgeBases"
+        self.kb_store = KnowledgeBaseStore(
+            region=REGION, table_name=self.kb_table, client=self.client
+        )
         self.shares_table = "U7_ResourceShares"
         self.custom_table = "U7_CustomPersonaData"
         self._create_tables()
@@ -123,7 +128,7 @@ class SurveyWorld:
             ),
             LookupTable(ResourceType.SURVEY, self.db.surveys_table, "name"),
             LookupTable(ResourceType.DATASET, self.db.datasets_table, "name"),
-            LookupTable(ResourceType.KNOWLEDGE_BASE, self.db.kb_table, "name"),
+            LookupTable(ResourceType.KNOWLEDGE_BASE, self.kb_table, "name"),
             LookupTable(
                 ResourceType.CUSTOM_PERSONA_DATA,
                 self.custom_table,
@@ -163,7 +168,7 @@ class SurveyWorld:
         table(self.db.survey_templates_table, owner_index=True)
         table(self.db.surveys_table, owner_index=True)
         table(self.db.datasets_table)
-        table(self.db.kb_table)
+        table(self.kb_table)
         table(self.custom_table)
         self.client.create_table(
             TableName=self.shares_table,
@@ -295,11 +300,9 @@ class SurveyWorld:
 
     def knowledge_base(self, *groups: str) -> KnowledgeBase:
         kb = KnowledgeBase.create_new("KB123", "社内資料", "説明")
-        self.db.save_knowledge_base(kb)
+        self.kb_store.put_new(kb)
         if groups:
-            self.db.update_asset_scope(
-                "knowledge_base", kb.id, add=frozenset(groups), remove=frozenset()
-            )
+            self.kb_store.update_scope(kb.id, add=frozenset(groups), remove=frozenset())
         return kb
 
     def raw(self, table: str, item_id: str) -> dict | None:

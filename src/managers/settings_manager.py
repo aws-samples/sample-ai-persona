@@ -22,7 +22,7 @@ from ..models.authz import Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KnowledgeBase
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
-from ..services.database_service import DatabaseConditionFailed, DatabaseService
+from ..services.knowledge_base_store import KnowledgeBaseStore
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory
@@ -48,16 +48,16 @@ def _missing_kb() -> SettingsManagerError:
 class SettingsManager:
     def __init__(
         self,
-        database_service: Optional[DatabaseService] = None,
+        knowledge_base_store: Optional[KnowledgeBaseStore] = None,
         departments: Optional[DepartmentDirectory] = None,
     ) -> None:
         """Create the manager.
 
         Args:
-            database_service: Knowledge base records (the singleton when omitted).
+            knowledge_base_store: Knowledge base records (the singleton when omitted).
             departments: The per-task department copy (scope choices, C4).
         """
-        self.db = database_service or service_factory.get_database_service()
+        self._kbs = knowledge_base_store or service_factory.get_knowledge_base_store()
         self._departments = departments
 
     @property
@@ -82,7 +82,7 @@ class SettingsManager:
     ) -> ScopedAssets[KnowledgeBase]:
         """登録済みの KB と利用範囲（admin だけ）。"""
         self._require_manage(principal)
-        kbs = self.db.get_all_knowledge_bases()
+        kbs = self._kbs.list_all()
         departments = self._department_directory.list_all() if kbs else []
         return ScopedAssets(
             items=kbs,
@@ -106,14 +106,14 @@ class SettingsManager:
             name=name.strip(),
             description=description.strip(),
         )
-        self.db.save_knowledge_base(kb)
+        self._kbs.put_new(kb)
         logger.info("Knowledge base registered: %s", kb.id)
         return kb
 
     def delete_knowledge_base(self, principal: Principal, kb_id: str) -> None:
         """KB の登録を消す。"""
         self._require_manage(principal)
-        self.db.delete_knowledge_base(kb_id)
+        self._kbs.delete(kb_id)
         logger.info("Knowledge base deleted: %s", kb_id)
 
     def scope_dialog(self, principal: Principal, kb_id: str) -> AssetScopeDialog:
@@ -123,7 +123,7 @@ class SettingsManager:
             CodedError: ``SETTINGS_NOT_FOUND`` (missing knowledge base).
         """
         self._require_manage(principal)
-        kb = self.db.get_knowledge_base(kb_id, consistent=True)
+        kb = self._kbs.get(kb_id, consistent=True)
         if kb is None:
             raise _missing_kb()
         return scope_dialog(
@@ -150,12 +150,8 @@ class SettingsManager:
                 "a department that does not exist was sent",
                 code=ErrorCode.SHARE_SCOPE_INVALID,
             )
-        try:
-            self.db.update_asset_scope(
-                "knowledge_base", kb_id, add=change.add, remove=change.remove
-            )
-        except DatabaseConditionFailed as e:
-            raise _missing_kb() from e
+        if not self._kbs.update_scope(kb_id, add=change.add, remove=change.remove):
+            raise _missing_kb()
         log_event(
             "asset.scope_changed",
             resource_type=_KB.value,
@@ -164,7 +160,7 @@ class SettingsManager:
             removed=sorted(change.remove),
             actor_sub=principal.sub,
         )
-        kb = self.db.get_knowledge_base(kb_id, consistent=True)
+        kb = self._kbs.get(kb_id, consistent=True)
         if kb is None:
             raise _missing_kb()
         return kb

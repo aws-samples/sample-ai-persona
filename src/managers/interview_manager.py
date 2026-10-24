@@ -93,6 +93,7 @@ from .shared.structured_log import log_event
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
+    from ..services.knowledge_base_store import KnowledgeBaseStore
     from ..services.s3_service import S3Service
 
 
@@ -229,6 +230,7 @@ class InterviewManager:
         agent_service: AgentService | None = None,
         database_service: Optional[DatabaseService] = None,
         dataset_analysis_service: Optional["DatasetAnalysisService"] = None,
+        knowledge_base_store: Optional["KnowledgeBaseStore"] = None,
         binding_store: Any = None,
         session_store: Optional[InterviewSessionStore] = None,
         discussion_records: Optional[DiscussionRecords] = None,
@@ -245,6 +247,8 @@ class InterviewManager:
             agent_service: Agent service (the singleton when omitted)
             database_service: Database service (the singleton when omitted)
             dataset_analysis_service: Dataset tools (the singleton when omitted)
+            knowledge_base_store: Registered knowledge bases for the KB tool
+                (the singleton when omitted)
             binding_store: ``PersonaBindings`` for the KB / dataset tools (U5)
             session_store: Sessions and messages outside the app (U6)
             discussion_records: Saves the interview as a discussion (U6)
@@ -265,6 +269,8 @@ class InterviewManager:
         self._resource_lookup = resource_lookup
         self._agent_integration = PersonaAgentIntegration(
             database_service=self.database_service,
+            knowledge_base_store=knowledge_base_store
+            or service_factory.get_knowledge_base_store(),
             agent_service=self.agent_service,
             dataset_analysis_service=self.dataset_analysis_service,
             binding_store=binding_store or service_factory.get_persona_binding_store(),

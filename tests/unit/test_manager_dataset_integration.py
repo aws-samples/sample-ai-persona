@@ -59,6 +59,7 @@ def _component(db, ds_service, agent_service=None):
     )
     return PersonaAgentIntegration(
         database_service=db,
+        knowledge_base_store=Mock(),
         agent_service=agent_service or Mock(),
         dataset_analysis_service=ds_service,
         binding_store=binding_store,

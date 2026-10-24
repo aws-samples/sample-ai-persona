@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from ..models.dataset import Dataset
     from ..models.survey_template import SurveyTemplate
     from ..models.survey import Survey
-    from ..models.knowledge_base import KnowledgeBase
 
 
 class DatabaseError(CodedError):
@@ -171,7 +170,6 @@ class DatabaseService:
         self.datasets_table = name_of("Datasets")
         self.survey_templates_table = name_of("SurveyTemplates")
         self.surveys_table = name_of("Surveys")
-        self.kb_table = name_of("KnowledgeBases")
 
     def _get_table_name(self, entity_type: str) -> str:
         """
@@ -1238,66 +1236,7 @@ class DatabaseService:
             item_id: self._deserialize_survey(item) for item_id, item in items.items()
         }
 
-    # ==================== KnowledgeBase Operations ====================
-
-    def save_knowledge_base(self, kb: "KnowledgeBase") -> "KnowledgeBase":
-        """Save a new KnowledgeBase entry ("id does not exist yet", U7 BR1.5).
-
-        The usage scope is never written here (only :meth:`update_asset_scope`).
-        """
-
-        def _save() -> "KnowledgeBase":
-            data = kb.to_dict()
-            data.pop("shared_group_ids", None)
-            item = {k: self.serializer.serialize(v) for k, v in data.items()}
-            self.dynamodb_client.put_item(
-                TableName=self.kb_table,
-                Item=item,
-                ConditionExpression="attribute_not_exists(id)",
-            )
-            return kb
-
-        return self._execute_with_retry(
-            _save, operation_name=f"save_knowledge_base({kb.id})"
-        )
-
-    def get_knowledge_base(
-        self, kb_id: str, *, consistent: bool = False
-    ) -> Optional["KnowledgeBase"]:
-        """Get a KnowledgeBase by internal ID."""
-        from ..models.knowledge_base import KnowledgeBase
-
-        def _get() -> Optional["KnowledgeBase"]:
-            response = self.dynamodb_client.get_item(
-                TableName=self.kb_table,
-                Key={"id": self.serializer.serialize(kb_id)},
-                ConsistentRead=consistent,
-            )
-            raw_item = response.get("Item")
-            if not raw_item:
-                return None
-            item = {k: self.deserializer.deserialize(v) for k, v in raw_item.items()}
-            return KnowledgeBase.from_dict(item)
-
-        return self._execute_with_retry(
-            _get, operation_name=f"get_knowledge_base({kb_id})"
-        )
-
-    def get_all_knowledge_bases(self) -> List["KnowledgeBase"]:
-        """Every registered KnowledgeBase, every scan page (NFR9.37)."""
-        from ..models.knowledge_base import KnowledgeBase
-
-        def _get_all() -> List["KnowledgeBase"]:
-            return [
-                KnowledgeBase.from_dict(
-                    {k: self.deserializer.deserialize(v) for k, v in item.items()}
-                )
-                for item in self._scan_items(self.kb_table)
-            ]
-
-        return self._execute_with_retry(
-            _get_all, operation_name="get_all_knowledge_bases"
-        )
+    # Knowledge bases are KnowledgeBaseStore (U7).
 
     # ==================== Organization asset scope (U7) ====================
 
@@ -1319,10 +1258,11 @@ class DatabaseService:
         column: the asset is admin only again.
 
         Args:
-            kind: ``"dataset"`` or ``"knowledge_base"``.
+            kind: ``"dataset"`` (knowledge bases are
+                ``KnowledgeBaseStore.update_scope``).
 
         Raises:
-            ValueError: ``kind`` is neither.
+            ValueError: ``kind`` is not ``"dataset"``.
             DatabaseConditionFailed: The asset does not exist (or is
                 persona-dedicated); nothing was created.
             DatabaseError: Anything else.
@@ -1332,9 +1272,6 @@ class DatabaseService:
             condition = (
                 "attribute_exists(id) AND attribute_not_exists(owner_persona_id)"
             )
-        elif kind == "knowledge_base":
-            table = self.kb_table
-            condition = "attribute_exists(id)"
         else:
             raise ValueError(f"no usage scope for {kind!r}")
         for action, groups in (("ADD", add), ("DELETE", remove)):
@@ -1508,20 +1445,6 @@ class DatabaseService:
             if not last:
                 return items
             request["ExclusiveStartKey"] = last
-
-    def delete_knowledge_base(self, kb_id: str) -> bool:
-        """Delete a KnowledgeBase by ID."""
-
-        def _delete() -> bool:
-            self.dynamodb_client.delete_item(
-                TableName=self.kb_table,
-                Key={"id": self.serializer.serialize(kb_id)},
-            )
-            return True
-
-        return self._execute_with_retry(
-            _delete, operation_name=f"delete_knowledge_base({kb_id})"
-        )
 
     # Persona bindings (KB / datasets) live in PersonaBindings and are read and
     # written by PersonaBindingStore (U5, ADR-007).
