@@ -453,6 +453,11 @@ _CATALOG: dict[ErrorCode, str] = {
         "トピック名は{max_length}文字以内で設定してください"
     ),
     ErrorCode.MEMORY_CONTENT_TOO_LONG: "内容は{max_length}文字以内で設定してください",
+    ErrorCode.KNOWLEDGE_FILE_CONTENT_TOO_LONG: (
+        "変換後の内容が長すぎます（{content_length}文字）。"
+        "1つの知識の内容は{max_length}文字以内である必要があります。"
+        "より小さいファイルを使用するか、ファイルを分割してアップロードしてください。"
+    ),
     ErrorCode.MEMORY_FEATURE_DISABLED: "長期記憶機能が無効です",
     ErrorCode.MEMORY_STRATEGY_NOT_CONFIGURED: (
         "Semantic記憶戦略が設定されていません。"

@@ -229,6 +229,8 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaManager.delete_dataset_binding": CHECKS,  # ensure_manageable（BR2.2）
     # persona_memory_manager.py — U5（管理できる人だけ、BR4.1）
     "PersonaMemoryManager.ensure_memory_manageable": CHECKS,
+    # 渡された文字列の長さを見るだけ（呼ぶ前に Router が ensure_memory_manageable を通す）
+    "PersonaMemoryManager.check_knowledge_file_content": NO_USER_DATA,
     "PersonaMemoryManager.add_knowledge": CHECKS,
     "PersonaMemoryManager.get_memories": CHECKS,
     "PersonaMemoryManager.delete_memory": CHECKS,

@@ -21,6 +21,9 @@ from .components.access_policy import AccessPolicy
 from .components.resource_lookup import ResourceLookup
 from .components.sharing_runtime import build_access_parts, shared_access_parts
 
+#: 1 つの知識の内容の上限（手入力でもファイルの変換結果でも同じ）
+MAX_KNOWLEDGE_CONTENT_CHARS = 10000
+
 
 class PersonaMemoryManagerError(CodedError):
     """記憶管理操作エラー"""
@@ -92,6 +95,27 @@ class PersonaMemoryManager:
         """
         self._ensure_manageable(principal, persona_id)
 
+    def check_knowledge_file_content(self, content: str) -> None:
+        """Reject a converted knowledge file longer than one knowledge entry may be.
+
+        The preview runs this so a file that ``add_knowledge`` would refuse is
+        refused before the user edits it. Pure length check; no I/O.
+
+        Raises:
+            PersonaMemoryManagerError: ``KNOWLEDGE_FILE_CONTENT_TOO_LONG`` with
+                ``max_length`` and ``content_length`` in the context
+        """
+        if len(content) > MAX_KNOWLEDGE_CONTENT_CHARS:
+            raise PersonaMemoryManagerError(
+                f"converted knowledge length {len(content)} exceeds "
+                f"{MAX_KNOWLEDGE_CONTENT_CHARS}",
+                code=ErrorCode.KNOWLEDGE_FILE_CONTENT_TOO_LONG,
+                context={
+                    "max_length": MAX_KNOWLEDGE_CONTENT_CHARS,
+                    "content_length": len(content),
+                },
+            )
+
     def _ensure_manageable(self, principal: Principal, persona_id: str) -> None:
         self._validate_persona_id(persona_id)
         target = self._resource_lookup.get(ResourceType.PERSONA, persona_id.strip())
@@ -149,11 +173,12 @@ class PersonaMemoryManager:
                 context={"max_length": 100},
             )
 
-        if len(topic_content) > 10000:
+        if len(topic_content) > MAX_KNOWLEDGE_CONTENT_CHARS:
             raise PersonaMemoryManagerError(
-                f"topic content length {len(topic_content)} exceeds 10000",
+                f"topic content length {len(topic_content)} exceeds "
+                f"{MAX_KNOWLEDGE_CONTENT_CHARS}",
                 code=ErrorCode.MEMORY_CONTENT_TOO_LONG,
-                context={"max_length": 10000},
+                context={"max_length": MAX_KNOWLEDGE_CONTENT_CHARS},
             )
 
         self._ensure_manageable(principal, persona_id)

@@ -435,6 +435,12 @@ class ErrorCode(StrEnum):
     MEMORY_CONTENT_REQUIRED = ("memory_content_required", ErrorKind.VALIDATION)
     MEMORY_TOPIC_NAME_TOO_LONG = ("memory_topic_name_too_long", ErrorKind.CAPACITY)
     MEMORY_CONTENT_TOO_LONG = ("memory_content_too_long", ErrorKind.CAPACITY)
+    # Same limit as MEMORY_CONTENT_TOO_LONG, but the fix is different: a
+    # converted file is shortened by splitting the file, not by editing text.
+    KNOWLEDGE_FILE_CONTENT_TOO_LONG = (
+        "knowledge_file_content_too_long",
+        ErrorKind.CAPACITY,
+    )
     MEMORY_FEATURE_DISABLED = ("memory_feature_disabled", ErrorKind.CONFIG)
     MEMORY_STRATEGY_NOT_CONFIGURED = (
         "memory_strategy_not_configured",

@@ -1543,24 +1543,8 @@ async def upload_knowledge_file_preview(
             file.filename,  # type: ignore[arg-type]
         )
 
-        # 内容の文字数チェック（10000文字制限）
-        if len(markdown_content) > 10000:
-            logger.warning(
-                f"Knowledge file content too long for persona {persona_id}: "
-                f"{len(markdown_content)} chars (limit: 10000)"
-            )
-            return templates.TemplateResponse(
-                request,
-                "persona/partials/knowledge_file_error.html",
-                {
-                    "request": request,
-                    "error": (
-                        f"変換後の内容が長すぎます（{len(markdown_content)}文字）。"
-                        f"1つの知識の内容は10000文字以内である必要があります。"
-                        f"より小さいファイルを使用するか、ファイルを分割してアップロードしてください。"
-                    ),
-                },
-            )
+        # 1 つの知識の上限は手入力と同じ（判定は Manager。文字数を見るだけ）
+        get_persona_memory_manager().check_knowledge_file_content(markdown_content)
 
         # ファイル名から拡張子を除去してトピック名を生成
         topic_name = Path(file.filename).stem  # type: ignore[arg-type]
