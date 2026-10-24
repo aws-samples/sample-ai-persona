@@ -863,7 +863,7 @@ def _u7_call(world, op: str, principal: Principal, resource_id: str) -> None:
         sleep=lambda _s: None,
     )
     if action == "read":
-        surveys.get_survey(principal, resource_id)
+        surveys.get_survey_detail(principal, resource_id)
     else:
         surveys.delete_survey(principal, resource_id)
 

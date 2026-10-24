@@ -1168,12 +1168,6 @@ async def get_persona_list_partial(
 MEMORIES_PER_PAGE = 10
 
 
-class MemoryUIError(Exception):
-    """Memory UI操作エラー"""
-
-    pass
-
-
 # 記憶の 5 つの入口は、管理できないペルソナ（共有されただけの人・無関係の人）に
 # ないものと同じ 404 を返す（BR4.1、AC4.2.4）。PersonaMemoryManagerError のうち
 # NOT_FOUND は PERSONA_NOT_FOUND だけなので、種類で見て共通の例外ハンドラへ渡す。

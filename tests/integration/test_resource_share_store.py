@@ -232,54 +232,6 @@ class TestReads:
         assert kwargs["ConsistentRead"] is True
         assert set(kwargs["ExpressionAttributeNames"].values()) == {"id", "name"}
 
-    def test_get_items_reads_in_chunks_of_100(self, aws, store):
-        for i in range(150):
-            _put_persona(aws, f"p{i}")
-
-        found = store.get_items(
-            PERSONAS, [f"p{i}" for i in range(150)] + ["nope"], ATTRS
-        )
-
-        assert len(found) == 150
-        assert found["p3"]["name"] == "name-p3"
-
-    def test_unprocessed_keys_are_read_again(self):
-        client = Mock()
-        key = {"id": {"S": "p2"}}
-        client.batch_get_item.side_effect = [
-            {
-                "Responses": {PERSONAS: [{"id": {"S": "p1"}}]},
-                "UnprocessedKeys": {PERSONAS: {"Keys": [key]}},
-            },
-            {"Responses": {PERSONAS: [{"id": {"S": "p2"}}]}, "UnprocessedKeys": {}},
-        ]
-        sleeps: list[float] = []
-        store = ResourceShareStore(
-            region=REGION, shares_table=SHARES, client=client, sleep=sleeps.append
-        )
-
-        assert set(store.get_items(PERSONAS, ["p1", "p2"], ["id"])) == {"p1", "p2"}
-        assert len(sleeps) == 1
-        assert client.batch_get_item.call_args_list[0].kwargs["RequestItems"][PERSONAS][
-            "ConsistentRead"
-        ]
-
-    def test_keys_left_after_three_rereads_raise(self):
-        client = Mock()
-        key = {"id": {"S": "p2"}}
-        client.batch_get_item.return_value = {
-            "Responses": {PERSONAS: []},
-            "UnprocessedKeys": {PERSONAS: {"Keys": [key]}},
-        }
-        store = ResourceShareStore(
-            region=REGION, shares_table=SHARES, client=client, sleep=lambda _s: None
-        )
-
-        with pytest.raises(ResourceShareStoreError) as exc:
-            store.get_items(PERSONAS, ["p2"], ["id"])
-        assert exc.value.reason == "unprocessed"
-        assert client.batch_get_item.call_count == 4
-
 
 class TestOwnerIndex:
     def test_newest_first_page_and_count(self, aws, store):

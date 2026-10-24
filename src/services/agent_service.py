@@ -1099,22 +1099,6 @@ class AgentService:
         capacity_markers = ("max_tokens", "read timed out", "read timeout")
         return any(marker in message for marker in capacity_markers)
 
-    def create_data_agent_tools(self, event_queue: Any = None) -> list[Any]:
-        """DWH用ツールリストを生成する"""
-        from .data_agent_service import create_data_agent_tool
-
-        if not config.DATA_AGENT_RUNTIME_ARN:
-            raise AgentServiceError(
-                "DATA_AGENT_RUNTIME_ARN is not configured",
-                code=ErrorCode.DATA_AGENT_NOT_CONFIGURED,
-            )
-        tool = create_data_agent_tool(
-            config.DATA_AGENT_RUNTIME_ARN,
-            config.DATA_AGENT_REGION,
-            event_queue=event_queue,
-        )
-        return [tool]
-
     # =========================================================================
 
     # =========================================================================

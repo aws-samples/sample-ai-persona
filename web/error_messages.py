@@ -247,9 +247,6 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.SURVEY_EXECUTION_FAILED: (
         "アンケートの実行中にエラーが発生しました。時間をおいて再度お試しください。"
     ),
-    ErrorCode.SURVEY_REPORT_GENERATION_FAILED: (
-        "レポート生成に失敗しました。再試行してください。"
-    ),
     # --- 議論 ---
     ErrorCode.DISCUSSION_INTERVIEW_MODE_UNSUPPORTED: (
         "インタビューモードは別のエンドポイントで処理されます"

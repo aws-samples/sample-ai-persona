@@ -558,14 +558,6 @@ class DiscussionStore:
 
     # --- the cleanup script (BR1.6; operators' credentials, not the task role) ------
 
-    def message_discussion_ids(self) -> dict[str, int]:
-        """Discussion ID -> number of messages, over the whole messages table."""
-        return {k: v.count for k, v in self.message_partitions().items()}
-
-    def report_discussion_ids(self) -> dict[str, int]:
-        """Discussion ID -> number of reports, over the whole reports table."""
-        return {k: v.count for k, v in self.report_partitions().items()}
-
     def message_partitions(self) -> dict[str, PartitionSummary]:
         """Discussion ID -> count and newest write time of its messages."""
         return self._scan_partitions(self.messages_table)

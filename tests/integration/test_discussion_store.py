@@ -510,14 +510,6 @@ class TestFailureClassification:
 
 
 class TestOrphanScans:
-    def test_lists_the_discussions_that_have_messages_or_reports(self, store):
-        store.write_messages(_messages("d1", 3) + _messages("d2", 1))
-        assert store.message_discussion_ids() == {"d1": 3, "d2": 1}
-        d = _discussion()
-        store.put_new(d.to_dict())
-        store.put_report(_report(d.id), max_reports=3, updated_at="u")
-        assert store.report_discussion_ids() == {d.id: 1}
-
     def test_partitions_carry_the_newest_write_time(self, client):
         """発言は書いた時刻（written_at）を持ち、後始末は 1 時間以内のものを飛ばす。"""
         store = make_store(client, clock=lambda: 1_800_000_000.0)

@@ -156,7 +156,6 @@ CLASSIFICATION: dict[str, Entry] = {
     "AuthManager.complete_new_password": NO_USER_DATA,
     # dataset_manager.py — U7（設定は settings:manage、なければ 404。security-design.md 1.4）
     "DatasetManager.analyze_schema": CHECKS,
-    "DatasetManager.download_csv_from_url": CHECKS,
     "DatasetManager.upload_csv": CHECKS,
     "DatasetManager.get_datasets": CHECKS,
     "DatasetManager.get_dataset": CHECKS,
@@ -266,8 +265,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "SurveyAnalysisManager.result_cache": NO_USER_DATA,  # キャッシュの実体を返すだけ
     "SurveyAnalysisManager.get_visual_analysis": CHECKS,  # ensure_readable
     "SurveyAnalysisManager.get_persona_statistics": CHECKS,  # ensure_readable
-    "SurveyAnalysisManager.generate_insight_report": CHECKS,  # ai:execute + manage
-    "SurveyAnalysisManager.generate_insight_report_streaming": CHECKS,  # 同上
+    "SurveyAnalysisManager.generate_insight_report_streaming": CHECKS,  # ai:execute + manage
     "SurveyAnalysisManager.save_insight_report": CHECKS,  # 同上
     # survey_dataset_manager.py — U7（管理は settings:manage、参照は can_use_asset）
     "SurveyDatasetManager.check_nemotron_status": NO_USER_DATA,  # 取り込みの有無だけ
@@ -298,10 +296,8 @@ CLASSIFICATION: dict[str, Entry] = {
     "SurveyExecutionManager.result_cache": NO_USER_DATA,  # キャッシュの実体を返すだけ
     "SurveyExecutionManager.create_survey": CHECKS,
     "SurveyExecutionManager.list_surveys": CHECKS,  # ResourceSharing + can_read
-    "SurveyExecutionManager.get_survey": CHECKS,  # ensure_readable
-    "SurveyExecutionManager.get_survey_detail": CHECKS,  # 同上 + can_manage
+    "SurveyExecutionManager.get_survey_detail": CHECKS,  # ensure_readable + can_manage
     "SurveyExecutionManager.get_download_url": CHECKS,  # 同上
-    "SurveyExecutionManager.download_results_csv": CHECKS,  # 同上
     "SurveyExecutionManager.get_result_image_url": CHECKS,  # 同上 + 写しの画像だけ
     "SurveyExecutionManager.delete_survey": CHECKS,  # delete_with_shares
     "SurveyExecutionManager.normalize_filters": NO_USER_DATA,  # 入力の整形だけ

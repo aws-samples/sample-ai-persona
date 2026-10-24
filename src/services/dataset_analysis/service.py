@@ -16,7 +16,6 @@ from typing import (
     Sequence,
     Tuple,
     TYPE_CHECKING,
-    TypedDict,
 )
 
 from .dataset_tools import ResolvedDataset, ToolLimits, create_analyze_dataset_tool
@@ -26,21 +25,6 @@ if TYPE_CHECKING:
     from ...models.dataset import Dataset
 
 logger = logging.getLogger(__name__)
-
-
-class BindingDescriptor(TypedDict):
-    """binding 経路の入口記述子（discussion / interview）。"""
-
-    dataset_id: str
-    binding_keys: Dict[str, str]
-
-
-class SourceDescriptor(TypedDict):
-    """persona 生成 source 経路の入口記述子。forced_filter は持たない。"""
-
-    alias: str
-    path: str
-    columns: List[str]
 
 
 class DatasetAnalysisService:

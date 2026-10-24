@@ -852,14 +852,6 @@ class SurveyExecutionManager:
     # 読む（BR1.3、BR2.6〜BR2.10）
     # =========================================================================
 
-    def get_survey(self, principal: Principal, survey_id: str) -> Survey:
-        """A survey the user may read (BR1.3).
-
-        Raises:
-            CodedError: ``SURVEY_NOT_FOUND`` (unreadable or missing).
-        """
-        return self._readable_survey(principal, survey_id)
-
     def _readable_survey(self, principal: Principal, survey_id: str) -> Survey:
         target = self._resource_lookup.get(_SURVEY, survey_id)
         AccessPolicy.ensure_readable(principal, target, ErrorCode.SURVEY_NOT_FOUND)
@@ -912,11 +904,6 @@ class SurveyExecutionManager:
         return self.s3_service.generate_presigned_url(
             self._result_path(survey), expiration
         )
-
-    def download_results_csv(self, principal: Principal, survey_id: str) -> bytes:
-        """The result CSV, after the read check (BR2.6)."""
-        survey = self._readable_survey(principal, survey_id)
-        return self.s3_service.download_file(self._result_path(survey))
 
     @staticmethod
     def _result_path(survey: Survey) -> str:

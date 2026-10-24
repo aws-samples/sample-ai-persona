@@ -443,28 +443,6 @@ class SurveyAnalysisManager:
         summary = self._generate_statistical_summary(csv_text, questions)
         return build_insight_prompt(summary, questions)  # type: ignore[arg-type]
 
-    def generate_insight_report(
-        self, principal: Principal, survey_id: str
-    ) -> InsightReport:
-        """インサイトレポートを生成して保存する（管理できる人だけ、BR2.11）。
-
-        Raises:
-            AccessDeniedError: No ``ai:execute``, or readable but not manageable.
-            CodedError: ``SURVEY_NOT_FOUND``, ``SURVEY_RESULT_NOT_READY``,
-                ``SURVEY_REPORT_TOO_LARGE`` or ``SURVEY_REPORT_GENERATION_FAILED``.
-        """
-        survey = self._manageable_survey(principal, survey_id)
-        prompt = self._report_prompt(principal, survey)
-        try:
-            content = self.ai_service.invoke_model(prompt, max_tokens=8000)
-        except Exception as e:
-            logger.error("Failed to generate insight report: %s", type(e).__name__)
-            raise SurveyAnalysisManagerError(
-                f"insight report generation failed ({type(e).__name__})",
-                code=ErrorCode.SURVEY_REPORT_GENERATION_FAILED,
-            ) from e
-        return self._store_report(survey, content)
-
     def generate_insight_report_streaming(
         self, principal: Principal, survey_id: str
     ) -> Iterator[str]:

@@ -235,10 +235,6 @@ class PersonaCandidate:
         """The generated name (for results and logs shown to the owner)."""
         return str(self.persona_payload.get("name", ""))
 
-    def behavior_dataset(self, temp_id: str) -> BehaviorDatasetCandidate | None:
-        """The behaviour CSV with ``temp_id``, or ``None`` (BR1.5)."""
-        return next((b for b in self.behavior_datasets if b.temp_id == temp_id), None)
-
     def to_persona(self) -> Persona:
         """A new, unsaved persona with the payload and the generation record.
 
