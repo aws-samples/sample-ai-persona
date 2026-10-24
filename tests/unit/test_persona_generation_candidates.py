@@ -506,7 +506,7 @@ class TestHoldIsConfirmedBeforeEachSave:
         ids = [p.id for p in _generate(generation, count=2).personas]
         claim = generation.claim_candidates(A, ids)
         # the second candidate is taken over while the first one is saved
-        original = world.db.save_persona.side_effect
+        original = world.db.put_new.side_effect
 
         def stall_then_take_over(persona):
             saved = original(persona)
@@ -514,7 +514,7 @@ class TestHoldIsConfirmedBeforeEachSave:
             store.claim(ids[1], A.sub, "another-request", clock.now)
             return saved
 
-        world.db.save_persona.side_effect = stall_then_take_over
+        world.db.put_new.side_effect = stall_then_take_over
         result = self._persona_manager(store, world, clock).save_generated_personas(
             A, claim
         )

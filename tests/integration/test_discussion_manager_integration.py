@@ -118,8 +118,8 @@ class TestDiscussionManagerIntegration:
         )
 
         # Save personas to database
-        self.mock_database_service.save_persona(self.persona1)
-        self.mock_database_service.save_persona(self.persona2)
+        self.mock_database_service.put_new(self.persona1)
+        self.mock_database_service.put_new(self.persona2)
 
         # Create realistic test messages
         self.test_messages = [

@@ -14,7 +14,7 @@ from src.models.authz import Principal, Role
 from src.models.errors import CodedError
 from src.models.persona import Persona
 from src.services.ai_service import AIService
-from src.services.database_service import DatabaseError
+from src.services.persona_store import PersonaStoreError
 
 #: The saver / owner and an admin (U4: saving and editing take the user).
 OWNER = Principal("local:owner@example.com", frozenset({Role.MEMBER}))
@@ -70,10 +70,10 @@ class TestPersonaManagerIntegration:
                 if occupation_pattern.lower() in p.occupation.lower()
             ]
 
-        mock_db.save_persona.side_effect = mock_save_persona
-        mock_db.get_persona.side_effect = mock_get_persona
+        mock_db.put_new.side_effect = mock_save_persona
+        mock_db.get.side_effect = mock_get_persona
         mock_db.get_all_personas.side_effect = mock_get_all_personas
-        mock_db.update_persona.side_effect = mock_update_persona
+        mock_db.update_editable.side_effect = mock_update_persona
         mock_db.delete_persona_returning_old.side_effect = (
             mock_delete_persona_returning_old
         )
@@ -110,7 +110,7 @@ class TestPersonaManagerIntegration:
         bindings = Mock()
         bindings.list_for_persona.return_value = []
         return PersonaManager(
-            database_service=database_service,
+            persona_store=database_service,
             resource_sharing=sharing,
             binding_store=bindings,
             memory_service=None,
@@ -170,15 +170,15 @@ class TestPersonaManagerIntegration:
     @patch("src.managers.persona_manager.service_factory")
     def test_persona_manager_initialization(self, mock_sf, mock_database_service):
         """Test persona manager initialization."""
-        mock_sf.get_database_service.return_value = mock_database_service
+        mock_sf.get_persona_store.return_value = mock_database_service
 
         # Test with default services
         manager = PersonaManager()
-        assert manager.database_service is not None
+        assert manager._personas is mock_database_service
 
         # Test with custom services
-        manager = PersonaManager(database_service=mock_database_service)
-        assert manager.database_service == mock_database_service
+        manager = PersonaManager(persona_store=mock_database_service)
+        assert manager._personas is mock_database_service
 
     def test_save_persona_success(self, persona_manager, sample_persona_data):
         """Test successful persona saving."""
@@ -379,11 +379,9 @@ class TestPersonaManagerIntegration:
         """Test handling of database errors."""
         # Create a mock database service that raises an error
         error_db_service = Mock()
-        error_db_service.save_persona.side_effect = DatabaseError(
-            "Database save failed"
-        )
+        error_db_service.put_new.side_effect = PersonaStoreError("Database save failed")
 
-        manager = PersonaManager(database_service=error_db_service)
+        manager = PersonaManager(persona_store=error_db_service)
 
         # Test that database errors are properly handled
         persona = Persona.create_new(

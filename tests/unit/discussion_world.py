@@ -324,7 +324,7 @@ class World:
             "p2": persona("p2", "b", "鈴木", shared_group_ids=frozenset({"sales"})),
             "p3": persona("p3", "c", "田中"),
         }
-        self.bodies.get_personas_by_ids.side_effect = lambda ids: {
+        self.bodies.get_many.side_effect = lambda ids: {
             i: self.persona_bodies[i] for i in ids if i in self.persona_bodies
         }
         self.participants = ParticipantReader(self.lookup, self.bodies)

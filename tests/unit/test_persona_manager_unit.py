@@ -19,7 +19,7 @@ OWNER = Principal("sub-owner", frozenset({Role.MEMBER}))
 @pytest.fixture
 def mock_db():
     mock = Mock()
-    mock.get_persona.return_value = Persona.create_new(
+    mock.get.return_value = Persona.create_new(
         name="テスト",
         age=30,
         occupation="会社員",
@@ -33,7 +33,7 @@ def mock_db():
 
 @pytest.fixture
 def manager(mock_db):
-    return PersonaManager(database_service=mock_db)
+    return PersonaManager(persona_store=mock_db)
 
 
 class TestGeneratePersonas:
@@ -173,7 +173,7 @@ class TestSavePersona:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(database_service=Mock())
+        return PersonaManager(persona_store=Mock())
 
     def test_none_persona_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_INVALID):
@@ -189,13 +189,12 @@ class TestSavePersona:
             pain_points=["p"],
             goals=["g"],
         )
-        manager.database_service.save_persona.return_value = persona.id
         result = manager.save_persona(OWNER, persona)
         assert result == persona.id
-        manager.database_service.save_persona.assert_called_once()
+        manager._personas.put_new.assert_called_once()
 
     def test_db_error(self, manager):
-        from src.services.database_service import DatabaseError
+        from src.services.persona_store import PersonaStoreError
 
         persona = Persona.create_new(
             name="テスト",
@@ -206,7 +205,7 @@ class TestSavePersona:
             pain_points=["p"],
             goals=["g"],
         )
-        manager.database_service.save_persona.side_effect = DatabaseError("DB down")
+        manager._personas.put_new.side_effect = PersonaStoreError("DB down")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.save_persona(OWNER, persona)
 
@@ -227,7 +226,7 @@ class TestGetPersonasForUse:
 
     @pytest.fixture
     def manager(self, world):
-        return PersonaManager(database_service=Mock(), participants=world.participants)
+        return PersonaManager(persona_store=Mock(), participants=world.participants)
 
     def test_readable_personas_in_order(self, manager, world):
         from tests.unit.discussion_world import OWNER as RUNNER
@@ -240,7 +239,7 @@ class TestGetPersonasForUse:
 
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
             manager.get_personas_for_use(RUNNER, ["p1", "p3"])
-        world.bodies.get_personas_by_ids.assert_not_called()
+        world.bodies.get_many.assert_not_called()
 
     def test_missing_persona_is_not_found(self, manager):
         from tests.unit.discussion_world import OWNER as RUNNER
@@ -281,26 +280,26 @@ class TestEditPersona:
             pain_points=["p"],
             goals=["g"],
         ).owned_by(OWNER.sub)
-        mock_db.get_persona.return_value = persona
-        mock_db.update_persona.return_value = True
-        return PersonaManager(database_service=mock_db, resource_sharing=Mock())
+        mock_db.get.return_value = persona
+        mock_db.update_editable.return_value = True
+        return PersonaManager(persona_store=mock_db, resource_sharing=Mock())
 
     def test_empty_id_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
             manager.update_persona(OWNER, "")
 
     def test_persona_not_found(self, manager):
-        manager.database_service.get_persona.return_value = None
+        manager._personas.get.return_value = None
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
             manager.update_persona(OWNER, "p1", name="新名前")
 
     def test_success(self, manager):
         result = manager.update_persona(OWNER, "p1", name="新名前")
         assert result.name == "新名前"
-        manager.database_service.update_persona.assert_called_once()
+        manager._personas.update_editable.assert_called_once()
 
     def test_deleted_while_editing_is_not_found(self, manager):
-        manager.database_service.update_persona.return_value = False
+        manager._personas.update_editable.return_value = False
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_NOT_FOUND):
             manager.update_persona(OWNER, "p1", name="新名前")
 
@@ -309,21 +308,21 @@ class TestEditPersona:
             manager.update_persona(OWNER, "p1", name=" ")
 
     def test_db_error(self, manager):
-        manager.database_service.update_persona.side_effect = RuntimeError("down")
+        manager._personas.update_editable.side_effect = RuntimeError("down")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.update_persona(OWNER, "p1", name="新名前")
 
     def test_read_error(self, manager):
-        manager.database_service.get_persona.side_effect = RuntimeError("down")
+        manager._personas.get.side_effect = RuntimeError("down")
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
             manager.update_persona(OWNER, "p1", name="新名前")
 
     def test_other_member_cannot_edit(self, manager):
         shared = replace(
-            manager.database_service.get_persona.return_value,
+            manager._personas.get.return_value,
             shared_group_ids=frozenset({"sales"}),
         )
-        manager.database_service.get_persona.return_value = shared
+        manager._personas.get.return_value = shared
         member = Principal("sub-other", frozenset({Role.MEMBER}), frozenset({"sales"}))
         with pytest.raises(AccessDeniedError):
             manager.update_persona(member, "p1", name="新名前")
@@ -334,7 +333,7 @@ class TestDeletePersona:
 
     @pytest.fixture
     def manager(self):
-        return PersonaManager(database_service=Mock(), resource_sharing=Mock())
+        return PersonaManager(persona_store=Mock(), resource_sharing=Mock())
 
     def test_empty_id_raises(self, manager):
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_ID_INVALID):
@@ -387,8 +386,8 @@ class TestValidatePersonaForSave:
     @pytest.fixture
     def manager(self):
         mock_db = Mock()
-        mock_db.save_persona.return_value = "id-123"
-        return PersonaManager(database_service=mock_db)
+        mock_db.put_new.return_value = None
+        return PersonaManager(persona_store=mock_db)
 
     # --- 必須フィールド ---
 
@@ -543,12 +542,12 @@ class TestValidatePersonaForSave:
     def test_valid_gender_passes(self, manager):
         persona = _valid_persona(gender="male")
         result = manager.save_persona(OWNER, persona)
-        assert result == "id-123"
+        assert result == persona.id
 
     def test_none_gender_passes(self, manager):
         persona = _valid_persona(gender=None)
         result = manager.save_persona(OWNER, persona)
-        assert result == "id-123"
+        assert result == persona.id
 
     # --- 国コードバリデーション ---
 
@@ -564,7 +563,7 @@ class TestValidatePersonaForSave:
         mock_cs.is_valid_country.return_value = True
         persona = _valid_persona(country="JP")
         result = manager.save_persona(OWNER, persona)
-        assert result == "id-123"
+        assert result == persona.id
 
     # --- 都市バリデーション ---
 
@@ -615,7 +614,7 @@ class TestValidatePersonaForSave:
     def test_valid_tags_passes(self, manager):
         persona = _valid_persona(tags=["タグ1", "タグ2"])
         result = manager.save_persona(OWNER, persona)
-        assert result == "id-123"
+        assert result == persona.id
 
 
 # 紐付けの作成・一覧・削除（U5、PersonaBindings）は

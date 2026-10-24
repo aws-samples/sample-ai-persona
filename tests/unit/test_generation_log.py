@@ -1,7 +1,7 @@
 """Tests for persona generation log persistence."""
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from src.models.persona import Persona
 
@@ -107,19 +107,20 @@ class TestPersonaGenerationLogModel:
         assert restored.generation_context == SAMPLE_CONTEXT
 
 
-class TestDatabaseServiceGenerationLog:
-    """DatabaseService の serialize/deserialize での generation_log テスト"""
+class TestPersonaStoreGenerationLog:
+    """PersonaStore が書く項目・読み戻す値での generation_log のテスト"""
 
-    @patch("boto3.client")
-    def test_serialize_with_generation_log(self, mock_boto3_client):
-        from src.services.database_service import DatabaseService
+    @staticmethod
+    def _written(persona: Persona) -> dict:
+        from src.services.persona_store import PersonaStore
 
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-        service = DatabaseService()
+        client = Mock()
+        PersonaStore(region="us-east-1", table_name="T", client=client).put_new(persona)
+        return client.put_item.call_args.kwargs["Item"]
 
-        persona = Persona(
+    @staticmethod
+    def _persona(**kwargs) -> Persona:
+        return Persona(
             id="test-id",
             name="Test",
             age=30,
@@ -130,98 +131,36 @@ class TestDatabaseServiceGenerationLog:
             goals=["g"],
             created_at=datetime(2026, 1, 1),
             updated_at=datetime(2026, 1, 1),
-            generation_log=SAMPLE_LOG,
-            generation_context=SAMPLE_CONTEXT,
+            **kwargs,
         )
-        serialized = service._serialize_persona(persona)
-        assert "generation_log" in serialized
-        assert "generation_context" in serialized
 
-    @patch("boto3.client")
-    def test_serialize_without_generation_log(self, mock_boto3_client):
-        from src.services.database_service import DatabaseService
-
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-        service = DatabaseService()
-
-        persona = Persona(
-            id="test-id",
-            name="Test",
-            age=30,
-            occupation="Eng",
-            background="bg",
-            values=["v"],
-            pain_points=["p"],
-            goals=["g"],
-            created_at=datetime(2026, 1, 1),
-            updated_at=datetime(2026, 1, 1),
+    def test_written_with_generation_log(self):
+        item = self._written(
+            self._persona(generation_log=SAMPLE_LOG, generation_context=SAMPLE_CONTEXT)
         )
-        serialized = service._serialize_persona(persona)
-        assert "generation_log" not in serialized
-        assert "generation_context" not in serialized
+        assert "generation_log" in item
+        assert "generation_context" in item
 
-    @patch("boto3.client")
-    def test_deserialize_with_generation_log(self, mock_boto3_client):
-        from src.services.database_service import DatabaseService
+    def test_written_without_generation_log(self):
+        item = self._written(self._persona())
+        assert "generation_log" not in item
+        assert "generation_context" not in item
 
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-        service = DatabaseService()
+    def test_read_back_with_generation_log(self):
+        from src.services.persona_store import PersonaStore
 
-        item = {
-            "id": {"S": "test-id"},
-            "name": {"S": "Test"},
-            "age": {"N": "30"},
-            "occupation": {"S": "Eng"},
-            "background": {"S": "bg"},
-            "values": {"L": [{"S": "v"}]},
-            "pain_points": {"L": [{"S": "p"}]},
-            "goals": {"L": [{"S": "g"}]},
-            "created_at": {"S": "2026-01-01T00:00:00"},
-            "updated_at": {"S": "2026-01-01T00:00:00"},
-            "type": {"S": "persona"},
-            "generation_log": {
-                "L": [
-                    {"M": {"type": {"S": "thinking"}, "content": {"S": "分析中"}}},
-                ]
-            },
-            "generation_context": {
-                "M": {
-                    "data_type": {"S": "interview"},
-                    "persona_count": {"N": "1"},
-                }
-            },
-        }
-        persona = service._deserialize_persona(item)
-        assert persona.generation_log == [{"type": "thinking", "content": "分析中"}]
-        assert persona.generation_context["data_type"] == "interview"
+        store = PersonaStore(region="us-east-1", table_name="T", client=Mock())
+        persona = self._persona(
+            generation_log=SAMPLE_LOG, generation_context=SAMPLE_CONTEXT
+        )
+        restored = store._persona(self._written(persona))
+        assert restored.generation_log == SAMPLE_LOG
+        assert restored.generation_context == SAMPLE_CONTEXT
 
-    @patch("boto3.client")
-    def test_deserialize_without_generation_log(self, mock_boto3_client):
-        """既存データ（フィールドなし）のデシリアライズ"""
-        from src.services.database_service import DatabaseService
+    def test_read_back_without_generation_log(self):
+        from src.services.persona_store import PersonaStore
 
-        mock_client = Mock()
-        mock_client.list_tables.return_value = {"TableNames": []}
-        mock_boto3_client.return_value = mock_client
-        service = DatabaseService()
-
-        item = {
-            "id": {"S": "test-id"},
-            "name": {"S": "Test"},
-            "age": {"N": "30"},
-            "occupation": {"S": "Eng"},
-            "background": {"S": "bg"},
-            "values": {"L": [{"S": "v"}]},
-            "pain_points": {"L": [{"S": "p"}]},
-            "goals": {"L": [{"S": "g"}]},
-            "created_at": {"S": "2026-01-01T00:00:00"},
-            "updated_at": {"S": "2026-01-01T00:00:00"},
-            "type": {"S": "persona"},
-        }
-        persona = service._deserialize_persona(item)
-        assert persona.generation_log is None
-        assert persona.generation_context is None
+        store = PersonaStore(region="us-east-1", table_name="T", client=Mock())
+        restored = store._persona(self._written(self._persona()))
+        assert restored.generation_log is None
+        assert restored.generation_context is None

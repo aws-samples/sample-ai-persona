@@ -139,14 +139,14 @@ def plan_cleanup(
             continue
         by_survey.setdefault(match.group(1), []).append(stored)
     alive = _existing(surveys, "get_many", sorted(by_survey))
-    for survey_id, stored in sorted(by_survey.items()):
+    for survey_id, results in sorted(by_survey.items()):
         if survey_id in alive:
             continue
-        if max(s.written_at for s in stored) > limit:
+        if max(s.written_at for s in results) > limit:
             plan.recent.append(f"{RESULTS_PREFIX}{survey_id}/")
             continue
-        plan.results[survey_id] = len(stored)
-        plan.result_keys[survey_id] = sorted(s.key for s in stored)
+        plan.results[survey_id] = len(results)
+        plan.result_keys[survey_id] = sorted(s.key for s in results)
 
     files: dict[str, StoredObject] = {}
     for stored in _list(objects, CUSTOM_PREFIX):
