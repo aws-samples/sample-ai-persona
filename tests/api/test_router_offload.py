@@ -42,17 +42,7 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
     ): f"受け取ったバイト列の拡張子・大きさ・空を見るだけで{_NO_IO}",
     (
         "persona.py",
-        "update_persona",
-        "avatar_upload_enabled",
-    ): f"S3 の設定があるかを属性で見るだけで{_NO_IO}",
-    (
-        "persona.py",
-        "get_persona_detail",
-        "avatar_upload_enabled",
-    ): f"S3 の設定があるかを属性で見るだけで{_NO_IO}",
-    (
-        "persona.py",
-        "get_persona_detail_header",
+        "_detail_context",
         "avatar_upload_enabled",
     ): f"S3 の設定があるかを属性で見るだけで{_NO_IO}",
     (

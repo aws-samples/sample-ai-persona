@@ -21,7 +21,11 @@ from fastapi.templating import Jinja2Templates
 
 from src.config import config
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
-from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.managers.persona_manager import (
+    PersonaDetail,
+    PersonaManager,
+    PersonaManagerError,
+)
 from src.managers.persona_memory_manager import (
     PersonaMemoryManager,
     PersonaMemoryManagerError,
@@ -757,6 +761,17 @@ async def _render_edit_form_with_error(
     )
 
 
+def _detail_context(detail: PersonaDetail) -> dict[str, Any]:
+    """The header values the detail page, its reload and the edit swap share (R-07)."""
+    return {
+        "persona": detail.persona,
+        "manageable": detail.manageable,
+        "owner_label": detail.owner_label,
+        "shared_with": detail.shared_with,
+        "avatar_upload_enabled": get_persona_manager().avatar_upload_enabled(),
+    }
+
+
 @router.put("/{persona_id}", response_class=HTMLResponse)
 async def update_persona(
     request: Request,
@@ -804,12 +819,8 @@ async def update_persona(
             "persona/partials/detail_swap.html",
             {
                 "request": request,
-                "persona": detail.persona,
-                "manageable": detail.manageable,
-                "owner_label": detail.owner_label,
-                "shared_with": detail.shared_with,
+                **_detail_context(detail),
                 "message": "ペルソナを更新しました",
-                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
             },
         )
     except CodedError as e:
@@ -865,19 +876,13 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
             _principal(request),
             persona_id,
         )
-        persona = detail.persona
-
         return templates.TemplateResponse(
             request,
             "persona/detail.html",
             {
                 "request": request,
-                "title": f"ペルソナ: {persona.name}",
-                "persona": persona,
-                "manageable": detail.manageable,
-                "owner_label": detail.owner_label,
-                "shared_with": detail.shared_with,
-                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
+                "title": f"ペルソナ: {detail.persona.name}",
+                **_detail_context(detail),
             },
         )
     except (HTTPException, CodedError):
@@ -914,11 +919,7 @@ async def get_persona_detail_header(request: Request, persona_id: str) -> Any:
             "persona/partials/detail_header_body.html",
             {
                 "request": request,
-                "persona": detail.persona,
-                "manageable": detail.manageable,
-                "owner_label": detail.owner_label,
-                "shared_with": detail.shared_with,
-                "avatar_upload_enabled": persona_manager.avatar_upload_enabled(),
+                **_detail_context(detail),
             },
         )
     except (HTTPException, CodedError):
