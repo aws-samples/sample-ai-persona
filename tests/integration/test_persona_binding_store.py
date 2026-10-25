@@ -15,7 +15,11 @@ moto = pytest.importorskip("moto", reason="moto is required for DynamoDB tests")
 
 import boto3  # noqa: E402
 
-from src.models.persona_binding import KB_TARGET_KEY, PersonaBinding  # noqa: E402
+from src.models.persona_binding import (  # noqa: E402
+    KB_TARGET_KEY,
+    PersonaBinding,
+    dataset_target_key,
+)
 from src.services.stores.persona_binding_store import (  # noqa: E402
     PersonaBindingStore,
     PersonaBindingStoreError,
@@ -167,16 +171,28 @@ class TestDeleteForTarget:
     def test_deletes_every_binding_to_the_target(self, store):
         store.put(_dataset("p1", "d1"))
         store.put(_dataset("p2", "d1"))
-        store.put(PersonaBinding.for_kb("p3", "d1", now=NOW))
         store.put(_dataset("p1", "other"))
-        store.put(_dataset("p4", "other"))
+        store.put(_dataset("p3", "other"))
 
-        assert store.delete_for_target("d1") == 3
+        assert store.delete_for_target("d1", dataset_target_key("d1")) == 2
 
         assert [b.target_id for b in store.list_for_persona("p1")] == ["other"]
         assert store.list_for_persona("p2") == []
-        assert store.list_for_persona("p3") == []
-        assert [b.target_id for b in store.list_for_persona("p4")] == ["other"]
+        assert [b.target_id for b in store.list_for_persona("p3")] == ["other"]
+
+    def test_keeps_a_binding_of_the_other_kind_with_the_same_id(self, store):
+        """target_id はデータセットと KB で同じ名前空間。種類の違う紐付けは消さない。"""
+        store.put(_dataset("p1", "x"))
+        store.put(PersonaBinding.for_kb("p2", "x", now=NOW))
+
+        assert store.delete_for_target("x", KB_TARGET_KEY) == 1
+        assert [b.target_key for b in store.list_for_persona("p1")] == [
+            dataset_target_key("x")
+        ]
+        assert store.list_for_persona("p2") == []
+
+        assert store.delete_for_target("x", dataset_target_key("x")) == 1
+        assert store.list_for_persona("p1") == []
 
     def test_reads_every_index_page(self, store, client):
         for i in range(30):
@@ -190,7 +206,7 @@ class TestDeleteForTarget:
 
         client.query = paged
 
-        assert store.delete_for_target("d1") == 30
+        assert store.delete_for_target("d1", dataset_target_key("d1")) == 30
         assert len(calls) == 5
         assert all(c["IndexName"] == "TargetIndex" for c in calls)
         assert all(store.list_for_persona(f"p{i}") == [] for i in range(30))
@@ -199,7 +215,7 @@ class TestDeleteForTarget:
         batch = Mock(wraps=client.batch_write_item)
         client.batch_write_item = batch
 
-        assert store.delete_for_target("d1") == 0
+        assert store.delete_for_target("d1", dataset_target_key("d1")) == 0
         assert batch.call_count == 0
 
     def test_unprocessed_items_after_three_retries_fail(self, store, client, sleeps):
@@ -208,7 +224,7 @@ class TestDeleteForTarget:
             "UnprocessedItems": kwargs["RequestItems"]
         }
         with pytest.raises(PersonaBindingStoreError):
-            store.delete_for_target("d1")
+            store.delete_for_target("d1", dataset_target_key("d1"))
         assert sleeps == [0.2, 0.4, 0.8]
 
 

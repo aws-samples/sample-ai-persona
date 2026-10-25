@@ -26,6 +26,7 @@ from typing import Any, List, Optional
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.dataset import Dataset, DatasetColumn
 from ..models.errors import CodedError, ErrorCode
+from ..models.persona_binding import dataset_target_key
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
 from ..services.stores.dataset_store import DatasetStore
 from ..services.stores.persona_binding_store import (
@@ -311,7 +312,7 @@ class DatasetManager:
 
         # ペルソナとの紐付けを削除（残っても本体がないため読むときに飛ばされる）
         try:
-            self._bindings.delete_for_target(dataset_id)
+            self._bindings.delete_for_target(dataset_id, dataset_target_key(dataset_id))
         except PersonaBindingStoreError as e:
             logger.warning(
                 "Failed to delete bindings of dataset %s: %s",

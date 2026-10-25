@@ -112,6 +112,17 @@ class TestKnowledgeBases:
         assert bindings.list_for_persona("p1") == []
         assert [b.target_id for b in bindings.list_for_persona("p2")] == ["other"]
 
+    def test_delete_keeps_dataset_bindings_with_the_same_id(
+        self, manager, survey_world
+    ):
+        """KB の削除に別の種類の ID が来ても、データセットの紐付けは消さない。"""
+        bindings = survey_world.binding_store
+        bindings.put(PersonaBinding.for_dataset("p1", "x", now=NOW))
+
+        manager.delete_knowledge_base(ADMIN, "x")
+
+        assert [b.target_id for b in bindings.list_for_persona("p1")] == ["x"]
+
     def test_delete_succeeds_when_the_bindings_cannot_be_removed(
         self, manager, survey_world, monkeypatch
     ):

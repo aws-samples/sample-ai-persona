@@ -132,12 +132,14 @@ class PersonaBindingStore:
             self._batch_write(requests[start : start + WRITE_BATCH_LIMIT])
         return len(requests)
 
-    def delete_for_target(self, target_id: str) -> int:
+    def delete_for_target(self, target_id: str, target_key: str) -> int:
         """Delete every binding to a dataset or knowledge base (all index pages).
 
-        Used when the dataset or knowledge base itself is deleted. The
-        ``TargetIndex`` keys carry the table keys, so the bindings are deleted
-        without being read again. The index is eventually consistent: a binding
+        Used when the dataset or knowledge base itself is deleted. Dataset and
+        knowledge base IDs share ``target_id``, so only the bindings whose
+        ``target_key`` is ``target_key`` (``DATASET#{id}`` or ``KB``) are
+        deleted. The ``TargetIndex`` keys carry the table keys, so the bindings
+        are deleted without being read again. The index is eventually consistent: a binding
         written a moment before may be missed, and readers skip it because its
         target no longer exists.
 
@@ -160,6 +162,7 @@ class PersonaBindingStore:
             keys += [
                 (item["persona_id"]["S"], item["target_key"]["S"])
                 for item in response.get("Items", [])
+                if item["target_key"]["S"] == target_key
             ]
             last = response.get("LastEvaluatedKey")
             if not last:

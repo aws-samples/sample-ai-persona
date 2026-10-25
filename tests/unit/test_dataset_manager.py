@@ -431,6 +431,15 @@ class TestDatasetManagerCRUD:
         assert [b.target_id for b in bindings.list_for_persona("p1")] == ["other"]
         assert bindings.list_for_persona("p2") == []
 
+    def test_delete_keeps_kb_bindings_with_the_same_id(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset()
+        bindings = survey_world.binding_store
+        bindings.put(PersonaBinding.for_kb("p1", dataset.id, now=NOW))
+
+        assert ds_mgr.delete_dataset(ADMIN, dataset.id) is True
+
+        assert [b.target_id for b in bindings.list_for_persona("p1")] == [dataset.id]
+
     def test_delete_succeeds_when_the_bindings_cannot_be_removed(
         self, ds_mgr, survey_world, monkeypatch
     ):

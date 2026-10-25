@@ -21,6 +21,7 @@ from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KnowledgeBase
+from ..models.persona_binding import KB_TARGET_KEY
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
 from ..services.stores.knowledge_base_store import KnowledgeBaseStore
 from ..services.stores.persona_binding_store import (
@@ -134,7 +135,7 @@ class SettingsManager:
         self._kbs.delete(kb_id)
         logger.info("Knowledge base deleted: %s", kb_id)
         try:
-            self._bindings.delete_for_target(kb_id)
+            self._bindings.delete_for_target(kb_id, KB_TARGET_KEY)
         except PersonaBindingStoreError as e:
             logger.warning(
                 "Failed to delete bindings of knowledge base %s: %s",
