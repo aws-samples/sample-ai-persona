@@ -5,8 +5,11 @@ U7 の対応: BR3.1、BR3.2、BR6.3、NFR1.72、NFR3.13、NFR4.14、AC5.2.1〜AC
 """
 
 from contextlib import ExitStack
+from datetime import datetime
 
 import pytest
+
+from src.models.persona_binding import PersonaBinding
 
 from tests.api.u7_world import ADMIN_USER, ME, ApiWorld
 from tests.dialog_helpers import dialog_markup
@@ -68,10 +71,14 @@ class TestAdminScreens:
     def test_delete_dataset_and_knowledge_base(self, aw, client):
         dataset = aw.world.dataset()
         kb = aw.world.knowledge_base()
+        bindings = aw.world.binding_store
+        bindings.put(PersonaBinding.for_dataset("p1", dataset.id, now=datetime.now()))
+        bindings.put(PersonaBinding.for_kb("p1", kb.id, now=datetime.now()))
         assert client.delete(f"/settings/datasets/{dataset.id}").status_code == 200
         assert client.delete(f"/settings/knowledge-bases/{kb.id}").status_code == 200
         assert aw.world.dataset_store.get(dataset.id, consistent=True) is None
         assert aw.world.kb_store.get(kb.id, consistent=True) is None
+        assert bindings.list_for_persona("p1") == []
 
 
 # =============================================================================

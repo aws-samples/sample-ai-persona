@@ -26,8 +26,13 @@ from typing import Any, List, Optional
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.dataset import Dataset, DatasetColumn
 from ..models.errors import CodedError, ErrorCode
+from ..models.persona_binding import dataset_target_key
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
 from ..services.stores.dataset_store import DatasetStore
+from ..services.stores.persona_binding_store import (
+    PersonaBindingStore,
+    PersonaBindingStoreError,
+)
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory
@@ -56,6 +61,7 @@ class DatasetManager:
         dataset_store: Optional[DatasetStore] = None,
         s3_service: Any = None,
         departments: Optional[DepartmentDirectory] = None,
+        binding_store: Optional[PersonaBindingStore] = None,
     ) -> None:
         """Create the manager.
 
@@ -64,6 +70,8 @@ class DatasetManager:
             dataset_store: Dataset records (the singleton when omitted).
             s3_service: The CSV files (``None`` without S3: local files).
             departments: The per-task department copy (scope choices, C4).
+            binding_store: Persona bindings, removed with a deleted dataset
+                (the singleton on first use when omitted).
         """
         self._datasets = dataset_store or service_factory.get_dataset_store()
         self.s3_service = (
@@ -73,6 +81,13 @@ class DatasetManager:
             survey_batch_service or service_factory.get_survey_batch_service()
         )
         self._departments = departments
+        self._binding_store = binding_store
+
+    @property
+    def _bindings(self) -> PersonaBindingStore:
+        if self._binding_store is None:
+            self._binding_store = service_factory.get_persona_binding_store()
+        return self._binding_store
 
     @property
     def _department_directory(self) -> DepartmentDirectory:
@@ -294,6 +309,16 @@ class DatasetManager:
         # DB削除
         self._datasets.delete(dataset_id)
         logger.info("Dataset deleted: %s", dataset_id)
+
+        # ペルソナとの紐付けを削除（残っても本体がないため読むときに飛ばされる）
+        try:
+            self._bindings.delete_for_target(dataset_id, dataset_target_key(dataset_id))
+        except PersonaBindingStoreError as e:
+            logger.warning(
+                "Failed to delete bindings of dataset %s: %s",
+                dataset_id,
+                type(e).__name__,
+            )
         return True
 
     # --- 利用範囲（BR5.2） ---

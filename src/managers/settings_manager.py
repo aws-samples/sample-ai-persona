@@ -21,8 +21,13 @@ from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KnowledgeBase
+from ..models.persona_binding import KB_TARGET_KEY
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
 from ..services.stores.knowledge_base_store import KnowledgeBaseStore
+from ..services.stores.persona_binding_store import (
+    PersonaBindingStore,
+    PersonaBindingStoreError,
+)
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory
@@ -50,15 +55,25 @@ class SettingsManager:
         self,
         knowledge_base_store: Optional[KnowledgeBaseStore] = None,
         departments: Optional[DepartmentDirectory] = None,
+        binding_store: Optional[PersonaBindingStore] = None,
     ) -> None:
         """Create the manager.
 
         Args:
             knowledge_base_store: Knowledge base records (the singleton when omitted).
             departments: The per-task department copy (scope choices, C4).
+            binding_store: Persona bindings, removed with a deleted knowledge
+                base (the singleton on first use when omitted).
         """
         self._kbs = knowledge_base_store or service_factory.get_knowledge_base_store()
         self._departments = departments
+        self._binding_store = binding_store
+
+    @property
+    def _bindings(self) -> PersonaBindingStore:
+        if self._binding_store is None:
+            self._binding_store = service_factory.get_persona_binding_store()
+        return self._binding_store
 
     @property
     def _department_directory(self) -> DepartmentDirectory:
@@ -111,10 +126,22 @@ class SettingsManager:
         return kb
 
     def delete_knowledge_base(self, principal: Principal, kb_id: str) -> None:
-        """KB の登録を消す。"""
+        """Delete a knowledge base registration and its persona bindings.
+
+        A failed binding delete is logged and the delete still succeeds: the
+        bindings left behind have no target and are skipped when read.
+        """
         self._require_manage(principal)
         self._kbs.delete(kb_id)
         logger.info("Knowledge base deleted: %s", kb_id)
+        try:
+            self._bindings.delete_for_target(kb_id, KB_TARGET_KEY)
+        except PersonaBindingStoreError as e:
+            logger.warning(
+                "Failed to delete bindings of knowledge base %s: %s",
+                kb_id,
+                type(e).__name__,
+            )
 
     def scope_dialog(self, principal: Principal, kb_id: str) -> AssetScopeDialog:
         """What the usage-scope dialog shows (M10).

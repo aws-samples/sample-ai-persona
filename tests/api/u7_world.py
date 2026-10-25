@@ -108,9 +108,12 @@ class ApiWorld:
             dataset_store=world.dataset_store,
             s3_service=world.s3,
             departments=world.departments,
+            binding_store=world.binding_store,
         )
         self.settings = SettingsManager(
-            knowledge_base_store=world.kb_store, departments=world.departments
+            knowledge_base_store=world.kb_store,
+            departments=world.departments,
+            binding_store=world.binding_store,
         )
         self.sharing = SharingManager(world.sharing)
         self.file_manager = Mock()
