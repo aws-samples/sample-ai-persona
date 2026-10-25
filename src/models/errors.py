@@ -336,10 +336,6 @@ class ErrorCode(StrEnum):
     # Catch-alls for survey operations that failed for internal reasons.
     SURVEY_OPERATION_FAILED = ("survey_operation_failed", ErrorKind.TRANSIENT)
     SURVEY_EXECUTION_FAILED = ("survey_execution_failed", ErrorKind.TRANSIENT)
-    SURVEY_REPORT_GENERATION_FAILED = (
-        "survey_report_generation_failed",
-        ErrorKind.TRANSIENT,
-    )
     # U7 (NFR2.25): a template body over 200KB, or a survey body (with its
     # template snapshot) over 350KB. The user shortens the questions.
     SURVEY_TEMPLATE_TOO_LARGE = ("survey_template_too_large", ErrorKind.CAPACITY)

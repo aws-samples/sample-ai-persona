@@ -13,7 +13,6 @@ from src.managers.shared.result_csv_cache import ResultCsvCache
 from src.managers.survey_analysis_manager import (
     MAX_SURVEY_BYTES,
     SurveyAnalysisManager,
-    SurveyAnalysisManagerError,
 )
 from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
@@ -64,7 +63,6 @@ def _make_csv_bytes(template: SurveyTemplate) -> bytes:
 @pytest.fixture
 def ai() -> Mock:
     ai = Mock()
-    ai.invoke_model.return_value = "# レポート"
     ai.generate_standard_report_streaming.side_effect = lambda **_: iter(["# ", "本文"])
     return ai
 
@@ -222,11 +220,12 @@ class TestInsightReport:
         survey = _survey(survey_world, sample_template)
         survey_world.share(SURVEY, survey.id, "sales")
 
-        report = am.generate_insight_report(MEMBER_A, survey.id)
+        content = "".join(am.generate_insight_report_streaming(MEMBER_A, survey.id))
+        report = am.save_insight_report(MEMBER_A, survey.id, content)
 
         assert isinstance(report, InsightReport)
         stored = survey_world.survey_store.get(survey.id, consistent=True)
-        assert stored.insight_report.content == "# レポート"
+        assert stored.insight_report.content == "# 本文"
         assert stored.owner_sub == "a"
         assert stored.shared_group_ids == frozenset({"sales"})
         # 統計の要約は写しの質問から作る（BR2.7）
@@ -239,14 +238,11 @@ class TestInsightReport:
         survey = _survey(survey_world, sample_template)
         survey_world.share(SURVEY, survey.id, "sales")
         with pytest.raises(AccessDeniedError):
-            am.generate_insight_report(MEMBER_B, survey.id)
-        with pytest.raises(AccessDeniedError):
             am.generate_insight_report_streaming(MEMBER_B, survey.id)
         with pytest.raises(AccessDeniedError):
             am.save_insight_report(MEMBER_B, survey.id, "x")
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
             am.generate_insight_report_streaming(MEMBER_C, survey.id)
-        ai.invoke_model.assert_not_called()
         ai.generate_standard_report_streaming.assert_not_called()
 
     def test_needs_ai_execute(self, am, survey_world, sample_template, ai):
@@ -291,14 +287,6 @@ class TestInsightReport:
         assert (
             am.save_insight_report(ADMIN, legacy.id, "# 管理者").content == "# 管理者"
         )
-
-    def test_ai_failure_is_a_coded_error(self, am, survey_world, sample_template, ai):
-        survey = _survey(survey_world, sample_template)
-        ai.invoke_model.side_effect = RuntimeError("bedrock down")
-        with raises_code(
-            SurveyAnalysisManagerError, ErrorCode.SURVEY_REPORT_GENERATION_FAILED
-        ):
-            am.generate_insight_report(MEMBER_A, survey.id)
 
 
 # =============================================================================

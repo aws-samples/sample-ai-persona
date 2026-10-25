@@ -305,10 +305,6 @@ class CustomPersonaDataStore:
                 return records
             params["ExclusiveStartKey"] = last
 
-    def list_ids(self) -> set[str]:
-        """IDs of every record (the orphan cleanup script)."""
-        return {record.id for record in self.list_all()}
-
     # --- helpers ---------------------------------------------------------------
 
     def _batch_get(self, ids: Sequence[str]) -> dict[str, CustomPersonaData]:

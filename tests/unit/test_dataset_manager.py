@@ -300,7 +300,6 @@ class TestDatasetManagerIsAdminOnly:
         "call",
         [
             lambda m: m.analyze_schema(MEMBER_A, b"a\n1"),
-            lambda m: m.download_csv_from_url(MEMBER_A, "https://example.com/x.csv"),
             lambda m: m.upload_csv(MEMBER_A, b"a\n1", "a.csv", "名前"),
             lambda m: m.get_datasets(MEMBER_A),
             lambda m: m.get_dataset(MEMBER_A, "x"),

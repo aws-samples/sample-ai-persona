@@ -178,13 +178,6 @@ class DatasetManager:
     def _is_date(self, v: str) -> bool:
         return bool(re.match(r"^\d{4}-\d{2}-\d{2}", v))
 
-    def download_csv_from_url(self, principal: Principal, url: str) -> bytes:
-        """署名付きURLからCSVをダウンロードする（DataAgentService経由）"""
-        self._require_manage(principal)
-        from ..services.data_agent_service import DataAgentService
-
-        return DataAgentService.download_csv(url)
-
     def upload_csv(
         self,
         principal: Principal,

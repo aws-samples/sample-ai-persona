@@ -108,13 +108,6 @@ class PersonaResponse(BaseModel):
     tags: List[str] = []
 
 
-class DiscussionResponse(BaseModel):
-    id: str
-    topic: str
-    mode: str
-    created_at: str
-
-
 class InsightResponse(BaseModel):
     category: str
     description: str

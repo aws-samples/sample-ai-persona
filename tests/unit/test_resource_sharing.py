@@ -103,10 +103,6 @@ class FakeStore:
             None if body is None else {k: v for k, v in body.items() if k in attributes}
         )
 
-    def get_items(self, table, ids, attributes):
-        self.calls.append("get_items")
-        return {i: self.get_item(table, i, attributes) for i in ids if i in self.bodies}
-
     def _check(self, rid: str, expected: frozenset[str]) -> dict[str, Any]:
         if self.before_write:
             self.before_write.pop(0)()

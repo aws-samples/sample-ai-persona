@@ -26,7 +26,6 @@ import base64
 import binascii
 import json
 import logging
-import random
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -50,10 +49,6 @@ CLIENT_CONFIG = Config(
 
 #: Waits before the two throttling retries.
 THROTTLE_BACKOFF_SECONDS: tuple[float, ...] = (0.1, 0.2)
-#: Waits before the three re-reads of ``UnprocessedKeys`` (jittered).
-UNPROCESSED_BACKOFF_SECONDS: tuple[float, ...] = (0.05, 0.1, 0.2)
-#: ``BatchGetItem`` accepts at most 100 keys.
-BATCH_LIMIT = 100
 
 _THROTTLE_CODES = frozenset(
     {
@@ -142,7 +137,6 @@ class ResourceShareStore:
         shares_table: str,
         client: Any = None,
         sleep: Callable[[float], None] = time.sleep,
-        jitter: Callable[[], float] = random.random,
     ) -> None:
         """Create the store.
 
@@ -151,14 +145,12 @@ class ResourceShareStore:
             shares_table: Physical name of the ``ResourceShares`` table.
             client: Optional pre-built DynamoDB client (tests).
             sleep: Sleep function for the back-offs (tests).
-            jitter: Source of the 0-1 jitter of the re-read back-off.
         """
         self.shares_table = shares_table
         self.client = client or boto3.client(
             "dynamodb", region_name=region, config=CLIENT_CONFIG
         )
         self._sleep = sleep
-        self._jitter = jitter
         self._serializer = TypeSerializer()
         self._deserializer = TypeDeserializer()
 
@@ -181,58 +173,6 @@ class ResourceShareStore:
         )
         item = response.get("Item")
         return self._plain(item) if item else None
-
-    def get_items(
-        self, table: str, resource_ids: Sequence[str], attributes: Sequence[str]
-    ) -> dict[str, dict[str, Any]]:
-        """Read bodies with strongly consistent ``BatchGetItem`` calls.
-
-        Keys left in ``UnprocessedKeys`` are read again up to three times.
-
-        Returns:
-            id -> projected columns, for the IDs that exist.
-
-        Raises:
-            ResourceShareStoreError: Keys were still unprocessed (``reason``
-                ``unprocessed``); rows are never silently dropped (NFR2.5).
-        """
-        ids = list(dict.fromkeys(resource_ids))
-        found: dict[str, dict[str, Any]] = {}
-        for start in range(0, len(ids), BATCH_LIMIT):
-            chunk = ids[start : start + BATCH_LIMIT]
-            found.update(self._batch_get(table, chunk, attributes))
-        return found
-
-    def _batch_get(
-        self, table: str, ids: Sequence[str], attributes: Sequence[str]
-    ) -> dict[str, dict[str, Any]]:
-        keys: list[dict[str, Any]] = [{_ID: {"S": i}} for i in ids]
-        found: dict[str, dict[str, Any]] = {}
-        for attempt in range(len(UNPROCESSED_BACKOFF_SECONDS) + 1):
-            if attempt:
-                base = UNPROCESSED_BACKOFF_SECONDS[attempt - 1]
-                self._sleep(base * (0.5 + self._jitter()))
-            response = self._call(
-                "batch_get_item",
-                RequestItems={
-                    table: {
-                        "Keys": keys,
-                        "ConsistentRead": True,
-                        **_projection(attributes),
-                    }
-                },
-            )
-            for item in response.get("Responses", {}).get(table, []):
-                plain = self._plain(item)
-                found[str(plain[_ID])] = plain
-            keys = response.get("UnprocessedKeys", {}).get(table, {}).get("Keys", [])
-            if not keys:
-                return found
-        logger.warning("BatchGetItem left %d keys unprocessed", len(keys))
-        raise ResourceShareStoreError(
-            "BatchGetItem left keys unprocessed after three re-reads",
-            reason="unprocessed",
-        )
 
     # --- writes -------------------------------------------------------------------
 

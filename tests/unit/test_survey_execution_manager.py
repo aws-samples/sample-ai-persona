@@ -1128,21 +1128,21 @@ class TestReadSurvey:
     def test_owner_and_shared_reader(self, em, survey_world):
         survey = survey_world.survey("a")
         survey_world.share(SURVEY, survey.id, "sales")
-        assert em.get_survey(MEMBER_A, survey.id).id == survey.id
-        assert em.get_survey(MEMBER_B, survey.id).id == survey.id
+        assert em.get_survey_detail(MEMBER_A, survey.id).survey.id == survey.id
+        assert em.get_survey_detail(MEMBER_B, survey.id).survey.id == survey.id
 
     @pytest.mark.parametrize("which", ["unrelated", "missing"])
     def test_unreadable_is_the_same_as_missing(self, em, survey_world, which):
         survey = survey_world.survey("a")
         target = survey.id if which == "unrelated" else "missing-id"
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_survey(MEMBER_C, target)
+            em.get_survey_detail(MEMBER_C, target)
 
     def test_ownerless_survey_is_admin_only(self, em, survey_world):
         legacy = survey_world.survey(None, snapshot=False)
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_survey(MEMBER_A, legacy.id)
-        assert em.get_survey(ADMIN, legacy.id).id == legacy.id
+            em.get_survey_detail(MEMBER_A, legacy.id)
+        assert em.get_survey_detail(ADMIN, legacy.id).survey.id == legacy.id
 
     def test_detail_for_a_shared_reader_is_read_only(self, em, survey_world):
         survey = survey_world.survey("a")
@@ -1185,18 +1185,12 @@ class TestDownloadAndImages:
         monkeypatch.setattr(survey_world.s3, "generate_presigned_url", sign)
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
             em.get_download_url(MEMBER_C, survey.id)
-        with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.download_results_csv(MEMBER_C, survey.id)
         sign.assert_not_called()
 
     def test_not_ready_result(self, em, survey_world):
         survey = survey_world.survey("a", status="running")
         with raises_code(CodedError, ErrorCode.SURVEY_RESULT_NOT_READY):
             em.get_download_url(MEMBER_A, survey.id)
-
-    def test_csv_bytes_for_a_reader(self, em, survey_world):
-        survey = survey_world.survey("a")
-        assert b"persona_id" in em.download_results_csv(MEMBER_A, survey.id)
 
     def test_result_image_only_from_the_snapshot(self, em, survey_world):
         image = _image(survey_world)
