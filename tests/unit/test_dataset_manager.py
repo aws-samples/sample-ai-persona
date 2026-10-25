@@ -15,9 +15,13 @@ from src.services.stores.dataset_store import DatasetStore
 from src.models.dataset import Dataset, DatasetColumn
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange
+from src.models.persona_binding import PersonaBinding
+from src.services.stores.persona_binding_store import PersonaBindingStoreError
 from tests.error_helpers import raises_code
 from tests.log_helpers import LogCapture
 from tests.unit.survey_world import ADMIN, MEMBER_A, NO_ROLE, SurveyWorld
+
+NOW = datetime(2026, 10, 25, 0, 0, 0)
 
 
 class TestDatasetModels:
@@ -287,6 +291,7 @@ def ds_mgr(survey_world: SurveyWorld):
         dataset_store=survey_world.dataset_store,
         s3_service=survey_world.s3,
         departments=survey_world.departments,
+        binding_store=survey_world.binding_store,
     )
 
 
@@ -413,6 +418,38 @@ class TestDatasetManagerCRUD:
 
     def test_delete_missing(self, ds_mgr):
         assert ds_mgr.delete_dataset(ADMIN, "missing") is False
+
+    def test_delete_removes_the_bindings_to_the_dataset(self, ds_mgr, survey_world):
+        dataset = survey_world.dataset()
+        bindings = survey_world.binding_store
+        bindings.put(PersonaBinding.for_dataset("p1", dataset.id, now=NOW))
+        bindings.put(PersonaBinding.for_dataset("p2", dataset.id, now=NOW))
+        bindings.put(PersonaBinding.for_dataset("p1", "other", now=NOW))
+
+        assert ds_mgr.delete_dataset(ADMIN, dataset.id) is True
+
+        assert [b.target_id for b in bindings.list_for_persona("p1")] == ["other"]
+        assert bindings.list_for_persona("p2") == []
+
+    def test_delete_succeeds_when_the_bindings_cannot_be_removed(
+        self, ds_mgr, survey_world, monkeypatch
+    ):
+        """残った紐付けは、読むときに本体のない紐付けとして飛ばされる。"""
+        dataset = survey_world.dataset()
+        monkeypatch.setattr(
+            survey_world.binding_store,
+            "delete_for_target",
+            Mock(side_effect=PersonaBindingStoreError("down")),
+        )
+        assert ds_mgr.delete_dataset(ADMIN, dataset.id) is True
+        assert ds_mgr.get_dataset(ADMIN, dataset.id) is None
+
+    def test_a_missing_dataset_removes_no_bindings(self, ds_mgr, survey_world):
+        survey_world.binding_store.put(
+            PersonaBinding.for_dataset("p1", "missing", now=NOW)
+        )
+        assert ds_mgr.delete_dataset(ADMIN, "missing") is False
+        assert len(survey_world.binding_store.list_for_persona("p1")) == 1
 
 
 class TestDatasetScope:

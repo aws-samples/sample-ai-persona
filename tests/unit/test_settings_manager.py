@@ -5,16 +5,22 @@ AC5.3.3。KB とデータ分析エージェントの設定は settings:manage（
 DynamoDB は moto（tests/unit/survey_world.py）。
 """
 
+from datetime import datetime
+
 import pytest
 from unittest.mock import Mock, patch
 
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange
+from src.models.persona_binding import PersonaBinding
+from src.services.stores.persona_binding_store import PersonaBindingStoreError
 from tests.error_helpers import raises_code
 from src.services.stores.knowledge_base_store import KnowledgeBaseStore
 from tests.log_helpers import LogCapture
 from tests.unit.survey_world import ADMIN, MEMBER_A, SurveyWorld
+
+NOW = datetime(2026, 10, 25, 0, 0, 0)
 
 
 @pytest.fixture
@@ -22,6 +28,7 @@ def manager(survey_world: SurveyWorld) -> SettingsManager:
     return SettingsManager(
         knowledge_base_store=survey_world.kb_store,
         departments=survey_world.departments,
+        binding_store=survey_world.binding_store,
     )
 
 
@@ -91,6 +98,30 @@ class TestKnowledgeBases:
 
     def test_delete(self, manager, survey_world):
         kb = survey_world.knowledge_base()
+        manager.delete_knowledge_base(ADMIN, kb.id)
+        assert manager.get_all_knowledge_bases(ADMIN).items == []
+
+    def test_delete_removes_the_bindings_to_the_kb(self, manager, survey_world):
+        kb = survey_world.knowledge_base()
+        bindings = survey_world.binding_store
+        bindings.put(PersonaBinding.for_kb("p1", kb.id, now=NOW))
+        bindings.put(PersonaBinding.for_kb("p2", "other", now=NOW))
+
+        manager.delete_knowledge_base(ADMIN, kb.id)
+
+        assert bindings.list_for_persona("p1") == []
+        assert [b.target_id for b in bindings.list_for_persona("p2")] == ["other"]
+
+    def test_delete_succeeds_when_the_bindings_cannot_be_removed(
+        self, manager, survey_world, monkeypatch
+    ):
+        """残った紐付けは、読むときに本体のない紐付けとして飛ばされる。"""
+        kb = survey_world.knowledge_base()
+        monkeypatch.setattr(
+            survey_world.binding_store,
+            "delete_for_target",
+            Mock(side_effect=PersonaBindingStoreError("down")),
+        )
         manager.delete_knowledge_base(ADMIN, kb.id)
         assert manager.get_all_knowledge_bases(ADMIN).items == []
 

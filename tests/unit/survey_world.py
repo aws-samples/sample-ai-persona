@@ -1,7 +1,7 @@
 """Shared world for the U7 Manager tests (surveys, templates, organization assets).
 
 DynamoDB and S3 are moto; ``SurveyStore``, ``SurveyTemplateStore``,
-``ResourceShareStore``, ``CustomPersonaDataStore``, ``AuthzLookupService`` and
+``ResourceShareStore``, ``CustomPersonaDataStore``, ``PersonaBindingStore``, ``AuthzLookupService`` and
 ``S3Service`` are the real services on it. ``AccessPolicy``, ``ResourceSharing``, ``ResourceLookup`` and
 ``DepartmentDirectory`` are the real components (decisions are never mocked).
 ``FileAttachments`` and ``OwnerDirectory`` are fakes; AI is mocked by each test.
@@ -35,6 +35,7 @@ from src.services.authz_lookup_service import AuthzLookupService, LookupTable
 from src.services.stores.custom_persona_data_store import CustomPersonaDataStore
 from src.services.stores.dataset_store import DatasetStore
 from src.services.stores.knowledge_base_store import KnowledgeBaseStore
+from src.services.stores.persona_binding_store import PersonaBindingStore
 from src.services.stores.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
 from src.services.stores.survey_store import SurveyStore
@@ -111,7 +112,14 @@ class SurveyWorld:
         )
         self.shares_table = "U7_ResourceShares"
         self.custom_table = "U7_CustomPersonaData"
+        self.bindings_table = "U7_PersonaBindings"
         self._create_tables()
+        self.binding_store = PersonaBindingStore(
+            region=REGION,
+            table_name=self.bindings_table,
+            client=self.client,
+            sleep=lambda _s: None,
+        )
         boto3.client("s3", region_name=REGION).create_bucket(Bucket=BUCKET)
         self.s3 = S3Service(bucket_name=BUCKET, region_name=REGION)
         self.share_store = ResourceShareStore(
@@ -192,6 +200,26 @@ class SurveyWorld:
                 {"AttributeName": "share_key", "AttributeType": "S"},
             ],
             BillingMode="PAY_PER_REQUEST",
+        )
+        self.client.create_table(
+            TableName=self.bindings_table,
+            KeySchema=[
+                {"AttributeName": "persona_id", "KeyType": "HASH"},
+                {"AttributeName": "target_key", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "persona_id", "AttributeType": "S"},
+                {"AttributeName": "target_key", "AttributeType": "S"},
+                {"AttributeName": "target_id", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "TargetIndex",
+                    "KeySchema": [{"AttributeName": "target_id", "KeyType": "HASH"}],
+                    "Projection": {"ProjectionType": "KEYS_ONLY"},
+                }
+            ],
         )
 
     # --- seeding -----------------------------------------------------------------

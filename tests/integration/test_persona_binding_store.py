@@ -2,7 +2,7 @@
 
 BR2.2・BR2.5（ペルソナ ID と紐付け先の組での削除）、BR2.9（KB は固定キーの上書き 1 回）、
 BR3.1（persona_id での全件削除、未処理分の再試行）、NFR2.9（Query をページの最後まで、
-Scan を呼ばない）、NFR1.35、TargetIndex の逆引き。
+Scan を呼ばない）、NFR1.35、TargetIndex で引いた紐付け先ごとの削除。
 """
 
 from datetime import datetime, timezone
@@ -161,14 +161,55 @@ class TestDelete:
         assert sleeps == [0.2, 0.4, 0.8]
 
 
-class TestTargetIndex:
-    def test_persona_ids_for_a_target(self, store):
+class TestDeleteForTarget:
+    """データセット・KB を消したときに、その紐付けを TargetIndex で引いて消す。"""
+
+    def test_deletes_every_binding_to_the_target(self, store):
         store.put(_dataset("p1", "d1"))
         store.put(_dataset("p2", "d1"))
         store.put(PersonaBinding.for_kb("p3", "d1", now=NOW))
+        store.put(_dataset("p1", "other"))
         store.put(_dataset("p4", "other"))
 
-        assert sorted(store.persona_ids_for_target("d1")) == ["p1", "p2", "p3"]
+        assert store.delete_for_target("d1") == 3
+
+        assert [b.target_id for b in store.list_for_persona("p1")] == ["other"]
+        assert store.list_for_persona("p2") == []
+        assert store.list_for_persona("p3") == []
+        assert [b.target_id for b in store.list_for_persona("p4")] == ["other"]
+
+    def test_reads_every_index_page(self, store, client):
+        for i in range(30):
+            store.put(_dataset(f"p{i}", "d1"))
+        real = client.query
+        calls: list[dict[str, Any]] = []
+
+        def paged(**kwargs: Any) -> Any:
+            calls.append(kwargs)
+            return real(**{**kwargs, "Limit": 7})
+
+        client.query = paged
+
+        assert store.delete_for_target("d1") == 30
+        assert len(calls) == 5
+        assert all(c["IndexName"] == "TargetIndex" for c in calls)
+        assert all(store.list_for_persona(f"p{i}") == [] for i in range(30))
+
+    def test_no_bindings_writes_nothing(self, store, client):
+        batch = Mock(wraps=client.batch_write_item)
+        client.batch_write_item = batch
+
+        assert store.delete_for_target("d1") == 0
+        assert batch.call_count == 0
+
+    def test_unprocessed_items_after_three_retries_fail(self, store, client, sleeps):
+        store.put(_dataset("p1", "d1"))
+        client.batch_write_item = lambda **kwargs: {
+            "UnprocessedItems": kwargs["RequestItems"]
+        }
+        with pytest.raises(PersonaBindingStoreError):
+            store.delete_for_target("d1")
+        assert sleeps == [0.2, 0.4, 0.8]
 
 
 class TestFailures:

@@ -296,35 +296,11 @@ class TestAssetFilter:
 
 from src.managers.settings_manager import SettingsManager  # noqa: E402
 from src.models.sharing import AssetScopeChange  # noqa: E402
-from src.services.stores.persona_binding_store import PersonaBindingStore  # noqa: E402
 from tests.unit.survey_world import (  # noqa: E402
     ADMIN as _U7_ADMIN,
     MEMBER_A as _SALES_MEMBER,
     MEMBER_C as _PLAN_MEMBER,
 )
-
-_BINDINGS_TABLE = "U7_PersonaBindings"
-
-
-def _bindings_store(world) -> PersonaBindingStore:
-    world.client.create_table(
-        TableName=_BINDINGS_TABLE,
-        KeySchema=[
-            {"AttributeName": "persona_id", "KeyType": "HASH"},
-            {"AttributeName": "target_key", "KeyType": "RANGE"},
-        ],
-        AttributeDefinitions=[
-            {"AttributeName": "persona_id", "AttributeType": "S"},
-            {"AttributeName": "target_key", "AttributeType": "S"},
-        ],
-        BillingMode="PAY_PER_REQUEST",
-    )
-    return PersonaBindingStore(
-        region="us-east-1",
-        table_name=_BINDINGS_TABLE,
-        client=world.client,
-        sleep=lambda _s: None,
-    )
 
 
 class _ScopedKbWorld:
@@ -333,10 +309,12 @@ class _ScopedKbWorld:
     def __init__(self, world) -> None:
         self.world = world
         self.kb = world.knowledge_base("sales")
-        self.bindings = _bindings_store(world)
+        self.bindings = world.binding_store
         self.bindings.put(PersonaBinding.for_kb("p1", self.kb.id, now=_NOW))
         self.settings = SettingsManager(
-            knowledge_base_store=world.kb_store, departments=world.departments
+            knowledge_base_store=world.kb_store,
+            departments=world.departments,
+            binding_store=world.binding_store,
         )
         self.agent = Mock()
         self.agent.get_kb_tools.side_effect = lambda b, k: (

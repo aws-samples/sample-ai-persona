@@ -5,11 +5,15 @@ the fixed ``KB``), GSI ``TargetIndex`` (PK ``target_id``, ``KEYS_ONLY``).
 
 - Reading a persona's bindings is always a ``Query`` on ``persona_id``, read to
   the last page; this service never scans (NFR2.9, BR8.2).
-- Deleting is by ``(persona_id, target_key)`` only (BR2.5).
-- ``delete_all`` re-sends ``UnprocessedItems`` up to three times, 0.2 / 0.4 /
-  0.8 seconds apart (``reliability-design.md`` §4).
+- Deleting is by ``(persona_id, target_key)`` (BR2.5), by ``persona_id``
+  (``delete_all``, BR3.1) or by the target through ``TargetIndex``
+  (``delete_for_target``, when a dataset or knowledge base is deleted).
+- ``delete_all`` and ``delete_for_target`` re-send ``UnprocessedItems`` up to
+  three times, 0.2 / 0.4 / 0.8 seconds apart (``reliability-design.md`` §4).
 
-Who may read or change a binding is decided by ``PersonaManager``.
+Who may read or change a binding is decided by ``PersonaManager``; the
+bindings of a deleted dataset or knowledge base are removed by
+``DatasetManager`` and ``SettingsManager``.
 """
 
 import logging
@@ -128,11 +132,21 @@ class PersonaBindingStore:
             self._batch_write(requests[start : start + WRITE_BATCH_LIMIT])
         return len(requests)
 
-    def persona_ids_for_target(self, target_id: str) -> list[str]:
-        """IDs of the personas bound to a dataset or knowledge base (all pages).
+    def delete_for_target(self, target_id: str) -> int:
+        """Delete every binding to a dataset or knowledge base (all index pages).
 
-        ``TargetIndex`` is eventually consistent; callers skip personas that no
-        longer exist.
+        Used when the dataset or knowledge base itself is deleted. The
+        ``TargetIndex`` keys carry the table keys, so the bindings are deleted
+        without being read again. The index is eventually consistent: a binding
+        written a moment before may be missed, and readers skip it because its
+        target no longer exists.
+
+        Returns:
+            How many bindings were deleted.
+
+        Raises:
+            PersonaBindingStoreError: A call failed or items stayed
+                unprocessed after three re-sends.
         """
         params: dict[str, Any] = {
             "TableName": self.table_name,
@@ -140,14 +154,24 @@ class PersonaBindingStore:
             "KeyConditionExpression": "target_id = :tid",
             "ExpressionAttributeValues": {":tid": {"S": target_id}},
         }
-        ids: list[str] = []
+        keys: list[tuple[str, str]] = []
         while True:
             response = self._call("query", **params)
-            ids += [item["persona_id"]["S"] for item in response.get("Items", [])]
+            keys += [
+                (item["persona_id"]["S"], item["target_key"]["S"])
+                for item in response.get("Items", [])
+            ]
             last = response.get("LastEvaluatedKey")
             if not last:
-                return list(dict.fromkeys(ids))
+                break
             params["ExclusiveStartKey"] = last
+        requests = [
+            {"DeleteRequest": {"Key": self._key(persona_id, target_key)}}
+            for persona_id, target_key in dict.fromkeys(keys)
+        ]
+        for start in range(0, len(requests), WRITE_BATCH_LIMIT):
+            self._batch_write(requests[start : start + WRITE_BATCH_LIMIT])
+        return len(requests)
 
     # --- plumbing -------------------------------------------------------------------
 
