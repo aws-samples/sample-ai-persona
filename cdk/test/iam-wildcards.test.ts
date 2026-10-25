@@ -44,7 +44,7 @@ const tableArn = (id: string) => exportedRef(`${DATA}/Database/${id}/Resource`, 
 
 /**
  * タスクロールが Query してよい GSI（アプリが IndexName で引くものだけ、名前で付ける）。
- * OwnerIndex: src/services/resource_share_store.py、TargetIndex: src/services/persona_binding_store.py。
+ * OwnerIndex: src/services/stores/resource_share_store.py、TargetIndex: src/services/stores/persona_binding_store.py。
  * 型固定の GSI（NameIndex など）は外す途中で、アプリは使わないため付けない。
  */
 const QUERIED_INDEX_ARNS = [

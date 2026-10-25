@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from src.managers.auth_manager import AuthManager, AuthSettings, LocalUser
 from src.managers.shared.token_cipher import TokenCipher
 from src.models.login_session import SessionStore
-from src.services.memory_session_store import MemorySessionStore
+from src.services.stores.memory_session_store import MemorySessionStore
 from src.services.cognito.oidc_service import (
     AuthorizationRequest,
     OidcService,

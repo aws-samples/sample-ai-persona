@@ -368,7 +368,7 @@ def u5_files(monkeypatch):
 
     from src.managers.components.file_attachments import FileAttachments
     from src.services.s3_service import S3Service
-    from src.services.uploaded_file_store import UploadedFileStore
+    from src.services.stores.uploaded_file_store import UploadedFileStore
 
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")

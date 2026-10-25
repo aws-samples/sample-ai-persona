@@ -27,7 +27,7 @@ from ..models.authz import Permission, Principal, ResourceType
 from ..models.dataset import Dataset, DatasetColumn
 from ..models.errors import CodedError, ErrorCode
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
-from ..services.dataset_store import DatasetStore
+from ..services.stores.dataset_store import DatasetStore
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory

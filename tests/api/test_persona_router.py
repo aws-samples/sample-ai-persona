@@ -1619,7 +1619,7 @@ class TestPersonaTabs:
         assert 'id="persona-list-tab-all"' in html and 'aria-selected="true"' in html
 
     def test_count_that_cannot_be_read_is_a_dash(self, client, world):
-        from src.services.resource_share_store import ResourceShareStoreError
+        from src.services.stores.resource_share_store import ResourceShareStoreError
 
         world.add("p1", A_SUB)
         world.store.count_owner = Mock(side_effect=ResourceShareStoreError("down"))

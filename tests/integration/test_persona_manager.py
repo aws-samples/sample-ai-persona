@@ -13,7 +13,7 @@ from src.managers.persona_manager import PersonaManager, PersonaManagerError
 from src.models.authz import Principal, Role
 from src.models.errors import CodedError
 from src.models.persona import Persona
-from src.services.persona_store import PersonaStore, PersonaStoreError
+from src.services.stores.persona_store import PersonaStore, PersonaStoreError
 
 #: The saver / owner and an admin (U4: saving and editing take the user).
 OWNER = Principal("local:owner@example.com", frozenset({Role.MEMBER}))

@@ -22,7 +22,7 @@ from ..models.authz import Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
 from ..models.knowledge_base import KnowledgeBase
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
-from ..services.knowledge_base_store import KnowledgeBaseStore
+from ..services.stores.knowledge_base_store import KnowledgeBaseStore
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory

@@ -42,7 +42,7 @@ from src.services.cognito.cognito_auth_service import (
     CognitoChallenge,
     CognitoTokens,
 )
-from src.services.memory_session_store import MemorySessionStore
+from src.services.stores.memory_session_store import MemorySessionStore
 from src.services.session_store_service import SessionStoreError
 from tests.error_helpers import raises_code
 from tests.log_helpers import SENTINEL_PASSWORD, LogCapture, assert_not_leaked

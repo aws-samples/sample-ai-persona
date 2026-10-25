@@ -11,7 +11,7 @@ from unittest.mock import Mock
 from datetime import datetime
 from dataclasses import asdict
 
-from src.services.dataset_store import DatasetStore
+from src.services.stores.dataset_store import DatasetStore
 from src.models.dataset import Dataset, DatasetColumn
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange

@@ -43,7 +43,7 @@ class TestInterviewChatIntegration:
         moto = pytest.importorskip("moto")
         import boto3
 
-        from src.services.interview_session_store import InterviewSessionStore
+        from src.services.stores.interview_session_store import InterviewSessionStore
         from tests.unit.discussion_world import OWNER, World
 
         monkeypatch.delenv("AWS_PROFILE", raising=False)

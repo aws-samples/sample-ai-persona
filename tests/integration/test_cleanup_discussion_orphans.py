@@ -24,7 +24,7 @@ from src.models.discussion import Discussion  # noqa: E402
 from src.models.discussion_report import DiscussionReport  # noqa: E402
 from src.models.message import DiscussionMessage, Message  # noqa: E402
 from src.models.uploaded_file import UploadedFile  # noqa: E402
-from src.services.uploaded_file_store import UploadedFileStore  # noqa: E402
+from src.services.stores.uploaded_file_store import UploadedFileStore  # noqa: E402
 from tests.integration.test_discussion_store import (  # noqa: E402
     REGION,
     create_tables,

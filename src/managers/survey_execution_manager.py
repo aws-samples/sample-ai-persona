@@ -37,15 +37,15 @@ from ..models.custom_persona_data import PersonaDataRef
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
 from ..models.sharing import ListTab, TabbedList
 from ..models.survey import Survey, SurveyDetail, TemplateSnapshot
-from ..services.custom_persona_data_store import (
+from ..services.stores.custom_persona_data_store import (
     CustomPersonaDataStore,
     CustomPersonaDataStoreError,
 )
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
-from ..services.survey_store import SurveyStore, SurveyStoreError
-from ..services.survey_template_store import (
+from ..services.stores.survey_store import SurveyStore, SurveyStoreError
+from ..services.stores.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
 )

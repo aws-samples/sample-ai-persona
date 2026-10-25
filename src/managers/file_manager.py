@@ -32,7 +32,7 @@ from .components.sharing_runtime import build_access_parts, shared_access_parts
 
 if TYPE_CHECKING:
     from ..services.s3_service import S3Service
-    from ..services.uploaded_file_store import UploadedFileStore
+    from ..services.stores.uploaded_file_store import UploadedFileStore
 
 logger = logging.getLogger(__name__)
 

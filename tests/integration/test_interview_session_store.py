@@ -21,7 +21,7 @@ from src.models.interview_session import (  # noqa: E402
     InterviewMessage,
     InterviewSession,
 )
-from src.services.interview_session_store import (  # noqa: E402
+from src.services.stores.interview_session_store import (  # noqa: E402
     InterviewConflict,
     InterviewSessionStore,
     InterviewSessionStoreError,

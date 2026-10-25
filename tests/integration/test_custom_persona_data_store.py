@@ -20,7 +20,7 @@ from src.models.custom_persona_data import (  # noqa: E402
     ExtraColumn,
     reservation_id,
 )
-from src.services.custom_persona_data_store import (  # noqa: E402
+from src.services.stores.custom_persona_data_store import (  # noqa: E402
     CustomPersonaDataConditionFailed,
     CustomPersonaDataNameTaken,
     CustomPersonaDataStore,

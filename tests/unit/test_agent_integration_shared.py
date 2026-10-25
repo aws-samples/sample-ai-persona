@@ -296,7 +296,7 @@ class TestAssetFilter:
 
 from src.managers.settings_manager import SettingsManager  # noqa: E402
 from src.models.sharing import AssetScopeChange  # noqa: E402
-from src.services.persona_binding_store import PersonaBindingStore  # noqa: E402
+from src.services.stores.persona_binding_store import PersonaBindingStore  # noqa: E402
 from tests.unit.survey_world import (  # noqa: E402
     ADMIN as _U7_ADMIN,
     MEMBER_A as _SALES_MEMBER,

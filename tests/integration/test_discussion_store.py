@@ -19,7 +19,7 @@ from src.models.discussion import Discussion  # noqa: E402
 from src.models.discussion_report import DiscussionReport  # noqa: E402
 from src.models.insight import Insight  # noqa: E402
 from src.models.message import DiscussionMessage, Message  # noqa: E402
-from src.services.discussion_store import (  # noqa: E402
+from src.services.stores.discussion_store import (  # noqa: E402
     MAX_BODY_BYTES,
     DiscussionConditionFailed,
     DiscussionConflict,

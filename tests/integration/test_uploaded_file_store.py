@@ -20,7 +20,7 @@ import boto3  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
 
 from src.models.uploaded_file import UploadedFile  # noqa: E402
-from src.services.uploaded_file_store import (  # noqa: E402
+from src.services.stores.uploaded_file_store import (  # noqa: E402
     MAX_TRANSACTION_ITEMS,
     AttachConditionFailed,
     AttachConflict,

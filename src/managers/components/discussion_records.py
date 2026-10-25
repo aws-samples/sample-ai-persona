@@ -51,7 +51,7 @@ from ...models.errors import CodedError, ErrorCode, LookupUnavailableError
 from ...models.insight import Insight
 from ...models.message import DiscussionMessage, Message
 from ...models.uploaded_file import AttachResult
-from ...services.discussion_store import (
+from ...services.stores.discussion_store import (
     MAX_BODY_BYTES,
     DiscussionConditionFailed,
     DiscussionStoreError,

@@ -29,7 +29,7 @@ from src.models.errors import (
     LookupUnavailableError,
 )
 from src.models.sharing import ListTab, ResourceShareEntry, ShareChange, SharingTable
-from src.services.resource_share_store import (
+from src.services.stores.resource_share_store import (
     ResourceShareStoreError,
     ShareConditionFailed,
     ShareStartKeyInvalid,

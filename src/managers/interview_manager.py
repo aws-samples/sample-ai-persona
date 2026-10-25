@@ -64,7 +64,7 @@ from ..services.agent_service import (
     AgentService,
     PersonaAgent,
 )
-from ..services.interview_session_store import (
+from ..services.stores.interview_session_store import (
     InterviewConflict,
     InterviewSessionStore,
     InterviewSessionStoreError,
@@ -92,8 +92,8 @@ from .shared.structured_log import log_event
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
-    from ..services.dataset_store import DatasetStore
-    from ..services.knowledge_base_store import KnowledgeBaseStore
+    from ..services.stores.dataset_store import DatasetStore
+    from ..services.stores.knowledge_base_store import KnowledgeBaseStore
     from ..services.s3_service import S3Service
 
 

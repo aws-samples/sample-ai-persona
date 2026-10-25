@@ -73,9 +73,9 @@ from .shared.model_validation import (
 
 if TYPE_CHECKING:
     from ..services.dataset_analysis.service import DatasetAnalysisService
-    from ..services.persona_binding_store import PersonaBindingStore
-    from ..services.dataset_store import DatasetStore
-    from ..services.knowledge_base_store import KnowledgeBaseStore
+    from ..services.stores.persona_binding_store import PersonaBindingStore
+    from ..services.stores.dataset_store import DatasetStore
+    from ..services.stores.knowledge_base_store import KnowledgeBaseStore
 
 
 class AgentDiscussionManagerError(CodedError):

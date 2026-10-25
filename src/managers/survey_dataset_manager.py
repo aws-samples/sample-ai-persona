@@ -50,7 +50,7 @@ from ..prompts.survey_prompts import (
 )
 from ..services.ai_service import AIService
 from ..services.agent_service import AgentService
-from ..services.custom_persona_data_store import (
+from ..services.stores.custom_persona_data_store import (
     CustomPersonaDataConditionFailed,
     CustomPersonaDataNameTaken,
     CustomPersonaDataStore,

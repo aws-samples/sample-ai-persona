@@ -23,7 +23,7 @@ from src.managers.interview_manager import InterviewManager  # noqa: E402
 from src.managers.persona_manager import PersonaManager  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.interview_session import InterviewMessage  # noqa: E402
-from src.services.interview_session_store import InterviewSessionStore  # noqa: E402
+from src.services.stores.interview_session_store import InterviewSessionStore  # noqa: E402
 from tests.api.u6_world import ME, ApiWorld, _agent  # noqa: E402
 from tests.conftest import MEMBER_B  # noqa: E402
 from tests.dialog_helpers import dialog_markup  # noqa: E402

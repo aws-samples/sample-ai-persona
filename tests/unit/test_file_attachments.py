@@ -26,7 +26,7 @@ from src.models.authz import Principal  # noqa: E402
 from src.models.errors import CodedError, ErrorCode  # noqa: E402
 from src.models.uploaded_file import UploadedFile  # noqa: E402
 from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
-from src.services.uploaded_file_store import (  # noqa: E402
+from src.services.stores.uploaded_file_store import (  # noqa: E402
     UploadedFileStore,
     UploadedFileStoreError,
 )

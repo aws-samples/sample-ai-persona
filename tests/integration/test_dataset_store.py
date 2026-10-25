@@ -17,7 +17,7 @@ import boto3  # noqa: E402
 
 from src.models.dataset import Dataset, DatasetColumn  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
-from src.services.dataset_store import DatasetStore, DatasetStoreError  # noqa: E402
+from src.services.stores.dataset_store import DatasetStore, DatasetStoreError  # noqa: E402
 
 REGION = "ap-northeast-1"
 TABLE = "DatasetsTest"

@@ -16,7 +16,7 @@ moto = pytest.importorskip("moto", reason="moto is required for DynamoDB tests")
 import boto3  # noqa: E402
 
 from src.models.persona_binding import KB_TARGET_KEY, PersonaBinding  # noqa: E402
-from src.services.persona_binding_store import (  # noqa: E402
+from src.services.stores.persona_binding_store import (  # noqa: E402
     PersonaBindingStore,
     PersonaBindingStoreError,
 )

@@ -42,8 +42,8 @@ from src.prompts.survey_prompts import (
     build_persona_system_prompt,
     STANDARD_COLUMNS,
 )
-from src.services.survey_store import SurveyStore
-from src.services.survey_template_store import SurveyTemplateStore
+from src.services.stores.survey_store import SurveyStore
+from src.services.stores.survey_template_store import SurveyTemplateStore
 
 
 @pytest.fixture

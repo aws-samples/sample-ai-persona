@@ -227,9 +227,9 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def _default_services(region: str) -> tuple[Surveys, CustomData, Objects]:
-    from src.services.custom_persona_data_store import CustomPersonaDataStore
+    from src.services.stores.custom_persona_data_store import CustomPersonaDataStore
     from src.services.s3_service import S3Service
-    from src.services.survey_store import SurveyStore
+    from src.services.stores.survey_store import SurveyStore
 
     if not config.S3_BUCKET_NAME:
         raise SystemExit("S3_BUCKET_NAME が設定されていません")

@@ -145,7 +145,7 @@ class TestReferenceForEveryone:
     def test_unreadable_table_is_not_an_empty_list(self, dm, survey_world):
         survey_world.custom_store.list_all = Mock(
             side_effect=__import__(
-                "src.services.custom_persona_data_store",
+                "src.services.stores.custom_persona_data_store",
                 fromlist=["CustomPersonaDataStoreError"],
             ).CustomPersonaDataStoreError("down")
         )
@@ -352,7 +352,9 @@ class TestUpload:
         assert _objects(survey_world) == []
 
     def test_failed_record_write_removes_the_file(self, dm, survey_world):
-        from src.services.custom_persona_data_store import CustomPersonaDataStoreError
+        from src.services.stores.custom_persona_data_store import (
+            CustomPersonaDataStoreError,
+        )
 
         survey_world.custom_store.put_new = Mock(
             side_effect=CustomPersonaDataStoreError("down")
@@ -362,7 +364,9 @@ class TestUpload:
         assert _objects(survey_world) == []
 
     def test_a_file_left_behind_is_logged(self, dm, survey_world, logs, monkeypatch):
-        from src.services.custom_persona_data_store import CustomPersonaDataStoreError
+        from src.services.stores.custom_persona_data_store import (
+            CustomPersonaDataStoreError,
+        )
 
         survey_world.custom_store.put_new = Mock(
             side_effect=CustomPersonaDataStoreError("down")
@@ -599,7 +603,7 @@ def _second_instance(world: SurveyWorld, batch: Mock) -> SurveyDatasetManager:
 
     from src.managers.components.resource_lookup import build_resource_lookup
     from src.services.authz_lookup_service import AuthzLookupService, LookupTable
-    from src.services.custom_persona_data_store import CustomPersonaDataStore
+    from src.services.stores.custom_persona_data_store import CustomPersonaDataStore
     from src.services.s3_service import S3Service
     from tests.unit.survey_world import REGION
 

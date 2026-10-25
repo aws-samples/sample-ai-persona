@@ -49,6 +49,10 @@ _SERVICE_FACTORY = "service_factory"
 # 純粋なデータ参照（ISO国コード→名前等）でビジネスロジックを含まないもののみ。
 _DISPLAY_HELPER_ALLOW = {"country_service"}
 
+# ファイルごとに 1 ユニットとして扱うサブパッケージ。stores/ はテーブルごとのストアを
+# まとめた置き場で、同じディレクトリにあってもストアどうしは import しない。
+_PER_FILE_PACKAGES = {"stores"}
+
 # 既知の違反（module 相対パス -> 違反 import 先の集合）。新たな逆方向 import は
 # ここに足すのではなく、正しい層へ移すこと。ラチェットとして、ここに載っていない
 # 新規違反は fail し、解消済みで残っているエントリも fail する。
@@ -195,6 +199,8 @@ def _unit_of(module_file: Path, layer_dir: Path) -> str:
     if key in parts:
         after = parts[parts.index(key) + 1 :]
         if len(after) > 1:  # サブパッケージ配下（after = [subpkg, ..., file.py]）
+            if after[0] in _PER_FILE_PACKAGES:
+                return f"{after[0]}.{Path(after[1]).stem}"
             return after[0]
     return module_file.stem
 
@@ -204,8 +210,11 @@ def _target_unit(seg: list[str], layer_index: int) -> str:
 
     seg=['src','services','memory','memory_service'], layer_index=2 -> 'memory'
     seg=['src','services','country_service'],          layer_index=2 -> 'country_service'
+    seg=['src','services','stores','persona_store'],   layer_index=2 -> 'stores.persona_store'
     """
     after = seg[layer_index:]
+    if len(after) > 1 and after[0] in _PER_FILE_PACKAGES:
+        return f"{after[0]}.{after[1]}"
     return after[0] if after else ""
 
 
@@ -414,7 +423,7 @@ class TestCheckerItself:
         f = self._write(
             tmp_path,
             "web/routers/foo.py",
-            "from src.services.persona_store import PersonaStore\n",
+            "from src.services.stores.persona_store import PersonaStore\n",
         )
         assert _violations_for(f, _ROUTERS_DIR)
 
@@ -437,6 +446,33 @@ class TestCheckerItself:
             tmp_path,
             "src/services/foo.py",
             "from ..services.service_factory import get_service\n",
+        )
+        assert not _violations_for(f, _SERVICES_DIR)
+
+    def test_store_importing_other_store_is_flagged(self, tmp_path: Path) -> None:
+        # stores/ はテーブルごとに 1 ユニット。同じディレクトリでもストアどうしは結合しない。
+        f = self._write(
+            tmp_path,
+            "src/services/stores/foo_store.py",
+            "from .persona_store import PersonaStore\n",
+        )
+        assert _violations_for(f, _SERVICES_DIR)
+
+    def test_store_importing_other_store_absolutely_is_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        f = self._write(
+            tmp_path,
+            "src/services/stores/foo_store.py",
+            "from src.services.stores.persona_store import PersonaStore\n",
+        )
+        assert _violations_for(f, _SERVICES_DIR)
+
+    def test_store_importing_models_is_allowed(self, tmp_path: Path) -> None:
+        f = self._write(
+            tmp_path,
+            "src/services/stores/foo_store.py",
+            "from ...models.persona import Persona\n",
         )
         assert not _violations_for(f, _SERVICES_DIR)
 
