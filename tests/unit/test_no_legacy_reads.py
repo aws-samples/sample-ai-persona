@@ -7,6 +7,9 @@ PersonaDatasetBindings・PersonaKBBindings の権限と環境変数を外すた�
 U6（BR8.2、NFR2.15）: Discussions の型固定の GSI（CreatedAtIndex・TopicIndex・
 ModeIndex）を読むコードを残さない（CDK から外すのは U9）。判定を通らずにペルソナを
 読む ``get_persona_unchecked`` もなくす（BR2.8、NFR1.46）。
+
+U5（BR8.2）: Personas・UploadedFiles の型固定の GSI（NameIndex・OccupationIndex・
+UploadedAtIndex）を読むコードを残さない。
 """
 
 from pathlib import Path
@@ -21,6 +24,10 @@ _LEGACY_NAMES = (
     "PERSONA_KB_BINDINGS_TABLE_NAME",
     "get_bindings_by_persona",
     "get_kb_binding_by_persona",
+    # U5 BR8.2: Personas・UploadedFiles の type 固定の GSI
+    "NameIndex",
+    "OccupationIndex",
+    "UploadedAtIndex",
     # U6
     "CreatedAtIndex",
     "TopicIndex",
