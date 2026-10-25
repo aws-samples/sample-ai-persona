@@ -16,7 +16,7 @@ from scripts.rebuild_resource_shares import main, plan_rebuild, apply_plan  # no
 from src.models.authz import ResourceType  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.sharing import ResourceShareEntry, SharingTable  # noqa: E402
-from src.services.resource_share_store import ResourceShareStore  # noqa: E402
+from src.services.stores.resource_share_store import ResourceShareStore  # noqa: E402
 from tests.integration.test_resource_share_store import (  # noqa: E402
     PERSONAS,
     REGION,

@@ -206,7 +206,7 @@ class TestRunInterview:
         import boto3
 
         from src.managers.interview_manager import InterviewManager
-        from src.services.interview_session_store import InterviewSessionStore
+        from src.services.stores.interview_session_store import InterviewSessionStore
         from tests.api.test_interview_router import MESSAGES, REGION, SESSIONS, _tables
 
         monkeypatch.delenv("AWS_PROFILE", raising=False)

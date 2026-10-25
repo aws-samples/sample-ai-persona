@@ -22,7 +22,7 @@ from src.models.authz import Principal
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.persona import Persona
 from src.models.sharing import ListTab
-from src.services.resource_share_store import ResourceShareStoreError
+from src.services.stores.resource_share_store import ResourceShareStoreError
 from tests.error_helpers import raises_code
 from tests.unit.test_resource_sharing import (
     ADMIN,

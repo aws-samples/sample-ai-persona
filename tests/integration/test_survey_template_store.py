@@ -20,7 +20,7 @@ from src.models.survey_template import (  # noqa: E402
     SurveyTemplate,
     TemplateImage,
 )
-from src.services.survey_template_store import (  # noqa: E402
+from src.services.stores.survey_template_store import (  # noqa: E402
     SurveyTemplateStore,
     SurveyTemplateStoreError,
 )

@@ -3,9 +3,9 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 
-/** 「自分のもの」の一覧と件数の GSI（src/services/resource_share_store.py が Query する）。 */
+/** 「自分のもの」の一覧と件数の GSI（src/services/stores/resource_share_store.py が Query する）。 */
 export const OWNER_INDEX = 'OwnerIndex';
-/** 紐付けの逆引きの GSI（src/services/persona_binding_store.py が Query する）。 */
+/** 紐付けの逆引きの GSI（src/services/stores/persona_binding_store.py が Query する）。 */
 export const TARGET_INDEX = 'TargetIndex';
 /**
  * アプリが IndexName で Query する GSI。App スタックはこの名前の GSI だけをタスクロールに

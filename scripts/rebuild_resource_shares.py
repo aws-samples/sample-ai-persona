@@ -38,7 +38,7 @@ from src.config import config  # noqa: E402
 from src.managers.components.resource_sharing import default_sharing_tables  # noqa: E402
 from src.models.authz import ResourceType  # noqa: E402
 from src.models.sharing import ResourceShareEntry, SharingTable  # noqa: E402
-from src.services.resource_share_store import ResourceShareStore  # noqa: E402
+from src.services.stores.resource_share_store import ResourceShareStore  # noqa: E402
 
 _BODY_COLUMNS = ["id", "owner_sub", "shared_group_ids", "created_at"]
 

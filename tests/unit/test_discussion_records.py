@@ -32,7 +32,7 @@ from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.insight import Insight
 from src.models.message import Message
 from src.models.uploaded_file import AttachResult
-from src.services.discussion_store import (
+from src.services.stores.discussion_store import (
     MAX_BODY_BYTES,
     DiscussionConditionFailed,
     DiscussionStore,

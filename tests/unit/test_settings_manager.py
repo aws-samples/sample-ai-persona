@@ -12,7 +12,7 @@ from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.errors import CodedError, ErrorCode
 from src.models.sharing import AssetScopeChange
 from tests.error_helpers import raises_code
-from src.services.knowledge_base_store import KnowledgeBaseStore
+from src.services.stores.knowledge_base_store import KnowledgeBaseStore
 from tests.log_helpers import LogCapture
 from tests.unit.survey_world import ADMIN, MEMBER_A, SurveyWorld
 

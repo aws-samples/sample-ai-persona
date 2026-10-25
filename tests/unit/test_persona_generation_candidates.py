@@ -21,7 +21,7 @@ from src.models.persona_candidate import (
     CandidateSaveResult,
     PersonaCandidate,
 )
-from src.services.persona_candidate_store import (
+from src.services.stores.persona_candidate_store import (
     CandidateUnavailable,
     PersonaCandidateStore,
     PersonaCandidateStoreError,

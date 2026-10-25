@@ -480,7 +480,7 @@ class Saving:
 
     def __init__(self, client: Any) -> None:
         from src.managers.persona_generation_manager import PersonaGenerationManager
-        from src.services.persona_candidate_store import PersonaCandidateStore
+        from src.services.stores.persona_candidate_store import PersonaCandidateStore
 
         self.store = PersonaCandidateStore(
             region=REGION, table_name=TABLE, client=client

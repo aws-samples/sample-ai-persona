@@ -62,7 +62,7 @@ from ...models.sharing import (
     SharingTable,
     parse_share_key,
 )
-from ...services.resource_share_store import (
+from ...services.stores.resource_share_store import (
     ResourceShareStoreError,
     ShareConditionFailed,
     ShareStartKeyInvalid,

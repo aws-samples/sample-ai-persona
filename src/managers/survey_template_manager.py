@@ -38,7 +38,7 @@ from ..prompts.survey_prompts import (
 )
 from ..services.ai_service import AIService
 from ..services.service_factory import service_factory
-from ..services.survey_template_store import (
+from ..services.stores.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
 )

@@ -13,7 +13,7 @@ import pytest
 
 from src.managers.components.file_attachments import FileAttachments
 from src.managers.file_manager import FileManager
-from src.services.uploaded_file_store import UploadedFileStore
+from src.services.stores.uploaded_file_store import UploadedFileStore
 from tests.conftest import MEMBER_B
 from src.managers.discussion_manager import DiscussionManager
 from src.models.message import Message

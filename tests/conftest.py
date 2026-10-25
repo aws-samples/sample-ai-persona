@@ -212,7 +212,7 @@ def mock_agent_service() -> Mock:
 @pytest.fixture
 def mock_persona_store() -> Mock:
     """モック化されたPersonaStoreを提供"""
-    from src.services.persona_store import PersonaStore
+    from src.services.stores.persona_store import PersonaStore
 
     mock = Mock(spec=PersonaStore)
     mock.put_new.return_value = None

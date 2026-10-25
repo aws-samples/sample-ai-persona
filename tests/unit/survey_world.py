@@ -32,13 +32,13 @@ from src.models.survey import Survey, TemplateSnapshot
 from src.models.survey_template import Question, SurveyTemplate, TemplateImage
 from src.models.uploaded_file import AttachResult
 from src.services.authz_lookup_service import AuthzLookupService, LookupTable
-from src.services.custom_persona_data_store import CustomPersonaDataStore
-from src.services.dataset_store import DatasetStore
-from src.services.knowledge_base_store import KnowledgeBaseStore
-from src.services.resource_share_store import ResourceShareStore
+from src.services.stores.custom_persona_data_store import CustomPersonaDataStore
+from src.services.stores.dataset_store import DatasetStore
+from src.services.stores.knowledge_base_store import KnowledgeBaseStore
+from src.services.stores.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
-from src.services.survey_store import SurveyStore
-from src.services.survey_template_store import SurveyTemplateStore
+from src.services.stores.survey_store import SurveyStore
+from src.services.stores.survey_template_store import SurveyTemplateStore
 
 REGION = "us-east-1"
 BUCKET = "u7-test-bucket"

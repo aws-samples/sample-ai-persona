@@ -18,8 +18,8 @@ from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.survey import InsightReport, PersonaStatistics, VisualAnalysisData
 from src.models.survey_template import Question, SurveyTemplate
-from src.services.survey_store import SurveyStore
-from src.services.survey_template_store import SurveyTemplateStore
+from src.services.stores.survey_store import SurveyStore
+from src.services.stores.survey_template_store import SurveyTemplateStore
 from tests.error_helpers import raises_code
 from tests.unit.survey_world import (
     ADMIN,

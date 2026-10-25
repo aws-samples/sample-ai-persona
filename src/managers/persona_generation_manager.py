@@ -20,7 +20,7 @@ from ..models.persona_candidate import (
     PersonaCandidate,
 )
 from ..config import config
-from ..services.persona_candidate_store import (
+from ..services.stores.persona_candidate_store import (
     CandidateUnavailable,
     PersonaCandidateStore,
 )

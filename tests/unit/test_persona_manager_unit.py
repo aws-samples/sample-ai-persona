@@ -192,7 +192,7 @@ class TestSavePersona:
         manager._personas.put_new.assert_called_once()
 
     def test_db_error(self, manager):
-        from src.services.persona_store import PersonaStoreError
+        from src.services.stores.persona_store import PersonaStoreError
 
         persona = Persona.create_new(
             name="テスト",

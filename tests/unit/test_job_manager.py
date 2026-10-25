@@ -23,7 +23,7 @@ from src.models.errors import (
 )
 from src.models.job import Job, JobStatus
 from src.services.authz_lookup_service import AuthzLookupError
-from src.services.job_store import JobStore
+from src.services.stores.job_store import JobStore
 from tests.error_helpers import raises_code
 from tests.log_helpers import LogCapture
 

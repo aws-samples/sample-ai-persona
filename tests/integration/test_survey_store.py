@@ -17,7 +17,7 @@ import boto3  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.survey import InsightReport, Survey, TemplateSnapshot  # noqa: E402
 from src.models.survey_template import Question, SurveyTemplate  # noqa: E402
-from src.services.survey_store import SurveyStore, SurveyStoreError  # noqa: E402
+from src.services.stores.survey_store import SurveyStore, SurveyStoreError  # noqa: E402
 
 REGION = "ap-northeast-1"
 TABLE = "SurveysTest"

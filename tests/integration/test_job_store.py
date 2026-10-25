@@ -16,7 +16,7 @@ import boto3  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.job import JobStatus  # noqa: E402
 from src.services.authz_lookup_service import AuthzLookupService  # noqa: E402
-from src.services.job_store import JobStore, JobStoreError  # noqa: E402
+from src.services.stores.job_store import JobStore, JobStoreError  # noqa: E402
 
 REGION = "ap-northeast-1"
 TABLE = "JobsTest"

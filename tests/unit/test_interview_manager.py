@@ -32,7 +32,7 @@ from src.services.agent_service import (  # noqa: E402
     AgentCommunicationError,
     PersonaAgent,
 )
-from src.services.interview_session_store import (  # noqa: E402
+from src.services.stores.interview_session_store import (  # noqa: E402
     InterviewSessionStore,
     InterviewSessionStoreError,
 )

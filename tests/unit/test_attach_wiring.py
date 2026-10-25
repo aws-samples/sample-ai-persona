@@ -25,7 +25,7 @@ from src.models.errors import CodedError, ErrorCode
 from src.models.message import Message
 from src.models.uploaded_file import UploadedFile
 from src.services.agent_service import FacilitatorAgent, PersonaAgent
-from src.services.discussion_store import DiscussionStoreError
+from src.services.stores.discussion_store import DiscussionStoreError
 from tests.conftest import MEMBER_A, MEMBER_B
 from tests.error_helpers import raises_code
 from tests.unit.discussion_world import OWNER, World

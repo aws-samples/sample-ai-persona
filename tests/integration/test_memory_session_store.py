@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from src.models.authz import Role
 from src.models.login_challenge import LoginChallenge
 from src.models.login_session import AuthMethod, LoginSession
-from src.services.memory_session_store import MemorySessionStore
+from src.services.stores.memory_session_store import MemorySessionStore
 
 _NOW = datetime(2026, 10, 11, 0, 0, 0, tzinfo=timezone.utc)
 

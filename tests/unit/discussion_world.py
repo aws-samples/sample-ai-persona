@@ -27,7 +27,10 @@ from src.models.discussion_report import DiscussionReport
 from src.models.persona import Persona
 from src.models.sharing import ResourceShareEntry
 from src.models.uploaded_file import AttachResult
-from src.services.discussion_store import DiscussionConditionFailed, DiscussionStore
+from src.services.stores.discussion_store import (
+    DiscussionConditionFailed,
+    DiscussionStore,
+)
 
 DISCUSSION = ResourceType.DISCUSSION
 PERSONA = ResourceType.PERSONA

@@ -44,7 +44,7 @@ from ..models.persona_candidate import (
 from ..models.demographics import VALID_GENDERS
 from ..models.sharing import ListTab, TabbedList
 from ..services import country_service
-from ..services.persona_store import PersonaStore, PersonaStoreError
+from ..services.stores.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
@@ -69,10 +69,10 @@ from .shared.image_normalize import (
 )
 
 if TYPE_CHECKING:
-    from ..services.dataset_store import DatasetStore
-    from ..services.knowledge_base_store import KnowledgeBaseStore
-    from ..services.persona_binding_store import PersonaBindingStore
-    from ..services.persona_candidate_store import PersonaCandidateStore
+    from ..services.stores.dataset_store import DatasetStore
+    from ..services.stores.knowledge_base_store import KnowledgeBaseStore
+    from ..services.stores.persona_binding_store import PersonaBindingStore
+    from ..services.stores.persona_candidate_store import PersonaCandidateStore
     from ..services.s3_service import S3Service
 
 

@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 from unittest.mock import Mock
 
-from src.services.dataset_store import DatasetStore
-from src.services.persona_store import PersonaStore
-from src.services.knowledge_base_store import KnowledgeBaseStore
+from src.services.stores.dataset_store import DatasetStore
+from src.services.stores.persona_store import PersonaStore
+from src.services.stores.knowledge_base_store import KnowledgeBaseStore
 from src.managers.components.resource_lookup import ResourceLookup
 from src.managers.persona_manager import PersonaManager
 from src.models.authz import AccessTarget, Principal, ResourceType, Role

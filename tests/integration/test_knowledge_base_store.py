@@ -15,7 +15,7 @@ import boto3  # noqa: E402
 
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.knowledge_base import KnowledgeBase  # noqa: E402
-from src.services.knowledge_base_store import (  # noqa: E402
+from src.services.stores.knowledge_base_store import (  # noqa: E402
     KnowledgeBaseStore,
     KnowledgeBaseStoreError,
 )

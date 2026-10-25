@@ -213,9 +213,9 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def _default_stores(region: str) -> tuple[Store, Files, Objects | None]:
-    from src.services.discussion_store import DiscussionStore
+    from src.services.stores.discussion_store import DiscussionStore
     from src.services.service_factory import service_factory
-    from src.services.uploaded_file_store import UploadedFileStore
+    from src.services.stores.uploaded_file_store import UploadedFileStore
 
     store = DiscussionStore(
         region=region,

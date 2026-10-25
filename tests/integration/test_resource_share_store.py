@@ -36,7 +36,7 @@ from src.models.sharing import (  # noqa: E402
     ShareChange,
     SharingTable,
 )
-from src.services.resource_share_store import (  # noqa: E402
+from src.services.stores.resource_share_store import (  # noqa: E402
     ResourceShareStore,
     ResourceShareStoreError,
     ShareConditionFailed,

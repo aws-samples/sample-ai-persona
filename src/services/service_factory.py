@@ -18,19 +18,19 @@ if TYPE_CHECKING:
     from .cognito_groups_service import CognitoGroupsService
     from .cognito.cognito_auth_service import CognitoAuthService
     from .cognito.oidc_service import OidcService
-    from .custom_persona_data_store import CustomPersonaDataStore
-    from .dataset_store import DatasetStore
-    from .job_store import JobStore
-    from .knowledge_base_store import KnowledgeBaseStore
-    from .persona_binding_store import PersonaBindingStore
-    from .persona_candidate_store import PersonaCandidateStore
-    from .persona_store import PersonaStore
-    from .resource_share_store import ResourceShareStore
-    from .survey_store import SurveyStore
-    from .survey_template_store import SurveyTemplateStore
-    from .uploaded_file_store import UploadedFileStore
-    from .discussion_store import DiscussionStore
-    from .interview_session_store import InterviewSessionStore
+    from .stores.custom_persona_data_store import CustomPersonaDataStore
+    from .stores.dataset_store import DatasetStore
+    from .stores.job_store import JobStore
+    from .stores.knowledge_base_store import KnowledgeBaseStore
+    from .stores.persona_binding_store import PersonaBindingStore
+    from .stores.persona_candidate_store import PersonaCandidateStore
+    from .stores.persona_store import PersonaStore
+    from .stores.resource_share_store import ResourceShareStore
+    from .stores.survey_store import SurveyStore
+    from .stores.survey_template_store import SurveyTemplateStore
+    from .stores.uploaded_file_store import UploadedFileStore
+    from .stores.discussion_store import DiscussionStore
+    from .stores.interview_session_store import InterviewSessionStore
     from .user_directory_service import UserDirectoryService
     from .data_agent_service import DataAgentService
     from .dataset_analysis.service import DatasetAnalysisService
@@ -309,7 +309,7 @@ class ServiceFactory:
 
     def _create_session_store(self) -> "SessionStore":
         if config.AUTH_MODE == "local":
-            from .memory_session_store import MemorySessionStore
+            from .stores.memory_session_store import MemorySessionStore
 
             self.logger.info("Using the in-process session store (AUTH_MODE=local)")
             return MemorySessionStore()
@@ -445,7 +445,7 @@ class ServiceFactory:
         if self._resource_share_store is None:
             with self._lock:
                 if self._resource_share_store is None:
-                    from .resource_share_store import ResourceShareStore
+                    from .stores.resource_share_store import ResourceShareStore
 
                     self.logger.info("Creating new ResourceShareStore instance")
                     self._resource_share_store = ResourceShareStore(
@@ -459,7 +459,7 @@ class ServiceFactory:
         if self._persona_candidate_store is None:
             with self._lock:
                 if self._persona_candidate_store is None:
-                    from .persona_candidate_store import PersonaCandidateStore
+                    from .stores.persona_candidate_store import PersonaCandidateStore
 
                     self.logger.info("Creating new PersonaCandidateStore instance")
                     self._persona_candidate_store = PersonaCandidateStore(
@@ -473,7 +473,7 @@ class ServiceFactory:
         if self._persona_binding_store is None:
             with self._lock:
                 if self._persona_binding_store is None:
-                    from .persona_binding_store import PersonaBindingStore
+                    from .stores.persona_binding_store import PersonaBindingStore
 
                     self.logger.info("Creating new PersonaBindingStore instance")
                     self._persona_binding_store = PersonaBindingStore(
@@ -487,7 +487,7 @@ class ServiceFactory:
         if self._job_store is None:
             with self._lock:
                 if self._job_store is None:
-                    from .job_store import JobStore
+                    from .stores.job_store import JobStore
 
                     self.logger.info("Creating new JobStore instance")
                     self._job_store = JobStore(
@@ -501,7 +501,7 @@ class ServiceFactory:
         if self._dataset_store is None:
             with self._lock:
                 if self._dataset_store is None:
-                    from .dataset_store import DatasetStore
+                    from .stores.dataset_store import DatasetStore
 
                     self.logger.info("Creating new DatasetStore instance")
                     self._dataset_store = DatasetStore(
@@ -515,7 +515,7 @@ class ServiceFactory:
         if self._persona_store is None:
             with self._lock:
                 if self._persona_store is None:
-                    from .persona_store import PersonaStore
+                    from .stores.persona_store import PersonaStore
 
                     self.logger.info("Creating new PersonaStore instance")
                     self._persona_store = PersonaStore(
@@ -529,7 +529,7 @@ class ServiceFactory:
         if self._survey_store is None:
             with self._lock:
                 if self._survey_store is None:
-                    from .survey_store import SurveyStore
+                    from .stores.survey_store import SurveyStore
 
                     self.logger.info("Creating new SurveyStore instance")
                     self._survey_store = SurveyStore(
@@ -543,7 +543,7 @@ class ServiceFactory:
         if self._survey_template_store is None:
             with self._lock:
                 if self._survey_template_store is None:
-                    from .survey_template_store import SurveyTemplateStore
+                    from .stores.survey_template_store import SurveyTemplateStore
 
                     self.logger.info("Creating new SurveyTemplateStore instance")
                     self._survey_template_store = SurveyTemplateStore(
@@ -557,7 +557,7 @@ class ServiceFactory:
         if self._knowledge_base_store is None:
             with self._lock:
                 if self._knowledge_base_store is None:
-                    from .knowledge_base_store import KnowledgeBaseStore
+                    from .stores.knowledge_base_store import KnowledgeBaseStore
 
                     self.logger.info("Creating new KnowledgeBaseStore instance")
                     self._knowledge_base_store = KnowledgeBaseStore(
@@ -571,7 +571,7 @@ class ServiceFactory:
         if self._custom_persona_data_store is None:
             with self._lock:
                 if self._custom_persona_data_store is None:
-                    from .custom_persona_data_store import CustomPersonaDataStore
+                    from .stores.custom_persona_data_store import CustomPersonaDataStore
 
                     self.logger.info("Creating new CustomPersonaDataStore instance")
                     self._custom_persona_data_store = CustomPersonaDataStore(
@@ -585,7 +585,7 @@ class ServiceFactory:
         if self._uploaded_file_store is None:
             with self._lock:
                 if self._uploaded_file_store is None:
-                    from .uploaded_file_store import UploadedFileStore
+                    from .stores.uploaded_file_store import UploadedFileStore
 
                     self.logger.info("Creating new UploadedFileStore instance")
                     self._uploaded_file_store = UploadedFileStore(
@@ -599,7 +599,7 @@ class ServiceFactory:
         if self._discussion_store is None:
             with self._lock:
                 if self._discussion_store is None:
-                    from .discussion_store import DiscussionStore
+                    from .stores.discussion_store import DiscussionStore
 
                     self.logger.info("Creating new DiscussionStore instance")
                     self._discussion_store = DiscussionStore(
@@ -615,7 +615,7 @@ class ServiceFactory:
         if self._interview_session_store is None:
             with self._lock:
                 if self._interview_session_store is None:
-                    from .interview_session_store import InterviewSessionStore
+                    from .stores.interview_session_store import InterviewSessionStore
 
                     self.logger.info("Creating new InterviewSessionStore instance")
                     self._interview_session_store = InterviewSessionStore(

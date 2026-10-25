@@ -21,7 +21,7 @@ from src.models.persona_candidate import (  # noqa: E402
     BehaviorDatasetCandidate,
     PersonaCandidate,
 )
-from src.services.persona_candidate_store import (  # noqa: E402
+from src.services.stores.persona_candidate_store import (  # noqa: E402
     CandidateUnavailable,
     PersonaCandidateStore,
     PersonaCandidateStoreError,

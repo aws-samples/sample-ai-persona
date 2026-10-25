@@ -112,7 +112,7 @@ class TestPersonaStoreGenerationLog:
 
     @staticmethod
     def _written(persona: Persona) -> dict:
-        from src.services.persona_store import PersonaStore
+        from src.services.stores.persona_store import PersonaStore
 
         client = Mock()
         PersonaStore(region="us-east-1", table_name="T", client=client).put_new(persona)
@@ -147,7 +147,7 @@ class TestPersonaStoreGenerationLog:
         assert "generation_context" not in item
 
     def test_read_back_with_generation_log(self):
-        from src.services.persona_store import PersonaStore
+        from src.services.stores.persona_store import PersonaStore
 
         store = PersonaStore(region="us-east-1", table_name="T", client=Mock())
         persona = self._persona(
@@ -158,7 +158,7 @@ class TestPersonaStoreGenerationLog:
         assert restored.generation_context == SAMPLE_CONTEXT
 
     def test_read_back_without_generation_log(self):
-        from src.services.persona_store import PersonaStore
+        from src.services.stores.persona_store import PersonaStore
 
         store = PersonaStore(region="us-east-1", table_name="T", client=Mock())
         restored = store._persona(self._written(self._persona()))

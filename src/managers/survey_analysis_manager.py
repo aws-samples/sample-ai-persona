@@ -34,8 +34,8 @@ from ..services.ai_service import AIService
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
-from ..services.survey_store import SurveyStore, SurveyStoreError
-from ..services.survey_template_store import (
+from ..services.stores.survey_store import SurveyStore, SurveyStoreError
+from ..services.stores.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
 )

@@ -20,7 +20,7 @@ from hypothesis import strategies as st  # noqa: E402
 
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.persona import Persona  # noqa: E402
-from src.services.persona_store import PersonaStore, PersonaStoreError  # noqa: E402
+from src.services.stores.persona_store import PersonaStore, PersonaStoreError  # noqa: E402
 
 REGION = "ap-northeast-1"
 TABLE = "PersonasTest"
@@ -393,7 +393,7 @@ def test_a_save_of_an_existing_id_keeps_the_body_and_the_index(store, client):
     """R-02: 新規の保存は本体も共有の索引も上書きしない（BR6.1 所有者、BR1 共有）。"""
     from src.managers.persona_manager import PersonaManager, PersonaManagerError
     from src.models.authz import Principal, ResourceType, Role
-    from src.services.resource_share_store import ResourceShareStore
+    from src.services.stores.resource_share_store import ResourceShareStore
     from tests.error_helpers import raises_code
 
     client.create_table(

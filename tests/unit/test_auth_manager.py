@@ -34,7 +34,7 @@ from src.models.errors import (
     LookupUnavailableError,
 )
 from src.models.login_session import AuthMethod, LoginSession, SessionStore
-from src.services.memory_session_store import MemorySessionStore
+from src.services.stores.memory_session_store import MemorySessionStore
 from src.services.cognito.oidc_service import (
     AuthorizationRequest,
     OidcError,

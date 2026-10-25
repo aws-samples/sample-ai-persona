@@ -68,6 +68,7 @@ Router層 → Manager層 → Service層。Models は全層から参照可。逆�
 - 環境変数は`src/config.py`経由で参照すること。直接`os.environ`を使ってはならない
 - Service固有の例外クラスを定義すること
 - リトライ・タイムアウト・バックオフ処理はこの層に閉じること
+- DynamoDB のテーブルごとのストア（`XxxStore`）は `src/services/stores/` に 1 テーブル 1 ファイルで置くこと。ストアどうしは import しない（`tests/unit/test_architecture_deps.py` がファイル単位で検査する）
 - **Service層に書いてはならないものの具体例:**
   - ビジネスルール判定（件数上下限、ステータス遷移、フェーズ別分岐）
   - ワークフロー制御（ラウンド管理、発言順序決定、continue判定）
