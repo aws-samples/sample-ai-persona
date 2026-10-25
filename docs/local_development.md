@@ -114,7 +114,7 @@ ai-persona-system/
 │   ├── services/          # 外部サービス連携層
 │   │   ├── ai_service.py              # Bedrock Converse/Invoke API
 │   │   ├── agent_service.py           # Strands Agent SDK操作
-│   │   ├── *_store.py                 # DynamoDB のテーブルごとの読み書き（persona_store.py など）
+│   │   ├── stores/                    # DynamoDB のテーブルごとの読み書き（persona_store.py など）
 │   │   ├── s3_service.py              # S3操作
 │   │   ├── survey_batch_service.py    # DuckDB/Parquet + Bedrock Batch Inference
 │   │   ├── data_agent_service.py      # DWHエージェントツール
