@@ -1,19 +1,26 @@
 import { Construct, IConstruct } from 'constructs';
 import { Annotations, CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { AwsCustomResource } from 'aws-cdk-lib/custom-resources';
 import { AppParameter } from '../parameters';
 import { bedrockInferenceArns } from './bedrock-arns';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
+import { ClosedNetwork } from './constructs/closed-network';
 import { CloudFrontDistribution } from './constructs/cloudfront';
+import { PASSWORD_POLICY } from './constructs/cognito';
 import { FargateAppService } from './constructs/fargate-service';
+import { ValidationEnvironment } from './constructs/validation-environment';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
+import { AuthMode, PUBLIC_PROFILE, ResolvedProfile } from './deployment-profile';
 import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
 
 /**
@@ -73,13 +80,52 @@ const AUTH_METRICS: { name: string; event: string; dimensions?: Record<string, s
   { name: 'AuthzDenied', event: 'authz.denied', dimensions: { reason: '$.reason' } },
 ];
 
+const HTTPS = ec2.Port.tcp(443);
+
+/** Cognito のアプリクライアントのトークンの有効期間（公開・閉域で同じ。BR3.3）。 */
+const TOKEN_VALIDITY = {
+  // 反映の遅れ（最大 61 分）と最長 7 日のセッションの前提（logical-components.md）
+  accessTokenValidity: Duration.minutes(60),
+  idTokenValidity: Duration.minutes(60),
+  refreshTokenValidity: Duration.days(7),
+} as const;
+
+/**
+ * 閉域のアプリに渡すパスワードの条件（U1 閉域、BR3.6）。User Pool の条件（PASSWORD_POLICY）から
+ * 作り、値を二重に持たない。アプリは src/models/password_policy.py の PasswordPolicy.from_settings で読む。
+ */
+const PASSWORD_POLICY_ENVIRONMENT: Record<string, string> = {
+  PASSWORD_MIN_LENGTH: String(PASSWORD_POLICY.minLength),
+  PASSWORD_REQUIRE_UPPERCASE: String(PASSWORD_POLICY.requireUppercase),
+  PASSWORD_REQUIRE_LOWERCASE: String(PASSWORD_POLICY.requireLowercase),
+  PASSWORD_REQUIRE_DIGITS: String(PASSWORD_POLICY.requireDigits),
+  PASSWORD_REQUIRE_SYMBOLS: String(PASSWORD_POLICY.requireSymbols),
+};
+
+/** ログイン方式で値が変わる環境変数（authEnvironment が作る）。 */
+interface AuthEnvironment {
+  AUTH_MODE: AuthMode;
+  /** oidc だけ（Managed Login のドメイン）。 */
+  COGNITO_DOMAIN?: string;
+  /** admin_api だけ（パスワードの条件 5 つ）。 */
+  passwordPolicy?: Record<string, string>;
+}
+
+/** 入口ごとに決まる、アプリの URL と Cognito のアプリクライアント。 */
+interface AppEntry {
+  appBaseUrl: string;
+  client: cognito.UserPoolClient;
+}
+
 export interface AppStackProps extends StackProps {
   parameter: AppParameter;
   data: DataStack;
-  /** Edge スタックの WebACL の ARN（WAF が無効なら undefined）。 */
+  /** Edge スタックの WebACL の ARN（WAF が無効なら undefined。閉域では渡さない）。 */
   webAclArn?: string;
   /** タスクの台数（1〜10。Stage で検査する）。 */
   appDesiredCount: number;
+  /** Stage の解決済みの設定（既定は公開。U1 閉域、ADR-002）。 */
+  profile?: ResolvedProfile;
 }
 
 /**
@@ -88,15 +134,30 @@ export interface AppStackProps extends StackProps {
  * VPC・内部 ALB・ECS Fargate・CloudFront・Cognito のアプリクライアント・
  * アプリのロググループとメトリクスフィルタ。Data・Edge から参照で受け取り、
  * 壊して作り直せる。イメージはコンテキスト imageTag のタグを使う（latest は使わない）。
+ *
+ * 閉域構成（profile.deploymentMode=closed、U1 閉域）では、ClosedNetwork の VPC と
+ * HTTPS だけの内部 ALB を使い、CloudFront と Managed Login を作らない。アプリクライアントは
+ * 管理 API のログインだけにし、SG の結線・Private Hosted Zone の Alias・検証用 EC2 を足す。
+ * 公開構成のテンプレートは変えない（test/public-stage-invariants.test.ts、BR2.2）。
  */
 export class AppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
 
     const { parameter, data, webAclArn, appDesiredCount } = props;
+    const profile = props.profile ?? PUBLIC_PROFILE;
+    const closed = profile.closedNetwork;
     const imageTag = this.resolveImageTag();
 
-    const { vpc } = new Vpc(this, 'Vpc', { envName: parameter.envName });
+    const network = closed
+      ? new ClosedNetwork(this, 'Network', {
+        envName: parameter.envName,
+        vpcCidr: closed.vpcCidr,
+        domainName: closed.domainName,
+        createTestEnvironment: closed.createTestEnvironment,
+      })
+      : undefined;
+    const vpc = network ? network.vpc : new Vpc(this, 'Vpc', { envName: parameter.envName }).vpc;
 
     // アプリのログ（NFR8.4: dev で 30 日、RETAIN）と認証の出来事のメトリクス（NFR8.3）
     const logGroup = new logs.LogGroup(this, 'AppLogGroup', {
@@ -126,20 +187,27 @@ export class AppStack extends Stack {
       memoryLimitMiB: Number(parameter.containerMemory),
       desiredCount: appDesiredCount,
       logGroup,
-      environment: this.baseEnvironment(parameter, data, batchRole.role.roleArn),
+      environment: this.commonEnvironment(
+        parameter,
+        data,
+        batchRole.role.roleArn,
+        this.authEnvironment(profile, data),
+      ),
       secrets: {
         TOKEN_ENCRYPTION_KEYS: ecs.Secret.fromSecretsManager(data.tokenEncryptionKeys),
         LOGIN_COOKIE_SIGNING_KEY: ecs.Secret.fromSecretsManager(data.loginCookieSigningKey),
       },
+      ...(closed
+        ? {
+          ingress: { kind: 'closed' as const, certificateArn: closed.certificateArn },
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+        }
+        : {}),
     });
 
-    const cdn = new CloudFrontDistribution(this, 'CloudFront', {
-      loadBalancer: app.loadBalancer,
-      webAclArn,
-    });
-    const appBaseUrl = `https://${cdn.domainName}`;
-
-    const client = this.createAppClient(data, cdn.domainName);
+    const { appBaseUrl, client } = network
+      ? this.createClosedEntry(app, network, profile, data)
+      : this.createPublicEntry(app, data, webAclArn);
     const clientSecret = new secretsmanager.Secret(this, 'CognitoClientSecret', {
       description: 'AI Persona v1 Cognito app client secret',
       secretStringValue: client.userPoolClientSecret,
@@ -150,7 +218,7 @@ export class AppStack extends Stack {
     app.container.addEnvironment('COGNITO_CLIENT_ID', client.userPoolClientId);
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
-    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn);
+    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn, profile);
 
     // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
     acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
@@ -160,6 +228,87 @@ export class AppStack extends Stack {
     new CfnOutput(this, 'AppUrl', { value: appBaseUrl });
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
     new CfnOutput(this, 'ServiceName', { value: app.service.serviceName });
+  }
+
+  /** 公開の入口: CloudFront（VPC オリジン）と Managed Login のアプリクライアント。 */
+  private createPublicEntry(app: FargateAppService, data: DataStack, webAclArn?: string): AppEntry {
+    const cdn = new CloudFrontDistribution(this, 'CloudFront', {
+      loadBalancer: app.loadBalancer,
+      webAclArn,
+    });
+    return {
+      appBaseUrl: `https://${cdn.domainName}`,
+      client: this.createOidcClient(data, cdn.domainName),
+    };
+  }
+
+  /**
+   * 閉域の入口（U1 閉域）: 管理 API のログインのアプリクライアント、検証用 EC2（指定したとき
+   * だけ）、SG の結線、Private Hosted Zone の頂点の ALB への Alias。CloudFront は作らない（BR5.5）。
+   */
+  private createClosedEntry(
+    app: FargateAppService,
+    network: ClosedNetwork,
+    profile: ResolvedProfile,
+    data: DataStack,
+  ): AppEntry {
+    const { closedNetwork: closed, appBaseUrl } = profile;
+    if (!closed || !appBaseUrl) {
+      throw new Error('The closed profile has no network settings or APP_BASE_URL.');
+    }
+    const client = this.createAdminApiClient(data);
+    const validation = closed.createTestEnvironment
+      ? new ValidationEnvironment(this, 'Validation', { vpc: network.vpc })
+      : undefined;
+    this.wireClosedSecurityGroups(app, network, closed.allowedCidrs, validation);
+    // アプリは起動時に一度だけ GetMemory を引き、失敗すると長期記憶を無効にしたまま動く。
+    // エンドポイントとタスクの SG のルールができてからサービスを作る（CloudFormation は
+    // 依存のないリソースを並べて作るため）。
+    app.service.node.addDependency(network, app.taskSecurityGroup);
+    // FQDN（zone の頂点）を内部 ALB に向ける（BR4.4）
+    new route53.ARecord(this, 'AppAlias', {
+      zone: network.hostedZone,
+      target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(app.loadBalancer)),
+    });
+    return { appBaseUrl, client };
+  }
+
+  /**
+   * 閉域の SG の結線（U1 閉域、security-design.md §3 の表、BR5.3・BR5.4、NFR3.2・NFR3.6）。
+   *
+   * ALB からタスクへの 80 は FargateAppService（listener.addTargets）が両側に足す。ここでは
+   * 送り元から ALB への 443、タスク・検証用 EC2 からエンドポイントへの 443、タスクから
+   * S3・DynamoDB のゲートウェイ型エンドポイント（プレフィックスリスト）への 443 を足す。
+   * SG どうしのルールは別のリソース（SecurityGroupIngress / Egress）になり、循環しない。
+   */
+  private wireClosedSecurityGroups(
+    app: FargateAppService,
+    network: ClosedNetwork,
+    allowedCidrs: readonly string[],
+    validation?: ValidationEnvironment,
+  ): void {
+    const alb = app.loadBalancerSecurityGroup;
+    const task = app.taskSecurityGroup;
+    const endpoints = network.endpointSecurityGroup;
+    const allowHttps = (from: ec2.ISecurityGroup, to: ec2.ISecurityGroup, description: string) => {
+      from.addEgressRule(to, HTTPS, description);
+      to.addIngressRule(from, HTTPS, description);
+    };
+
+    for (const cidr of allowedCidrs) {
+      alb.addIngressRule(ec2.Peer.ipv4(cidr), HTTPS, `Allowed client ${cidr}`);
+    }
+    allowHttps(task, endpoints, 'App tasks to VPC interface endpoints');
+    task.addEgressRule(ec2.Peer.prefixList(network.s3PrefixListId), HTTPS, 'S3 gateway endpoint');
+    task.addEgressRule(
+      ec2.Peer.prefixList(network.dynamoDbPrefixListId),
+      HTTPS,
+      'DynamoDB gateway endpoint',
+    );
+    if (validation) {
+      allowHttps(validation.securityGroup, alb, 'Validation instance to the app load balancer');
+      allowHttps(validation.securityGroup, endpoints, 'Validation instance to VPC interface endpoints');
+    }
   }
 
   /**
@@ -257,22 +406,39 @@ export class AppStack extends Stack {
     return UNSET_IMAGE_TAG;
   }
 
-  private baseEnvironment(
+  /**
+   * ログイン方式で値が変わる環境変数（U1 閉域、BR3.6）。モードで分岐してから domainHost を読む
+   * （閉域の User Pool にはドメインがなく、読むとエラーになるため。Functional Design レビュー）。
+   */
+  private authEnvironment(profile: ResolvedProfile, data: DataStack): AuthEnvironment {
+    if (profile.authMode === 'admin_api') {
+      return { AUTH_MODE: 'admin_api', passwordPolicy: PASSWORD_POLICY_ENVIRONMENT };
+    }
+    return { AUTH_MODE: 'oidc', COGNITO_DOMAIN: data.cognito.domainHost };
+  }
+
+  /**
+   * タスクの環境変数。ログイン方式の値（auth）は今と同じ位置に置く: AUTH_MODE は先頭、
+   * COGNITO_DOMAIN は COGNITO_USER_POOL_ID の次、パスワードの条件は末尾。並び順はタスク定義の
+   * テンプレートに出るため、公開構成のテンプレートを変えないよう順番を保つ（BR2.2）。
+   */
+  private commonEnvironment(
     parameter: AppParameter,
     data: DataStack,
     batchRoleArn: string,
+    auth: AuthEnvironment,
   ): Record<string, string> {
     const region = this.region;
     const tableNames = Object.fromEntries(
       Object.entries(data.database.applicationTables).map(([name, table]) => [name, table.tableName]),
     );
     const environment: Record<string, string> = {
-      // deploymentMode=public のログイン方式（closed は Stage で止める）
-      AUTH_MODE: 'oidc',
+      // ログイン方式（DeploymentProfile が決める。public は oidc、closed は admin_api）
+      AUTH_MODE: auth.AUTH_MODE,
       AWS_REGION: region,
       DYNAMODB_REGION: region,
       COGNITO_USER_POOL_ID: data.cognito.userPool.userPoolId,
-      COGNITO_DOMAIN: data.cognito.domainHost,
+      ...(auth.COGNITO_DOMAIN !== undefined ? { COGNITO_DOMAIN: auth.COGNITO_DOMAIN } : {}),
       SESSIONS_TABLE_NAME: data.database.sessionsTable.tableName,
       // 部署ごとの共有の索引（U4、src/config.py の RESOURCE_SHARES_TABLE_NAME）
       RESOURCE_SHARES_TABLE_NAME: data.database.resourceSharesTable.tableName,
@@ -303,6 +469,7 @@ export class AppStack extends Stack {
       BATCH_INFERENCE_MODEL_ID: parameter.batchInferenceModelId,
       SURVEY_S3_PREFIX: parameter.surveyS3Prefix ?? 'survey-results/',
       BATCH_INFERENCE_S3_PREFIX: parameter.batchInferenceS3Prefix ?? 'batch-inference/',
+      ...(auth.passwordPolicy ?? {}),
     };
     if (parameter.dataAgentRuntimeArn) {
       environment.ENABLE_DATA_AGENT = 'true';
@@ -312,7 +479,8 @@ export class AppStack extends Stack {
     return environment;
   }
 
-  private createAppClient(data: DataStack, domainName: string): cognito.UserPoolClient {
+  /** 公開のアプリクライアント: Managed Login（OIDC の認可コード）でログインする。 */
+  private createOidcClient(data: DataStack, domainName: string): cognito.UserPoolClient {
     const client = new cognito.UserPoolClient(this, 'AppClient', {
       userPool: data.cognito.userPool,
       generateSecret: true,
@@ -324,10 +492,7 @@ export class AppStack extends Stack {
         logoutUrls: [`https://${domainName}/login`],
       },
       supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
-      // 反映の遅れ（最大 61 分）と最長 7 日のセッションの前提（logical-components.md）
-      accessTokenValidity: Duration.minutes(60),
-      idTokenValidity: Duration.minutes(60),
-      refreshTokenValidity: Duration.days(7),
+      ...TOKEN_VALIDITY,
       enableTokenRevocation: true,
       preventUserExistenceErrors: true,
     });
@@ -339,6 +504,25 @@ export class AppStack extends Stack {
       useCognitoProvidedValues: true,
     });
     return client;
+  }
+
+  /**
+   * 閉域のアプリクライアント（U1 閉域、BR3.3）: アプリが管理 API（AdminInitiateAuth）で
+   * ログインする。認証フローは ADMIN_USER_PASSWORD_AUTH だけ（REFRESH_TOKEN_AUTH は CDK が
+   * 足す）。OAuth を無効にし、Managed Login のブランディングは作らない。シークレット・
+   * トークンの失効・有効期間は公開と同じ。
+   */
+  private createAdminApiClient(data: DataStack): cognito.UserPoolClient {
+    return new cognito.UserPoolClient(this, 'AppClient', {
+      userPool: data.cognito.userPool,
+      generateSecret: true,
+      authFlows: { adminUserPassword: true },
+      disableOAuth: true,
+      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
+      ...TOKEN_VALIDITY,
+      enableTokenRevocation: true,
+      preventUserExistenceErrors: true,
+    });
   }
 
   /**
@@ -375,6 +559,7 @@ export class AppStack extends Stack {
     parameter: AppParameter,
     data: DataStack,
     batchRoleArn: string,
+    profile: ResolvedProfile,
   ): void {
     // テーブルの読み書きはテーブルの ARN と、アプリが Query する GSI の ARN（名前で付ける）に
     // 絞る（U9）。操作は grantReadWriteData と同じ。Sessions はカスタマー管理キーの権限も付ける
@@ -479,6 +664,14 @@ export class AppStack extends Stack {
       actions: ['cognito-idp:ListGroups', 'cognito-idp:ListUsers'],
       resources: [data.cognito.userPool.userPoolArn],
     }));
+    // 閉域の管理 API のログイン（U1 閉域、BR3.4、NFR1.1）。この Stage の User Pool だけ。
+    // 公開（oidc）には付けない（BR3.5）
+    if (profile.authMode === 'admin_api') {
+      taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['cognito-idp:AdminInitiateAuth', 'cognito-idp:AdminRespondToAuthChallenge'],
+        resources: [data.cognito.userPool.userPoolArn],
+      }));
+    }
     // Bedrock（U9、NFR7.16）: 操作は v0 と同じで、リソースを種類ごとに絞る。
     // minimizePolicies は同じリソースの文をまとめるため、種類ごとに文を分ける
     const { partition, account } = Stack.of(this);

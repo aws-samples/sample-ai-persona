@@ -1,0 +1,389 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） App スタックの SG のルール 1`] = `
+{
+  "AppAlbSecurityGroup3AB06DB6": {
+    "egress": [
+      ""GetAtt(AppServiceSecurityGroupA4191BE9.GroupId)" tcp 80-80",
+    ],
+    "ingress": [
+      ""pl-58a04531" tcp 80-80",
+    ],
+  },
+  "AppServiceSecurityGroupA4191BE9": {
+    "egress": [
+      ""0.0.0.0/0" -1 -",
+    ],
+    "ingress": [
+      ""GetAtt(AppAlbSecurityGroup3AB06DB6.GroupId)" tcp 80-80",
+    ],
+  },
+}
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） App スタックのリソースの型ごとの数 1`] = `
+{
+  "AWS::CloudFront::CachePolicy": 1,
+  "AWS::CloudFront::Distribution": 1,
+  "AWS::CloudFront::VpcOrigin": 1,
+  "AWS::Cognito::ManagedLoginBranding": 1,
+  "AWS::Cognito::UserPoolClient": 1,
+  "AWS::EC2::EIP": 1,
+  "AWS::EC2::InternetGateway": 1,
+  "AWS::EC2::NatGateway": 1,
+  "AWS::EC2::Route": 4,
+  "AWS::EC2::RouteTable": 4,
+  "AWS::EC2::SecurityGroup": 2,
+  "AWS::EC2::SecurityGroupEgress": 1,
+  "AWS::EC2::SecurityGroupIngress": 2,
+  "AWS::EC2::Subnet": 4,
+  "AWS::EC2::SubnetRouteTableAssociation": 4,
+  "AWS::EC2::VPC": 1,
+  "AWS::EC2::VPCEndpoint": 2,
+  "AWS::EC2::VPCGatewayAttachment": 1,
+  "AWS::ECS::Cluster": 1,
+  "AWS::ECS::Service": 1,
+  "AWS::ECS::TaskDefinition": 1,
+  "AWS::ElasticLoadBalancingV2::Listener": 1,
+  "AWS::ElasticLoadBalancingV2::LoadBalancer": 1,
+  "AWS::ElasticLoadBalancingV2::TargetGroup": 1,
+  "AWS::IAM::Policy": 4,
+  "AWS::IAM::Role": 5,
+  "AWS::Lambda::Function": 2,
+  "AWS::Logs::LogGroup": 1,
+  "AWS::Logs::MetricFilter": 7,
+  "AWS::SecretsManager::Secret": 1,
+  "Custom::DescribeCognitoUserPoolClient": 1,
+  "Custom::VpcRestrictDefaultSG": 1,
+}
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） Data スタックのステートフルな資源（Retain）の論理 ID 1`] = `
+[
+  "CognitoUserPool279BBD48 AWS::Cognito::UserPool",
+  "DatabaseCustomPersonaData2BD851B6 AWS::DynamoDB::GlobalTable",
+  "DatabaseDatasets6844609D AWS::DynamoDB::GlobalTable",
+  "DatabaseDiscussionMessages7B2C7FCD AWS::DynamoDB::GlobalTable",
+  "DatabaseDiscussionReportsA61FA565 AWS::DynamoDB::GlobalTable",
+  "DatabaseDiscussions02268B7D AWS::DynamoDB::GlobalTable",
+  "DatabaseInterviewMessages49E0B278 AWS::DynamoDB::GlobalTable",
+  "DatabaseInterviewSessions99433EF4 AWS::DynamoDB::GlobalTable",
+  "DatabaseJobs6F06B67C AWS::DynamoDB::GlobalTable",
+  "DatabaseKnowledgeBases13F82C35 AWS::DynamoDB::GlobalTable",
+  "DatabasePersonaBindingsD2AA93A9 AWS::DynamoDB::GlobalTable",
+  "DatabasePersonaCandidatesB29E66A7 AWS::DynamoDB::GlobalTable",
+  "DatabasePersonasF1218346 AWS::DynamoDB::GlobalTable",
+  "DatabaseResourceShares97F09665 AWS::DynamoDB::GlobalTable",
+  "DatabaseSessionsACCE14E8 AWS::DynamoDB::GlobalTable",
+  "DatabaseSessionsKey591942AA AWS::KMS::Key",
+  "DatabaseSurveyTemplates94E0DB60 AWS::DynamoDB::GlobalTable",
+  "DatabaseSurveysAEB1D8E2 AWS::DynamoDB::GlobalTable",
+  "DatabaseUploadedFiles6ED989C5 AWS::DynamoDB::GlobalTable",
+  "EcrRepository5297154A AWS::ECR::Repository",
+  "LoginCookieSigningKey527F8C52 AWS::SecretsManager::Secret",
+  "Memory AWS::BedrockAgentCore::Memory",
+  "TokenEncryptionKeys2836FA7D AWS::SecretsManager::Secret",
+  "UploadBucketB0FBA037 AWS::S3::Bucket",
+]
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） Data スタックのリソースの型ごとの数 1`] = `
+{
+  "AWS::BedrockAgentCore::Memory": 1,
+  "AWS::Cognito::UserPool": 1,
+  "AWS::Cognito::UserPoolDomain": 1,
+  "AWS::Cognito::UserPoolGroup": 2,
+  "AWS::DynamoDB::GlobalTable": 17,
+  "AWS::ECR::Repository": 1,
+  "AWS::KMS::Key": 1,
+  "AWS::S3::Bucket": 1,
+  "AWS::S3::BucketPolicy": 1,
+  "AWS::SecretsManager::Secret": 2,
+}
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） Edge スタックのリソースの型ごとの数 1`] = `
+{
+  "AWS::CloudFormation::WaitConditionHandle": 1,
+}
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） タスクの環境変数（キーで並べる） 1`] = `
+{
+  "AGENTCORE_MEMORY_ID": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryId5865BD41)",
+  "AGENTCORE_MEMORY_REGION": "ap-northeast-1",
+  "AGENT_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "APP_BASE_URL": "https://GetAtt(CloudFrontDistributionEAB06B35.DomainName)",
+  "AUTH_MODE": "oidc",
+  "AWS_REGION": "ap-northeast-1",
+  "BATCH_INFERENCE_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "BATCH_INFERENCE_S3_PREFIX": "batch-inference/",
+  "BEDROCK_BATCH_ROLE_ARN": "GetAtt(BedrockBatchRoleD187C6F4.Arn)",
+  "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5",
+  "COGNITO_CLIENT_ID": "Ref(AppClient4AE61178)",
+  "COGNITO_DOMAIN": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPoolDomain4D6973E96CE551BD).auth.ap-northeast-1.amazoncognito.com",
+  "COGNITO_USER_POOL_ID": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPool279BBD4830DEAA77)",
+  "CUSTOM_PERSONA_DATA_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseCustomPersonaData2BD851B606C64531)",
+  "DATASETS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseDatasets6844609DE4EE62ED)",
+  "DISCUSSIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseDiscussions02268B7D93C52308)",
+  "DISCUSSION_MESSAGES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseDiscussionMessages7B2C7FCDF5DD75E7)",
+  "DISCUSSION_REPORTS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseDiscussionReportsA61FA565D4EBAEB2)",
+  "DYNAMODB_REGION": "ap-northeast-1",
+  "ENABLE_ADDITIONAL_PERSONA_MODELS": "false",
+  "ENABLE_DATASET_ANALYSIS": "true",
+  "ENABLE_LONG_TERM_MEMORY": "true",
+  "INTERVIEW_MESSAGES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseInterviewMessages49E0B278401D9CF0)",
+  "INTERVIEW_SESSIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseInterviewSessions99433EF4A2AA7270)",
+  "JOBS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseJobs6F06B67C151894D0)",
+  "KNOWLEDGE_BASES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseKnowledgeBases13F82C351754E335)",
+  "PERSONAS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabasePersonasF1218346114625EB)",
+  "PERSONA_BINDINGS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabasePersonaBindingsD2AA93A98EC25DFD)",
+  "PERSONA_CANDIDATES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabasePersonaCandidatesB29E66A7595C5FE2)",
+  "RESOURCE_SHARES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseResourceShares97F0966581EFE80A)",
+  "S3_BUCKET_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefUploadBucketB0FBA0377290D88A)",
+  "SESSIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSessionsACCE14E83CC9D000)",
+  "SURVEYS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveysAEB1D8E2CC1C6D7E)",
+  "SURVEY_S3_PREFIX": "survey-results/",
+  "SURVEY_TEMPLATES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveyTemplates94E0DB60A667112B)",
+  "UPLOADED_FILES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseUploadedFiles6ED989C5C1E75869)",
+}
+`;
+
+exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1） タスクロールの IAM の文 1`] = `
+[
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:DescribeTable",
+      "dynamodb:GetItem",
+      "dynamodb:GetRecords",
+      "dynamodb:GetShardIterator",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDatasets6844609DArn0155E542)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussions02268B7DArnD9CDEC93)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseJobs6F06B67CArnB49409A9)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseKnowledgeBases13F82C35Arn6D1876B5)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonasF1218346Arn3688BF1B)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSessionsACCE14E8ArnEADBCE91)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyTemplates94E0DB60Arn37B8FB57)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseUploadedFiles6ED989C5Arn68B5DFFE)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussions02268B7DArnD9CDEC93)/index/OwnerIndex",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonasF1218346Arn3688BF1B)/index/OwnerIndex",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyTemplates94E0DB60Arn37B8FB57)/index/OwnerIndex",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)/index/OwnerIndex",
+    ],
+  },
+  {
+    "Action": [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey*",
+      "kms:ReEncrypt*",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSessionsKey591942AAArnD99BFA56)",
+  },
+  {
+    "Action": [
+      "bedrock-agentcore:ListMemories",
+      "bedrock:ListFoundationModels",
+      "bedrock:ListInferenceProfiles",
+      "bedrock:ListModelInvocationJobs",
+      "dynamodb:ListTables",
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+  },
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseResourceShares97F09665ArnABAB5B93)",
+  },
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonaCandidatesB29E66A7ArnF559BF3C)",
+  },
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonaBindingsD2AA93A9Arn4650CCAC)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonaBindingsD2AA93A9Arn4650CCAC)/index/TargetIndex",
+    ],
+  },
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussionMessages7B2C7FCDArn33035A01)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseDiscussionReportsA61FA565ArnE45E07EB)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseInterviewMessages49E0B278ArnB9924781)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseInterviewSessions99433EF4Arn5260B226)",
+    ],
+  },
+  {
+    "Action": [
+      "dynamodb:BatchGetItem",
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseCustomPersonaData2BD851B6Arn91E733E8)",
+  },
+  {
+    "Action": [
+      "s3:AbortMultipartUpload",
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObject",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/*",
+  },
+  {
+    "Action": [
+      "s3:DeleteObjectTagging",
+      "s3:GetObjectTagging",
+      "s3:PutObjectTagging",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/candidates/*",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)/uploads/*",
+    ],
+  },
+  {
+    "Action": [
+      "s3:ListBucket",
+      "s3:ListBucketMultipartUploads",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttUploadBucketB0FBA037ArnEE59DDB5)",
+  },
+  {
+    "Action": [
+      "cognito-idp:ListGroups",
+      "cognito-idp:ListUsers",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttCognitoUserPool279BBD48Arn95745070)",
+  },
+  {
+    "Action": [
+      "bedrock:GetFoundationModel",
+      "bedrock:GetInferenceProfile",
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:bedrock:*:123456789012:application-inference-profile/*",
+      "arn:aws:bedrock:*:123456789012:inference-profile/*",
+      "arn:aws:bedrock:*::foundation-model/*",
+    ],
+  },
+  {
+    "Action": [
+      "bedrock:CreateModelInvocationJob",
+      "bedrock:GetModelInvocationJob",
+      "bedrock:ListTagsForResource",
+      "bedrock:StopModelInvocationJob",
+      "bedrock:TagResource",
+      "bedrock:UntagResource",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:bedrock:*:123456789012:application-inference-profile/*",
+      "arn:aws:bedrock:*:123456789012:inference-profile/*",
+      "arn:aws:bedrock:*::foundation-model/*",
+      "arn:aws:bedrock:ap-northeast-1:123456789012:model-invocation-job/*",
+    ],
+  },
+  {
+    "Action": "bedrock:Retrieve",
+    "Effect": "Allow",
+    "Resource": "arn:aws:bedrock:ap-northeast-1:123456789012:knowledge-base/*",
+  },
+  {
+    "Action": "iam:PassRole",
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "bedrock.amazonaws.com",
+      },
+    },
+    "Effect": "Allow",
+    "Resource": "GetAtt(BedrockBatchRoleD187C6F4.Arn)",
+  },
+  {
+    "Action": [
+      "bedrock-agentcore:BatchCreateMemoryRecords",
+      "bedrock-agentcore:CreateEvent",
+      "bedrock-agentcore:CreateMemoryRecord",
+      "bedrock-agentcore:DeleteMemoryRecord",
+      "bedrock-agentcore:GetEvent",
+      "bedrock-agentcore:GetMemory",
+      "bedrock-agentcore:GetMemoryRecord",
+      "bedrock-agentcore:InvokeMemory",
+      "bedrock-agentcore:ListEvents",
+      "bedrock-agentcore:ListMemoryRecords",
+      "bedrock-agentcore:RetrieveMemory",
+      "bedrock-agentcore:RetrieveMemoryRecords",
+      "bedrock-agentcore:SearchMemoryRecords",
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryArn678119FD)",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryArn678119FD)/*",
+    ],
+  },
+]
+`;

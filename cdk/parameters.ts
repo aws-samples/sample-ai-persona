@@ -1,7 +1,27 @@
 import { Environment } from 'aws-cdk-lib';
 
-/** 公開構成（public）か閉域構成（closed）か。closed は後続リリース（U8 以降）。 */
+/** 公開構成（public）か閉域構成（closed）か。closed は Stage AIPersonaDevClosed で作る。 */
 export type DeploymentMode = 'public' | 'closed';
+
+/**
+ * 閉域の Stage を作るための入力（ClosedStageParameters、U1 閉域）。
+ *
+ * closedDevParameter の値に、コンテキスト（-c closedCertificateArn=... など）が重なる。
+ * 証明書の ARN と FQDN の両方がそろったときだけ閉域の Stage を作る（片方だけはエラー）。
+ * 実際の値はリポジトリに書かず、deploy.sh --closed の引数で渡す。
+ */
+export interface ClosedStageParameters {
+  /** 閉域の ALB の証明書（ACM。Stage と同じリージョン）。コンテキスト closedCertificateArn。 */
+  certificateArn: string;
+  /** 利用者が開く FQDN（Private Hosted Zone の名前）。コンテキスト closedDomainName。 */
+  domainName: string;
+  /** ALB に届いてよい送り元の CIDR。コンテキスト closedAllowedCidrs（カンマ区切り）。 */
+  allowedCidrs: string[];
+  /** 検証用の Windows EC2 を作るか。コンテキスト closedCreateTestEnvironment。 */
+  createTestEnvironment: boolean;
+  /** 新規 VPC の CIDR。コンテキスト closedVpcCidr。 */
+  vpcCidr: string;
+}
 
 export interface AppParameter {
   /** Data・App スタックの置き場所（Edge は常に us-east-1）。 */
@@ -47,6 +67,9 @@ export interface AppParameter {
 
   // MCP Gateway設定（AgentCore Gateway）。v1.0.0 では true にできない（U8 以降）
   enableMcpGateway?: boolean;
+
+  // 閉域構成の入力（deploymentMode が closed の Stage だけが読む）
+  closed?: ClosedStageParameters;
 }
 
 // 開発環境（Stage AIPersonaDev）
@@ -86,6 +109,23 @@ export const devParameter: AppParameter = {
 
   // MCP Gateway設定（AgentCore Gateway）
   enableMcpGateway: false,
+};
+
+// 閉域の開発環境（Stage AIPersonaDevClosed、U1 閉域）。公開の dev の値を写し、
+// envName を変えて公開の dev と名前（AgentCore Memory など）が重ならないようにする。
+// 証明書の ARN と FQDN は空のまま置き、deploy.sh --closed（-c closedCertificateArn=...
+// -c closedDomainName=...）で渡す。空のままなら閉域の Stage は作らない。
+export const closedDevParameter: AppParameter = {
+  ...devParameter,
+  envName: 'dev-closed',
+  deploymentMode: 'closed',
+  closed: {
+    certificateArn: '',
+    domainName: '',
+    allowedCidrs: [],
+    createTestEnvironment: false,
+    vpcCidr: '10.0.0.0/16',
+  },
 };
 
 // 本番環境（v1.0.0 では Stage を作らない。本番の Stage は後で足す）

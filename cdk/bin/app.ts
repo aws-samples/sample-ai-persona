@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-import { applyNagChecks, createDevStage } from '../lib/dev-stage';
+import { applyNagChecks, createClosedDevStage, createDevStage } from '../lib/dev-stage';
 
 /**
- * v1.0.0 の CDK アプリ: Stage AIPersonaDev（Data・App・Edge）だけを作る。
+ * v1.0.0 の CDK アプリ: Stage AIPersonaDev（Data・App・Edge）を作る。閉域のパラメータ
+ * （-c closedCertificateArn=... -c closedDomainName=...）が渡されたときだけ、閉域の Stage
+ * AIPersonaDevClosed（Data・App）も並べて作る（U1 閉域。deploy.sh --closed が渡す）。
  *
  * v0 のスタック（AIPersona-dev、AIPersonaEcr-dev、AIPersonaCognito-dev など）は
  * このアプリから外した。デプロイ済みの v0 のスタックはそのまま残り、v1 と並べて動かせる
@@ -16,4 +18,5 @@ import { applyNagChecks, createDevStage } from '../lib/dev-stage';
 const app = new cdk.App();
 
 createDevStage(app);
+createClosedDevStage(app);
 applyNagChecks(app);

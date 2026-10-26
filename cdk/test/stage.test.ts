@@ -1,13 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { AIPersonaStage } from '../lib/ai-persona-stage';
-import { createDevStage } from '../lib/dev-stage';
+import { createClosedDevStage, createDevStage } from '../lib/dev-stage';
+import { EdgeStack } from '../lib/edge-stack';
 import { devParameter } from '../parameters';
+import { closedContext } from './helpers/stages';
 
 /**
  * Stage AIPersonaDev とコンテキストの検査。FR1.9、FR9.1、FR9.2、ADR-001、NFR9.3、
  * Infrastructure Design レビュー R-09（imageTag なしでも synth は通す）。
  * U9: bin/app.ts とテストが同じ組み立て（createDevStage）を通る（NFR7.15）。
+ * U1 閉域: 公開の Stage は deploymentMode=closed を拒み（BR1.2）、閉域の Stage は閉域の
+ * パラメータがあるときだけ createClosedDevStage が作る（BR1.1）。閉域の中身は closed-stage.test.ts。
  */
 
 // Stage を 2 通り synth するテストがあるため、既定の 5 秒では足りない
@@ -20,19 +24,27 @@ function stage(context: Record<string, string> = {}): AIPersonaStage {
   return new AIPersonaStage(app, 'AIPersonaDev', { account: ACCOUNT, parameter: devParameter });
 }
 
+/** The Edge stack of a public Stage (the closed Stage has none). */
+function edgeOf(s: AIPersonaStage): EdgeStack {
+  if (!s.edge) {
+    throw new Error(`${s.node.id} has no Edge stack`);
+  }
+  return s.edge;
+}
+
 test('Data・App・Edge の 3 つのスタックを持つ', () => {
   const s = stage();
-  expect([s.data, s.app, s.edge].map((x) => x.node.id).sort()).toEqual(['App', 'Data', 'Edge']);
+  expect([s.data, s.app, edgeOf(s)].map((x) => x.node.id).sort()).toEqual(['App', 'Data', 'Edge']);
   expect(s.data.region).toBe('ap-northeast-1');
   expect(s.app.region).toBe('ap-northeast-1');
-  expect(s.edge.region).toBe('us-east-1');
+  expect(edgeOf(s).region).toBe('us-east-1');
 });
 
 test('-c region で Data・App のリージョンを変えられる（deploy.sh --region）。Edge は us-east-1 のまま', () => {
   const s = stage({ region: 'us-east-1' });
   expect(s.data.region).toBe('us-east-1');
   expect(s.app.region).toBe('us-east-1');
-  expect(s.edge.region).toBe('us-east-1');
+  expect(edgeOf(s).region).toBe('us-east-1');
 });
 
 test('CloudFront のプレフィックスリストが分からないリージョンは synth でエラー', () => {
@@ -44,7 +56,7 @@ test('依存は App → Data と App → Edge だけ', () => {
   const ids = (stack: cdk.Stack) => stack.dependencies.map((d) => d.node.id).sort();
   expect(ids(s.app)).toEqual(['Data', 'Edge']);
   expect(ids(s.data)).toEqual([]);
-  expect(ids(s.edge)).toEqual([]);
+  expect(ids(edgeOf(s))).toEqual([]);
 });
 
 test('imageTag がなくても synth が通る', () => {
@@ -56,8 +68,31 @@ test('imageTag がなくても synth が通る', () => {
   ]);
 });
 
-test('deploymentMode=closed は synth でエラー', () => {
-  expect(() => stage({ deploymentMode: 'closed' })).toThrow('閉域構成は後続リリースで提供');
+test('公開の Stage に deploymentMode=closed を渡すとエラー（閉域は別の Stage で作る、BR1.2）', () => {
+  expect(() => stage({ deploymentMode: 'closed' })).toThrow('閉域構成は別の Stage で作る');
+});
+
+describe('createClosedDevStage（U1 閉域、BR1.1）', () => {
+  test('閉域のパラメータがなければ閉域の Stage を作らない（CI の synth は今と同じ）', () => {
+    const app = new cdk.App();
+    expect(createClosedDevStage(app, { account: ACCOUNT })).toBeUndefined();
+    expect(app.node.children).toHaveLength(0);
+  });
+
+  test('証明書の ARN か FQDN の片方だけならエラー', () => {
+    const app = new cdk.App({ context: { closedDomainName: 'ai-persona.closed.example' } });
+    expect(() => createClosedDevStage(app, { account: ACCOUNT })).toThrow(
+      /証明書の ARN と FQDN の両方が要る.*closedCertificateArn/,
+    );
+  });
+
+  test('両方あれば AIPersonaDevClosed を作り、公開の Stage と並べられる', () => {
+    const app = new cdk.App({ context: closedContext() });
+    createDevStage(app, { account: ACCOUNT });
+    const closed = createClosedDevStage(app, { account: ACCOUNT });
+    expect(closed?.node.id).toBe('AIPersonaDevClosed');
+    expect(app.node.children.map((c) => c.node.id).sort()).toEqual(['AIPersonaDev', 'AIPersonaDevClosed']);
+  });
 });
 
 test('deploymentMode が未知ならエラー', () => {
@@ -115,7 +150,7 @@ describe('createDevStage（U9、bin/app.ts と同じ組み立て）', () => {
       enableAdditionalPersonaModels: true,
       enableWaf: true,
     });
-    Template.fromStack(s.edge).resourceCountIs('AWS::WAFv2::WebACL', 1);
+    Template.fromStack(edgeOf(s)).resourceCountIs('AWS::WAFv2::WebACL', 1);
     const taskDef = Object.values(
       Template.fromStack(s.app).findResources('AWS::ECS::TaskDefinition'),
     )[0];
@@ -129,7 +164,7 @@ describe('createDevStage（U9、bin/app.ts と同じ組み立て）', () => {
     expect(devParameter.enableAdditionalPersonaModels).toBe(false);
 
     const defaults = createDevStage(new cdk.App(), { account: ACCOUNT });
-    Template.fromStack(defaults.edge).resourceCountIs('AWS::WAFv2::WebACL', 0);
+    Template.fromStack(edgeOf(defaults)).resourceCountIs('AWS::WAFv2::WebACL', 0);
   });
 });
 
