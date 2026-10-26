@@ -333,17 +333,23 @@ U1 の閉域構成では、次はまだ閉域で動きません（後続の Unit
 
 閉域の検証では、自己署名の証明書を使えます（GenU の閉域構成と同じ手順）。ブラウザの警告は、検証のときだけ受け入れてください。社内の CA の証明書があれば、それをインポートします。
 
+証明書と秘密鍵はリポジトリの外（下の例では `~/closed-cert/`）に作ります。リポジトリの中に置くと、`deploy.sh` が未コミットの変更として止まります。
+
 ```bash
 FQDN=ai-persona.example.internal
+CERT_DIR=~/closed-cert
+mkdir -p "$CERT_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout closed-alb.key -out closed-alb.crt \
+  -keyout "$CERT_DIR/closed-alb.key" -out "$CERT_DIR/closed-alb.crt" \
   -subj "/CN=${FQDN}" -addext "subjectAltName=DNS:${FQDN}"
-aws acm import-certificate --region ap-northeast-1 \
-  --certificate fileb://closed-alb.crt --private-key fileb://closed-alb.key \
-  --query CertificateArn --output text
+CERT_ARN=$(aws acm import-certificate --region ap-northeast-1 \
+  --certificate "fileb://$CERT_DIR/closed-alb.crt" --private-key "fileb://$CERT_DIR/closed-alb.key" \
+  --query CertificateArn --output text)
+rm "$CERT_DIR/closed-alb.key"
+echo "$CERT_ARN"
 ```
 
-表示された ARN を `--certificate-arn` に渡します。秘密鍵（`closed-alb.key`）はリポジトリに置かず、インポートしたら手元から消すか安全な場所に移してください。
+表示された ARN を `--certificate-arn` に渡します。秘密鍵はインポートしたら消します（上の `rm`）。残す場合は安全な場所に移してください。
 
 #### 閉域のデプロイ（`deploy.sh --closed`）
 
