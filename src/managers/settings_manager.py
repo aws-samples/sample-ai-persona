@@ -30,6 +30,7 @@ from ..services.stores.persona_binding_store import (
 )
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
+from .components.data_agent_policy import DataAgentPolicy
 from .components.department_directory import DepartmentDirectory
 from .components.sharing_runtime import sharing_parts_from
 from .shared.asset_scope import scope_dialog, scope_labels
@@ -195,9 +196,18 @@ class SettingsManager:
     # --- データ分析エージェント設定 ---
 
     def get_data_agent_settings(self, principal: Principal) -> Dict[str, Any]:
-        """データ分析エージェントの接続設定（admin だけ、BR3.1）。"""
+        """データ分析エージェントの接続設定（admin だけ、BR3.1）。
+
+        Closed network U3 (BR3.4): when this environment may not use the agent,
+        only ``data_agent_allowed=False`` and ``data_agent_enabled=False`` are
+        returned (no ARN, no region), and the screen shows a notice instead of
+        the form.
+        """
         self._require_manage(principal)
+        if not DataAgentPolicy.allowed():
+            return {"data_agent_allowed": False, "data_agent_enabled": False}
         return {
+            "data_agent_allowed": True,
             "data_agent_enabled": config.ENABLE_DATA_AGENT,
             "data_agent_runtime_arn": config.DATA_AGENT_RUNTIME_ARN,
             "data_agent_region": config.DATA_AGENT_REGION,
@@ -210,8 +220,14 @@ class SettingsManager:
         region: str,
         enabled: bool,
     ) -> None:
-        """データ分析エージェント接続設定を保存する。"""
+        """データ分析エージェント接続設定を保存する。
+
+        Closed network U3 (BR3.2, BR1.5): refused with ``DATA_AGENT_NOT_ALLOWED``
+        before any value changes when the agent is not allowed here. Only the
+        three connection values are ever written; ``DATA_AGENT_ALLOWED`` never is.
+        """
         self._require_manage(principal)
+        DataAgentPolicy.ensure_allowed(SettingsManagerError)
         config.DATA_AGENT_RUNTIME_ARN = runtime_arn
         config.DATA_AGENT_REGION = region
         config.ENABLE_DATA_AGENT = enabled
@@ -221,12 +237,18 @@ class SettingsManager:
 
     @staticmethod
     def is_data_agent_available() -> bool:
-        """データ分析エージェントが利用可能かどうかを判定する。"""
-        return bool(config.ENABLE_DATA_AGENT and config.DATA_AGENT_RUNTIME_ARN)
+        """データ分析エージェントが利用可能かどうかを判定する（allowed を含む、BR3.3）。"""
+        return DataAgentPolicy.available()
+
+    @staticmethod
+    def is_data_agent_allowed() -> bool:
+        """Whether this environment may use the data agent (no permission, BR3.6)."""
+        return DataAgentPolicy.allowed()
 
     def test_data_agent_connection(self, principal: Principal) -> str:
-        """データ分析エージェントへの接続テストを実行する。"""
+        """データ分析エージェントへの接続テストを実行する（使ってよくなければ接続しない）。"""
         self._require_manage(principal)
+        DataAgentPolicy.ensure_allowed(SettingsManagerError)
         if not config.DATA_AGENT_RUNTIME_ARN:
             raise SettingsManagerError(
                 "runtime ARN is not configured",

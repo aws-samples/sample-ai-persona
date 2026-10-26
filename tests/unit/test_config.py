@@ -306,6 +306,82 @@ class TestDatasetAnalysisConcurrency:
                 Config()
 
 
+class TestClosedFeatureSettings:
+    """U3 の機能ごとの値（BR1.1〜BR1.4）。"""
+
+    _NAMES = ("NEMOTRON_SOURCE", "NEMOTRON_DATASET_KEY", "DATA_AGENT_ALLOWED")
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        base = {k: v for k, v in os.environ.items() if k not in self._NAMES}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    def test_defaults_keep_the_current_behaviour(self):
+        cfg = self._config()
+        assert cfg.NEMOTRON_SOURCE == "huggingface"
+        assert (
+            cfg.NEMOTRON_DATASET_KEY
+            == "persona-dataset/nemotron-personas-japan.parquet"  # gitleaks:allow
+        )
+        assert cfg.DATA_AGENT_ALLOWED is True
+
+    def test_empty_values_fall_back_to_the_defaults(self):
+        cfg = self._config(
+            NEMOTRON_SOURCE="", NEMOTRON_DATASET_KEY="", DATA_AGENT_ALLOWED=""
+        )
+        assert cfg.NEMOTRON_SOURCE == "huggingface"
+        assert cfg.NEMOTRON_DATASET_KEY.endswith("nemotron-personas-japan.parquet")
+        assert cfg.DATA_AGENT_ALLOWED is True
+
+    def test_closed_values_are_read_case_insensitively(self):
+        cfg = self._config(
+            NEMOTRON_SOURCE="S3",
+            NEMOTRON_DATASET_KEY="closed/nemotron.parquet",
+            DATA_AGENT_ALLOWED="FALSE",
+        )
+        assert cfg.NEMOTRON_SOURCE == "s3"
+        assert cfg.NEMOTRON_DATASET_KEY == "closed/nemotron.parquet"
+        assert cfg.DATA_AGENT_ALLOWED is False
+
+    def test_data_agent_allowed_true(self):
+        assert self._config(DATA_AGENT_ALLOWED="True").DATA_AGENT_ALLOWED is True
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [("NEMOTRON_SOURCE", "ftp"), ("DATA_AGENT_ALLOWED", "maybe")],
+    )
+    def test_unknown_values_stop_the_start(self, name, value):
+        with pytest.raises(ValueError, match=name):
+            self._config(**{name: value})
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "my key.parquet",
+            "a+b.parquet",
+            "/x.parquet",
+            "a/../b.parquet",
+            "a//b.parquet",
+            "x.csv",
+            "persona-dataset/custom/x.parquet",
+            "persona-dataset/temp/x.parquet",
+            "データ.parquet",
+        ],
+    )
+    def test_malformed_dataset_key_stops_the_start(self, key):
+        with pytest.raises(ValueError, match="NEMOTRON_DATASET_KEY"):
+            self._config(NEMOTRON_DATASET_KEY=key)
+
+    @pytest.mark.parametrize(
+        "key",
+        ["nemotron.parquet", "persona-dataset/closed/nemotron_v2-1.parquet"],
+    )
+    def test_well_formed_dataset_key_is_used(self, key):
+        assert self._config(NEMOTRON_DATASET_KEY=key).NEMOTRON_DATASET_KEY == key
+
+
 class TestGlobalConfigInstance:
     """グローバル設定インスタンスのテスト"""
 

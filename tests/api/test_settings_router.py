@@ -278,3 +278,77 @@ class TestSettingsModalsUseSharedDialog:
         assert "data-dialog-remove-on-close" in outer
         assert f'hx-put="/settings/datasets/{dataset.id}"' in html
         assert ".remove()" not in html
+
+
+# =============================================================================
+# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2 の 1・2、BR3.8）
+# =============================================================================
+
+HTMX = {"HX-Request": "true"}
+
+
+@pytest.fixture
+def agent_config(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setattr(config, "ENABLE_DATA_AGENT", True)
+    monkeypatch.setattr(config, "DATA_AGENT_RUNTIME_ARN", "arn:agent")
+    monkeypatch.setattr(config, "DATA_AGENT_REGION", "ap-northeast-1")
+    monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", True)
+    return config
+
+
+class TestDataAgentNotAllowedRoutes:
+    def test_save_is_forbidden_and_changes_nothing(self, aw, client, agent_config):
+        agent_config.DATA_AGENT_ALLOWED = False
+        response = client.post(
+            "/settings/data-agent",
+            data={"runtime_arn": "arn:new", "enabled": "true"},
+            headers=HTMX,
+        )
+        assert response.status_code == 403
+        assert "HX-Trigger" in response.headers
+        assert response.text == ""
+        assert agent_config.DATA_AGENT_RUNTIME_ARN == "arn:agent"
+        assert agent_config.DATA_AGENT_ALLOWED is False
+
+    def test_connection_test_is_forbidden_without_connecting(
+        self, aw, client, agent_config
+    ):
+        from unittest.mock import patch
+
+        agent_config.DATA_AGENT_ALLOWED = False
+        with patch("src.managers.settings_manager.service_factory") as factory:
+            response = client.post("/settings/data-agent/test", headers=HTMX)
+        assert response.status_code == 403
+        assert "HX-Trigger" in response.headers
+        factory.get_data_agent_service.assert_not_called()
+
+    @pytest.mark.parametrize("path", ["/settings/", "/settings/data-agent/status"])
+    def test_not_allowed_screen_shows_a_notice_instead_of_the_form(
+        self, aw, client, agent_config, path
+    ):
+        agent_config.DATA_AGENT_ALLOWED = False
+        html = client.get(path).text
+        assert 'data-testid="data-agent-not-allowed"' in html
+        assert 'name="runtime_arn"' not in html
+        assert 'data-testid="data-agent-save-button"' not in html
+        assert "/settings/data-agent/test" not in html
+        assert "arn:agent" not in html
+
+    def test_public_screen_keeps_the_form(self, aw, client, agent_config):
+        html = client.get("/settings/data-agent/status").text
+        assert 'name="runtime_arn"' in html
+        assert 'data-testid="data-agent-save-button"' in html
+        assert "/settings/data-agent/test" in html
+        assert 'data-testid="data-agent-not-allowed"' not in html
+
+    def test_public_default_still_saves(self, aw, client, agent_config):
+        response = client.post(
+            "/settings/data-agent",
+            data={"runtime_arn": "arn:new", "enabled": "true"},
+            headers=HTMX,
+        )
+        assert response.status_code == 200
+        assert agent_config.DATA_AGENT_RUNTIME_ARN == "arn:new"
+        assert agent_config.ENABLE_DATA_AGENT is True

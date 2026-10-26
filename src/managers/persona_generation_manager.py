@@ -25,6 +25,7 @@ from ..services.stores.persona_candidate_store import (
     PersonaCandidateStore,
 )
 from .components.access_policy import AccessPolicy
+from .components.data_agent_policy import DataAgentPolicy
 from .shared.structured_log import log_event
 from ..services.agent_service import (
     AgentService,
@@ -192,6 +193,16 @@ class PersonaGenerationManager:
     # 公開API
     # ------------------------------------------------------------------
 
+    def ensure_data_agent_allowed(self, principal: Principal) -> None:
+        """Refuse a DWH generation before the router starts streaming (BR3.7).
+
+        Raises:
+            AccessDeniedError: The user lacks ``ai:execute``.
+            PersonaGenerationManagerError: ``DATA_AGENT_NOT_ALLOWED``.
+        """
+        AccessPolicy.require(principal, Permission.AI_EXECUTE)
+        DataAgentPolicy.ensure_allowed(PersonaGenerationManagerError)
+
     def generate(
         self,
         principal: Principal,
@@ -218,6 +229,9 @@ class PersonaGenerationManager:
                 (``GENERATION_OPERATION_FAILED``) failed.
         """
         AccessPolicy.require(principal, Permission.AI_EXECUTE)
+        if data_type == "dwh":
+            # Closed network U3 BR3.2 (3): before any data agent tool is built
+            DataAgentPolicy.ensure_allowed(PersonaGenerationManagerError)
         self._validate_generation_input(
             data_type, persona_count, file_contents, data_description
         )

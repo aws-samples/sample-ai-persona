@@ -216,6 +216,71 @@ class TestEffectiveFlag:
         assert descriptors[0]["alias"] == "source_1"
 
 
+class TestDataAgentNotAllowed:
+    """閉域対応 U3 BR3.2 の (3) と BR3.7: data_type=dwh の生成を止める。"""
+
+    @pytest.fixture
+    def not_allowed(self, monkeypatch):
+        monkeypatch.setattr(mod.config, "DATA_AGENT_ALLOWED", False)
+        monkeypatch.setattr(mod.config, "DATA_AGENT_RUNTIME_ARN", "arn:agent")
+
+    def test_dwh_generation_stops_before_any_tool_is_built(
+        self, monkeypatch, not_allowed
+    ):
+        from src.models.errors import ErrorCode
+        from tests.error_helpers import raises_code
+
+        create_tool = Mock()
+        monkeypatch.setattr(
+            "src.services.data_agent_service.create_data_agent_tool", create_tool
+        )
+        mgr = _manager()
+        with raises_code(
+            mod.PersonaGenerationManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED
+        ):
+            mgr.generate(
+                MEMBER,
+                file_contents=[],
+                data_type="dwh",
+                persona_count=1,
+                data_description="購買",
+            )
+        create_tool.assert_not_called()
+        mgr.agent_service.run_persona_generation.assert_not_called()
+
+    def test_pre_check_stops_too(self, not_allowed):
+        from src.models.errors import ErrorCode
+        from tests.error_helpers import raises_code
+
+        with raises_code(
+            mod.PersonaGenerationManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED
+        ):
+            _manager().ensure_data_agent_allowed(MEMBER)
+
+    def test_pre_check_needs_ai_execute_first(self, not_allowed):
+        from src.models.errors import AccessDeniedError
+        from tests.conftest import NO_ROLE
+
+        with pytest.raises(AccessDeniedError):
+            _manager().ensure_data_agent_allowed(NO_ROLE.principal())
+
+    def test_pre_check_passes_when_allowed(self, monkeypatch):
+        monkeypatch.setattr(mod.config, "DATA_AGENT_ALLOWED", True)
+        _manager().ensure_data_agent_allowed(MEMBER)
+
+    def test_file_generation_is_not_affected(self, not_allowed):
+        mgr = _manager()
+        result = mgr.generate(
+            MEMBER,
+            file_contents=[
+                ("顧客インタビューの十分に長い本文です。".encode("utf-8"), "a.txt")
+            ],
+            data_type="interview",
+            persona_count=1,
+        )
+        assert len(result.personas) == 1
+
+
 class TestConstructorDI:
     def test_accepts_dataset_analysis_service(self):
         ds = Mock()

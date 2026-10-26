@@ -49,6 +49,7 @@ CERTIFICATE_ARN=""
 DOMAIN_NAME=""
 ALLOWED_CIDRS=""
 CREATE_TEST_ENVIRONMENT=false
+NEMOTRON_DATASET_KEY=""
 CLOSED_OPTION_GIVEN=""
 
 RED='\033[0;31m'
@@ -79,6 +80,8 @@ usage() {
   --domain-name FQDN          利用者が開く FQDN（例 ai-persona.example.internal）。--closed で必須
   --allowed-cidrs CIDRS       ALB に届いてよい送り元の CIDR（カンマ区切り。既定: なし）
   --create-test-environment   検証用の Windows EC2（Fleet Manager で入る）も作る
+  --nemotron-dataset-key KEY  事前に配置する Nemotron の Parquet のキー（アプリのバケットの中。
+                              既定: persona-dataset/nemotron-personas-japan.parquet）
   --restart-app・--image-tag・--region は --closed と一緒に使える（対象は閉域の Stage）
   許可する CIDR か検証用 EC2 のどちらかが要る（どちらもなければ CDK の synth で止まる）
 
@@ -109,6 +112,9 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { log_error "--allowed-cidrs には CIDR（カンマ区切り）を指定してください"; exit 1; }
       ALLOWED_CIDRS="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
     --create-test-environment) CREATE_TEST_ENVIRONMENT=true; CLOSED_OPTION_GIVEN="$1"; shift ;;
+    --nemotron-dataset-key)
+      [[ $# -ge 2 ]] || { log_error "--nemotron-dataset-key には S3 のキーを指定してください"; exit 1; }
+      NEMOTRON_DATASET_KEY="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) log_error "不明なオプション: $1"; usage; exit 1 ;;
   esac
@@ -216,6 +222,10 @@ if [[ "${CLOSED}" == "true" ]]; then
     -c "closedAllowedCidrs=${ALLOWED_CIDRS}"
     -c "closedCreateTestEnvironment=${CREATE_TEST_ENVIRONMENT}"
   )
+  # 事前に配置する Nemotron の Parquet のキー（U3 閉域）。渡したときだけ（省略時は既定のキー）
+  if [[ -n "${NEMOTRON_DATASET_KEY}" ]]; then
+    CDK_CONTEXT+=(-c "closedNemotronDatasetKey=${NEMOTRON_DATASET_KEY}")
+  fi
 fi
 
 # ===== Step 2: ① Data（公開は Edge も） =====
@@ -301,6 +311,7 @@ if [[ "${CLOSED}" == "true" ]]; then
   CLOSED_ARGS="--closed --certificate-arn ${CERTIFICATE_ARN} --domain-name ${DOMAIN_NAME}"
   [[ -z "${ALLOWED_CIDRS}" ]] || CLOSED_ARGS+=" --allowed-cidrs ${ALLOWED_CIDRS}"
   [[ "${CREATE_TEST_ENVIRONMENT}" == "false" ]] || CLOSED_ARGS+=" --create-test-environment"
+  [[ -z "${NEMOTRON_DATASET_KEY}" ]] || CLOSED_ARGS+=" --nemotron-dataset-key ${NEMOTRON_DATASET_KEY}"
   echo "再デプロイ（コードを更新したとき）: ./deploy.sh ${CLOSED_ARGS}"
   echo "前の版に戻す:                       ./deploy.sh ${CLOSED_ARGS} --image-tag <前のタグ>"
   echo "秘密を書き換えたあと:               ./deploy.sh --closed --restart-app"

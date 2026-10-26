@@ -21,6 +21,11 @@ export interface ClosedStageParameters {
   createTestEnvironment: boolean;
   /** 新規 VPC の CIDR。コンテキスト closedVpcCidr。 */
   vpcCidr: string;
+  /**
+   * 事前に配置する Nemotron の Parquet のキー（アプリのバケットの中、U3 閉域）。
+   * コンテキスト closedNemotronDatasetKey。省略・空は既定のキー（persona-dataset/nemotron-personas-japan.parquet）。
+   */
+  nemotronDatasetKey?: string;
 }
 
 export interface AppParameter {

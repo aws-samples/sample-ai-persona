@@ -38,6 +38,11 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
     (
         "persona.py",
         "generate_persona",
+        "ensure_data_agent_allowed",
+    ): f"ロールと起動時の設定値（DATA_AGENT_ALLOWED）を見るだけで{_NO_IO}",
+    (
+        "persona.py",
+        "generate_persona",
         "validate_persona_source_file",
     ): f"受け取ったバイト列の拡張子・大きさ・空を見るだけで{_NO_IO}",
     (
@@ -99,7 +104,16 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
         "save_data_agent_settings",
     ): f"ロールを見て、メモリ上の設定値を書き換えるだけで{_NO_IO}（保存先はない）",
     # survey.py
-    ("survey.py", "download_nemotron", "ensure_manageable"): _ROLE_ONLY,
+    (
+        "survey.py",
+        "download_nemotron",
+        "ensure_nemotron_downloadable",
+    ): f"ロールと起動時の設定値（NEMOTRON_SOURCE）を見るだけで{_NO_IO}",
+    (
+        "survey.py",
+        "dwh_extract",
+        "ensure_data_agent_allowed",
+    ): f"ロールと起動時の設定値（DATA_AGENT_ALLOWED）を見るだけで{_NO_IO}",
     ("survey.py", "upload_custom_step1", "ensure_manageable"): _ROLE_ONLY,
     ("survey.py", "preview_persona_prompt", "ensure_manageable"): _ROLE_ONLY,
     ("survey.py", "_import", "ensure_manageable"): _ROLE_ONLY,

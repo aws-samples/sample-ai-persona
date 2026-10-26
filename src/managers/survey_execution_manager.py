@@ -32,9 +32,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
+from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.custom_persona_data import PersonaDataRef
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
+from ..models.nemotron_dataset import NemotronSource
 from ..models.sharing import ListTab, TabbedList
 from ..models.survey import Survey, SurveyDetail, TemplateSnapshot
 from ..services.stores.custom_persona_data_store import (
@@ -512,24 +514,34 @@ class SurveyExecutionManager:
         return self._surveys.update_fields(survey_id, fields)
 
     def _ensure_parquet_uri(self, datasource: str) -> None:
-        """nemotron使用時、batch_serviceにS3 URIをセットする。"""
-        if not datasource.startswith("custom:"):
-            if not self.batch_service.has_parquet_uri():
-                from ..services.survey_batch_service import PARQUET_S3_KEY
+        """nemotron使用時、batch_serviceにS3 URIをセットする。
 
-                bucket = self.s3_service.bucket_name
-                try:
-                    self.s3_service.s3_client.head_object(
-                        Bucket=bucket, Key=PARQUET_S3_KEY
-                    )
-                    self.batch_service.set_parquet_s3_uri(
-                        f"s3://{bucket}/{PARQUET_S3_KEY}"
-                    )
-                except Exception:
-                    raise SurveyExecutionError(
-                        "nemotron parquet uri is not configured",
-                        code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
-                    )
+        The key is ``Config.NEMOTRON_DATASET_KEY`` (closed network U3 BR2.1).
+        A missing file never triggers a download: it stops with
+        ``NEMOTRON_DATASET_NOT_PLACED`` when the file is placed beforehand
+        (``s3``), else ``SURVEY_DATASET_NOT_DOWNLOADED`` (BR2.4).
+        """
+        if datasource.startswith("custom:") or self.batch_service.has_parquet_uri():
+            return
+        key = config.NEMOTRON_DATASET_KEY
+        bucket = self.s3_service.bucket_name
+        try:
+            self.s3_service.s3_client.head_object(Bucket=bucket, Key=key)
+        except Exception as e:
+            # The S3 key is a file path: logged here, never put in the context.
+            logger.warning(
+                "Nemotron parquet not usable at %s: %s", key, type(e).__name__
+            )
+            if config.NEMOTRON_SOURCE == NemotronSource.S3:
+                raise SurveyExecutionError(
+                    "nemotron parquet is not placed",
+                    code=ErrorCode.NEMOTRON_DATASET_NOT_PLACED,
+                ) from e
+            raise SurveyExecutionError(
+                "nemotron parquet uri is not configured",
+                code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+            ) from e
+        self.batch_service.set_parquet_s3_uri(f"s3://{bucket}/{key}")
 
     def _save_results_to_s3(
         self,

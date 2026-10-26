@@ -540,3 +540,55 @@ class TestDatasetScope:
         from dataclasses import replace
 
         assert not replace(dataset, owner_persona_id="p1").is_org_asset
+
+
+class TestNemotronDatasetStatus:
+    """U3 BR2.2: the Nemotron state the persona data screen shows."""
+
+    def test_download_is_allowed_only_from_hugging_face(self):
+        from src.models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
+
+        public = NemotronDatasetStatus.missing(NemotronSource.HUGGINGFACE, "k.parquet")
+        closed = NemotronDatasetStatus.missing(NemotronSource.S3, "k.parquet")
+        assert public.download_allowed is True
+        assert closed.download_allowed is False
+
+    def test_missing_file_has_no_size(self):
+        from src.models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
+
+        status = NemotronDatasetStatus.missing(NemotronSource.S3, "k.parquet")
+        assert status.available is False
+        assert status.size_mb == 0
+        assert status.dataset_key == "k.parquet"
+
+    def test_placed_file_reports_its_size_in_mb(self):
+        from src.models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
+
+        status = NemotronDatasetStatus.placed(
+            NemotronSource.S3, "k.parquet", size_bytes=3 * 1024 * 1024 + 60_000
+        )
+        assert status.available is True
+        assert status.size_mb == 3.1
+
+    def test_to_dict_carries_every_field(self):
+        from src.models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
+
+        data = NemotronDatasetStatus.missing(NemotronSource.S3, "k.parquet").to_dict()
+        assert data == {
+            "source": "s3",
+            "dataset_key": "k.parquet",
+            "available": False,
+            "size_mb": 0,
+            "download_allowed": False,
+        }
+
+
+class TestClosedFeatureErrorCodes:
+    """U3 functional-spec §6: the kinds of the three new codes."""
+
+    def test_refusals_are_forbidden_and_the_missing_file_is_config(self):
+        from src.models.errors import ErrorCode, ErrorKind
+
+        assert ErrorCode.NEMOTRON_DOWNLOAD_NOT_ALLOWED.kind is ErrorKind.FORBIDDEN
+        assert ErrorCode.DATA_AGENT_NOT_ALLOWED.kind is ErrorKind.FORBIDDEN
+        assert ErrorCode.NEMOTRON_DATASET_NOT_PLACED.kind is ErrorKind.CONFIG

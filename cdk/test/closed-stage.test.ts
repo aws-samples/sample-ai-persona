@@ -19,6 +19,9 @@ import { exportedRef, exportTargets, flattenReference, pathOf } from './template
 
 jest.setTimeout(120_000);
 
+/** 閉域のタスクにだけ足す U3 の環境変数（BR5.1）。 */
+const CLOSED_FEATURE_KEYS = ['NEMOTRON_SOURCE', 'NEMOTRON_DATASET_KEY', 'DATA_AGENT_ALLOWED'];
+
 /** Bedrock 系のインターフェイス型エンドポイントを提供する AZ（infrastructure-design レビュー R-05）。 */
 const BEDROCK_ENDPOINT_AZS = ['ap-northeast-1a', 'ap-northeast-1c', 'ap-northeast-1d'];
 
@@ -469,10 +472,31 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     const closedEnv = environmentOf(appStack);
     const authKeys = ['AUTH_MODE', 'COGNITO_DOMAIN'];
     const passwordKeys = Object.keys(closedEnv).filter((k) => k.startsWith('PASSWORD_'));
-    expect(Object.keys(closedEnv).filter((k) => !passwordKeys.includes(k)).sort()).toEqual(
+    // U3 の閉域だけの値（NEMOTRON_SOURCE など）は下の別のテストで確かめる
+    const closedOnly = [...passwordKeys, ...CLOSED_FEATURE_KEYS];
+    expect(Object.keys(closedEnv).filter((k) => !closedOnly.includes(k)).sort()).toEqual(
       Object.keys(publicEnv).filter((k) => k !== 'COGNITO_DOMAIN').sort(),
     );
     expect(authKeys.filter((k) => k in publicEnv)).toEqual(authKeys);
+  });
+
+  test('閉域のタスクに U3 の環境変数 3 つ（キーは既定）。公開のタスクにはない（BR5.1、BR5.2）', () => {
+    const env = environmentOf(appStack);
+    expect({
+      NEMOTRON_SOURCE: env.NEMOTRON_SOURCE,
+      NEMOTRON_DATASET_KEY: env.NEMOTRON_DATASET_KEY,
+      DATA_AGENT_ALLOWED: env.DATA_AGENT_ALLOWED,
+    }).toEqual({
+      NEMOTRON_SOURCE: 's3',
+      NEMOTRON_DATASET_KEY: 'persona-dataset/nemotron-personas-japan.parquet',
+      DATA_AGENT_ALLOWED: 'false',
+    });
+    expect(env.ENABLE_ADDITIONAL_PERSONA_MODELS).toBe('false');
+    expect(env).not.toHaveProperty('ENABLE_DATA_AGENT');
+    const publicEnv = environmentOf(synthPublic().templates.App);
+    for (const key of CLOSED_FEATURE_KEYS) {
+      expect(publicEnv).not.toHaveProperty(key);
+    }
   });
 
   test('App クライアントは管理 API のログインだけ（OAuth なし・シークレットあり・失効あり・有効期間は公開と同じ、BR3.3）', () => {
@@ -601,5 +625,16 @@ describe('閉域の Stage（検証用 EC2 なし・許可 CIDR 2 つ）', () => 
       'ALB in 192.168.10.0/24 tcp 443',
     ]);
     expect(rules.some((r) => r.includes('Validation'))).toBe(false);
+  });
+});
+
+describe('閉域の Nemotron のキー（コンテキスト closedNemotronDatasetKey、U3 BR5.1・BR5.3）', () => {
+  test('指定のキーをタスクに渡す', () => {
+    const { templates } = synthClosed({}, { closedNemotronDatasetKey: 'closed/nemotron.parquet' });
+    expect(environmentOf(templates.App).NEMOTRON_DATASET_KEY).toBe('closed/nemotron.parquet');
+  });
+
+  test.each(['my key.parquet', 'a+b.parquet'])('空白か + を含むキー %p で synth が止まる', (key) => {
+    expect(() => synthClosed({}, { closedNemotronDatasetKey: key })).toThrow(/closedNemotronDatasetKey/);
   });
 });

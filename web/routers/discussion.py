@@ -809,6 +809,24 @@ async def get_discussion_insights(request: Request, discussion_id: str) -> Any:
 # =============================================================================
 
 
+def _data_agent_refusal(
+    report_manager: ReportManager, principal: Principal
+) -> StreamingResponse | None:
+    """One ``error`` event when the data agent may not be used (U3 BR3.7).
+
+    Checked before the stream starts, so the agent is never called; ``None``
+    lets the request go on.
+    """
+    try:
+        report_manager.ensure_data_agent_allowed(principal)
+    except CodedError as e:
+        logger.info("Data-driven report refused: %s", error_kind_of(e).value)
+        return StreamingResponse(
+            iter([_sse_error(user_message_for(e))]), media_type="text/event-stream"
+        )
+    return None
+
+
 def _agent_event_sse(evt: dict[str, Any]) -> str | None:
     """One event of the data-driven report agent as SSE (``None`` to skip)."""
     evt_type = evt.get("type", "")
@@ -873,6 +891,10 @@ async def generate_report_stream(
             media_type="text/event-stream",
         )
     report_manager = get_report_manager()
+    if template_type == "data_driven":
+        refusal = _data_agent_refusal(report_manager, principal)
+        if refusal is not None:
+            return refusal
 
     def stream_generator() -> Any:
         default = "レポートの生成に失敗しました"
@@ -922,6 +944,9 @@ async def generate_followup_report_stream(
     """
     principal = _principal(request)
     report_manager = get_report_manager()
+    refusal = _data_agent_refusal(report_manager, principal)
+    if refusal is not None:
+        return refusal
 
     def run(eq: Any) -> None:
         for _ in report_manager.generate_followup_report_streaming(

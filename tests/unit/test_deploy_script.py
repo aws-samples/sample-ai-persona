@@ -125,3 +125,60 @@ def test_region_option_reaches_every_cdk_deploy(workspace, tmp_path):
         line for line in calls.read_text().splitlines() if "cdk bootstrap" in line
     ]
     assert any("aws://123/us-west-2" in line for line in bootstraps)
+
+
+# 閉域対応 U3（W6）: --nemotron-dataset-key は --closed のときだけ -c closedNemotronDatasetKey
+
+
+def _ok_tools(tmp_path: Path) -> tuple[Path, Path]:
+    calls = tmp_path / "ok-calls.log"
+    calls.touch()
+    ok_bin = tmp_path / "ok-bin"
+    ok_bin.mkdir()
+    for tool in ("aws", "docker", "npx", "npm"):
+        fake = ok_bin / tool
+        fake.write_text(f'#!/bin/sh\necho "{tool} $*" >> "{calls}"\necho 123\nexit 0\n')
+        fake.chmod(0o755)
+    return ok_bin, calls
+
+
+_CLOSED = [
+    "--closed",
+    "--certificate-arn",
+    "arn:aws:acm:ap-northeast-1:123456789012:certificate/0",
+    "--domain-name",
+    "ai-persona.closed.example",
+    "--create-test-environment",
+    "--image-tag",
+    "abc1234",
+]
+
+
+def test_nemotron_dataset_key_needs_closed(workspace):
+    repo, bin_dir, calls = workspace
+    result = _run(["--nemotron-dataset-key", "closed/n.parquet"], repo, bin_dir)
+    assert result.returncode != 0
+    assert "--nemotron-dataset-key" in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
+def test_nemotron_dataset_key_reaches_every_closed_cdk_deploy(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run(
+        [*_CLOSED, "--nemotron-dataset-key", "closed/n.parquet"], repo, ok_bin
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    deploys = [
+        line for line in calls.read_text().splitlines() if " cdk deploy " in line
+    ]
+    assert len(deploys) == 2
+    assert all("-c closedNemotronDatasetKey=closed/n.parquet" in d for d in deploys)
+
+
+def test_closed_deploy_without_the_key_passes_no_key_context(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run(_CLOSED, repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "closedNemotronDatasetKey" not in calls.read_text()

@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.config import config
 from src.managers.file_manager import FileManager, FileUploadError, FileSecurityError
+from src.managers.settings_manager import SettingsManager
 from src.managers.persona_manager import (
     PersonaDetail,
     PersonaManager,
@@ -165,6 +166,8 @@ async def persona_generation_page(request: Request) -> Any:
             # アップロード制限をカタログの単一ソース（config）から表示に渡す
             "max_file_size_mb": config.PERSONA_SOURCE_MAX_BYTES // (1024 * 1024),
             "max_source_chars": config.PERSONA_SOURCE_MAX_CHARS,
+            # 閉域対応 U3 BR3.5: 権限を問わない判定（Router は閉域かどうかを判断しない）
+            "data_agent_allowed": SettingsManager.is_data_agent_allowed(),
         },
     )
 
@@ -285,6 +288,13 @@ async def generate_persona(
         )
 
         import queue as queue_mod
+
+        try:
+            # 閉域対応 U3 BR3.7: 流し始める前に拒み、error イベント 1 つだけを返す
+            get_persona_generation_manager().ensure_data_agent_allowed(principal)
+        except PersonaGenerationManagerError as e:
+            refusal = _sse_event("error", user_message_for(e))
+            return StreamingResponse(iter([refusal]), media_type="text/event-stream")
 
         event_queue: queue_mod.Queue = queue_mod.Queue()
 

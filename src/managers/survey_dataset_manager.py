@@ -25,6 +25,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from ..config import config
 from ..models.authz import (
     AccessTarget,
     Department,
@@ -40,6 +41,7 @@ from ..models.custom_persona_data import (
     normalize_name,
 )
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
+from ..models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
 from ..models.sharing import AssetScopeChange, AssetScopeDialog
 from ..prompts.survey_prompts import (
     DWH_SEGMENT_SYSTEM_PROMPT,
@@ -58,8 +60,9 @@ from ..services.stores.custom_persona_data_store import (
 )
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
-from ..services.survey_batch_service import PARQUET_S3_KEY, SurveyBatchService
+from ..services.survey_batch_service import SurveyBatchService
 from .components.access_policy import AccessPolicy
+from .components.data_agent_policy import DataAgentPolicy
 from .components.department_directory import DepartmentDirectory
 from .components.resource_lookup import ResourceLookup
 from .components.sharing_runtime import access_parts_from, sharing_parts_from
@@ -94,6 +97,31 @@ def _not_found(message: str) -> SurveyDatasetManagerError:
     return SurveyDatasetManagerError(
         message, code=ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND
     )
+
+
+def _nemotron_missing() -> SurveyDatasetManagerError:
+    """No Nemotron file: placed beforehand (s3) or downloaded (BR2.4).
+
+    The S3 key is a file path, so it goes to the log only, never the context.
+    """
+    if config.NEMOTRON_SOURCE == NemotronSource.S3:
+        return SurveyDatasetManagerError(
+            "nemotron parquet is not placed",
+            code=ErrorCode.NEMOTRON_DATASET_NOT_PLACED,
+        )
+    return SurveyDatasetManagerError(
+        "nemotron parquet uri is not configured",
+        code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+    )
+
+
+def _is_missing_object(error: Exception) -> bool:
+    """Whether a HEAD failure only says the object is not there (404)."""
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return False
+    code = str(response.get("Error", {}).get("Code", ""))
+    return code in ("404", "NoSuchKey", "NotFound")
 
 
 class SurveyDatasetManager:
@@ -191,26 +219,58 @@ class SurveyDatasetManager:
     # Nemotron データセット
     # =========================================================================
 
-    def check_nemotron_status(self) -> Dict[str, Any]:
-        """Nemotronデータセットの存在状況を返す（利用者のデータを持たない）。"""
-        bucket = self.s3_service.bucket_name
+    def check_nemotron_status(self) -> NemotronDatasetStatus:
+        """The Nemotron file's state for the screens (no user data, BR2.2).
+
+        Never raises: any HEAD failure (``ClientError``, a connection failure,
+        ...) reads as "no file" and is logged as a warning, so the screens
+        always get ``source`` and ``download_allowed``.
+        """
+        source = NemotronSource(config.NEMOTRON_SOURCE)
+        key = config.NEMOTRON_DATASET_KEY
         try:
             resp = self.s3_service.s3_client.head_object(
-                Bucket=bucket, Key=PARQUET_S3_KEY
+                Bucket=self.s3_service.bucket_name, Key=key
             )
-            size_mb = round(resp["ContentLength"] / (1024 * 1024), 1)
-            return {"exists": True, "size_mb": size_mb}
-        except self.s3_service.s3_client.exceptions.ClientError:
-            return {"exists": False, "size_mb": 0}
+        except Exception as e:
+            if not _is_missing_object(e):
+                logger.warning(
+                    "Nemotron parquet status unavailable: %s", type(e).__name__
+                )
+            return NemotronDatasetStatus.missing(source, key)
+        return NemotronDatasetStatus.placed(
+            source, key, size_bytes=int(resp["ContentLength"])
+        )
 
-    def download_nemotron_dataset(self, principal: Principal) -> Dict[str, Any]:
-        """Nemotronデータセットをダウンロード・S3配置する（admin、BR4.1）。"""
+    def ensure_nemotron_downloadable(self, principal: Principal) -> None:
+        """Refuse a Nemotron download before the router starts it (BR2.3).
+
+        Raises:
+            CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin) or
+                ``NEMOTRON_DOWNLOAD_NOT_ALLOWED`` (the source is ``s3``).
+        """
         self._require_manage(principal)
+        self._refuse_placed_source()
+
+    @staticmethod
+    def _refuse_placed_source() -> None:
+        if config.NEMOTRON_SOURCE != NemotronSource.HUGGINGFACE:
+            raise SurveyDatasetManagerError(
+                "nemotron is placed beforehand; downloads are not allowed",
+                code=ErrorCode.NEMOTRON_DOWNLOAD_NOT_ALLOWED,
+            )
+
+    def download_nemotron_dataset(self, principal: Principal) -> NemotronDatasetStatus:
+        """Nemotronデータセットをダウンロード・S3配置する（admin、BR4.1、BR2.3）。"""
+        self._require_manage(principal)
+        self._refuse_placed_source()
         parquet_bytes = self.batch_service.download_nemotron_dataset()
 
-        self.s3_service.upload_file(parquet_bytes, PARQUET_S3_KEY)
-        s3_uri = f"s3://{self.s3_service.bucket_name}/{PARQUET_S3_KEY}"
-        self.batch_service.set_parquet_s3_uri(s3_uri)
+        key = config.NEMOTRON_DATASET_KEY
+        self.s3_service.upload_file(parquet_bytes, key)
+        self.batch_service.set_parquet_s3_uri(
+            f"s3://{self.s3_service.bucket_name}/{key}"
+        )
         logger.info("Nemotron parquet uploaded")
 
         return self.check_nemotron_status()
@@ -218,15 +278,15 @@ class SurveyDatasetManager:
     def _ensure_parquet_uri(self) -> None:
         """S3上にParquetが存在するか確認し、batch_serviceにURIをセットする。"""
         bucket = self.s3_service.bucket_name
+        key = config.NEMOTRON_DATASET_KEY
         try:
-            self.s3_service.s3_client.head_object(Bucket=bucket, Key=PARQUET_S3_KEY)
-            s3_uri = f"s3://{bucket}/{PARQUET_S3_KEY}"
-            self.batch_service.set_parquet_s3_uri(s3_uri)
-        except self.s3_service.s3_client.exceptions.ClientError:
-            raise SurveyDatasetManagerError(
-                "nemotron parquet uri is not configured",
-                code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+            self.s3_service.s3_client.head_object(Bucket=bucket, Key=key)
+        except Exception as e:
+            logger.warning(
+                "Nemotron parquet not usable at %s: %s", key, type(e).__name__
             )
+            raise _nemotron_missing() from e
+        self.batch_service.set_parquet_s3_uri(f"s3://{bucket}/{key}")
 
     # =========================================================================
     # カスタムペルソナデータの参照（BR4.2、BR5.3）
@@ -537,17 +597,27 @@ class SurveyDatasetManager:
     # DWH連携セグメント抽出（admin）
     # =========================================================================
 
+    def ensure_data_agent_allowed(self, principal: Principal) -> None:
+        """Refuse a DWH extraction before the router starts streaming (BR3.7).
+
+        Raises:
+            CodedError: ``CUSTOM_PERSONA_DATA_NOT_FOUND`` (not an admin) or
+                ``DATA_AGENT_NOT_ALLOWED``.
+        """
+        self._require_manage(principal)
+        DataAgentPolicy.ensure_allowed(SurveyDatasetManagerError)
+
     def extract_segment_from_dwh(
         self, principal: Principal, condition: str, event_queue: Any
     ) -> Dict[str, Any]:
         """データ分析エージェント連携でDWHから顧客セグメントを抽出する。"""
-        from ..config import config
         from ..services.data_agent_service import (
             DataAgentService,
             create_data_agent_tool,
         )
 
         self._require_manage(principal)
+        DataAgentPolicy.ensure_allowed(SurveyDatasetManagerError)
         if not condition or not condition.strip():
             raise SurveyDatasetValidationError(
                 "extraction condition is blank",

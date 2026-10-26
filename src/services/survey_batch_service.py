@@ -90,8 +90,8 @@ PERSONA_PROFILE_COLUMNS: List[str] = [
 # Hugging Face データセット名
 DATASET_NAME = "nvidia/Nemotron-Personas-Japan"
 
-# S3上のParquetファイルの固定キー
-PARQUET_S3_KEY = "persona-dataset/nemotron-personas-japan.parquet"  # gitleaks:allow
+# Nemotron の Parquet のキーはこの Service では持たない（閉域対応 U3 BR2.1）。
+# Manager が Config.NEMOTRON_DATASET_KEY から URI を作って set_parquet_s3_uri で渡す。
 
 CUSTOM_DATASET_PREFIX = CUSTOM_FILE_PREFIX
 

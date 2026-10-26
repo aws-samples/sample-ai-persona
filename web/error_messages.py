@@ -211,6 +211,15 @@ _CATALOG: dict[ErrorCode, str] = {
         "Nemotronデータセットがまだダウンロードされていません。"
         "アンケート調査 > ペルソナデータ設定からデータセットをダウンロードしてください。"
     ),
+    ErrorCode.NEMOTRON_DATASET_NOT_PLACED: (
+        "Nemotronデータセットのファイルが配置されていません。"
+        "閉域構成では事前に配置したファイルを使います。"
+        "管理者にファイルの配置を依頼してください。"
+    ),
+    ErrorCode.NEMOTRON_DOWNLOAD_NOT_ALLOWED: (
+        "閉域構成ではNemotronデータセットを取得できません。"
+        "事前に配置したファイルを使います。"
+    ),
     ErrorCode.SURVEY_DATASET_CSV_UNREADABLE: (
         "CSVファイルを読み取れませんでした。"
         "UTF-8のカンマ区切り、ヘッダー行ありの形式で保存してください。"
@@ -329,6 +338,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.DATA_AGENT_NOT_CONFIGURED: (
         "データ分析エージェントの接続設定がされていません。"
         "設定画面から Runtime ARN を設定してください"
+    ),
+    ErrorCode.DATA_AGENT_NOT_ALLOWED: (
+        "この環境ではデータ分析エージェントを使えません。"
     ),
     ErrorCode.DATA_AGENT_CONNECTION_FAILED: (
         "データ分析エージェントへの接続テストに失敗しました。"

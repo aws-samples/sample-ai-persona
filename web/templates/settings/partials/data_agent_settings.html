@@ -1,3 +1,9 @@
+{#- この環境で Data Agent を使ってよくないときは、設定欄の代わりに案内を出す（U3 BR3.4） #}
+{% if not data_agent_allowed %}
+<div data-testid="data-agent-not-allowed" class="text-sm text-gray-600 bg-gray-50 rounded-md p-4">
+    この環境ではデータ分析エージェントを使えません。設定と接続テストはできません。
+</div>
+{% else %}
 <form hx-post="/settings/data-agent" hx-target="#data-agent-settings" hx-swap="innerHTML" class="space-y-4">
     <div>
         <label class="flex items-center gap-2 cursor-pointer">
@@ -30,6 +36,7 @@
 
     <div class="flex items-center gap-3">
         <button type="submit"
+                data-testid="data-agent-save-button"
                 class="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 transition-colors text-sm">
             保存
         </button>
@@ -55,3 +62,4 @@
     <div class="text-sm text-green-600 bg-green-50 rounded p-2">{{ save_message }}</div>
     {% endif %}
 </form>
+{% endif %}

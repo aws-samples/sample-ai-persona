@@ -110,11 +110,11 @@ def _upload(dm, principal=ADMIN, name="顧客データ", **kwargs):
 
 class TestReferenceForEveryone:
     def test_nemotron_status_needs_no_permission(self, dm, survey_world):
-        assert dm.check_nemotron_status() == {"exists": False, "size_mb": 0}
+        assert dm.check_nemotron_status().available is False
         survey_world.s3.upload_file(
             b"x" * 1024, "persona-dataset/nemotron-personas-japan.parquet"
         )
-        assert dm.check_nemotron_status()["exists"] is True
+        assert dm.check_nemotron_status().available is True
 
     def test_member_lists_only_data_in_their_scope(self, dm, survey_world):
         sales = survey_world.custom_data("営業向け", "sales")
@@ -270,7 +270,7 @@ class TestManagementIsAdminOnly:
     def test_admin_downloads_nemotron(self, dm, survey_world, batch):
         batch.download_nemotron_dataset.return_value = b"parquet"
         result = dm.download_nemotron_dataset(ADMIN)
-        assert result["exists"] is True
+        assert result.available is True
         batch.set_parquet_s3_uri.assert_called_once()
 
 
@@ -708,3 +708,184 @@ class TestHundredsOfAssets:
         assert {d.id for d in dm.list_persona_data(ADMIN).custom} == {
             d.id for d in made
         }
+
+
+# =============================================================================
+# 閉域対応 U3: Nemotron のキー（BR2.1）
+# =============================================================================
+
+CLOSED_KEY = "closed/nemotron.parquet"
+
+
+@pytest.fixture
+def closed_key(monkeypatch) -> str:
+    from src.config import config
+
+    monkeypatch.setattr(config, "NEMOTRON_DATASET_KEY", CLOSED_KEY)
+    return CLOSED_KEY
+
+
+class TestNemotronDatasetKey:
+    def test_status_heads_the_configured_key(self, dm, survey_world, closed_key):
+        survey_world.s3.upload_file(
+            b"x" * 1024, "persona-dataset/nemotron-personas-japan.parquet"
+        )
+        assert dm.check_nemotron_status().available is False
+        survey_world.s3.upload_file(b"x" * 1024, closed_key)
+        assert dm.check_nemotron_status().available is True
+
+    def test_download_places_the_file_at_the_configured_key(
+        self, dm, survey_world, batch, closed_key
+    ):
+        batch.download_nemotron_dataset.return_value = b"parquet"
+        dm.download_nemotron_dataset(ADMIN)
+        assert _objects(survey_world, prefix="closed/") == [closed_key]
+        batch.set_parquet_s3_uri.assert_called_once_with(f"s3://{BUCKET}/{closed_key}")
+
+    def test_usable_datasource_sets_the_uri_of_the_configured_key(
+        self, dm, survey_world, batch, closed_key
+    ):
+        batch.has_parquet_uri.return_value = False
+        survey_world.s3.upload_file(b"x" * 1024, closed_key)
+        assert dm.get_filtered_count(MEMBER_A, None, "nemotron") == 500
+        batch.set_parquet_s3_uri.assert_called_once_with(f"s3://{BUCKET}/{closed_key}")
+
+
+# =============================================================================
+# 閉域対応 U3: Nemotron の入手先（BR2.2〜BR2.5）と DWH 抽出（BR3.2 の 4）
+# =============================================================================
+
+
+@pytest.fixture
+def s3_source(monkeypatch) -> None:
+    from src.config import config
+
+    monkeypatch.setattr(config, "NEMOTRON_SOURCE", "s3")
+
+
+class TestNemotronStatus:
+    def test_closed_status_carries_source_key_and_no_download(
+        self, dm, survey_world, s3_source, closed_key
+    ):
+        survey_world.s3.upload_file(b"x" * (2 * 1024 * 1024), closed_key)
+        status = dm.check_nemotron_status()
+        assert status.to_dict() == {
+            "source": "s3",
+            "dataset_key": closed_key,
+            "available": True,
+            "size_mb": 2.0,
+            "download_allowed": False,
+        }
+
+    def test_public_status_offers_the_download(self, dm):
+        status = dm.check_nemotron_status()
+        assert status.source == "huggingface"
+        assert status.download_allowed is True
+        assert status.available is False
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            "client_error",
+            "connection_error",
+        ],
+    )
+    def test_head_failure_reads_as_missing_and_is_logged(
+        self, dm, survey_world, s3_source, failure, monkeypatch, caplog
+    ):
+        from botocore.exceptions import ClientError, EndpointConnectionError
+
+        error = (
+            ClientError({"Error": {"Code": "403"}}, "HeadObject")
+            if failure == "client_error"
+            else EndpointConnectionError(endpoint_url="https://s3.example")
+        )
+
+        def head(**_kwargs):
+            raise error
+
+        monkeypatch.setattr(survey_world.s3.s3_client, "head_object", head)
+        with caplog.at_level("WARNING"):
+            status = dm.check_nemotron_status()
+        assert status.available is False
+        assert status.size_mb == 0
+        assert status.source == "s3"
+        assert status.download_allowed is False
+        assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+class TestNemotronDownloadSource:
+    def test_closed_download_does_not_call_hugging_face(self, dm, batch, s3_source):
+        with raises_code(
+            SurveyDatasetManagerError, ErrorCode.NEMOTRON_DOWNLOAD_NOT_ALLOWED
+        ):
+            dm.download_nemotron_dataset(ADMIN)
+        batch.download_nemotron_dataset.assert_not_called()
+
+    def test_closed_pre_check_refuses(self, dm, s3_source):
+        with raises_code(
+            SurveyDatasetManagerError, ErrorCode.NEMOTRON_DOWNLOAD_NOT_ALLOWED
+        ):
+            dm.ensure_nemotron_downloadable(ADMIN)
+
+    def test_member_still_gets_not_found_first(self, dm, batch, s3_source):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.ensure_nemotron_downloadable(MEMBER_A)
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.download_nemotron_dataset(MEMBER_A)
+        batch.download_nemotron_dataset.assert_not_called()
+
+    def test_public_pre_check_passes(self, dm):
+        dm.ensure_nemotron_downloadable(ADMIN)
+
+
+class TestNemotronMissingFile:
+    def test_closed_missing_file_is_a_placement_problem(
+        self, dm, batch, s3_source, closed_key
+    ):
+        batch.has_parquet_uri.return_value = False
+        with raises_code(
+            SurveyDatasetManagerError, ErrorCode.NEMOTRON_DATASET_NOT_PLACED
+        ) as caught:
+            dm.get_filtered_count(MEMBER_A, None, "nemotron")
+        # The S3 key is a file path: logs only, never the user-facing context.
+        assert "dataset_key" not in caught.value.context
+        batch.download_nemotron_dataset.assert_not_called()
+
+    def test_public_missing_file_keeps_the_current_code(self, dm, batch):
+        batch.has_parquet_uri.return_value = False
+        with raises_code(
+            SurveyDatasetManagerError, ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED
+        ):
+            dm.get_filtered_count(MEMBER_A, None, "nemotron")
+
+
+class TestDwhExtractionNotAllowed:
+    @pytest.fixture
+    def not_allowed(self, monkeypatch):
+        from src.config import config
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+        monkeypatch.setattr(config, "DATA_AGENT_RUNTIME_ARN", "arn:agent")
+
+    def test_extraction_stops_before_the_agent(self, dm, not_allowed, monkeypatch):
+        create_tool = Mock()
+        monkeypatch.setattr(
+            "src.services.data_agent_service.create_data_agent_tool", create_tool
+        )
+        queue = Mock()
+        with raises_code(SurveyDatasetManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+            dm.extract_segment_from_dwh(ADMIN, "20代女性", queue)
+        create_tool.assert_not_called()
+        queue.put.assert_not_called()
+
+    def test_pre_check_refuses(self, dm, not_allowed):
+        with raises_code(SurveyDatasetManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+            dm.ensure_data_agent_allowed(ADMIN)
+
+    def test_pre_check_hides_from_members_first(self, dm, not_allowed):
+        with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND):
+            dm.ensure_data_agent_allowed(MEMBER_A)
+
+    def test_pre_check_passes_when_allowed(self, dm):
+        dm.ensure_data_agent_allowed(ADMIN)

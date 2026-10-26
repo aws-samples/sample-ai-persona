@@ -1258,3 +1258,65 @@ class TestDeleteSurvey:
         assert events[0]["step"] == "results"
         assert events[0]["resource_type"] == "survey"
         assert "s3://" not in json.dumps(events)
+
+
+@pytest.mark.unit
+class TestEnsureParquetUriUsesConfiguredKey:
+    """閉域対応 U3 BR2.1: HEAD と URI は Config.NEMOTRON_DATASET_KEY を使う。"""
+
+    def test_heads_and_sets_the_configured_key(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_batch_service: Mock,
+        mock_s3_service: Mock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from src.config import config
+
+        monkeypatch.setattr(config, "NEMOTRON_DATASET_KEY", "closed/nemotron.parquet")
+        mock_batch_service.has_parquet_uri.return_value = False
+        mock_s3_service.s3_client.head_object.return_value = {}
+        mgr._ensure_parquet_uri("nemotron")
+        mock_s3_service.s3_client.head_object.assert_called_once_with(
+            Bucket="test-bucket", Key="closed/nemotron.parquet"
+        )
+        mock_batch_service.set_parquet_s3_uri.assert_called_once_with(
+            "s3://test-bucket/closed/nemotron.parquet"
+        )
+
+    def test_closed_missing_file_is_a_placement_problem(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_batch_service: Mock,
+        mock_s3_service: Mock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BR2.4: s3 でファイルがないと閉域のコード（外へ取りに行かない）。"""
+        from src.config import config
+
+        monkeypatch.setattr(config, "NEMOTRON_SOURCE", "s3")
+        monkeypatch.setattr(config, "NEMOTRON_DATASET_KEY", "closed/nemotron.parquet")
+        mock_batch_service.has_parquet_uri.return_value = False
+        mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
+        with raises_code(
+            SurveyExecutionError, ErrorCode.NEMOTRON_DATASET_NOT_PLACED
+        ) as caught:
+            mgr._ensure_parquet_uri("nemotron")
+        # The S3 key is a file path: logs only, never the user-facing context.
+        assert "dataset_key" not in caught.value.context
+        mock_batch_service.download_nemotron_dataset.assert_not_called()
+
+    def test_public_missing_file_keeps_the_current_code(
+        self,
+        mgr: SurveyExecutionManager,
+        mock_batch_service: Mock,
+        mock_s3_service: Mock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from src.config import config
+
+        monkeypatch.setattr(config, "NEMOTRON_SOURCE", "huggingface")
+        mock_batch_service.has_parquet_uri.return_value = False
+        mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
+        with raises_code(SurveyExecutionError, ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED):
+            mgr._ensure_parquet_uri("nemotron")
