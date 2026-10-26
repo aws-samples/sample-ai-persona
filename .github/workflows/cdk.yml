@@ -37,3 +37,13 @@ jobs:
       - name: CDK synth
         working-directory: cdk
         run: npx cdk synth --no-staging
+
+      # 閉域の Stage（AIPersonaDevClosed）を含めた synth（U1 閉域、cicd-pipeline.md §1）。
+      # 証明書の ARN は形だけのテスト用の値で、AWS には触れない。cdk-nag もここで閉域にかかる
+      - name: CDK synth (closed network)
+        working-directory: cdk
+        run: >-
+          npx cdk synth --no-staging
+          -c closedCertificateArn=arn:aws:acm:ap-northeast-1:123456789012:certificate/00000000-0000-0000-0000-000000000000
+          -c closedDomainName=ai-persona.closed.example
+          -c closedCreateTestEnvironment=true

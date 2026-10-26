@@ -1,13 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { createDevStage, DevStageOverrides } from '../lib/dev-stage';
+import { synthClosed, templatesOf } from './helpers/stages';
 import { exportedRef, exportTargets, flattenReference, PATH_METADATA_CONTEXT } from './template-paths';
 
 /**
  * IAM の `*` と方針の大きさ、秘密の読み手（U9、NFR7.16、NFR3.14、security-design.md）。
  *
- * Stage を 2 通り（既定の dev の値と、追加のペルソナモデルを有効にした値）synth し、
- * 3 スタックの全ロールの方針を調べる。`Resource: "*"` の文の操作は、下の例外の一覧と
+ * Stage を 3 通り（既定の dev の値、追加のペルソナモデルを有効にした値、U1 閉域の Stage）synth し、
+ * 全スタック（公開は Data・App・Edge、閉域は Data・App）の全ロールの方針を調べる。`Resource: "*"` の文の操作は、下の例外の一覧と
  * 完全に一致させる（増えても、減って一覧が古くなっても失敗する）。IAM の文を足す変更は、
  * 同じ変更でこの一覧を直す。
  */
@@ -39,21 +40,22 @@ const INFERENCE_ARNS = [
   `arn:aws:bedrock:*:${ACCOUNT}:application-inference-profile/*`,
 ];
 
-const DATA = 'AIPersonaDev/Data';
-const tableArn = (id: string) => exportedRef(`${DATA}/Database/${id}/Resource`, 'Arn');
-
 /**
  * タスクロールが Query してよい GSI（アプリが IndexName で引くものだけ、名前で付ける）。
  * OwnerIndex: src/services/stores/resource_share_store.py、TargetIndex: src/services/stores/persona_binding_store.py。
  * 型固定の GSI（NameIndex など）は外す途中で、アプリは使わないため付けない。
+ * `data` は Data スタックの construct のパス（公開は AIPersonaDev/Data、閉域は AIPersonaDevClosed/Data）。
  */
-const QUERIED_INDEX_ARNS = [
-  `${tableArn('Discussions')}/index/OwnerIndex`,
-  `${tableArn('PersonaBindings')}/index/TargetIndex`,
-  `${tableArn('Personas')}/index/OwnerIndex`,
-  `${tableArn('SurveyTemplates')}/index/OwnerIndex`,
-  `${tableArn('Surveys')}/index/OwnerIndex`,
-];
+function queriedIndexArns(data: string): string[] {
+  const tableArn = (id: string) => exportedRef(`${data}/Database/${id}/Resource`, 'Arn');
+  return [
+    `${tableArn('Discussions')}/index/OwnerIndex`,
+    `${tableArn('PersonaBindings')}/index/TargetIndex`,
+    `${tableArn('Personas')}/index/OwnerIndex`,
+    `${tableArn('SurveyTemplates')}/index/OwnerIndex`,
+    `${tableArn('Surveys')}/index/OwnerIndex`,
+  ];
+}
 
 /** IAM の 1 つの方針の上限（区切りの空白を除いた文字数）。 */
 const MAX_INLINE_POLICY = 10_240;
@@ -64,23 +66,34 @@ const FEATURE_FLAGS: Record<string, unknown> = require('../cdk.json').context;
 
 interface Variant {
   name: string;
-  overrides: DevStageOverrides;
+  /** Data スタックの construct のパス。 */
+  data: string;
+  build: () => Template[];
   expectedWildcards: string[];
 }
 
 const VARIANTS: Variant[] = [
   {
     name: '既定の dev の値',
-    overrides: {},
+    data: 'AIPersonaDev/Data',
+    build: () => templates({}),
     expectedWildcards: Object.keys(WILDCARD_EXCEPTIONS),
   },
   {
     name: 'enableAdditionalPersonaModels: true',
-    overrides: { enableAdditionalPersonaModels: true },
+    data: 'AIPersonaDev/Data',
+    build: () => templates({ enableAdditionalPersonaModels: true }),
     expectedWildcards: [
       ...Object.keys(WILDCARD_EXCEPTIONS),
       ...Object.keys(MANTLE_WILDCARD_EXCEPTIONS),
     ],
+  },
+  {
+    // U1 閉域: Data・App だけ（Edge なし）。検証用 EC2 のロールは管理ポリシーだけで、* の文を足さない
+    name: '閉域の Stage（検証用 EC2 あり）',
+    data: 'AIPersonaDevClosed/Data',
+    build: () => Object.values(synthClosed().templates),
+    expectedWildcards: Object.keys(WILDCARD_EXCEPTIONS),
   },
 ];
 
@@ -98,7 +111,7 @@ function templates(overrides: DevStageOverrides): Template[] {
     new cdk.App({ context: { ...FEATURE_FLAGS, ...PATH_METADATA_CONTEXT } }),
     { account: ACCOUNT, ...overrides },
   );
-  return [stage.data, stage.app, stage.edge].map((s) => Template.fromStack(s));
+  return Object.values(templatesOf(stage));
 }
 
 /** Export name → `{path.attribute}` across the given templates. */
@@ -131,8 +144,9 @@ const resourcesOf = (s: any): any[] => [s.Resource].flat().filter((r) => r !== u
 const withAction = (docs: PolicyDoc[], action: string) =>
   statementsOf(docs).filter((s) => actionsOf(s).includes(action));
 
-describe.each(VARIANTS)('IAM（$name）', ({ overrides, expectedWildcards }) => {
-  const all = templates(overrides);
+describe.each(VARIANTS)('IAM（$name）', ({ data: DATA, build, expectedWildcards }) => {
+  const QUERIED_INDEX_ARNS = queriedIndexArns(DATA);
+  const all = build();
   const docs = policyDocs(all);
   const targets = targetsOf(all);
   const flat = (s: any) => resourcesOf(s).map((r) => flattenReference(r, targets));

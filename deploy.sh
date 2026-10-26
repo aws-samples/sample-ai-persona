@@ -21,6 +21,14 @@
 #   --image-tag TAG    ②をせず、ECR にある TAG のイメージで③を行う（前の版に戻すときに使う）
 #   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
 #
+# 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
+#   ./deploy.sh --closed --certificate-arn <ACM の証明書の ARN> --domain-name <FQDN> \
+#     [--allowed-cidrs <CIDR,CIDR>] [--create-test-environment]
+#   ① cdk deploy AIPersonaDevClosed/Data（us-east-1 の bootstrap と Edge はしない）
+#   ② イメージを閉域の Data の ECR へ送る ③ cdk deploy AIPersonaDevClosed/App -c imageTag=<タグ>
+#   --image-tag・--restart-app・--region も --closed と一緒に使える（対象は閉域の Stage）。
+#   --certificate-arn と --domain-name がなければ、AWS に触れる前に使い方を出して終わる。
+#
 # 事前に: ローカルの検査（pytest・ruff・mypy・CDK の検査）を通し、
 #   cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=<タグ>
 # でステートフルなリソースの置き換え（replace）がないことを確かめる。
@@ -30,11 +38,18 @@
 set -euo pipefail
 
 STAGE="AIPersonaDev"
+CLOSED_STAGE="AIPersonaDevClosed"
 REGION="ap-northeast-1"
 EDGE_REGION="us-east-1"
 RESTART_APP=false
 IMAGE_TAG_OVERRIDE=""
 UNSET_IMAGE_TAG="unset"
+CLOSED=false
+CERTIFICATE_ARN=""
+DOMAIN_NAME=""
+ALLOWED_CIDRS=""
+CREATE_TEST_ENVIRONMENT=false
+CLOSED_OPTION_GIVEN=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -56,6 +71,20 @@ usage() {
                      （前の版に戻すときに使う）
   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
   -h, --help         この説明を出す
+
+閉域構成（Stage AIPersonaDevClosed。公開の Stage には触れない）:
+  --closed                    閉域の Stage を Data → イメージ → App の順にデプロイする
+                              （us-east-1 の bootstrap と Edge はしない）
+  --certificate-arn ARN       内部 ALB の証明書（Data・App と同じリージョンの ACM）。--closed で必須
+  --domain-name FQDN          利用者が開く FQDN（例 ai-persona.example.internal）。--closed で必須
+  --allowed-cidrs CIDRS       ALB に届いてよい送り元の CIDR（カンマ区切り。既定: なし）
+  --create-test-environment   検証用の Windows EC2（Fleet Manager で入る）も作る
+  --restart-app・--image-tag・--region は --closed と一緒に使える（対象は閉域の Stage）
+  許可する CIDR か検証用 EC2 のどちらかが要る（どちらもなければ CDK の synth で止まる）
+
+例:
+  ./deploy.sh --closed --certificate-arn arn:aws:acm:ap-northeast-1:<アカウント>:certificate/<ID> \
+    --domain-name ai-persona.example.internal --create-test-environment
 USAGE
 }
 
@@ -69,6 +98,17 @@ while [[ $# -gt 0 ]]; do
     --region)
       [[ $# -ge 2 ]] || { log_error "--region にはリージョンを指定してください"; exit 1; }
       REGION="$2"; shift 2 ;;
+    --closed) CLOSED=true; shift ;;
+    --certificate-arn)
+      [[ $# -ge 2 ]] || { log_error "--certificate-arn には証明書の ARN を指定してください"; exit 1; }
+      CERTIFICATE_ARN="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
+    --domain-name)
+      [[ $# -ge 2 ]] || { log_error "--domain-name には FQDN を指定してください"; exit 1; }
+      DOMAIN_NAME="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
+    --allowed-cidrs)
+      [[ $# -ge 2 ]] || { log_error "--allowed-cidrs には CIDR（カンマ区切り）を指定してください"; exit 1; }
+      ALLOWED_CIDRS="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
+    --create-test-environment) CREATE_TEST_ENVIRONMENT=true; CLOSED_OPTION_GIVEN="$1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) log_error "不明なオプション: $1"; usage; exit 1 ;;
   esac
@@ -77,6 +117,26 @@ done
 if [[ "${IMAGE_TAG_OVERRIDE}" == "${UNSET_IMAGE_TAG}" ]]; then
   log_error "イメージのタグが ${UNSET_IMAGE_TAG} です。実在するタグを指定してください"
   exit 1
+fi
+
+# 閉域の値の検査は AWS に触れる前に行う（BR7.2）。公開の使い方は変えない（BR7.3）
+if [[ "${CLOSED}" == "false" && -n "${CLOSED_OPTION_GIVEN}" ]]; then
+  log_error "${CLOSED_OPTION_GIVEN} は --closed と一緒に使ってください"
+  usage
+  exit 1
+fi
+if [[ "${CLOSED}" == "true" ]]; then
+  STAGE="${CLOSED_STAGE}"
+  if [[ "${RESTART_APP}" == "false" ]]; then
+    missing=()
+    [[ -n "${CERTIFICATE_ARN}" ]] || missing+=("--certificate-arn")
+    [[ -n "${DOMAIN_NAME}" ]] || missing+=("--domain-name")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      log_error "閉域構成には ${missing[*]} が要ります"
+      usage
+      exit 1
+    fi
+  fi
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,7 +170,12 @@ stack_output() {
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 log_info "AWS アカウント: ${ACCOUNT_ID}"
-log_info "リージョン: ${REGION}（Edge: ${EDGE_REGION}）"
+log_info "Stage: ${STAGE}"
+if [[ "${CLOSED}" == "true" ]]; then
+  log_info "リージョン: ${REGION}（閉域構成のため Edge なし）"
+else
+  log_info "リージョン: ${REGION}（Edge: ${EDGE_REGION}）"
+fi
 
 # ===== --restart-app: タスクの入れ替えだけ =====
 if [[ "${RESTART_APP}" == "true" ]]; then
@@ -134,15 +199,33 @@ fi
 log_step "Step 1: CDK の依存のインストールと bootstrap"
 cd "${PROJECT_ROOT}/cdk"
 npm ci
-for target_region in "${REGION}" "${EDGE_REGION}"; do
+BOOTSTRAP_REGIONS=("${REGION}")
+if [[ "${CLOSED}" == "false" ]]; then
+  BOOTSTRAP_REGIONS+=("${EDGE_REGION}")
+fi
+for target_region in "${BOOTSTRAP_REGIONS[@]}"; do
   npx cdk bootstrap "aws://${ACCOUNT_ID}/${target_region}" --region "${target_region}"
 done
 
 CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}" -c "region=${REGION}")
+if [[ "${CLOSED}" == "true" ]]; then
+  # 閉域の Stage は、このコンテキストがあるときだけ作られる（cdk/lib/dev-stage.ts）
+  CDK_CONTEXT+=(
+    -c "closedCertificateArn=${CERTIFICATE_ARN}"
+    -c "closedDomainName=${DOMAIN_NAME}"
+    -c "closedAllowedCidrs=${ALLOWED_CIDRS}"
+    -c "closedCreateTestEnvironment=${CREATE_TEST_ENVIRONMENT}"
+  )
+fi
 
-# ===== Step 2: ① Data・Edge =====
-log_step "Step 2: Data・Edge スタック（① テーブル・ECR・Cognito・WAF）"
-npx cdk deploy "${STAGE}/Data" "${STAGE}/Edge" --require-approval never "${CDK_CONTEXT[@]}"
+# ===== Step 2: ① Data（公開は Edge も） =====
+if [[ "${CLOSED}" == "true" ]]; then
+  log_step "Step 2: Data スタック（① テーブル・ECR・Cognito）"
+  npx cdk deploy "${STAGE}/Data" --require-approval never "${CDK_CONTEXT[@]}"
+else
+  log_step "Step 2: Data・Edge スタック（① テーブル・ECR・Cognito・WAF）"
+  npx cdk deploy "${STAGE}/Data" "${STAGE}/Edge" --require-approval never "${CDK_CONTEXT[@]}"
+fi
 
 ECR_URI=$(stack_output "${STAGE}-Data" EcrRepositoryUri)
 ECR_REPOSITORY="${ECR_URI#*/}"
@@ -173,7 +256,11 @@ else
 fi
 
 # ===== Step 4: ③ App =====
-log_step "Step 4: App スタック（③ Fargate・内部 ALB・CloudFront）"
+if [[ "${CLOSED}" == "true" ]]; then
+  log_step "Step 4: App スタック（③ Fargate・内部 ALB（HTTPS）・VPC エンドポイント）"
+else
+  log_step "Step 4: App スタック（③ Fargate・内部 ALB・CloudFront）"
+fi
 if [[ "${IMAGE_TAG}" == "${UNSET_IMAGE_TAG}" ]]; then
   log_error "イメージのタグが ${UNSET_IMAGE_TAG} のため App スタックをデプロイしません"
   exit 1
@@ -194,14 +281,39 @@ echo -e "  イメージのタグ:   ${IMAGE_TAG}"
 echo ""
 echo "初めてのときは、動作確認用の admin を 1 人作ってください:"
 echo ""
-echo "  aws cognito-idp admin-create-user --region ${REGION} \\"
-echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> \\"
-echo "    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true"
-echo "  aws cognito-idp admin-add-user-to-group --region ${REGION} \\"
-echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> --group-name role:admin"
-echo ""
-echo "  （仮のパスワードがメールで届きます。初回ログインで新しいパスワードを設定します）"
-echo ""
-echo "再デプロイ（コードを更新したとき）: ./deploy.sh"
-echo "前の版に戻す:                       ./deploy.sh --image-tag <前のタグ>"
-echo "秘密を書き換えたあと:               ./deploy.sh --restart-app"
+if [[ "${CLOSED}" == "true" ]]; then
+  # 閉域構成はアプリのログイン画面（admin_api）を使う。一時パスワードで作り、初回ログインで変える
+  echo "  aws cognito-idp admin-create-user --region ${REGION} \\"
+  echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> \\"
+  echo "    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \\"
+  echo "    --temporary-password '<一時パスワード>' --message-action SUPPRESS"
+  echo "  aws cognito-idp admin-add-user-to-group --region ${REGION} \\"
+  echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> --group-name role:admin"
+  echo ""
+  echo "  （一時パスワードは別の経路で伝えます。初回ログインで新しいパスワードを設定します）"
+  echo ""
+  echo "  アプリは閉域の VPC の中からだけ開けます（${APP_URL}）。"
+  if [[ "${CREATE_TEST_ENVIRONMENT}" == "true" ]]; then
+    echo "  検証用 EC2 には Systems Manager の Fleet Manager（リモートデスクトップ）で入り、"
+    echo "  その中のブラウザで ${APP_URL}/health を開きます（手順は cdk/README.md の「閉域構成」）。"
+  fi
+  echo ""
+  CLOSED_ARGS="--closed --certificate-arn ${CERTIFICATE_ARN} --domain-name ${DOMAIN_NAME}"
+  [[ -z "${ALLOWED_CIDRS}" ]] || CLOSED_ARGS+=" --allowed-cidrs ${ALLOWED_CIDRS}"
+  [[ "${CREATE_TEST_ENVIRONMENT}" == "false" ]] || CLOSED_ARGS+=" --create-test-environment"
+  echo "再デプロイ（コードを更新したとき）: ./deploy.sh ${CLOSED_ARGS}"
+  echo "前の版に戻す:                       ./deploy.sh ${CLOSED_ARGS} --image-tag <前のタグ>"
+  echo "秘密を書き換えたあと:               ./deploy.sh --closed --restart-app"
+else
+  echo "  aws cognito-idp admin-create-user --region ${REGION} \\"
+  echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> \\"
+  echo "    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true"
+  echo "  aws cognito-idp admin-add-user-to-group --region ${REGION} \\"
+  echo "    --user-pool-id ${USER_POOL_ID} --username <メールアドレス> --group-name role:admin"
+  echo ""
+  echo "  （仮のパスワードがメールで届きます。初回ログインで新しいパスワードを設定します）"
+  echo ""
+  echo "再デプロイ（コードを更新したとき）: ./deploy.sh"
+  echo "前の版に戻す:                       ./deploy.sh --image-tag <前のタグ>"
+  echo "秘密を書き換えたあと:               ./deploy.sh --restart-app"
+fi

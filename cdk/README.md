@@ -83,40 +83,7 @@ cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=$(git rev-parse --short HEAD
 
 `role:admin` にも `role:member` にも入っていない利用者は、ログインすると「利用権限がまだありません」の画面に送られ、ログアウトしかできません（API は 403 の `role_required`）。グループに入れたあとは、ログアウトしてログインし直すと使えるようになります。
 
-#### 閉域構成の利用者（後続リリース）
-
-閉域構成（`deploymentMode=closed`）は後続リリースで提供します（v1.0.0 では synth でエラー）。閉域構成ではアプリ自身のログイン画面（`AUTH_MODE=admin_api`）を使うため、利用者の作成とパスワードの再設定は次のとおりに行います。
-
-- **作成は一時パスワード付きで行う。** 利用者は初回ログインで「パスワードの設定」画面に移り、新しいパスワードを設定するとそのままログインします。グループ（`role:*`・`group:*`）の付け方は上と同じです。
-
-  ```bash
-  aws cognito-idp admin-create-user --user-pool-id <User Pool ID> \
-    --username <メールアドレス> \
-    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
-    --temporary-password '<一時パスワード>'
-  ```
-
-- **パスワードの再設定は、一時パスワードの設定で行う。** コンソールの「パスワードをリセット」は使いません（再設定が必要な状態の利用者は、ログイン画面で「メールアドレスまたはパスワードが違います」になり、先へ進めないため）。一時パスワードを設定すると、次のログインで再び「パスワードの設定」画面に移ります。
-
-  ```bash
-  aws cognito-idp admin-set-user-password --user-pool-id <User Pool ID> \
-    --username <メールアドレス> --password '<一時パスワード>' --no-permanent
-  ```
-
-一時パスワードは User Pool のパスワードの条件を満たす必要があります。利用者には別の経路（メールなど）で伝え、コマンドの履歴に残さないよう注意してください。
-
-#### 閉域構成のリリースで行うこと（v1.0.0 から送った項目）
-
-v1.0.0 ではアプリ側のログイン（`AUTH_MODE=admin_api`）だけを作り、AWS では動かしていません（公開構成には切り替えを作らない）。閉域構成のスタックを作るリリースで、次を作り、確かめます。
-
-| 項目 | 内容 |
-|---|---|
-| App の環境変数 | closed の分岐で `AUTH_MODE=admin_api` と、パスワードの条件の 5 つ（`PASSWORD_MIN_LENGTH`・`PASSWORD_REQUIRE_UPPERCASE`・`PASSWORD_REQUIRE_LOWERCASE`・`PASSWORD_REQUIRE_DIGITS`・`PASSWORD_REQUIRE_SYMBOLS`）。値は User Pool のパスワードポリシーと同じ定数から作る |
-| App クライアント | closed の User Pool のクライアントに `ADMIN_USER_PASSWORD_AUTH`（と `REFRESH_TOKEN_AUTH`）を許す |
-| タスクロール | `cognito-idp:AdminInitiateAuth`・`cognito-idp:AdminRespondToAuthChallenge`（closed の User Pool の ARN だけ） |
-| 内部 ALB の TLS | 閉域構成ではパスワードがアプリを通るため、ALB までを TLS にする |
-| Cognito への経路 | `cognito-idp` の VPC エンドポイント |
-| AWS での確かめ | Cognito の一時停止（パスワードを続けて間違えた利用者）が画面の「試行回数が上限に達しました」になること、ログインの応答時間の 95 パーセンタイル（20 回以上）、App クライアントの設定の変更が置き換えにならないこと（`npx cdk diff`） |
+閉域構成（Stage `AIPersonaDevClosed`）の利用者の作り方は、下の「[閉域構成](#閉域構成stage-aipersonadevclosed)」の「閉域の利用者の作成と再設定」を参照してください（アプリ自身のログイン画面を使うため、作り方が違います）。
 
 #### 設定（`cdk/parameters.ts`）
 
@@ -125,7 +92,7 @@ v1.0.0 では `deploy.sh` のオプションで設定を変えず、`cdk/paramet
 | 項目 | 既定 | 説明 |
 |---|---|---|
 | `appDesiredCount` | 1 | タスクの台数（1〜10。範囲外は synth でエラー）。`-c appDesiredCount=2` でも変えられる |
-| `deploymentMode` | `public` | `closed`（閉域構成）は後続リリースで提供。v1.0.0 では synth でエラー |
+| `deploymentMode` | `public` | 公開の Stage `AIPersonaDev` は `public` だけ（`-c deploymentMode=closed` は synth でエラー）。閉域構成は別の Stage `AIPersonaDevClosed` で作る（下の「閉域構成」） |
 | `enableWaf` / `allowedIpAddresses` | `false` / なし | CloudFront 用 WAF と IP 制限。`true` のときだけ WebACL を作り、ログイン系の URL のレート制限（下の「安全網（U9）」）もかかる |
 | `enableAdditionalPersonaModels` | `false` | 追加ペルソナベースモデル（Bedrock Mantle 経由） |
 | `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
@@ -310,6 +277,190 @@ Secrets Manager の `TokenEncryptionKeys`（`{"current": "v1", "k_v1": "..."}`�
 1. 新しい版（例: `"k_v2": "<64 文字の乱数>"`）を足し、`--restart-app`（暗号化はまだ `current` の古い版）
 2. すべてのタスクが入れ替わったら `current` を新しい版にして、`--restart-app`
 3. 7 日後（セッションの最長）に古い版を外して、`--restart-app`
+
+### 閉域構成（Stage `AIPersonaDevClosed`）
+
+インターネットへ出る経路を持たない VPC の中で、同じアプリを動かす構成です。公開の Stage `AIPersonaDev` と同じアカウント・同じリージョンに並べて置けます（スタック名・テーブル・User Pool・ECR・VPC はすべて別で、共有するのは CDK のコードとコンテナイメージの作り方だけ）。閉域の作業では公開の Stage に触れません。
+
+```mermaid
+graph TB
+    subgraph VPC["閉域の VPC（PRIVATE_ISOLATED のサブネット 2 つ。NAT・IGW なし）"]
+        EC2[検証用 Windows EC2（任意）] -->|HTTPS 443| ALB[内部 ALB（HTTPS だけ）]
+        Client([許可した CIDR の利用者]) -->|HTTPS 443| ALB
+        ALB -->|HTTP 80| ECS[ECS Fargate（アプリ）]
+        ECS -->|443| EP[インターフェイス型 VPC エンドポイント 10 種]
+        ECS -->|443| GW[ゲートウェイ型 VPC エンドポイント（S3・DynamoDB）]
+        PHZ[Private Hosted Zone（FQDN → ALB）]
+    end
+    EP --> AWS[ECR・Logs・Secrets Manager・Cognito・Bedrock・AgentCore]
+    GW --> Data[(DynamoDB・S3)]
+```
+
+テキストでの説明: 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、Private Hosted Zone で引いた FQDN の内部 ALB へ HTTPS で届きます。TLS は ALB で終わり、ALB からアプリへは HTTP 80 です。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。CloudFront・WAF・Cognito の Managed Login は使わず、ログインはアプリ自身の画面（`AUTH_MODE=admin_api`）で行います。
+
+| スタック（Stage `AIPersonaDevClosed`） | 中身 | 依存 |
+|---|---|---|
+| `AIPersonaDevClosed-Data` | 公開と同じ Data スタック（テーブル・S3・ECR・AgentCore Memory・鍵・User Pool。すべて RETAIN）。User Pool は Managed Login のドメインを作らず、メールでの回復を無効にする | なし |
+| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB（HTTPS 443）・ECS Fargate・管理 API のログインのアプリクライアント・検証用 EC2（任意） | Data |
+
+閉域の Stage は、証明書の ARN と FQDN の両方が渡されたときだけ作られます。渡さなければ `npx cdk synth` は今までどおり公開の Stage だけを出します。片方だけならエラーで止まります。
+
+U1 の閉域構成では、次はまだ閉域で動きません（後続の Unit で直します）。
+
+- アバターなど、署名付き URL で画像を出す 5 か所（U4）。画面は壊れず、画像だけが出ません
+- Nemotron の取得と Data Agent（U3）
+- エンドポイントのポリシーでの絞り込み・Flow Logs・既存 VPC の取り込み（U2）
+
+#### 閉域のパラメータ
+
+`cdk/parameters.ts` の `closedDevParameter` に既定があり、コンテキスト（`-c`）で上書きします。`deploy.sh --closed` が引数からコンテキストを渡します。実際の証明書の ARN と FQDN はリポジトリに書かないでください。
+
+| コンテキスト | `deploy.sh` の引数 | 既定 | 説明 |
+|---|---|---|---|
+| `closedCertificateArn` | `--certificate-arn` | なし（必須） | 内部 ALB の証明書。Data・App と同じリージョンの ACM の ARN（`arn:aws:acm:<リージョン>:<アカウント>:certificate/<ID>`） |
+| `closedDomainName` | `--domain-name` | なし（必須） | 利用者が開く FQDN（例 `ai-persona.example.internal`）。スキーム・パス・大文字・末尾のドットなし、ラベル 2 つ以上。この名前で Private Hosted Zone を作る |
+| `closedAllowedCidrs` | `--allowed-cidrs` | なし | ALB に届いてよい送り元の CIDR（カンマ区切り） |
+| `closedCreateTestEnvironment` | `--create-test-environment` | `false` | 検証用の Windows EC2 と、そのための SSM のエンドポイント 3 種を作る |
+| `closedVpcCidr` | なし | `10.0.0.0/16` | 新規 VPC の CIDR |
+
+- 許可する CIDR か検証用 EC2 のどちらかが要ります（どちらもなければ誰も ALB に届かないため、synth でエラー）
+- `envName` は `dev-closed` です。AgentCore Memory の名前（`AIPersona_v1_dev_closed_memory`）が公開の dev と重なりません
+- `enableMcpGateway=true` は閉域でも synth でエラーです
+- VPC の AZ は `ap-northeast-1a`・`ap-northeast-1c` に固定しています（`lib/constructs/closed-network.ts` の `CLOSED_AVAILABILITY_ZONES`）。Bedrock・AgentCore のインターフェイス型エンドポイントを提供する AZ が限られるためです。AZ の名前はアカウントごとに割り当てが違うため、別のアカウントに置くときは `aws ec2 describe-vpc-endpoint-services --region ap-northeast-1 --service-names com.amazonaws.ap-northeast-1.bedrock-agentcore-control --query 'ServiceDetails[].AvailabilityZones'` で確かめます
+- S3・DynamoDB のプレフィックスリストの ID（タスクの外向きのルールに使う）は、東京リージョンの値を `closed-network.ts` に持っています。ほかのリージョンでは synth でエラーになるため、表に足します
+
+#### 自己署名の証明書を作って ACM にインポートする
+
+閉域の検証では、自己署名の証明書を使えます（GenU の閉域構成と同じ手順）。ブラウザの警告は、検証のときだけ受け入れてください。社内の CA の証明書があれば、それをインポートします。
+
+```bash
+FQDN=ai-persona.example.internal
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout closed-alb.key -out closed-alb.crt \
+  -subj "/CN=${FQDN}" -addext "subjectAltName=DNS:${FQDN}"
+aws acm import-certificate --region ap-northeast-1 \
+  --certificate fileb://closed-alb.crt --private-key fileb://closed-alb.key \
+  --query CertificateArn --output text
+```
+
+表示された ARN を `--certificate-arn` に渡します。秘密鍵（`closed-alb.key`）はリポジトリに置かず、インポートしたら手元から消すか安全な場所に移してください。
+
+#### 閉域のデプロイ（`deploy.sh --closed`）
+
+```bash
+./deploy.sh --closed \
+  --certificate-arn arn:aws:acm:ap-northeast-1:<アカウント>:certificate/<ID> \
+  --domain-name ai-persona.example.internal \
+  --create-test-environment
+```
+
+`deploy.sh --closed` は次の順に動きます。
+
+1. CDK の依存のインストールと bootstrap（Data・App のリージョンだけ。us-east-1 の bootstrap と Edge はしない）
+2. ① `AIPersonaDevClosed/Data` をデプロイ
+3. ② コンテナイメージをビルドし、閉域の Data の ECR へ送る（タグは公開と同じく `git rev-parse --short HEAD`）
+4. ③ `AIPersonaDevClosed/App` を `-c imageTag=<タグ>` と閉域のコンテキストでデプロイ
+5. アプリの URL（`https://<FQDN>`）と、最初の admin を作るコマンドを表示
+
+| 使い方 | コマンド |
+|---|---|
+| 許可する CIDR から使う | `./deploy.sh --closed --certificate-arn <ARN> --domain-name <FQDN> --allowed-cidrs 10.10.0.0/16,192.168.10.0/24` |
+| 前の版に戻す | `./deploy.sh --closed --certificate-arn <ARN> --domain-name <FQDN> [同じ引数] --image-tag <前のタグ>` |
+| 秘密を書き換えたあと | `./deploy.sh --closed --restart-app`（閉域の Stage のタスクを入れ替える） |
+| リージョンを変える | `--region <リージョン>`（証明書も同じリージョンの ACM に置く） |
+
+- `--certificate-arn` と `--domain-name` がなければ、AWS に触れる前に使い方を出して終了コード 1 で終わります
+- 閉域の引数（`--certificate-arn` など）を `--closed` なしで渡すとエラーです。`--closed` のない `./deploy.sh` の動きは今までと同じです
+- 再デプロイでは、前と同じ引数（特に `--create-test-environment` と `--allowed-cidrs`）を渡します。渡さないと、検証用 EC2 や許可した CIDR のルールが消えます
+- CI（`.github/workflows/cdk.yml` の `synth`）は、形だけの証明書の ARN で閉域の Stage を含めた synth（cdk-nag を含む）を毎回行います。AWS には触れません
+
+#### 公開の Stage に差分がないことを確かめる
+
+閉域の変更は公開の Stage を変えません（`test/public-stage-invariants.test.ts` が公開の Stage の写しをスナップショットで固定しています）。デプロイの前に、公開の dev で動いているイメージのタグを渡して差分を見ます。`imageTag` を渡さないとイメージのタグが `unset` になり、App に必ず差分が出ます。
+
+```bash
+CLUSTER=$(aws cloudformation describe-stacks --stack-name AIPersonaDev-App --region ap-northeast-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='ClusterName'].OutputValue" --output text)
+SERVICE=$(aws cloudformation describe-stacks --stack-name AIPersonaDev-App --region ap-northeast-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='ServiceName'].OutputValue" --output text)
+TASK_DEFINITION=$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+  --region ap-northeast-1 --query 'services[0].taskDefinition' --output text)
+IMAGE_TAG=$(aws ecs describe-task-definition --task-definition "${TASK_DEFINITION}" \
+  --region ap-northeast-1 --query 'taskDefinition.containerDefinitions[0].image' --output text | sed 's/.*://')
+cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMAGE_TAG}"
+```
+
+`AIPersonaDev/Data` と `AIPersonaDev/App` に差分がないことを確かめます（Edge は us-east-1 のスタックで、閉域の変更では変わりません）。差分があれば閉域のデプロイを止めて原因を調べます。
+
+#### 検証用 EC2 から使う（Fleet Manager）
+
+`--create-test-environment` を付けると、閉域のサブネットに Windows Server 2022（日本語）の `t3.medium` を 1 台作ります。パブリック IP はなく、Systems Manager の Fleet Manager（SSM のエンドポイント経由）のリモートデスクトップで入ります。
+
+1. インスタンスの ID とキーペアの ID を調べ、キーペアの秘密鍵を SSM パラメータストアから取り出す（CDK の `ec2.KeyPair` が `/ec2/keypair/<キーペアの ID>` に置く）
+
+   ```bash
+   aws ec2 describe-instances --region ap-northeast-1 \
+     --filters Name=tag:aws:cloudformation:stack-name,Values=AIPersonaDevClosed-App \
+               Name=instance-state-name,Values=pending,running,stopping,stopped \
+     --query 'Reservations[].Instances[].[InstanceId,KeyName]' --output text
+   KEY_PAIR_ID=$(aws ec2 describe-key-pairs --region ap-northeast-1 --key-names <KeyName> \
+     --query 'KeyPairs[0].KeyPairId' --output text)
+   aws ssm get-parameter --region ap-northeast-1 --name "/ec2/keypair/${KEY_PAIR_ID}" \
+     --with-decryption --query Parameter.Value --output text > closed-rdp.pem
+   ```
+
+2. AWS コンソールの Systems Manager →「Fleet Manager」で検証用のインスタンスを選び、「ノードアクション」→「接続」→「リモートデスクトップで接続」を開く。認証の種類に「キーペア」を選び、`closed-rdp.pem` を渡して接続する
+3. インスタンスの中のブラウザで `https://<FQDN>/health` を開く（自己署名の証明書の警告は、検証のときだけ受け入れる）。続けて `https://<FQDN>/login` でログインする
+4. 使い終えた `closed-rdp.pem` は手元から消す
+
+タスクが起動しているかは、CloudWatch の `AWS/ApplicationELB` の `HealthyHostCount`（閉域の ALB のターゲットグループ）と、ECS のサービスのイベント（`aws ecs describe-services --cluster <ClusterName> --services <ServiceName> --query 'services[0].events[:5]'`）で確かめます。Container Insights は有効にしていないため、`RunningTaskCount` は出ません。タスクが起動しないときは、VPC エンドポイントの抜けか SG のルールを疑います。
+
+**止め方・消し方**: 使わない間は止めておけます（`aws ec2 stop-instances --region ap-northeast-1 --instance-ids <インスタンスの ID>`。止めている間はインスタンスの料金がかかりません）。要らなくなったら、`--create-test-environment` を付けずに `./deploy.sh --closed ...` を流し直します。検証用 EC2・そのロールとキーペア・SSM のエンドポイント 3 種・関係する SG のルールが App スタックから外れて消えます（許可する CIDR がないとエラーになるため、そのときは `--allowed-cidrs` を渡します）。検証用 EC2 はデータを持ちません。
+
+#### 閉域の利用者の作成と再設定
+
+閉域構成ではアプリ自身のログイン画面（`AUTH_MODE=admin_api`）を使い、Cognito の Managed Login とメールでの回復は使いません。利用者の作成とパスワードの再設定は次のとおりに行います（User Pool ID は `deploy.sh --closed` の最後に表示され、`AIPersonaDevClosed-Data` の出力 `UserPoolId` にもあります）。
+
+- **作成は一時パスワード付きで行う。** 利用者は初回ログインで「パスワードの設定」画面に移り、新しいパスワードを設定するとそのままログインします。グループ（`role:*`・`group:*`）の付け方は公開と同じです。
+
+  ```bash
+  aws cognito-idp admin-create-user --region ap-northeast-1 --user-pool-id <User Pool ID> \
+    --username <メールアドレス> \
+    --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
+    --temporary-password '<一時パスワード>' --message-action SUPPRESS
+  aws cognito-idp admin-add-user-to-group --region ap-northeast-1 --user-pool-id <User Pool ID> \
+    --username <メールアドレス> --group-name role:admin
+  ```
+
+- **パスワードの再設定は、一時パスワードの設定で行う。** コンソールの「パスワードをリセット」は使いません（再設定が必要な状態の利用者は、ログイン画面で「メールアドレスまたはパスワードが違います」になり、先へ進めないため。閉域の User Pool はメールでの回復も無効）。一時パスワードを設定すると、次のログインで再び「パスワードの設定」画面に移ります。
+
+  ```bash
+  aws cognito-idp admin-set-user-password --region ap-northeast-1 --user-pool-id <User Pool ID> \
+    --username <メールアドレス> --password '<一時パスワード>' --no-permanent
+  ```
+
+一時パスワードは User Pool のパスワードの条件（8 文字以上、大文字・小文字・数字・記号を含む）を満たす必要があります。利用者には別の経路で伝え、コマンドの履歴に残さないよう注意してください。
+
+閉域のアプリには、アプリクライアントの `ADMIN_USER_PASSWORD_AUTH`（と `REFRESH_TOKEN_AUTH`）、タスクロールの `cognito-idp:AdminInitiateAuth`・`cognito-idp:AdminRespondToAuthChallenge`（閉域の User Pool の ARN だけ）、パスワードの条件の 5 つの環境変数（User Pool の `PASSWORD_POLICY` から作る）が CDK から渡ります。デプロイのあとに AWS で、Cognito の一時停止（パスワードを続けて間違えた利用者）が画面の「試行回数が上限に達しました」になること、ログインの応答時間を確かめます。
+
+#### VPC エンドポイントと月額の目安
+
+| 種類 | エンドポイント | 数 |
+|---|---|---|
+| インターフェイス型 | `ecr.api`、`ecr.dkr`、`logs`、`secretsmanager`、`cognito-idp`、`bedrock-runtime`、`bedrock`、`bedrock-agent-runtime`、`bedrock-agentcore`、`bedrock-agentcore-control` | 10 |
+| インターフェイス型（検証用 EC2 を作るときだけ） | `ssm`、`ssmmessages`、`ec2messages` | 3 |
+| ゲートウェイ型（無料） | `s3`、`dynamodb` | 2 |
+
+インターフェイス型はどれもプライベート DNS を有効にし、2 つの AZ に置きます。一覧は `lib/constructs/closed-network.ts` の `CLOSED_ENDPOINTS` にだけあります。
+
+| 項目 | 目安（月、東京リージョン） |
+|---|---|
+| インターフェイス型エンドポイント 10 種 × 2 AZ | 約 204 USD（1 個・1 AZ あたり 1 時間 0.014 USD × 730 時間） |
+| 検証用のエンドポイント 3 種 × 2 AZ | 約 61 USD（検証用 EC2 を作るときだけ） |
+| 検証用 EC2（t3.medium、Windows） | 約 70 USD（動かしたままの場合。止めればインスタンスの料金はかからない） |
+| NAT Gateway | 0（公開の dev より約 45 USD 安い） |
+
+エンドポイントのデータ処理料は別にかかります。料金は変わることがあるため、デプロイの前に東京リージョンの料金ページで確かめてください。内部 ALB と Fargate は公開の dev と同じです。
 
 ### v1.0.0 の手元の開発
 

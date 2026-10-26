@@ -76,6 +76,25 @@ export const NAG_REASONS = {
   kmsDataKeyActions:
     'Sessions テーブルのカスタマー管理キーへの grantReadWriteData が付ける kms:GenerateDataKey*・' +
     'kms:ReEncrypt*。対象はそのキーの ARN だけ',
+  /** VPC7: 閉域の VPC（U1 閉域、security-design.md §7）。U2 までの一時的な抑止。 */
+  closedFlowLogsUntilU2:
+    '閉域の VPC の Flow Logs は U2（u2-closed-network-hardening）で作る。U1 の細い一本では' +
+    'エンドポイントの結線を確かめるところまでで、それまでの一時的な抑止',
+  /**
+   * W3010（aws-cdk-lib の CloudFormation Validate の warning）: 閉域の VPC のサブネットと検証用 EC2
+   * （U1 閉域、Infrastructure Design レビュー R-05）。
+   */
+  pinnedAvailabilityZones:
+    'Bedrock・AgentCore のインターフェイス型エンドポイントを提供する AZ が限られるため、閉域の VPC の ' +
+    'AZ を固定している（closed-network.ts の CLOSED_AVAILABILITY_ZONES）',
+  /** EC28・EC29: 検証用 EC2（U1 閉域）。 */
+  validationInstance:
+    '検証用で既定は作らない（closedCreateTestEnvironment=true のときだけ）。データを持たず、' +
+    '使い終えたら止めるか消す。詳細監視と終了保護は付けない',
+  /** IAM4: 検証用 EC2 のロール（U1 閉域、NFR1.4）。 */
+  ssmManagedInstance:
+    'Fleet Manager（SSM）の接続に AWS が用意する最小のポリシー AmazonSSMManagedInstanceCore だけを付け、' +
+    'インラインの権限は足さない',
 } as const;
 
 /**
@@ -120,6 +139,20 @@ export function iam5ResourceId(scope: IConstruct, resource: string): string {
  */
 export function iam5ExportedResourceId(producer: Stack, value: string, suffix: string): string {
   return iam5ResourceId(producer, `${producer.exportValue(value)}${suffix}`);
+}
+
+/**
+ * Acknowledge rules of aws-cdk-lib's CloudFormation Validate plugin on one resource with one
+ * reason. `ids` are the rule IDs without the plugin prefix (e.g. `W3010`); the plugin reports
+ * them as `CloudFormation-Validate::<id>`.
+ */
+export function acknowledgeCfnValidate(construct: IConstruct, ids: readonly string[], reason: string): void {
+  const target = CfnResource.isCfnResource(construct)
+    ? construct
+    : (construct.node.defaultChild ?? construct);
+  for (const id of ids) {
+    Validations.of(target).acknowledge({ id: `CloudFormation-Validate::${id}`, reason });
+  }
 }
 
 /**

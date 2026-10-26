@@ -5,6 +5,11 @@ import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 export interface CognitoProps {
   envName: string;
+  /**
+   * Managed Login のドメインを作るか（既定 true）。閉域構成（ResolvedProfile.createCognitoDomain）
+   * では false にし、ドメインを作らずメールでの回復も無効にする（U1 閉域、BR3.1）。
+   */
+  createDomain?: boolean;
 }
 
 /**
@@ -29,6 +34,7 @@ export const PASSWORD_POLICY = {
  * - 機能プランは Essentials、セルフサインアップなし（管理者が利用者を作る）
  * - ロールのグループ role:admin・role:member を作る（部署の group:* は運用で足す。U2）
  * - Managed Login（新しい版）のドメイン接頭辞 ai-persona-v1-dev-{アカウント ID}
+ *   （閉域構成では作らない。ログインはアプリが管理 API で行う。U1 閉域）
  * - RETAIN と削除保護
  *
  * アプリクライアントと Managed Login のブランディングは、コールバック URL に
@@ -36,12 +42,13 @@ export const PASSWORD_POLICY = {
  */
 export class Cognito extends Construct {
   public readonly userPool: cognito.UserPool;
-  public readonly domain: cognito.UserPoolDomain;
+  /** Managed Login のドメイン（createDomain: false のときはない）。 */
+  public readonly domain?: cognito.UserPoolDomain;
 
   constructor(scope: Construct, id: string, props: CognitoProps) {
     super(scope, id);
 
-    const { envName } = props;
+    const { envName, createDomain = true } = props;
     const account = Stack.of(this).account;
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
@@ -51,7 +58,8 @@ export class Cognito extends Construct {
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
       passwordPolicy: { ...PASSWORD_POLICY },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // 閉域構成ではメールが届かない前提のため、回復は管理者の再設定だけにする（BR3.1）
+      accountRecovery: createDomain ? cognito.AccountRecovery.EMAIL_ONLY : cognito.AccountRecovery.NONE,
       deletionProtection: true,
       removalPolicy: RemovalPolicy.RETAIN,
     });
@@ -66,14 +74,24 @@ export class Cognito extends Construct {
       });
     }
 
-    this.domain = this.userPool.addDomain('Domain', {
-      cognitoDomain: { domainPrefix: `ai-persona-v1-${envName}-${account}` },
-      managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
-    });
+    if (createDomain) {
+      this.domain = this.userPool.addDomain('Domain', {
+        cognitoDomain: { domainPrefix: `ai-persona-v1-${envName}-${account}` },
+        managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
+      });
+    }
   }
 
-  /** ``<prefix>.auth.<region>.amazoncognito.com``（スキームなし）。 */
+  /**
+   * ``<prefix>.auth.<region>.amazoncognito.com``（スキームなし）。
+   *
+   * ドメインのない User Pool（閉域構成）で読むとエラーにする（BR3.2）。公開の分岐の誤りで
+   * 空の COGNITO_DOMAIN がアプリに渡るのを synth で止めるため。
+   */
   public get domainHost(): string {
+    if (!this.domain) {
+      throw new Error('この User Pool にはドメインがない（閉域構成）');
+    }
     return `${this.domain.domainName}.auth.${Stack.of(this).region}.amazoncognito.com`;
   }
 }

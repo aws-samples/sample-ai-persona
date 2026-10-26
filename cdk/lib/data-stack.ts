@@ -11,6 +11,11 @@ import { acknowledgeAll, NAG_REASONS } from './nag-reasons';
 
 export interface DataStackProps extends StackProps {
   parameter: AppParameter;
+  /**
+   * Cognito の Managed Login のドメインを作るか（既定 true。ResolvedProfile.createCognitoDomain）。
+   * 閉域構成では false（U1 閉域、BR3.1）。
+   */
+  createCognitoDomain?: boolean;
 }
 
 /**
@@ -44,7 +49,10 @@ export class DataStack extends Stack {
       description: `Long-term memory for AI Persona v1 ${parameter.envName}`,
       removalPolicy: RemovalPolicy.RETAIN,
     });
-    this.cognito = new Cognito(this, 'Cognito', { envName: parameter.envName });
+    this.cognito = new Cognito(this, 'Cognito', {
+      envName: parameter.envName,
+      createDomain: props.createCognitoDomain ?? true,
+    });
 
     // トークンの暗号化鍵の一覧（security-design.md「暗号化と鍵」）。CDK は初期値を
     // 作るだけで、版の追加・切り替えは手で値を書き換える。
