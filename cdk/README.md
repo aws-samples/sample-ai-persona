@@ -482,27 +482,17 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 1. インターネットにつながる端末（リポジトリを取得して `uv sync` した手元など）で Parquet を作る。行数・大きさ・SHA-256 が出ます。既にファイルがあると上書きしません（上書きするときは `--force`）
 
    ```bash
-   uv run python scripts/export_nemotron_parquet.py --output ./nemotron.parquet
+   uv run python scripts/export_nemotron_parquet.py --output ./nemotron-personas-japan.parquet
    ```
 
-2. 閉域のアプリのバケット名を調べる（タスクの環境変数 `S3_BUCKET_NAME`。`ClusterName`・`ServiceName` は `AIPersonaDevClosed-App` の出力）
+2. 閉域のアプリのバケットを探す。AWS コンソールの CloudFormation で `AIPersonaDevClosed-Data` を開き、「リソース」タブで論理 ID が `UploadBucket` で始まる `AWS::S3::Bucket` の物理 ID（`aipersonadevclosed-data-uploadbucket...`）を控えます。S3 のコンソールで `aipersonadevclosed-data-uploadbucket` を検索しても見つかります
 
-   ```bash
-   TASK_DEF=$(aws ecs describe-services --region ap-northeast-1 --cluster <ClusterName> --services <ServiceName> \
-     --query 'services[0].taskDefinition' --output text)
-   aws ecs describe-task-definition --region ap-northeast-1 --task-definition "$TASK_DEF" \
-     --query "taskDefinition.containerDefinitions[0].environment[?name=='S3_BUCKET_NAME'].value" --output text
-   ```
+3. 手元の PC のブラウザで、S3 のコンソールからキーに置く。ファイルは 1 GB を超えるため、CloudShell にはアップロードできません（CloudShell のアップロードは 1 ファイル 1 GB まで）。S3 のコンソールのアップロードは 1 ファイル 160 GB まで使えます。キーは `closedNemotronDatasetKey`（既定 `persona-dataset/nemotron-personas-japan.parquet`）と同じにします
+   1. 手順 2 のバケットを開き、`persona-dataset/` フォルダを開く（なければ「フォルダの作成」で `persona-dataset` を作る）
+   2. 「アップロード」→「ファイルを追加」で手順 1 で作った `nemotron-personas-japan.parquet` を選び（コンソールでは置くときに名前を変えられないため、ファイル名をキーの最後と同じにしておきます）、「プロパティ」と「アクセス許可」は既定のまま「アップロード」を押す（バケットの既定の暗号化とパブリックアクセスのブロックがそのまま効きます）
+   3. アップロードしたオブジェクトを開き、「キー」が `persona-dataset/nemotron-personas-japan.parquet`、「サイズ」が手順 1 の大きさと同じことを確かめる
 
-3. `aws s3 cp` でキーに置く。バケットはアカウントの中にあるので、CloudShell など AWS の API に届く端末から置けます（CloudShell へはファイルをアップロードしてから実行します）。キーは `closedNemotronDatasetKey`（既定 `persona-dataset/nemotron-personas-japan.parquet`）と同じにします
-
-   ```bash
-   aws s3 cp ./nemotron.parquet s3://<バケット名>/persona-dataset/nemotron-personas-japan.parquet
-   aws s3api head-object --bucket <バケット名> --key persona-dataset/nemotron-personas-japan.parquet \
-     --query ContentLength
-   ```
-
-   `ContentLength` が手順 1 の大きさと同じことを確かめます。
+   AWS CLI を使える PC なら、コンソールの代わりに `aws s3 cp ./nemotron-personas-japan.parquet s3://<バケット名>/persona-dataset/nemotron-personas-japan.parquet` でも置けます（大きいファイルは自動でマルチパートのアップロードになります）
 
 4. キーを変えるときは、上の推奨する配置先からキーを選び、`./deploy.sh --closed ... --nemotron-dataset-key <キー>` で流し直し（`-c closedNemotronDatasetKey=<キー>` が渡ります）、手順 3 でそのキーに置きます
 5. 検証用 EC2 のブラウザでペルソナデータ画面（`/survey/persona-data`）を開き、「配置済み」とデータサイズが出ることを確かめます。ファイルがなければ「ファイルが配置されていません」と出ます
