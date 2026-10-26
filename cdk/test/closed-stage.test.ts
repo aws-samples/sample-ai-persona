@@ -541,6 +541,27 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     });
   });
 
+  test('ECS のサービスは、すべての VPC エンドポイントとタスクの SG のルールができてから作る（起動時の GetMemory が通るように）', () => {
+    const resources = appStack.toJSON().Resources as Record<string, any>;
+    const [serviceId, service] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::ECS::Service')!;
+    const dependsOn = new Set<string>(service.DependsOn ?? []);
+    const taskSg = service.Properties.NetworkConfiguration.AwsvpcConfiguration.SecurityGroups[0]['Fn::GetAtt'][0];
+
+    const endpoints = Object.keys(resources).filter((id) => resources[id].Type === 'AWS::EC2::VPCEndpoint');
+    // タスクの SG が片側にある SG どうしのルール（エンドポイントへの 443、ゲートウェイ型への 443）
+    const taskRules = Object.keys(resources).filter((id) => {
+      const r = resources[id];
+      if (r.Type !== 'AWS::EC2::SecurityGroupIngress' && r.Type !== 'AWS::EC2::SecurityGroupEgress') return false;
+      return JSON.stringify(r.Properties).includes(`"${taskSg}"`) && Number(r.Properties.FromPort) === 443;
+    });
+
+    expect(endpoints.length).toBe(INTERFACE_ENDPOINTS.length + VALIDATION_ENDPOINTS.length + 2);
+    expect(taskRules.length).toBeGreaterThan(0);
+    for (const id of [...endpoints, ...taskRules]) {
+      expect({ serviceId, missing: dependsOn.has(id) ? undefined : id }).toEqual({ serviceId, missing: undefined });
+    }
+  });
+
   test('出力は公開と同じ名前（AppUrl=https://<FQDN>、ClusterName、ServiceName。Data は EcrRepositoryUri・UserPoolId）', () => {
     const outputs = appStack.toJSON().Outputs as Record<string, any>;
     expect(outputs.AppUrl.Value).toBe(`https://${CLOSED_TEST_VALUES.domainName}`);

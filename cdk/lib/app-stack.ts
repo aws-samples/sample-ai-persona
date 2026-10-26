@@ -261,6 +261,10 @@ export class AppStack extends Stack {
       ? new ValidationEnvironment(this, 'Validation', { vpc: network.vpc })
       : undefined;
     this.wireClosedSecurityGroups(app, network, closed.allowedCidrs, validation);
+    // アプリは起動時に一度だけ GetMemory を引き、失敗すると長期記憶を無効にしたまま動く。
+    // エンドポイントとタスクの SG のルールができてからサービスを作る（CloudFormation は
+    // 依存のないリソースを並べて作るため）。
+    app.service.node.addDependency(network, app.taskSecurityGroup);
     // FQDN（zone の頂点）を内部 ALB に向ける（BR4.4）
     new route53.ARecord(this, 'AppAlias', {
       zone: network.hostedZone,
