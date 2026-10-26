@@ -472,6 +472,13 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 
 閉域では Hugging Face から取得できないため、インターネットにつながる端末で Parquet を作り、閉域のアプリのバケットに置きます。アプリが画面から取得するときと同じ変換（`SurveyBatchService.download_nemotron_dataset`）を使います。
 
+配置キーには次の場所を推奨します。アップロード先のキーと `closedNemotronDatasetKey` を一致させてください。
+
+- 通常は既定の `persona-dataset/nemotron-personas-japan.parquet` を使います。`--nemotron-dataset-key` の指定は不要です
+- キーを変更する場合は、Nemotron 専用の `persona-dataset/nemotron/` 配下（例: `persona-dataset/nemotron/nemotron-v2.parquet`）を使います
+
+`candidates/` 配下は一時ファイル用で、S3 のライフサイクル設定により 1 日後に削除対象になるため、Nemotron の配置先には指定しないでください。`persona-dataset/custom/` と `persona-dataset/temp/` 配下も、他のデータや一時ファイル用の予約済みの場所なので使えません。
+
 1. インターネットにつながる端末（リポジトリを取得して `uv sync` した手元など）で Parquet を作る。行数・大きさ・SHA-256 が出ます。既にファイルがあると上書きしません（上書きするときは `--force`）
 
    ```bash
@@ -497,7 +504,7 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 
    `ContentLength` が手順 1 の大きさと同じことを確かめます。
 
-4. キーを変えるときは、`./deploy.sh --closed ... --nemotron-dataset-key <キー>` で流し直し（`-c closedNemotronDatasetKey=<キー>` が渡ります）、手順 3 でそのキーに置きます
+4. キーを変えるときは、上の推奨する配置先からキーを選び、`./deploy.sh --closed ... --nemotron-dataset-key <キー>` で流し直し（`-c closedNemotronDatasetKey=<キー>` が渡ります）、手順 3 でそのキーに置きます
 5. 検証用 EC2 のブラウザでペルソナデータ画面（`/survey/persona-data`）を開き、「配置済み」とデータサイズが出ることを確かめます。ファイルがなければ「ファイルが配置されていません」と出ます
 
 #### VPC エンドポイントと月額の目安
