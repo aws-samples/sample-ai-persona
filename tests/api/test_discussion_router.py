@@ -854,3 +854,73 @@ class TestReports:
         assert response.status_code == 200
         kwargs = aw.agent_service.run_report_agent_streaming.call_args.kwargs
         assert kwargs["session_id"] == report_session_id(discussion.id, ME.sub)
+
+
+# =============================================================================
+# 閉域対応 U3: データに基づくレポート（BR3.2 の 5、BR3.7）
+# =============================================================================
+
+
+@pytest.fixture
+def agent_not_allowed(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+
+
+class TestDataDrivenReportNotAllowed:
+    def test_data_driven_returns_one_error_event_only(
+        self, aw, client, agent_not_allowed
+    ):
+        discussion = aw.discussion()
+        with patch(
+            "src.managers.report_manager.ReportManager.generate_report_streaming"
+        ) as generate:
+            response = client.get(
+                f"/discussion/{discussion.id}/report/generate"
+                "?template_type=data_driven",
+                headers=SAME_ORIGIN,
+            )
+        assert response.status_code == 200
+        events = _sse(response)
+        assert [e["type"] for e in events] == ["error"]
+        assert events[0]["message"]
+        generate.assert_not_called()
+        aw.agent_service.run_report_agent_streaming.assert_not_called()
+
+    def test_followup_returns_one_error_event_only(self, aw, client, agent_not_allowed):
+        discussion = aw.discussion()
+        with patch(
+            "src.managers.report_manager.ReportManager."
+            "generate_followup_report_streaming"
+        ) as followup:
+            response = client.post(
+                f"/discussion/{discussion.id}/report/generate-followup",
+                data={"followup_prompt": "追加", "previous_report": "前回"},
+            )
+        assert response.status_code == 200
+        events = _sse(response)
+        assert [e["type"] for e in events] == ["error"]
+        followup.assert_not_called()
+        aw.agent_service.run_report_agent_streaming.assert_not_called()
+
+    def test_other_templates_still_stream(self, aw, client, agent_not_allowed):
+        discussion = aw.discussion()
+        response = client.get(
+            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        )
+        assert [e["type"] for e in _sse(response)][-1] == "done"
+
+    def test_detail_page_hides_the_data_driven_choice(
+        self, aw, client, agent_not_allowed, monkeypatch
+    ):
+        from src.config import config
+
+        monkeypatch.setattr(config, "ENABLE_DATA_AGENT", True)
+        monkeypatch.setattr(config, "DATA_AGENT_RUNTIME_ARN", "arn:agent")
+        discussion = aw.discussion()
+        choice = "データドリブン分析（データ分析エージェント連携）"
+        html = client.get(f"/discussion/{discussion.id}").text
+        assert choice not in html
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", True)
+        assert choice in client.get(f"/discussion/{discussion.id}").text

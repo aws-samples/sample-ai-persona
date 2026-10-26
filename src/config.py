@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, TYPE_CHECKING
 
+from src.models.nemotron_dataset import (
+    DEFAULT_NEMOTRON_DATASET_KEY,
+    NemotronSource,
+    nemotron_dataset_key_problem,
+)
 from src.models.password_policy import PASSWORD_POLICY_SETTINGS
 
 if TYPE_CHECKING:
@@ -94,6 +99,16 @@ class Config:
     DATA_AGENT_RUNTIME_ARN: Optional[str] = None
     DATA_AGENT_REGION: str = "ap-northeast-1"
     ENABLE_DATA_AGENT: bool = False
+
+    # --- 閉域で使えない機能の切り替え（閉域対応 U3、ADR-002） ---
+    # 閉域かどうかは持たず、機能ごとの値だけを持つ。CDK が閉域のタスクにだけ渡し、
+    # 公開構成では既定値が今の振る舞いになる。起動時に読み、実行中は書き換えない（BR1.5）
+    # Nemotron の入手先。huggingface（管理者が画面から取得）か s3（事前に配置）
+    NEMOTRON_SOURCE: str = NemotronSource.HUGGINGFACE.value
+    # Nemotron の Parquet のキー（アプリの S3 バケットの中）
+    NEMOTRON_DATASET_KEY: str = DEFAULT_NEMOTRON_DATASET_KEY
+    # Data Agent をこの環境で使ってよいか。設定画面からも変えない
+    DATA_AGENT_ALLOWED: bool = True
 
     # データセット構造化分析ツール(analyze_dataset)のグローバルkill switch。
     # process起動ではなくtool登録・プロンプト付与をこのフラグで制御する。
@@ -258,10 +273,46 @@ class Config:
         if persona_cache_ttl:
             self.PERSONA_CACHE_TTL_SECONDS = int(persona_cache_ttl)
 
+        self._load_closed_feature_settings()
         self._load_auth_settings()
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()
+
+    def _load_closed_feature_settings(self) -> None:
+        """Read the three per-feature values of closed network U3 (BR1.1〜BR1.4).
+
+        Empty values mean the defaults (the public behaviour). Any other value
+        that is not allowed stops the start with the variable's name; it never
+        falls back to a default.
+
+        Raises:
+            ValueError: ``NEMOTRON_SOURCE``, ``NEMOTRON_DATASET_KEY`` or
+                ``DATA_AGENT_ALLOWED`` holds a value that is not allowed.
+        """
+        source = os.getenv("NEMOTRON_SOURCE", "").strip().lower()
+        if source:
+            allowed_sources = [s.value for s in NemotronSource]
+            if source not in allowed_sources:
+                raise ValueError(
+                    f"NEMOTRON_SOURCE must be one of {allowed_sources}, got {source!r}"
+                )
+            self.NEMOTRON_SOURCE = source
+
+        key = os.getenv("NEMOTRON_DATASET_KEY", "").strip()
+        if key:
+            problem = nemotron_dataset_key_problem(key)
+            if problem:
+                raise ValueError(f"NEMOTRON_DATASET_KEY {key!r}: {problem}")
+            self.NEMOTRON_DATASET_KEY = key
+
+        allowed = os.getenv("DATA_AGENT_ALLOWED", "").strip().lower()
+        if allowed:
+            if allowed not in ("true", "false"):
+                raise ValueError(
+                    f"DATA_AGENT_ALLOWED must be 'true' or 'false', got {allowed!r}"
+                )
+            self.DATA_AGENT_ALLOWED = allowed == "true"
 
     def _load_auth_settings(self) -> None:
         """Override login-related settings from environment variables."""

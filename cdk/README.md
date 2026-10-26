@@ -305,11 +305,16 @@ graph TB
 
 閉域の Stage は、証明書の ARN と FQDN の両方が渡されたときだけ作られます。渡さなければ `npx cdk synth` は今までどおり公開の Stage だけを出します。片方だけならエラーで止まります。
 
-U1 の閉域構成では、次はまだ閉域で動きません（後続の Unit で直します）。
+閉域構成では、次はまだ閉域で動きません（後続の Unit で直します）。
 
 - アバターなど、署名付き URL で画像を出す 5 か所（U4）。画面は壊れず、画像だけが出ません
-- Nemotron の取得と Data Agent（U3）
 - エンドポイントのポリシーでの絞り込み・Flow Logs・既存 VPC の取り込み（U2）
+
+閉域では、インターネットへ出る次の機能を使えません（U3。下の「[閉域で使えない機能](#閉域で使えない機能)」）。
+
+- Hugging Face からの Nemotron の取得（事前に S3 に置いたファイルを使う。手順は「[Nemotron のデータを置く](#nemotron-のデータを置く)」）
+- データ分析エージェント（Data Agent）
+- 追加のペルソナのモデル（Bedrock Mantle 経由の GPT・Gemma）
 
 #### 閉域のパラメータ
 
@@ -322,6 +327,7 @@ U1 の閉域構成では、次はまだ閉域で動きません（後続の Unit
 | `closedAllowedCidrs` | `--allowed-cidrs` | なし | ALB に届いてよい送り元の CIDR（カンマ区切り） |
 | `closedCreateTestEnvironment` | `--create-test-environment` | `false` | 検証用の Windows EC2 と、そのための SSM のエンドポイント 3 種を作る |
 | `closedVpcCidr` | なし | `10.0.0.0/16` | 新規 VPC の CIDR |
+| `closedNemotronDatasetKey` | `--nemotron-dataset-key` | `persona-dataset/nemotron-personas-japan.parquet` | 事前に置く Nemotron の Parquet のキー（アプリのバケットの中）。英数字・`.`・`_`・`-`・`/` だけで、先頭の `/`・`..`・`//` なし、末尾は `.parquet`。`persona-dataset/custom/` と `persona-dataset/temp/` の下は使えない（誤りは synth でエラー） |
 
 - 許可する CIDR か検証用 EC2 のどちらかが要ります（どちらもなければ誰も ALB に届かないため、synth でエラー）
 - `envName` は `dev-closed` です。AgentCore Memory の名前（`AIPersona_v1_dev_closed_memory`）が公開の dev と重なりません
@@ -448,6 +454,48 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 一時パスワードは User Pool のパスワードの条件（8 文字以上、大文字・小文字・数字・記号を含む）を満たす必要があります。利用者には別の経路で伝え、コマンドの履歴に残さないよう注意してください。
 
 閉域のアプリには、アプリクライアントの `ADMIN_USER_PASSWORD_AUTH`（と `REFRESH_TOKEN_AUTH`）、タスクロールの `cognito-idp:AdminInitiateAuth`・`cognito-idp:AdminRespondToAuthChallenge`（閉域の User Pool の ARN だけ）、パスワードの条件の 5 つの環境変数（User Pool の `PASSWORD_POLICY` から作る）が CDK から渡ります。デプロイのあとに AWS で、Cognito の一時停止（パスワードを続けて間違えた利用者）が画面の「試行回数が上限に達しました」になること、ログインの応答時間を確かめます。
+
+#### 閉域で使えない機能
+
+閉域の Stage のタスクにだけ、CDK が次の 3 つの環境変数を渡します（`lib/deployment-profile.ts`）。アプリには「閉域かどうか」は渡さず、機能ごとの値で振る舞いを変えます。公開の Stage のタスクには渡さず、アプリの既定値（今の振る舞い）になります。
+
+| 環境変数 | 閉域の値 | アプリの振る舞い |
+|---|---|---|
+| `NEMOTRON_SOURCE` | `s3` | ペルソナデータ画面に取得のボタンと Hugging Face の案内を出さず、事前に置いたファイルのキーと有無を出す。取得の要求は 403（Hugging Face を呼ばない）。ファイルがないままアンケートを始めると、置き方の案内のエラーになる |
+| `NEMOTRON_DATASET_KEY` | `closedNemotronDatasetKey`（既定 `persona-dataset/nemotron-personas-japan.parquet`） | Nemotron の Parquet を読むキー |
+| `DATA_AGENT_ALLOWED` | `false` | データ分析エージェントの入口 5 つ（設定の保存・接続テスト・ペルソナ生成の「データ分析エージェント連携」・ペルソナデータの DWH 抽出・議論のデータに基づくレポートとフォローアップ）を止め、画面からも選択肢を消す。設定画面の欄は「この環境では使えない」の案内になる |
+
+- 閉域の Stage に `enableAdditionalPersonaModels=true`（追加のモデル）か `dataAgentRuntimeArn`（Data Agent の ARN）を渡すと、synth でエラーになります。公開の Stage では今までどおり使えます
+- 値が許されない値（`NEMOTRON_SOURCE=ftp` など）だと、アプリは起動しません（既定値に落としません）
+
+#### Nemotron のデータを置く
+
+閉域では Hugging Face から取得できないため、インターネットにつながる端末で Parquet を作り、閉域のアプリのバケットに置きます。アプリが画面から取得するときと同じ変換（`SurveyBatchService.download_nemotron_dataset`）を使います。
+
+配置キーには次の場所を推奨します。アップロード先のキーと `closedNemotronDatasetKey` を一致させてください。
+
+- 通常は既定の `persona-dataset/nemotron-personas-japan.parquet` を使います。`--nemotron-dataset-key` の指定は不要です
+- キーを変更する場合は、Nemotron 専用の `persona-dataset/nemotron/` 配下（例: `persona-dataset/nemotron/nemotron-v2.parquet`）を使います
+
+`candidates/` 配下は一時ファイル用で、S3 のライフサイクル設定により 1 日後に削除対象になるため、Nemotron の配置先には指定しないでください。`persona-dataset/custom/` と `persona-dataset/temp/` 配下も、他のデータや一時ファイル用の予約済みの場所なので使えません。
+
+1. インターネットにつながる端末（リポジトリを取得して `uv sync` した手元など）で Parquet を作る。行数・大きさ・SHA-256 が出ます。既にファイルがあると上書きしません（上書きするときは `--force`）
+
+   ```bash
+   uv run python scripts/export_nemotron_parquet.py --output ./nemotron-personas-japan.parquet
+   ```
+
+2. 閉域のアプリのバケットを探す。AWS コンソールの CloudFormation で `AIPersonaDevClosed-Data` を開き、「リソース」タブで論理 ID が `UploadBucket` で始まる `AWS::S3::Bucket` の物理 ID（`aipersonadevclosed-data-uploadbucket...`）を控えます。S3 のコンソールで `aipersonadevclosed-data-uploadbucket` を検索しても見つかります
+
+3. 手元の PC のブラウザで、S3 のコンソールからキーに置く。ファイルは 1 GB を超えるため、CloudShell にはアップロードできません（CloudShell のアップロードは 1 ファイル 1 GB まで）。S3 のコンソールのアップロードは 1 ファイル 160 GB まで使えます。キーは `closedNemotronDatasetKey`（既定 `persona-dataset/nemotron-personas-japan.parquet`）と同じにします
+   1. 手順 2 のバケットを開き、`persona-dataset/` フォルダを開く（なければ「フォルダの作成」で `persona-dataset` を作る）
+   2. 「アップロード」→「ファイルを追加」で手順 1 で作った `nemotron-personas-japan.parquet` を選び（コンソールでは置くときに名前を変えられないため、ファイル名をキーの最後と同じにしておきます）、「プロパティ」と「アクセス許可」は既定のまま「アップロード」を押す（バケットの既定の暗号化とパブリックアクセスのブロックがそのまま効きます）
+   3. アップロードしたオブジェクトを開き、「キー」が `persona-dataset/nemotron-personas-japan.parquet`、「サイズ」が手順 1 の大きさと同じことを確かめる
+
+   AWS CLI を使える PC なら、コンソールの代わりに `aws s3 cp ./nemotron-personas-japan.parquet s3://<バケット名>/persona-dataset/nemotron-personas-japan.parquet` でも置けます（大きいファイルは自動でマルチパートのアップロードになります）
+
+4. キーを変えるときは、上の推奨する配置先からキーを選び、`./deploy.sh --closed ... --nemotron-dataset-key <キー>` で流し直し（`-c closedNemotronDatasetKey=<キー>` が渡ります）、手順 3 でそのキーに置きます
+5. 検証用 EC2 のブラウザでペルソナデータ画面（`/survey/persona-data`）を開き、「配置済み」とデータサイズが出ることを確かめます。ファイルがなければ「ファイルが配置されていません」と出ます
 
 #### VPC エンドポイントと月額の目安
 

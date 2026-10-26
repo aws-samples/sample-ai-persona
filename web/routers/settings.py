@@ -529,6 +529,9 @@ async def test_data_agent_connection(request: Request) -> Any:
             "</script>"
         )
     except SettingsManagerError as e:
+        if error_kind_of(e) in _ACCESS_KINDS:
+            # 閉域対応 U3: FORBIDDEN はトーストと 403（本文で画面を置き換えない）
+            raise
         logger.warning("Data analysis agent connection test failed", exc_info=True)
         message = user_message_for(e, default="接続テストに失敗しました")
         return HTMLResponse(

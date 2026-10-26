@@ -151,6 +151,55 @@ class TestGenerate:
         assert sessions[1] == report_session_id(discussion.id, PEER.sub)
         assert sessions[0] != sessions[1]
 
+    # --- 閉域対応 U3 BR3.2 の (5)、BR3.7 ---
+
+    @pytest.fixture
+    def not_allowed(self, monkeypatch):
+        from src.config import config
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+
+    def test_data_driven_stops_before_the_agent_when_not_allowed(
+        self, manager, world, agent_service, not_allowed
+    ):
+        discussion = _seed(world)
+        with raises_code(ReportManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+            _generate(manager, OWNER, discussion.id, "data_driven")
+        agent_service.run_report_agent_streaming.assert_not_called()
+
+    def test_followup_stops_before_the_agent_when_not_allowed(
+        self, manager, world, agent_service, not_allowed
+    ):
+        discussion = _seed(world)
+        with patch("src.managers.report_manager.service_factory") as factory:
+            factory.check_stm_session_exists.return_value = False
+            with raises_code(ReportManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+                list(
+                    manager.generate_followup_report_streaming(
+                        OWNER, discussion.id, "追加", "前回"
+                    )
+                )
+        agent_service.run_report_agent_streaming.assert_not_called()
+
+    @pytest.mark.parametrize("template_type", ["summary", "review", "custom"])
+    def test_other_templates_are_not_stopped(
+        self, manager, world, not_allowed, template_type
+    ):
+        discussion = _seed(world)
+        assert _generate(manager, OWNER, discussion.id, template_type) == [
+            "chunk1",
+            "chunk2",
+        ]
+
+    def test_pre_check_refuses_after_ai_execute(self, manager, not_allowed):
+        with pytest.raises(AccessDeniedError):
+            manager.ensure_data_agent_allowed(NO_ROLE)
+        with raises_code(ReportManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+            manager.ensure_data_agent_allowed(OWNER)
+
+    def test_pre_check_passes_when_allowed(self, manager):
+        manager.ensure_data_agent_allowed(OWNER)
+
     def test_session_id_does_not_carry_the_raw_sub(self):
         session = report_session_id("d1", "user-sub-123")
         assert session.startswith("report-d1-")

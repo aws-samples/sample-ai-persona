@@ -67,7 +67,9 @@ class TestSettingsAreAdminOnly:
         assert [e["reason"] for e in denied] == ["hidden"]
 
     def test_availability_needs_no_permission(self):
-        with patch("src.managers.settings_manager.config") as config:
+        # U3: the decision is DataAgentPolicy's (it reads the config itself)
+        with patch("src.managers.components.data_agent_policy.config") as config:
+            config.DATA_AGENT_ALLOWED = True
             config.ENABLE_DATA_AGENT = True
             config.DATA_AGENT_RUNTIME_ARN = "arn"
             assert SettingsManager.is_data_agent_available() is True
@@ -79,6 +81,7 @@ class TestSettingsAreAdminOnly:
             config.DATA_AGENT_REGION = "ap-northeast-1"
             settings = manager.get_data_agent_settings(ADMIN)
         assert settings == {
+            "data_agent_allowed": True,
             "data_agent_enabled": True,
             "data_agent_runtime_arn": "arn:agent",
             "data_agent_region": "ap-northeast-1",
@@ -258,3 +261,73 @@ class TestSettingsManagerDataAgent:
             self.manager.test_data_agent_connection(ADMIN)
 
         assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+# =============================================================================
+# 閉域対応 U3: Data Agent を使ってよくない環境（BR3.2、BR3.4、BR3.6、BR3.8）
+# =============================================================================
+
+
+@pytest.fixture
+def agent_config(monkeypatch):
+    """The real config with a configured agent; tests set DATA_AGENT_ALLOWED."""
+    from src.config import config
+
+    monkeypatch.setattr(config, "ENABLE_DATA_AGENT", True)
+    monkeypatch.setattr(config, "DATA_AGENT_RUNTIME_ARN", "arn:agent")
+    monkeypatch.setattr(config, "DATA_AGENT_REGION", "ap-northeast-1")
+    monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", True)
+    return config
+
+
+@pytest.mark.unit
+class TestDataAgentNotAllowed:
+    def test_save_stops_without_changing_the_config(self, manager, agent_config):
+        agent_config.DATA_AGENT_ALLOWED = False
+        with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+            manager.save_data_agent_settings(ADMIN, "arn:new", "us-west-2", False)
+        assert agent_config.DATA_AGENT_RUNTIME_ARN == "arn:agent"
+        assert agent_config.DATA_AGENT_REGION == "ap-northeast-1"
+        assert agent_config.ENABLE_DATA_AGENT is True
+        assert agent_config.DATA_AGENT_ALLOWED is False
+
+    def test_connection_test_stops_without_connecting(self, manager, agent_config):
+        agent_config.DATA_AGENT_ALLOWED = False
+        with patch("src.managers.settings_manager.service_factory") as factory:
+            with raises_code(SettingsManagerError, ErrorCode.DATA_AGENT_NOT_ALLOWED):
+                manager.test_data_agent_connection(ADMIN)
+        factory.get_data_agent_service.assert_not_called()
+
+    def test_settings_hide_the_arn_and_region(self, manager, agent_config):
+        agent_config.DATA_AGENT_ALLOWED = False
+        assert manager.get_data_agent_settings(ADMIN) == {
+            "data_agent_allowed": False,
+            "data_agent_enabled": False,
+        }
+
+    def test_settings_stay_admin_only_when_not_allowed(self, manager, agent_config):
+        agent_config.DATA_AGENT_ALLOWED = False
+        with raises_code(CodedError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.get_data_agent_settings(MEMBER_A)
+
+    def test_allowed_needs_no_permission(self, agent_config):
+        assert SettingsManager.is_data_agent_allowed() is True
+        agent_config.DATA_AGENT_ALLOWED = False
+        assert SettingsManager.is_data_agent_allowed() is False
+
+    def test_not_allowed_is_never_available(self, agent_config):
+        assert SettingsManager.is_data_agent_available() is True
+        agent_config.DATA_AGENT_ALLOWED = False
+        assert SettingsManager.is_data_agent_available() is False
+
+    def test_allowed_environment_keeps_the_current_behaviour(
+        self, manager, agent_config
+    ):
+        manager.save_data_agent_settings(ADMIN, "arn:new", "us-west-2", True)
+        assert agent_config.DATA_AGENT_RUNTIME_ARN == "arn:new"
+        assert manager.get_data_agent_settings(ADMIN) == {
+            "data_agent_allowed": True,
+            "data_agent_enabled": True,
+            "data_agent_runtime_arn": "arn:new",
+            "data_agent_region": "us-west-2",
+        }

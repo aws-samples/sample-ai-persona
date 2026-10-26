@@ -187,12 +187,16 @@ export class AppStack extends Stack {
       memoryLimitMiB: Number(parameter.containerMemory),
       desiredCount: appDesiredCount,
       logGroup,
-      environment: this.commonEnvironment(
-        parameter,
-        data,
-        batchRole.role.roleArn,
-        this.authEnvironment(profile, data),
-      ),
+      environment: {
+        ...this.commonEnvironment(
+          parameter,
+          data,
+          batchRole.role.roleArn,
+          this.authEnvironment(profile, data),
+        ),
+        // U3 閉域（BR5.1）: 閉域のタスクにだけ末尾に足す。公開の環境変数の並びは変えない（BR5.2）
+        ...(profile.closedFeatureEnvironment ?? {}),
+      },
       secrets: {
         TOKEN_ENCRYPTION_KEYS: ecs.Secret.fromSecretsManager(data.tokenEncryptionKeys),
         LOGIN_COOKIE_SIGNING_KEY: ecs.Secret.fromSecretsManager(data.loginCookieSigningKey),

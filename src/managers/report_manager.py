@@ -31,6 +31,7 @@ from ..services.agent_service import AgentService
 from ..services.ai_service import AIService
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
+from .components.data_agent_policy import DataAgentPolicy
 from .components.discussion_records import DiscussionRecords
 from .components.participant_reader import ParticipantReader
 from .components.sharing_runtime import DiscussionParts, discussion_parts_from
@@ -171,6 +172,18 @@ class ReportManager:
 
         return "\n".join(context_parts)
 
+    def ensure_data_agent_allowed(self, principal: Principal) -> None:
+        """Refuse a data-driven report before the router starts streaming (BR3.7).
+
+        Raises:
+            AccessDeniedError: The user lacks ``ai:execute``.
+            ReportManagerError: ``DATA_AGENT_NOT_ALLOWED``.
+        """
+        AccessPolicy.require(
+            principal, Permission.AI_EXECUTE, resource_type=ResourceType.DISCUSSION
+        )
+        DataAgentPolicy.ensure_allowed(ReportManagerError)
+
     def generate_report_streaming(
         self,
         principal: Principal,
@@ -215,6 +228,9 @@ class ReportManager:
         event_queue: Any,
         is_followup: bool,
     ) -> Iterator[str]:
+        if template_type == "data_driven":
+            # Closed network U3 BR3.2 (5): before AgentService is called
+            DataAgentPolicy.ensure_allowed(ReportManagerError)
         insights_data, personas_data = self._get_report_context(principal, view)
         if template_type == "data_driven":
             yield from self._generate_data_driven_report(

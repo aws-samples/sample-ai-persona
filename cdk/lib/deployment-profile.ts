@@ -24,6 +24,11 @@ export interface ResolvedProfile {
   readonly appBaseUrl?: string;
   /** closed のときだけある。 */
   readonly closedNetwork?: ClosedNetworkSettings;
+  /**
+   * closed のタスクにだけ足す機能ごとの値（U3 閉域、BR5.1）。アプリには「閉域かどうか」を
+   * 渡さず、この値で Nemotron の入手先と Data Agent の可否を変える（ADR-002）。
+   */
+  readonly closedFeatureEnvironment?: Readonly<Record<string, string>>;
 }
 
 export interface DeploymentProfileInput {
@@ -33,7 +38,18 @@ export interface DeploymentProfileInput {
   region: string;
   closed?: ClosedStageParameters;
   enableMcpGateway?: boolean;
+  /** 追加のモデル（Mantle 系）。閉域では true にできない（U3 BR5.4）。 */
+  enableAdditionalPersonaModels?: boolean;
+  /** Data Agent の Runtime ARN。閉域では渡せない（U3 BR5.5）。 */
+  dataAgentRuntimeArn?: string;
 }
+
+/** The Nemotron key the app has always used (src/models/nemotron_dataset.py). */
+export const DEFAULT_NEMOTRON_DATASET_KEY = 'persona-dataset/nemotron-personas-japan.parquet';
+/** Places of other files in the bucket (custom persona data, import temp files). */
+const RESERVED_KEY_PREFIXES = ['persona-dataset/custom/', 'persona-dataset/temp/'];
+/** The ASCII part of the app's runtime S3 URI check (SurveyBatchService). */
+const KEY_CHARACTERS = /^[A-Za-z0-9._\-/]+$/;
 
 /** The profile of the public Stage (also the default of AppStack). */
 export const PUBLIC_PROFILE: ResolvedProfile = Object.freeze({
@@ -73,7 +89,66 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
     createCognitoDomain: false,
     appBaseUrl: `https://${closedNetwork.domainName}`,
     closedNetwork,
+    closedFeatureEnvironment: resolveClosedFeatures(input, closed),
   };
+}
+
+/**
+ * The per-feature values of the closed task (U3, BR5.1, BR5.3〜BR5.5).
+ *
+ * Throws when the closed Stage is given a feature that needs the internet (additional models,
+ * the data agent) or a Nemotron key the app cannot use.
+ */
+function resolveClosedFeatures(
+  input: DeploymentProfileInput,
+  closed: ClosedStageParameters,
+): Readonly<Record<string, string>> {
+  if (input.enableAdditionalPersonaModels) {
+    throw new Error(
+      '閉域構成では enableAdditionalPersonaModels を使えない（追加のモデルは Bedrock Mantle 経由でインターネットに出る）',
+    );
+  }
+  if (input.dataAgentRuntimeArn) {
+    throw new Error('閉域構成では dataAgentRuntimeArn を使えない（データ分析エージェントは閉域で止める）');
+  }
+  const key = closed.nemotronDatasetKey?.trim() || DEFAULT_NEMOTRON_DATASET_KEY;
+  const problem = nemotronDatasetKeyProblem(key);
+  if (problem) {
+    throw new Error(`closedNemotronDatasetKey の "${key}" は使えない: ${problem}`);
+  }
+  return Object.freeze({
+    NEMOTRON_SOURCE: 's3',
+    NEMOTRON_DATASET_KEY: key,
+    DATA_AGENT_ALLOWED: 'false',
+  });
+}
+
+/**
+ * Why `key` cannot be the Nemotron Parquet key, or undefined when it can (BR5.3).
+ *
+ * The same rules as the app's start-up check (src/models/nemotron_dataset.py, BR1.4).
+ */
+export function nemotronDatasetKeyProblem(key: string): string | undefined {
+  if (!KEY_CHARACTERS.test(key)) {
+    return '英数字・.・_・-・/ だけにする（空白・+・引用符・全角を使わない）';
+  }
+  if (key.startsWith('/')) {
+    return '先頭に / を付けない';
+  }
+  if (key.includes('//')) {
+    return '// を含めない';
+  }
+  if (key.split('/').includes('..')) {
+    return '.. の区切りを含めない';
+  }
+  if (!key.endsWith('.parquet')) {
+    return '末尾を .parquet にする';
+  }
+  const reserved = RESERVED_KEY_PREFIXES.find((prefix) => key.startsWith(prefix));
+  if (reserved !== undefined) {
+    return `${reserved} の下に置かない（カスタムデータと取り込みの一時ファイルの場所）`;
+  }
+  return undefined;
 }
 
 /**
@@ -110,6 +185,7 @@ export function mergeClosedStageContext(
     const value = read(key);
     return value === undefined || value === null ? fallback : String(value).trim();
   };
+  const nemotronDatasetKey = read('closedNemotronDatasetKey');
   return {
     certificateArn: text('closedCertificateArn', base.certificateArn),
     domainName: text('closedDomainName', base.domainName),
@@ -120,6 +196,12 @@ export function mergeClosedStageContext(
       base.createTestEnvironment,
     ),
     vpcCidr: text('closedVpcCidr', base.vpcCidr),
+    // U3: only when given (the profile falls back to the default key)
+    ...(nemotronDatasetKey !== undefined && nemotronDatasetKey !== null
+      ? { nemotronDatasetKey: String(nemotronDatasetKey).trim() }
+      : base.nemotronDatasetKey !== undefined
+        ? { nemotronDatasetKey: base.nemotronDatasetKey }
+        : {}),
   };
 }
 

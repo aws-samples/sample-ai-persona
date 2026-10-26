@@ -52,6 +52,25 @@ class TestPersonaGenerationPage:
         assert response.status_code == 200
         assert "AIペルソナ生成" in response.text or "ペルソナ" in response.text
 
+    def test_dwh_choice_is_hidden_when_not_allowed(self, client, monkeypatch):
+        """閉域対応 U3 BR3.5: allowed=false で「データ分析エージェント連携」を出さない"""
+        from src.config import config
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+        html = client.get("/persona/generation").text
+        assert 'data-testid="generation-data-type-dwh"' not in html
+        assert 'value="dwh"' not in html
+
+    def test_dwh_choice_shows_by_default_even_without_an_arn(self, client, monkeypatch):
+        """BR3.5 の合否: 公開の既定では ARN が未設定でも今のとおり出る"""
+        from src.config import config
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", True)
+        monkeypatch.setattr(config, "ENABLE_DATA_AGENT", False)
+        monkeypatch.setattr(config, "DATA_AGENT_RUNTIME_ARN", None)
+        html = client.get("/persona/generation").text
+        assert 'data-testid="generation-data-type-dwh"' in html
+
 
 class TestPersonaManagementPage:
     """ペルソナ管理ページのテスト"""
@@ -333,6 +352,44 @@ class TestPersonaGenerateEndpoint:
         assert response.headers["X-Accel-Buffering"] == "no"
         assert "query_dwh" in response.text
         assert "event: result" in response.text
+
+    def test_dwh_generation_not_allowed_returns_one_error_event(
+        self, client, monkeypatch
+    ):
+        """閉域対応 U3 BR3.2 の (3)、BR3.7: 流し始める前に拒み、生成を呼ばない"""
+        from src.config import config
+        from src.managers.persona_generation_manager import PersonaGenerationManager
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+        real = PersonaGenerationManager(
+            agent_service=Mock(),
+            dataset_analysis_service=Mock(),
+            candidate_store=Mock(),
+            s3_service=None,
+        )
+        with (
+            patch(
+                "web.routers.persona.get_persona_generation_manager",
+                return_value=real,
+            ),
+            patch.object(real, "generate") as generate,
+        ):
+            response = client.post(
+                "/persona/generate",
+                data={
+                    "data_type": "dwh",
+                    "persona_count": 1,
+                    "analysis_angle": "購買頻度",
+                    "custom_prompt": "",
+                },
+            )
+
+        assert response.status_code == 200
+        events = [
+            line for line in response.text.splitlines() if line.startswith("event: ")
+        ]
+        assert events == ["event: error"]
+        generate.assert_not_called()
 
 
 class TestPersonaSaveEndpoint:

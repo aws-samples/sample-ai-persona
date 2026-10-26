@@ -52,7 +52,9 @@
                         <div class="text-sm font-medium text-gray-700">その他</div>
                     </div>
                 </label>
-                <label class="relative cursor-pointer">
+                {#- この環境で Data Agent を使ってよいときだけ（U3 BR3.5。ARN の有無では出し分けない） #}
+                {% if data_agent_allowed %}
+                <label class="relative cursor-pointer" data-testid="generation-data-type-dwh">
                     <input type="radio" name="data_type" value="dwh" x-model="dataType" class="peer sr-only">
                     <div class="border-2 rounded-lg p-3 text-center transition-all peer-checked:border-purple-500 peer-checked:bg-purple-50 hover:border-gray-400">
                         <div class="flex justify-center mb-1 text-purple-500">
@@ -61,6 +63,7 @@
                         <div class="text-sm font-medium text-gray-700">データ分析エージェント連携</div>
                     </div>
                 </label>
+                {% endif %}
             </div>
 
             <!-- DWH の場合の説明 -->

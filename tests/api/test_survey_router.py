@@ -626,3 +626,136 @@ def test_unrelated_user_sees_nothing_of_mine(aw, client):
     _as(client, OTHER)
     assert "私のテンプレート" not in client.get("/survey/templates").text
     assert "私の結果" not in client.get("/survey/results").text
+
+
+# =============================================================================
+# 閉域対応 U3: Nemotron の入手先（BR2.2〜BR2.5）と DWH 抽出（BR3.2 の 4、BR3.7）
+# =============================================================================
+
+NEMOTRON_KEY = "persona-dataset/nemotron-personas-japan.parquet"
+HTMX = {"HX-Request": "true"}
+
+
+@pytest.fixture
+def closed_source(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setattr(config, "NEMOTRON_SOURCE", "s3")
+
+
+@pytest.fixture
+def head_fails(aw, monkeypatch):
+    from botocore.exceptions import EndpointConnectionError
+
+    def head(**_kwargs):
+        raise EndpointConnectionError(endpoint_url="https://s3.example")
+
+    monkeypatch.setattr(aw.world.s3.s3_client, "head_object", head)
+
+
+class TestNemotronSourceRoutes:
+    def test_closed_download_is_forbidden_without_background_work(
+        self, aw, client, closed_source
+    ):
+        from web.routers import survey as survey_router
+
+        _as(client, ADMIN_USER)
+        with patch("web.routers.survey.asyncio.create_task") as create_task:
+            response = client.post(
+                "/survey/persona-data/download-nemotron", headers=HTMX
+            )
+        assert response.status_code == 403
+        assert "HX-Trigger" in response.headers
+        create_task.assert_not_called()
+        assert survey_router._nemotron_download_status["downloading"] is False
+        aw.batch.download_nemotron_dataset.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "path", ["/survey/persona-data", "/survey/persona-data/nemotron-status"]
+    )
+    def test_screens_render_when_the_status_head_fails(
+        self, aw, client, closed_source, head_fails, path
+    ):
+        _as(client, ADMIN_USER)
+        response = client.get(path)
+        assert response.status_code == 200
+        assert 'data-testid="nemotron-download-button"' not in response.text
+
+    def test_start_page_offers_nemotron_only_when_available(self, aw, client):
+        aw.world.custom_data("営業向けデータ", "sales")
+        html = client.get("/survey/start").text
+        assert '<option value="nemotron">' not in html
+        assert "営業向けデータ" in html
+        aw.world.s3.upload_file(b"x" * 1024, NEMOTRON_KEY)
+        html = client.get("/survey/start").text
+        assert '<option value="nemotron">' in html
+        assert "営業向けデータ" in html
+
+
+class TestPersonaDataScreenByEnvironment:
+    """BR4.1、BR3.5: 画面は Manager の状態だけで出し分ける（data-testid で確かめる）。"""
+
+    def test_closed_missing_file_shows_the_placement_guide(
+        self, aw, client, closed_source
+    ):
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/persona-data").text
+        assert 'data-testid="nemotron-download-button"' not in html
+        assert "huggingface.co" not in html
+        assert 'data-testid="nemotron-placed-notice"' in html
+        assert 'data-testid="nemotron-placed-missing"' in html
+        assert 'data-testid="nemotron-placement-guide"' in html
+        assert NEMOTRON_KEY in html
+
+    def test_closed_member_sees_no_key(self, aw, client, closed_source):
+        """The S3 key is a file path: only admins (who place the file) see it."""
+        _as(client, ME)
+        html = client.get("/survey/persona-data").text
+        assert 'data-testid="nemotron-placed-notice"' in html
+        assert 'data-testid="nemotron-placement-guide"' in html
+        assert NEMOTRON_KEY not in html
+
+    def test_closed_placed_file_shows_its_size(self, aw, client, closed_source):
+        aw.world.s3.upload_file(b"x" * (3 * 1024 * 1024), NEMOTRON_KEY)
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/persona-data/nemotron-status").text
+        assert 'data-testid="nemotron-placed-available"' in html
+        assert "3.0 MB" in html
+        assert 'data-testid="nemotron-download-button"' not in html
+
+    def test_public_screen_keeps_the_download(self, aw, client):
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/persona-data").text
+        assert 'data-testid="nemotron-download-button"' in html
+        assert "huggingface.co" in html
+        assert 'data-testid="nemotron-placed-notice"' not in html
+
+    def test_dwh_tab_follows_allowed(self, aw, client, monkeypatch):
+        from src.config import config
+
+        _as(client, ADMIN_USER)
+        html = client.get("/survey/persona-data").text
+        assert 'data-testid="persona-data-dwh-tab"' in html
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+        html = client.get("/survey/persona-data").text
+        assert 'data-testid="persona-data-dwh-tab"' not in html
+        assert 'id="dwh-condition"' not in html
+
+
+class TestDwhExtractNotAllowed:
+    def test_returns_one_error_event_without_extracting(self, aw, client, monkeypatch):
+        from src.config import config
+        from src.managers.survey_dataset_manager import SurveyDatasetManager
+
+        monkeypatch.setattr(config, "DATA_AGENT_ALLOWED", False)
+        _as(client, ADMIN_USER)
+        with patch.object(SurveyDatasetManager, "extract_segment_from_dwh") as run:
+            response = client.post(
+                "/survey/persona-data/dwh-extract", data={"condition": "20代女性"}
+            )
+        assert response.status_code == 200
+        events = [
+            line for line in response.text.splitlines() if line.startswith("event: ")
+        ]
+        assert events == ["event: error"]
+        run.assert_not_called()

@@ -45,6 +45,7 @@ from src.managers.survey_template_manager import (
     SurveyTemplateValidationError,
 )
 from src.managers.file_manager import FileManager
+from src.managers.settings_manager import SettingsManager
 from src.models.authz import Principal
 from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.survey_template import Question, TemplateImage
@@ -185,11 +186,8 @@ async def _persona_data_context(principal: Principal) -> dict[str, Any]:
 async def persona_data_page(request: Request) -> Any:
     """ペルソナデータ設定画面（member は使えるデータを見るだけ）"""
     manager = get_dataset_manager()
-    nemotron_status = {"exists": False, "size_mb": 0}
-    try:
-        nemotron_status = await _run(manager.check_nemotron_status)
-    except Exception:
-        logger.warning("Failed to check Nemotron dataset status", exc_info=True)
+    # 状態の取得は失敗しても例外を投げない（閉域対応 U3 BR2.2）。Router は代替を持たない
+    nemotron_status = await _run(manager.check_nemotron_status)
     context = await _persona_data_context(_principal(request))
     return templates.TemplateResponse(
         request,
@@ -200,6 +198,7 @@ async def persona_data_page(request: Request) -> Any:
             "nemotron_status": nemotron_status,
             "downloading": _nemotron_download_status["downloading"],
             "manageable": context["listing"].manageable,
+            "data_agent_allowed": SettingsManager.is_data_agent_allowed(),
             **context,
         },
     )
@@ -230,13 +229,15 @@ def _download_nemotron_background(principal: Principal) -> None:
         _nemotron_download_status["downloading"] = False
 
 
-def _nemotron_status_response(request: Request) -> Any:
+async def _nemotron_status_response(request: Request) -> Any:
+    """The "downloading" partial, with the Manager's status (no stand-in, BR2.2)."""
+    status = await _run(get_dataset_manager().check_nemotron_status)
     return templates.TemplateResponse(
         request,
         "survey/partials/nemotron_status.html",
         {
             "request": request,
-            "nemotron_status": {"exists": False, "size_mb": 0},
+            "nemotron_status": status,
             "downloading": True,
             "manageable": True,
         },
@@ -247,14 +248,14 @@ def _nemotron_status_response(request: Request) -> Any:
 async def download_nemotron(request: Request) -> Any:
     """Nemotronデータセットのダウンロードをバックグラウンドで開始（admin だけ）"""
     principal = _principal(request)
-    # 裏で動かす前に止める（裏の失敗は応答に届かない）
-    get_dataset_manager().ensure_manageable(principal)
+    # 裏で動かす前に止める（裏の失敗は応答に届かない）。閉域では取得しない（U3 BR2.3）
+    get_dataset_manager().ensure_nemotron_downloadable(principal)
     if _nemotron_download_status["downloading"]:
-        return _nemotron_status_response(request)
+        return await _nemotron_status_response(request)
     _nemotron_download_status["downloading"] = True
     _nemotron_download_status["error"] = None
     asyncio.create_task(asyncio.to_thread(_download_nemotron_background, principal))
-    return _nemotron_status_response(request)
+    return await _nemotron_status_response(request)
 
 
 # 受け身の要求（BR1.9）: 5 秒ごとの自動更新。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
@@ -262,10 +263,7 @@ async def download_nemotron(request: Request) -> Any:
 async def nemotron_download_status(request: Request) -> Any:
     """Nemotronダウンロード状況をポーリングで返す"""
     manager = get_dataset_manager()
-    try:
-        status = await _run(manager.check_nemotron_status)
-    except Exception:
-        status = {"exists": False, "size_mb": 0}
+    status = await _run(manager.check_nemotron_status)
     listing = await _run(manager.list_persona_data, _principal(request))
     return templates.TemplateResponse(
         request,
@@ -275,7 +273,7 @@ async def nemotron_download_status(request: Request) -> Any:
             "nemotron_status": status,
             "downloading": _nemotron_download_status["downloading"],
             "error": _nemotron_download_status["error"],
-            "success": status.get("exists", False)
+            "success": status.available
             and not _nemotron_download_status["downloading"],
             "manageable": listing.manageable,
         },
@@ -582,6 +580,12 @@ async def dwh_extract(request: Request) -> Any:
     manager = get_dataset_manager()
     # 流し始める前に止める（流し始めたあとは状態コードを返せない）
     manager.ensure_manageable(principal)
+    try:
+        # 閉域対応 U3 BR3.7: 使ってよくない環境では error イベント 1 つだけを返す
+        manager.ensure_data_agent_allowed(principal)
+    except SurveyDatasetManagerError as e:
+        refusal = _survey_sse_event("error", user_message_for(e))
+        return StreamingResponse(iter([refusal]), media_type="text/event-stream")
     form = await request.form()
     condition = str(form.get("condition", "")).strip()
 
@@ -996,9 +1000,7 @@ async def survey_start_page(
     datasource_counts: dict[str, int] = {}
     custom_data: tuple = ()
     try:
-        nemotron_available = (await _run(ds_mgr.check_nemotron_status)).get(
-            "exists", False
-        )
+        nemotron_available = (await _run(ds_mgr.check_nemotron_status)).available
         custom_data = (await _run(ds_mgr.list_persona_data, principal)).custom
         sources = (["nemotron"] if nemotron_available else []) + [
             f"custom:{d.id}" for d in custom_data

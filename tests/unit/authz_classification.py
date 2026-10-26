@@ -197,6 +197,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "JobManager.get": CHECKS,
     # persona_generation_manager.py — U5（候補は PersonaCandidates、BR1.1〜BR1.9）
     "PersonaGenerationManager.generate": CHECKS,  # ai:execute
+    "PersonaGenerationManager.ensure_data_agent_allowed": CHECKS,  # ai:execute（U3）
     "PersonaGenerationManager.claim_candidates": CHECKS,  # 本人の照合（条件付き更新）
     "PersonaGenerationManager.finish_candidates": CHECKS,  # 押さえの印が一致するものだけ
     # persona_manager.py — U4 で所有・共有の判定を入れた分は CHECKS。
@@ -237,6 +238,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaMemoryManager.safe_get_memories": CHECKS,
     # report_manager.py — U6（生成は読める人、変更は管理できる人、BR4.1・BR4.2）
     "ReportManager.get_discussion": CHECKS,  # DiscussionRecords.get
+    "ReportManager.ensure_data_agent_allowed": CHECKS,  # ai:execute（U3）
     "ReportManager.generate_report_streaming": CHECKS,  # ai:execute + 読める人
     "ReportManager.generate_followup_report_streaming": CHECKS,  # 同上
     "ReportManager.get_report": CHECKS,  # DiscussionRecords.get_report（読める人）
@@ -259,6 +261,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "SettingsManager.update_scope": CHECKS,  # ADD / DELETE（BR5.2）
     "SettingsManager.save_data_agent_settings": CHECKS,
     "SettingsManager.is_data_agent_available": NO_USER_DATA,  # 設定の有無だけ
+    "SettingsManager.is_data_agent_allowed": NO_USER_DATA,  # 環境の事実だけ（U3 BR3.6）
     "SettingsManager.test_data_agent_connection": CHECKS,
     "SettingsManager.get_data_agent_settings": CHECKS,
     # survey_analysis_manager.py — U7（判定のあとだけ CSV とキャッシュ、BR2.4・BR2.11）
@@ -271,6 +274,8 @@ CLASSIFICATION: dict[str, Entry] = {
     "SurveyDatasetManager.check_nemotron_status": NO_USER_DATA,  # 取り込みの有無だけ
     "SurveyDatasetManager.download_nemotron_dataset": CHECKS,
     "SurveyDatasetManager.ensure_manageable": CHECKS,  # 裏で動かす前の止め
+    "SurveyDatasetManager.ensure_nemotron_downloadable": CHECKS,  # 同上（U3 BR2.3）
+    "SurveyDatasetManager.ensure_data_agent_allowed": CHECKS,  # 流す前の止め（U3）
     "SurveyDatasetManager.import_scope_choices": CHECKS,  # 取り込みの利用範囲の欄
     "SurveyDatasetManager.list_persona_data": CHECKS,  # can_use_asset（BR4.2）
     "SurveyDatasetManager.get_custom_persona_data": CHECKS,  # can_use_asset

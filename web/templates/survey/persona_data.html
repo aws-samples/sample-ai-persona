@@ -21,12 +21,14 @@
             <svg class="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
-            オープンデータセットのダウンロード
+            {% if nemotron_status.download_allowed %}オープンデータセットのダウンロード{% else %}オープンデータセット（Nemotron-Personas-Japan）{% endif %}
         </h2>
+        {% if nemotron_status.download_allowed %}
         <p class="text-sm text-gray-500 mb-4">
             Hugging Face の <a href="https://huggingface.co/datasets/nvidia/Nemotron-Personas-Japan" target="_blank" class="text-blue-700 underline">Nemotron-Personas-Japan</a>
             データセットをダウンロードしてアンケート用ペルソナとして使用できます。
         </p>
+        {% endif %}
 
         <div id="nemotron-status">
             {% include "survey/partials/nemotron_status.html" %}
@@ -58,7 +60,7 @@
             カスタムペルソナデータの追加
         </h2>
         <p class="text-sm text-gray-500 mb-4">
-            CSVファイルのアップロード、またはデータ分析エージェント連携でDWHから顧客セグメントを抽出して追加します。
+            {% if data_agent_allowed %}CSVファイルのアップロード、またはデータ分析エージェント連携でDWHから顧客セグメントを抽出して追加します。{% else %}CSVファイルをアップロードして追加します。{% endif %}
         </p>
 
         <!-- ソース選択タブ -->
@@ -70,7 +72,10 @@
                 {{ icon_upload("w-4 h-4") }}
                 CSVアップロード
             </button>
+            {#- DWH からの抽出は、この環境で Data Agent を使ってよいときだけ（U3 BR3.5） #}
+            {% if data_agent_allowed %}
             <button type="button"
+                    data-testid="persona-data-dwh-tab"
                     @click="source = 'dwh'"
                     :class="source === 'dwh' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
                     class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px">
@@ -79,6 +84,7 @@
                 </svg>
                 データ分析エージェント連携
             </button>
+            {% endif %}
         </div>
 
         <!-- CSVアップロード -->
@@ -138,6 +144,7 @@
         </div>
 
         <!-- データ分析エージェント連携 -->
+        {% if data_agent_allowed %}
         <div x-show="source === 'dwh'" x-cloak x-transition>
             <p class="text-xs text-purple-600 bg-purple-50 rounded-md p-3 mb-4">
                 DWH に蓄積された業務データからデータ分析エージェントが自然言語で顧客セグメントを抽出します。
@@ -182,6 +189,7 @@
             <!-- 抽出結果 / マッピングUI -->
             <div id="dwh-result" class="mt-4"></div>
         </div>
+        {% endif %}
     </div>
     {%- endif %}
 </div>

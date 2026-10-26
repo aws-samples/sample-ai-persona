@@ -310,6 +310,15 @@ class ErrorCode(StrEnum):
         "survey_dataset_not_downloaded",
         ErrorKind.CONFIG,
     )
+    # Closed network U3: the Parquet must be placed beforehand and is not at
+    # NEMOTRON_DATASET_KEY. An operator places it (the cdk/README.md procedure);
+    # the settings screen cannot fix it.
+    NEMOTRON_DATASET_NOT_PLACED = ("nemotron_dataset_not_placed", ErrorKind.CONFIG)
+    # Closed network U3: this environment never downloads from Hugging Face.
+    NEMOTRON_DOWNLOAD_NOT_ALLOWED = (
+        "nemotron_download_not_allowed",
+        ErrorKind.FORBIDDEN,
+    )
     # The batch-inference IAM role is not configured. Only an operator can fix
     # this, and the variable name itself stays out of the wording.
     SURVEY_BATCH_ROLE_NOT_CONFIGURED = (
@@ -545,6 +554,8 @@ class ErrorCode(StrEnum):
     # The data agent returned no CSV URL: an internal outcome, retry may work.
     SEGMENT_CSV_URL_MISSING = ("segment_csv_url_missing", ErrorKind.TRANSIENT)
     DATA_AGENT_NOT_CONFIGURED = ("data_agent_not_configured", ErrorKind.CONFIG)
+    # Closed network U3: DATA_AGENT_ALLOWED=false. No setting can turn it on.
+    DATA_AGENT_NOT_ALLOWED = ("data_agent_not_allowed", ErrorKind.FORBIDDEN)
     # The runtime ARN is set, but the service failed to initialize or the
     # connection test itself failed. Retry can succeed once the transient
     # condition clears.

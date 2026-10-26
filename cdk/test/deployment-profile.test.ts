@@ -189,4 +189,83 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
       mergeClosedStageContext(base, (key) => (key === 'closedCreateTestEnvironment' ? 'yes' : undefined)),
     ).toThrow(/closedCreateTestEnvironment/);
   });
+
+  test('closedNemotronDatasetKey を渡したときだけ nemotronDatasetKey を重ねる（U3）', () => {
+    const merged = mergeClosedStageContext(base, (key) =>
+      key === 'closedNemotronDatasetKey' ? ' closed/nemotron.parquet ' : undefined,
+    );
+    expect(merged.nemotronDatasetKey).toBe('closed/nemotron.parquet');
+    expect(mergeClosedStageContext(base, () => undefined)).not.toHaveProperty('nemotronDatasetKey');
+  });
+});
+
+describe('resolveDeploymentProfile: 閉域で使えない機能（U3 BR5.1〜BR5.5）', () => {
+  const DEFAULT_KEY = 'persona-dataset/nemotron-personas-japan.parquet';
+
+  test('閉域のタスクに足す環境変数 3 つ（キーは既定）（BR5.1）', () => {
+    expect(resolveClosed().closedFeatureEnvironment).toEqual({
+      NEMOTRON_SOURCE: 's3',
+      NEMOTRON_DATASET_KEY: DEFAULT_KEY,
+      DATA_AGENT_ALLOWED: 'false',
+    });
+  });
+
+  test.each([['closed/nemotron.parquet'], ['persona-dataset/closed/nemotron_v2-1.parquet']])(
+    '指定のキー %p をそのまま渡す（BR5.1）',
+    (key) => {
+      expect(resolveClosed({ nemotronDatasetKey: key }).closedFeatureEnvironment?.NEMOTRON_DATASET_KEY).toBe(key);
+    },
+  );
+
+  test('空のキーは既定のキー（BR5.3）', () => {
+    expect(resolveClosed({ nemotronDatasetKey: '' }).closedFeatureEnvironment?.NEMOTRON_DATASET_KEY).toBe(
+      DEFAULT_KEY,
+    );
+  });
+
+  test.each([
+    'my key.parquet',
+    'a+b.parquet',
+    '/x.parquet',
+    'a/../b.parquet',
+    'a//b.parquet',
+    'x.csv',
+    'persona-dataset/custom/x.parquet',
+    'persona-dataset/temp/x.parquet',
+    'データ.parquet',
+  ])('キーの誤り %p で synth を止める（BR5.3）', (key) => {
+    expect(() => resolveClosed({ nemotronDatasetKey: key })).toThrow(/closedNemotronDatasetKey/);
+  });
+
+  test('閉域で enableAdditionalPersonaModels=true は止める（BR5.4）', () => {
+    expect(() =>
+      resolveDeploymentProfile({
+        deploymentMode: 'closed',
+        region: REGION,
+        closed: closed(),
+        enableAdditionalPersonaModels: true,
+      }),
+    ).toThrow(/enableAdditionalPersonaModels/);
+  });
+
+  test('閉域で dataAgentRuntimeArn を渡したら止める（BR5.5）', () => {
+    expect(() =>
+      resolveDeploymentProfile({
+        deploymentMode: 'closed',
+        region: REGION,
+        closed: closed(),
+        dataAgentRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:runtime/x',
+      }),
+    ).toThrow(/dataAgentRuntimeArn/);
+  });
+
+  test('公開では止めず、環境変数も足さない（BR5.2）', () => {
+    const profile = resolveDeploymentProfile({
+      deploymentMode: 'public',
+      region: REGION,
+      enableAdditionalPersonaModels: true,
+      dataAgentRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:runtime/x',
+    });
+    expect(profile).not.toHaveProperty('closedFeatureEnvironment');
+  });
 });

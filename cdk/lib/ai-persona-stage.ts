@@ -59,6 +59,9 @@ export class AIPersonaStage extends Stage {
       region,
       closed: parameter.closed,
       enableMcpGateway: this.mcpGatewayEnabled(parameter),
+      // U3: the closed profile rejects these two (BR5.4, BR5.5); the public one ignores them
+      enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
+      dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
     });
     const appDesiredCount = this.resolveDesiredCount(parameter);
     const closed = this.profile.deploymentMode === 'closed';
