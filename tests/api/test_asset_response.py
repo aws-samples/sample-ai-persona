@@ -101,18 +101,70 @@ class TestBodyIsAlwaysClosed:
 
         close.assert_called()
 
-    def test_client_disconnect_after_a_few_chunks(self):
+    @pytest.mark.parametrize(
+        ("fail_on", "spec_version"),
+        [
+            ("http.response.start", "2.4"),  # 最初のデータを送る前
+            ("http.response.body", "2.4"),  # 途中まで送ったあと
+            ("http.response.start", "2.0"),
+            ("http.response.body", "2.0"),
+        ],
+    )
+    def test_send_failure_closes_the_body(self, fail_on, spec_version):
+        """送信そのものが失敗しても（後始末のタスクが走らなくても）閉じる。"""
         close = Mock()
         response = asset_response(_result(iter([b"a"] * 100), close))
+        scope = {"type": "http", "asgi": {"spec_version": spec_version}}
+        sent: list[str] = []
 
-        async def read_a_few_and_leave() -> None:
-            body = response.body_iterator
-            await body.__anext__()
-            await body.__anext__()
-            await body.aclose()  # type: ignore[attr-defined]
-            assert response.background is not None
-            await response.background()
+        async def receive():
+            await asyncio.sleep(3600)  # the browser never says it left
+            return {"type": "http.disconnect"}
 
-        asyncio.run(read_a_few_and_leave())
+        async def send(message):
+            sent.append(message["type"])
+            body_count = sent.count("http.response.body")
+            if message["type"] == fail_on and (
+                fail_on != "http.response.body" or body_count == 3
+            ):
+                raise OSError("connection reset by peer")
 
-        close.assert_called()
+        async def run() -> None:
+            with pytest.raises(Exception):
+                await response(scope, receive, send)
+            # Checked while the loop still runs: a real server keeps its loop,
+            # so closing at loop shutdown or by GC does not count.
+            close.assert_called()
+
+        asyncio.run(run())
+
+    def test_client_disconnect_after_a_few_chunks(self):
+        """The server reports the browser left (ASGI < 2.4) while chunks flow."""
+        close = Mock()
+
+        def endless():
+            while True:
+                yield b"a"
+
+        response = asset_response(_result(endless(), close))
+        scope = {"type": "http", "asgi": {"spec_version": "2.0"}}
+        bodies = 0
+        left = asyncio.Event()
+
+        async def receive():
+            await left.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal bodies
+            if message["type"] == "http.response.body":
+                bodies += 1
+                if bodies == 2:
+                    left.set()
+            await asyncio.sleep(0)
+
+        async def run() -> None:
+            await response(scope, receive, send)
+            close.assert_called()  # while the loop still runs
+
+        asyncio.run(run())

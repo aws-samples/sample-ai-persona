@@ -8,16 +8,16 @@ value the Manager returned and imports no Service.
 - ``stream``: a ``StreamingResponse`` of the opened S3 body with
   ``Content-Type`` / ``Content-Length`` / ``Content-Disposition`` (RFC 5987 for
   Japanese names) / ``X-Content-Type-Options: nosniff`` / ``Cache-Control``.
-  The body is closed by the response's background task, which also runs when
-  the browser disconnects before the end (BR4.5).
+  The body is closed when the response ends on any path: read to the end, S3
+  failing mid-way, or sending failing before or after the first chunk (BR4.5).
 """
 
 from collections.abc import Iterator
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import quote
 
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from starlette.background import BackgroundTask
+from starlette.types import Receive, Scope, Send
 
 from src.models.asset_delivery import AssetStream, DeliveryKind, DeliveryResult
 
@@ -56,7 +56,8 @@ def asset_response(
         return RedirectResponse(result.presigned_url, status_code=302, headers=headers)
     asset = result.asset
     assert asset is not None
-    return StreamingResponse(
+    return _ClosingStreamingResponse(
+        asset,
         _body(asset),
         media_type=result.content_type,
         headers={
@@ -67,8 +68,27 @@ def asset_response(
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": cache_control or STREAM_CACHE_CONTROL,
         },
-        background=BackgroundTask(asset.close),
     )
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    """A ``StreamingResponse`` that always closes the S3 body when it ends.
+
+    Starlette skips the background task when sending fails (a dropped
+    connection surfaces as ``ClientDisconnect``), and the body iterator is then
+    abandoned mid-way or never started, so its own ``finally`` would wait for
+    GC. Wrapping the whole response closes the body on every path (BR4.5).
+    """
+
+    def __init__(self, asset: AssetStream, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._asset = asset
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._asset.close()
 
 
 def _body(asset: AssetStream) -> Iterator[bytes]:
