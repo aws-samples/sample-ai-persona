@@ -327,6 +327,46 @@ def test_avatar_redirect_needs_read_access(client, u5, who, expected):
     assert ("location" in response.headers) is (expected == 302)
 
 
+@pytest.mark.parametrize("mode", ["presigned", "proxy"])
+def test_avatar_of_an_unreadable_persona_never_touches_s3(
+    client, u5, monkeypatch, mode
+):
+    """閉域対応 U4 BR4.4: どちらの方式でも 404 で、開かず署名もしない。"""
+    from src.config import config
+
+    monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
+    response = _as(client, "stranger").get(
+        f"/persona/{u5.persona.id}/avatar", follow_redirects=False
+    )
+
+    assert response.status_code == 404
+    u5.world.s3.generate_presigned_url.assert_not_called()
+    u5.world.s3.open_stream.assert_not_called()
+
+
+def test_avatar_is_streamed_to_a_reader_in_proxy_mode(client, u5, monkeypatch):
+    """閉域対応 U4 BR2.2、BR4.1: 読める人には、アプリが本体を流す。"""
+    from src.config import config
+    from src.models.asset_delivery import AssetStream
+
+    monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+    close = Mock()
+    u5.world.s3.open_stream.return_value = AssetStream(
+        chunks=iter([b"webp-bytes"]), content_length=10, close=close
+    )
+
+    response = _as(client, "peer").get(
+        f"/persona/{u5.persona.id}/avatar", follow_redirects=False
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"webp-bytes"
+    assert response.headers["Content-Type"] == "image/webp"
+    u5.world.s3.open_stream.assert_called_once_with(u5.persona.avatar_path)
+    u5.world.s3.generate_presigned_url.assert_not_called()
+    close.assert_called()
+
+
 def test_avatar_redirect_reads_the_persona_once(client, u5, monkeypatch):
     """NFR2.14: 判定のための本体の読みは 1 回だけで、画像は配信 URL へ移す（中継しない）。"""
     from src.models.authz import ResourceType

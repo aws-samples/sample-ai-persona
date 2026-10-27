@@ -157,6 +157,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.FILE_ATTACH_LIMIT_EXCEEDED: (
         "一度に添付できるファイルは{max_files}件までです。ファイルの数を減らしてください"
     ),
+    ErrorCode.ASSET_TOO_LARGE: (
+        "ファイルが大きすぎるため表示できません。管理者に連絡してください"
+    ),
     # --- アンケート ---
     # ID は画面に出さずログにのみ残す（診断情報とユーザー向け案内の分離）。
     ErrorCode.SURVEY_NOT_FOUND: "アンケートが見つかりません",

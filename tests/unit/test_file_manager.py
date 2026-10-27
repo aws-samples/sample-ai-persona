@@ -13,6 +13,8 @@ from src.managers.file_manager import (
     FileUploadError,
     FileSecurityError,
 )
+from src.config import config
+from src.models.asset_delivery import DeliveryKind, SizeLimit
 from src.models.errors import ErrorCode
 from tests.conftest import MEMBER_A
 
@@ -481,13 +483,75 @@ class TestFileManagerU5Uploads:
 
 
 class TestFileManagerU5Preview:
-    def test_owner_gets_a_url_for_their_unattached_image(self, u5_files):
+    """BR5.8 の検査（check_preview_path）と、検査のあとの配信（U4 BR3.4）。"""
+
+    def test_owner_passes_the_check_and_nothing_is_signed(self, u5_files, monkeypatch):
+        manager, _, s3, _, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        sign = Mock(wraps=s3.generate_presigned_url)
+        monkeypatch.setattr(s3, "generate_presigned_url", sign)
+
+        assert manager.check_preview_path(PRINCIPAL, metadata.file_path) is None
+        sign.assert_not_called()
+
+    def test_deliver_preview_hands_the_upload_handle(self, u5_files):
+        manager, _, _, attachments, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "商品.png")
+        delivery = Mock()
+        delivering = FileManager(
+            s3_service=manager.s3_service,
+            file_store=manager._file_store,
+            attachments=attachments,
+            asset_delivery=delivery,
+        )
+
+        result = delivering.deliver_preview(PRINCIPAL, metadata.file_path)
+
+        assert result is delivery.deliver.return_value
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.s3_path == metadata.file_path
+        assert handle.content_type == "image/png"
+        assert handle.download_name == "商品.png"
+        assert handle.size_limit is SizeLimit.UPLOAD
+        assert handle.not_found_code is ErrorCode.FILE_NOT_FOUND
+        assert handle.presigned_expiration == 3600
+
+    def test_deliver_preview_streams_in_proxy_mode(self, u5_files, monkeypatch):
         manager, _, _, _, _ = u5_files
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
         metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
 
-        url = manager.preview_url_for_path(PRINCIPAL, metadata.file_path)
+        result = manager.deliver_preview(PRINCIPAL, metadata.file_path)
 
-        assert url.startswith("https://")
+        assert result.kind is DeliveryKind.STREAM
+        assert b"".join(result.asset.chunks) == _PNG
+
+    def test_deliver_preview_of_someone_elses_image_never_delivers(self, u5_files):
+        from tests.conftest import MEMBER_B
+
+        manager, _, _, attachments, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        delivery = Mock()
+        delivering = FileManager(
+            s3_service=manager.s3_service,
+            file_store=manager._file_store,
+            attachments=attachments,
+            asset_delivery=delivery,
+        )
+        with pytest.raises(FileUploadError) as exc_info:
+            delivering.deliver_preview(MEMBER_B.principal(), metadata.file_path)
+        assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
+        delivery.deliver.assert_not_called()
+
+    def test_signing_failure_is_a_file_operation_failure(self, u5_files, monkeypatch):
+        manager, _, s3, _, _ = u5_files
+        metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
+        monkeypatch.setattr(
+            s3, "generate_presigned_url", Mock(side_effect=RuntimeError("boom"))
+        )
+        with pytest.raises(FileUploadError) as exc_info:
+            manager.deliver_preview(PRINCIPAL, metadata.file_path)
+        assert exc_info.value.code is ErrorCode.FILE_OPERATION_FAILED
 
     @pytest.mark.parametrize(
         "path",
@@ -503,7 +567,7 @@ class TestFileManagerU5Preview:
     def test_any_other_path_is_not_found(self, u5_files, path):
         manager, _, _, _, _ = u5_files
         with pytest.raises(FileUploadError) as exc_info:
-            manager.preview_url_for_path(PRINCIPAL, path)
+            manager.check_preview_path(PRINCIPAL, path)
         assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
 
     def test_someone_elses_image_is_not_found(self, u5_files):
@@ -512,7 +576,7 @@ class TestFileManagerU5Preview:
         manager, _, _, _, _ = u5_files
         metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
         with pytest.raises(FileUploadError) as exc_info:
-            manager.preview_url_for_path(MEMBER_B.principal(), metadata.file_path)
+            manager.check_preview_path(MEMBER_B.principal(), metadata.file_path)
         assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
 
     def test_a_path_that_does_not_match_the_metadata_is_not_found(self, u5_files):
@@ -520,7 +584,7 @@ class TestFileManagerU5Preview:
         metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
         forged = metadata.file_path.replace("_a.png", "_other.png")
         with pytest.raises(FileUploadError) as exc_info:
-            manager.preview_url_for_path(PRINCIPAL, forged)
+            manager.check_preview_path(PRINCIPAL, forged)
         assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND
 
     def test_expired_image_is_not_found(self, u5_files):
@@ -528,5 +592,5 @@ class TestFileManagerU5Preview:
         metadata = manager.upload_survey_image(PRINCIPAL, _PNG, "a.png")
         clock["now"] = _U5_NOW.timestamp() + 24 * 3600
         with pytest.raises(FileUploadError) as exc_info:
-            manager.preview_url_for_path(PRINCIPAL, metadata.file_path)
+            manager.check_preview_path(PRINCIPAL, metadata.file_path)
         assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND

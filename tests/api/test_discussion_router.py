@@ -412,9 +412,48 @@ class TestDetail:
 
         html = client.get(f"/discussion/{discussion.id}", headers=PAGE).text
 
-        assert "https://signed" in html
+        assert f"/discussion/{discussion.id}/documents/f1" in html
         principal, file_id = aw.world.files.readable_file.call_args.args
         assert (principal.sub, file_id) == (ME.sub, "f1")
+
+    @pytest.mark.parametrize("mode", ["presigned", "proxy"])
+    def test_documents_link_to_the_app_route_in_both_modes(
+        self, aw, client, monkeypatch, mode
+    ):
+        """閉域対応 U4 BR4.2: img の src と a の href はアプリのルート（S3 の URL を出さない）"""
+        from src.config import config
+        from src.models.discussion import DocumentRef
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
+        discussion = aw.discussion()
+        aw.world.store.bodies[discussion.id]["documents"] = [
+            DocumentRef("f1", "a.png", "image/png", 1, "2026-10-15").to_dict(),
+            DocumentRef("f2", "b.pdf", "application/pdf", 1, "2026-10-15").to_dict(),
+            DocumentRef("f3", "c.png", "image/png", 1, "2026-10-15").to_dict(),
+            DocumentRef("f4", "d.png", "image/png", 1, "2026-10-15").to_dict(),
+        ]
+
+        def readable(principal, file_id):
+            if file_id == "f3":
+                raise CodedError("no", code=ErrorCode.FILE_NOT_FOUND)
+            if file_id == "f4":
+                return Mock(file_path="/tmp/local/d.png")
+            return Mock(file_path=f"s3://b/k/{file_id}")
+
+        aw.world.files.readable_file.side_effect = readable
+
+        html = client.get(f"/discussion/{discussion.id}", headers=PAGE).text
+
+        base = f"/discussion/{discussion.id}/documents"
+        assert f'src="{base}/f1"' in html
+        assert f'href="{base}/f1"' in html
+        assert f'href="{base}/f2"' in html
+        assert f"{base}/f3" not in html
+        assert f"{base}/f4" not in html
+        assert "amazonaws.com" not in html
+        assert "https://signed" not in html
+        aw.s3.generate_presigned_url.assert_not_called()
+        aw.s3.open_stream.assert_not_called()
 
     def test_result_partial_and_insights_for_readers(self, aw, client):
         discussion = aw.discussion(PEER, shared_with=("sales",))
@@ -479,6 +518,91 @@ class TestMissingLooksLikeUnreadable:
 
         assert a.status_code == 404
         assert _same_shape(a, unreadable) == _same_shape(b, missing)
+
+
+class TestDocumentRoute:
+    """閉域対応 U4 BR3.5、BR4.1、BR4.4: GET /discussion/{id}/documents/{doc_id}"""
+
+    def _with_pdf(self, aw, discussion):
+        from src.models.discussion import DocumentRef
+
+        aw.world.store.bodies[discussion.id]["documents"] = [
+            DocumentRef("f1", "資料.pdf", "application/pdf", 4, "2026-10-15").to_dict()
+        ]
+        aw.world.files.readable_file.return_value = Mock(
+            file_path="s3://b/uploads/x/discussion_document/f1_資料.pdf",
+            mime_type="application/pdf",
+            original_filename="資料.pdf",
+        )
+
+    def test_presigned_redirects(self, aw, client):
+        discussion = aw.discussion()
+        self._with_pdf(aw, discussion)
+
+        response = client.get(
+            f"/discussion/{discussion.id}/documents/f1", follow_redirects=False
+        )
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://signed"
+        path, expiration = aw.s3.generate_presigned_url.call_args.args
+        assert path.endswith("f1_資料.pdf") and expiration == 3600
+
+    def test_proxy_streams_a_pdf_inline(self, aw, client, monkeypatch):
+        from src.config import config
+        from src.models.asset_delivery import AssetStream
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+        discussion = aw.discussion()
+        self._with_pdf(aw, discussion)
+        close = Mock()
+        aw.s3.open_stream.return_value = AssetStream(
+            chunks=iter([b"%PDF"]), content_length=4, close=close
+        )
+
+        response = client.get(
+            f"/discussion/{discussion.id}/documents/f1", follow_redirects=False
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"%PDF"
+        assert response.headers["Content-Type"] == "application/pdf"
+        assert response.headers["Content-Disposition"].startswith("inline;")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Cache-Control"] == "private, no-store"
+        aw.s3.generate_presigned_url.assert_not_called()
+        close.assert_called()
+
+    @pytest.mark.parametrize("mode", ["presigned", "proxy"])
+    def test_unreadable_discussion_is_404_without_s3(
+        self, aw, client, monkeypatch, mode
+    ):
+        from src.config import config
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
+        discussion = aw.discussion(STRANGER)
+        self._with_pdf(aw, discussion)
+
+        response = client.get(
+            f"/discussion/{discussion.id}/documents/f1", follow_redirects=False
+        )
+
+        assert response.status_code == 404
+        aw.s3.generate_presigned_url.assert_not_called()
+        aw.s3.open_stream.assert_not_called()
+
+    def test_document_of_another_discussion_is_file_not_found(self, aw, client):
+        mine = aw.discussion()
+        other = aw.discussion()
+        self._with_pdf(aw, other)
+
+        response = client.get(
+            f"/discussion/{mine.id}/documents/f1", follow_redirects=False
+        )
+
+        assert response.status_code == 404
+        aw.s3.generate_presigned_url.assert_not_called()
+        aw.world.files.readable_file.assert_not_called()
 
 
 class TestExport:

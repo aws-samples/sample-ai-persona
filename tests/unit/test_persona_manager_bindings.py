@@ -521,9 +521,10 @@ class TestGetPersonaAndAvatar:
         world.s3.generate_presigned_url.return_value = "https://signed"
         manager = world.manager()
 
-        assert manager.get_avatar_url(SALES_PEER, shared.id) == "https://signed"
+        result = manager.deliver_avatar(SALES_PEER, shared.id)
+        assert result.presigned_url == "https://signed"
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
-            manager.get_avatar_url(SALES_PEER, private.id)
+            manager.deliver_avatar(SALES_PEER, private.id)
 
     def test_avatar_changes_need_manage(self, world, shared):
         manager = world.manager()

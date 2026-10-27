@@ -275,12 +275,12 @@ class TestAcrossInstances:
         server.attachments.register_parent(
             "survey_template", lambda p, parent_id: parent_id == "tpl-1"
         )
-        url = server.files.preview_url_for_path(
+        delivered = server.files.deliver_preview(
             MEMBER_B.principal(), uploaded.file_path
         )
 
         assert result.file_ids == (uploaded.file_id,)
-        assert url.startswith("https://")
+        assert delivered.presigned_url.startswith("https://")
         stored = server.store.get(uploaded.file_id)
         assert (stored.parent_type, stored.parent_id) == ("survey_template", "tpl-1")
         assert stored.expires_at is None
@@ -290,7 +290,5 @@ class TestAcrossInstances:
         refusing = _Host()
         refusing.attachments.register_parent("survey_template", lambda p, _id: False)
         with pytest.raises(FileUploadError) as exc_info:
-            refusing.files.preview_url_for_path(
-                MEMBER_B.principal(), uploaded.file_path
-            )
+            refusing.files.check_preview_path(MEMBER_B.principal(), uploaded.file_path)
         assert exc_info.value.code is ErrorCode.FILE_NOT_FOUND

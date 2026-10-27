@@ -238,6 +238,10 @@ class ErrorCode(StrEnum):
     # More than 100 files attached to one parent (the transaction limit,
     # security-design.md §3). The user attaches fewer files.
     FILE_ATTACH_LIMIT_EXCEEDED = ("file_attach_limit_exceeded", ErrorKind.CAPACITY)
+    # Closed network U4 (BR2.3): a stored file is above the limit for streaming
+    # it through the app. The user cannot fix a stored file, so an operator
+    # handles it (CONFIG, not CAPACITY).
+    ASSET_TOO_LARGE = ("asset_too_large", ErrorKind.CONFIG)
 
     # --- Surveys ---
     SURVEY_NOT_FOUND = ("survey_not_found", ErrorKind.NOT_FOUND)

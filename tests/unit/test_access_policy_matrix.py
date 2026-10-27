@@ -452,7 +452,7 @@ def _u5_call(op: str, world, principal: Principal, persona_id: str, dataset_id: 
     if op == "preview":
         return manager.preview_binding_data(principal, persona_id, dataset_id)
     if op == "avatar_url":
-        return manager.get_avatar_url(principal, persona_id)
+        return manager.deliver_avatar(principal, persona_id)
     if op == "avatar_change":
         return manager.delete_avatar(principal, persona_id)
     if op == "export":

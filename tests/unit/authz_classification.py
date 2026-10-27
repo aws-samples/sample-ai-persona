@@ -171,7 +171,9 @@ CLASSIFICATION: dict[str, Entry] = {
     "DiscussionManager.list_accessible_discussions": CHECKS,  # 同上（API）
     "DiscussionManager.get_discussion": CHECKS,  # DiscussionRecords.get（BR2.4）
     "DiscussionManager.export_discussion": CHECKS,  # DiscussionRecords（BR9.1）
-    "DiscussionManager.get_document_urls": CHECKS,  # FileAttachments.readable_file（BR5.1）
+    "DiscussionManager.servable_document_ids": CHECKS,  # FileAttachments.readable_file（BR5.1）
+    # 閉域対応 U4: 議論の読み取り + その議論の添付 + readable_file（BR3.5）
+    "DiscussionManager.deliver_document": CHECKS,
     "DiscussionManager.delete_discussion": CHECKS,  # DiscussionRecords.delete（BR1.5）
     "DiscussionManager.regenerate_insights": CHECKS,  # ai:execute + 管理できる人（BR2.5）
     "DiscussionManager.check_insights_allowed": CHECKS,  # 同上（API のジョブの前）
@@ -182,7 +184,8 @@ CLASSIFICATION: dict[str, Entry] = {
     "FileManager.upload_discussion_document": CHECKS,  # resource:create、本人のキー
     "FileManager.upload_survey_image": CHECKS,  # resource:create、本人のキー
     "FileManager.upload_interview_attachment": CHECKS,  # resource:create（U6 BR3.6）
-    "FileManager.preview_url_for_path": CHECKS,  # FileAttachments.readable_file（BR5.8）
+    "FileManager.check_preview_path": CHECKS,  # FileAttachments.readable_file（BR5.8）
+    "FileManager.deliver_preview": CHECKS,  # 同上のあとに配る（閉域対応 U4 BR3.4）
     # interview_manager.py — U6（持ち主だけ、BR3.2。手で呼ぶ掃除・生のファイルの経路はなくした）
     "InterviewManager.start_interview_session": CHECKS,  # ai:execute（BR3.1）
     "InterviewManager.send_user_message": CHECKS,  # ensure_owner + 参加者の確かめ直し
@@ -220,7 +223,7 @@ CLASSIFICATION: dict[str, Entry] = {
     "PersonaManager.avatar_upload_enabled": NO_USER_DATA,  # 設定の有無だけ
     "PersonaManager.set_avatar": CHECKS,  # ensure_manageable（BR4.3）
     "PersonaManager.delete_avatar": CHECKS,  # ensure_manageable（BR4.3）
-    "PersonaManager.get_avatar_url": CHECKS,  # ensure_readable（BR4.4）
+    "PersonaManager.deliver_avatar": CHECKS,  # ensure_readable（BR4.4、閉域対応 U4 BR3.1）
     "PersonaManager.get_kb_binding": CHECKS,  # ensure_readable（BR2.1）
     "PersonaManager.create_kb_binding": CHECKS,  # ensure_manageable + can_use_asset
     "PersonaManager.delete_kb_binding": CHECKS,  # ensure_manageable（BR2.2）
@@ -302,8 +305,9 @@ CLASSIFICATION: dict[str, Entry] = {
     "SurveyExecutionManager.create_survey": CHECKS,
     "SurveyExecutionManager.list_surveys": CHECKS,  # ResourceSharing + can_read
     "SurveyExecutionManager.get_survey_detail": CHECKS,  # ensure_readable + can_manage
-    "SurveyExecutionManager.get_download_url": CHECKS,  # 同上
-    "SurveyExecutionManager.get_result_image_url": CHECKS,  # 同上 + 写しの画像だけ
+    "SurveyExecutionManager.deliver_result_csv": CHECKS,  # 同上（閉域対応 U4 BR3.2）
+    # 同上 + 写しの画像だけ（閉域対応 U4 BR3.3）
+    "SurveyExecutionManager.deliver_result_image": CHECKS,
     "SurveyExecutionManager.delete_survey": CHECKS,  # delete_with_shares
     "SurveyExecutionManager.normalize_filters": NO_USER_DATA,  # 入力の整形だけ
     "SurveyExecutionManager.generate_default_survey_name": NO_USER_DATA,  # 名前の生成だけ

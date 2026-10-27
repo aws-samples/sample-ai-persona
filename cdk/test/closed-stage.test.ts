@@ -20,7 +20,7 @@ import { exportedRef, exportTargets, flattenReference, pathOf } from './template
 jest.setTimeout(120_000);
 
 /** 閉域のタスクにだけ足す U3 の環境変数（BR5.1）。 */
-const CLOSED_FEATURE_KEYS = ['NEMOTRON_SOURCE', 'NEMOTRON_DATASET_KEY', 'DATA_AGENT_ALLOWED'];
+const CLOSED_FEATURE_KEYS = ['NEMOTRON_SOURCE', 'NEMOTRON_DATASET_KEY', 'DATA_AGENT_ALLOWED', 'ASSET_DELIVERY'];
 
 /** Bedrock 系のインターフェイス型エンドポイントを提供する AZ（infrastructure-design レビュー R-05）。 */
 const BEDROCK_ENDPOINT_AZS = ['ap-northeast-1a', 'ap-northeast-1c', 'ap-northeast-1d'];
@@ -497,6 +497,11 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     for (const key of CLOSED_FEATURE_KEYS) {
       expect(publicEnv).not.toHaveProperty(key);
     }
+  });
+
+  test('閉域のタスクに ASSET_DELIVERY=proxy。公開のタスクにはない（閉域対応 U4 BR5.1、BR5.2）', () => {
+    expect(environmentOf(appStack).ASSET_DELIVERY).toBe('proxy');
+    expect(environmentOf(synthPublic().templates.App)).not.toHaveProperty('ASSET_DELIVERY');
   });
 
   test('App クライアントは管理 API のログインだけ（OAuth なし・シークレットあり・失効あり・有効期間は公開と同じ、BR3.3）', () => {

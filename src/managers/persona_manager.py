@@ -46,7 +46,9 @@ from ..models.sharing import ListTab, TabbedList
 from ..services import country_service
 from ..services.stores.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
+from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
 from .components.access_policy import AccessPolicy
+from .components.asset_delivery import AssetDelivery
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
 from .components.participant_reader import ParticipantReader
 from .components.resource_lookup import ResourceLookup
@@ -219,6 +221,7 @@ class PersonaManager:
         candidate_store: Optional["PersonaCandidateStore"] = None,
         clock: Callable[[], datetime] = _utc_now,
         participants: Optional[ParticipantReader] = None,
+        asset_delivery: Optional[AssetDelivery] = None,
     ):
         """
         Args:
@@ -246,6 +249,9 @@ class PersonaManager:
             clock: UTC clock for the hold checks (tests pass a fake one)
             participants: Reads discussion / interview participants after the
                 decision (U6; built on first use)
+            asset_delivery: Serves the avatar (closed network U4; built from
+                this Manager's S3 service and ``Config.ASSET_DELIVERY`` when
+                omitted)
         """
         self.logger = logging.getLogger(__name__)
         self._personas = persona_store or service_factory.get_persona_store()
@@ -267,6 +273,13 @@ class PersonaManager:
         self._candidate_store = candidate_store
         self._clock = clock
         self._reader = participants
+        self._delivery = asset_delivery
+
+    @property
+    def _asset_delivery(self) -> AssetDelivery:
+        if self._delivery is not None:
+            return self._delivery
+        return AssetDelivery(self.s3_service, config.ASSET_DELIVERY)
 
     @property
     def _participant_reader(self) -> ParticipantReader:
@@ -1080,31 +1093,48 @@ class PersonaManager:
         self.logger.info(f"Avatar removed for persona {persona.id}")
         return updated
 
-    def get_avatar_url(self, principal: Principal, persona_id: str) -> str:
+    def deliver_avatar(self, principal: Principal, persona_id: str) -> DeliveryResult:
         """
-        Return a short-lived presigned URL of the persona's avatar image (BR4.4).
+        Serve the persona's avatar image after the read check (BR4.4, U4 BR3.1).
+
+        Returns a presigned URL to redirect to, or a stream through the app,
+        depending on ``Config.ASSET_DELIVERY`` (this Manager does not look).
 
         Raises:
-            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing (no
-                URL is made)
-            PersonaManagerError: If the avatar is missing, or the URL cannot
-                be generated
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing
+                (nothing is opened or signed)
+            PersonaManagerError: ``PERSONA_AVATAR_NOT_FOUND`` (no avatar, or
+                the object is gone), ``ASSET_TOO_LARGE``, or
+                ``PERSONA_OPERATION_FAILED`` when S3 fails
         """
-        s3_service = self._require_avatar_storage()
+        self._require_avatar_storage()
         persona, _ = self._readable_target(principal, persona_id)
         if not persona.avatar_path:
             raise PersonaManagerError(
                 "persona has no avatar image",
                 code=ErrorCode.PERSONA_AVATAR_NOT_FOUND,
             )
+        handle = AssetHandle(
+            s3_path=persona.avatar_path,
+            content_type="image/webp",
+            download_name=f"{persona.id}.webp",
+            size_limit=SizeLimit.UPLOAD,
+            not_found_code=ErrorCode.PERSONA_AVATAR_NOT_FOUND,
+            presigned_expiration=AVATAR_URL_EXPIRATION_SECONDS,
+        )
         try:
-            return s3_service.generate_presigned_url(
-                persona.avatar_path, AVATAR_URL_EXPIRATION_SECONDS
-            )
-        except Exception as e:
-            self.logger.error("Failed to generate avatar URL", exc_info=True)
+            return self._asset_delivery.deliver(handle, error_type=PersonaManagerError)
+        except PersonaManagerError as e:
+            if e.code is not ErrorCode.S3_OPERATION_FAILED:
+                raise
+            self.logger.error("Failed to serve the avatar", exc_info=True)
             raise PersonaManagerError(
-                f"avatar url generation failed ({type(e).__name__})",
+                "avatar delivery failed", code=ErrorCode.PERSONA_OPERATION_FAILED
+            ) from e
+        except Exception as e:
+            self.logger.error("Failed to serve the avatar", exc_info=True)
+            raise PersonaManagerError(
+                f"avatar delivery failed ({type(e).__name__})",
                 code=ErrorCode.PERSONA_OPERATION_FAILED,
             ) from e
 

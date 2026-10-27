@@ -1457,8 +1457,12 @@ class TestPersonaAvatarEndpoints:
 
     @patch("web.routers.persona.get_persona_manager")
     def test_get_redirects_to_presigned_url(self, mock_get_manager, client):
+        from src.models.asset_delivery import DeliveryResult
+
         mock_manager = Mock()
-        mock_manager.get_avatar_url.return_value = "https://signed.example/a.webp"
+        mock_manager.deliver_avatar.return_value = DeliveryResult.redirect(
+            "https://signed.example/a.webp"
+        )
         mock_get_manager.return_value = mock_manager
 
         response = client.get("/persona/p1/avatar", follow_redirects=False)
@@ -1468,9 +1472,47 @@ class TestPersonaAvatarEndpoints:
         assert response.headers["Cache-Control"] == "private, max-age=300"
 
     @patch("web.routers.persona.get_persona_manager")
+    def test_get_streams_the_avatar_in_proxy_mode(self, mock_get_manager, client):
+        """閉域（proxy）: アプリが流す。キャッシュの指定は同じ（U4 BR4.1、BR4.3）"""
+        from src.models.asset_delivery import AssetStream, DeliveryResult
+
+        close = Mock()
+        asset = AssetStream(
+            chunks=iter([b"RIFF", b"WEBP"]), content_length=8, close=close
+        )
+        mock_manager = Mock()
+        mock_manager.deliver_avatar.return_value = DeliveryResult.stream(
+            asset, "image/webp", "p1.webp"
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/persona/p1/avatar", follow_redirects=False)
+
+        assert response.status_code == 200
+        assert response.content == b"RIFFWEBP"
+        assert response.headers["Content-Type"] == "image/webp"
+        assert response.headers["Content-Length"] == "8"
+        assert response.headers["Content-Disposition"].startswith("inline;")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Cache-Control"] == "private, max-age=300"
+        close.assert_called()
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_get_failure_is_500(self, mock_get_manager, client):
+        mock_manager = Mock()
+        mock_manager.deliver_avatar.side_effect = PersonaManagerError(
+            "s3", code=ErrorCode.PERSONA_OPERATION_FAILED
+        )
+        mock_get_manager.return_value = mock_manager
+
+        response = client.get("/persona/p1/avatar", follow_redirects=False)
+
+        assert response.status_code == 500
+
+    @patch("web.routers.persona.get_persona_manager")
     def test_get_without_avatar_is_404(self, mock_get_manager, client):
         mock_manager = Mock()
-        mock_manager.get_avatar_url.side_effect = PersonaManagerError(
+        mock_manager.deliver_avatar.side_effect = PersonaManagerError(
             "no avatar", code=ErrorCode.PERSONA_AVATAR_NOT_FOUND
         )
         mock_get_manager.return_value = mock_manager

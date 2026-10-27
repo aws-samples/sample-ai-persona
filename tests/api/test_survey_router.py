@@ -9,6 +9,7 @@ AC4.1.1〜AC4.1.5、AC4.4.1、AC4.4.2、AC4.4.4、AC5.1.1、AC5.1.3、AC5.2.2。
 import json
 from contextlib import ExitStack
 from unittest.mock import Mock, patch
+from urllib.parse import quote, urlencode
 
 import pytest
 
@@ -35,6 +36,10 @@ def aw(client, survey_world):
 
 def _as(client, user) -> None:
     user.login(client)
+
+
+def _preview_route(file_path: str) -> str:
+    return "/survey/image-preview/file?" + urlencode({"file_path": file_path})
 
 
 # =============================================================================
@@ -351,6 +356,86 @@ class TestResults:
         assert response.status_code in (302, 307)
         assert "results.csv" in response.headers["location"]
 
+    def test_download_streams_the_csv_in_proxy_mode(self, aw, client, monkeypatch):
+        """閉域対応 U4 BR2.2、BR4.1: 本文が S3 の中身と同じで、日本語の名前で落ちる"""
+        from src.config import config
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+        survey = self._shared(aw)
+        stored = aw.world.s3.download_file(survey.s3_result_path)
+
+        response = client.get(
+            f"/survey/results/{survey.id}/download", follow_redirects=False
+        )
+
+        assert response.status_code == 200
+        assert response.content == stored
+        assert response.headers["Content-Type"].startswith("text/csv")
+        disposition = response.headers["Content-Disposition"]
+        assert disposition.startswith("attachment;")
+        assert f"filename*=UTF-8''{quote('共有された結果.csv')}" in disposition
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Cache-Control"] == "private, no-store"
+
+    def test_too_large_csv_is_refused_in_proxy_mode(self, aw, client, monkeypatch):
+        """閉域対応 U4 BR2.3: 上限を超えると ASSET_TOO_LARGE（本文は流さない）"""
+        from src.config import config
+        from src.models.asset_delivery import SizeLimit
+        from src.models.errors import ErrorCode
+        from web.error_messages import http_status_for
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+        monkeypatch.setattr(
+            "src.managers.components.asset_delivery.max_bytes",
+            lambda limit, upload_max_bytes: 1 if limit is SizeLimit.SURVEY_CSV else 0,
+        )
+        survey = self._shared(aw)
+
+        response = client.get(
+            f"/survey/results/{survey.id}/download", follow_redirects=False
+        )
+
+        assert response.status_code == http_status_for(ErrorCode.ASSET_TOO_LARGE)
+        assert response.headers.get("X-Content-Type-Options") is None
+
+    @pytest.mark.parametrize("mode", ["presigned", "proxy"])
+    def test_stranger_download_is_404_in_both_modes(
+        self, aw, client, monkeypatch, mode
+    ):
+        from src.config import config
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
+        survey = aw.survey("c")
+        response = client.get(
+            f"/survey/results/{survey.id}/download", follow_redirects=False
+        )
+        assert response.status_code == 404
+
+    def test_result_image_is_streamed_in_proxy_mode(self, aw, client, monkeypatch):
+        from src.config import config
+        from src.models.survey_template import TemplateImage
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+        key = "uploads/b/survey_image/11111111-1111-4111-8111-111111111111_a.png"
+        aw.world.s3.upload_file(b"png-bytes", key)
+        image = TemplateImage(
+            id="img1",
+            name="商品",
+            file_path=aw.world.s3.path_of(key),
+            mime_type="image/png",
+            original_filename="a.png",
+        )
+        survey = aw.world.survey(PEER_SUB, aw.world.template(PEER_SUB, images=[image]))
+        aw.world.share(SURVEY, survey.id, "sales")
+
+        response = client.get(
+            f"/survey/results/{survey.id}/images/img1", follow_redirects=False
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"png-bytes"
+        assert response.headers["Content-Disposition"].startswith("inline;")
+
     def test_analysis_for_a_shared_reader(self, aw, client):
         survey = self._shared(aw)
         assert client.get(f"/survey/results/{survey.id}/personas").status_code == 200
@@ -526,7 +611,7 @@ class TestSurveyImages:
             mime_type="image/png",
             original_filename="a.png",
         )
-        manager.preview_url_for_path.return_value = "https://signed/a.png"
+        manager.check_preview_path.return_value = None
 
         resp = client.post(
             "/survey/templates/upload-image",
@@ -537,7 +622,7 @@ class TestSurveyImages:
         principal, content, filename = manager.upload_survey_image.call_args.args
         assert principal.sub == "local:dev@example.com"
         assert (content, filename) == (b"\x89PNG", "a.png")
-        assert resp.json()["preview_url"] == "https://signed/a.png"
+        assert resp.json()["preview_url"] == _preview_route(_UPLOADED)
 
     @pytest.mark.parametrize(
         "path",
@@ -581,9 +666,109 @@ class TestSurveyImages:
         )
         template = aw.template(images=[image])
         html = client.get(f"/survey/templates/{template.id}/edit").text
-        assert "https://signed/image" in html
-        principal, path = aw.file_manager.preview_url_for_path.call_args.args
+        assert _preview_route(_UPLOADED) in html
+        assert "amazonaws.com" not in html
+        principal, path = aw.file_manager.check_preview_path.call_args.args
         assert principal.sub == ME.sub and path == _UPLOADED
+
+    def test_edit_screen_leaves_unreadable_images_without_a_url(self, aw, client):
+        from src.models.errors import CodedError, ErrorCode
+        from src.models.survey_template import TemplateImage
+
+        aw.file_manager.check_preview_path.side_effect = CodedError(
+            "gone", code=ErrorCode.FILE_NOT_FOUND
+        )
+        image = TemplateImage(
+            id="img1",
+            name="商品",
+            file_path=_UPLOADED,
+            mime_type="image/png",
+            original_filename="a.png",
+        )
+        template = aw.template(images=[image])
+        html = client.get(f"/survey/templates/{template.id}/edit").text
+        assert "/survey/image-preview/file" not in html
+
+    def test_image_preview_json_points_at_the_app_route(self, aw, client):
+        resp = client.get("/survey/image-preview", params={"file_path": _UPLOADED})
+        assert resp.status_code == 200
+        assert resp.json() == {"url": _preview_route(_UPLOADED)}
+
+    @pytest.mark.parametrize("mode", ["presigned", "proxy"])
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "s3://bucket/datasets/secret.csv",
+            "s3://bucket/uploads/local:other@example.com/survey_image/x_a.png",
+            "../../etc/passwd",
+        ],
+    )
+    def test_preview_file_of_any_other_path_is_404_without_s3(
+        self, client, monkeypatch, path, mode
+    ):
+        """閉域対応 U4 BR3.4、BR4.4: 任意のパス・他人のパスは開かず署名もしない"""
+        from src.config import config
+        from src.managers.file_manager import FileManager
+        from src.models.errors import CodedError, ErrorCode
+
+        monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
+        s3 = Mock()
+        s3.key_of.side_effect = lambda p: (
+            p.removeprefix("s3://bucket/") if p.startswith("s3://bucket/") else None
+        )
+        attachments = Mock()
+        attachments.readable_file.side_effect = CodedError(
+            "unreadable", code=ErrorCode.FILE_NOT_FOUND
+        )
+        manager = FileManager(s3_service=s3, file_store=Mock(), attachments=attachments)
+        with patch("web.routers.survey.get_file_manager", return_value=manager):
+            resp = client.get(
+                "/survey/image-preview/file",
+                params={"file_path": path},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 404
+        s3.generate_presigned_url.assert_not_called()
+        s3.open_stream.assert_not_called()
+
+    def test_preview_file_redirects_in_presigned_mode(self, aw, client):
+        from src.models.asset_delivery import DeliveryResult
+
+        aw.file_manager.deliver_preview.return_value = DeliveryResult.redirect(
+            "https://signed/a.png"
+        )
+        resp = client.get(
+            "/survey/image-preview/file",
+            params={"file_path": _UPLOADED},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "https://signed/a.png"
+        principal, path = aw.file_manager.deliver_preview.call_args.args
+        assert principal.sub == ME.sub and path == _UPLOADED
+
+    def test_preview_file_streams_in_proxy_mode(self, aw, client):
+        from src.models.asset_delivery import AssetStream, DeliveryResult
+
+        close = Mock()
+        aw.file_manager.deliver_preview.return_value = DeliveryResult.stream(
+            AssetStream(chunks=iter([b"\x89PNG"]), content_length=4, close=close),
+            "image/png",
+            "商品.png",
+        )
+        resp = client.get(
+            "/survey/image-preview/file",
+            params={"file_path": _UPLOADED},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.content == b"\x89PNG"
+        assert resp.headers["Content-Type"] == "image/png"
+        assert resp.headers["Content-Disposition"].startswith("inline;")
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["Cache-Control"] == "private, no-store"
+        close.assert_called()
 
     def test_path_signing_helper_is_gone(self):
         import web.routers.survey as survey_router

@@ -202,11 +202,12 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
 describe('resolveDeploymentProfile: 閉域で使えない機能（U3 BR5.1〜BR5.5）', () => {
   const DEFAULT_KEY = 'persona-dataset/nemotron-personas-japan.parquet';
 
-  test('閉域のタスクに足す環境変数 3 つ（キーは既定）（BR5.1）', () => {
+  test('閉域のタスクに足す環境変数 3 つ（キーは既定）と U4 の配信の方式（BR5.1）', () => {
     expect(resolveClosed().closedFeatureEnvironment).toEqual({
       NEMOTRON_SOURCE: 's3',
       NEMOTRON_DATASET_KEY: DEFAULT_KEY,
       DATA_AGENT_ALLOWED: 'false',
+      ASSET_DELIVERY: 'proxy',
     });
   });
 
@@ -267,5 +268,19 @@ describe('resolveDeploymentProfile: 閉域で使えない機能（U3 BR5.1〜BR5
       dataAgentRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-1:123456789012:runtime/x',
     });
     expect(profile).not.toHaveProperty('closedFeatureEnvironment');
+  });
+});
+
+describe('resolveDeploymentProfile: ファイルの配信の方式（閉域対応 U4 BR5.1、BR5.2）', () => {
+  test('閉域のタスクには ASSET_DELIVERY=proxy を渡す（閉域で presigned を選ぶ入力はない）', () => {
+    expect(resolveClosed().closedFeatureEnvironment?.ASSET_DELIVERY).toBe('proxy');
+    expect(resolveClosed({ nemotronDatasetKey: 'closed/nemotron.parquet' }).closedFeatureEnvironment?.ASSET_DELIVERY).toBe(
+      'proxy',
+    );
+  });
+
+  test('公開には ASSET_DELIVERY を渡さない（アプリの既定 presigned のまま）', () => {
+    const profile = resolveDeploymentProfile({ deploymentMode: 'public', region: REGION });
+    expect(profile.closedFeatureEnvironment?.ASSET_DELIVERY).toBeUndefined();
   });
 });

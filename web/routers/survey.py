@@ -14,13 +14,13 @@ import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import (
     HTMLResponse,
     Response,
     JSONResponse,
-    RedirectResponse,
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
@@ -65,6 +65,7 @@ from web.error_messages import (  # noqa: E402
 )
 from web.sanitize import render_markdown  # noqa: E402
 from web import asset_scope_views  # noqa: E402
+from ._asset_response import asset_response  # noqa: E402
 
 # マークダウンフィルターを追加
 templates.env.filters["markdown"] = render_markdown
@@ -898,16 +899,23 @@ async def template_ai_generate(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
-def _signed_preview_url(principal: Principal, file_path: str) -> str:
+def _preview_route(file_path: str) -> str:
+    """The app's preview route of a checked template image (closed network U4)."""
+    return "/survey/image-preview/file?" + urlencode({"file_path": file_path})
+
+
+def _preview_url(principal: Principal, file_path: str) -> str:
     """A preview URL through FileAttachments (the parent template's check, BR1.9).
 
-    Empty when the image cannot be signed (deleted, or not readable).
+    The app's own route for both deliveries (U4 BR4.2, Q2 A); nothing is signed
+    while the page is drawn. Empty when the image is deleted or not readable.
     """
     try:
-        return get_file_manager().preview_url_for_path(principal, file_path)
+        get_file_manager().check_preview_path(principal, file_path)
     except CodedError:
         logger.warning("Template image preview is unavailable", exc_info=True)
         return ""
+    return _preview_route(file_path)
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
@@ -921,7 +929,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
     images_with_urls = []
     for img in tmpl.images:
         d = img.to_dict()
-        d["preview_url"] = await _run(_signed_preview_url, principal, img.file_path)
+        d["preview_url"] = await _run(_preview_url, principal, img.file_path)
         images_with_urls.append(d)
     return templates.TemplateResponse(
         request,
@@ -1215,14 +1223,14 @@ async def delete_survey(
 
 @router.get("/results/{survey_id}/images/{image_id}")
 async def result_image(request: Request, survey_id: str, image_id: str) -> Any:
-    """結果の写しの画像（読める人だけ、署名付きURLへリダイレクト、BR2.8）"""
-    url = await _run(
-        get_execution_manager().get_result_image_url,
+    """結果の写しの画像（読める人だけ、BR2.8）。公開は 302、閉域は流す（閉域対応 U4）"""
+    result = await _run(
+        get_execution_manager().deliver_result_image,
         _principal(request),
         survey_id,
         image_id,
     )
-    return RedirectResponse(url=url)
+    return asset_response(result)
 
 
 # =========================================================================
@@ -1249,9 +1257,7 @@ async def upload_survey_image(request: Request, file: UploadFile = File(...)) ->
                 "file_path": metadata.file_path,
                 "mime_type": metadata.mime_type,
                 "original_filename": metadata.original_filename,
-                "preview_url": await _run(
-                    _signed_preview_url, principal, metadata.file_path
-                ),
+                "preview_url": await _run(_preview_url, principal, metadata.file_path),
             }
         )
     except Exception as e:
@@ -1264,15 +1270,27 @@ async def upload_survey_image(request: Request, file: UploadFile = File(...)) ->
 
 @router.get("/image-preview")
 async def image_preview(request: Request, file_path: str) -> Any:
-    """画像のプレビューURL（署名付きURL）を返す。
+    """画像のプレビューURL（アプリのプレビューのルート）を返す。
 
     読めるアップロード・読めるテンプレートの画像のパスだけ（BR1.9、BR5.8）。任意の
-    パス・他人のパスは 404 で URL を作らない（共通の例外ハンドラが答える）。
+    パス・他人のパスは 404 で URL を作らない（共通の例外ハンドラが答える）。署名付き URL は
+    作らない（閉域対応 U4 BR4.2）
     """
-    url = await _run(
-        get_file_manager().preview_url_for_path, _principal(request), file_path
+    await _run(get_file_manager().check_preview_path, _principal(request), file_path)
+    return JSONResponse({"url": _preview_route(file_path)})
+
+
+@router.get("/image-preview/file")
+async def image_preview_file(request: Request, file_path: str) -> Any:
+    """テンプレートの画像そのもの（閉域対応 U4 BR3.4）。
+
+    ``/image-preview`` と同じ検査（BR5.8）を通したパスだけを配る。公開は署名付き URL へ
+    302、閉域はアプリが流す。任意のパス・他人のパスは 404 で、開かず署名もしない。
+    """
+    result = await _run(
+        get_file_manager().deliver_preview, _principal(request), file_path
     )
-    return JSONResponse({"url": url})
+    return asset_response(result)
 
 
 # =========================================================================
@@ -1503,14 +1521,11 @@ async def execute_survey(request: Request) -> Any:
 
 @router.get("/results/{survey_id}/download")
 async def download_csv(request: Request, survey_id: str) -> Any:
-    """CSVダウンロード（読める人だけ、署名付きURLへリダイレクト）"""
-    presigned_url = await _run(
-        get_execution_manager().get_download_url,
-        _principal(request),
-        survey_id,
-        300,
+    """CSVダウンロード（読める人だけ）。公開は 302、閉域は流す（閉域対応 U4 BR3.2）"""
+    result = await _run(
+        get_execution_manager().deliver_result_csv, _principal(request), survey_id
     )
-    return RedirectResponse(url=presigned_url)
+    return asset_response(result)
 
 
 def _analysis_error(request: Request, message: str) -> Any:
