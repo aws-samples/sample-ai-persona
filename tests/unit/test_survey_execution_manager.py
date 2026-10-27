@@ -6,6 +6,7 @@ AC2.5.2、AC4.1.2、AC4.4.1、AC4.4.4。DynamoDB と S3 は moto、判定の部�
 （tests/unit/survey_world.py）、バッチ推論はモック。
 """
 
+import dataclasses
 import io
 import json
 from unittest.mock import Mock
@@ -13,6 +14,8 @@ from unittest.mock import Mock
 import polars as pl
 import pytest
 
+from src.config import config
+from src.models.asset_delivery import DeliveryKind, SizeLimit
 from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 
@@ -1172,10 +1175,13 @@ class TestReadSurvey:
 
 
 class TestDownloadAndImages:
+    """BR3.2・BR3.3: 読み取りの認可のあとに、CSV と写しの画像を配る。"""
+
     def test_download_url_after_the_read_check(self, em, survey_world):
         survey = survey_world.survey("a")
         survey_world.share(SURVEY, survey.id, "sales")
-        assert em.get_download_url(MEMBER_B, survey.id).startswith("https://")
+        result = em.deliver_result_csv(MEMBER_B, survey.id)
+        assert result.presigned_url.startswith("https://")
 
     def test_stranger_gets_404_and_nothing_is_signed(
         self, em, survey_world, monkeypatch
@@ -1184,34 +1190,141 @@ class TestDownloadAndImages:
         sign = Mock(wraps=survey_world.s3.generate_presigned_url)
         monkeypatch.setattr(survey_world.s3, "generate_presigned_url", sign)
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_download_url(MEMBER_C, survey.id)
+            em.deliver_result_csv(MEMBER_C, survey.id)
         sign.assert_not_called()
 
     def test_not_ready_result(self, em, survey_world):
         survey = survey_world.survey("a", status="running")
         with raises_code(CodedError, ErrorCode.SURVEY_RESULT_NOT_READY):
-            em.get_download_url(MEMBER_A, survey.id)
+            em.deliver_result_csv(MEMBER_A, survey.id)
+
+    def test_csv_handle(self, survey_world, batch, cache):
+        delivery = Mock()
+        manager = _manager_with_delivery(survey_world, batch, cache, delivery)
+        survey = survey_world.survey("a", name="満足度調査")
+
+        result = manager.deliver_result_csv(MEMBER_A, survey.id)
+
+        assert result is delivery.deliver.return_value
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.s3_path == survey.s3_result_path
+        assert handle.content_type == "text/csv"
+        assert handle.download_name == "満足度調査.csv"
+        assert handle.size_limit is SizeLimit.SURVEY_CSV
+        assert handle.not_found_code is ErrorCode.SURVEY_RESULT_NOT_READY
+        assert handle.presigned_expiration == 300
+        assert handle.check_exists is False
+
+    def test_csv_is_streamed_in_proxy_mode(self, em, survey_world, monkeypatch):
+        monkeypatch.setattr(config, "ASSET_DELIVERY", "proxy")
+        survey = survey_world.survey("a", csv=b"a,b\n1,2\n")
+
+        result = em.deliver_result_csv(MEMBER_A, survey.id)
+
+        assert result.kind is DeliveryKind.STREAM
+        assert b"".join(result.asset.chunks) == b"a,b\n1,2\n"
 
     def test_result_image_only_from_the_snapshot(self, em, survey_world):
         image = _image(survey_world)
         template = survey_world.template("a", images=[image])
         survey = survey_world.survey("a", template)
         survey_world.share(SURVEY, survey.id, "sales")
-        assert em.get_result_image_url(MEMBER_B, survey.id, image.id).startswith(
-            "https://"
-        )
+        result = em.deliver_result_image(MEMBER_B, survey.id, image.id)
+        assert result.presigned_url.startswith("https://")
         with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
-            em.get_result_image_url(MEMBER_B, survey.id, "not-in-snapshot")
+            em.deliver_result_image(MEMBER_B, survey.id, "not-in-snapshot")
         with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_result_image_url(MEMBER_C, survey.id, image.id)
+            em.deliver_result_image(MEMBER_C, survey.id, image.id)
 
-    def test_deleted_image_is_not_found(self, em, survey_world):
+    def test_image_handle_checks_existence(self, survey_world, batch, cache):
+        delivery = Mock()
+        manager = _manager_with_delivery(survey_world, batch, cache, delivery)
+        image = _image(survey_world)
+        survey = survey_world.survey("a", survey_world.template("a", images=[image]))
+
+        manager.deliver_result_image(MEMBER_A, survey.id, image.id)
+
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.s3_path == image.file_path
+        assert handle.content_type == "image/png"
+        assert handle.download_name == "a.png"
+        assert handle.size_limit is SizeLimit.UPLOAD
+        assert handle.check_exists is True
+        assert handle.not_found_code is ErrorCode.FILE_NOT_FOUND
+        assert handle.presigned_expiration == 3600
+
+    @pytest.mark.parametrize(
+        "mime_type", ["application/pdf", "text/html", "image/svg+xml", ""]
+    )
+    def test_image_type_from_the_form_is_not_trusted(
+        self, survey_world, batch, cache, mime_type
+    ):
+        delivery = Mock()
+        manager = _manager_with_delivery(survey_world, batch, cache, delivery)
+        image = dataclasses.replace(_image(survey_world), mime_type=mime_type)
+        survey = survey_world.survey("a", survey_world.template("a", images=[image]))
+
+        manager.deliver_result_image(MEMBER_A, survey.id, image.id)
+
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.content_type == "application/octet-stream"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "survey-results/x/results.csv",
+            "persona_avatars/p1/a.webp",
+            "uploads/a/discussion_document/11111111-1111-4111-8111-111111111111_a.pdf",
+        ],
+    )
+    def test_image_outside_the_upload_prefix_never_reaches_asset_delivery(
+        self, survey_world, batch, cache, key
+    ):
+        delivery = Mock()
+        manager = _manager_with_delivery(survey_world, batch, cache, delivery)
+        image = dataclasses.replace(
+            _image(survey_world), file_path=f"s3://{BUCKET}/{key}"
+        )
+        survey = survey_world.survey("a", survey_world.template("a", images=[image]))
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            manager.deliver_result_image(MEMBER_A, survey.id, image.id)
+        delivery.deliver.assert_not_called()
+
+    def test_image_outside_the_snapshot_never_reaches_asset_delivery(
+        self, survey_world, batch, cache
+    ):
+        delivery = Mock()
+        manager = _manager_with_delivery(survey_world, batch, cache, delivery)
+        survey = survey_world.survey("a")
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            manager.deliver_result_image(MEMBER_A, survey.id, "img1")
+        delivery.deliver.assert_not_called()
+
+    @pytest.mark.parametrize("mode", ["presigned", "proxy"])
+    def test_deleted_image_is_not_found(self, em, survey_world, monkeypatch, mode):
+        monkeypatch.setattr(config, "ASSET_DELIVERY", mode)
         image = _image(survey_world)
         template = survey_world.template("a", images=[image])
         survey = survey_world.survey("a", template)
         survey_world.s3.delete_file(image.file_path)
         with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
-            em.get_result_image_url(MEMBER_A, survey.id, image.id)
+            em.deliver_result_image(MEMBER_A, survey.id, image.id)
+
+
+def _manager_with_delivery(survey_world, batch, cache, delivery):
+    return SurveyExecutionManager(
+        survey_store=survey_world.survey_store,
+        survey_template_store=survey_world.template_store,
+        survey_batch_service=batch,
+        s3_service=survey_world.s3,
+        resource_sharing=survey_world.sharing,
+        owners=survey_world.owners,
+        resource_lookup=survey_world.lookup,
+        custom_persona_data_store=survey_world.custom_store,
+        result_cache=cache,
+        sleep=lambda _s: None,
+        asset_delivery=delivery,
+    )
 
 
 class TestDeleteSurvey:

@@ -13,6 +13,7 @@ import boto3  # noqa: E402
 
 from src.models.errors import ErrorCode  # noqa: E402
 from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
+from tests.error_helpers import raises_code  # noqa: E402
 
 
 @pytest.fixture
@@ -307,3 +308,126 @@ def test_exists_tells_whether_an_object_is_there(s3_service):
     assert s3_service.exists(path) is True
     s3_service.delete_file(path)
     assert s3_service.exists(path) is False
+
+
+# --- 閉域対応 U4: ストリームでの読み取り（BR2.2、BR2.5、BR2.6、BR4.5） ---------------
+
+CHUNK = 256 * 1024
+
+
+class _Body:
+    """A fake ``StreamingBody`` that records reads and closes."""
+
+    def __init__(self, data: bytes, fail_after: int | None = None):
+        self._data = data
+        self._pos = 0
+        self._reads = 0
+        self._fail_after = fail_after
+        self.close_calls = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self._fail_after is not None and self._reads >= self._fail_after:
+            raise ConnectionResetError("broken")
+        self._reads += 1
+        chunk = self._data[self._pos : self._pos + size]
+        self._pos += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def _fake_object(s3_service, monkeypatch, body: _Body) -> None:
+    monkeypatch.setattr(
+        s3_service.s3_client,
+        "get_object",
+        lambda **_: {"Body": body, "ContentLength": len(body._data)},
+    )
+
+
+def test_open_stream_returns_the_size_and_256_kib_chunks(s3_service):
+    data = bytes(range(256)) * (CHUNK * 2 // 256) + b"tail"
+    path = s3_service.upload_file(data, "uploads/sub-a/discussion/f_a.pdf")
+
+    stream = s3_service.open_stream(path)
+    chunks = list(stream.chunks)
+
+    assert stream.content_length == len(data)
+    assert [len(c) for c in chunks] == [CHUNK, CHUNK, 4]
+    assert b"".join(chunks) == data
+
+
+def test_open_stream_of_a_missing_key_is_not_found(s3_service, s3_bucket_name):
+    with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+        s3_service.open_stream(f"s3://{s3_bucket_name}/uploads/none.png")
+
+
+def test_open_stream_other_client_errors_are_operation_failures(
+    s3_service, monkeypatch
+):
+    from botocore.exceptions import ClientError
+
+    def deny(**_):
+        raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+
+    monkeypatch.setattr(s3_service.s3_client, "get_object", deny)
+    with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+        s3_service.open_stream("s3://b/uploads/a.png")
+
+
+def test_open_stream_connection_failures_are_operation_failures(
+    s3_service, monkeypatch
+):
+    from botocore.exceptions import EndpointConnectionError
+
+    def unreachable(**_):
+        raise EndpointConnectionError(endpoint_url="https://s3")
+
+    monkeypatch.setattr(s3_service.s3_client, "get_object", unreachable)
+    with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+        s3_service.open_stream("s3://b/uploads/a.png")
+
+
+def test_close_closes_the_body_and_may_be_called_twice(s3_service, monkeypatch):
+    body = _Body(b"x" * (CHUNK * 3))
+    _fake_object(s3_service, monkeypatch, body)
+
+    stream = s3_service.open_stream("s3://b/uploads/a.png")
+    next(stream.chunks)
+    stream.close()
+    stream.close()
+
+    assert body.close_calls == 1
+
+
+def test_reading_to_the_end_closes_the_body(s3_service, monkeypatch):
+    body = _Body(b"x" * (CHUNK + 1))
+    _fake_object(s3_service, monkeypatch, body)
+
+    stream = s3_service.open_stream("s3://b/uploads/a.png")
+    assert sum(len(c) for c in stream.chunks) == CHUNK + 1
+
+    assert body.close_calls == 1
+
+
+def test_abandoning_the_iterator_closes_the_body(s3_service, monkeypatch):
+    body = _Body(b"x" * (CHUNK * 3))
+    _fake_object(s3_service, monkeypatch, body)
+
+    stream = s3_service.open_stream("s3://b/uploads/a.png")
+    next(stream.chunks)
+    stream.chunks.close()  # type: ignore[attr-defined]
+
+    assert body.close_calls == 1
+
+
+def test_a_failure_while_streaming_closes_the_body(s3_service, monkeypatch):
+    body = _Body(b"x" * (CHUNK * 3), fail_after=1)
+    _fake_object(s3_service, monkeypatch, body)
+
+    stream = s3_service.open_stream("s3://b/uploads/a.png")
+    next(stream.chunks)
+    with pytest.raises(ConnectionResetError):
+        next(stream.chunks)
+
+    assert body.close_calls == 1

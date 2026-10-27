@@ -13,7 +13,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import (
     HTMLResponse,
-    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -69,6 +68,7 @@ templates.env.filters["markdown"] = render_markdown
 # （アーキ規約「Router→Manager経由」の表示ヘルパー例外）。
 from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
+from ._asset_response import asset_response  # noqa: E402
 from ._persona_avatar import persona_avatar_url  # noqa: E402
 
 templates.env.globals["country_name"] = country_service.country_name
@@ -1087,24 +1087,26 @@ async def delete_persona_avatar(request: Request, persona_id: str) -> Any:
 
 @router.get("/{persona_id}/avatar")
 async def get_persona_avatar(request: Request, persona_id: str) -> Any:
-    """アイコン画像の署名付きURLへリダイレクトする。読めなければ 404 で URL を作らない（BR4.4）"""
+    """アイコン画像を返す。読めなければ 404 で開かず URL も作らない（BR4.4）。
+
+    公開構成は署名付き URL へ 302、閉域（ASSET_DELIVERY=proxy）はアプリが流す（閉域対応 U4）。
+    """
     try:
         loop = asyncio.get_running_loop()
-        url = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             executor,
-            get_persona_manager().get_avatar_url,
+            get_persona_manager().deliver_avatar,
             _principal(request),
             persona_id,
         )
     except Exception as e:
         if error_kind_of(e) is ErrorKind.NOT_FOUND:
             return Response(status_code=404)
-        logger.error("Persona avatar url error", exc_info=True)
+        logger.error("Persona avatar delivery error", exc_info=True)
         return Response(status_code=500)
-    # 署名付きURLの有効期限より十分短くキャッシュさせる（期限切れURLへの誘導を防ぐ）
-    return RedirectResponse(
-        url, status_code=302, headers={"Cache-Control": "private, max-age=300"}
-    )
+    # 署名付きURLの有効期限より十分短くキャッシュさせる（期限切れURLへの誘導を防ぐ）。
+    # 流すときも同じ指定にする（BR4.3）
+    return asset_response(result, cache_control="private, max-age=300")
 
 
 @router.get("/list/partial", response_class=HTMLResponse)

@@ -382,6 +382,34 @@ class TestClosedFeatureSettings:
         assert self._config(NEMOTRON_DATASET_KEY=key).NEMOTRON_DATASET_KEY == key
 
 
+class TestAssetDeliverySetting:
+    """U4 の配信の方式 ASSET_DELIVERY（BR1.1、BR1.2）。"""
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        base = {k: v for k, v in os.environ.items() if k != "ASSET_DELIVERY"}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    @pytest.mark.parametrize("env", [{}, {"ASSET_DELIVERY": ""}])
+    def test_default_is_presigned(self, env):
+        assert self._config(**env).ASSET_DELIVERY == "presigned"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("proxy", "proxy"), ("PROXY", "proxy"), (" Presigned ", "presigned")],
+    )
+    def test_values_are_read_case_insensitively(self, value, expected):
+        assert self._config(ASSET_DELIVERY=value).ASSET_DELIVERY == expected
+
+    @pytest.mark.parametrize("value", ["direct", "s3", "true"])
+    def test_unknown_value_stops_the_start(self, value):
+        with pytest.raises(ValueError, match="ASSET_DELIVERY") as info:
+            self._config(ASSET_DELIVERY=value)
+        assert value in str(info.value)
+
+
 class TestGlobalConfigInstance:
     """グローバル設定インスタンスのテスト"""
 

@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.managers.discussion_manager import DiscussionManager, DiscussionManagerError
+from src.models.asset_delivery import SizeLimit
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.insight_category import InsightCategory
 from src.models.message import Message
@@ -388,10 +389,116 @@ class TestDetail:
             return uploaded
 
         world.files.readable_file.side_effect = readable
-        manager._s3.generate_presigned_url.return_value = "https://signed"
         view = manager.get_discussion(OWNER, discussion.id)
-        urls = manager.get_document_urls(OWNER, view)
-        assert urls == {"f1": "https://signed"}
+        assert manager.servable_document_ids(OWNER, view) == ["f1"]
+        manager._s3.generate_presigned_url.assert_not_called()
+
+    def test_documents_outside_s3_are_not_servable(self, manager, world):
+        discussion = _seed(manager, world)
+        world.store.bodies[discussion.id]["documents"] = [_doc("f1")]
+        world.files.readable_file.return_value = Mock(file_path="/tmp/local/a.png")
+        view = manager.get_discussion(OWNER, discussion.id)
+        assert manager.servable_document_ids(OWNER, view) == []
+
+    def test_no_documents_means_no_ids(self, manager, world):
+        discussion = _seed(manager, world)
+        view = manager.get_discussion(OWNER, discussion.id)
+        assert manager.servable_document_ids(OWNER, view) == []
+
+
+def _doc(doc_id: str, mime_type: str = "image/png") -> dict:
+    return {
+        "id": doc_id,
+        "filename": f"{doc_id}.png",
+        "mime_type": mime_type,
+        "file_size": 1,
+        "uploaded_at": "2026",
+    }
+
+
+class TestDeliverDocument:
+    """BR3.5: 議論を読めて、その議論の添付で、添付を読めるときだけ配る。"""
+
+    @pytest.fixture
+    def delivery(self) -> Mock:
+        return Mock()
+
+    @pytest.fixture
+    def delivering(self, world, ai, delivery) -> DiscussionManager:
+        return DiscussionManager(
+            ai_service=ai,
+            file_attachments=world.files,
+            discussion_records=world.records,
+            participants=world.participants,
+            resource_sharing=world.sharing,
+            owners=world.owners,
+            s3_service=Mock(),
+            asset_delivery=delivery,
+        )
+
+    def _uploaded(self) -> Mock:
+        return Mock(
+            file_path="s3://bucket/uploads/sub-owner/discussion/f1_資料.pdf",
+            mime_type="application/pdf",
+            original_filename="資料.pdf",
+        )
+
+    def test_readable_document_gets_the_upload_handle(
+        self, delivering, world, delivery
+    ):
+        discussion = _seed(delivering, world)
+        world.store.bodies[discussion.id]["documents"] = [_doc("f1")]
+        world.files.readable_file.return_value = self._uploaded()
+
+        result = delivering.deliver_document(OWNER, discussion.id, "f1")
+
+        assert result is delivery.deliver.return_value
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.s3_path.endswith("f1_資料.pdf")
+        assert handle.content_type == "application/pdf"
+        assert handle.download_name == "資料.pdf"
+        assert handle.size_limit is SizeLimit.UPLOAD
+        assert handle.not_found_code is ErrorCode.FILE_NOT_FOUND
+        assert handle.presigned_expiration == 3600
+        world.files.readable_file.assert_called_once_with(OWNER, "f1")
+
+    def test_unreadable_discussion_is_not_found(self, delivering, world, delivery):
+        discussion = _seed(delivering, world)
+        world.store.bodies[discussion.id]["documents"] = [_doc("f1")]
+        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
+            delivering.deliver_document(STRANGER, discussion.id, "f1")
+        delivery.deliver.assert_not_called()
+
+    def test_a_document_of_another_discussion_is_not_found(
+        self, delivering, world, delivery
+    ):
+        mine = _seed(delivering, world)
+        other = _seed(delivering, world, topic="別の議論")
+        world.store.bodies[mine.id]["documents"] = [_doc("f1")]
+        world.store.bodies[other.id]["documents"] = [_doc("f2")]
+        world.files.readable_file.return_value = self._uploaded()
+
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            delivering.deliver_document(OWNER, mine.id, "f2")
+        delivery.deliver.assert_not_called()
+
+    def test_an_unreadable_document_is_not_found(self, delivering, world, delivery):
+        discussion = _seed(delivering, world)
+        world.store.bodies[discussion.id]["documents"] = [_doc("f1")]
+        world.files.readable_file.side_effect = CodedError(
+            "no", code=ErrorCode.FILE_NOT_FOUND
+        )
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            delivering.deliver_document(OWNER, discussion.id, "f1")
+        delivery.deliver.assert_not_called()
+
+    def test_a_local_document_is_not_found(self, delivering, world, delivery):
+        discussion = _seed(delivering, world)
+        world.store.bodies[discussion.id]["documents"] = [_doc("f1")]
+        world.files.readable_file.return_value = Mock(file_path="/tmp/a.pdf")
+        with raises_code(CodedError, ErrorCode.FILE_NOT_FOUND):
+            delivering.deliver_document(OWNER, discussion.id, "f1")
+        delivery.deliver.assert_not_called()
 
 
 class TestDelete:

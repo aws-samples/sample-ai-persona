@@ -4,12 +4,14 @@ Amazon S3へのファイルアップロード・ダウンロード・削除を�
 """
 
 import logging
+from collections.abc import Callable, Iterator
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
+from ..models.asset_delivery import AssetStream
 from ..models.errors import CodedError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,43 @@ logger = logging.getLogger(__name__)
 
 class S3ServiceError(CodedError):
     """S3サービス関連のエラー"""
+
+
+#: Size of one streamed read (closed network U4, BR2.2).
+STREAM_CHUNK_SIZE = 256 * 1024
+
+
+def _closer(body: Any, s3_key: str) -> Callable[[], None]:
+    """An idempotent close of an S3 body (BR4.5)."""
+    closed = False
+
+    def close() -> None:
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        try:
+            body.close()
+        except Exception as e:
+            logger.warning("Closing S3 body of %s failed: %s", s3_key, type(e).__name__)
+
+    return close
+
+
+def _read_chunks(body: Any, s3_key: str, close: Callable[[], None]) -> Iterator[bytes]:
+    """Read ``body`` in chunks; always ``close`` it when the reading stops (BR4.5)."""
+    try:
+        while True:
+            chunk = body.read(STREAM_CHUNK_SIZE)
+            if not chunk:
+                return
+            yield bytes(chunk)
+    except Exception as e:
+        # Headers are already sent: only the key and the type are logged.
+        logger.warning("S3 stream of %s broke: %s", s3_key, type(e).__name__)
+        raise
+    finally:
+        close()
 
 
 class S3Service:
@@ -120,6 +159,47 @@ class S3Service:
                 f"s3 download failed ({error_code})",
                 code=ErrorCode.S3_OPERATION_FAILED,
             ) from e
+
+    def open_stream(self, s3_path: str) -> AssetStream:
+        """Open an object to stream it in 256 KiB chunks (closed network U4).
+
+        The object is opened before anything is returned, so a missing or
+        unreadable object is an error code, never a half-sent response
+        (BR2.2, BR2.5, BR2.6). The body is closed when the chunks are read to
+        the end, when reading fails, when the iterator is discarded, or when
+        ``close`` is called; ``close`` may be called any number of times (BR4.5).
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` (no such key) or
+                ``S3_OPERATION_FAILED`` (any other client or connection error).
+        """
+        s3_key = self._extract_key_from_path(s3_path)
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            if error_code in ("NoSuchKey", "404", "NotFound"):
+                raise S3ServiceError(
+                    "s3 object not found", code=ErrorCode.S3_OBJECT_NOT_FOUND
+                ) from e
+            logger.warning("S3 get_object (stream) failed: %s", error_code)
+            raise S3ServiceError(
+                f"s3 stream open failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
+        except BotoCoreError as e:
+            logger.warning("S3 get_object (stream) unreachable: %s", type(e).__name__)
+            raise S3ServiceError(
+                f"s3 stream open unreachable ({type(e).__name__})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
+        body = response["Body"]
+        close = _closer(body, s3_key)
+        return AssetStream(
+            chunks=_read_chunks(body, s3_key, close),
+            content_length=int(response.get("ContentLength", 0)),
+            close=close,
+        )
 
     def delete_file(self, s3_path: str) -> bool:
         """

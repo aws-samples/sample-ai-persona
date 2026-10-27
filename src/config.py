@@ -13,6 +13,7 @@ from src.models.nemotron_dataset import (
     NemotronSource,
     nemotron_dataset_key_problem,
 )
+from src.models.asset_delivery import AssetDeliveryMode
 from src.models.password_policy import PASSWORD_POLICY_SETTINGS
 
 if TYPE_CHECKING:
@@ -109,6 +110,9 @@ class Config:
     NEMOTRON_DATASET_KEY: str = DEFAULT_NEMOTRON_DATASET_KEY
     # Data Agent をこの環境で使ってよいか。設定画面からも変えない
     DATA_AGENT_ALLOWED: bool = True
+    # ファイルの配信の方式（閉域対応 U4、BR1.1）。presigned（署名付き URL へ 302、
+    # 公開構成）か proxy（アプリ経由で流す、閉域の Stage が渡す）
+    ASSET_DELIVERY: str = AssetDeliveryMode.PRESIGNED.value
 
     # データセット構造化分析ツール(analyze_dataset)のグローバルkill switch。
     # process起動ではなくtool登録・プロンプト付与をこのフラグで制御する。
@@ -274,6 +278,7 @@ class Config:
             self.PERSONA_CACHE_TTL_SECONDS = int(persona_cache_ttl)
 
         self._load_closed_feature_settings()
+        self._load_asset_delivery_setting()
         self._load_auth_settings()
 
         # ディレクトリの存在確認と作成
@@ -313,6 +318,26 @@ class Config:
                     f"DATA_AGENT_ALLOWED must be 'true' or 'false', got {allowed!r}"
                 )
             self.DATA_AGENT_ALLOWED = allowed == "true"
+
+    def _load_asset_delivery_setting(self) -> None:
+        """Read the file delivery mode of closed network U4 (BR1.1, BR1.2).
+
+        Empty means ``presigned`` (the public behaviour). Values are read
+        case-insensitively; anything other than ``presigned`` or ``proxy``
+        stops the start with the variable's name and never falls back.
+
+        Raises:
+            ValueError: ``ASSET_DELIVERY`` holds a value that is not allowed.
+        """
+        mode = os.getenv("ASSET_DELIVERY", "").strip().lower()
+        if not mode:
+            return
+        allowed_modes = [m.value for m in AssetDeliveryMode]
+        if mode not in allowed_modes:
+            raise ValueError(
+                f"ASSET_DELIVERY must be one of {allowed_modes}, got {mode!r}"
+            )
+        self.ASSET_DELIVERY = mode
 
     def _load_auth_settings(self) -> None:
         """Override login-related settings from environment variables."""

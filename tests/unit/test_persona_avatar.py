@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from src.managers.persona_manager import PersonaManager, PersonaManagerError
+from src.models.asset_delivery import DeliveryResult, SizeLimit
 from src.models.authz import Principal, Role
 from src.models.errors import CodedError, ErrorCode
 from src.models.persona import Persona
@@ -235,18 +236,67 @@ class TestDeleteAvatar:
         s3.delete_file.assert_not_called()
 
 
-class TestGetAvatarUrl:
-    def test_returns_presigned_url(self, manager, db, s3):
+class TestDeliverAvatar:
+    """BR3.1: 読み取りの認可のあとに、アバターのハンドルを AssetDelivery に渡す。"""
+
+    STRANGER = Principal("sub-stranger", frozenset({Role.MEMBER}))
+
+    @pytest.fixture
+    def delivery(self) -> Mock:
+        mock = Mock()
+        mock.deliver.return_value = DeliveryResult.redirect("https://signed")
+        return mock
+
+    @pytest.fixture
+    def delivering(self, db, s3, delivery):
+        return PersonaManager(persona_store=db, s3_service=s3, asset_delivery=delivery)
+
+    def test_hands_the_avatar_handle_to_asset_delivery(self, delivering, db, delivery):
+        persona = _persona(OLD_PATH)
+        db.get.return_value = persona
+
+        result = delivering.deliver_avatar(OWNER, persona.id)
+
+        assert result is delivery.deliver.return_value
+        handle = delivery.deliver.call_args.args[0]
+        assert handle.s3_path == OLD_PATH
+        assert handle.content_type == "image/webp"
+        assert handle.download_name == f"{persona.id}.webp"
+        assert handle.size_limit is SizeLimit.UPLOAD
+        assert handle.not_found_code is ErrorCode.PERSONA_AVATAR_NOT_FOUND
+        assert handle.presigned_expiration == 3600
+        assert handle.check_exists is False
+
+    def test_unreadable_persona_never_reaches_asset_delivery(
+        self, delivering, db, delivery
+    ):
         db.get.return_value = _persona(OLD_PATH)
 
-        assert manager.get_avatar_url(OWNER, "p1") == "https://signed.example/x"
-        s3.generate_presigned_url.assert_called_once_with(OLD_PATH, 3600)
+        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
+            delivering.deliver_avatar(self.STRANGER, "p1")
+        delivery.deliver.assert_not_called()
 
-    def test_without_avatar_is_not_found(self, manager, db):
+    def test_without_avatar_is_not_found(self, delivering, db, delivery):
         db.get.return_value = _persona()
 
         with raises_code(PersonaManagerError, ErrorCode.PERSONA_AVATAR_NOT_FOUND):
-            manager.get_avatar_url(OWNER, "p1")
+            delivering.deliver_avatar(OWNER, "p1")
+        delivery.deliver.assert_not_called()
+
+    def test_default_delivery_signs_with_the_manager_s3(self, manager, db, s3):
+        db.get.return_value = _persona(OLD_PATH)
+
+        result = manager.deliver_avatar(OWNER, "p1")
+
+        assert result.presigned_url == "https://signed.example/x"
+        s3.generate_presigned_url.assert_called_once_with(OLD_PATH, 3600)
+
+    def test_signing_failure_is_a_persona_operation_failure(self, manager, db, s3):
+        db.get.return_value = _persona(OLD_PATH)
+        s3.generate_presigned_url.side_effect = RuntimeError("boom")
+
+        with raises_code(PersonaManagerError, ErrorCode.PERSONA_OPERATION_FAILED):
+            manager.deliver_avatar(OWNER, "p1")
 
 
 class TestDeletePersonaCleansUpAvatar:

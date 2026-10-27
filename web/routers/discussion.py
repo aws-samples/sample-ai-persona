@@ -47,6 +47,7 @@ from web.error_messages import (
     user_message_for,
     user_message_for_code,
 )
+from ._asset_response import asset_response, content_disposition
 from ._form_parsing import parse_persona_models
 
 logger = logging.getLogger(__name__)
@@ -155,8 +156,7 @@ def _sse_error(message: str) -> str:
 
 def _attachment(filename: str) -> str:
     """``Content-Disposition`` of a download (the name may be Japanese)."""
-    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+    return content_disposition("attachment", filename)
 
 
 def _conversation_stopped(request: Request) -> Response:
@@ -647,6 +647,24 @@ async def export_discussion(request: Request, discussion_id: str) -> Any:
     )
 
 
+@router.get("/{discussion_id}/documents/{document_id}")
+async def get_discussion_document(
+    request: Request, discussion_id: str, document_id: str
+) -> Any:
+    """議論の添付 1 つ（閉域対応 U4 BR3.5）。
+
+    議論を読めて、その議論の添付で、添付を読めるときだけ配る。公開は署名付き URL へ
+    302、閉域はアプリが流す。読めなければ共通の例外ハンドラが 404 で答え、S3 に触れない。
+    """
+    result = await _run(
+        get_discussion_manager().deliver_document,
+        _principal(request),
+        discussion_id,
+        document_id,
+    )
+    return asset_response(result)
+
+
 @router.get("/{discussion_id}", response_class=HTMLResponse)
 async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
     """議論詳細ページ（インタビューを含む）。読める人だけ（BR2.4）、操作は管理できる人だけ"""
@@ -655,7 +673,13 @@ async def get_discussion_detail(request: Request, discussion_id: str) -> Any:
     principal = _principal(request)
     manager = get_discussion_manager()
     view = await _run(manager.get_discussion, principal, discussion_id)
-    document_urls = await _run(manager.get_document_urls, principal, view)
+    # 添付はアプリのルートで開く（公開・閉域とも。閉域対応 U4 BR4.2）。署名はここで作らない
+    servable = await _run(manager.servable_document_ids, principal, view)
+    document_urls = {
+        doc_id: f"/discussion/{quote(discussion_id, safe='')}/documents/"
+        f"{quote(doc_id, safe='')}"
+        for doc_id in servable
+    }
     custom_categories = (view.agent_config or {}).get("insight_categories")
     title = (
         "インタビューセッション" if view.mode == "interview" else f"議論: {view.topic}"

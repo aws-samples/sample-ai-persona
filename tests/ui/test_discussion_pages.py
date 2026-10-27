@@ -82,7 +82,7 @@ def detail_manager() -> Generator[Mock]:
     manager.get_default_categories.return_value = [
         {"name": "顧客ニーズ", "description": "ニーズ"}
     ]
-    manager.get_document_urls.return_value = {}
+    manager.servable_document_ids.return_value = []
     with patch("web.routers.discussion.get_discussion_manager", return_value=manager):
         yield manager
 

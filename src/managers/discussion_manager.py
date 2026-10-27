@@ -41,7 +41,9 @@ from ..models.sharing import ListTab, TabbedList
 from ..services.ai_service import AIService, AIServiceError
 from ..services.service_factory import service_factory
 from .components import discussion_validation
+from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
 from .components.access_policy import AccessPolicy
+from .components.asset_delivery import AssetDelivery
 from .components.discussion_records import DiscussionRecords
 from .components.file_attachments import FileAttachments
 from .components.owner_directory import OwnerDirectory
@@ -60,6 +62,8 @@ _DISCUSSION = ResourceType.DISCUSSION
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
+#: Lifetime of a document's presigned URL (unchanged by closed network U4).
+DOCUMENT_URL_EXPIRATION_SECONDS = 3600
 
 #: 種類で絞るときに 1 回の要求で読むページの上限（1 ページ 20 件）
 MODE_FILTER_MAX_PAGES = 10
@@ -94,6 +98,7 @@ class DiscussionManager:
         resource_sharing: Optional[ResourceSharing] = None,
         owners: Optional[OwnerDirectory] = None,
         s3_service: Any = None,
+        asset_delivery: Optional[AssetDelivery] = None,
     ):
         """
         Initialize discussion manager.
@@ -105,8 +110,11 @@ class DiscussionManager:
             participants: The per-task ``ParticipantReader`` (U6)
             resource_sharing: The per-task ``ResourceSharing`` (U6 lists)
             owners: The owner-name copy (display only)
-            s3_service: Signs document URLs (``None`` without S3)
+            s3_service: Holds the documents (``None`` without S3)
+            asset_delivery: Serves documents (closed network U4; built from
+                ``s3_service`` and ``Config.ASSET_DELIVERY`` when omitted)
         """
+        self._delivery = asset_delivery
         self.logger = logging.getLogger(__name__)
         self.ai_service = ai_service or service_factory.get_ai_service()
         self._attachments = file_attachments
@@ -157,6 +165,12 @@ class DiscussionManager:
         if self._s3 is None:
             self._s3 = service_factory.get_optional_s3_service()
         return self._s3
+
+    @property
+    def _asset_delivery(self) -> AssetDelivery:
+        if self._delivery is not None:
+            return self._delivery
+        return AssetDelivery(self._s3_service, config.ASSET_DELIVERY)
 
     # =========================================================================
     # 実行（BR2.8、BR7.1）
@@ -488,29 +502,57 @@ class DiscussionManager:
         """``(filename, markdown)`` of a discussion the user may read (BR9.1)."""
         return self._discussion_records.export_markdown(principal, discussion_id)
 
-    def get_document_urls(
+    def servable_document_ids(
         self, principal: Principal, view: DiscussionView
-    ) -> Dict[str, str]:
-        """Signed URLs of the documents the user may be served (BR5.1, NFR1.53).
+    ) -> List[str]:
+        """IDs of the documents the user may be served (BR5.1, NFR1.53, U4 BR4.2).
 
         Every document is read through ``FileAttachments.readable_file`` (the
-        parent discussion's readers); the stored metadata never yields a URL.
+        parent discussion's readers) and must be in S3. Nothing is signed: the
+        page links to :meth:`deliver_document`'s route for each ID.
         """
-        urls: Dict[str, str] = {}
-        if not view.discussion.documents or self._s3_service is None:
-            return urls
-        for doc in view.discussion.documents:
+        ids: List[str] = []
+        for doc in view.discussion.documents or []:
             try:
                 uploaded = self._file_attachments.readable_file(principal, doc.id)
-                if uploaded.file_path.startswith("s3://"):
-                    urls[doc.id] = self._s3_service.generate_presigned_url(
-                        uploaded.file_path
-                    )
             except CodedError:
                 continue
             except Exception:
-                self.logger.warning("Signing a document URL failed", exc_info=True)
-        return urls
+                self.logger.warning("Reading a document failed", exc_info=True)
+                continue
+            if uploaded.file_path.startswith("s3://"):
+                ids.append(doc.id)
+        return ids
+
+    def deliver_document(
+        self, principal: Principal, discussion_id: str, document_id: str
+    ) -> DeliveryResult:
+        """Serve one document of a discussion the user may read (U4 BR3.5).
+
+        Raises:
+            CodedError: ``DISCUSSION_NOT_FOUND`` (unreadable discussion);
+                ``FILE_NOT_FOUND`` (not this discussion's document, unreadable,
+                not in S3, or gone); ``ASSET_TOO_LARGE``;
+                ``S3_OPERATION_FAILED``.
+        """
+        view = self._discussion_records.get(principal, discussion_id)
+        not_found = DiscussionManagerError(
+            "document is not servable", code=ErrorCode.FILE_NOT_FOUND
+        )
+        if document_id not in {d.id for d in view.discussion.documents or []}:
+            raise not_found
+        uploaded = self._file_attachments.readable_file(principal, document_id)
+        if not uploaded.file_path.startswith("s3://"):
+            raise not_found
+        handle = AssetHandle(
+            s3_path=uploaded.file_path,
+            content_type=uploaded.mime_type,
+            download_name=uploaded.original_filename,
+            size_limit=SizeLimit.UPLOAD,
+            not_found_code=ErrorCode.FILE_NOT_FOUND,
+            presigned_expiration=DOCUMENT_URL_EXPIRATION_SECONDS,
+        )
+        return self._asset_delivery.deliver(handle, error_type=DiscussionManagerError)
 
     def delete_discussion(self, principal: Principal, discussion_id: str) -> bool:
         """Delete a discussion the user manages, then clean up (BR1.5, BR2.5).

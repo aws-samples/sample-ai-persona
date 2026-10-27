@@ -117,7 +117,8 @@ class ApiWorld:
         )
         self.sharing = SharingManager(world.sharing)
         self.file_manager = Mock()
-        self.file_manager.preview_url_for_path.return_value = "https://signed/image"
+        # 閉域対応 U4: 検査に通ったパスには、アプリのプレビューのルートを埋め込む
+        self.file_manager.check_preview_path.return_value = None
 
     def patch_routers(self, stack: ExitStack) -> None:
         for target, value in [

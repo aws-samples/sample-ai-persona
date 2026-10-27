@@ -307,8 +307,9 @@ graph TB
 
 閉域構成では、次はまだ閉域で動きません（後続の Unit で直します）。
 
-- アバターなど、署名付き URL で画像を出す 5 か所（U4）。画面は壊れず、画像だけが出ません
 - エンドポイントのポリシーでの絞り込み・Flow Logs・既存 VPC の取り込み（U2）
+
+アバターなど 5 か所のファイルは、閉域ではアプリ経由で流します（U4。下の「[ファイルの配信](#ファイルの配信)」）。
 
 閉域では、インターネットへ出る次の機能を使えません（U3。下の「[閉域で使えない機能](#閉域で使えない機能)」）。
 
@@ -467,6 +468,24 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 
 - 閉域の Stage に `enableAdditionalPersonaModels=true`（追加のモデル）か `dataAgentRuntimeArn`（Data Agent の ARN）を渡すと、synth でエラーになります。公開の Stage では今までどおり使えます
 - 値が許されない値（`NEMOTRON_SOURCE=ftp` など）だと、アプリは起動しません（既定値に落としません）
+
+#### ファイルの配信
+
+公開構成では、ブラウザがファイルを S3 の署名付き URL から直接取りに行きます。閉域の VPC からは S3 のホストへ届かないため、閉域の Stage のタスクにだけ CDK が `ASSET_DELIVERY=proxy` を渡し、次の 5 か所をアプリ経由の認証付きダウンロードにします（U4、`lib/deployment-profile.ts`）。公開の Stage には渡さず、アプリの既定 `presigned`（今の振る舞い）のままです。閉域で `presigned` を選ぶパラメータはありません。
+
+| ファイル | ルート | 上限 |
+|---|---|---|
+| ペルソナのアバター | `GET /persona/{id}/avatar` | 10 MiB |
+| アンケートの結果の CSV | `GET /survey/results/{id}/download` | 200 MiB |
+| アンケートの結果の画像 | `GET /survey/results/{id}/images/{image_id}` | 10 MiB |
+| テンプレートの画像 | `GET /survey/image-preview/file?file_path=...` | 10 MiB |
+| 議論の添付 | `GET /discussion/{id}/documents/{document_id}` | 10 MiB |
+
+- 認可は公開と同じです（読めない利用者には 404 を返し、S3 に触れません）。画面に埋め込む URL は公開・閉域ともこのルートで、公開ではルートが署名付き URL へ 302 で飛ばします
+- 本体は S3 から 256 KiB ずつ読んで流すため、ファイルの大きさによってタスクのメモリは増えません。応答には保存時の種類（`Content-Type`）と `X-Content-Type-Options: nosniff` を付け、画像（PNG・JPEG・WebP）と PDF だけを画面内で開き、ほかはダウンロードにします
+- 上限を超えるファイルは流さず、「ファイルが大きすぎるため表示できません。管理者に連絡してください」のエラー（`ASSET_TOO_LARGE`）になります。アップロードの上限は 10 MiB のため、通常は CSV だけが対象です
+- 200 MiB を超える CSV が出たときは、運用者が S3 のコンソールか CLI で閉域のアプリのバケット（下の「Nemotron のデータを置く」の手順 2 と同じバケット）の `survey-results/{アンケートの ID}/results.csv` を取り出し、上限の見直しを別の課題にしてください。例: `aws s3 cp s3://<バケット名>/survey-results/<アンケートの ID>/results.csv . --region ap-northeast-1`（検証用 EC2 から、S3 のゲートウェイ型エンドポイント経由）
+- `ASSET_DELIVERY` が `presigned`・`proxy` 以外だと、アプリは起動しません
 
 #### Nemotron のデータを置く
 

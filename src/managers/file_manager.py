@@ -10,8 +10,9 @@ v1.0.0 U5（BR5.1〜BR5.9）:
   ``expires_at`` を書く
 - 親への紐付けと配信の判定は Component ``FileAttachments`` が持つ
 - 記憶への取り込みのファイルは保存しない（``convert_file_to_markdown`` が確認と変換だけ）
-- ``preview_url_for_path`` は形・メタデータの一致・``can_read_file`` を満たすパスにだけ
-  配信 URL を出す（任意の S3 パスを受け付けない、BR5.8）
+- ``check_preview_path`` / ``deliver_preview`` は形・メタデータの一致・``can_read_file`` を
+  満たすパスだけを通し、配る（任意の S3 パスを受け付けない、BR5.8。配り方は閉域対応 U4 の
+  ``AssetDelivery``）
 """
 
 import hashlib
@@ -22,11 +23,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from ..config import config
+from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
 from ..models.authz import Permission, Principal
 from ..models.errors import CodedError, ErrorCode
 from ..models.uploaded_file import PENDING_TAG, UploadedFile, file_id_from_key
 from ..services.service_factory import service_factory
 from .components.access_policy import AccessPolicy
+from .components.asset_delivery import AssetDelivery
 from .components.file_attachments import FileAttachments
 from .components.sharing_runtime import build_access_parts, shared_access_parts
 
@@ -121,6 +124,7 @@ class FileManager:
         file_store: Optional["UploadedFileStore"] = None,
         attachments: Optional[FileAttachments] = None,
         clock: Optional[Callable[[], datetime]] = None,
+        asset_delivery: Optional[AssetDelivery] = None,
     ):
         """ファイルマネージャーの初期化
 
@@ -129,7 +133,10 @@ class FileManager:
             file_store: Upload metadata (optional, built on first use)
             attachments: The per-task ``FileAttachments`` (optional)
             clock: Aware-UTC clock (tests)
+            asset_delivery: Serves template images (closed network U4; built
+                from ``s3_service`` and ``Config.ASSET_DELIVERY`` when omitted)
         """
+        self._delivery = asset_delivery
         self.upload_dir = config.upload_dir
         self.discussion_doc_dir = Path("discussion_documents")
         self.survey_images_dir = Path("survey_images")
@@ -150,6 +157,12 @@ class FileManager:
             self.upload_dir.mkdir(parents=True, exist_ok=True)
             self.discussion_doc_dir.mkdir(parents=True, exist_ok=True)
             self.survey_images_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def _asset_delivery(self) -> AssetDelivery:
+        if self._delivery is not None:
+            return self._delivery
+        return AssetDelivery(self.s3_service, config.ASSET_DELIVERY)
 
     @property
     def _store(self) -> "UploadedFileStore":
@@ -463,17 +476,60 @@ class FileManager:
                 code=ErrorCode.FILE_OPERATION_FAILED,
             ) from e
 
-    def preview_url_for_path(self, principal: Principal, file_path: str) -> str:
-        """A presigned URL of a template image the user may read (BR5.8).
+    def check_preview_path(self, principal: Principal, file_path: str) -> None:
+        """Check that ``file_path`` is a template image the user may read (BR5.8).
+
+        Nothing is signed or opened; the router then embeds the app's own
+        preview route for this path (closed network U4 BR4.2).
+
+        Raises:
+            FileUploadError: ``FILE_NOT_FOUND``
+        """
+        self._readable_preview(principal, file_path)
+
+    def deliver_preview(self, principal: Principal, file_path: str) -> DeliveryResult:
+        """Serve a template image after the BR5.8 check (closed network U4 BR3.4).
+
+        Raises:
+            FileUploadError: ``FILE_NOT_FOUND`` (failed check or the object is
+                gone), ``ASSET_TOO_LARGE``, or ``FILE_OPERATION_FAILED`` when
+                S3 fails
+        """
+        uploaded = self._readable_preview(principal, file_path)
+        handle = AssetHandle(
+            s3_path=file_path,
+            content_type=uploaded.mime_type,
+            download_name=uploaded.original_filename,
+            size_limit=SizeLimit.UPLOAD,
+            not_found_code=ErrorCode.FILE_NOT_FOUND,
+            presigned_expiration=PREVIEW_URL_EXPIRATION_SECONDS,
+        )
+        try:
+            return self._asset_delivery.deliver(handle, error_type=FileUploadError)
+        except FileUploadError as e:
+            if e.code is not ErrorCode.S3_OPERATION_FAILED:
+                raise
+            logger.warning("Preview could not be served: S3 failed")
+            raise FileUploadError(
+                "preview delivery failed", code=ErrorCode.FILE_OPERATION_FAILED
+            ) from e
+        except Exception as e:
+            logger.warning("Preview could not be served: %s", type(e).__name__)
+            raise FileUploadError(
+                f"preview delivery failed ({type(e).__name__})",
+                code=ErrorCode.FILE_OPERATION_FAILED,
+            ) from e
+
+    def _readable_preview(self, principal: Principal, file_path: str) -> UploadedFile:
+        """The upload behind a template image path the user may read (BR5.8).
 
         Only ``s3://{bucket}/uploads/{owner}/survey_image/{file_id}_{name}`` is
         accepted, where ``file_id`` is a UUID whose metadata holds exactly that
         key and ``FileAttachments.can_read_file`` passes. Anything else gets
-        ``FILE_NOT_FOUND`` and no URL is made.
+        ``FILE_NOT_FOUND``.
 
         Raises:
-            FileUploadError: ``FILE_NOT_FOUND`` (or ``FILE_OPERATION_FAILED``
-                when the URL cannot be signed)
+            FileUploadError: ``FILE_NOT_FOUND``
         """
         not_found = FileUploadError(
             "preview path is not a readable upload", code=ErrorCode.FILE_NOT_FOUND
@@ -492,16 +548,7 @@ class FileManager:
             raise
         if uploaded.s3_key != key:
             raise not_found
-        try:
-            return self.s3_service.generate_presigned_url(
-                file_path, PREVIEW_URL_EXPIRATION_SECONDS
-            )
-        except Exception as e:
-            logger.warning("Preview URL could not be signed: %s", type(e).__name__)
-            raise FileUploadError(
-                f"preview url failed ({type(e).__name__})",
-                code=ErrorCode.FILE_OPERATION_FAILED,
-            ) from e
+        return uploaded
 
     # プライベートメソッド
 

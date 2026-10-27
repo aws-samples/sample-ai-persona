@@ -51,7 +51,9 @@ from ..services.stores.survey_template_store import (
     SurveyTemplateStore,
     SurveyTemplateStoreError,
 )
+from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
 from .components.access_policy import AccessPolicy
+from .components.asset_delivery import AssetDelivery
 from .components.owner_directory import OwnerDirectory
 from .components.resource_lookup import ResourceLookup
 from .components.resource_sharing import SEARCH_LIMIT, ResourceSharing
@@ -70,6 +72,13 @@ MAX_SURVEY_BYTES = 350 * 1024
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
 SEARCH_RESULT_LIMIT = 100
+#: Lifetimes of the presigned URLs of a result CSV and a snapshot image
+#: (unchanged from before closed network U4).
+RESULT_CSV_URL_EXPIRATION_SECONDS = 300
+RESULT_IMAGE_URL_EXPIRATION_SECONDS = 3600
+#: Types a snapshot image may be served as. The type in the snapshot came from
+#: the template form, so anything else is sent as opaque bytes (U4 review).
+_RESULT_IMAGE_CONTENT_TYPES = frozenset({"image/png", "image/jpeg"})
 
 
 class SurveyExecutionManagerError(CodedError):
@@ -134,6 +143,7 @@ class SurveyExecutionManager:
         custom_persona_data_store: Optional[CustomPersonaDataStore] = None,
         result_cache: Optional[ResultCache] = None,
         sleep: Callable[[float], None] = time.sleep,
+        asset_delivery: Optional[AssetDelivery] = None,
     ) -> None:
         """Create the manager.
 
@@ -148,6 +158,9 @@ class SurveyExecutionManager:
             custom_persona_data_store: Custom persona data records.
             result_cache: The per-task cache of result CSVs (evicted on delete).
             sleep: Wait between cleanup attempts (tests).
+            asset_delivery: Serves result CSVs and images (closed network U4;
+                built from ``s3_service`` and ``Config.ASSET_DELIVERY`` when
+                omitted).
         """
         self._surveys = survey_store or service_factory.get_survey_store()
         self._templates = (
@@ -163,8 +176,15 @@ class SurveyExecutionManager:
         self._custom_store = custom_persona_data_store
         self._cache = result_cache
         self._sleep = sleep
+        self._delivery = asset_delivery
 
     # --- parts (built lazily) -------------------------------------------------------
+
+    @property
+    def _asset_delivery(self) -> AssetDelivery:
+        if self._delivery is not None:
+            return self._delivery
+        return AssetDelivery(self.s3_service, config.ASSET_DELIVERY)
 
     @property
     def _resource_sharing(self) -> ResourceSharing:
@@ -904,17 +924,27 @@ class SurveyExecutionManager:
             analysis_available=template is not None,
         )
 
-    def get_download_url(
-        self, principal: Principal, survey_id: str, expiration: int = 300
-    ) -> str:
-        """A signed URL of the result CSV, after the read check (BR2.6).
+    def deliver_result_csv(
+        self, principal: Principal, survey_id: str
+    ) -> DeliveryResult:
+        """Serve the result CSV after the read check (BR2.6, U4 BR3.2).
 
         Raises:
-            CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``.
+            CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_RESULT_NOT_READY``
+                (also when the object is gone), ``ASSET_TOO_LARGE`` or
+                ``S3_OPERATION_FAILED``.
         """
         survey = self._readable_survey(principal, survey_id)
-        return self.s3_service.generate_presigned_url(
-            self._result_path(survey), expiration
+        handle = AssetHandle(
+            s3_path=self._result_path(survey),
+            content_type="text/csv",
+            download_name=f"{survey.name}.csv",
+            size_limit=SizeLimit.SURVEY_CSV,
+            not_found_code=ErrorCode.SURVEY_RESULT_NOT_READY,
+            presigned_expiration=RESULT_CSV_URL_EXPIRATION_SECONDS,
+        )
+        return self._asset_delivery.deliver(
+            handle, error_type=SurveyExecutionManagerError
         )
 
     @staticmethod
@@ -925,27 +955,55 @@ class SurveyExecutionManager:
             )
         return survey.s3_result_path
 
-    def get_result_image_url(
+    def deliver_result_image(
         self, principal: Principal, survey_id: str, image_id: str
-    ) -> str:
-        """A signed URL of a snapshot image, after the read check (BR2.8).
+    ) -> DeliveryResult:
+        """Serve a snapshot image after the read check (BR2.8, U4 BR3.3).
 
         Raises:
-            CodedError: ``SURVEY_NOT_FOUND`` (unreadable survey) or
-                ``FILE_NOT_FOUND`` (not in the snapshot, or deleted).
+            CodedError: ``SURVEY_NOT_FOUND`` (unreadable survey),
+                ``FILE_NOT_FOUND`` (not in the snapshot, or deleted),
+                ``ASSET_TOO_LARGE`` or ``S3_OPERATION_FAILED``.
         """
         survey = self._readable_survey(principal, survey_id)
         snapshot = survey.template_snapshot
         image = snapshot.image(image_id) if snapshot is not None else None
-        if image is None or not image.file_path.startswith("s3://"):
+        if image is None or not self._is_survey_image_upload(image.file_path):
             raise SurveyExecutionManagerError(
                 "image is not in the snapshot", code=ErrorCode.FILE_NOT_FOUND
             )
-        if not self.s3_service.exists(image.file_path):
-            raise SurveyExecutionManagerError(
-                "image file is gone", code=ErrorCode.FILE_NOT_FOUND
-            )
-        return self.s3_service.generate_presigned_url(image.file_path)
+        content_type = (
+            image.mime_type
+            if image.mime_type in _RESULT_IMAGE_CONTENT_TYPES
+            else "application/octet-stream"
+        )
+        handle = AssetHandle(
+            s3_path=image.file_path,
+            content_type=content_type,
+            download_name=image.original_filename,
+            size_limit=SizeLimit.UPLOAD,
+            not_found_code=ErrorCode.FILE_NOT_FOUND,
+            presigned_expiration=RESULT_IMAGE_URL_EXPIRATION_SECONDS,
+            check_exists=True,
+        )
+        return self._asset_delivery.deliver(
+            handle, error_type=SurveyExecutionManagerError
+        )
+
+    def _is_survey_image_upload(self, file_path: str) -> bool:
+        """Whether a snapshot path is a survey image upload in this bucket.
+
+        The snapshot copies the template's paths, which came from the form, so
+        only ``uploads/{owner}/survey_image/{file}`` is served (U4 review).
+        """
+        key = self.s3_service.key_of(file_path or "")
+        parts = (key or "").split("/")
+        return (
+            len(parts) == 4
+            and parts[0] == "uploads"
+            and parts[2] == "survey_image"
+            and all(parts)
+        )
 
     # =========================================================================
     # 削除（BR1.8）

@@ -94,7 +94,8 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
 }
 
 /**
- * The per-feature values of the closed task (U3, BR5.1, BR5.3〜BR5.5).
+ * The per-feature values of the closed task (U3, BR5.1, BR5.3〜BR5.5), and the file delivery
+ * mode `ASSET_DELIVERY=proxy` (U4, BR5.1).
  *
  * Throws when the closed Stage is given a feature that needs the internet (additional models,
  * the data agent) or a Nemotron key the app cannot use.
@@ -120,6 +121,8 @@ function resolveClosedFeatures(
     NEMOTRON_SOURCE: 's3',
     NEMOTRON_DATASET_KEY: key,
     DATA_AGENT_ALLOWED: 'false',
+    // 閉域対応 U4（BR5.1）: 5 か所のファイルをアプリ経由で流す。閉域で presigned を選ぶ入力は作らない
+    ASSET_DELIVERY: 'proxy',
   });
 }
 

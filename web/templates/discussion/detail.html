@@ -7,7 +7,8 @@
   引数:
     discussion    ... DiscussionView（本体の項目・発言・レポート・参加者の状態）
     manageable    ... 削除・共有・再生成・レポートの保存と編集を出すか
-    document_urls ... 資料の ID -> 配信 URL（読める資料だけ）
+    document_urls ... 資料の ID -> アプリの配信のルート /discussion/{id}/documents/{資料の ID}
+                      （読めて S3 にある資料だけ。閉域対応 U4）
 #}
 
 {% block content %}
@@ -172,7 +173,7 @@
             {% set doc_id = doc.id if doc.id else doc.file_path %}
             {% set file_url = document_urls.get(doc_id) if document_urls else None %}
             <div class="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
-                {# 画像プレビュー（署名付きURLがある場合） #}
+                {# 画像プレビュー（配信のルートがある場合。公開は 302、閉域はアプリが流す） #}
                 {% if doc.mime_type and doc.mime_type.startswith('image/') and file_url %}
                 <a href="{{ file_url }}" target="_blank" class="block">
                     <div class="aspect-video bg-gray-100 flex items-center justify-center overflow-hidden">
