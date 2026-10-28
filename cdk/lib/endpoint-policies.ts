@@ -77,6 +77,11 @@ export interface EndpointAccessScope {
   readonly knowledgeBaseArn: string;
   /** このアカウント・リージョンの model-invocation-job/*（タスクロールと同じ）。 */
   readonly batchJobArn: string;
+  /**
+   * バッチ推論のジョブに渡すロール（BedrockBatchRole）。CreateModelInvocationJob の iam:PassRole は、
+   * bedrock のエンドポイントのポリシーでも評価される（BR1.10）。
+   */
+  readonly batchRoleArn: string;
 }
 
 /** The AWS-managed bucket where ECR stores image layers (`prod-<region>-starport-layer-bucket`). */
@@ -139,7 +144,8 @@ export const RESTRICTED_ENDPOINT_SERVICES: readonly RestrictedEndpointService[] 
 
 /**
  * The statements of one endpoint's policy (functional-spec.md §3): `<prefix>:*` on the app's
- * resources, the list or unsigned APIs on `*`, and for S3 `s3:GetObject` on the ECR layer bucket.
+ * resources, the list or unsigned APIs on `*`, for S3 `s3:GetObject` on the ECR layer bucket, and
+ * for Bedrock `iam:PassRole` on the batch inference role.
  * Every statement allows any principal (BR1.2).
  */
 export function endpointPolicyStatements(
@@ -154,6 +160,11 @@ export function endpointPolicyStatements(
   if (service === 's3') {
     // BR1.5: タスクがイメージのレイヤーを取得するため（読み取りだけ）
     statements.push(allow(['s3:GetObject'], [`${scope.ecrLayerBucketArn}/*`]));
+  }
+  if (service === 'bedrock') {
+    // BR1.10: バッチ推論のジョブの作成でロールを渡す。iam:PassRole もエンドポイントのポリシーの対象になる
+    // （AWS Security Blog「How to use the PassRole permission with IAM roles」）。渡せるのはこのロールだけ
+    statements.push(allow(['iam:PassRole'], [scope.batchRoleArn]));
   }
   return statements;
 }

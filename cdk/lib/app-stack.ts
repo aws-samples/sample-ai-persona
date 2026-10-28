@@ -252,7 +252,13 @@ export class AppStack extends Stack {
     // 同じ参照でエンドポイントのポリシーを付ける
     if (network) {
       network.restrictEndpoints(
-        this.endpointAccessScope(data, logGroup, [data.tokenEncryptionKeys, data.loginCookieSigningKey, clientSecret], inferenceArns),
+        this.endpointAccessScope(
+          data,
+          logGroup,
+          [data.tokenEncryptionKeys, data.loginCookieSigningKey, clientSecret],
+          inferenceArns,
+          batchRole.role.roleArn,
+        ),
       );
     }
 
@@ -297,6 +303,7 @@ export class AppStack extends Stack {
     logGroup: logs.ILogGroup,
     secrets: secretsmanager.ISecret[],
     inferenceArns: string[],
+    batchRoleArn: string,
   ): EndpointAccessScope {
     const { partition, account, region } = this;
     return {
@@ -312,6 +319,8 @@ export class AppStack extends Stack {
       inferenceArns,
       knowledgeBaseArn: `arn:${partition}:bedrock:${region}:${account}:knowledge-base/*`,
       batchJobArn: `arn:${partition}:bedrock:${region}:${account}:model-invocation-job/*`,
+      // タスクロールの iam:PassRole と同じロール（grantTaskRole）
+      batchRoleArn,
     };
   }
 

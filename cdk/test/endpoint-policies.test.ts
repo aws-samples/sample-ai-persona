@@ -36,6 +36,7 @@ function scope(overrides: Partial<EndpointAccessScope> = {}): EndpointAccessScop
     inferenceArns: inferenceArnList(ENV, { inferenceScope: 'global', explicitModelIds: {} }),
     knowledgeBaseArn: arn('bedrock', 'knowledge-base/*'),
     batchJobArn: arn('bedrock', 'model-invocation-job/*'),
+    batchRoleArn: `arn:aws:iam::${ACCOUNT}:role/BedrockBatchRole`,
     ...overrides,
   };
 }
@@ -119,11 +120,19 @@ describe('endpointPolicyStatements: 12 種のサービスごとの文（function
     }
   });
 
-  test('bedrock: 推論の ARN とバッチ推論のジョブ、一覧の API 3 つ', () => {
+  test('bedrock: 推論の ARN とバッチ推論のジョブ、一覧の API 3 つ、バッチ推論のロールの iam:PassRole（BR1.10）', () => {
     expect(shapeOf('bedrock')).toEqual({
       'bedrock:*': [...s.inferenceArns, s.batchJobArn].sort(),
       'bedrock:ListFoundationModels,bedrock:ListInferenceProfiles,bedrock:ListModelInvocationJobs': ['*'],
+      'iam:PassRole': [s.batchRoleArn],
     });
+  });
+
+  test('iam:PassRole は bedrock のエンドポイントだけに入る（ほかのエンドポイントからロールは渡せない）', () => {
+    const withPassRole = RESTRICTED_ENDPOINT_SERVICES.filter((service) =>
+      statementsOf(service).some((statement) => statement.Action.includes('iam:PassRole')),
+    );
+    expect(withPassRole).toEqual(['bedrock']);
   });
 
   test('S3: アプリのバケットと <ARN>/*、ECR のレイヤーのバケットは s3:GetObject だけ（BR1.5）', () => {

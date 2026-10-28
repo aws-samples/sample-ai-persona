@@ -802,13 +802,17 @@ function endpointServicesOf(action: string): string[] | undefined {
       if (name.startsWith('InvokeModel')) return ['bedrock-runtime'];
       if (name === 'Retrieve') return ['bedrock-agent-runtime'];
       return ['bedrock'];
+    case 'iam':
+      // PassRole はロールを渡す先のサービスの要求（CreateModelInvocationJob）と一緒に、そのエンドポイントの
+      // ポリシーで評価される（BR1.10）。タスクロールの PassRole はバッチ推論のロールだけ
+      return name === 'PassRole' ? ['bedrock'] : undefined;
     default:
       return undefined;
   }
 }
 
 /** Services the 12 endpoints do not cover (BR1.4: excluded from the coverage check). */
-const NOT_THROUGH_ENDPOINTS = ['iam', 'kms'];
+const NOT_THROUGH_ENDPOINTS = ['kms'];
 
 /** The statements of the task role and the execution role policies. */
 function roleStatements(template: Template): { role: string; statement: TemplateStatement }[] {

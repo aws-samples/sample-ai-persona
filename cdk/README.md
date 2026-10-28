@@ -579,7 +579,7 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 | `secretsmanager` | `TOKEN_ENCRYPTION_KEYS`・`LOGIN_COOKIE_SIGNING_KEY`・`COGNITO_CLIENT_SECRET` の 3 つの秘密 | なし |
 | `cognito-idp` | この Stage の User Pool | `cognito-idp:RevokeToken`（ログアウト。IAM で認可されない API のため） |
 | `bedrock-runtime` | `lib/bedrock-arns.ts` の推論の ARN の一覧 | なし |
-| `bedrock` | 推論の ARN の一覧と `model-invocation-job/*`（このアカウント・リージョン） | `bedrock:ListFoundationModels`・`bedrock:ListInferenceProfiles`・`bedrock:ListModelInvocationJobs` |
+| `bedrock` | 推論の ARN の一覧と `model-invocation-job/*`（このアカウント・リージョン）。バッチ推論のロールへの `iam:PassRole`（ジョブの作成でロールを渡すため。`iam:PassRole` もエンドポイントのポリシーで評価される） | `bedrock:ListFoundationModels`・`bedrock:ListInferenceProfiles`・`bedrock:ListModelInvocationJobs` |
 | `bedrock-agent-runtime` | `knowledge-base/*`（このアカウント・リージョン） | なし |
 | `bedrock-agentcore`・`bedrock-agentcore-control` | この Stage の AgentCore Memory と `<ARN>/*` | `bedrock-agentcore:ListMemories` |
 
