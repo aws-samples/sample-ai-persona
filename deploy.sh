@@ -27,7 +27,8 @@
 #
 # 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
 #   ./deploy.sh --closed --certificate-arn <ACM の証明書の ARN> --domain-name <FQDN> \
-#     [--allowed-cidrs <CIDR,CIDR>] [--create-test-environment]
+#     [--allowed-cidrs <CIDR,CIDR>] [--create-test-environment] [--endpoint-az-count <1|2>] \
+#     [--create-resolver-endpoint --resolver-allowed-cidrs <社内 DNS の CIDR,CIDR>]
 #   ① cdk deploy AIPersonaDevClosed/Data（us-east-1 の bootstrap と Edge はしない）
 #   ② イメージを閉域の Data の ECR へ送る ③ cdk deploy AIPersonaDevClosed/App -c imageTag=<タグ>
 #   --image-tag・--restart-app・--region も --closed と一緒に使える（対象は閉域の Stage）。
@@ -54,6 +55,10 @@ DOMAIN_NAME=""
 ALLOWED_CIDRS=""
 CREATE_TEST_ENVIRONMENT=false
 NEMOTRON_DATASET_KEY=""
+ENDPOINT_AZ_COUNT=""
+ENDPOINT_AZ_COUNT_GIVEN=false
+CREATE_RESOLVER_ENDPOINT=false
+RESOLVER_ALLOWED_CIDRS=""
 CLOSED_OPTION_GIVEN=""
 INFERENCE_SCOPE=""
 INFERENCE_SCOPE_GIVEN=false
@@ -93,6 +98,12 @@ usage() {
   --create-test-environment   検証用の Windows EC2（Fleet Manager で入る）も作る
   --nemotron-dataset-key KEY  事前に配置する Nemotron の Parquet のキー（アプリのバケットの中。
                               既定: persona-dataset/nemotron-personas-japan.parquet）
+  --endpoint-az-count 1|2     インターフェイス型 VPC エンドポイントを置く AZ の数（既定: parameters.ts の
+                              値。dev は 1）。1 ではタスクと検証用 EC2 も同じ AZ に置く（ALB は 2 AZ）
+  --create-resolver-endpoint  社内 DNS から転送を受ける Route 53 Resolver の Inbound Endpoint を作る
+                              （既定: 作らない。--resolver-allowed-cidrs が要る）
+  --resolver-allowed-cidrs CIDRS
+                              Resolver に問い合わせてよい社内 DNS の CIDR（カンマ区切り。TCP・UDP 53）
   --restart-app・--image-tag・--region は --closed と一緒に使える（対象は閉域の Stage）
   許可する CIDR か検証用 EC2 のどちらかが要る（どちらもなければ CDK の synth で止まる）
 
@@ -129,6 +140,13 @@ while [[ $# -gt 0 ]]; do
     --nemotron-dataset-key)
       [[ $# -ge 2 ]] || { log_error "--nemotron-dataset-key には S3 のキーを指定してください"; exit 1; }
       NEMOTRON_DATASET_KEY="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
+    --endpoint-az-count)
+      [[ $# -ge 2 ]] || { log_error "--endpoint-az-count には 1 か 2 を指定してください"; exit 1; }
+      ENDPOINT_AZ_COUNT="$2"; ENDPOINT_AZ_COUNT_GIVEN=true; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
+    --create-resolver-endpoint) CREATE_RESOLVER_ENDPOINT=true; CLOSED_OPTION_GIVEN="$1"; shift ;;
+    --resolver-allowed-cidrs)
+      [[ $# -ge 2 ]] || { log_error "--resolver-allowed-cidrs には社内 DNS の CIDR（カンマ区切り）を指定してください"; exit 1; }
+      RESOLVER_ALLOWED_CIDRS="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) log_error "不明なオプション: $1"; usage; exit 1 ;;
   esac
@@ -142,6 +160,12 @@ fi
 # 推論の範囲の検査も AWS・CDK に触れる前に行う（閉域対応 U5 BR1.9）
 if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" && "${INFERENCE_SCOPE}" != "global" && "${INFERENCE_SCOPE}" != "jp" ]]; then
   log_error "--inference-scope には global か jp を指定してください（受け取った値: '${INFERENCE_SCOPE}'）"
+  exit 1
+fi
+# エンドポイントの AZ の数の検査も同じく AWS・CDK に触れる前に行う（閉域対応 U2 BR5.1）。
+# Resolver の CIDR の形と組み合わせ（作る指定と CIDR）は CDK の synth が検査する（BR3.2、BR3.3）
+if [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "true" && "${ENDPOINT_AZ_COUNT}" != "1" && "${ENDPOINT_AZ_COUNT}" != "2" ]]; then
+  log_error "--endpoint-az-count には 1 か 2 を指定してください（受け取った値: '${ENDPOINT_AZ_COUNT}'）"
   exit 1
 fi
 
@@ -260,6 +284,16 @@ if [[ "${CLOSED}" == "true" ]]; then
   if [[ -n "${NEMOTRON_DATASET_KEY}" ]]; then
     CDK_CONTEXT+=(-c "closedNemotronDatasetKey=${NEMOTRON_DATASET_KEY}")
   fi
+  # 閉域対応 U2（BR5.1）。渡したときだけ（省略時は parameters.ts の値: AZ の数 1、Resolver なし）
+  if [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "true" ]]; then
+    CDK_CONTEXT+=(-c "closedEndpointAzCount=${ENDPOINT_AZ_COUNT}")
+  fi
+  if [[ "${CREATE_RESOLVER_ENDPOINT}" == "true" ]]; then
+    CDK_CONTEXT+=(-c "closedCreateResolverEndpoint=true")
+  fi
+  if [[ -n "${RESOLVER_ALLOWED_CIDRS}" ]]; then
+    CDK_CONTEXT+=(-c "closedResolverAllowedCidrs=${RESOLVER_ALLOWED_CIDRS}")
+  fi
 fi
 
 # ===== Step 2: ① Data（公開は Edge も） =====
@@ -347,6 +381,9 @@ if [[ "${CLOSED}" == "true" ]]; then
   [[ "${CREATE_TEST_ENVIRONMENT}" == "false" ]] || CLOSED_ARGS+=" --create-test-environment"
   [[ -z "${NEMOTRON_DATASET_KEY}" ]] || CLOSED_ARGS+=" --nemotron-dataset-key ${NEMOTRON_DATASET_KEY}"
   [[ "${INFERENCE_SCOPE_GIVEN}" == "false" ]] || CLOSED_ARGS+=" --inference-scope ${INFERENCE_SCOPE}"
+  [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "false" ]] || CLOSED_ARGS+=" --endpoint-az-count ${ENDPOINT_AZ_COUNT}"
+  [[ "${CREATE_RESOLVER_ENDPOINT}" == "false" ]] || CLOSED_ARGS+=" --create-resolver-endpoint"
+  [[ -z "${RESOLVER_ALLOWED_CIDRS}" ]] || CLOSED_ARGS+=" --resolver-allowed-cidrs ${RESOLVER_ALLOWED_CIDRS}"
   echo "再デプロイ（コードを更新したとき）: ./deploy.sh ${CLOSED_ARGS}"
   echo "前の版に戻す:                       ./deploy.sh ${CLOSED_ARGS} --image-tag <前のタグ>"
   echo "秘密を書き換えたあと:               ./deploy.sh --closed --restart-app"

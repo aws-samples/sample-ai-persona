@@ -76,10 +76,11 @@ export const NAG_REASONS = {
   kmsDataKeyActions:
     'Sessions テーブルのカスタマー管理キーへの grantReadWriteData が付ける kms:GenerateDataKey*・' +
     'kms:ReEncrypt*。対象はそのキーの ARN だけ',
-  /** VPC7: 閉域の VPC（U1 閉域、security-design.md §7）。U2 までの一時的な抑止。 */
-  closedFlowLogsUntilU2:
-    '閉域の VPC の Flow Logs は U2（u2-closed-network-hardening）で作る。U1 の細い一本では' +
-    'エンドポイントの結線を確かめるところまでで、それまでの一時的な抑止',
+  /** VPC7: 閉域の VPC（閉域対応 U2 BR4.1、functional-design-questions.md Q5-1 A）。 */
+  closedFlowLogsNotCreated:
+    '閉域の VPC の Flow Logs は作らないと利用者が決めた（費用と管理の対象を増やさない）。外へ出る経路が' +
+    'ないことは、テンプレートの検査（NAT・IGW・パブリック IP がない、NFR3）と、タスクの SG の外向きを' +
+    'エンドポイントとゲートウェイ型の 443 だけに固定するテストで保証する',
   /**
    * W3010（aws-cdk-lib の CloudFormation Validate の warning）: 閉域の VPC のサブネットと検証用 EC2
    * （U1 閉域、Infrastructure Design レビュー R-05）。

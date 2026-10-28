@@ -12,6 +12,11 @@ const WINDOWS_KMS_PORT = 1688;
 
 export interface ValidationEnvironmentProps {
   vpc: ec2.IVpc;
+  /**
+   * インスタンスを置くサブネット（閉域対応 U2 BR2.4）。省略時は PRIVATE_ISOLATED。閉域で AZ の数 1 の
+   * ときは、エンドポイントと同じ AZ を渡す。
+   */
+  subnets?: ec2.SubnetSelection;
 }
 
 /**
@@ -63,7 +68,7 @@ export class ValidationEnvironment extends Construct {
 
     this.instance = new ec2.Instance(this, 'Instance', {
       vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: props.subnets ?? { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       instanceType: new ec2.InstanceType('t3.medium'),
       machineImage: ec2.MachineImage.latestWindows(
         ec2.WindowsVersion.WINDOWS_SERVER_2022_JAPANESE_FULL_BASE,

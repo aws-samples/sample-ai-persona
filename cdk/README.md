@@ -288,26 +288,26 @@ graph TB
         EC2[検証用 Windows EC2（任意）] -->|HTTPS 443| ALB[内部 ALB（HTTPS だけ）]
         Client([許可した CIDR の利用者]) -->|HTTPS 443| ALB
         ALB -->|HTTP 80| ECS[ECS Fargate（アプリ）]
-        ECS -->|443| EP[インターフェイス型 VPC エンドポイント 10 種]
-        ECS -->|443| GW[ゲートウェイ型 VPC エンドポイント（S3・DynamoDB）]
+        ECS -->|443| EP[インターフェイス型 VPC エンドポイント 10 種（ポリシーで絞る）]
+        ECS -->|443| GW[ゲートウェイ型 VPC エンドポイント（S3・DynamoDB。ポリシーで絞る）]
         PHZ[Private Hosted Zone（FQDN → ALB）]
+        R[Resolver Inbound Endpoint（任意）] --> PHZ
     end
+    DNS([社内 DNS（任意）]) -->|TCP・UDP 53| R
     EP --> AWS[ECR・Logs・Secrets Manager・Cognito・Bedrock・AgentCore]
     GW --> Data[(DynamoDB・S3)]
 ```
 
-テキストでの説明: 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、Private Hosted Zone で引いた FQDN の内部 ALB へ HTTPS で届きます。TLS は ALB で終わり、ALB からアプリへは HTTP 80 です。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。CloudFront・WAF・Cognito の Managed Login は使わず、ログインはアプリ自身の画面（`AUTH_MODE=admin_api`）で行います。
+テキストでの説明: 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、Private Hosted Zone で引いた FQDN の内部 ALB へ HTTPS で届きます。TLS は ALB で終わり、ALB からアプリへは HTTP 80 です。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。エンドポイントのポリシーで、アクセス先をこのアプリの資源に絞ります。社内のネットワークから FQDN を引くときは、指定したときだけ作る Resolver Inbound Endpoint へ社内 DNS から転送します。CloudFront・WAF・Cognito の Managed Login は使わず、ログインはアプリ自身の画面（`AUTH_MODE=admin_api`）で行います。
 
 | スタック（Stage `AIPersonaDevClosed`） | 中身 | 依存 |
 |---|---|---|
 | `AIPersonaDevClosed-Data` | 公開と同じ Data スタック（テーブル・S3・ECR・AgentCore Memory・鍵・User Pool。すべて RETAIN）。User Pool は Managed Login のドメインを作らず、メールでの回復を無効にする | なし |
-| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB（HTTPS 443）・ECS Fargate・管理 API のログインのアプリクライアント・検証用 EC2（任意） | Data |
+| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント（ポリシー付き）・Private Hosted Zone・内部 ALB（HTTPS 443）・ECS Fargate・管理 API のログインのアプリクライアント・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） | Data |
 
 閉域の Stage は、証明書の ARN と FQDN の両方が渡されたときだけ作られます。渡さなければ `npx cdk synth` は今までどおり公開の Stage だけを出します。片方だけならエラーで止まります。
 
-閉域構成では、次はまだ閉域で動きません（後続の Unit で直します）。
-
-- エンドポイントのポリシーでの絞り込み・Flow Logs・既存 VPC の取り込み（U2）
+閉域の VPC は常に新規に作ります。既存の VPC に置くオプションは後続のリリースで検討します。VPC の Flow Logs は作りません（下の「[Flow Logs を作らない理由](#flow-logs-を作らない理由)」）。
 
 アバターなど 5 か所のファイルは、閉域ではアプリ経由で流します（U4。下の「[ファイルの配信](#ファイルの配信)」）。
 
@@ -329,6 +329,9 @@ graph TB
 | `closedCreateTestEnvironment` | `--create-test-environment` | `false` | 検証用の Windows EC2 と、そのための SSM のエンドポイント 3 種を作る |
 | `closedVpcCidr` | なし | `10.0.0.0/16` | 新規 VPC の CIDR |
 | `closedNemotronDatasetKey` | `--nemotron-dataset-key` | `persona-dataset/nemotron-personas-japan.parquet` | 事前に置く Nemotron の Parquet のキー（アプリのバケットの中）。英数字・`.`・`_`・`-`・`/` だけで、先頭の `/`・`..`・`//` なし、末尾は `.parquet`。`persona-dataset/custom/` と `persona-dataset/temp/` の下は使えない（誤りは synth でエラー） |
+| `closedEndpointAzCount` | `--endpoint-az-count` | `1`（`closedDevParameter`。省略時の既定は `2`） | インターフェイス型 VPC エンドポイントを置く AZ の数（`1` か `2`。ほかは synth でエラー）。`1` ではタスクと検証用 EC2 も同じ AZ に置き、内部 ALB は 2 AZ のまま（下の「[エンドポイントの AZ の数](#エンドポイントの-az-の数)」） |
+| `closedCreateResolverEndpoint` | `--create-resolver-endpoint` | `false` | 社内 DNS から転送を受ける Route 53 Resolver の Inbound Endpoint を作る |
+| `closedResolverAllowedCidrs` | `--resolver-allowed-cidrs` | なし | Resolver に問い合わせてよい社内 DNS の CIDR（カンマ区切り）。Resolver を作るときは 1 つ以上が要り、作らないときは渡すとエラー。`/0`（どこからでも）は使えない |
 
 - 許可する CIDR か検証用 EC2 のどちらかが要ります（どちらもなければ誰も ALB に届かないため、synth でエラー）
 - `envName` は `dev-closed` です。AgentCore Memory の名前（`AIPersona_v1_dev_closed_memory`）が公開の dev と重なりません
@@ -381,10 +384,13 @@ echo "$CERT_ARN"
 | 前の版に戻す | `./deploy.sh --closed --certificate-arn <ARN> --domain-name <FQDN> [同じ引数] --image-tag <前のタグ>` |
 | 秘密を書き換えたあと | `./deploy.sh --closed --restart-app`（閉域の Stage のタスクを入れ替える） |
 | リージョンを変える | `--region <リージョン>`（証明書も同じリージョンの ACM に置く） |
+| エンドポイントを 2 AZ に置く | `./deploy.sh --closed ... --endpoint-az-count 2` |
+| 社内 DNS から名前を引けるようにする | `./deploy.sh --closed ... --create-resolver-endpoint --resolver-allowed-cidrs 10.1.0.0/16,10.2.0.0/16` |
 
 - `--certificate-arn` と `--domain-name` がなければ、AWS に触れる前に使い方を出して終了コード 1 で終わります
 - 閉域の引数（`--certificate-arn` など）を `--closed` なしで渡すとエラーです。`--closed` のない `./deploy.sh` の動きは今までと同じです
-- 再デプロイでは、前と同じ引数（特に `--create-test-environment` と `--allowed-cidrs`）を渡します。渡さないと、検証用 EC2 や許可した CIDR のルールが消えます
+- 再デプロイでは、前と同じ引数（特に `--create-test-environment`・`--allowed-cidrs`・`--endpoint-az-count`・`--create-resolver-endpoint`）を渡します。渡さないと、検証用 EC2 や許可した CIDR のルール、Resolver が消え、AZ の数は `parameters.ts` の値に戻ります。`deploy.sh` は最後に、渡した引数を含めた再デプロイのコマンドを表示します
+- `--endpoint-az-count` の値が `1`・`2` 以外なら、AWS に触れる前に終了コード 1 で終わります
 - CI（`.github/workflows/cdk.yml` の `synth`）は、形だけの証明書の ARN で閉域の Stage を含めた synth（cdk-nag を含む）を毎回行います。AWS には触れません
 
 #### 公開の Stage に差分がないことを確かめる
@@ -518,22 +524,105 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 
 #### VPC エンドポイントと月額の目安
 
-| 種類 | エンドポイント | 数 |
+| 種類 | エンドポイント | 数 | ポリシー |
+|---|---|---|---|
+| インターフェイス型 | `ecr.api`、`ecr.dkr`、`logs`、`secretsmanager`、`cognito-idp`、`bedrock-runtime`、`bedrock`、`bedrock-agent-runtime`、`bedrock-agentcore`、`bedrock-agentcore-control` | 10 | アプリの資源に絞る |
+| インターフェイス型（検証用 EC2 を作るときだけ） | `ssm`、`ssmmessages`、`ec2messages` | 3 | 付けない（すべて許可） |
+| ゲートウェイ型（無料） | `s3`、`dynamodb` | 2 | アプリの資源に絞る |
+
+インターフェイス型はどれもプライベート DNS を有効にし、`closedEndpointAzCount` の数の AZ に置きます。一覧は `lib/constructs/closed-network.ts` の `CLOSED_ENDPOINTS`・`CLOSED_GATEWAY_ENDPOINTS` にだけあります。
+
+月額の目安（東京リージョン、730 時間。2026-10-28 に AWS Price List API で確かめた単価: インターフェイス型エンドポイント 1 個・1 AZ あたり 1 時間 0.014 USD、Resolver の ENI 1 つあたり 1 時間 0.125 USD）:
+
+| 項目 | AZ の数 1（dev の既定） | AZ の数 2 |
 |---|---|---|
-| インターフェイス型 | `ecr.api`、`ecr.dkr`、`logs`、`secretsmanager`、`cognito-idp`、`bedrock-runtime`、`bedrock`、`bedrock-agent-runtime`、`bedrock-agentcore`、`bedrock-agentcore-control` | 10 |
-| インターフェイス型（検証用 EC2 を作るときだけ） | `ssm`、`ssmmessages`、`ec2messages` | 3 |
-| ゲートウェイ型（無料） | `s3`、`dynamodb` | 2 |
+| インターフェイス型エンドポイント 10 種 | 約 102 USD | 約 204 USD |
+| 検証用のエンドポイント 3 種（検証用 EC2 を作るときだけ） | 約 31 USD | 約 61 USD |
+| Resolver Inbound Endpoint（作るときだけ。AZ の数によらず ENI 2 つ） | 約 183 USD | 約 183 USD |
+| 検証用 EC2（t3.medium、Windows） | 約 70 USD（動かしたままの場合。止めればインスタンスの料金はかからない） | 同じ |
+| NAT Gateway | 0（公開の dev より約 45 USD 安い） | 0 |
 
-インターフェイス型はどれもプライベート DNS を有効にし、2 つの AZ に置きます。一覧は `lib/constructs/closed-network.ts` の `CLOSED_ENDPOINTS` にだけあります。
+| 構成 | AZ の数 1 | AZ の数 2 |
+|---|---|---|
+| エンドポイント 10 種だけ（Resolver なし・検証用 EC2 なし） | 約 102 USD | 約 204 USD |
+| エンドポイント 10 種 + Resolver | 約 285 USD | 約 387 USD |
+| エンドポイント 13 種（検証用 EC2 あり。EC2 自体は含まない） | 約 133 USD | 約 266 USD |
+| エンドポイント 13 種 + Resolver | 約 316 USD | 約 449 USD |
 
-| 項目 | 目安（月、東京リージョン） |
-|---|---|
-| インターフェイス型エンドポイント 10 種 × 2 AZ | 約 204 USD（1 個・1 AZ あたり 1 時間 0.014 USD × 730 時間） |
-| 検証用のエンドポイント 3 種 × 2 AZ | 約 61 USD（検証用 EC2 を作るときだけ） |
-| 検証用 EC2（t3.medium、Windows） | 約 70 USD（動かしたままの場合。止めればインスタンスの料金はかからない） |
-| NAT Gateway | 0（公開の dev より約 45 USD 安い） |
+エンドポイントのデータ処理料（1 GB あたり 0.01 USD）と、Resolver の問い合わせの料金は別にかかります。料金は変わることがあるため、デプロイの前に東京リージョンの料金ページで確かめてください。内部 ALB と Fargate は公開の dev と同じです。
 
-エンドポイントのデータ処理料は別にかかります。料金は変わることがあるため、デプロイの前に東京リージョンの料金ページで確かめてください。内部 ALB と Fargate は公開の dev と同じです。
+#### エンドポイントの AZ の数
+
+`closedEndpointAzCount`（`--endpoint-az-count`）で、インターフェイス型エンドポイントを置く AZ の数を `1` か `2` から選びます。`closedDevParameter` は `1`（月額のおよそ半分を減らす）、`parameters.ts` で省略したときの既定は `2` です。
+
+| 資源 | AZ の数 1 | AZ の数 2 |
+|---|---|---|
+| インターフェイス型エンドポイント | VPC の AZ の並びの先頭（`ap-northeast-1a`） | 2 つ |
+| ECS のタスク・検証用 EC2 | エンドポイントと同じ先頭の AZ（AZ をまたぐ通信の料金を避ける） | タスクは 2 つ、検証用 EC2 は先頭のサブネット |
+| 内部 ALB・Resolver の IP | 2 つ（ALB は 2 AZ が要る） | 2 つ |
+| VPC・サブネット | 2 AZ のまま | 2 AZ |
+
+- AZ の数 1 では、先頭の AZ が止まるとアプリも止まります（エンドポイントが 1 AZ なので、タスクを 2 AZ に置いても結果は同じ）
+- AZ の数を変えて再デプロイすると、エンドポイントの `SubnetIds` と ECS のサービスのサブネットがその場で更新されます。ステートフルな資源と VPC・サブネットは置き換わりません。デプロイの前に `cdk diff 'AIPersonaDevClosed/*'` で確かめます
+- 先頭の AZ が 13 種すべてのエンドポイントを提供している必要があります（`ap-northeast-1a` は 2026-10-28 に確かめた）。AZ の名前はアカウントごとに割り当てが違うため、別のアカウントでは、上の「閉域のパラメータ」の `aws ec2 describe-vpc-endpoint-services ... --query 'ServiceDetails[].AvailabilityZones'` で、`CLOSED_AVAILABILITY_ZONES` の先頭の AZ が含まれることを確かめます。含まれないと、デプロイがエンドポイントの作成で失敗します（synth では分かりません）
+
+#### VPC エンドポイントのポリシー
+
+アプリが使う 12 種（ゲートウェイ型 2 とインターフェイス型 10）のエンドポイントに、アクセス先をこのアプリの資源に絞るポリシーを付けます（`lib/endpoint-policies.ts`）。どの文もプリンシパルは `*` で、リソースだけを絞ります。ARN は手で書かず、タスクロールの権限と同じ参照から作ります。
+
+| エンドポイント | 許す資源（Action はそのサービスの `*`） | Resource `*` で許す API |
+|---|---|---|
+| `s3` | アプリのバケットと `<ARN>/*`。ECR のレイヤーのバケット `prod-<リージョン>-starport-layer-bucket/*` は `s3:GetObject` だけ | なし |
+| `dynamodb` | タスクロールが使うテーブルすべてと `<テーブル>/index/*` | `dynamodb:ListTables` |
+| `ecr.api`・`ecr.dkr` | Data の ECR のリポジトリ | `ecr:GetAuthorizationToken` |
+| `logs` | アプリのロググループ（`<ARN>` と `<ARN>:*`） | なし |
+| `secretsmanager` | `TOKEN_ENCRYPTION_KEYS`・`LOGIN_COOKIE_SIGNING_KEY`・`COGNITO_CLIENT_SECRET` の 3 つの秘密 | なし |
+| `cognito-idp` | この Stage の User Pool | `cognito-idp:RevokeToken`（ログアウト。IAM で認可されない API のため） |
+| `bedrock-runtime` | `lib/bedrock-arns.ts` の推論の ARN の一覧 | なし |
+| `bedrock` | 推論の ARN の一覧と `model-invocation-job/*`（このアカウント・リージョン） | `bedrock:ListFoundationModels`・`bedrock:ListInferenceProfiles`・`bedrock:ListModelInvocationJobs` |
+| `bedrock-agent-runtime` | `knowledge-base/*`（このアカウント・リージョン） | なし |
+| `bedrock-agentcore`・`bedrock-agentcore-control` | この Stage の AgentCore Memory と `<ARN>/*` | `bedrock-agentcore:ListMemories` |
+
+- 検証用 EC2 だけが使う `ssm`・`ssmmessages`・`ec2messages` には付けません（検証用 EC2 のロールは `AmazonSSMManagedInstanceCore` だけで、既定では作らない）
+- S3 のポリシーは同じルート表を使う検証用 EC2 にも効きます。検証用 EC2 の SG には S3 への外向きがないため、今までどおり S3 へは届きません
+- タスクロールと実行ロールが使う資源がすべてエンドポイントのポリシーに含まれることを、`test/closed-stage.test.ts` が確かめます。タスクロールに資源を足したら、`lib/endpoint-policies.ts` の表（とアクセス先の `AppStack.endpointAccessScope`）にも足します。足し忘れると jest が落ちます
+- デプロイのあとに拒否が出たら、CloudTrail の `errorCode`（`AccessDenied`、`vpcEndpointId` 付き）とアプリのログで、どのエンドポイントかを調べます
+
+#### 社内 DNS からの名前解決（Resolver Inbound Endpoint）
+
+社内のネットワーク（Direct Connect や VPN で閉域の VPC とつないだ端末）から `https://<FQDN>` を開くには、社内 DNS が FQDN の問い合わせを閉域の VPC の Resolver Inbound Endpoint へ転送します。Resolver は指定したときだけ作ります。
+
+1. 社内 DNS の CIDR を渡して作る
+
+   ```bash
+   ./deploy.sh --closed --certificate-arn <ARN> --domain-name <FQDN> \
+     --allowed-cidrs <利用者の CIDR> \
+     --create-resolver-endpoint --resolver-allowed-cidrs 10.1.0.0/16,10.2.0.0/16
+   ```
+
+   Resolver の SG は、渡した CIDR からの TCP・UDP の 53 だけを受け入れ、外向きのルールを持ちません（SG は応答を通します）。IP は VPC の 2 つの AZ のサブネットに 1 つずつ置きます（AZ の数 1 でも 2 つ）。
+
+2. Resolver の IP を調べる。ID は `AIPersonaDevClosed-App` の出力 `ResolverEndpointId` にあります
+
+   ```bash
+   RESOLVER_ID=$(aws cloudformation describe-stacks --stack-name AIPersonaDevClosed-App --region ap-northeast-1 \
+     --query "Stacks[0].Outputs[?OutputKey=='ResolverEndpointId'].OutputValue" --output text)
+   aws route53resolver list-resolver-endpoint-ip-addresses --region ap-northeast-1 \
+     --resolver-endpoint-id "${RESOLVER_ID}" --query 'IpAddresses[].Ip' --output text
+   ```
+
+3. 社内 DNS に、FQDN（`closedDomainName`）のゾーンを手順 2 の 2 つの IP へ転送する条件付きフォワーダーを足す。利用者の CIDR は、ALB に届くよう `--allowed-cidrs` に入れておきます
+
+- Resolver を作り直すと IP が変わります。そのときは手順 2 で調べ直し、社内 DNS の転送先を直します
+- dev には社内 DNS がないため、転送そのものは確かめません。Resolver ができること・SG のルール・IP の数は jest と `cdk diff` で確かめます
+- Resolver をやめるときは、`--create-resolver-endpoint` と `--resolver-allowed-cidrs` を付けずに流し直します（Resolver はデータを持たない）
+
+#### Flow Logs を作らない理由
+
+閉域の VPC には Flow Logs を作りません（利用者の判断。費用と管理の対象を増やさない）。外へ出る経路がないことは、次の 2 つで保証します。cdk-nag の `VPC7` は、この理由を書いて抑止しています（`lib/nag-reasons.ts` の `closedFlowLogsNotCreated`）。
+
+- テンプレートの検査: NAT Gateway・Internet Gateway・パブリック IP がない（`test/closed-stage.test.ts`）
+- タスクの SG の外向きを、エンドポイントの SG と S3・DynamoDB のプレフィックスリストへの 443 だけに固定するテスト
 
 ### 推論の範囲（`inferenceScope`）
 
@@ -564,7 +653,7 @@ Bedrock の推論を送ってよい範囲を、パラメータ 1 つで `global`
 - 3 つのモデル ID（`bedrockModelId`・`agentModelId`・`batchInferenceModelId`）は `parameters.ts` で省略しています。省略すると範囲の既定、明示すると範囲と照らさずにそのまま使います（`jp` で `global.*` を書いても止まりません）。`jp` で明示した `jp.*` 以外の ID は、呼ぶための IAM の権限が足されます（推論プロファイルの ID はそのプロファイルとリージョン `*` の基盤モデル、接頭辞のない基盤モデルの ID は Stack のリージョンの基盤モデル）。ARN の形（`arn:...`）は synth で止まります。ID で渡してください。
 - `global` では、明示したモデル ID に応じた IAM の追加はしません（もともとすべてのリージョンの基盤モデルと、このアカウントのすべての推論プロファイルを許すため）。`jp` だけが明示した ID の ARN を足します。
 - アプリケーション推論プロファイルは `jp` でも許します。中身が国内のモデルを指すことは運用で守ってください。
-- 閉域の Bedrock Runtime のエンドポイントにポリシーを付けるとき（U2）は、`lib/bedrock-arns.ts` の `bedrockInferenceArns` が返す一覧から作ってください（いまはエンドポイントにポリシーを付けていません）。「`jp` なら国内だけ」と決め打ちしないでください（明示したモデル ID とアプリケーション推論プロファイルが一覧に入るため）。
+- 閉域の `bedrock-runtime`・`bedrock` のエンドポイントのポリシーは、`lib/bedrock-arns.ts` の推論の ARN の一覧そのものから作ります（「[VPC エンドポイントのポリシー](#vpc-エンドポイントのポリシー)」）。範囲を変えるとポリシーも同じ一覧に変わります。「`jp` なら国内だけ」と決め打ちしないでください（明示したモデル ID とアプリケーション推論プロファイルが一覧に入るため）。
 - 範囲を変えても、保存済みのペルソナごとのモデル ID は書き換えません。アプリが読むたびに範囲の同じモデルに読み替えます（例: `jp` では `global` の Claude Haiku 4.5 を `jp` の Claude Haiku 4.5 で呼ぶ。同じモデルがなければ `AGENT_MODEL_ID`）。
 
 ### v1.0.0 の手元の開発

@@ -48,6 +48,11 @@ export interface FargateAppServiceProps {
   ingress?: FargateIngress;
   /** ALB とサービスを置くサブネットの種類（既定 PRIVATE_WITH_EGRESS。閉域は PRIVATE_ISOLATED）。 */
   subnetType?: ec2.SubnetType;
+  /**
+   * サービス（タスク）だけを置くサブネット（閉域対応 U2 BR2.4）。省略時は ALB と同じ subnetType の
+   * サブネット。閉域で AZ の数 1 のとき、タスクをエンドポイントと同じ AZ に置くために渡す。
+   */
+  serviceSubnets?: ec2.SubnetSelection;
 }
 
 /**
@@ -147,7 +152,7 @@ export class FargateAppService extends Construct {
       taskDefinition: this.taskDefinition,
       desiredCount,
       assignPublicIp: false,
-      vpcSubnets: privateSubnets,
+      vpcSubnets: props.serviceSubnets ?? privateSubnets,
       circuitBreaker: { enable: true, rollback: true },
       minHealthyPercent: 100,
       maxHealthyPercent: 200,

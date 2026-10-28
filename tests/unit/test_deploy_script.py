@@ -251,3 +251,99 @@ def test_help_lists_inference_scope(workspace):
     assert result.returncode == 0
     assert "--inference-scope" in result.stdout
     assert calls.read_text() == ""
+
+
+# 閉域対応 U2（BR5.1）: --endpoint-az-count・--create-resolver-endpoint・--resolver-allowed-cidrs は
+# --closed のときだけ、2 回の cdk deploy にコンテキストとして渡す
+
+_U2_OPTIONS = [
+    "--endpoint-az-count",
+    "2",
+    "--create-resolver-endpoint",
+    "--resolver-allowed-cidrs",
+    "10.1.0.0/16,10.2.0.0/16",
+]
+_U2_CONTEXT = [
+    "-c closedEndpointAzCount=2",
+    "-c closedCreateResolverEndpoint=true",
+    "-c closedResolverAllowedCidrs=10.1.0.0/16,10.2.0.0/16",
+]
+
+
+def test_closed_network_options_reach_every_closed_cdk_deploy(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run([*_CLOSED, *_U2_OPTIONS], repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    deploys = _deploys(calls)
+    assert len(deploys) == 2
+    for context in _U2_CONTEXT:
+        assert all(context in d for d in deploys), context
+
+
+def test_closed_deploy_without_the_options_passes_no_u2_context(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run(_CLOSED, repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = calls.read_text()
+    for key in (
+        "closedEndpointAzCount",
+        "closedCreateResolverEndpoint",
+        "closedResolverAllowedCidrs",
+    ):
+        assert key not in text
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--endpoint-az-count", "1"],
+        ["--create-resolver-endpoint"],
+        ["--resolver-allowed-cidrs", "10.1.0.0/16"],
+    ],
+    ids=["az-count", "create-resolver", "resolver-cidrs"],
+)
+def test_closed_network_options_need_closed(workspace, option):
+    repo, bin_dir, calls = workspace
+    result = _run(option, repo, bin_dir)
+    assert result.returncode != 0
+    assert option[0] in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
+@pytest.mark.parametrize("value", ["0", "3", "two", ""])
+def test_endpoint_az_count_other_than_1_or_2_stops_before_any_aws_call(
+    workspace, value
+):
+    repo, bin_dir, calls = workspace
+    result = _run([*_CLOSED, "--endpoint-az-count", value], repo, bin_dir)
+    assert result.returncode == 1
+    assert "--endpoint-az-count" in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
+def test_help_lists_the_closed_network_options(workspace):
+    repo, bin_dir, calls = workspace
+    result = _run(["--help"], repo, bin_dir)
+    assert result.returncode == 0
+    for option in (
+        "--endpoint-az-count",
+        "--create-resolver-endpoint",
+        "--resolver-allowed-cidrs",
+    ):
+        assert option in result.stdout
+    assert calls.read_text() == ""
+
+
+def test_redeploy_command_includes_the_closed_network_options(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, _ = _ok_tools(tmp_path)
+    result = _run([*_CLOSED, *_U2_OPTIONS], repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    redeploy = next(
+        line for line in result.stdout.splitlines() if line.startswith("再デプロイ")
+    )
+    assert "--endpoint-az-count 2" in redeploy
+    assert "--create-resolver-endpoint" in redeploy
+    assert "--resolver-allowed-cidrs 10.1.0.0/16,10.2.0.0/16" in redeploy

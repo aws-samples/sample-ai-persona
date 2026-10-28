@@ -29,7 +29,8 @@ const INFERENCE_PROFILE_ID = /^(global|us|us-gov|eu|apac|au|ca)\.(.+)$/;
  * モデル ID は、形で見分けて呼ぶ ARN を足す（BR2.3）。同じ ARN は 1 つにまとめる。
  *
  * タスクロール（推論・バッチ推論の作成）とバッチ推論ロール（InvokeModel）、cdk-nag の抑止で
- * 同じ一覧を使う（BR2.4）。U2 のエンドポイントのポリシーもこの一覧から作る。
+ * 同じ一覧を使う（BR2.4）。閉域の Bedrock 系のエンドポイントのポリシーもこの一覧から作る（閉域対応 U2
+ * BR1.6、endpoint-policies.ts）。
  *
  * Throws when an explicit model ID is given as an ARN under jp (the foundation model behind it
  * cannot be derived from the ARN).

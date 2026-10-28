@@ -74,6 +74,8 @@ describe('resolveDeploymentProfile: モードの解決（BR1.3、BR1.5）', () =
       domainName: DOMAIN_NAME,
       allowedCidrs: [],
       createTestEnvironment: true,
+      // 閉域対応 U2（BR2.1、BR3.1）: AZ の数は既定 2、Resolver は既定で作らない
+      endpointAzCount: 2,
     });
   });
 
@@ -168,13 +170,15 @@ describe('closedStageRequested: 閉域の Stage を作るか（BR1.1）', () => 
 describe('mergeClosedStageContext: コンテキストを閉域の既定に重ねる', () => {
   const base = closedDevParameter.closed as ClosedStageParameters;
 
-  test('closedDevParameter の既定は空の証明書・FQDN、空の許可 CIDR、検証用 EC2 なし、10.0.0.0/16', () => {
+  test('closedDevParameter の既定は空の証明書・FQDN、空の許可 CIDR、検証用 EC2 なし、10.0.0.0/16、AZ の数 1', () => {
     expect(base).toEqual({
       certificateArn: '',
       domainName: '',
       allowedCidrs: [],
       createTestEnvironment: false,
       vpcCidr: '10.0.0.0/16',
+      // 閉域対応 U2（BR2.2）: dev はインターフェイス型エンドポイントを 1 AZ に置く
+      endpointAzCount: 1,
     });
     expect(closedDevParameter.envName).toBe('dev-closed');
     expect(closedDevParameter.deploymentMode).toBe('closed');
@@ -216,6 +220,7 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
       allowedCidrs: ['10.10.0.0/16', '192.168.0.0/24'],
       createTestEnvironment: true,
       vpcCidr: '10.1.0.0/16',
+      endpointAzCount: 1,
     });
   });
 
@@ -438,5 +443,109 @@ describe('resolveDeploymentProfile: モデル ID（閉域対応 U5 BR1.5〜BR1.7
 
   test('global で何も明示しなければ PUBLIC_PROFILE と同じ（公開構成のテンプレートを変えない、BR1.8）', () => {
     expect(resolvePublic()).toEqual(PUBLIC_PROFILE);
+  });
+});
+
+describe('resolveDeploymentProfile: インターフェイス型エンドポイントの AZ の数（閉域対応 U2 BR2.1）', () => {
+  test('省略すると 2', () => {
+    expect(resolveClosed().closedNetwork?.endpointAzCount).toBe(2);
+  });
+
+  test.each([1, 2])('%p はそのまま使う', (count) => {
+    expect(resolveClosed({ endpointAzCount: count }).closedNetwork?.endpointAzCount).toBe(count);
+  });
+
+  test.each([0, 3, 1.5, Number.NaN])('%p はパラメータの名前と値を示してエラー', (count) => {
+    expect(() => resolveClosed({ endpointAzCount: count })).toThrow(
+      new RegExp(`closedEndpointAzCount.*"${String(count).replace('.', '\\.')}"`),
+    );
+  });
+});
+
+describe('resolveDeploymentProfile: Resolver Inbound Endpoint（閉域対応 U2 BR3.1〜BR3.3）', () => {
+  const CORPORATE_DNS = ['10.1.0.0/16', '10.2.0.0/16'];
+
+  test('既定では作らない（resolver の設定がない）', () => {
+    expect(resolveClosed().closedNetwork).not.toHaveProperty('resolver');
+  });
+
+  test('作る指定と社内 DNS の CIDR があれば、設定に入る（BR3.1）', () => {
+    const settings = resolveClosed({ createResolverEndpoint: true, resolverAllowedCidrs: CORPORATE_DNS }).closedNetwork;
+    expect(settings?.resolver).toEqual({ allowedCidrs: CORPORATE_DNS });
+  });
+
+  test('作る指定で CIDR が空ならエラー（BR3.2）', () => {
+    expect(() => resolveClosed({ createResolverEndpoint: true, resolverAllowedCidrs: [] })).toThrow(
+      /closedResolverAllowedCidrs/,
+    );
+    expect(() => resolveClosed({ createResolverEndpoint: true })).toThrow(/closedResolverAllowedCidrs/);
+  });
+
+  test('作らないのに CIDR を渡したら、closedCreateResolverEndpoint=true の付け忘れを示してエラー（BR3.3）', () => {
+    expect(() => resolveClosed({ createResolverEndpoint: false, resolverAllowedCidrs: CORPORATE_DNS })).toThrow(
+      /closedResolverAllowedCidrs.*closedCreateResolverEndpoint=true/,
+    );
+    expect(() => resolveClosed({ resolverAllowedCidrs: CORPORATE_DNS })).toThrow(/closedCreateResolverEndpoint=true/);
+  });
+
+  test.each(['10.0.0.0', '10.0.0.0/33', 'fd00::/8', 'abc'])('IPv4 の CIDR でない %p はエラー（BR3.2）', (cidr) => {
+    expect(() => resolveClosed({ createResolverEndpoint: true, resolverAllowedCidrs: [cidr] })).toThrow(
+      new RegExp(`closedResolverAllowedCidrs.*${cidr.replace(/[./]/g, '\\$&')}.*IPv4`),
+    );
+  });
+
+  test.each(['0.0.0.0/0', '10.0.0.0/0', '0.0.0.0/00'])('接頭辞の長さが 0 の %p はエラー（どこからでも受け入れるため、BR3.2）', (cidr) => {
+    expect(() =>
+      resolveClosed({ createResolverEndpoint: true, resolverAllowedCidrs: ['10.1.0.0/16', cidr] }),
+    ).toThrow(new RegExp(`closedResolverAllowedCidrs.*${cidr.replace(/[./]/g, '\\$&')}.*/0`));
+  });
+
+  test('closedAllowedCidrs の検査の文言は今のまま（パラメータの名前ごと）', () => {
+    expect(() => resolveClosed({ allowedCidrs: ['10.0.0.0'] })).toThrow(
+      'closedAllowedCidrs の "10.0.0.0" は IPv4 の CIDR（例 10.0.0.0/16）ではない',
+    );
+  });
+});
+
+describe('mergeClosedStageContext: U2 の 3 つのコンテキスト（閉域対応 U2）', () => {
+  const base = closed();
+
+  test('文字列を数・真偽値・CIDR の並びにする', () => {
+    const context: Record<string, string> = {
+      closedEndpointAzCount: '1',
+      closedCreateResolverEndpoint: 'true',
+      closedResolverAllowedCidrs: '10.1.0.0/16, 10.2.0.0/16',
+    };
+    expect(mergeClosedStageContext(base, (key) => context[key])).toEqual({
+      ...base,
+      endpointAzCount: 1,
+      createResolverEndpoint: true,
+      resolverAllowedCidrs: ['10.1.0.0/16', '10.2.0.0/16'],
+    });
+  });
+
+  test('コンテキストがなければ 3 つのキーを足さない。parameters.ts の値はそのまま残す', () => {
+    expect(mergeClosedStageContext(base, () => undefined)).toEqual(base);
+    const withBase = closed({ endpointAzCount: 1, createResolverEndpoint: true, resolverAllowedCidrs: ['10.1.0.0/16'] });
+    expect(mergeClosedStageContext(withBase, () => undefined)).toEqual(withBase);
+  });
+
+  test('コンテキストの AZ の数が parameters.ts の値より優先する（BR2.1）', () => {
+    const merged = mergeClosedStageContext(closed({ endpointAzCount: 1 }), (key) =>
+      key === 'closedEndpointAzCount' ? '2' : undefined,
+    );
+    expect(merged.endpointAzCount).toBe(2);
+  });
+
+  test.each(['0', '3', 'two', '', '1.5', ' '])('closedEndpointAzCount の %p は名前と値を示してエラー', (value) => {
+    expect(() =>
+      mergeClosedStageContext(base, (key) => (key === 'closedEndpointAzCount' ? value : undefined)),
+    ).toThrow(new RegExp(`closedEndpointAzCount.*"${value.replace('.', '\\.')}"`));
+  });
+
+  test('closedCreateResolverEndpoint が true・false 以外ならエラー（今の parseBoolean と同じ）', () => {
+    expect(() =>
+      mergeClosedStageContext(base, (key) => (key === 'closedCreateResolverEndpoint' ? 'yes' : undefined)),
+    ).toThrow(/closedCreateResolverEndpoint は true か false にする: "yes"/);
   });
 });
