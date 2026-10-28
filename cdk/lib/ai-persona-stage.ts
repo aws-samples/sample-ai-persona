@@ -62,6 +62,11 @@ export class AIPersonaStage extends Stage {
       // U3: the closed profile rejects these two (BR5.4, BR5.5); the public one ignores them
       enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
       dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
+      // U5: 推論の範囲はコンテキスト（deploy.sh --inference-scope）が parameters.ts より優先（BR1.1）
+      inferenceScope: this.resolveInferenceScope(parameter),
+      bedrockModelId: parameter.bedrockModelId,
+      agentModelId: parameter.agentModelId,
+      batchInferenceModelId: parameter.batchInferenceModelId,
     });
     const appDesiredCount = this.resolveDesiredCount(parameter);
     const closed = this.profile.deploymentMode === 'closed';
@@ -119,6 +124,12 @@ export class AIPersonaStage extends Stage {
       );
     }
     return mode;
+  }
+
+  /** `-c inferenceScope=...`, then `parameter.inferenceScope` (the profile checks the value). */
+  private resolveInferenceScope(parameter: AppParameter): string | undefined {
+    const fromContext = this.node.tryGetContext('inferenceScope');
+    return fromContext === undefined || fromContext === null ? parameter.inferenceScope : String(fromContext);
   }
 
   private mcpGatewayEnabled(parameter: AppParameter): boolean {

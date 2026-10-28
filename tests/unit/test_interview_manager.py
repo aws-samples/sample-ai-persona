@@ -256,6 +256,7 @@ class TestStart:
     @patch("src.managers.shared.model_validation.config")
     def test_additional_models_disabled(self, mock_config, manager, world):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+        mock_config.INFERENCE_SCOPE = "global"
         with raises_code(
             InterviewValidationError,
             ErrorCode.INTERVIEW_MODEL_ADDITIONAL_MODELS_DISABLED,

@@ -182,3 +182,62 @@ def test_closed_deploy_without_the_key_passes_no_key_context(workspace, tmp_path
     result = _run(_CLOSED, repo, ok_bin)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "closedNemotronDatasetKey" not in calls.read_text()
+
+
+# 閉域対応 U5（BR1.9）: --inference-scope は公開・閉域とも -c inferenceScope=<値>
+
+
+def _deploys(calls: Path) -> list[str]:
+    return [line for line in calls.read_text().splitlines() if " cdk deploy " in line]
+
+
+@pytest.mark.parametrize(
+    "base", [["--image-tag", "abc1234"], _CLOSED], ids=["public", "closed"]
+)
+def test_inference_scope_reaches_every_cdk_deploy(workspace, tmp_path, base):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run([*base, "--inference-scope", "jp"], repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    deploys = _deploys(calls)
+    assert len(deploys) == 2
+    assert all("-c inferenceScope=jp" in d for d in deploys)
+    assert "推論の範囲: jp" in result.stdout
+
+
+def test_without_inference_scope_no_context_and_the_default_is_shown(
+    workspace, tmp_path
+):
+    repo, _, _ = workspace
+    ok_bin, calls = _ok_tools(tmp_path)
+    result = _run(["--image-tag", "abc1234"], repo, ok_bin)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "inferenceScope" not in calls.read_text()
+    assert "推論の範囲: 指定なし（parameters.ts の値か global）" in result.stdout
+
+
+def test_scope_is_shown_before_the_first_cdk_deploy(workspace, tmp_path):
+    repo, _, _ = workspace
+    ok_bin, _ = _ok_tools(tmp_path)
+    result = _run(
+        ["--image-tag", "abc1234", "--inference-scope", "global"], repo, ok_bin
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "推論の範囲: global" in result.stdout.split("Step 2")[0]
+
+
+@pytest.mark.parametrize("value", ["us", "JP-East", ""])
+def test_unknown_inference_scope_stops_before_any_aws_call(workspace, value):
+    repo, bin_dir, calls = workspace
+    result = _run(["--inference-scope", value], repo, bin_dir)
+    assert result.returncode == 1
+    assert "--inference-scope" in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
+def test_help_lists_inference_scope(workspace):
+    repo, bin_dir, calls = workspace
+    result = _run(["--help"], repo, bin_dir)
+    assert result.returncode == 0
+    assert "--inference-scope" in result.stdout
+    assert calls.read_text() == ""

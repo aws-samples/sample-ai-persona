@@ -587,14 +587,17 @@ class AgentService:
 
     @staticmethod
     def _resolve_effective_spec(model_id: Optional[str]) -> Any:
-        """model_id省略時はconfig.AGENT_MODEL_ID（CDK/環境変数で上書き可能）を既定として使う。
+        """The spec of the model actually called (closed network U5, BR4.4, BR4.5).
 
-        model_registry.DEFAULT_MODEL_IDはstdlibのみのModels層にありconfigを参照できないため、
-        「未指定→実際に使う既定モデル」の解決はここ（Service層）で行う。
+        The Models layer cannot read config, so the scope (config.INFERENCE_SCOPE)
+        and the environment's default model (config.AGENT_MODEL_ID) are passed
+        to resolve_model_spec here.
         """
-        from ..models.model_registry import get_model_spec
+        from ..models.model_registry import resolve_model_spec
 
-        return get_model_spec(model_id or config.AGENT_MODEL_ID)
+        return resolve_model_spec(
+            model_id, config.INFERENCE_SCOPE, config.AGENT_MODEL_ID
+        )
 
     def _create_model(self, model_id: Optional[str] = None) -> Any:
         """
@@ -621,6 +624,11 @@ class AgentService:
         )
 
         spec = self._resolve_effective_spec(model_id)
+        if model_id and spec.model_id != model_id:
+            self.logger.info(
+                f"Model id resolved for inference scope {config.INFERENCE_SCOPE}: "
+                f"{model_id} -> {spec.model_id}"
+            )
         region = resolve_call_region(spec, config.AWS_REGION)
 
         if spec.provider == ModelProvider.OPENAI_RESPONSES:

@@ -76,6 +76,7 @@ class TestAgentService:
             patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
             patch("src.services.agent_service.config") as mock_config,
         ):
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "us-east-1"
             mock_config.AGENT_MODEL_ID = (
                 "global.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -93,23 +94,31 @@ class TestAgentService:
 
     @patch("src.services.agent_service.Agent")
     @patch("src.services.agent_service.BedrockModel")
-    def test_create_model_unknown_id_falls_back_to_default(
-        self, mock_bedrock_model, mock_agent
+    def test_create_model_unknown_id_falls_back_to_agent_model_id(
+        self, mock_bedrock_model, mock_agent, monkeypatch
     ):
-        """未知のmodel_idは既定モデルに丸められる（get_model_specの丸め動作）。"""
-        from src.models.model_registry import DEFAULT_MODEL_ID
+        """未知のmodel_idは環境の既定（config.AGENT_MODEL_ID）で呼ぶ（閉域対応 U5 BR4.5）。"""
+        from src.services import agent_service as module
 
+        monkeypatch.setattr(module.config, "INFERENCE_SCOPE", "global")
+        monkeypatch.setattr(
+            module.config, "AGENT_MODEL_ID", "global.anthropic.claude-sonnet-5"
+        )
         agent_service = AgentService()
         mock_bedrock_model.reset_mock()
 
         agent_service._create_model("unknown.model-id")
 
-        assert mock_bedrock_model.call_args.kwargs["model_id"] == DEFAULT_MODEL_ID
+        assert (
+            mock_bedrock_model.call_args.kwargs["model_id"]
+            == "global.anthropic.claude-sonnet-5"
+        )
 
     @patch("src.services.agent_service.config")
     def test_create_model_mantle_disabled_raises_config_error(self, mock_config):
         """ENABLE_ADDITIONAL_PERSONA_MODELS無効時にMantle系モデルを選択するとCONFIGエラーになる。"""
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+        mock_config.INFERENCE_SCOPE = "global"
 
         with (
             patch("src.services.agent_service.Agent"),
@@ -138,6 +147,7 @@ class TestAgentService:
         ):
             mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
             mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "us-east-1"
 
             agent_service._create_model("openai.gpt-5.6-terra")
@@ -164,6 +174,7 @@ class TestAgentService:
         ):
             mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
             mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "us-west-2"
 
             agent_service._create_model("google.gemma-4-31b")
@@ -189,6 +200,7 @@ class TestAgentService:
         ):
             mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
             mock_config.AGENT_MAX_TOKENS = 32000
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "ap-northeast-1"
 
             agent_service._create_model("openai.gpt-5.6-terra")
@@ -203,6 +215,7 @@ class TestAgentService:
             patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
             patch("src.services.agent_service.config") as mock_config,
         ):
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "ap-northeast-1"
             mock_config.get_aws_credentials.return_value = {}
             agent_service = AgentService()
@@ -225,6 +238,7 @@ class TestAgentService:
             patch("src.services.agent_service.BedrockModel") as mock_bedrock_model,
             patch("src.services.agent_service.config") as mock_config,
         ):
+            mock_config.INFERENCE_SCOPE = "global"
             mock_config.AWS_REGION = "us-east-1"
             mock_config.AGENT_MODEL_ID = "global.anthropic.claude-sonnet-5"
             mock_config.get_aws_credentials.return_value = {}
@@ -268,6 +282,7 @@ class TestAgentService:
         model_id未指定でもMantle経路になりBedrockModelが呼ばれないため、
         configを明示的にモックしてBedrock系モデルに固定する。
         """
+        mock_config.INFERENCE_SCOPE = "global"
         mock_config.AWS_REGION = "us-east-1"
         mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_config.get_aws_credentials.return_value = {}
@@ -315,6 +330,7 @@ class TestAgentService:
         model_id未指定でもMantle経路になりBedrockModelが呼ばれないため、
         configを明示的にモックしてBedrock系モデルに固定する。
         """
+        mock_config.INFERENCE_SCOPE = "global"
         mock_config.AWS_REGION = "us-east-1"
         mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_config.get_aws_credentials.return_value = {}
@@ -368,6 +384,7 @@ class TestInitialMessages:
         ]
 
     def _service(self, mock_config) -> AgentService:
+        mock_config.INFERENCE_SCOPE = "global"
         mock_config.AWS_REGION = "us-east-1"
         mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         mock_config.get_aws_credentials.return_value = {}
@@ -1126,3 +1143,91 @@ class TestReportGenerationCapacity:
 
         assert not isinstance(exc_info.value, ReportGenerationCapacityError)
         assert "内部スタックトレース" not in str(exc_info.value)
+
+
+class TestInferenceScopeModelResolution:
+    """閉域対応 U5（BR4.4）: 呼ぶモデルと requires_mantle は読み替え後の仕様で決める。"""
+
+    JP_HAIKU_5_5 = "jp.anthropic.claude-haiku-5-5"
+    JP_HAIKU_4_5 = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+    GLOBAL_HAIKU_4_5 = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    @pytest.fixture
+    def jp(self, monkeypatch):
+        from src.services import agent_service as module
+
+        monkeypatch.setattr(module.config, "INFERENCE_SCOPE", "jp")
+        monkeypatch.setattr(module.config, "AGENT_MODEL_ID", self.JP_HAIKU_5_5)
+        monkeypatch.setattr(module.config, "ENABLE_ADDITIONAL_PERSONA_MODELS", False)
+        monkeypatch.setattr(module.config, "AWS_REGION", "ap-northeast-1")
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_global_id_is_called_as_the_jp_model_and_logged(
+        self, mock_bedrock_model, mock_agent, jp, caplog
+    ):
+        service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        with caplog.at_level("INFO", logger="src.services.agent_service"):
+            service._create_model(self.GLOBAL_HAIKU_4_5)
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == self.JP_HAIKU_4_5
+        assert mock_bedrock_model.call_args.kwargs["region_name"] == "ap-northeast-1"
+        resolved = [
+            r.getMessage() for r in caplog.records if "resolved" in r.getMessage()
+        ]
+        assert resolved, "the rewrite from the stored ID to the called ID is logged"
+        assert self.GLOBAL_HAIKU_4_5 in resolved[0]
+        assert self.JP_HAIKU_4_5 in resolved[0]
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_in_scope_id_is_not_logged_as_resolved(
+        self, mock_bedrock_model, mock_agent, jp, caplog
+    ):
+        service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        with caplog.at_level("INFO", logger="src.services.agent_service"):
+            service._create_model(self.JP_HAIKU_4_5)
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == self.JP_HAIKU_4_5
+        assert not [r for r in caplog.records if "resolved" in r.getMessage()]
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_stored_gemma_in_jp_is_the_jp_default_without_mantle(
+        self, mock_bedrock_model, mock_agent, jp
+    ):
+        """保存済みの Gemma は jp の既定で呼び、Mantle 扱いにしない（設定が無効でも止めない）。"""
+        service = AgentService()
+        service._create_tool_logging_callback = Mock(return_value=None)
+        mock_bedrock_model.reset_mock()
+
+        persona_agent = service.create_persona_agent(
+            Persona.create_new(
+                name="n",
+                age=30,
+                occupation="o",
+                background="b",
+                values=[],
+                pain_points=[],
+                goals=[],
+            ),
+            "sys",
+            model_id="google.gemma-4-31b",
+        )
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == self.JP_HAIKU_5_5
+        assert persona_agent.requires_mantle is False
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_no_model_id_uses_agent_model_id(self, mock_bedrock_model, mock_agent, jp):
+        service = AgentService()
+        mock_bedrock_model.reset_mock()
+
+        service._create_model(None)
+
+        assert mock_bedrock_model.call_args.kwargs["model_id"] == self.JP_HAIKU_5_5

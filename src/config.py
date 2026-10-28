@@ -14,6 +14,7 @@ from src.models.nemotron_dataset import (
     nemotron_dataset_key_problem,
 )
 from src.models.asset_delivery import AssetDeliveryMode
+from src.models.model_registry import SCOPE_DEFAULTS, InferenceScope
 from src.models.password_policy import PASSWORD_POLICY_SETTINGS
 
 if TYPE_CHECKING:
@@ -66,7 +67,10 @@ class Config:
 
     # AWS Bedrock設定
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "global.anthropic.claude-sonnet-5"
+    # 推論の範囲（閉域対応 U5、BR3.1）。global か jp。CDK は jp のときだけ渡す。
+    # 3 つのモデル ID の既定は範囲から決まる（BR3.4。クラスの属性は global の値）
+    INFERENCE_SCOPE: str = InferenceScope.GLOBAL.value
+    BEDROCK_MODEL_ID: str = SCOPE_DEFAULTS[InferenceScope.GLOBAL].bedrock_model_id
 
     # AI生成設定
     MAX_TOKENS: int = 4000
@@ -76,7 +80,7 @@ class Config:
     AGENT_MAX_TOKENS: int = 32000
 
     # Agent Mode設定
-    AGENT_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    AGENT_MODEL_ID: str = SCOPE_DEFAULTS[InferenceScope.GLOBAL].agent_model_id
     DEFAULT_ROUNDS: int = 3
     MIN_ROUNDS: int = 1
     MAX_ROUNDS: int = 10
@@ -93,7 +97,10 @@ class Config:
     SEMANTIC_MEMORY_STRATEGY_ID: Optional[str] = None
 
     # マスアンケート機能設定
-    BATCH_INFERENCE_MODEL_ID: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"  # バッチ推論用モデル（Claude 4.5 Haiku、クロスリージョン推論プロファイル）
+    # バッチ推論用モデル（Claude Haiku 4.5、クロスリージョン推論プロファイル）
+    BATCH_INFERENCE_MODEL_ID: str = SCOPE_DEFAULTS[
+        InferenceScope.GLOBAL
+    ].batch_inference_model_id
     BEDROCK_BATCH_ROLE_ARN: Optional[str] = None
 
     # データ分析エージェント連携設定
@@ -191,8 +198,6 @@ class Config:
         """設定の初期化後処理"""
         # 環境変数から設定を上書き
         self.AWS_REGION = os.getenv("AWS_REGION", self.AWS_REGION)
-        self.BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", self.BEDROCK_MODEL_ID)
-        self.AGENT_MODEL_ID = os.getenv("AGENT_MODEL_ID", self.AGENT_MODEL_ID)
         agent_max_tokens = os.getenv("AGENT_MAX_TOKENS")
         if agent_max_tokens:
             self.AGENT_MAX_TOKENS = int(agent_max_tokens)
@@ -204,6 +209,8 @@ class Config:
             self.ENABLE_ADDITIONAL_PERSONA_MODELS = True
         elif enable_additional_persona_models in ("false", "0", "no"):
             self.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+        # 範囲を先に読み、3 つのモデル ID の既定を範囲から決める（閉域対応 U5）
+        self._load_inference_scope_setting()
 
         # DynamoDB設定を環境変数から上書き
         self.DYNAMODB_TABLE_PREFIX = os.getenv(
@@ -237,9 +244,6 @@ class Config:
         self.S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", self.S3_BUCKET_NAME)
 
         # マスアンケート機能設定を環境変数から上書き
-        self.BATCH_INFERENCE_MODEL_ID = os.getenv(
-            "BATCH_INFERENCE_MODEL_ID", self.BATCH_INFERENCE_MODEL_ID
-        )
         self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
             "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN
         )
@@ -338,6 +342,44 @@ class Config:
                 f"ASSET_DELIVERY must be one of {allowed_modes}, got {mode!r}"
             )
         self.ASSET_DELIVERY = mode
+
+    def _load_inference_scope_setting(self) -> None:
+        """Read the inference scope and the three model IDs (closed network U5, BR3.1〜BR3.4).
+
+        ``INFERENCE_SCOPE`` empty means ``global``; values are read
+        case-insensitively. Each model ID uses its environment variable when it
+        is set and not empty, otherwise the scope's default
+        (``SCOPE_DEFAULTS``). Must run after ``ENABLE_ADDITIONAL_PERSONA_MODELS``
+        is read.
+
+        Raises:
+            ValueError: ``INFERENCE_SCOPE`` holds a value that is not allowed,
+                or ``jp`` is combined with ``ENABLE_ADDITIONAL_PERSONA_MODELS``.
+        """
+        scope_value = os.getenv("INFERENCE_SCOPE", "").strip().lower()
+        if scope_value:
+            allowed_scopes = [s.value for s in InferenceScope]
+            if scope_value not in allowed_scopes:
+                raise ValueError(
+                    f"INFERENCE_SCOPE must be one of {allowed_scopes}, "
+                    f"got {scope_value!r}"
+                )
+            self.INFERENCE_SCOPE = scope_value
+        scope = InferenceScope(self.INFERENCE_SCOPE)
+        if scope is InferenceScope.JP and self.ENABLE_ADDITIONAL_PERSONA_MODELS:
+            raise ValueError(
+                "INFERENCE_SCOPE=jp cannot be combined with "
+                "ENABLE_ADDITIONAL_PERSONA_MODELS=true (the additional models "
+                "call Bedrock Mantle in US regions)"
+            )
+        defaults = SCOPE_DEFAULTS[scope]
+        self.BEDROCK_MODEL_ID = (
+            os.getenv("BEDROCK_MODEL_ID") or defaults.bedrock_model_id
+        )
+        self.AGENT_MODEL_ID = os.getenv("AGENT_MODEL_ID") or defaults.agent_model_id
+        self.BATCH_INFERENCE_MODEL_ID = (
+            os.getenv("BATCH_INFERENCE_MODEL_ID") or defaults.batch_inference_model_id
+        )
 
     def _load_auth_settings(self) -> None:
         """Override login-related settings from environment variables."""

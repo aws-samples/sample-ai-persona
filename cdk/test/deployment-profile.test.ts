@@ -1,9 +1,26 @@
 import {
+  ADDITIONAL_MODEL_IDS,
   closedStageRequested,
   mergeClosedStageContext,
+  PUBLIC_PROFILE,
   resolveDeploymentProfile,
+  SCOPE_DEFAULTS,
 } from '../lib/deployment-profile';
-import { ClosedStageParameters, closedDevParameter, devParameter } from '../parameters';
+import { ClosedStageParameters, closedDevParameter, devParameter, prodParameter } from '../parameters';
+
+// 範囲ごとの既定（U5 BR1.6 と計画の「設計からの変更」）。tests/unit/test_model_registry.py にも
+// 同じ値を書く（BR4.6）。どちらかを変えたら両方のテストが落ちる
+const GLOBAL_DEFAULTS = {
+  bedrockModelId: 'global.anthropic.claude-sonnet-5',
+  agentModelId: 'global.anthropic.claude-haiku-5-5',
+  batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+};
+const JP_DEFAULTS = {
+  bedrockModelId: 'jp.anthropic.claude-haiku-5-5',
+  agentModelId: 'jp.anthropic.claude-haiku-5-5',
+  batchInferenceModelId: 'jp.anthropic.claude-haiku-4-5-20251001-v1:0',
+};
+const MANTLE_MODEL_IDS = ['openai.gpt-5.6-terra', 'openai.gpt-5.6-luna', 'google.gemma-4-31b'];
 
 /**
  * DeploymentProfile（U1 閉域、ADR-002、BR1.1〜BR1.8）の単体テスト。
@@ -38,6 +55,10 @@ describe('resolveDeploymentProfile: モードの解決（BR1.3、BR1.5）', () =
       deploymentMode: 'public',
       authMode: 'oidc',
       createCognitoDomain: true,
+      // U5: 範囲は global、モデル ID は global の既定、明示した値なし
+      inferenceScope: 'global',
+      modelIds: GLOBAL_DEFAULTS,
+      explicitModelIds: {},
     });
   });
 
@@ -157,8 +178,27 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
     });
     expect(closedDevParameter.envName).toBe('dev-closed');
     expect(closedDevParameter.deploymentMode).toBe('closed');
-    // 公開の dev の値（モデル・台数など）はそのまま写す
-    expect(closedDevParameter.bedrockModelId).toBe(devParameter.bedrockModelId);
+    // 公開の dev の値（モデル・台数など）はそのまま写す。モデル ID は省略（U5 BR1.5）なので、
+    // 解決後の 3 つの ID が同じことを比べる
+    const modelIdsOf = (parameter: typeof devParameter) => ({
+      inferenceScope: parameter.inferenceScope,
+      bedrockModelId: parameter.bedrockModelId,
+      agentModelId: parameter.agentModelId,
+      batchInferenceModelId: parameter.batchInferenceModelId,
+    });
+    const publicIds = resolveDeploymentProfile({
+      deploymentMode: 'public',
+      region: REGION,
+      ...modelIdsOf(devParameter),
+    }).modelIds;
+    const closedIds = resolveDeploymentProfile({
+      deploymentMode: 'closed',
+      region: REGION,
+      closed: closed(),
+      ...modelIdsOf(closedDevParameter),
+    }).modelIds;
+    expect(closedIds).toEqual(publicIds);
+    expect(closedDevParameter.appDesiredCount).toBe(devParameter.appDesiredCount);
     expect(devParameter.envName).toBe('dev');
   });
 
@@ -282,5 +322,121 @@ describe('resolveDeploymentProfile: ファイルの配信の方式（閉域対�
   test('公開には ASSET_DELIVERY を渡さない（アプリの既定 presigned のまま）', () => {
     const profile = resolveDeploymentProfile({ deploymentMode: 'public', region: REGION });
     expect(profile.closedFeatureEnvironment?.ASSET_DELIVERY).toBeUndefined();
+  });
+});
+
+const resolvePublic = (input: Partial<Parameters<typeof resolveDeploymentProfile>[0]> = {}) =>
+  resolveDeploymentProfile({ deploymentMode: 'public', region: REGION, ...input });
+
+describe('resolveDeploymentProfile: 推論の範囲の決定と検査（閉域対応 U5 BR1.1〜BR1.4）', () => {
+  test('指定がなければ global（BR1.1）', () => {
+    expect(resolvePublic().inferenceScope).toBe('global');
+    expect(resolvePublic({ inferenceScope: '' }).inferenceScope).toBe('global');
+  });
+
+  test.each([['jp'], ['JP'], [' Jp ']])('%p は jp（大文字・前後の空白を区別しない）', (value) => {
+    expect(resolvePublic({ inferenceScope: value }).inferenceScope).toBe('jp');
+    expect(resolveClosedWith({ inferenceScope: value }).inferenceScope).toBe('jp');
+  });
+
+  test.each([['us'], ['world'], ['japan']])('%p はパラメータの名前と値を示してエラー（BR1.2）', (value) => {
+    expect(() => resolvePublic({ inferenceScope: value })).toThrow(
+      new RegExp(`inferenceScope.*"${value}"`),
+    );
+  });
+
+  test('jp は ap-northeast-3 でも使える', () => {
+    expect(resolvePublic({ inferenceScope: 'jp', region: 'ap-northeast-3' }).inferenceScope).toBe('jp');
+  });
+
+  test('jp でリージョンが us-east-1 ならエラー（BR1.3）', () => {
+    expect(() => resolvePublic({ inferenceScope: 'jp', region: 'us-east-1' })).toThrow(
+      /inferenceScope=jp.*us-east-1/,
+    );
+  });
+
+  test('global ならリージョンを問わない', () => {
+    expect(resolvePublic({ region: 'us-east-1' }).inferenceScope).toBe('global');
+  });
+
+  test('公開の jp と enableAdditionalPersonaModels=true はエラー（BR1.4、Mantle の米国のリージョン）', () => {
+    expect(() => resolvePublic({ inferenceScope: 'jp', enableAdditionalPersonaModels: true })).toThrow(
+      /inferenceScope=jp.*enableAdditionalPersonaModels.*Mantle/,
+    );
+  });
+
+  test('閉域の jp と enableAdditionalPersonaModels=true は U3 の文言で止まる', () => {
+    expect(() => resolveClosedWith({ inferenceScope: 'jp', enableAdditionalPersonaModels: true })).toThrow(
+      /閉域構成では enableAdditionalPersonaModels を使えない/,
+    );
+  });
+
+  test.each(MANTLE_MODEL_IDS)('jp で追加のモデルの ID %p を明示したらエラー（公開・閉域）', (id) => {
+    expect(() => resolvePublic({ inferenceScope: 'jp', agentModelId: id })).toThrow(
+      new RegExp(`agentModelId.*"${id}".*Mantle`),
+    );
+    expect(() => resolveClosedWith({ inferenceScope: 'jp', bedrockModelId: id })).toThrow(
+      new RegExp(`bedrockModelId.*"${id}".*Mantle`),
+    );
+  });
+
+  test('global なら追加のモデルの ID の明示も通す（今のまま）', () => {
+    expect(resolvePublic({ agentModelId: 'google.gemma-4-31b' }).modelIds.agentModelId).toBe('google.gemma-4-31b');
+  });
+});
+
+function resolveClosedWith(input: Partial<Parameters<typeof resolveDeploymentProfile>[0]> = {}) {
+  return resolveDeploymentProfile({ deploymentMode: 'closed', region: REGION, closed: closed(), ...input });
+}
+
+describe('resolveDeploymentProfile: モデル ID（閉域対応 U5 BR1.5〜BR1.7、BR4.6）', () => {
+  test('範囲ごとの既定の表（pytest と同じ値）', () => {
+    expect(SCOPE_DEFAULTS).toEqual({ global: GLOBAL_DEFAULTS, jp: JP_DEFAULTS });
+  });
+
+  test('追加のモデルの ID は ModelRegistry の requires_mantle と同じ 3 つ', () => {
+    expect([...ADDITIONAL_MODEL_IDS].sort()).toEqual([...MANTLE_MODEL_IDS].sort());
+  });
+
+  test('省略した値は範囲の既定（公開・閉域）', () => {
+    expect(resolvePublic().modelIds).toEqual(GLOBAL_DEFAULTS);
+    expect(resolvePublic({ inferenceScope: 'jp' }).modelIds).toEqual(JP_DEFAULTS);
+    expect(resolveClosedWith().modelIds).toEqual(GLOBAL_DEFAULTS);
+    expect(resolveClosedWith({ inferenceScope: 'jp' }).modelIds).toEqual(JP_DEFAULTS);
+  });
+
+  test('明示した値はそのまま使い、明示した値の集まりに残す（jp で global.* も検査しない）', () => {
+    const profile = resolvePublic({
+      inferenceScope: 'jp',
+      bedrockModelId: 'global.anthropic.claude-sonnet-5',
+      batchInferenceModelId: ' anthropic.claude-haiku-4-5-20251001-v1:0 ',
+    });
+    expect(profile.modelIds).toEqual({
+      bedrockModelId: 'global.anthropic.claude-sonnet-5',
+      agentModelId: JP_DEFAULTS.agentModelId,
+      batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+    });
+    expect(profile.explicitModelIds).toEqual({
+      bedrockModelId: 'global.anthropic.claude-sonnet-5',
+      batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+    });
+  });
+
+  test('空・空白だけは省略と同じ', () => {
+    const profile = resolvePublic({ inferenceScope: 'jp', agentModelId: '  ', bedrockModelId: '' });
+    expect(profile.modelIds).toEqual(JP_DEFAULTS);
+    expect(profile.explicitModelIds).toEqual({});
+  });
+
+  test('parameters.ts の dev・prod はモデル ID を省略する（明示のままだと jp でも global が残る）', () => {
+    for (const parameter of [devParameter, prodParameter, closedDevParameter]) {
+      expect(parameter.bedrockModelId).toBeUndefined();
+      expect(parameter.agentModelId).toBeUndefined();
+      expect(parameter.batchInferenceModelId).toBeUndefined();
+    }
+  });
+
+  test('global で何も明示しなければ PUBLIC_PROFILE と同じ（公開構成のテンプレートを変えない、BR1.8）', () => {
+    expect(resolvePublic()).toEqual(PUBLIC_PROFILE);
   });
 });

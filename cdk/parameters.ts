@@ -4,6 +4,13 @@ import { Environment } from 'aws-cdk-lib';
 export type DeploymentMode = 'public' | 'closed';
 
 /**
+ * 推論を送ってよい範囲（閉域対応 U5、FR5.5、ADR-006）。global（既定）はどのリージョンへも
+ * 振り分ける推論プロファイル、jp は国内（東京・大阪）だけの推論プロファイルを使う。
+ * 「閉域かどうか」とは独立した値で、公開・閉域のどちらの Stage でも使える。
+ */
+export type InferenceScope = 'global' | 'jp';
+
+/**
  * 閉域の Stage を作るための入力（ClosedStageParameters、U1 閉域）。
  *
  * closedDevParameter の値に、コンテキスト（-c closedCertificateArn=... など）が重なる。
@@ -50,15 +57,24 @@ export interface AppParameter {
   agentCoreMemoryEventExpiryDays?: number;
 
   // Bedrock設定
-  bedrockModelId: string;
-  agentModelId: string;
+  /**
+   * 推論の範囲（U5）。コンテキスト -c inferenceScope=<global|jp> が優先。省略時は global。
+   * jp を続けて使うならここに書く（deploy.sh の引数を付け忘れると global に戻り、IAM が広がる）。
+   */
+  inferenceScope?: InferenceScope;
+  /**
+   * 3 つのモデル ID は省略できる（U5 BR1.5）。省略すると範囲の既定（deployment-profile.ts の
+   * SCOPE_DEFAULTS）、明示した値は範囲と照らさずにそのまま使い、呼ぶ権限を IAM に足す。
+   */
+  bedrockModelId?: string;
+  agentModelId?: string;
   // 追加ペルソナベースモデル（GPT-5.6 Terra/Luna、Gemma 4 31B。いずれもBedrock Mantle
   // 経由で呼び出す非Anthropicモデル）を選択可能にするか（既定false）。
   // 有効時はtaskRoleにbedrock-mantle権限を付与する
   enableAdditionalPersonaModels?: boolean;
 
   // マスアンケート機能設定
-  batchInferenceModelId: string;
+  batchInferenceModelId?: string;
   surveyS3Prefix?: string;
   batchInferenceS3Prefix?: string;
 
@@ -96,12 +112,10 @@ export const devParameter: AppParameter = {
 
   agentCoreMemoryEventExpiryDays: 30,
 
-  bedrockModelId: 'global.anthropic.claude-sonnet-5',
-  agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // 推論の範囲とモデル ID は省略（範囲は global、モデル ID は範囲の既定。U5）
   enableAdditionalPersonaModels: false,
 
   // マスアンケート機能設定
-  batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',
 
@@ -152,12 +166,10 @@ export const prodParameter: AppParameter = {
 
   agentCoreMemoryEventExpiryDays: 90,
 
-  bedrockModelId: 'global.anthropic.claude-sonnet-5',
-  agentModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // 推論の範囲とモデル ID は省略（範囲は global、モデル ID は範囲の既定。U5）
   enableAdditionalPersonaModels: false,
 
   // マスアンケート機能設定
-  batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   surveyS3Prefix: 'survey-results/',
   batchInferenceS3Prefix: 'batch-inference/',
 
