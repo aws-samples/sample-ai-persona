@@ -21,7 +21,8 @@
 #   --image-tag TAG    ②をせず、ECR にある TAG のイメージで③を行う（前の版に戻すときに使う）
 #   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
 #   --inference-scope global|jp
-#                      推論の範囲（-c inferenceScope=<値>。公開・閉域とも）。省略時は parameters.ts の
+#                      推論の範囲。デプロイする Stage だけに効く（公開は -c inferenceScope=<値>、
+#                      --closed は -c closedInferenceScope=<値>）。省略時は parameters.ts の
 #                      inferenceScope か global。jp を続けて使うなら parameters.ts に書く（cdk/README.md）
 #
 # 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
@@ -77,7 +78,8 @@ usage() {
                      （前の版に戻すときに使う）
   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
   --inference-scope global|jp
-                     推論の範囲（公開・閉域とも）。jp は国内（東京・大阪）の推論プロファイルだけを使う。
+                     推論の範囲（デプロイする Stage だけに効く。--closed と一緒なら閉域だけ）。
+                     jp は国内（東京・大阪）の推論プロファイルだけを使う。
                      省略時は parameters.ts の inferenceScope か global。jp を続けて使うなら
                      parameters.ts に書く（付け忘れると global に戻る。cdk/README.md「推論の範囲」）
   -h, --help         この説明を出す
@@ -237,9 +239,14 @@ for target_region in "${BOOTSTRAP_REGIONS[@]}"; do
 done
 
 CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}" -c "region=${REGION}")
-# 推論の範囲（U5 BR1.9）。渡したときだけ（省略時は parameters.ts の値か global）
+# 推論の範囲（U5 BR1.9）。渡したときだけ（省略時は parameters.ts の値か global）。
+# 閉域の synth は公開の Stage も組み立てるため、閉域は別の名前で渡し、対象の Stage だけに効かせる
 if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" ]]; then
-  CDK_CONTEXT+=(-c "inferenceScope=${INFERENCE_SCOPE}")
+  if [[ "${CLOSED}" == "true" ]]; then
+    CDK_CONTEXT+=(-c "closedInferenceScope=${INFERENCE_SCOPE}")
+  else
+    CDK_CONTEXT+=(-c "inferenceScope=${INFERENCE_SCOPE}")
+  fi
 fi
 if [[ "${CLOSED}" == "true" ]]; then
   # 閉域の Stage は、このコンテキストがあるときだけ作られる（cdk/lib/dev-stage.ts）

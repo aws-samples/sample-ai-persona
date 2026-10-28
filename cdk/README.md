@@ -554,7 +554,7 @@ Bedrock の推論を送ってよい範囲を、パラメータ 1 つで `global`
 
 指定のしかた:
 
-- 一度だけ: `./deploy.sh --inference-scope jp`（閉域は `./deploy.sh --closed ... --inference-scope jp`）。CDK には `-c inferenceScope=jp` として渡り、`parameters.ts` の値より優先します。デプロイの前に「推論の範囲: <値>」を表示します。
+- 一度だけ: `./deploy.sh --inference-scope jp`（閉域は `./deploy.sh --closed ... --inference-scope jp`）。CDK には、公開は `-c inferenceScope=jp`、閉域は `-c closedInferenceScope=jp` として渡り、`parameters.ts` の値より優先します。値はデプロイする Stage だけに効きます（`--closed` のときの synth は公開の Stage も組み立てるため、名前を分けています）。デプロイの前に「推論の範囲: <値>」を表示します。
 - 続けて使う: `parameters.ts` の `devParameter`（閉域は `closedDevParameter`）に `inferenceScope: 'jp'` を書きます。引数だけで運用すると、付け忘れた再デプロイで `global` に戻り、IAM の推論のリソースが広がります。
 
 守ること:

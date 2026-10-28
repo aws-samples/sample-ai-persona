@@ -184,7 +184,9 @@ def test_closed_deploy_without_the_key_passes_no_key_context(workspace, tmp_path
     assert "closedNemotronDatasetKey" not in calls.read_text()
 
 
-# 閉域対応 U5（BR1.9）: --inference-scope は公開・閉域とも -c inferenceScope=<値>
+# 閉域対応 U5（BR1.9）: --inference-scope は対象の Stage のコンテキストだけに渡す。
+# 公開は -c inferenceScope=<値>、--closed は -c closedInferenceScope=<値>（閉域の synth は
+# 公開の Stage も組み立てるため、共通の名前だと公開にも効いてしまう）
 
 
 def _deploys(calls: Path) -> list[str]:
@@ -192,16 +194,24 @@ def _deploys(calls: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "base", [["--image-tag", "abc1234"], _CLOSED], ids=["public", "closed"]
+    ("base", "context", "other"),
+    [
+        (["--image-tag", "abc1234"], "-c inferenceScope=jp", "closedInferenceScope"),
+        (_CLOSED, "-c closedInferenceScope=jp", "-c inferenceScope="),
+    ],
+    ids=["public", "closed"],
 )
-def test_inference_scope_reaches_every_cdk_deploy(workspace, tmp_path, base):
+def test_inference_scope_reaches_only_the_target_stage(
+    workspace, tmp_path, base, context, other
+):
     repo, _, _ = workspace
     ok_bin, calls = _ok_tools(tmp_path)
     result = _run([*base, "--inference-scope", "jp"], repo, ok_bin)
     assert result.returncode == 0, result.stdout + result.stderr
     deploys = _deploys(calls)
     assert len(deploys) == 2
-    assert all("-c inferenceScope=jp" in d for d in deploys)
+    assert all(context in d for d in deploys)
+    assert not any(other in d for d in deploys)
     assert "推論の範囲: jp" in result.stdout
 
 
