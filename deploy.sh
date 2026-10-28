@@ -20,6 +20,10 @@
 #                      （Secrets Manager の秘密の値を書き換えたあとに使う。鍵の入れ替え）
 #   --image-tag TAG    ②をせず、ECR にある TAG のイメージで③を行う（前の版に戻すときに使う）
 #   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
+#   --inference-scope global|jp
+#                      推論の範囲。デプロイする Stage だけに効く（公開は -c inferenceScope=<値>、
+#                      --closed は -c closedInferenceScope=<値>）。省略時は parameters.ts の
+#                      inferenceScope か global。jp を続けて使うなら parameters.ts に書く（cdk/README.md）
 #
 # 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
 #   ./deploy.sh --closed --certificate-arn <ACM の証明書の ARN> --domain-name <FQDN> \
@@ -51,6 +55,8 @@ ALLOWED_CIDRS=""
 CREATE_TEST_ENVIRONMENT=false
 NEMOTRON_DATASET_KEY=""
 CLOSED_OPTION_GIVEN=""
+INFERENCE_SCOPE=""
+INFERENCE_SCOPE_GIVEN=false
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -71,6 +77,11 @@ usage() {
   --image-tag TAG    イメージのビルドと送信をせず、ECR にある TAG で App をデプロイする
                      （前の版に戻すときに使う）
   --region REGION    Data・App のリージョン（既定: ap-northeast-1。Edge は常に us-east-1）
+  --inference-scope global|jp
+                     推論の範囲（デプロイする Stage だけに効く。--closed と一緒なら閉域だけ）。
+                     jp は国内（東京・大阪）の推論プロファイルだけを使う。
+                     省略時は parameters.ts の inferenceScope か global。jp を続けて使うなら
+                     parameters.ts に書く（付け忘れると global に戻る。cdk/README.md「推論の範囲」）
   -h, --help         この説明を出す
 
 閉域構成（Stage AIPersonaDevClosed。公開の Stage には触れない）:
@@ -101,6 +112,9 @@ while [[ $# -gt 0 ]]; do
     --region)
       [[ $# -ge 2 ]] || { log_error "--region にはリージョンを指定してください"; exit 1; }
       REGION="$2"; shift 2 ;;
+    --inference-scope)
+      [[ $# -ge 2 ]] || { log_error "--inference-scope には global か jp を指定してください"; exit 1; }
+      INFERENCE_SCOPE="$2"; INFERENCE_SCOPE_GIVEN=true; shift 2 ;;
     --closed) CLOSED=true; shift ;;
     --certificate-arn)
       [[ $# -ge 2 ]] || { log_error "--certificate-arn には証明書の ARN を指定してください"; exit 1; }
@@ -122,6 +136,12 @@ done
 
 if [[ "${IMAGE_TAG_OVERRIDE}" == "${UNSET_IMAGE_TAG}" ]]; then
   log_error "イメージのタグが ${UNSET_IMAGE_TAG} です。実在するタグを指定してください"
+  exit 1
+fi
+
+# 推論の範囲の検査も AWS・CDK に触れる前に行う（閉域対応 U5 BR1.9）
+if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" && "${INFERENCE_SCOPE}" != "global" && "${INFERENCE_SCOPE}" != "jp" ]]; then
+  log_error "--inference-scope には global か jp を指定してください（受け取った値: '${INFERENCE_SCOPE}'）"
   exit 1
 fi
 
@@ -177,6 +197,11 @@ stack_output() {
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 log_info "AWS アカウント: ${ACCOUNT_ID}"
 log_info "Stage: ${STAGE}"
+if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" ]]; then
+  log_info "推論の範囲: ${INFERENCE_SCOPE}"
+else
+  log_info "推論の範囲: 指定なし（parameters.ts の値か global）"
+fi
 if [[ "${CLOSED}" == "true" ]]; then
   log_info "リージョン: ${REGION}（閉域構成のため Edge なし）"
 else
@@ -214,6 +239,15 @@ for target_region in "${BOOTSTRAP_REGIONS[@]}"; do
 done
 
 CDK_CONTEXT=(-c "imageTag=${IMAGE_TAG}" -c "region=${REGION}")
+# 推論の範囲（U5 BR1.9）。渡したときだけ（省略時は parameters.ts の値か global）。
+# 閉域の synth は公開の Stage も組み立てるため、閉域は別の名前で渡し、対象の Stage だけに効かせる
+if [[ "${INFERENCE_SCOPE_GIVEN}" == "true" ]]; then
+  if [[ "${CLOSED}" == "true" ]]; then
+    CDK_CONTEXT+=(-c "closedInferenceScope=${INFERENCE_SCOPE}")
+  else
+    CDK_CONTEXT+=(-c "inferenceScope=${INFERENCE_SCOPE}")
+  fi
+fi
 if [[ "${CLOSED}" == "true" ]]; then
   # 閉域の Stage は、このコンテキストがあるときだけ作られる（cdk/lib/dev-stage.ts）
   CDK_CONTEXT+=(
@@ -312,6 +346,7 @@ if [[ "${CLOSED}" == "true" ]]; then
   [[ -z "${ALLOWED_CIDRS}" ]] || CLOSED_ARGS+=" --allowed-cidrs ${ALLOWED_CIDRS}"
   [[ "${CREATE_TEST_ENVIRONMENT}" == "false" ]] || CLOSED_ARGS+=" --create-test-environment"
   [[ -z "${NEMOTRON_DATASET_KEY}" ]] || CLOSED_ARGS+=" --nemotron-dataset-key ${NEMOTRON_DATASET_KEY}"
+  [[ "${INFERENCE_SCOPE_GIVEN}" == "false" ]] || CLOSED_ARGS+=" --inference-scope ${INFERENCE_SCOPE}"
   echo "再デプロイ（コードを更新したとき）: ./deploy.sh ${CLOSED_ARGS}"
   echo "前の版に戻す:                       ./deploy.sh ${CLOSED_ARGS} --image-tag <前のタグ>"
   echo "秘密を書き換えたあと:               ./deploy.sh --closed --restart-app"
@@ -324,7 +359,9 @@ else
   echo ""
   echo "  （仮のパスワードがメールで届きます。初回ログインで新しいパスワードを設定します）"
   echo ""
-  echo "再デプロイ（コードを更新したとき）: ./deploy.sh"
-  echo "前の版に戻す:                       ./deploy.sh --image-tag <前のタグ>"
+  PUBLIC_ARGS=""
+  [[ "${INFERENCE_SCOPE_GIVEN}" == "false" ]] || PUBLIC_ARGS=" --inference-scope ${INFERENCE_SCOPE}"
+  echo "再デプロイ（コードを更新したとき）: ./deploy.sh${PUBLIC_ARGS}"
+  echo "前の版に戻す:                       ./deploy.sh${PUBLIC_ARGS} --image-tag <前のタグ>"
   echo "秘密を書き換えたあと:               ./deploy.sh --restart-app"
 fi

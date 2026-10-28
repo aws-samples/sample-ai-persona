@@ -86,6 +86,28 @@ export function synthClosed(
   return { app, stage, templates: templatesOf(stage) };
 }
 
+/**
+ * Both Stages in one App, the way bin/app.ts builds them when deploy.sh --closed passes the
+ * closed context (the public Stage first, then the closed Stage, then applyNagChecks).
+ */
+export function synthBoth(
+  publicOverrides: DevStageOverrides = {},
+  context: Record<string, unknown> = {},
+): { app: cdk.App; publicStage: SynthesizedStage; closedStage: SynthesizedStage } {
+  const app = newApp({ ...closedContext(), ...context });
+  const publicStage = createDevStage(app, { account: ACCOUNT, ...publicOverrides });
+  const closedStage = createClosedDevStage(app, { account: ACCOUNT });
+  if (!closedStage) {
+    throw new Error('createClosedDevStage() did not build the closed Stage from the test context.');
+  }
+  applyNagChecks(app);
+  return {
+    app,
+    publicStage: { app, stage: publicStage, templates: templatesOf(publicStage) },
+    closedStage: { app, stage: closedStage, templates: templatesOf(closedStage) },
+  };
+}
+
 /** The public Stage AIPersonaDev, built and checked the way bin/app.ts does. */
 export function synthPublic(
   overrides: DevStageOverrides = {},

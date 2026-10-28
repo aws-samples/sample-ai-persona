@@ -239,6 +239,7 @@ class TestModelSelectionValidation:
         self, mock_config, sample_persona, sample_persona_2
     ):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = False
+        mock_config.INFERENCE_SCOPE = "global"
         manager = _manager()
         manager._agent_integration.build_agent = Mock()
 

@@ -10,6 +10,11 @@ export interface BedrockBatchRoleProps {
    * 固定名 BedrockBatchInferenceRole とぶつからないようにする）。
    */
   roleName?: string;
+  /**
+   * InvokeModel を許す推論の ARN（閉域対応 U5 BR2.4: タスクロールと同じ一覧を App スタックが渡す）。
+   * 省略時は公開（global）の 3 つ。
+   */
+  inferenceArns?: string[];
 }
 
 export class BedrockBatchRole extends Construct {
@@ -19,6 +24,7 @@ export class BedrockBatchRole extends Construct {
     super(scope, id);
 
     const { bucket, roleName } = props;
+    const inferenceArns = props.inferenceArns ?? bedrockInferenceArns(this);
 
     this.role = new iam.Role(this, 'Role', {
       roleName,
@@ -46,13 +52,13 @@ export class BedrockBatchRole extends Construct {
       })
     );
 
-    // Bedrock model invocation（U9、NFR7.16: 推論の 3 つの ARN に絞る）
+    // Bedrock model invocation（U9、NFR7.16: 推論の ARN に絞る。U5: 範囲で変わる）
     this.role.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvokeModel',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
-        resources: bedrockInferenceArns(this),
+        resources: inferenceArns,
       })
     );
   }

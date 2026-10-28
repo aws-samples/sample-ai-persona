@@ -38,7 +38,11 @@ from src.models.errors import (
     ParticipantNotFoundError,
 )
 from src.models.insight_category import InsightCategory
-from src.models.model_registry import display_name_for, list_selectable_models
+from src.models.model_registry import (
+    default_selectable_model_id,
+    display_name_for,
+    list_selectable_models,
+)
 from web.error_messages import (
     error_kind_of,
     is_correctable,
@@ -208,7 +212,10 @@ def _parse_categories_from_form(form_data) -> Optional[List[InsightCategory]]:  
 @router.get("/setup", response_class=HTMLResponse)
 async def discussion_setup_page(request: Request) -> Any:
     """議論設定ページ（ペルソナ一覧は htmx で遅延ロード）"""
-    selectable_models = list_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS)
+    # 閉域対応 U5（BR5.1）: 一覧と既定の選択を推論の範囲に合わせる
+    selectable_models = list_selectable_models(
+        config.ENABLE_ADDITIONAL_PERSONA_MODELS, config.INFERENCE_SCOPE
+    )
     return templates.TemplateResponse(
         request,
         "discussion/setup.html",
@@ -217,7 +224,9 @@ async def discussion_setup_page(request: Request) -> Any:
             "title": "議論設定",
             "selectable_models": selectable_models,
             "enable_additional_models": config.ENABLE_ADDITIONAL_PERSONA_MODELS,
-            "default_model_id": config.AGENT_MODEL_ID,
+            "default_model_id": default_selectable_model_id(
+                selectable_models, config.AGENT_MODEL_ID
+            ),
         },
     )
 

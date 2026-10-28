@@ -7,7 +7,15 @@ import { ClosedNetwork } from '../lib/constructs/closed-network';
 import { Cognito, PASSWORD_POLICY } from '../lib/constructs/cognito';
 import { FargateAppService } from '../lib/constructs/fargate-service';
 import { ValidationEnvironment } from '../lib/constructs/validation-environment';
-import { ACCOUNT, CLOSED_TEST_VALUES, FEATURE_FLAGS, REGION, synthClosed, synthPublic } from './helpers/stages';
+import {
+  ACCOUNT,
+  CLOSED_TEST_VALUES,
+  FEATURE_FLAGS,
+  REGION,
+  synthBoth,
+  synthClosed,
+  synthPublic,
+} from './helpers/stages';
 import { exportedRef, exportTargets, flattenReference, pathOf } from './template-paths';
 
 /**
@@ -630,6 +638,102 @@ describe('閉域の Stage（検証用 EC2 なし・許可 CIDR 2 つ）', () => 
       'ALB in 192.168.10.0/24 tcp 443',
     ]);
     expect(rules.some((r) => r.includes('Validation'))).toBe(false);
+  });
+});
+
+/** `bedrock:InvokeModel` を持つ文の、ロールの論理 ID の接頭辞 → Resource の一覧。 */
+function invokeModelResources(template: Template): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const policy of Object.values(template.findResources('AWS::IAM::Policy'))) {
+    const roles = (policy.Properties.Roles as { Ref: string }[]).map((r) => r.Ref);
+    for (const statement of policy.Properties.PolicyDocument.Statement as any[]) {
+      const actions = ([] as string[]).concat(statement.Action);
+      if (!actions.includes('bedrock:InvokeModel')) {
+        continue;
+      }
+      const resources = ([] as unknown[])
+        .concat(statement.Resource)
+        .map((r) => (typeof r === 'string' ? r : JSON.stringify(r)));
+      for (const role of roles) {
+        const key = role.startsWith('BedrockBatchRole') ? 'batch' : 'task';
+        result[key] = resources.sort();
+      }
+    }
+  }
+  return result;
+}
+
+const JP_INFERENCE_ARNS = [
+  `arn:aws:bedrock:ap-northeast-1::foundation-model/*`,
+  `arn:aws:bedrock:ap-northeast-3::foundation-model/*`,
+  `arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/jp.*`,
+  `arn:aws:bedrock:*:${ACCOUNT}:application-inference-profile/*`,
+].sort();
+
+describe('推論の範囲 jp（閉域はコンテキスト closedInferenceScope、閉域対応 U5 BR1.7、BR2.2、BR2.4）', () => {
+  const closedJp = synthClosed({}, { closedInferenceScope: 'jp' });
+
+  test('閉域の jp: INFERENCE_SCOPE=jp と jp の既定のモデル ID を渡す', () => {
+    const env = environmentOf(closedJp.templates.App);
+    expect(env.INFERENCE_SCOPE).toBe('jp');
+    expect(env.BEDROCK_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
+    expect(env.AGENT_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
+    expect(env.BATCH_INFERENCE_MODEL_ID).toBe('jp.anthropic.claude-haiku-4-5-20251001-v1:0');
+  });
+
+  test('閉域の jp: タスクロールとバッチ推論ロールの InvokeModel は同じ国内の一覧', () => {
+    const resources = invokeModelResources(closedJp.templates.App);
+    expect(resources.task).toEqual(JP_INFERENCE_ARNS);
+    expect(resources.batch).toEqual(JP_INFERENCE_ARNS);
+  });
+
+  test('閉域の jp: cdk-nag の違反がない（IAM5 の抑止も同じ一覧から作る）', () => {
+    expect(() => closedJp.app.synth()).not.toThrow();
+  });
+
+  test('閉域の global（既定）には INFERENCE_SCOPE を渡さない', () => {
+    expect(environmentOf(synthClosed().templates.App)).not.toHaveProperty('INFERENCE_SCOPE');
+  });
+
+  test('公開の jp も INFERENCE_SCOPE=jp と国内の一覧。公開の既定には INFERENCE_SCOPE がない', () => {
+    const publicJp = synthPublic({}, { inferenceScope: 'jp' });
+    expect(environmentOf(publicJp.templates.App).INFERENCE_SCOPE).toBe('jp');
+    expect(invokeModelResources(publicJp.templates.App).task).toEqual(JP_INFERENCE_ARNS);
+    expect(() => publicJp.app.synth()).not.toThrow();
+    expect(environmentOf(synthPublic().templates.App)).not.toHaveProperty('INFERENCE_SCOPE');
+  });
+
+  test('jp で追加のモデルを有効にした公開の Stage は synth で止まる（BR1.4）', () => {
+    expect(() => synthPublic({ enableAdditionalPersonaModels: true }, { inferenceScope: 'jp' })).toThrow(
+      /inferenceScope=jp.*enableAdditionalPersonaModels/,
+    );
+  });
+
+  test('不正な範囲は synth で止まる（BR1.2）', () => {
+    expect(() => synthClosed({}, { closedInferenceScope: 'us' })).toThrow(/inferenceScope.*"us"/);
+  });
+});
+
+describe('CLI で渡した範囲は、対象の Stage だけに効く（閉域対応 U5 BR1.1・BR1.9）', () => {
+  test('公開は global で追加のモデルを有効、閉域は jp: 両方を組み立てても synth が通る', () => {
+    const { app, publicStage, closedStage } = synthBoth(
+      { enableAdditionalPersonaModels: true },
+      { closedInferenceScope: 'jp' },
+    );
+    expect(environmentOf(publicStage.templates.App)).not.toHaveProperty('INFERENCE_SCOPE');
+    expect(environmentOf(closedStage.templates.App).INFERENCE_SCOPE).toBe('jp');
+    expect(() => app.synth()).not.toThrow();
+  });
+
+  test('閉域の Stage は -c inferenceScope を読まない（公開の Stage だけに効く）', () => {
+    const { publicStage, closedStage } = synthBoth({}, { inferenceScope: 'jp' });
+    expect(environmentOf(publicStage.templates.App).INFERENCE_SCOPE).toBe('jp');
+    expect(environmentOf(closedStage.templates.App)).not.toHaveProperty('INFERENCE_SCOPE');
+  });
+
+  test('公開の Stage は -c closedInferenceScope を読まない', () => {
+    const { publicStage } = synthBoth({}, { closedInferenceScope: 'jp' });
+    expect(environmentOf(publicStage.templates.App)).not.toHaveProperty('INFERENCE_SCOPE');
   });
 });
 

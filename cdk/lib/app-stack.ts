@@ -20,7 +20,7 @@ import { FargateAppService } from './constructs/fargate-service';
 import { ValidationEnvironment } from './constructs/validation-environment';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
-import { AuthMode, PUBLIC_PROFILE, ResolvedProfile } from './deployment-profile';
+import { AuthMode, ResolvedProfile, resolveDeploymentProfile } from './deployment-profile';
 import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
 
 /**
@@ -145,8 +145,22 @@ export class AppStack extends Stack {
     super(scope, id, props);
 
     const { parameter, data, webAclArn, appDesiredCount } = props;
-    const profile = props.profile ?? PUBLIC_PROFILE;
+    // U5 BR1.10: profile なし（テストで直接作るとき）は parameter から公開の profile を作る
+    // （明示したモデル ID と範囲を黙って捨てない）
+    const profile =
+      props.profile ??
+      resolveDeploymentProfile({
+        deploymentMode: 'public',
+        region: this.region,
+        inferenceScope: parameter.inferenceScope,
+        bedrockModelId: parameter.bedrockModelId,
+        agentModelId: parameter.agentModelId,
+        batchInferenceModelId: parameter.batchInferenceModelId,
+        enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
+      });
     const closed = profile.closedNetwork;
+    // 推論の ARN（U5 BR2.4）: タスクロール・バッチ推論ロール・cdk-nag の抑止で同じ一覧
+    const inferenceArns = bedrockInferenceArns(this, profile);
     const imageTag = this.resolveImageTag();
 
     const network = closed
@@ -177,6 +191,7 @@ export class AppStack extends Stack {
 
     const batchRole = new BedrockBatchRole(this, 'BedrockBatchRole', {
       bucket: data.uploadBucket.bucket,
+      inferenceArns,
     });
 
     const app = new FargateAppService(this, 'App', {
@@ -190,12 +205,15 @@ export class AppStack extends Stack {
       environment: {
         ...this.commonEnvironment(
           parameter,
+          profile,
           data,
           batchRole.role.roleArn,
           this.authEnvironment(profile, data),
         ),
         // U3 閉域（BR5.1）: 閉域のタスクにだけ末尾に足す。公開の環境変数の並びは変えない（BR5.2）
         ...(profile.closedFeatureEnvironment ?? {}),
+        // U5（BR1.7）: jp のときだけ渡す（アプリの既定は global。公開構成のテンプレートを変えない）
+        ...(profile.inferenceScope === 'jp' ? { INFERENCE_SCOPE: 'jp' } : {}),
       },
       secrets: {
         TOKEN_ENCRYPTION_KEYS: ecs.Secret.fromSecretsManager(data.tokenEncryptionKeys),
@@ -222,12 +240,12 @@ export class AppStack extends Stack {
     app.container.addEnvironment('COGNITO_CLIENT_ID', client.userPoolClientId);
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
-    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn, profile);
+    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn, profile, inferenceArns);
 
     // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
     acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
     this.acknowledgeCustomResourceRole();
-    this.acknowledgeIamWildcards(app, batchRole, data, parameter);
+    this.acknowledgeIamWildcards(app, batchRole, data, parameter, inferenceArns);
 
     new CfnOutput(this, 'AppUrl', { value: appBaseUrl });
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
@@ -348,10 +366,12 @@ export class AppStack extends Stack {
     batchRole: BedrockBatchRole,
     data: DataStack,
     parameter: AppParameter,
+    inferenceArns: string[],
   ): void {
     const bucketObjects = (...suffixes: string[]) =>
       suffixes.map((suffix) => iam5ExportedResourceId(data, data.uploadBucket.bucket.bucketArn, suffix));
-    const inference = bedrockInferenceArns(this).map((arn) => iam5ResourceId(this, arn));
+    // `*` を含む ARN だけが IAM5 の指摘になる（明示したモデル ID の ARN に `*` がないこともある）
+    const inference = inferenceArns.filter((arn) => arn.includes('*')).map((arn) => iam5ResourceId(this, arn));
 
     const taskPolicy = defaultPolicyOf(app.taskDefinition.taskRole);
     acknowledgeAll(taskPolicy, ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
@@ -428,6 +448,7 @@ export class AppStack extends Stack {
    */
   private commonEnvironment(
     parameter: AppParameter,
+    profile: ResolvedProfile,
     data: DataStack,
     batchRoleArn: string,
     auth: AuthEnvironment,
@@ -464,13 +485,14 @@ export class AppStack extends Stack {
       ENABLE_LONG_TERM_MEMORY: 'true',
       AGENTCORE_MEMORY_ID: data.memory.memoryId,
       AGENTCORE_MEMORY_REGION: region,
-      BEDROCK_MODEL_ID: parameter.bedrockModelId,
-      AGENT_MODEL_ID: parameter.agentModelId,
+      // U5 BR1.10: 3 つのモデル ID は ResolvedProfile から（明示した値か、範囲の既定）
+      BEDROCK_MODEL_ID: profile.modelIds.bedrockModelId,
+      AGENT_MODEL_ID: profile.modelIds.agentModelId,
       ENABLE_ADDITIONAL_PERSONA_MODELS: String(parameter.enableAdditionalPersonaModels ?? false),
       // optional のため未指定時は既定 true。String(undefined) で "undefined" が渡るのを防ぐ
       ENABLE_DATASET_ANALYSIS: String(parameter.enableDatasetAnalysis ?? true),
       BEDROCK_BATCH_ROLE_ARN: batchRoleArn,
-      BATCH_INFERENCE_MODEL_ID: parameter.batchInferenceModelId,
+      BATCH_INFERENCE_MODEL_ID: profile.modelIds.batchInferenceModelId,
       SURVEY_S3_PREFIX: parameter.surveyS3Prefix ?? 'survey-results/',
       BATCH_INFERENCE_S3_PREFIX: parameter.batchInferenceS3Prefix ?? 'batch-inference/',
       ...(auth.passwordPolicy ?? {}),
@@ -564,6 +586,7 @@ export class AppStack extends Stack {
     data: DataStack,
     batchRoleArn: string,
     profile: ResolvedProfile,
+    inferenceArns: string[],
   ): void {
     // テーブルの読み書きはテーブルの ARN と、アプリが Query する GSI の ARN（名前で付ける）に
     // 絞る（U9）。操作は grantReadWriteData と同じ。Sessions はカスタマー管理キーの権限も付ける
@@ -679,7 +702,6 @@ export class AppStack extends Stack {
     // Bedrock（U9、NFR7.16）: 操作は v0 と同じで、リソースを種類ごとに絞る。
     // minimizePolicies は同じリソースの文をまとめるため、種類ごとに文を分ける
     const { partition, account } = Stack.of(this);
-    const inferenceArns = bedrockInferenceArns(this);
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
         'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream',

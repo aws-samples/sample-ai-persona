@@ -60,24 +60,88 @@ class TestDiscussionSetupPage:
 
     @patch("web.routers.discussion.list_selectable_models")
     def test_setup_page_passes_selectable_models_to_template(
-        self, mock_list_selectable_models, client
+        self, mock_list_selectable_models, client, monkeypatch
     ):
-        """list_selectable_models(config.ENABLE_ADDITIONAL_PERSONA_MODELS) の結果を渡す（#107 R8）"""
-        from src.models.model_registry import DEFAULT_MODEL_ID, SUPPORTED_MODELS
+        """list_selectable_models(ENABLE_ADDITIONAL_PERSONA_MODELS, INFERENCE_SCOPE) の結果を渡す（#107 R8、U5 BR5.1）"""
+        from src.models.model_registry import SUPPORTED_MODELS
+        from web.routers import discussion
 
-        mock_list_selectable_models.return_value = [SUPPORTED_MODELS[DEFAULT_MODEL_ID]]
+        monkeypatch.setattr(discussion.config, "INFERENCE_SCOPE", "jp")
+        monkeypatch.setattr(
+            discussion.config, "ENABLE_ADDITIONAL_PERSONA_MODELS", False
+        )
+        mock_list_selectable_models.return_value = [
+            SUPPORTED_MODELS["jp.anthropic.claude-haiku-5-5"]
+        ]
 
         response = client.get("/discussion/setup")
 
         assert response.status_code == 200
-        mock_list_selectable_models.assert_called_once()
+        mock_list_selectable_models.assert_called_once_with(False, "jp")
 
     @patch("web.routers.discussion.config")
     def test_setup_page_uses_enable_additional_persona_models_config(
         self, mock_config, client
     ):
         mock_config.ENABLE_ADDITIONAL_PERSONA_MODELS = True
-        assert client.get("/discussion/setup").status_code == 200
+        mock_config.INFERENCE_SCOPE = "global"
+        mock_config.AGENT_MODEL_ID = "global.anthropic.claude-haiku-5-5"
+        html = client.get("/discussion/setup").text
+        assert 'value="google.gemma-4-31b"' in html
+
+
+class TestDiscussionSetupModelsByScope:
+    """閉域対応 U5（BR5.1）: 一覧と既定の選択を推論の範囲に合わせる。"""
+
+    @staticmethod
+    def _options(html: str) -> list[str]:
+        # ファシリテータのモデルの select（ペルソナごとの select と同じ一覧）
+        select = re.search(r'name="facilitator_model".*?</select>', html, re.S)
+        assert select
+        return re.findall(r'<option value="([^"]+)">', select.group(0))
+
+    @staticmethod
+    def _default(html: str) -> str:
+        match = re.search(r"defaultModelId: '([^']*)'", html)
+        assert match
+        return match.group(1)
+
+    @pytest.fixture
+    def scope(self, monkeypatch):
+        from web.routers import discussion
+
+        def apply(value: str, agent_model_id: str) -> None:
+            monkeypatch.setattr(discussion.config, "INFERENCE_SCOPE", value)
+            monkeypatch.setattr(discussion.config, "AGENT_MODEL_ID", agent_model_id)
+            monkeypatch.setattr(
+                discussion.config, "ENABLE_ADDITIONAL_PERSONA_MODELS", False
+            )
+
+        return apply
+
+    def test_global_lists_haiku_5_5_first_and_selects_it(self, client, scope):
+        scope("global", "global.anthropic.claude-haiku-5-5")
+        html = client.get("/discussion/setup").text
+        options = self._options(html)
+        assert options[0] == "global.anthropic.claude-haiku-5-5"
+        assert "global.anthropic.claude-haiku-4-5-20251001-v1:0" in options
+        assert self._default(html) == "global.anthropic.claude-haiku-5-5"
+
+    def test_jp_lists_only_the_two_jp_models(self, client, scope):
+        scope("jp", "jp.anthropic.claude-haiku-5-5")
+        html = client.get("/discussion/setup").text
+        assert set(self._options(html)) == {
+            "jp.anthropic.claude-haiku-5-5",
+            "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+        }
+        assert self._options(html)[0] == "jp.anthropic.claude-haiku-5-5"
+        assert self._default(html) == "jp.anthropic.claude-haiku-5-5"
+
+    def test_agent_model_outside_the_list_selects_the_list_default(self, client, scope):
+        scope("jp", "custom.agent-model")
+        html = client.get("/discussion/setup").text
+        assert self._default(html) == "jp.anthropic.claude-haiku-5-5"
+        assert "custom.agent-model" not in self._options(html)
 
     def test_start_indicator_is_busy_and_announced(self, client):
         html = client.get("/discussion/setup").text

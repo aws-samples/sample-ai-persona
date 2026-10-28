@@ -697,3 +697,76 @@ test('出力に CloudFront の URL とサービスの名前がある（deploy.sh
   }
   expect(stack.region).toBe('ap-northeast-1');
 });
+
+describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1.10、BR2.3、BR2.4）', () => {
+  /** `bedrock:InvokeModel` を持つ文の Resource（タスクロールとバッチ推論ロール）。 */
+  function invokeModelResources(t: Template): { task: string[]; batch: string[] } {
+    const out: { task: string[]; batch: string[] } = { task: [], batch: [] };
+    for (const policy of Object.values(t.findResources('AWS::IAM::Policy'))) {
+      const roles = (policy.Properties.Roles as { Ref: string }[]).map((r) => r.Ref);
+      for (const s of policy.Properties.PolicyDocument.Statement as any[]) {
+        if (!([] as string[]).concat(s.Action).includes('bedrock:InvokeModel')) {
+          continue;
+        }
+        const resources = ([] as unknown[]).concat(s.Resource).map((r) => (typeof r === 'string' ? r : JSON.stringify(r)));
+        out[roles.some((r) => r.startsWith('BedrockBatchRole')) ? 'batch' : 'task'] = resources.sort();
+      }
+    }
+    return out;
+  }
+
+  test('公開の既定: AGENT_MODEL_ID は Haiku 5.5、ほかの 2 つは今の値。INFERENCE_SCOPE はない', () => {
+    const env = envOf(template);
+    expect(env.AGENT_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
+    expect(env.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-sonnet-5');
+    expect(env.BATCH_INFERENCE_MODEL_ID).toBe('global.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(env).not.toHaveProperty('INFERENCE_SCOPE');
+  });
+
+  test('profile なしで作ると parameter の明示したモデル ID を使う（BR1.10）', () => {
+    const { template: t } = build({ parameter: { agentModelId: 'global.anthropic.claude-sonnet-5' } });
+    expect(envOf(t).AGENT_MODEL_ID).toBe('global.anthropic.claude-sonnet-5');
+  });
+
+  test('profile なしでも parameter の inferenceScope=jp を使い、INFERENCE_SCOPE=jp を渡す', () => {
+    const { template: t } = build({ parameter: { inferenceScope: 'jp' } });
+    const env = envOf(t);
+    expect(env.INFERENCE_SCOPE).toBe('jp');
+    expect(env.AGENT_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
+  });
+
+  test('jp で明示した global.* と基盤モデルの ID の権限を、両方のロールに同じ一覧で足す（BR2.3、BR2.4）', () => {
+    const { template: t } = build({
+      parameter: {
+        inferenceScope: 'jp',
+        bedrockModelId: 'global.anthropic.claude-sonnet-5',
+        batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+    });
+    const { task, batch } = invokeModelResources(t);
+    expect(task).toEqual(batch);
+    expect(task).toEqual(
+      [
+        'arn:aws:bedrock:ap-northeast-1::foundation-model/*',
+        'arn:aws:bedrock:ap-northeast-3::foundation-model/*',
+        'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.*',
+        'arn:aws:bedrock:*:123456789012:application-inference-profile/*',
+        'arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude-sonnet-5',
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5',
+        'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+      ].sort(),
+    );
+    expect(envOf(t).BEDROCK_MODEL_ID).toBe('global.anthropic.claude-sonnet-5');
+  });
+
+  test('jp で ARN の形のモデル ID は synth で止まる（BR2.3）', () => {
+    expect(() =>
+      build({
+        parameter: {
+          inferenceScope: 'jp',
+          agentModelId: 'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.x',
+        },
+      }),
+    ).toThrow(/agentModelId/);
+  });
+});

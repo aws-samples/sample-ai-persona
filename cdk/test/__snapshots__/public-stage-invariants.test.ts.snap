@@ -112,7 +112,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
 {
   "AGENTCORE_MEMORY_ID": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttMemoryMemoryId5865BD41)",
   "AGENTCORE_MEMORY_REGION": "ap-northeast-1",
-  "AGENT_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "AGENT_MODEL_ID": "global.anthropic.claude-haiku-5-5",
   "APP_BASE_URL": "https://GetAtt(CloudFrontDistributionEAB06B35.DomainName)",
   "AUTH_MODE": "oidc",
   "AWS_REGION": "ap-northeast-1",

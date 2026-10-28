@@ -410,6 +410,82 @@ class TestAssetDeliverySetting:
         assert value in str(info.value)
 
 
+class TestInferenceScopeSetting:
+    """閉域対応 U5 の推論の範囲 INFERENCE_SCOPE（BR3.1〜BR3.4）。"""
+
+    _MODEL_KEYS = ("BEDROCK_MODEL_ID", "AGENT_MODEL_ID", "BATCH_INFERENCE_MODEL_ID")
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        drop = {
+            "INFERENCE_SCOPE",
+            "ENABLE_ADDITIONAL_PERSONA_MODELS",
+            *self._MODEL_KEYS,
+        }
+        base = {k: v for k, v in os.environ.items() if k not in drop}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    @pytest.mark.parametrize("env", [{}, {"INFERENCE_SCOPE": ""}])
+    def test_default_is_global_with_the_global_model_ids(self, env):
+        cfg = self._config(**env)
+        assert cfg.INFERENCE_SCOPE == "global"
+        assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5"
+        assert cfg.AGENT_MODEL_ID == "global.anthropic.claude-haiku-5-5"
+        assert (
+            cfg.BATCH_INFERENCE_MODEL_ID
+            == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+    @pytest.mark.parametrize("value", ["jp", "JP", " Jp "])
+    def test_jp_is_read_case_insensitively(self, value):
+        assert self._config(INFERENCE_SCOPE=value).INFERENCE_SCOPE == "jp"
+
+    @pytest.mark.parametrize("value", ["us", "world", "japan"])
+    def test_unknown_value_stops_the_start(self, value):
+        with pytest.raises(ValueError, match="INFERENCE_SCOPE") as info:
+            self._config(INFERENCE_SCOPE=value)
+        assert value in str(info.value)
+
+    def test_jp_with_additional_models_stops_the_start(self):
+        with pytest.raises(ValueError) as info:
+            self._config(INFERENCE_SCOPE="jp", ENABLE_ADDITIONAL_PERSONA_MODELS="true")
+        assert "INFERENCE_SCOPE" in str(info.value)
+        assert "ENABLE_ADDITIONAL_PERSONA_MODELS" in str(info.value)
+
+    def test_global_with_additional_models_is_allowed(self):
+        cfg = self._config(ENABLE_ADDITIONAL_PERSONA_MODELS="true")
+        assert cfg.ENABLE_ADDITIONAL_PERSONA_MODELS is True
+        assert cfg.INFERENCE_SCOPE == "global"
+
+    def test_jp_without_model_env_uses_the_jp_defaults(self):
+        cfg = self._config(INFERENCE_SCOPE="jp")
+        assert cfg.BEDROCK_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
+        assert cfg.AGENT_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
+        assert (
+            cfg.BATCH_INFERENCE_MODEL_ID
+            == "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+    def test_explicit_model_env_is_used_as_is_even_in_jp(self):
+        cfg = self._config(
+            INFERENCE_SCOPE="jp",
+            BEDROCK_MODEL_ID="global.anthropic.claude-sonnet-5",
+            AGENT_MODEL_ID="custom.agent-model",
+            BATCH_INFERENCE_MODEL_ID="anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+        assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5"
+        assert cfg.AGENT_MODEL_ID == "custom.agent-model"
+        assert (
+            cfg.BATCH_INFERENCE_MODEL_ID == "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+    def test_empty_model_env_means_the_scope_default(self):
+        cfg = self._config(INFERENCE_SCOPE="jp", AGENT_MODEL_ID="")
+        assert cfg.AGENT_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
+
+
 class TestGlobalConfigInstance:
     """グローバル設定インスタンスのテスト"""
 

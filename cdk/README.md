@@ -535,6 +535,38 @@ cd cdk && npx cdk diff 'AIPersonaDev/Data' 'AIPersonaDev/App' -c imageTag="${IMA
 
 エンドポイントのデータ処理料は別にかかります。料金は変わることがあるため、デプロイの前に東京リージョンの料金ページで確かめてください。内部 ALB と Fargate は公開の dev と同じです。
 
+### 推論の範囲（`inferenceScope`）
+
+Bedrock の推論を送ってよい範囲を、パラメータ 1 つで `global`（既定）か `jp` に切り替えます。公開・閉域のどちらの Stage でも使え、「閉域かどうか」とは別の値です。範囲に合わせて、既定のモデル ID・議論とインタビューで選べるモデルの一覧・IAM の推論のリソースがまとめて変わります。
+
+公開の議論・インタビューの既定のモデル（`AGENT_MODEL_ID`）は、この変更で Claude Haiku 4.5 から Claude Haiku 5.5（`global.anthropic.claude-haiku-5-5`）になりました。公開の dev のテンプレートで変わるのは、タスクの環境変数 `AGENT_MODEL_ID` の値だけです。
+
+| 値 | `global`（既定） | `jp` |
+|---|---|---|
+| `bedrockModelId`（生成・インサイト・レポート） | `global.anthropic.claude-sonnet-5` | `jp.anthropic.claude-haiku-5-5` |
+| `agentModelId`（議論・インタビューの既定） | `global.anthropic.claude-haiku-5-5` | `jp.anthropic.claude-haiku-5-5` |
+| `batchInferenceModelId`（アンケート） | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | `jp.anthropic.claude-haiku-4-5-20251001-v1:0`（Haiku 5.5 はバッチ推論の対応表にない） |
+| 選べるモデル | Claude Haiku 5.5（既定）、Claude Haiku 4.5、Claude Sonnet 5、追加のモデル 3 つ（有効なときだけ） | Claude Haiku 5.5（既定）、Claude Haiku 4.5 |
+| IAM の基盤モデル | すべてのリージョン | `ap-northeast-1`・`ap-northeast-3` |
+| IAM の推論プロファイル | このアカウントのすべて | Stack のリージョンの `jp.*` |
+| IAM のアプリケーション推論プロファイル | このアカウントのすべて | このアカウントのすべて |
+| タスクの `INFERENCE_SCOPE` | 渡さない | `jp` |
+
+指定のしかた:
+
+- 一度だけ: `./deploy.sh --inference-scope jp`（閉域は `./deploy.sh --closed ... --inference-scope jp`）。CDK には、公開は `-c inferenceScope=jp`、閉域は `-c closedInferenceScope=jp` として渡り、`parameters.ts` の値より優先します。値はデプロイする Stage だけに効きます（`--closed` のときの synth は公開の Stage も組み立てるため、名前を分けています）。デプロイの前に「推論の範囲: <値>」を表示します。
+- 続けて使う: `parameters.ts` の `devParameter`（閉域は `closedDevParameter`）に `inferenceScope: 'jp'` を書きます。引数だけで運用すると、付け忘れた再デプロイで `global` に戻り、IAM の推論のリソースが広がります。
+
+守ること:
+
+- `jp` は Stack のリージョンが `ap-northeast-1` か `ap-northeast-3` のときだけ使えます（ほかは synth で止まる）。国内の推論プロファイルはこの 2 つのリージョンから呼び、振り分け先もこの 2 つです。
+- `jp` と `enableAdditionalPersonaModels: true` は同時に使えません。追加のモデル（GPT-5.6 Terra・Luna、Gemma 4 31B）の ID を `jp` で明示しても synth で止まります。追加のモデルは Bedrock Mantle 経由で米国のリージョンを呼ぶためです。
+- 3 つのモデル ID（`bedrockModelId`・`agentModelId`・`batchInferenceModelId`）は `parameters.ts` で省略しています。省略すると範囲の既定、明示すると範囲と照らさずにそのまま使います（`jp` で `global.*` を書いても止まりません）。`jp` で明示した `jp.*` 以外の ID は、呼ぶための IAM の権限が足されます（推論プロファイルの ID はそのプロファイルとリージョン `*` の基盤モデル、接頭辞のない基盤モデルの ID は Stack のリージョンの基盤モデル）。ARN の形（`arn:...`）は synth で止まります。ID で渡してください。
+- `global` では、明示したモデル ID に応じた IAM の追加はしません（もともとすべてのリージョンの基盤モデルと、このアカウントのすべての推論プロファイルを許すため）。`jp` だけが明示した ID の ARN を足します。
+- アプリケーション推論プロファイルは `jp` でも許します。中身が国内のモデルを指すことは運用で守ってください。
+- 閉域の Bedrock Runtime のエンドポイントにポリシーを付けるとき（U2）は、`lib/bedrock-arns.ts` の `bedrockInferenceArns` が返す一覧から作ってください（いまはエンドポイントにポリシーを付けていません）。「`jp` なら国内だけ」と決め打ちしないでください（明示したモデル ID とアプリケーション推論プロファイルが一覧に入るため）。
+- 範囲を変えても、保存済みのペルソナごとのモデル ID は書き換えません。アプリが読むたびに範囲の同じモデルに読み替えます（例: `jp` では `global` の Claude Haiku 4.5 を `jp` の Claude Haiku 4.5 で呼ぶ。同じモデルがなければ `AGENT_MODEL_ID`）。
+
 ### v1.0.0 の手元の開発
 
 手元では `AUTH_MODE=local` で起動します（Cognito・DynamoDB の Sessions テーブル・Secrets Manager を使わず、設定した開発用の利用者でログインする）。詳しくは [ローカル開発ガイド](../docs/local_development.md) を参照してください。`AUTH_MODE=local` は ECS の中では起動しません。

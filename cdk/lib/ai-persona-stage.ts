@@ -20,6 +20,8 @@ export interface AIPersonaStageProps extends StageProps {
 const MIN_DESIRED_COUNT = 1;
 const MAX_DESIRED_COUNT = 10;
 const EDGE_REGION = 'us-east-1';
+/** The closed Stage's inference scope context key (deploy.sh --closed --inference-scope). */
+const CLOSED_INFERENCE_SCOPE_CONTEXT = 'closedInferenceScope';
 
 /**
  * v1.0.0 の Stage（FR9.1、ADR-001）。
@@ -62,6 +64,11 @@ export class AIPersonaStage extends Stage {
       // U3: the closed profile rejects these two (BR5.4, BR5.5); the public one ignores them
       enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
       dataAgentRuntimeArn: parameter.dataAgentRuntimeArn,
+      // U5: 推論の範囲はこの Stage のコンテキスト（deploy.sh --inference-scope）が parameters.ts より優先（BR1.1）
+      inferenceScope: this.resolveInferenceScope(props, parameter),
+      bedrockModelId: parameter.bedrockModelId,
+      agentModelId: parameter.agentModelId,
+      batchInferenceModelId: parameter.batchInferenceModelId,
     });
     const appDesiredCount = this.resolveDesiredCount(parameter);
     const closed = this.profile.deploymentMode === 'closed';
@@ -119,6 +126,18 @@ export class AIPersonaStage extends Stage {
       );
     }
     return mode;
+  }
+
+  /**
+   * The Stage's own context key (`-c inferenceScope=...` for the public Stage,
+   * `-c closedInferenceScope=...` for the closed Stage), then `parameter.inferenceScope`
+   * (the profile checks the value). deploy.sh --closed synthesizes the public Stage too, so a
+   * shared key would apply the closed Stage's scope to the public Stage as well.
+   */
+  private resolveInferenceScope(props: AIPersonaStageProps, parameter: AppParameter): string | undefined {
+    const key = props.deploymentMode === 'closed' ? CLOSED_INFERENCE_SCOPE_CONTEXT : 'inferenceScope';
+    const fromContext = this.node.tryGetContext(key);
+    return fromContext === undefined || fromContext === null ? parameter.inferenceScope : String(fromContext);
   }
 
   private mcpGatewayEnabled(parameter: AppParameter): boolean {

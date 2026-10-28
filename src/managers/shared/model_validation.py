@@ -10,7 +10,21 @@ from typing import Callable, Dict, Iterable, Mapping, Optional, Type
 
 from ...config import config
 from ...models.errors import CodedError, ErrorCode
-from ...models.model_registry import get_model_spec, is_supported
+from ...models.model_registry import ModelSpec, models_in_scope, resolve_model_spec
+
+
+def _is_accepted(model_id: str) -> bool:
+    """BR4.3: a model of the current scope's list, or the environment's default model."""
+    if model_id == config.AGENT_MODEL_ID:
+        return True
+    return any(
+        spec.model_id == model_id for spec in models_in_scope(config.INFERENCE_SCOPE)
+    )
+
+
+def _called_spec(model_id: str) -> ModelSpec:
+    """BR4.4: the spec of the model actually called (after reading it for the scope)."""
+    return resolve_model_spec(model_id, config.INFERENCE_SCOPE, config.AGENT_MODEL_ID)
 
 
 def validate_model_selection(
@@ -45,12 +59,12 @@ def validate_model_selection(
     for identifier, model_id in model_ids.items():
         if model_id is None:
             continue
-        if not is_supported(model_id):
+        if not _is_accepted(model_id):
             raise error_cls(
                 unsupported_message(identifier, model_id),
                 code=unsupported_code,
             )
-        spec = get_model_spec(model_id)
+        spec = _called_spec(model_id)
         if spec.requires_mantle and not config.ENABLE_ADDITIONAL_PERSONA_MODELS:
             raise error_cls(
                 disabled_message(model_id),
@@ -116,7 +130,7 @@ def validate_document_size_for_models(
     for model_id in set(persona_models.values()):
         if model_id is None:
             continue
-        spec = get_model_spec(model_id)
+        spec = _called_spec(model_id)
         if spec.max_request_bytes is None:
             continue
         effective_max = int(spec.max_request_bytes * 3 / 4)

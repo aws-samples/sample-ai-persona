@@ -1,4 +1,4 @@
-import { ClosedStageParameters, DeploymentMode } from '../parameters';
+import { ClosedStageParameters, DeploymentMode, InferenceScope } from '../parameters';
 
 /**
  * DeploymentProfile（U1 閉域、ADR-002、BR1.1〜BR1.8）。
@@ -29,7 +29,56 @@ export interface ResolvedProfile {
    * 渡さず、この値で Nemotron の入手先と Data Agent の可否を変える（ADR-002）。
    */
   readonly closedFeatureEnvironment?: Readonly<Record<string, string>>;
+  /** 推論の範囲（U5、BR1.1）。jp のときだけタスクに INFERENCE_SCOPE=jp を渡す（BR1.7）。 */
+  readonly inferenceScope: InferenceScope;
+  /** タスクに渡す 3 つのモデル ID（明示した値か、範囲の既定。BR1.5、BR1.6）。 */
+  readonly modelIds: Readonly<ModelIds>;
+  /** パラメータで明示したモデル ID だけ（BedrockArns が呼ぶ権限を足す、BR2.3）。 */
+  readonly explicitModelIds: Readonly<Partial<ModelIds>>;
 }
+
+/** タスクに渡す 3 つのモデル ID（AppParameter の名前のまま）。 */
+export interface ModelIds {
+  /** ペルソナの生成・インサイト・レポート（BEDROCK_MODEL_ID）。 */
+  bedrockModelId: string;
+  /** 議論・インタビューの既定（AGENT_MODEL_ID）。 */
+  agentModelId: string;
+  /** アンケートのバッチ推論（BATCH_INFERENCE_MODEL_ID）。 */
+  batchInferenceModelId: string;
+}
+
+const MODEL_ID_NAMES: readonly (keyof ModelIds)[] = ['bedrockModelId', 'agentModelId', 'batchInferenceModelId'];
+
+/**
+ * 範囲ごとの既定のモデル ID（U5 BR1.6 と計画の「設計からの変更」）。src/models/model_registry.py の
+ * SCOPE_DEFAULTS と同じ値（BR4.6。pytest と jest の両方に同じ値を書いて固定する）。jp のバッチ推論が
+ * Haiku 4.5 なのは、Haiku 5.5 がバッチ推論の対応表にないため。
+ */
+export const SCOPE_DEFAULTS: Readonly<Record<InferenceScope, Readonly<ModelIds>>> = Object.freeze({
+  global: Object.freeze({
+    bedrockModelId: 'global.anthropic.claude-sonnet-5',
+    agentModelId: 'global.anthropic.claude-haiku-5-5',
+    batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  }),
+  jp: Object.freeze({
+    bedrockModelId: 'jp.anthropic.claude-haiku-5-5',
+    agentModelId: 'jp.anthropic.claude-haiku-5-5',
+    batchInferenceModelId: 'jp.anthropic.claude-haiku-4-5-20251001-v1:0',
+  }),
+});
+
+/**
+ * 追加のモデル（Bedrock Mantle 経由で米国のリージョンを呼ぶ）の ID。ModelRegistry の
+ * requires_mantle のモデルと同じ（BR4.6）。jp では明示もできない（BR1.4）。
+ */
+export const ADDITIONAL_MODEL_IDS: readonly string[] = Object.freeze([
+  'openai.gpt-5.6-terra',
+  'openai.gpt-5.6-luna',
+  'google.gemma-4-31b',
+]);
+
+/** 国内の推論プロファイルを呼べるリージョン（jp の Stack はこのどちらかに置く、BR1.3）。 */
+export const JP_REGIONS: readonly string[] = Object.freeze(['ap-northeast-1', 'ap-northeast-3']);
 
 export interface DeploymentProfileInput {
   /** Stage を作る側が決めたモード（コンテキストの値ではない）。 */
@@ -42,6 +91,12 @@ export interface DeploymentProfileInput {
   enableAdditionalPersonaModels?: boolean;
   /** Data Agent の Runtime ARN。閉域では渡せない（U3 BR5.5）。 */
   dataAgentRuntimeArn?: string;
+  /** 推論の範囲（コンテキスト inferenceScope か AppParameter.inferenceScope。U5 BR1.1）。省略は global。 */
+  inferenceScope?: string;
+  /** 明示したモデル ID（省略・空・空白は範囲の既定、BR1.5）。 */
+  bedrockModelId?: string;
+  agentModelId?: string;
+  batchInferenceModelId?: string;
 }
 
 /** The Nemotron key the app has always used (src/models/nemotron_dataset.py). */
@@ -51,11 +106,14 @@ const RESERVED_KEY_PREFIXES = ['persona-dataset/custom/', 'persona-dataset/temp/
 /** The ASCII part of the app's runtime S3 URI check (SurveyBatchService). */
 const KEY_CHARACTERS = /^[A-Za-z0-9._\-/]+$/;
 
-/** The profile of the public Stage (also the default of AppStack). */
+/** The profile of the public Stage with the global scope and no explicit model IDs. */
 export const PUBLIC_PROFILE: ResolvedProfile = Object.freeze({
   deploymentMode: 'public',
   authMode: 'oidc',
   createCognitoDomain: true,
+  inferenceScope: 'global',
+  modelIds: SCOPE_DEFAULTS.global,
+  explicitModelIds: Object.freeze({}),
 });
 
 const MCP_GATEWAY_ERROR =
@@ -74,8 +132,19 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
   if (enableMcpGateway) {
     throw new Error(MCP_GATEWAY_ERROR);
   }
+  const inferenceScope = resolveInferenceScope(input.inferenceScope, region);
   if (deploymentMode === 'public') {
-    return PUBLIC_PROFILE;
+    if (inferenceScope === 'jp' && input.enableAdditionalPersonaModels) {
+      throw new Error(
+        'inferenceScope=jp では enableAdditionalPersonaModels を使えない' +
+          '（追加のモデルは Bedrock Mantle 経由で米国のリージョンを呼ぶ）',
+      );
+    }
+    const inference = resolveInference(input, inferenceScope);
+    if (inferenceScope === 'global' && Object.keys(inference.explicitModelIds).length === 0) {
+      return PUBLIC_PROFILE;
+    }
+    return { deploymentMode: 'public', authMode: 'oidc', createCognitoDomain: true, ...inference };
   }
   if (!closed) {
     throw new Error(
@@ -83,13 +152,63 @@ export function resolveDeploymentProfile(input: DeploymentProfileInput): Resolve
     );
   }
   const closedNetwork = validateClosedParameters(closed, region);
+  // U3 の検査（閉域で追加のモデルを止める）を先に通す。jp の追加のモデルの ID の検査はその後
+  const closedFeatureEnvironment = resolveClosedFeatures(input, closed);
   return {
     deploymentMode: 'closed',
     authMode: 'admin_api',
     createCognitoDomain: false,
     appBaseUrl: `https://${closedNetwork.domainName}`,
     closedNetwork,
-    closedFeatureEnvironment: resolveClosedFeatures(input, closed),
+    closedFeatureEnvironment,
+    ...resolveInference(input, inferenceScope),
+  };
+}
+
+/**
+ * The inference scope (U5, BR1.1〜BR1.3): trimmed and case-insensitive, `global` when omitted.
+ * Throws for values other than global and jp, and for jp outside the two domestic regions.
+ */
+function resolveInferenceScope(value: string | undefined, region: string): InferenceScope {
+  const scope = (value ?? '').trim().toLowerCase() || 'global';
+  if (scope !== 'global' && scope !== 'jp') {
+    throw new Error(`inferenceScope must be "global" or "jp", got "${value}"`);
+  }
+  if (scope === 'jp' && !JP_REGIONS.includes(region)) {
+    throw new Error(
+      `inferenceScope=jp は Stack のリージョンが ${JP_REGIONS.join('・')} のときだけ使える` +
+        `（リージョン ${region}。国内の推論プロファイルはこの 2 つのリージョンから呼ぶ）`,
+    );
+  }
+  return scope;
+}
+
+/**
+ * The three model IDs (U5, BR1.4〜BR1.6): an explicit (non-blank) value is used as is, an omitted
+ * one is the scope's default. Under jp, an explicit additional (Mantle) model ID is an error.
+ */
+function resolveInference(
+  input: DeploymentProfileInput,
+  inferenceScope: InferenceScope,
+): Pick<ResolvedProfile, 'inferenceScope' | 'modelIds' | 'explicitModelIds'> {
+  const explicit: Partial<ModelIds> = {};
+  for (const name of MODEL_ID_NAMES) {
+    const value = input[name]?.trim();
+    if (!value) {
+      continue;
+    }
+    if (inferenceScope === 'jp' && ADDITIONAL_MODEL_IDS.includes(value)) {
+      throw new Error(
+        `inferenceScope=jp では ${name} に "${value}" を使えない` +
+          '（追加のモデルは Bedrock Mantle 経由で米国のリージョンを呼ぶ）',
+      );
+    }
+    explicit[name] = value;
+  }
+  return {
+    inferenceScope,
+    modelIds: Object.freeze({ ...SCOPE_DEFAULTS[inferenceScope], ...explicit }),
+    explicitModelIds: Object.freeze(explicit),
   };
 }
 
