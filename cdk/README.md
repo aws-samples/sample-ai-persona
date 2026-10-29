@@ -35,7 +35,7 @@ graph TB
     Secrets -.->|起動時に環境変数として| ECS
 ```
 
-テキストでの説明: 利用者は CloudFront（WAF はオプション）から内部 ALB を経てアプリへ届きます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+利用者は CloudFront（WAF はオプション）から内部 ALB を経てアプリへ届きます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
@@ -68,8 +68,7 @@ cd sample-ai-persona
 
 `deploy.sh` の最後に表示されるコマンドで、利用者を作って `role:admin` のグループに入れます。仮のパスワードがメールで届き、初回ログインで新しいパスワードを設定します。
 
-- ロールは `role:admin` か `role:member` のグループで、部署は `group:<名前>` のグループで表します
-- どのロールにも入っていない利用者は、ログインすると「利用権限がまだありません」の画面になり、ログアウトしかできません。グループに入れたあと、ログアウトしてログインし直すと使えるようになります
+ほかの利用者の追加、ロールの付け方、グループの作り方は [利用者・ロール・グループの管理](../docs/user_management.md) を参照してください。
 
 ### 設定（`cdk/parameters.ts`）
 

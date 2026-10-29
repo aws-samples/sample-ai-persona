@@ -86,8 +86,8 @@ export const NAG_REASONS = {
    * （U1 閉域、Infrastructure Design レビュー R-05）。
    */
   pinnedAvailabilityZones:
-    'Bedrock・AgentCore のインターフェイス型エンドポイントを提供する AZ が限られるため、閉域の VPC の ' +
-    'AZ を固定している（closed-network.ts の CLOSED_AVAILABILITY_ZONES）',
+    '置く AZ を合成のたびに変えないよう、閉域の VPC の AZ を固定している' +
+    '（closed-network.ts の CLOSED_AVAILABILITY_ZONES）',
   /** EC28・EC29: 検証用 EC2（U1 閉域）。 */
   validationInstance:
     '検証用で既定は作らない（closedCreateTestEnvironment=true のときだけ）。データを持たず、' +

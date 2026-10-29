@@ -33,7 +33,7 @@ uv run python run_htmx.py
 
 ブラウザで http://localhost:8000 にアクセス
 
-> **ログイン:** `AUTH_MODE=local` では、画面を開くと開発用の利用者（既定はロール `member`）で自動的にログインします。名前・ロール・部署は `.env` の `LOCAL_DEV_USER_*` で変えられます（`.env.example` 参照）。
+> **ログイン:** `AUTH_MODE=local` では、画面を開くと開発用の利用者（既定はロール `member`）で自動的にログインします。名前・ロール・グループは `.env` の `LOCAL_DEV_USER_*` で変えられます（`.env.example` 参照）。
 >
 > **テーブル名:** CDK でデプロイしたテーブルを手元から使う場合は、`PERSONAS_TABLE_NAME` などテーブルごとの名前を `.env` に書きます（`.env.example` 参照）。
 

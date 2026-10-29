@@ -80,10 +80,10 @@ export const DYNAMODB_PREFIX_LISTS: Record<string, string> = {
 /**
  * 閉域の VPC が使う 2 つの AZ（Infrastructure Design レビュー R-05）。
  *
- * bedrock・bedrock-agent-runtime・bedrock-agentcore・bedrock-agentcore-control のエンドポイントは
- * ap-northeast-1 では 1a・1c・1d でだけ提供される（dev のアカウントで DescribeVpcEndpointServices
- * により確かめた）。maxAzs に任せると AZ の並びによっては作成が失敗しうるため、AZ を固定する。
- * AZ の名前はアカウントごとに割り当てが違うため、別のアカウントに置くときは次で確かめる:
+ * 閉域で使うエンドポイント 13 種は、ap-northeast-1 で使える AZ（1a・1c・1d）のすべてで
+ * 提供される。
+ * 置く AZ を合成のたびに変えないよう、2 つを決めておく。エンドポイントが提供される AZ は
+ * 次で確かめる:
  *   aws ec2 describe-vpc-endpoint-services --region <region> \
  *     --service-names com.amazonaws.<region>.bedrock-agentcore-control \
  *     --query 'ServiceDetails[].AvailabilityZones'

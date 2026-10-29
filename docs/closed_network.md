@@ -18,12 +18,14 @@ graph TB
     EP --> AWS[ECR・Logs・Secrets Manager・Cognito・Bedrock・AgentCore・DynamoDB・S3]
 ```
 
-テキストでの説明: 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、指定した FQDN で内部 ALB へ HTTPS で届きます。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。社内のネットワークから FQDN を引くときは、Resolver Inbound Endpoint へ社内 DNS から転送します。ログインは Cognito の Managed Login ではなく、アプリ自身のログイン画面で行います。
+利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、指定した FQDN で内部 ALB へ HTTPS で届きます。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。社内のネットワークから FQDN を引くときは、Resolver Inbound Endpoint へ社内 DNS から転送します。ログインは Cognito の Managed Login ではなく、アプリ自身のログイン画面で行います。
 
 | スタック | 中身 |
 |---|---|
 | `AIPersonaDevClosed-Data` | 公開構成と同じ Data スタック（テーブル・S3・ECR・AgentCore Memory・鍵・User Pool。すべて RETAIN） |
 | `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB・ECS Fargate・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） |
+
+閉域構成は **東京リージョン（`ap-northeast-1`）だけ** で使えます。ほかのリージョンを指定すると、デプロイの前にエラーになります。
 
 公開構成（Stage `AIPersonaDev`）と同じアカウント・同じリージョンに並べて置けます。スタック・テーブル・User Pool・VPC はすべて別で、閉域の作業は公開構成に影響しません。
 
@@ -138,27 +140,45 @@ Resolver とエンドポイントの AZ の数は、`deploy.sh` が今の環境�
 
 使わない間は EC2 を止めておけます（止めている間はインスタンスの料金がかかりません）。要らなくなったら、`--create-test-environment` を付けずにデプロイし直すと消えます（そのときは `--allowed-cidrs` が要ります）。
 
-## 利用者の作成とパスワードの再設定
+## 利用者の管理
 
-閉域ではアプリ自身のログイン画面を使い、メールでのパスワードの回復はありません。利用者は一時パスワード付きで作り、本人が初回ログインで新しいパスワードを設定します。User Pool ID は `deploy.sh --closed` の最後に表示されます。
+利用者・ロール・グループの管理は、公開構成と同じく [利用者・ロール・グループの管理](user_management.md) の手順で行います。閉域構成では、次の点が違います。
+
+- **User Pool:** CloudFormation の `AIPersonaDevClosed-Data` スタックの出力 `UserPoolId` で確かめます。AWS CLI では、`USER_POOL_ID` を求めるコマンドのスタック名を `AIPersonaDevClosed-Data` にします
+- **ログイン:** Cognito のログイン画面ではなく、アプリ自身のログイン画面を使います
+- **パスワードの回復:** メールでのパスワードの再設定はできません（下の「[パスワードを忘れたとき](#パスワードを忘れたとき)」）
+- **ログインの試行回数:** パスワードを続けて間違えると、しばらくログインできなくなります（画面に「試行回数が上限に達しました」と出ます）
+
+### 利用者を作る
+
+一時パスワードを付けて利用者を作り、本人に別の経路で伝えます。本人は初回ログインで「パスワードの設定」画面に移り、新しいパスワードを設定します。一時パスワードは 8 文字以上で、大文字・小文字・数字・記号を含めます。
+
+**コンソールで:** [利用者・ロール・グループの管理の「利用者を作る」](user_management.md#利用者を作る) の手順で、次の 2 か所だけを変えます。
+
+- 招待メッセージは「招待を送信しない」を選ぶ
+- パスワードは「パスワードの設定」を選び、一時パスワードを入れる
+
+**AWS CLI で:**
 
 ```bash
-# 作成（ロールのグループの付け方は公開構成と同じ）
-aws cognito-idp admin-create-user --region ap-northeast-1 --user-pool-id <User Pool ID> \
+aws cognito-idp admin-create-user --region "$REGION" --user-pool-id "$USER_POOL_ID" \
   --username <メールアドレス> \
   --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
   --temporary-password '<一時パスワード>' --message-action SUPPRESS
-aws cognito-idp admin-add-user-to-group --region ap-northeast-1 --user-pool-id <User Pool ID> \
-  --username <メールアドレス> --group-name role:admin
+```
 
-# パスワードを忘れたときは、一時パスワードを設定し直す
-aws cognito-idp admin-set-user-password --region ap-northeast-1 --user-pool-id <User Pool ID> \
+一時パスワードをコマンドの履歴に残さないよう注意してください。続けて、公開構成と同じ手順でロールを付けます。
+
+### パスワードを忘れたとき
+
+管理者が AWS CLI で一時パスワードを設定し直します。本人は次のログインで新しいパスワードを設定します。
+
+```bash
+aws cognito-idp admin-set-user-password --region "$REGION" --user-pool-id "$USER_POOL_ID" \
   --username <メールアドレス> --password '<一時パスワード>' --no-permanent
 ```
 
-- 一時パスワードは 8 文字以上で、大文字・小文字・数字・記号を含めます。利用者には別の経路で伝えてください
-- コンソールの「パスワードをリセット」は使わないでください。リセットした利用者は、閉域のログイン画面からは先へ進めなくなります
-- パスワードを続けて間違えると、しばらくログインできなくなります（画面に「試行回数が上限に達しました」と出ます）
+コンソールの「パスワードをリセット」は使わないでください。リセットした利用者は、閉域のログイン画面から先へ進めなくなります。
 
 ## 社内のネットワークから使う
 

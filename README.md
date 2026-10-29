@@ -98,6 +98,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | ユーザー向け | [ユーザーガイド](docs/user_guide.md)  |
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
 | 開発者向け | [閉域構成ガイド](docs/closed_network.md) |
+| 管理者向け | [利用者・ロール・グループの管理](docs/user_management.md) |
 | 開発者向け | [ローカル開発ガイド](docs/local_development.md) |
 | 共通 | [データ分析エージェント連携ガイド](docs/data_agent_integration.md) |
 | 共通 | [AI ペルソナ MCP Server 設定ガイド](docs/remote_mcp_setup.md)（v1.0.0 では未対応） |

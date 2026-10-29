@@ -2,6 +2,55 @@
 
 ## ユーザー向け（アプリケーション操作に起因する問題）
 
+### ログインと権限の問題
+
+#### 問題: ログイン後に「利用権限がまだありません」と表示される
+
+**原因:** ロール（`admin` または `member`）がまだ付いていません。
+
+**対処法:**
+1. 管理者にロールを付けてもらう（管理者の手順は [利用者・ロール・グループの管理](user_management.md#ロールを付ける)）
+2. ログアウトしてログインし直す
+
+#### 問題: 「ログインの有効期限が切れました」と表示される
+
+**原因:** 8 時間操作しなかったか、ログインから 7 日たちました。
+
+**対処法:** もう一度ログインしてください。
+
+#### 問題: ログインしようとすると 403 になる
+
+**原因:** WAF を有効にしている環境で、同じ IP から短時間にログイン画面へのアクセスが集中しました。社内のネットワークなど、多くの人が同じ IP から使っていると起きることがあります。
+
+**対処法:** 数分待ってからやり直す。続くときは管理者に連絡する（管理者は [CDK デプロイガイドの「運用（管理者向け）」](../cdk/README.md#ログインできない403-が出ると言われたら) を参照）。
+
+#### 問題: 「試行回数が上限に達しました」と表示される（閉域構成）
+
+**原因:** パスワードを続けて間違えたため、しばらくログインできなくなっています。
+
+**対処法:** 時間をおいてからやり直す。パスワードを忘れた場合は、管理者に一時パスワードを設定してもらう（[閉域構成ガイドの「パスワードを忘れたとき」](closed_network.md#パスワードを忘れたとき)）。
+
+#### 問題: 共有されたはずのものが「共有されたもの」に出ない
+
+**対処法:**
+1. 画面を再読み込みする
+2. 共有先のグループに自分が所属しているか、管理者に確認する
+3. 所有者に、共有先の設定を確認してもらう
+
+それでも出ないときは、管理者が共有の索引を作り直します（[CDK デプロイガイドの「共有の索引の作り直し」](../cdk/README.md#共有の索引の作り直し)）。
+
+#### 問題: 編集・削除のボタンがない、または「この操作の権限がありません」と表示される
+
+**原因:** 共有されたものは、閲覧と利用だけができます。編集・削除・共有先の変更は、所有者と admin だけができます（[ユーザーガイドの「共有と権限」](user_guide.md#共有と権限)）。
+
+#### 問題: ナレッジベースやデータセットに「〔利用権限なし〕」と表示される
+
+**原因:** その資産の利用範囲に、自分のグループが入っていません。議論・インタビュー・アンケートでは使われません。
+
+**対処法:** 使う必要があれば、admin に利用範囲へグループを足してもらう（[ユーザーガイドの「8.5 組織資産の利用範囲」](user_guide.md#85-組織資産の利用範囲)）。
+
+---
+
 ### ファイルアップロードの問題
 
 #### 対応ファイル形式一覧
@@ -623,24 +672,20 @@ uv run python -c "import duckdb; import polars; print('OK')"
 
 #### 問題: 長期記憶が動作しない
 
+アプリは起動するときに AgentCore Memory の設定を読み込みます。読み込めないと、長期記憶を無効にして起動します。
+
 **対処法:**
-1. 環境変数の確認
-```bash
-echo $ENABLE_LONG_TERM_MEMORY    # true であること
-echo $AGENTCORE_MEMORY_ID
-echo $AGENTCORE_MEMORY_REGION
-echo $SUMMARY_MEMORY_STRATEGY_ID
-echo $SEMANTIC_MEMORY_STRATEGY_ID
-```
+1. アプリのログで、起動時のメッセージを確認する
+   - `AgentCore Memory strategies resolved` が出ていれば、読み込めています
+   - `AgentCore Memory strategy lookup failed (...); long-term memory is disabled` が出ていれば、読み込めずに無効になっています。括弧の中の例外名（`AccessDeniedException` など）で原因を調べます
+2. Memory の ID を確認する。AWS では Data スタックの出力 `AgentCoreMemoryId` にあります
 
-2. AgentCore Memoryリソースが作成済みか確認
-```bash
-# CDK出力からMemory IDを取得
-cd cdk && npx cdk outputs AgentcoreMemoryStack
-```
+   ```bash
+   aws cloudformation describe-stacks --stack-name AIPersonaDev-Data --region ap-northeast-1 \
+     --query "Stacks[0].Outputs[?OutputKey=='AgentCoreMemoryId'].OutputValue" --output text
+   ```
 
-3. IAMロールにAgentCore Memoryへのアクセス権限があるか確認
-   - 必要な権限: `bedrock:InvokeAgent`（AgentCore Memory API）
+3. ローカルでは `.env` の `ENABLE_LONG_TERM_MEMORY=true`、`AGENTCORE_MEMORY_ID`、`AGENTCORE_MEMORY_REGION` を確認する
 
 ---
 
@@ -717,7 +762,7 @@ uv run uvicorn web.main:app --reload --log-level debug
 |---|---|---|
 | データの保存に失敗しました | DB接続エラー | DynamoDB接続確認 |
 | データの取得に失敗しました | 権限不足 | IAM権限確認 |
-| Required DynamoDB tables not found | テーブル未作成 | CDKデプロイを確認 |
+| （ログ）`... failed: ResourceNotFoundException` | テーブル未作成・テーブル名の誤り | [DynamoDBテーブルが見つからない](#問題-dynamodbテーブルが見つからない) を参照 |
 
 #### バッチ推論関連
 
@@ -744,11 +789,19 @@ uv run uvicorn web.main:app --reload --log-level debug
 
 ### ログの確認方法
 
-#### AWS環境（ECS Express Mode）
+#### AWS環境
 
-1. AWSコンソール → ECS → クラスター `ai-persona-cluster-<env>` を選択
-2. サービス `ai-persona-<env>` → 「ログ」タブでコンテナログを確認
-3. または、サービス詳細 → タスク → 個別タスクの「ログ」タブで特定タスクのログを確認
+1. クラスター名とサービス名を、App スタックの出力 `ClusterName`・`ServiceName` で確認する（閉域構成はスタック名が `AIPersonaDevClosed-App`）
+
+   ```bash
+   aws cloudformation describe-stacks --stack-name AIPersonaDev-App --region ap-northeast-1 \
+     --query "Stacks[0].Outputs[?OutputKey=='ClusterName' || OutputKey=='ServiceName'].[OutputKey,OutputValue]" --output text
+   ```
+
+2. AWSコンソール → ECS → そのクラスター → サービス →「ログ」タブでコンテナログを確認する
+3. タスクが起動しないときは、同じサービスの「イベント」タブで原因を確認する
+
+ログは CloudWatch Logs に 30 日間残ります。
 
 エラー発生時刻を絞り込んで検索するとトラブルシューティングが効率的です。
 
