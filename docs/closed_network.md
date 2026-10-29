@@ -5,17 +5,32 @@
 ## 構成
 
 ```mermaid
-graph TB
-    subgraph VPC["閉域の VPC（NAT・インターネットゲートウェイなし）"]
-        EC2[検証用 Windows EC2（任意）] -->|HTTPS 443| ALB[内部 ALB]
-        Client([許可した CIDR の利用者]) -->|HTTPS 443| ALB
-        ALB --> ECS[ECS Fargate（アプリ）]
-        ECS --> EP[VPC エンドポイント]
-        PHZ[Private Hosted Zone（FQDN → ALB）]
-        R[Resolver Inbound Endpoint（任意）] --> PHZ
+flowchart TB
+    Client([許可した CIDR の利用者])
+    DNS([社内 DNS（任意）])
+
+    subgraph App["App スタック"]
+        subgraph VPC["閉域の VPC（NAT・インターネットゲートウェイなし）"]
+            EC2["検証用 Windows EC2<br/>（任意）"]
+            R["Resolver Inbound Endpoint<br/>（任意）"] --> PHZ["Private Hosted Zone<br/>（FQDN → ALB）"]
+            ALB["内部 ALB<br/>（HTTPS）"] --> ECS[ECS Fargate<br/>アプリ]
+            ECS --> EP[VPC エンドポイント]
+        end
     end
-    DNS([社内 DNS（任意）]) -->|53| R
-    EP --> AWS[ECR・Logs・Secrets Manager・Cognito・Bedrock・AgentCore・DynamoDB・S3]
+
+    subgraph Data["Data スタック（すべて RETAIN）"]
+        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
+        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
+        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
+    end
+
+    Bedrock[Amazon Bedrock]
+
+    Client -->|HTTPS| ALB
+    EC2 -->|HTTPS| ALB
+    DNS -->|DNS| R
+    EP --> Data
+    EP --> Bedrock
 ```
 
 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、指定した FQDN で内部 ALB へ HTTPS で届きます。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。社内のネットワークから FQDN を引くときは、Resolver Inbound Endpoint へ社内 DNS から転送します。ログインは Cognito の Managed Login ではなく、アプリ自身のログイン画面で行います。

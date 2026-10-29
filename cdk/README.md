@@ -1,41 +1,42 @@
 # AI ペルソナシステムの AWS CDK デプロイについて
 
-AI ペルソナシステムを AWS にデプロイするための CDK コードです。v1.0.0 では、ログインをアプリ自身が行い（Lambda@Edge をやめた）、アプリを ECS Fargate と内部 ALB で動かし、CDK を Data・App・Edge の 3 スタックに分けました。
+AI ペルソナシステムを AWS にデプロイするための CDK コードです。v1.0.0 では、ログインをアプリ自身が行い、アプリを ECS Fargate と内部 ALB で動かし、CDK を Data・App・Edge の 3 スタックで構成。
 
 インターネットへ出る経路を持たない VPC で動かす場合は、[閉域構成ガイド](../docs/closed_network.md) を参照してください。
 
-## v1.0.0 の構成
+## AI ペルソナシステム（v1） の構成
 
 ```mermaid
-graph TB
-    User([ユーザー]) -->|HTTPS| CloudFront[Amazon CloudFront]
-    WAF[AWS WAF（Edge、us-east-1）] -.-> CloudFront
-    CloudFront -->|VPC オリジン HTTP 80| ALB
+flowchart TB
+    User([ユーザー])
 
-    subgraph App["App スタック（ap-northeast-1）"]
+    subgraph Edge["Edge スタック（us-east-1）"]
+        WAF["AWS WAF<br/>（enableWaf: true のとき）"]
+    end
+
+    subgraph App["App スタック"]
+        CloudFront[Amazon CloudFront]
         subgraph VPC["VPC（プライベートサブネット）"]
-            ALB[内部 ALB] --> ECS[ECS Fargate（アプリ）]
+            ALB[内部 ALB] --> ECS[ECS Fargate<br/>アプリ]
         end
+        CloudFront -->|VPC オリジン| ALB
     end
 
-    subgraph Data["Data スタック（ap-northeast-1、すべて RETAIN）"]
-        DynamoDB[(DynamoDB)]
-        S3[(S3)]
-        ECR[ECR]
-        Cognito[Cognito User Pool]
-        Memory[AgentCore Memory]
-        Secrets[Secrets Manager（鍵）]
+    subgraph Data["Data スタック（すべて RETAIN）"]
+        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
+        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
+        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
     end
 
-    ECS -->|ログイン（OIDC）| Cognito
-    ECS --> DynamoDB
-    ECS --> S3
-    ECS --> Memory
-    ECR -.->|イメージ| ECS
-    Secrets -.->|起動時に環境変数として| ECS
+    Bedrock[Amazon Bedrock]
+
+    User -->|HTTPS| CloudFront
+    WAF -.- CloudFront
+    ECS --> Data
+    ECS --> Bedrock
 ```
 
-利用者は CloudFront（WAF はオプション）から内部 ALB を経てアプリへ届きます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF を有効にすると、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
@@ -43,11 +44,9 @@ graph TB
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF（`enableWaf: true` のときだけ） |
 | `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ログ |
 
-v0 のスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）とは名前が重ならないため、同じアカウントに並べて動かせます（切り戻しの備え）。v0 のスタックの削除は、利用者が判断して手で行ってください。
-
 ## デプロイ（CloudShell）
 
-前提: CloudShell（ap-northeast-1）で、作業ツリーに未コミットの変更がないこと（イメージのタグに Git のコミットの短いハッシュを使うため）。
+前提: CloudShellで、作業ツリーに未コミットの変更がないこと（イメージのタグに Git のコミットの短いハッシュを使うため）。
 
 ```bash
 git clone https://github.com/aws-samples/sample-ai-persona.git
