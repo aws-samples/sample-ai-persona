@@ -28,7 +28,10 @@
 # 閉域構成（Stage AIPersonaDevClosed。Data・App の 2 スタック。公開の Stage には触れない）:
 #   ./deploy.sh --closed --certificate-arn <ACM の証明書の ARN> --domain-name <FQDN> \
 #     [--allowed-cidrs <CIDR,CIDR>] [--create-test-environment] [--endpoint-az-count <1|2>] \
-#     [--create-resolver-endpoint --resolver-allowed-cidrs <社内 DNS の CIDR,CIDR>]
+#     [--create-resolver-endpoint --resolver-allowed-cidrs <社内 DNS の CIDR,CIDR>] \
+#     [--remove-resolver-endpoint]
+#   デプロイ済みの App に Resolver があるのに --create-resolver-endpoint がないとき、
+#   エンドポイントが 2 AZ なのに --endpoint-az-count がないときは、AWS を変える前に止まる。
 #   ① cdk deploy AIPersonaDevClosed/Data（us-east-1 の bootstrap と Edge はしない）
 #   ② イメージを閉域の Data の ECR へ送る ③ cdk deploy AIPersonaDevClosed/App -c imageTag=<タグ>
 #   --image-tag・--restart-app・--region も --closed と一緒に使える（対象は閉域の Stage）。
@@ -59,6 +62,7 @@ ENDPOINT_AZ_COUNT=""
 ENDPOINT_AZ_COUNT_GIVEN=false
 CREATE_RESOLVER_ENDPOINT=false
 RESOLVER_ALLOWED_CIDRS=""
+REMOVE_RESOLVER_ENDPOINT=false
 CLOSED_OPTION_GIVEN=""
 INFERENCE_SCOPE=""
 INFERENCE_SCOPE_GIVEN=false
@@ -104,6 +108,10 @@ usage() {
                               （既定: 作らない。--resolver-allowed-cidrs が要る）
   --resolver-allowed-cidrs CIDRS
                               Resolver に問い合わせてよい社内 DNS の CIDR（カンマ区切り。TCP・UDP 53）
+  --remove-resolver-endpoint  デプロイ済みの Resolver を消す（付けないと、Resolver があるのに
+                              --create-resolver-endpoint がない再デプロイは止まる）
+  再デプロイで Resolver が消えたりエンドポイントの AZ が 2 から減ったりする引数のときは、
+  AWS を変える前に止まる（減らすときは --endpoint-az-count 1 を明示する）
   --restart-app・--image-tag・--region は --closed と一緒に使える（対象は閉域の Stage）
   許可する CIDR か検証用 EC2 のどちらかが要る（どちらもなければ CDK の synth で止まる）
 
@@ -144,6 +152,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { log_error "--endpoint-az-count には 1 か 2 を指定してください"; exit 1; }
       ENDPOINT_AZ_COUNT="$2"; ENDPOINT_AZ_COUNT_GIVEN=true; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
     --create-resolver-endpoint) CREATE_RESOLVER_ENDPOINT=true; CLOSED_OPTION_GIVEN="$1"; shift ;;
+    --remove-resolver-endpoint) REMOVE_RESOLVER_ENDPOINT=true; CLOSED_OPTION_GIVEN="$1"; shift ;;
     --resolver-allowed-cidrs)
       [[ $# -ge 2 ]] || { log_error "--resolver-allowed-cidrs には社内 DNS の CIDR（カンマ区切り）を指定してください"; exit 1; }
       RESOLVER_ALLOWED_CIDRS="$2"; CLOSED_OPTION_GIVEN="$1"; shift 2 ;;
@@ -166,6 +175,11 @@ fi
 # Resolver の CIDR の形と組み合わせ（作る指定と CIDR）は CDK の synth が検査する（BR3.2、BR3.3）
 if [[ "${ENDPOINT_AZ_COUNT_GIVEN}" == "true" && "${ENDPOINT_AZ_COUNT}" != "1" && "${ENDPOINT_AZ_COUNT}" != "2" ]]; then
   log_error "--endpoint-az-count には 1 か 2 を指定してください（受け取った値: '${ENDPOINT_AZ_COUNT}'）"
+  exit 1
+fi
+
+if [[ "${CREATE_RESOLVER_ENDPOINT}" == "true" && "${REMOVE_RESOLVER_ENDPOINT}" == "true" ]]; then
+  log_error "--create-resolver-endpoint と --remove-resolver-endpoint は一緒に使えません"
   exit 1
 fi
 
@@ -250,6 +264,51 @@ if [[ -z "${IMAGE_TAG_OVERRIDE}" ]] && ! docker info > /dev/null 2>&1; then
   exit 1
 fi
 
+# ===== 閉域: デプロイ済みの構成を引数の付け忘れで減らさない =====
+# Resolver とエンドポイントの AZ の数は引数（コンテキスト）でしか渡らず、どこにも残らない。
+# 付け忘れた再デプロイで Resolver が消える（社内 DNS の転送先の IP が失われる）ことや、
+# エンドポイントとタスクが 1 AZ に寄ることを、デプロイ済みの App と比べて AWS を変える前に止める
+closed_app_resource_ids() {
+  # closed_app_resource_ids <リソースの型>
+  aws cloudformation describe-stack-resources --stack-name "${STAGE}-App" --region "${REGION}" \
+    --query "StackResources[?ResourceType=='$1'].PhysicalResourceId" --output text
+}
+
+if [[ "${CLOSED}" == "true" ]]; then
+  if ! stack_error=$(aws cloudformation describe-stacks --stack-name "${STAGE}-App" \
+      --region "${REGION}" 2>&1 > /dev/null); then
+    if [[ "${stack_error}" != *"does not exist"* ]]; then
+      log_error "デプロイ済みの ${STAGE}-App を確かめられません: ${stack_error}"
+      exit 1
+    fi
+    log_info "${STAGE}-App はまだありません（初回のデプロイ）"
+  else
+    deployed_resolvers=$(closed_app_resource_ids "AWS::Route53Resolver::ResolverEndpoint")
+    if [[ -n "${deployed_resolvers}" && "${deployed_resolvers}" != "None" \
+        && "${CREATE_RESOLVER_ENDPOINT}" == "false" && "${REMOVE_RESOLVER_ENDPOINT}" == "false" ]]; then
+      log_error "デプロイ済みの Resolver Inbound Endpoint（${deployed_resolvers}）が、この引数では消えます"
+      log_error "残すなら --create-resolver-endpoint --resolver-allowed-cidrs <前と同じ CIDR> を付け、"
+      log_error "消すなら --remove-resolver-endpoint を付けてください（社内 DNS の転送先の IP も失われます）"
+      exit 1
+    fi
+    deployed_az_count="None"
+    endpoint_ids=$(closed_app_resource_ids "AWS::EC2::VPCEndpoint")
+    if [[ -n "${endpoint_ids}" && "${endpoint_ids}" != "None" ]]; then
+      # shellcheck disable=SC2086  # タブ区切りの ID を 1 つずつの引数にする
+      deployed_az_count=$(aws ec2 describe-vpc-endpoints --region "${REGION}" \
+        --vpc-endpoint-ids ${endpoint_ids} \
+        --query "max(VpcEndpoints[?VpcEndpointType=='Interface'].length(SubnetIds))" --output text)
+    fi
+    if [[ "${deployed_az_count}" == "2" && "${ENDPOINT_AZ_COUNT_GIVEN}" == "false" ]]; then
+      log_error "デプロイ済みのエンドポイントは 2 AZ ですが、--endpoint-az-count がありません"
+      log_error "（省略すると parameters.ts の値になり、dev は 1 AZ に減ってタスクも 1 AZ に寄ります）"
+      log_error "--endpoint-az-count 2 で残すか、--endpoint-az-count 1 で減らすかを明示してください"
+      exit 1
+    fi
+    log_info "デプロイ済みの ${STAGE}-App: Resolver ${deployed_resolvers:-なし}、エンドポイントの AZ の数 ${deployed_az_count}"
+  fi
+fi
+
 # ===== Step 1: CDK の準備 =====
 log_step "Step 1: CDK の依存のインストールと bootstrap"
 cd "${PROJECT_ROOT}/cdk"
@@ -290,6 +349,9 @@ if [[ "${CLOSED}" == "true" ]]; then
   fi
   if [[ "${CREATE_RESOLVER_ENDPOINT}" == "true" ]]; then
     CDK_CONTEXT+=(-c "closedCreateResolverEndpoint=true")
+  elif [[ "${REMOVE_RESOLVER_ENDPOINT}" == "true" ]]; then
+    # parameters.ts で作る設定にしていても消す
+    CDK_CONTEXT+=(-c "closedCreateResolverEndpoint=false")
   fi
   if [[ -n "${RESOLVER_ALLOWED_CIDRS}" ]]; then
     CDK_CONTEXT+=(-c "closedResolverAllowedCidrs=${RESOLVER_ALLOWED_CIDRS}")

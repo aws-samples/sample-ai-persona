@@ -386,10 +386,12 @@ echo "$CERT_ARN"
 | リージョンを変える | `--region <リージョン>`（証明書も同じリージョンの ACM に置く） |
 | エンドポイントを 2 AZ に置く | `./deploy.sh --closed ... --endpoint-az-count 2` |
 | 社内 DNS から名前を引けるようにする | `./deploy.sh --closed ... --create-resolver-endpoint --resolver-allowed-cidrs 10.1.0.0/16,10.2.0.0/16` |
+| 作った Resolver を消す | `./deploy.sh --closed ... --remove-resolver-endpoint`（社内 DNS の転送先の IP も失われる） |
 
 - `--certificate-arn` と `--domain-name` がなければ、AWS に触れる前に使い方を出して終了コード 1 で終わります
 - 閉域の引数（`--certificate-arn` など）を `--closed` なしで渡すとエラーです。`--closed` のない `./deploy.sh` の動きは今までと同じです
 - 再デプロイでは、前と同じ引数（特に `--create-test-environment`・`--allowed-cidrs`・`--endpoint-az-count`・`--create-resolver-endpoint`）を渡します。渡さないと、検証用 EC2 や許可した CIDR のルール、Resolver が消え、AZ の数は `parameters.ts` の値に戻ります。`deploy.sh` は最後に、渡した引数を含めた再デプロイのコマンドを表示します
+- Resolver と AZ の数は、`deploy.sh` がデプロイ済みの `AIPersonaDevClosed-App` と比べ、AWS を変える前に止めます。Resolver があるのに `--create-resolver-endpoint` も `--remove-resolver-endpoint` もないとき、エンドポイントが 2 AZ なのに `--endpoint-az-count` がないときです（`parameters.ts` に書いた値は見ないため、そのときも引数で明示します）。検証用 EC2 と許可した CIDR は比べません
 - `--endpoint-az-count` の値が `1`・`2` 以外なら、AWS に触れる前に終了コード 1 で終わります
 - CI（`.github/workflows/cdk.yml` の `synth`）は、形だけの証明書の ARN で閉域の Stage を含めた synth（cdk-nag を含む）を毎回行います。AWS には触れません
 
