@@ -1,6 +1,7 @@
 import { Construct, IConstruct } from 'constructs';
 import { Annotations, CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -13,7 +14,7 @@ import { AwsCustomResource } from 'aws-cdk-lib/custom-resources';
 import { AppParameter } from '../parameters';
 import { bedrockInferenceArns } from './bedrock-arns';
 import { BedrockBatchRole } from './constructs/bedrock-batch-role';
-import { ClosedNetwork } from './constructs/closed-network';
+import { allowIngressFromCidrs, ClosedNetwork } from './constructs/closed-network';
 import { CloudFrontDistribution } from './constructs/cloudfront';
 import { PASSWORD_POLICY } from './constructs/cognito';
 import { FargateAppService } from './constructs/fargate-service';
@@ -21,6 +22,7 @@ import { ValidationEnvironment } from './constructs/validation-environment';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
 import { AuthMode, ResolvedProfile, resolveDeploymentProfile } from './deployment-profile';
+import { ecrLayerBucketArn, EndpointAccessScope, TASK_LIST_ACTIONS } from './endpoint-policies';
 import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
 
 /**
@@ -169,6 +171,9 @@ export class AppStack extends Stack {
         vpcCidr: closed.vpcCidr,
         domainName: closed.domainName,
         createTestEnvironment: closed.createTestEnvironment,
+        // 閉域対応 U2（BR2.1、BR3.1）
+        endpointAzCount: closed.endpointAzCount,
+        resolver: closed.resolver,
       })
       : undefined;
     const vpc = network ? network.vpc : new Vpc(this, 'Vpc', { envName: parameter.envName }).vpc;
@@ -219,10 +224,12 @@ export class AppStack extends Stack {
         TOKEN_ENCRYPTION_KEYS: ecs.Secret.fromSecretsManager(data.tokenEncryptionKeys),
         LOGIN_COOKIE_SIGNING_KEY: ecs.Secret.fromSecretsManager(data.loginCookieSigningKey),
       },
-      ...(closed
+      ...(network && closed
         ? {
           ingress: { kind: 'closed' as const, certificateArn: closed.certificateArn },
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          // 閉域対応 U2（BR2.4）: タスクはエンドポイントと同じ AZ、内部 ALB は 2 AZ のまま
+          serviceSubnets: network.placement.computeSubnets,
         }
         : {}),
     });
@@ -241,6 +248,19 @@ export class AppStack extends Stack {
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
     this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn, profile, inferenceArns);
+    // 閉域対応 U2（BR1.1、BR1.3）: アクセス先の資源（ロググループ・秘密）ができてから、タスクロールと
+    // 同じ参照でエンドポイントのポリシーを付ける
+    if (network) {
+      network.restrictEndpoints(
+        this.endpointAccessScope(
+          data,
+          logGroup,
+          [data.tokenEncryptionKeys, data.loginCookieSigningKey, clientSecret],
+          inferenceArns,
+          batchRole.role.roleArn,
+        ),
+      );
+    }
 
     // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
     acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
@@ -250,6 +270,58 @@ export class AppStack extends Stack {
     new CfnOutput(this, 'AppUrl', { value: appBaseUrl });
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
     new CfnOutput(this, 'ServiceName', { value: app.service.serviceName });
+    if (network?.resolverEndpoint) {
+      // 閉域対応 U2（BR3.5）: IP は aws route53resolver list-resolver-endpoint-ip-addresses で調べる
+      new CfnOutput(this, 'ResolverEndpointId', { value: network.resolverEndpoint.attrResolverEndpointId });
+    }
+  }
+
+  /**
+   * タスクロールが読み書きするテーブルすべて（閉域対応 U2 BR1.3）。エンドポイントのポリシーの
+   * アクセス先に使う。grantTaskRole の文はテーブルごとに操作が違うため、文はそのまま並べる
+   * （テーブルを足したら両方に足す。抜けは test/closed-stage.test.ts の BR1.4 のテストが落ちる）。
+   */
+  private taskTables(data: DataStack): dynamodb.ITableV2[] {
+    const { database } = data;
+    return [
+      ...Object.values(database.applicationTables),
+      database.sessionsTable,
+      database.resourceSharesTable,
+      database.personaCandidatesTable,
+      database.personaBindingsTable,
+      ...Object.values(database.discussionChildTables),
+      database.customPersonaDataTable,
+    ];
+  }
+
+  /**
+   * 閉域のエンドポイントのポリシーで許すアクセス先（閉域対応 U2、entities.md の EndpointAccessScope）。
+   * ARN は手で書かず、タスクロールと実行ロールの権限と同じ参照から作る（BR1.3）。
+   */
+  private endpointAccessScope(
+    data: DataStack,
+    logGroup: logs.ILogGroup,
+    secrets: secretsmanager.ISecret[],
+    inferenceArns: string[],
+    batchRoleArn: string,
+  ): EndpointAccessScope {
+    const { partition, account, region } = this;
+    return {
+      bucketArn: data.uploadBucket.bucket.bucketArn,
+      ecrLayerBucketArn: ecrLayerBucketArn(partition, region),
+      tableArns: this.taskTables(data).map((table) => table.tableArn),
+      userPoolArn: data.cognito.userPool.userPoolArn,
+      secretArns: secrets.map((secret) => secret.secretArn),
+      // ロググループの ARN（CreateLogStream）と、CDK の logGroupArn（<ARN>:*。ログストリームを含む）
+      logGroupArns: [`arn:${partition}:logs:${region}:${account}:log-group:${logGroup.logGroupName}`, logGroup.logGroupArn],
+      repositoryArn: data.ecr.repository.repositoryArn,
+      memoryArn: data.memory.memoryArn,
+      inferenceArns,
+      knowledgeBaseArn: `arn:${partition}:bedrock:${region}:${account}:knowledge-base/*`,
+      batchJobArn: `arn:${partition}:bedrock:${region}:${account}:model-invocation-job/*`,
+      // タスクロールの iam:PassRole と同じロール（grantTaskRole）
+      batchRoleArn,
+    };
   }
 
   /** 公開の入口: CloudFront（VPC オリジン）と Managed Login のアプリクライアント。 */
@@ -279,8 +351,9 @@ export class AppStack extends Stack {
       throw new Error('The closed profile has no network settings or APP_BASE_URL.');
     }
     const client = this.createAdminApiClient(data);
+    // 閉域対応 U2（BR2.4）: 検証用 EC2 もエンドポイントと同じ AZ に置く
     const validation = closed.createTestEnvironment
-      ? new ValidationEnvironment(this, 'Validation', { vpc: network.vpc })
+      ? new ValidationEnvironment(this, 'Validation', { vpc: network.vpc, subnets: network.placement.computeSubnets })
       : undefined;
     this.wireClosedSecurityGroups(app, network, closed.allowedCidrs, validation);
     // アプリは起動時に一度だけ GetMemory を引き、失敗すると長期記憶を無効にしたまま動く。
@@ -317,9 +390,7 @@ export class AppStack extends Stack {
       to.addIngressRule(from, HTTPS, description);
     };
 
-    for (const cidr of allowedCidrs) {
-      alb.addIngressRule(ec2.Peer.ipv4(cidr), HTTPS, `Allowed client ${cidr}`);
-    }
+    allowIngressFromCidrs(alb, allowedCidrs, [HTTPS], (cidr) => `Allowed client ${cidr}`);
     allowHttps(task, endpoints, 'App tasks to VPC interface endpoints');
     task.addEgressRule(ec2.Peer.prefixList(network.s3PrefixListId), HTTPS, 'S3 gateway endpoint');
     task.addEgressRule(
@@ -604,14 +675,9 @@ export class AppStack extends Stack {
     }
     // リソースを指定できない一覧の API だけを * で付ける（U9、NFR7.16。例外の一覧は
     // test/iam-wildcards.test.ts）。DatabaseService は起動時に ListTables で接続を確かめる
+    // 閉域のエンドポイントのポリシーも同じ定数を使う（閉域対応 U2 BR1.3）
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: [
-        'dynamodb:ListTables',
-        'bedrock:ListFoundationModels',
-        'bedrock:ListInferenceProfiles',
-        'bedrock:ListModelInvocationJobs',
-        'bedrock-agentcore:ListMemories',
-      ],
+      actions: [...TASK_LIST_ACTIONS],
       resources: ['*'],
     }));
     // 部署ごとの共有の索引（U4、security-design.md §8）。Scan は付けない（member の一覧で

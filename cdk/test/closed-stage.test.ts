@@ -3,7 +3,10 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as logs from 'aws-cdk-lib/aws-logs';
-import { ClosedNetwork } from '../lib/constructs/closed-network';
+import { CLOSED_ENDPOINTS, CLOSED_GATEWAY_ENDPOINTS, ClosedNetwork } from '../lib/constructs/closed-network';
+import { RESTRICTED_ENDPOINT_SERVICES } from '../lib/endpoint-policies';
+import { NAG_REASONS } from '../lib/nag-reasons';
+import { describePolicyValue, grantsOf, statementsAllow, TemplateStatement } from './helpers/policy-coverage';
 import { Cognito, PASSWORD_POLICY } from '../lib/constructs/cognito';
 import { FargateAppService } from '../lib/constructs/fargate-service';
 import { ValidationEnvironment } from '../lib/constructs/validation-environment';
@@ -745,5 +748,332 @@ describe('閉域の Nemotron のキー（コンテキスト closedNemotronDatase
 
   test.each(['my key.parquet', 'a+b.parquet'])('空白か + を含むキー %p で synth が止まる', (key) => {
     expect(() => synthClosed({}, { closedNemotronDatasetKey: key })).toThrow(/closedNemotronDatasetKey/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 閉域のネットワークの仕上げ（閉域対応 U2: BR1.1、BR1.4、BR1.6、BR1.7、BR1.9、BR2.2〜BR2.4、
+// BR3.1、BR3.4、BR3.5、BR4.1）
+// ---------------------------------------------------------------------------
+
+/** Every VPC endpoint of a template, keyed by the short service name. */
+function endpointsByService(template: Template): Record<string, any> {
+  const prefix = `com.amazonaws.${REGION}.`;
+  const result: Record<string, any> = {};
+  for (const endpoint of Object.values(template.findResources('AWS::EC2::VPCEndpoint'))) {
+    const name = endpoint.Properties.ServiceName;
+    const text =
+      typeof name === 'string'
+        ? name
+        : (name['Fn::Join'][1] as any[]).map((part) => (part?.Ref === 'AWS::Region' ? REGION : part)).join(name['Fn::Join'][0]);
+    result[text.slice(prefix.length)] = endpoint;
+  }
+  return result;
+}
+
+const statementsOfEndpoint = (endpoint: any): TemplateStatement[] =>
+  (endpoint.Properties.PolicyDocument?.Statement ?? []) as TemplateStatement[];
+
+/** The isolated subnets of the closed App stack, as `Ref`s keyed by AZ. */
+function subnetRefsByAz(template: Template): Record<string, { Ref: string }> {
+  return Object.fromEntries(
+    Object.entries(template.findResources('AWS::EC2::Subnet')).map(([id, subnet]) => [
+      subnet.Properties.AvailabilityZone,
+      { Ref: id },
+    ]),
+  );
+}
+
+/** The endpoint services an action goes through (undefined for services the 12 do not cover). */
+function endpointServicesOf(action: string): string[] | undefined {
+  const [prefix, name] = action.split(':');
+  switch (prefix) {
+    case 's3':
+    case 'dynamodb':
+    case 'logs':
+    case 'secretsmanager':
+    case 'cognito-idp':
+      return [prefix];
+    case 'ecr':
+      return ['ecr.api', 'ecr.dkr'];
+    case 'bedrock-agentcore':
+      return ['bedrock-agentcore', 'bedrock-agentcore-control'];
+    case 'bedrock':
+      if (name.startsWith('InvokeModel')) return ['bedrock-runtime'];
+      if (name === 'Retrieve') return ['bedrock-agent-runtime'];
+      return ['bedrock'];
+    case 'iam':
+      // PassRole はロールを渡す先のサービスの要求（CreateModelInvocationJob）と一緒に、そのエンドポイントの
+      // ポリシーで評価される（BR1.10）。タスクロールの PassRole はバッチ推論のロールだけ
+      return name === 'PassRole' ? ['bedrock'] : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** Services the 12 endpoints do not cover (BR1.4: excluded from the coverage check). */
+const NOT_THROUGH_ENDPOINTS = ['kms'];
+
+/** The statements of the task role and the execution role policies. */
+function roleStatements(template: Template): { role: string; statement: TemplateStatement }[] {
+  return Object.values(template.findResources('AWS::IAM::Policy')).flatMap((policy) => {
+    const roles = JSON.stringify(policy.Properties.Roles);
+    const role = roles.includes('TaskRole') ? 'task' : roles.includes('ExecutionRole') ? 'execution' : undefined;
+    if (!role) {
+      return [];
+    }
+    return (policy.Properties.PolicyDocument.Statement as TemplateStatement[]).map((statement) => ({ role, statement }));
+  });
+}
+
+/** `<role> <action> <resource>` of every grant that no corresponding endpoint policy allows (BR1.4). */
+function uncoveredGrants(template: Template): string[] {
+  const endpoints = endpointsByService(template);
+  const missing: string[] = [];
+  for (const { role, statement } of roleStatements(template)) {
+    for (const { action, resource } of grantsOf(statement)) {
+      const services = endpointServicesOf(action);
+      if (!services) {
+        expect({ action, excluded: NOT_THROUGH_ENDPOINTS.includes(action.split(':')[0]) }).toEqual({ action, excluded: true });
+        continue;
+      }
+      for (const service of services) {
+        if (!statementsAllow(statementsOfEndpoint(endpoints[service]), action, resource)) {
+          missing.push(`${role} ${service} ${action} ${describePolicyValue(resource)}`);
+        }
+      }
+    }
+  }
+  return missing;
+}
+
+describe('閉域のエンドポイントのポリシー（閉域対応 U2 BR1.1、BR1.2、BR1.5、BR1.7、BR1.9）', () => {
+  const { templates } = synthClosed();
+  const endpoints = endpointsByService(templates.App);
+
+  test('ポリシーを付ける表は、ゲートウェイ型 2 とインターフェイス型の restricted の 10 で 12 種', () => {
+    const restricted = [
+      ...CLOSED_GATEWAY_ENDPOINTS.map((spec) => spec.service),
+      ...CLOSED_ENDPOINTS.filter((spec) => spec.policy === 'restricted').map((spec) => spec.service),
+    ];
+    expect(restricted.sort()).toEqual([...RESTRICTED_ENDPOINT_SERVICES].sort());
+  });
+
+  test('12 種のエンドポイントに PolicyDocument があり、SSM の 3 つにはない（検証用 EC2 ありの構成）', () => {
+    expect(Object.keys(endpoints).sort()).toEqual(
+      [...RESTRICTED_ENDPOINT_SERVICES, ...VALIDATION_ENDPOINTS].sort(),
+    );
+    for (const service of RESTRICTED_ENDPOINT_SERVICES) {
+      expect({ service, statements: statementsOfEndpoint(endpoints[service]).length > 0 }).toEqual({
+        service,
+        statements: true,
+      });
+    }
+    for (const service of VALIDATION_ENDPOINTS) {
+      expect({ service, policy: endpoints[service].Properties.PolicyDocument }).toEqual({ service, policy: undefined });
+    }
+  });
+
+  test('どの文も Allow でプリンシパルは *', () => {
+    for (const service of RESTRICTED_ENDPOINT_SERVICES) {
+      for (const statement of statementsOfEndpoint(endpoints[service])) {
+        expect({ service, Effect: statement.Effect, Principal: statement.Principal }).toEqual({
+          service,
+          Effect: 'Allow',
+          Principal: '*',
+        });
+      }
+    }
+  });
+
+  test('S3 に ECR のレイヤーのバケットの s3:GetObject がある（BR1.5）', () => {
+    const layer = `arn:aws:s3:::prod-${REGION}-starport-layer-bucket/*`;
+    const s3 = statementsOfEndpoint(endpoints.s3);
+    expect(statementsAllow(s3, 's3:GetObject', layer)).toBe(true);
+    expect(statementsAllow(s3, 's3:PutObject', layer)).toBe(false);
+  });
+
+  test('cognito-idp に署名のない cognito-idp:RevokeToken（Resource *）がある（BR1.9）', () => {
+    const cognito = statementsOfEndpoint(endpoints['cognito-idp']);
+    expect(
+      cognito.some((s) => ([] as unknown[]).concat(s.Action).includes('cognito-idp:RevokeToken') && s.Resource === '*'),
+    ).toBe(true);
+  });
+
+  test('BR1.4: タスクロールと実行ロールの文の Resource が、対応するエンドポイントのポリシーに含まれる', () => {
+    expect(roleStatements(templates.App).map((r) => r.role)).toEqual(expect.arrayContaining(['task', 'execution']));
+    expect(uncoveredGrants(templates.App)).toEqual([]);
+  });
+
+  test('BR1.4: 推論の範囲 jp の閉域でも含まれる。bedrock-runtime の推論の ARN は国内の一覧そのもの（BR1.6）', () => {
+    const jp = synthClosed({}, { closedInferenceScope: 'jp' }).templates.App;
+    expect(uncoveredGrants(jp)).toEqual([]);
+    const runtime = statementsOfEndpoint(endpointsByService(jp)['bedrock-runtime']);
+    expect(runtime).toHaveLength(1);
+    expect(([] as string[]).concat(runtime[0].Resource as string[]).sort()).toEqual(JP_INFERENCE_ARNS);
+  });
+
+  test('検証用 EC2 なしの構成でも 12 種にポリシーがあり、BR1.4 が通る', () => {
+    const { App } = synthClosed({ createTestEnvironment: false }).templates;
+    const withoutTest = endpointsByService(App);
+    expect(Object.keys(withoutTest).sort()).toEqual([...RESTRICTED_ENDPOINT_SERVICES].sort());
+    expect(uncoveredGrants(App)).toEqual([]);
+  });
+});
+
+describe('インターフェイス型エンドポイントの AZ の数（閉域対応 U2 BR2.2〜BR2.4）', () => {
+  const [firstAz, secondAz] = ['ap-northeast-1a', 'ap-northeast-1c'];
+
+  function placementOf(template: Template) {
+    const interfaceSubnets = Object.values(template.findResources('AWS::EC2::VPCEndpoint'))
+      .filter((e) => e.Properties.VpcEndpointType === 'Interface')
+      .map((e) => e.Properties.SubnetIds);
+    const service = Object.values(template.findResources('AWS::ECS::Service'))[0];
+    const alb = Object.values(template.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer'))[0];
+    const instance = Object.values(template.findResources('AWS::EC2::Instance'))[0];
+    return {
+      interfaceSubnets,
+      serviceSubnets: service.Properties.NetworkConfiguration.AwsvpcConfiguration.Subnets,
+      albSubnets: alb.Properties.Subnets,
+      instanceSubnet: instance?.Properties.NetworkInterfaces[0].SubnetId,
+    };
+  }
+
+  test('AZ の数 1: エンドポイント・ECS サービス・検証用 EC2 は先頭の AZ の 1 つ、ALB は 2 つ（BR2.3、BR2.4）', () => {
+    const { App } = synthClosed({}, { closedEndpointAzCount: '1' }).templates;
+    const subnets = subnetRefsByAz(App);
+    const placement = placementOf(App);
+    expect(placement.interfaceSubnets.length).toBe(INTERFACE_ENDPOINTS.length + VALIDATION_ENDPOINTS.length);
+    for (const ids of placement.interfaceSubnets) {
+      expect(ids).toEqual([subnets[firstAz]]);
+    }
+    expect(placement.serviceSubnets).toEqual([subnets[firstAz]]);
+    expect(placement.instanceSubnet).toEqual(subnets[firstAz]);
+    expect([...placement.albSubnets].sort((a, b) => a.Ref.localeCompare(b.Ref))).toEqual(
+      [subnets[firstAz], subnets[secondAz]].sort((a, b) => a.Ref.localeCompare(b.Ref)),
+    );
+  });
+
+  test('AZ の数 2: エンドポイント・ECS サービス・ALB は 2 つの AZ（U1 のまま）', () => {
+    const { App } = synthClosed({}, { closedEndpointAzCount: '2' }).templates;
+    const subnets = subnetRefsByAz(App);
+    const both = [subnets[firstAz], subnets[secondAz]];
+    const placement = placementOf(App);
+    for (const ids of placement.interfaceSubnets) {
+      expect(ids).toEqual(both);
+    }
+    expect(placement.serviceSubnets).toEqual(both);
+    expect(placement.albSubnets).toEqual(both);
+    // 検証用 EC2 は今も先頭のサブネット（2 から 1 にしても置き換わらない）
+    expect(placement.instanceSubnet).toEqual(subnets[firstAz]);
+  });
+
+  test('VPC は AZ の数によらず 2 AZ のサブネットを持つ', () => {
+    const { App } = synthClosed({}, { closedEndpointAzCount: '1' }).templates;
+    expect(Object.keys(subnetRefsByAz(App)).sort()).toEqual([firstAz, secondAz]);
+  });
+
+  test('closedDevParameter の既定（コンテキストなし）は AZ の数 1（BR2.2）', () => {
+    const { App } = synthClosed().templates;
+    const subnets = subnetRefsByAz(App);
+    expect(placementOf(App).serviceSubnets).toEqual([subnets[firstAz]]);
+  });
+
+  test('closedEndpointAzCount の誤りは synth で止まる（BR2.1）', () => {
+    expect(() => synthClosed({}, { closedEndpointAzCount: '3' })).toThrow(/closedEndpointAzCount.*"3"/);
+  });
+});
+
+describe('Resolver Inbound Endpoint（閉域対応 U2 BR3.1、BR3.4、BR3.5）', () => {
+  const RESOLVER_CONTEXT = {
+    closedCreateResolverEndpoint: 'true',
+    closedResolverAllowedCidrs: '10.1.0.0/16,10.2.0.0/16',
+  };
+
+  test('既定では作らず、出力もない（BR3.1）', () => {
+    const { App } = synthClosed().templates;
+    App.resourceCountIs('AWS::Route53Resolver::ResolverEndpoint', 0);
+    expect(App.toJSON().Outputs).not.toHaveProperty('ResolverEndpointId');
+  });
+
+  describe('作る指定と社内 DNS の CIDR 2 つ（AZ の数 1 の既定のまま）', () => {
+    const synthesized = synthClosed({}, RESOLVER_CONTEXT);
+    const { App } = synthesized.templates;
+
+    test('cdk-nag の違反がない（Resolver の SG に新しい指摘が出ない）', () => {
+      expect(() => synthesized.app.synth()).not.toThrow();
+    });
+    const resolvers = Object.values(App.findResources('AWS::Route53Resolver::ResolverEndpoint'));
+    const sgIdOf = () => resolvers[0].Properties.SecurityGroupIds[0]['Fn::GetAtt'][0];
+
+    test('INBOUND で、IP は 2 つの AZ のサブネットに 1 つずつ（BR3.5）', () => {
+      expect(resolvers).toHaveLength(1);
+      const subnets = subnetRefsByAz(App);
+      expect(resolvers[0].Properties.Direction).toBe('INBOUND');
+      expect(resolvers[0].Properties.IpAddresses).toEqual([
+        { SubnetId: subnets['ap-northeast-1a'] },
+        { SubnetId: subnets['ap-northeast-1c'] },
+      ]);
+    });
+
+    test('SG の受け入れは CIDR ごとの TCP 53・UDP 53 だけで、0.0.0.0/0 がない（BR3.4）', () => {
+      const sg = App.findResources('AWS::EC2::SecurityGroup')[sgIdOf()];
+      const ingress = [
+        ...(sg.Properties.SecurityGroupIngress ?? []),
+        ...separateRules(App, 'AWS::EC2::SecurityGroupIngress', sgIdOf()),
+      ].map((r: any) => `${r.CidrIp} ${r.IpProtocol} ${r.FromPort}-${r.ToPort}`);
+      expect(ingress.sort()).toEqual([
+        '10.1.0.0/16 tcp 53-53',
+        '10.1.0.0/16 udp 53-53',
+        '10.2.0.0/16 tcp 53-53',
+        '10.2.0.0/16 udp 53-53',
+      ]);
+      expect(JSON.stringify(sg)).not.toContain('0.0.0.0/0');
+    });
+
+    test('SG の外向きは、すべて許可（-1、0.0.0.0/0）でなく、ルールもない（BR3.4）', () => {
+      const sg = App.findResources('AWS::EC2::SecurityGroup')[sgIdOf()];
+      expect(inlineEgress(sg)).toEqual([]);
+      expect(separateRules(App, 'AWS::EC2::SecurityGroupEgress', sgIdOf())).toEqual([]);
+      expect((sg.Properties.SecurityGroupEgress ?? []).some((r: any) => r.IpProtocol === '-1')).toBe(false);
+    });
+
+    test('Resolver の ID をスタックの出力にする', () => {
+      const outputs = App.toJSON().Outputs as Record<string, any>;
+      expect(outputs.ResolverEndpointId.Value).toEqual({
+        'Fn::GetAtt': [Object.keys(App.findResources('AWS::Route53Resolver::ResolverEndpoint'))[0], 'ResolverEndpointId'],
+      });
+    });
+
+    test('タスクの SG の外向き（NFR3 の固定）は変わらない: エンドポイントの SG と 2 つのプレフィックスリストへの 443 だけ', () => {
+      const [taskSgId, taskSg] = Object.entries(App.findResources('AWS::EC2::SecurityGroup')).find(
+        ([, sg]) => pathOf(sg) === `${CLOSED}/App/App/TaskSecurityGroup/Resource`,
+      )!;
+      const egress = [...inlineEgress(taskSg), ...separateRules(App, 'AWS::EC2::SecurityGroupEgress', taskSgId)].map(
+        (r: any) =>
+          `${r.DestinationPrefixListId ?? (r.DestinationSecurityGroupId ? 'sg' : r.CidrIp)} ${r.IpProtocol} ${r.FromPort}`,
+      );
+      expect(egress.sort()).toEqual(['pl-61a54008 tcp 443', 'pl-78a54011 tcp 443', 'sg tcp 443']);
+    });
+  });
+
+  test('作る指定で CIDR がなければ synth で止まる（BR3.2）', () => {
+    expect(() => synthClosed({}, { closedCreateResolverEndpoint: 'true' })).toThrow(/closedResolverAllowedCidrs/);
+  });
+});
+
+describe('Flow Logs を作らない（閉域対応 U2 BR4.1）', () => {
+  const { templates } = synthClosed();
+
+  test('AWS::EC2::FlowLog がない', () => {
+    templates.App.resourceCountIs('AWS::EC2::FlowLog', 0);
+  });
+
+  test('VPC7 の抑止の理由は、恒久的な理由（U2 までの一時的な抑止ではない）', () => {
+    const vpc = Object.values(templates.App.findResources('AWS::EC2::VPC'))[0];
+    const rules = vpc.Metadata.cdk_nag.rules_to_suppress as { id: string; reason: string }[];
+    const vpc7 = rules.find((rule) => rule.id === 'AwsSolutions-VPC7');
+    expect(vpc7?.reason).toBe(NAG_REASONS.closedFlowLogsNotCreated);
+    expect(vpc7?.reason).not.toMatch(/一時的|U2/);
   });
 });

@@ -12,8 +12,33 @@ import { ClosedStageParameters, DeploymentMode, InferenceScope } from '../parame
 /** アプリのログイン方式（環境変数 AUTH_MODE）。 */
 export type AuthMode = 'oidc' | 'admin_api';
 
-/** 閉域のネットワークと入口の設定（検査済みの ClosedStageParameters）。 */
-export type ClosedNetworkSettings = Readonly<ClosedStageParameters>;
+/** インターフェイス型エンドポイントを置く AZ の数（閉域対応 U2 BR2.1）。 */
+export type EndpointAzCount = 1 | 2;
+
+/** 既定の AZ の数（BR2.1）。closedDevParameter だけ 1 にする（BR2.2）。 */
+export const DEFAULT_ENDPOINT_AZ_COUNT: EndpointAzCount = 2;
+
+/** 検査済みの Resolver Inbound Endpoint の設定（閉域対応 U2 BR3.1〜BR3.3）。 */
+export interface ResolverSettings {
+  /** 社内 DNS の CIDR（1 つ以上の IPv4 CIDR。接頭辞の長さ 0 は含まない）。 */
+  readonly allowedCidrs: readonly string[];
+}
+
+/**
+ * 閉域のネットワークと入口の設定（検査済みの ClosedStageParameters、entities.md の
+ * ClosedNetworkSettings）。ClosedNetwork と AppStack はこれだけを見る。
+ */
+export interface ClosedNetworkSettings {
+  readonly vpcCidr: string;
+  readonly certificateArn: string;
+  readonly domainName: string;
+  readonly allowedCidrs: readonly string[];
+  readonly createTestEnvironment: boolean;
+  /** 閉域対応 U2（BR2.1）。 */
+  readonly endpointAzCount: EndpointAzCount;
+  /** Resolver を作るときだけある（閉域対応 U2 BR3.1）。 */
+  readonly resolver?: ResolverSettings;
+}
 
 export interface ResolvedProfile {
   readonly deploymentMode: DeploymentMode;
@@ -308,6 +333,9 @@ export function mergeClosedStageContext(
     return value === undefined || value === null ? fallback : String(value).trim();
   };
   const nemotronDatasetKey = read('closedNemotronDatasetKey');
+  const endpointAzCount = read('closedEndpointAzCount');
+  const createResolverEndpoint = read('closedCreateResolverEndpoint');
+  const resolverAllowedCidrs = read('closedResolverAllowedCidrs');
   return {
     certificateArn: text('closedCertificateArn', base.certificateArn),
     domainName: text('closedDomainName', base.domainName),
@@ -324,7 +352,41 @@ export function mergeClosedStageContext(
       : base.nemotronDatasetKey !== undefined
         ? { nemotronDatasetKey: base.nemotronDatasetKey }
         : {}),
+    // U2: only when given or set in parameters.ts (the profile applies the defaults)
+    ...(isGiven(endpointAzCount)
+      ? { endpointAzCount: parseAzCount('closedEndpointAzCount', endpointAzCount) }
+      : base.endpointAzCount !== undefined
+        ? { endpointAzCount: base.endpointAzCount }
+        : {}),
+    ...(isGiven(createResolverEndpoint) || base.createResolverEndpoint !== undefined
+      ? {
+        createResolverEndpoint: parseBoolean(
+          'closedCreateResolverEndpoint',
+          createResolverEndpoint,
+          base.createResolverEndpoint ?? false,
+        ),
+      }
+      : {}),
+    ...(isGiven(resolverAllowedCidrs) || base.resolverAllowedCidrs !== undefined
+      ? { resolverAllowedCidrs: parseCidrList(resolverAllowedCidrs, base.resolverAllowedCidrs ?? []) }
+      : {}),
   };
+}
+
+function isGiven(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+/**
+ * The endpoint AZ count from a context string (`"1"` or `"2"`, BR2.1). Throws with the parameter
+ * name and the value received for anything else (`"0"`, `"3"`, `"two"`, empty).
+ */
+function parseAzCount(name: string, value: unknown): number {
+  const text = String(value).trim();
+  if (text !== '1' && text !== '2') {
+    throw new Error(`${name} は 1 か 2 にする: "${String(value)}"`);
+  }
+  return Number(text);
 }
 
 function parseCidrList(value: unknown, fallback: string[]): string[] {
@@ -354,24 +416,79 @@ function validateClosedParameters(closed: ClosedStageParameters, region: string)
   if (!isIpv4Cidr(closed.vpcCidr)) {
     throw new Error(`closedVpcCidr の "${closed.vpcCidr}" は IPv4 の CIDR（例 10.0.0.0/16）ではない`);
   }
-  for (const cidr of closed.allowedCidrs) {
-    if (!isIpv4Cidr(cidr)) {
-      throw new Error(`closedAllowedCidrs の "${cidr}" は IPv4 の CIDR（例 10.0.0.0/16）ではない`);
-    }
-  }
+  requireIpv4Cidrs('closedAllowedCidrs', closed.allowedCidrs);
   if (closed.allowedCidrs.length === 0 && !closed.createTestEnvironment) {
     throw new Error(
       '閉域の ALB に届く経路がない: 許可する CIDR（closedAllowedCidrs）か、' +
         '検証用 EC2（closedCreateTestEnvironment=true）のどちらかが要る',
     );
   }
+  const resolver = validateResolver(closed);
   return Object.freeze({
     vpcCidr: closed.vpcCidr,
     certificateArn: closed.certificateArn,
     domainName: closed.domainName,
     allowedCidrs: [...closed.allowedCidrs],
     createTestEnvironment: closed.createTestEnvironment,
+    endpointAzCount: validateAzCount(closed.endpointAzCount),
+    ...(resolver ? { resolver } : {}),
   });
+}
+
+/** BR2.1: 1 or 2, 2 when omitted. */
+function validateAzCount(count: number | undefined): EndpointAzCount {
+  if (count === undefined) {
+    return DEFAULT_ENDPOINT_AZ_COUNT;
+  }
+  if (count !== 1 && count !== 2) {
+    throw new Error(`closedEndpointAzCount は 1 か 2 にする: "${String(count)}"`);
+  }
+  return count;
+}
+
+/**
+ * BR3.1〜BR3.3: the Resolver settings when it is requested, undefined when it is not.
+ * Throws when it is requested without CIDRs, when CIDRs are given without the request,
+ * and for a CIDR that is not IPv4 or whose prefix length is 0.
+ */
+function validateResolver(closed: ClosedStageParameters): ResolverSettings | undefined {
+  const cidrs = closed.resolverAllowedCidrs ?? [];
+  if (!closed.createResolverEndpoint) {
+    if (cidrs.length > 0) {
+      throw new Error(
+        `closedResolverAllowedCidrs（${cidrs.join(',')}）は Resolver を作るときだけ使う` +
+          '（closedCreateResolverEndpoint=true を付け忘れていないか確かめる）',
+      );
+    }
+    return undefined;
+  }
+  if (cidrs.length === 0) {
+    throw new Error(
+      'Resolver Inbound Endpoint を作るには、社内 DNS の CIDR（closedResolverAllowedCidrs）が 1 つ以上要る',
+    );
+  }
+  requireIpv4Cidrs('closedResolverAllowedCidrs', cidrs, { rejectZeroPrefix: true });
+  return Object.freeze({ allowedCidrs: Object.freeze([...cidrs]) });
+}
+
+/**
+ * Throws, naming the parameter, for the first value that is not an IPv4 CIDR (and, with
+ * `rejectZeroPrefix`, for a prefix length of 0, which accepts every address).
+ */
+function requireIpv4Cidrs(
+  name: string,
+  cidrs: readonly string[],
+  options: { rejectZeroPrefix?: boolean } = {},
+): void {
+  for (const cidr of cidrs) {
+    if (!isIpv4Cidr(cidr)) {
+      throw new Error(`${name} の "${cidr}" は IPv4 の CIDR（例 10.0.0.0/16）ではない`);
+    }
+    // 接頭辞は数で比べる（"/00" も 0）
+    if (options.rejectZeroPrefix && Number(cidr.split('/')[1]) === 0) {
+      throw new Error(`${name} の "${cidr}" は使えない: 接頭辞の長さ /0 はどこからでも受け入れる`);
+    }
+  }
 }
 
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;

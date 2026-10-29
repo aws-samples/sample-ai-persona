@@ -33,6 +33,22 @@ export interface ClosedStageParameters {
    * コンテキスト closedNemotronDatasetKey。省略・空は既定のキー（persona-dataset/nemotron-personas-japan.parquet）。
    */
   nemotronDatasetKey?: string;
+  /**
+   * インターフェイス型エンドポイントを置く AZ の数（1 か 2、閉域対応 U2 BR2.1）。コンテキスト
+   * closedEndpointAzCount。省略は 2。1 のときはエンドポイント・タスク・検証用 EC2 を VPC の先頭の AZ に
+   * 置き、内部 ALB は 2 AZ のまま（BR2.3、BR2.4）。
+   */
+  endpointAzCount?: number;
+  /**
+   * 社内 DNS から転送を受ける Route 53 Resolver の Inbound Endpoint を作るか（閉域対応 U2 BR3.1）。
+   * コンテキスト closedCreateResolverEndpoint。省略は false（作らない）。
+   */
+  createResolverEndpoint?: boolean;
+  /**
+   * Resolver の受け入れ元（社内 DNS の CIDR）。コンテキスト closedResolverAllowedCidrs（カンマ区切り）。
+   * createResolverEndpoint が true のときは 1 つ以上が要り、false のときは空にする（BR3.2、BR3.3）。
+   */
+  resolverAllowedCidrs?: string[];
 }
 
 export interface AppParameter {
@@ -144,6 +160,9 @@ export const closedDevParameter: AppParameter = {
     allowedCidrs: [],
     createTestEnvironment: false,
     vpcCidr: '10.0.0.0/16',
+    // 閉域対応 U2（BR2.2）: dev はインターフェイス型エンドポイントを 1 AZ に置く（月額のおよそ半分を
+    // 減らす）。2 AZ にするときは deploy.sh --endpoint-az-count 2（-c closedEndpointAzCount=2）
+    endpointAzCount: 1,
   },
 };
 
