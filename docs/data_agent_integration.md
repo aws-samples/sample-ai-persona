@@ -65,34 +65,16 @@ DATA_AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:<region>:<account-id>:runtime/<
 DATA_AGENT_REGION=us-east-1  # データ分析エージェントをデプロイしたリージョン
 ```
 
-### deploy.sh によるデプロイ
+### AWS へのデプロイ
 
-> **v1.0.0 の場合:** `deploy.sh` のオプションでは設定しません。`cdk/parameters.ts` の
-> `dataAgentRuntimeArn`（と必要なら `dataAgentRegion`）を設定してコミットし、`./deploy.sh` を
-> 実行してください（[CDK デプロイガイド](../cdk/README.md#設定cdkparametersts)）。以下は v0 の構成の手順です。
-
-`--data-agent-arn` オプションを指定してデプロイします。
-
-```bash
-./deploy.sh --data-agent-arn "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxx"
-```
-
-データ分析エージェントのリージョンが AI ペルソナのデプロイ先と異なる場合:
-
-```bash
-./deploy.sh --data-agent-arn "arn:aws:..." --data-agent-region ap-northeast-1
-```
-
-再デプロイ時は既存スタックから設定が自動引き継ぎされるため、毎回指定する必要はありません。明示的に連携を解除する場合は `--data-agent-arn ""` を指定してください。
-
-### CDK パラメータによる設定
-
-`cdk/parameters.ts` で直接設定することもできます。
+`cdk/parameters.ts` で設定してコミットし、`./deploy.sh` を実行します（[CDK デプロイガイド](../cdk/README.md#設定cdkparametersts)）。
 
 ```typescript
 dataAgentRuntimeArn: 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxx',
-dataAgentRegion: 'us-east-1',  // 省略時はメインスタックのリージョンを使用
+dataAgentRegion: 'us-east-1',  // 省略時はアプリのリージョンを使用
 ```
+
+連携を解除するときは、`dataAgentRuntimeArn` を消してデプロイし直します。
 
 ### 設定画面からの接続テスト
 

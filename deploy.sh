@@ -435,7 +435,7 @@ if [[ "${CLOSED}" == "true" ]]; then
   echo "  アプリは閉域の VPC の中からだけ開けます（${APP_URL}）。"
   if [[ "${CREATE_TEST_ENVIRONMENT}" == "true" ]]; then
     echo "  検証用 EC2 には Systems Manager の Fleet Manager（リモートデスクトップ）で入り、"
-    echo "  その中のブラウザで ${APP_URL}/health を開きます（手順は cdk/README.md の「閉域構成」）。"
+    echo "  その中のブラウザで ${APP_URL}/health を開きます（手順は docs/closed_network.md）。"
   fi
   echo ""
   CLOSED_ARGS="--closed --certificate-arn ${CERTIFICATE_ARN} --domain-name ${DOMAIN_NAME}"

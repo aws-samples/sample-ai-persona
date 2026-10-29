@@ -6,6 +6,7 @@ Managed documentation files and their update triggers.
 |---|---|---|
 | `README.md` | Project overview, quickstart | Setup steps change, new features added, dependencies change |
 | `cdk/README.md` | CDK deploy procedures, parameters, stack outputs | New stacks, changed parameters, new CfnOutputs |
+| `docs/closed_network.md` | Closed-network (AIPersonaDevClosed) deploy and use | Closed-stage parameters, `deploy.sh --closed` options, features unavailable in closed mode change |
 | `docs/user_guide.md` | End-user guide | UI changes, new features, workflow changes |
 | `docs/local_development.md` | Local dev setup, run, test, CSS build | Setup/run commands change, dependencies change, test markers change, build steps change |
 | `docs/remote_mcp_setup.md` | MCP Gateway setup | MCP configuration changes, new MCP tools |

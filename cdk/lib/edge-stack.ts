@@ -5,7 +5,7 @@ import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 /**
  * ログイン系の URL のレート制限（U9、NFR4.16、約束 C11）。パスはアプリのルート
  * （web/routers/auth.py）と tests/unit/test_waf_login_paths.py で照らす。正当な利用者が
- * 403 になるとき（出口の IP を多くの人が共有する組織など）は閾値を見直す（cdk/README.md）。
+ * 403 になるとき（出口の IP を多くの人が共有する組織など）は閾値を見直す（cdk/README.md「運用（管理者向け）」）。
  */
 export const LOGIN_RATE_LIMITED_PATHS = ['/login', '/auth/callback', '/auth/new-password'] as const;
 /** 評価の窓（秒）ごとに IP 1 つから許す要求の数。 */

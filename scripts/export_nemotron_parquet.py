@@ -6,7 +6,7 @@ The closed network never downloads from Hugging Face (``NEMOTRON_SOURCE=s3``).
 Run this on a machine that can reach Hugging Face; it builds the Parquet with
 the same conversion the app uses (``SurveyBatchService.download_nemotron_dataset``)
 and writes it to ``--output``. Then place the file in the app bucket with
-``aws s3 cp`` (the procedure is in ``cdk/README.md``, closed network section)::
+``aws s3 cp`` (the procedure is in ``docs/closed_network.md``)::
 
     uv run python scripts/export_nemotron_parquet.py --output ./nemotron.parquet
 

@@ -11,7 +11,7 @@ import { devParameter } from '../parameters';
 
 /**
  * テーブルごとの GSI の名前（U9、NFR2.27）。型固定の GSI 7 つはすべて外した。
- * dev は Stage を作り直して出すため、1 回で外す（既存の環境の扱いは cdk/README.md）。
+ * dev は Stage を作り直して出すため、1 回で外す（既存の環境は各テーブル 1 つずつ外した形で分けて出す）。
  * この一覧を変えるときは tests/unit/test_create_dynamodb_tables.py の EXPECTED_GSIS も直す。
  */
 const EXPECTED_GSIS: Record<string, string[]> = {
