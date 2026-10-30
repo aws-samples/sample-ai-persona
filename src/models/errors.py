@@ -315,7 +315,7 @@ class ErrorCode(StrEnum):
         ErrorKind.CONFIG,
     )
     # Closed network U3: the Parquet must be placed beforehand and is not at
-    # NEMOTRON_DATASET_KEY. An operator places it (the cdk/README.md procedure);
+    # NEMOTRON_DATASET_KEY. An operator places it (the docs/closed_network.md procedure);
     # the settings screen cannot fix it.
     NEMOTRON_DATASET_NOT_PLACED = ("nemotron_dataset_not_placed", ErrorKind.CONFIG)
     # Closed network U3: this environment never downloads from Hugging Face.

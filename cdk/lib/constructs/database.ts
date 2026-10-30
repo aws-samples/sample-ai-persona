@@ -95,8 +95,8 @@ export class Database extends Construct {
     });
 
     // 型固定の GSI 7 つ（NFR2.27）は U9 ですべて外した。dev は Stage を作り直して出すため
-    // 1 回で外す。既存のテーブルは 1 回の更新で各テーブル 1 つまでしか消せない
-    // （cdk/README.md「GSI の片付け」）
+    // 1 回で外す。既存のテーブルは 1 回の更新で各テーブル 1 つまでしか消せないため、
+    // 既存の環境には各テーブル 1 つずつ外した形で分けて出すか、Stage を作り直す
     this.personasTable = this.table('Personas', {
       globalSecondaryIndexes: [
         // 「自分のもの」の一覧と件数（U4、BR3.2）。owner_sub のない項目は入らない
@@ -116,7 +116,8 @@ export class Database extends Construct {
     });
     this.datasetsTable = this.table('Datasets');
     // 古い紐付けの PersonaDatasetBindings・PersonaKBBindings は U9 で CDK の管理から外した
-    // （NFR2.28）。RETAIN のため AWS には残る。管理に戻す手順は cdk/README.md
+    // （NFR2.28）。RETAIN のため AWS には残る。管理に戻すときは、tableName に今の物理名を指定して
+    // cdk import で取り込む（新しく作らせない）
     // 「自分のもの」の一覧と件数（U7、BR1.2）。テーブルは置き換えない（GSI の追加だけ）
     this.surveyTemplatesTable = this.table('SurveyTemplates', {
       globalSecondaryIndexes: [

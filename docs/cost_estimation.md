@@ -20,15 +20,17 @@ AI ペルソナシステムは利用する各 AWS サービスは従量課金で
 |---|-------------|-----------|---------|
 | 1 | Amazon ECS Fargate<br>(1vCPU、4GB) | $53.1 | Web アプリケーション |
 | 2 | NAT Gateway | $46.5 | プライベートサブネットからの外部通信 |
-| 3 | Amazon Bedrock<br>(Claude Sonnet 5 / Haiku 5.5 / Haiku 4.5) | $36.7 | ペルソナ作成<br>議論、インサイト作成、マスアンケート、レポート生成 |
+| 3 | Amazon Bedrock<br>(Claude Sonnet 5 / Haiku 5.5 / Haiku 4.5) | $23.9 | ペルソナ作成<br>議論、インサイト作成、マスアンケート、レポート生成 |
 | 4 | Application Load Balancer | $19.7 | 負荷分散 |
 | 5 | Amazon Bedrock AgentCore Memory | $4.1 | ペルソナの長期記憶機能 |
 | 6 | Amazon ECR | $1.2 | コンテナイメージ保存 |
 | 7 | Amazon S3 | $0.6 | ファイルストレージ |
-| 8 | Amazon DynamoDB | $0.3 | データベース |
-| | **合計** | **$162.2** | - |
+| 8 | AWS Secrets Manager | $1.2 | ログインに使う鍵（シークレット 3 つ） |
+| 9 | AWS KMS | $1.0 | ログインセッションの暗号化（カスタマー管理キー 1 つ） |
+| 10 | Amazon DynamoDB | $0.3 | データベース |
+| | **合計** | **$151.6** | - |
 
-- 固定コストは約 $117.3（Fargate $53.1、NAT Gateway の基本料金 $45.3、ALB の基本料金 $17.7、ECR $1.2）。
+- 固定コストは約 $119.5（Fargate $53.1、NAT Gateway の基本料金 $45.3、ALB の基本料金 $17.7、ECR $1.2、Secrets Manager $1.2、KMS $1.0）。
 - 変動コストとして Bedrock、AgentCore Memory、ALB の LCU、NAT Gateway のデータ処理、S3、DynamoDBがあります。ペルソナ生成・議論・アンケートなどの実行量に比例します。
 
 ## ユースケース毎の Amazon Bedrock コスト試算
@@ -40,21 +42,21 @@ Amazon Bedrock 試算単価（`global` 推論プロファイル、1M トーク�
 | モデル | 入力 | 出力 |
 |--------|------|------|
 | Claude Sonnet 5（`bedrockModelId` 既定） | $2.00 | $10.00 |
-| Claude Haiku 5.5（`agentModelId` 既定） | 未確認※ | 未確認※ |
+| Claude Haiku 5.5（`agentModelId` 既定） | $0.10 | $0.50 |
 | Claude Haiku 4.5（議論・インタビューで選択可） | $1.00 | $5.00 |
 | Claude Haiku 4.5 バッチ（`batchInferenceModelId` 既定） | $0.50 | $2.50 |
 
-※ Claude Haiku 5.5 の単価は、この試算を書いた時点で確かめられていません。議論・インタビューの行（モデルが Haiku 5.5 の行）は、**試算は Haiku 4.5 の単価**（入力 $1.00、出力 $5.00）で計算しています。実際の単価は [Amazon Bedrock 料金](https://aws.amazon.com/bedrock/pricing/) の Claude Haiku 5.5 の行で確認してください（入力 10 万トークンを超えるプロンプトは「Claude Haiku 5.5 - Long Context」の単価になります）。
+Claude Haiku 5.5 は、入力が 10 万トークンを超えるプロンプトでは Long Context の単価（入力 $0.50、出力 $2.50）になります。単価は 2026-10-30 に AWS Price List API（東京リージョン）で確かめました。
 
 ### ユースケース別の 1 回あたりコスト試算
 
 | ユースケース | 1 回あたり | モデル | コール数 | 入力トークン | 出力トークン |
 |---|---|---|---|---|---|
 | ペルソナ生成（1〜10 体） | **$0.060** | Sonnet 5 | 1 | 10,000 | 4,000 |
-| 議論（しっかり議論モード、5 ペルソナ × 3 ラウンド） | $0.153 | Haiku 5.5（試算は Haiku 4.5 の単価） | 18 | 81,000 | 14,400 |
+| 議論（しっかり議論モード、5 ペルソナ × 3 ラウンド） | $0.015 | Haiku 5.5 | 18 | 81,000 | 14,400 |
 | └ インサイト抽出 | $0.063 | Sonnet 5 | 1 | 11,600 | 4,000 |
-| **議論 1 回（インサイト抽出込み）** | **$0.217** | - | 19 | 92,600 | 18,400 |
-| インタビュー 1 セッション（3 ペルソナ × 5 往復） | **$0.083** | Haiku 5.5（試算は Haiku 4.5 の単価） | 15 | 45,000 | 7,500 |
+| **議論 1 回（インサイト抽出込み）** | **$0.078** | - | 19 | 92,600 | 18,400 |
+| インタビュー 1 セッション（3 ペルソナ × 5 往復） | **$0.008** | Haiku 5.5 | 15 | 45,000 | 7,500 |
 | レポート生成（標準テンプレート） | **$0.090** | Sonnet 5 | 1 | 14,600 | 6,000 |
 | マスアンケート（1,000 ペルソナ × 4 問） | $2.76 | Haiku 4.5 バッチ | 1,000 レコード | 1,500,000 | 800,000 |
 | └ 統計分析・インサイト生成 | $0.08 | Sonnet 5 | 1 | 5,000 | 6,000 |
@@ -80,13 +82,15 @@ Amazon Bedrock 試算単価（`global` 推論プロファイル、1M トーク�
 | 項目 | 発生条件 |
 |------|---------|
 | Amazon CloudFront | 従量課金の無料枠（月 1TB のデータ転送、1,000 万リクエスト）を超えた場合 |
-| Lambda@Edge | Cognito 認証で全リクエストに対して実行されます。**Lambda@Edge は us-east-1 にデプロイされるため、東京リージョン構成でも us-east-1 の料金が適用されます** |
-| AWS WAF | `enableWaf: true` の場合（prod 既定）。**CloudFront 用 WebACL は us-east-1 に作成されるため us-east-1 の料金が適用されます**。WebACL 単位およびルール単位の月額料金とリクエスト課金が発生します |
+| AWS WAF | `enableWaf: true` の場合。**CloudFront 用 WebACL は us-east-1 に作成されるため us-east-1 の料金が適用されます**。WebACL 単位およびルール単位の月額料金とリクエスト課金が発生します |
 | Amazon Cognito | Essentials ティアの無料枠（月 10,000 MAU）を超えた場合 |
-| Amazon CloudWatch Logs | ECS コンテナログ、Lambda@Edge ログ、WAF メトリクスの取り込み・保管 |
+| Amazon CloudWatch Logs | ECS コンテナログ（30 日保管）、WAF メトリクスの取り込み・保管 |
 | Amazon Bedrock Knowledge Bases | ナレッジベース連携機能を利用する場合。ベクトルストア（OpenSearch Serverless 等）の費用が別途発生します |
-| Amazon Bedrock AgentCore Gateway / Amazon API Gateway | `enableMcpGateway: true` の場合。[MCP Server 設定ガイド](remote_mcp_setup.md) を参照 |
 | データ分析エージェント | [sample-text2sql-agent](https://github.com/aws-samples/sample-text2sql-agent) は別ソリューションとしてデプロイするため、その費用は本試算に含みません。[連携ガイド](data_agent_integration.md) を参照 |
+
+## 閉域構成の場合
+
+閉域構成では NAT Gateway の費用がなくなる一方、VPC エンドポイントの費用が増えます。目安は [閉域構成ガイドの「月額の目安」](closed_network.md#月額の目安) を参照してください。
 
 ## 注意事項
 

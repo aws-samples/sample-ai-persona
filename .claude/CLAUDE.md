@@ -13,7 +13,7 @@ uv run pytest -m e2e             # 固定E2E回帰（起動中の:8000に実AWS�
 uv run ruff check --fix .        # リント自動修正
 uv run mypy src/ web/            # 型チェック
 ./scripts/build-css.sh --minify  # CSSビルド
-cd cdk && npx cdk deploy --all   # CDKデプロイ
+./deploy.sh                      # AWS へのデプロイ（CloudShell。閉域は --closed。cdk/README.md）
 ```
 
 ## テスト実行ルーティング
