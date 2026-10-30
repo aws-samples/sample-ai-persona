@@ -1231,3 +1231,93 @@ class TestInferenceScopeModelResolution:
         service._create_model(None)
 
         assert mock_bedrock_model.call_args.kwargs["model_id"] == self.JP_HAIKU_5_5
+
+
+def _dict_fields(schema: dict, path: str = "$") -> list[str]:
+    """Paths whose JSON schema is a free-form object (``additionalProperties`` other than false)."""
+    found = []
+    if schema.get("additionalProperties") not in (None, False):
+        found.append(path)
+    for name, child in schema.get("properties", {}).items():
+        found += _dict_fields(child, f"{path}.{name}")
+    for name, child in schema.get("$defs", {}).items():
+        found += _dict_fields(child, f"$defs.{name}")
+    if isinstance(schema.get("items"), dict):
+        found += _dict_fields(schema["items"], f"{path}[]")
+    return found
+
+
+class TestColumnMappingStructuredOutput:
+    """CSV のカラム推定の構造化出力（Bedrock の JSON Schema 出力で表せる形にする）。"""
+
+    def test_output_schema_has_no_dict_fields(self):
+        """dict のフィールドがあると Strands は JSON Schema 出力を使えず auto に落ちる。"""
+        from src.services.agent_service import ColumnMappingOutput
+
+        assert _dict_fields(ColumnMappingOutput.model_json_schema()) == []
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_pairs_are_returned_as_a_mapping(self, mock_bedrock_model, mock_agent):
+        from src.services.agent_service import (
+            ColumnMappingItem,
+            ColumnMappingOutput,
+            ExtraColumnItem,
+        )
+
+        mock_agent.return_value.structured_output.return_value = ColumnMappingOutput(
+            mapping=[
+                ColumnMappingItem(standard_column="age", csv_column="年齢"),
+                ColumnMappingItem(standard_column="sex", csv_column="性別"),
+            ],
+            extra_columns=[
+                ExtraColumnItem(
+                    csv_column="購入回数", label="購入回数", description="d"
+                )
+            ],
+        )
+
+        result = AgentService().suggest_column_mapping_with_llm("prompt")
+
+        assert mock_agent.return_value.structured_output.call_args.args[0] is (
+            ColumnMappingOutput
+        )
+        assert result == {
+            "mapping": {"age": "年齢", "sex": "性別"},
+            "extra_columns": [
+                {"csv_column": "購入回数", "label": "購入回数", "description": "d"}
+            ],
+        }
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_empty_output_is_an_empty_mapping(self, mock_bedrock_model, mock_agent):
+        from src.services.agent_service import ColumnMappingOutput
+
+        mock_agent.return_value.structured_output.return_value = ColumnMappingOutput(
+            mapping=[], extra_columns=[]
+        )
+
+        result = AgentService().suggest_column_mapping_with_llm("prompt")
+
+        assert result == {"mapping": {}, "extra_columns": []}
+
+    @patch("src.services.agent_service.Agent")
+    @patch("src.services.agent_service.BedrockModel")
+    def test_duplicate_standard_column_keeps_the_first(
+        self, mock_bedrock_model, mock_agent
+    ):
+        """同じ標準カラムが 2 回返っても、最初の対応を使う（dict のときと違い重複を返しうる）。"""
+        from src.services.agent_service import ColumnMappingItem, ColumnMappingOutput
+
+        mock_agent.return_value.structured_output.return_value = ColumnMappingOutput(
+            mapping=[
+                ColumnMappingItem(standard_column="age", csv_column="年齢"),
+                ColumnMappingItem(standard_column="age", csv_column="生年"),
+            ],
+            extra_columns=[],
+        )
+
+        result = AgentService().suggest_column_mapping_with_llm("prompt")
+
+        assert result["mapping"] == {"age": "年齢"}

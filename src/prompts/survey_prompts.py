@@ -145,7 +145,7 @@ COLUMN_MAPPING_PROMPT_TEMPLATE = (
     "## 目的\n"
     "extra_columnsは「AIがこの人になりきってアンケートに回答する際に、回答内容に影響を与える情報」だけを選ぶこと。\n\n"
     "## ルール\n"
-    "- mappingのキーは標準カラム名、値はCSVカラム名\n"
+    "- mappingには標準カラム名（standard_column）と対応するCSVカラム名（csv_column）の組を、1つの標準カラムにつき1組だけ入れる\n"
     "- birth_year等はageに変換可能なのでマッピング対象にする\n"
     "- extra_columnsには行動履歴・嗜好・利用状況・ライフステージなど回答に影響するカラムのみ含める\n"
     "- extra_columnsに含めてはいけないもの: 氏名・姓・名・メールアドレス・電話番号・住所詳細・ID・作成日時・更新日時など個人識別情報やメタデータ\n"

@@ -63,7 +63,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 | カテゴリ | 技術 |
 |---------|------|
 | 言語・フレームワーク | Python 3.13, FastAPI, htmx, Jinja2, Tailwind CSS, Alpine.js |
-| AI | Amazon Bedrock (Claude Sonnet 5 / Haiku 5.5 / Haiku 4.5), Strands Agent SDK |
+| AI | Amazon Bedrock (Claude Sonnet 5.5 / Haiku 5.5 / Haiku 4.5), Strands Agent SDK |
 | インフラ | AWS CDK (TypeScript), ECS Fargate, 内部 ALB, CloudFront（VPC オリジン）, WAF, ECR, Cognito（アプリでの OIDC ログイン）, DynamoDB, Secrets Manager |
 
 
@@ -71,7 +71,7 @@ AIペルソナとの議論・対話を通じてインサイトを発見します
 
 ### ペルソナベースモデルの追加
 
-しっかり議論・インタビューモードでは、標準の Claude Haiku 5.5（既定）/ Claude Haiku 4.5 / Claude Sonnet 5 に加えて、以下モデルをペルソナ・ファシリテータ毎に選択ができます。
+しっかり議論・インタビューモードでは、標準の Claude Haiku 5.5（既定）/ Claude Haiku 4.5 / Claude Sonnet 5.5 / Claude Sonnet 5 に加えて、以下モデルをペルソナ・ファシリテータ毎に選択ができます。
 - GPT-5.6 Terra
 - GPT-5.6 Luna
 - Gemma 4 31B

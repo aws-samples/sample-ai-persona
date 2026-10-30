@@ -431,7 +431,7 @@ class TestInferenceScopeSetting:
     def test_default_is_global_with_the_global_model_ids(self, env):
         cfg = self._config(**env)
         assert cfg.INFERENCE_SCOPE == "global"
-        assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5"
+        assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5-5"
         assert cfg.AGENT_MODEL_ID == "global.anthropic.claude-haiku-5-5"
         assert (
             cfg.BATCH_INFERENCE_MODEL_ID

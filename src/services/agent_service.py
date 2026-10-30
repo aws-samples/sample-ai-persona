@@ -16,10 +16,35 @@ except ImportError:
     Agent = None  # type: ignore[assignment,misc]
     BedrockModel = None  # type: ignore[assignment,misc]
 
+from pydantic import BaseModel, Field
+
 from ..config import config
 from ..models.errors import CodedError, ErrorCode
 from ..models.persona import Persona
 from ..models.message import Message
+
+
+# カラム推定の構造化出力。Bedrock の JSON Schema 出力（Strands の native）は dict のフィールドを
+# 表せず、dict があると Strands は auto のツール呼び出しに落ちて出力が保証されない。強制の
+# tool_choice を受け付けないモデル（Sonnet 5.5 など）で確実に返すため、対応は組のリストで受け取る。
+class ColumnMappingItem(BaseModel):
+    standard_column: str = Field(description="標準カラム名")
+    csv_column: str = Field(description="対応するCSVカラム名")
+
+
+class ExtraColumnItem(BaseModel):
+    csv_column: str = Field(description="CSVカラム名")
+    label: str = Field(description="日本語ラベル")
+    description: str = Field(description="補足説明")
+
+
+class ColumnMappingOutput(BaseModel):
+    mapping: List[ColumnMappingItem] = Field(
+        description="標準カラム名とCSVカラム名の対応（1つの標準カラムにつき1組）"
+    )
+    extra_columns: List[ExtraColumnItem] = Field(
+        description="標準カラム以外で有用なカラムの補足情報"
+    )
 
 
 class AgentServiceError(CodedError):
@@ -1248,26 +1273,16 @@ class AgentService:
 
     def suggest_column_mapping_with_llm(self, prompt: str) -> Dict[str, Any]:
         """Strands Agent Structured Outputでカラムマッピング提案を返す。"""
-        from pydantic import BaseModel, Field
-
-        class ExtraColumnItem(BaseModel):
-            csv_column: str = Field(description="CSVカラム名")
-            label: str = Field(description="日本語ラベル")
-            description: str = Field(description="補足説明")
-
-        class ColumnMappingOutput(BaseModel):
-            mapping: Dict[str, str] = Field(
-                description="標準カラム名→CSVカラム名のマッピング"
-            )
-            extra_columns: List[ExtraColumnItem] = Field(
-                description="標準カラム以外で有用なカラムの補足情報"
-            )
-
         model = self._build_generation_model()
         agent = Agent(model=model, tools=[])
         result = agent.structured_output(ColumnMappingOutput, prompt)
 
+        mapping: Dict[str, str] = {}
+        for item in result.mapping:
+            # 同じ標準カラムが重複して返ったら最初の対応を使う
+            mapping.setdefault(item.standard_column, item.csv_column)
+
         return {
-            "mapping": dict(result.mapping),
+            "mapping": mapping,
             "extra_columns": [e.model_dump() for e in result.extra_columns],
         }

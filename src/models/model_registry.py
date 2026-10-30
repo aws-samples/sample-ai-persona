@@ -61,7 +61,7 @@ class ScopeDefaults:
 # （Haiku 5.5 はバッチ推論の対応表にない）。値の一致は pytest と jest の両方で固定する（BR4.6）
 SCOPE_DEFAULTS: dict[InferenceScope, ScopeDefaults] = {
     InferenceScope.GLOBAL: ScopeDefaults(
-        bedrock_model_id="global.anthropic.claude-sonnet-5",
+        bedrock_model_id="global.anthropic.claude-sonnet-5-5",
         agent_model_id="global.anthropic.claude-haiku-5-5",
         batch_inference_model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
     ),
@@ -99,6 +99,14 @@ _MODELS: tuple[ModelSpec, ...] = (
         scope=_GLOBAL,
         base_model="claude-haiku-4-5",
     ),
+    ModelSpec(
+        model_id="global.anthropic.claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5",
+        provider=ModelProvider.BEDROCK,
+        scope=_GLOBAL,
+        base_model="claude-sonnet-5-5",
+    ),
+    # 保存済みの議論・インタビューが選んだ Sonnet 5 を同じモデルで呼び続けるため残す
     ModelSpec(
         model_id="global.anthropic.claude-sonnet-5",
         display_name="Claude Sonnet 5",

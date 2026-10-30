@@ -715,10 +715,10 @@ describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1
     return out;
   }
 
-  test('公開の既定: AGENT_MODEL_ID は Haiku 5.5、ほかの 2 つは今の値。INFERENCE_SCOPE はない', () => {
+  test('公開の既定: AGENT_MODEL_ID は Haiku 5.5、BEDROCK_MODEL_ID は Sonnet 5.5。INFERENCE_SCOPE はない', () => {
     const env = envOf(template);
     expect(env.AGENT_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
-    expect(env.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-sonnet-5');
+    expect(env.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-sonnet-5-5');
     expect(env.BATCH_INFERENCE_MODEL_ID).toBe('global.anthropic.claude-haiku-4-5-20251001-v1:0');
     expect(env).not.toHaveProperty('INFERENCE_SCOPE');
   });

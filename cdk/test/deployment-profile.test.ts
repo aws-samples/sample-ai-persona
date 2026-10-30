@@ -11,7 +11,7 @@ import { ClosedStageParameters, closedDevParameter, devParameter, prodParameter 
 // 範囲ごとの既定（U5 BR1.6 と計画の「設計からの変更」）。tests/unit/test_model_registry.py にも
 // 同じ値を書く（BR4.6）。どちらかを変えたら両方のテストが落ちる
 const GLOBAL_DEFAULTS = {
-  bedrockModelId: 'global.anthropic.claude-sonnet-5',
+  bedrockModelId: 'global.anthropic.claude-sonnet-5-5',
   agentModelId: 'global.anthropic.claude-haiku-5-5',
   batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 };

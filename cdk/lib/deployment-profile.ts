@@ -81,7 +81,7 @@ const MODEL_ID_NAMES: readonly (keyof ModelIds)[] = ['bedrockModelId', 'agentMod
  */
 export const SCOPE_DEFAULTS: Readonly<Record<InferenceScope, Readonly<ModelIds>>> = Object.freeze({
   global: Object.freeze({
-    bedrockModelId: 'global.anthropic.claude-sonnet-5',
+    bedrockModelId: 'global.anthropic.claude-sonnet-5-5',
     agentModelId: 'global.anthropic.claude-haiku-5-5',
     batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
   }),
