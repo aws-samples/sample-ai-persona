@@ -26,6 +26,7 @@ from src.models.model_registry import (
 GLOBAL_HAIKU_5_5 = "global.anthropic.claude-haiku-5-5"
 GLOBAL_HAIKU_4_5 = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 GLOBAL_SONNET_5 = "global.anthropic.claude-sonnet-5"
+GLOBAL_SONNET_5_5 = "global.anthropic.claude-sonnet-5-5"
 JP_HAIKU_5_5 = "jp.anthropic.claude-haiku-5-5"
 JP_HAIKU_4_5 = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
 GEMMA = "google.gemma-4-31b"
@@ -39,7 +40,7 @@ class TestScopeDefaults:
 
     def test_global_defaults(self):
         defaults = SCOPE_DEFAULTS[InferenceScope.GLOBAL]
-        assert defaults.bedrock_model_id == GLOBAL_SONNET_5
+        assert defaults.bedrock_model_id == GLOBAL_SONNET_5_5
         assert defaults.agent_model_id == GLOBAL_HAIKU_5_5
         assert defaults.batch_inference_model_id == GLOBAL_HAIKU_4_5
 
@@ -64,11 +65,12 @@ class TestScopeDefaults:
 class TestScopeTables:
     """BR4.1: 範囲と baseModel を持つ表。"""
 
-    def test_global_has_six_models(self):
+    def test_global_has_seven_models(self):
         ids = [spec.model_id for spec in models_in_scope(InferenceScope.GLOBAL)]
         assert ids == [
             GLOBAL_HAIKU_5_5,
             GLOBAL_HAIKU_4_5,
+            GLOBAL_SONNET_5_5,
             GLOBAL_SONNET_5,
             TERRA,
             LUNA,
@@ -120,13 +122,19 @@ class TestListSelectableModels:
             spec.model_id
             for spec in list_selectable_models(False, InferenceScope.GLOBAL)
         ]
-        assert ids == [GLOBAL_HAIKU_5_5, GLOBAL_HAIKU_4_5, GLOBAL_SONNET_5]
+        assert ids == [
+            GLOBAL_HAIKU_5_5,
+            GLOBAL_HAIKU_4_5,
+            GLOBAL_SONNET_5_5,
+            GLOBAL_SONNET_5,
+        ]
 
     def test_global_enabled_includes_mantle(self):
         ids = [spec.model_id for spec in list_selectable_models(True, "global")]
         assert ids == [
             GLOBAL_HAIKU_5_5,
             GLOBAL_HAIKU_4_5,
+            GLOBAL_SONNET_5_5,
             GLOBAL_SONNET_5,
             TERRA,
             LUNA,

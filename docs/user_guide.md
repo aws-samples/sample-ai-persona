@@ -752,7 +752,7 @@ DWH（データウェアハウス）から自然言語で顧客セグメント�
 <details>
 <summary>Q: どのAIモデルが使用されている？</summary>
 
-Amazon Bedrock上のClaude Sonnet 5（メイン）、Claude Haiku 5.5（しっかり議論・インタビューのデフォルト）、Claude Haiku 4.5（バッチ推論のデフォルト）を使用しています。しっかり議論・インタビューモードでは、ペルソナ・ファシリテータ毎にClaude Haiku 5.5 / Claude Haiku 4.5 / Claude Sonnet 5から使用モデルを選択できます。管理者が有効化した場合は、Bedrock Mantle経由でGPT-5.6 Terra/Luna、Gemma 4 31Bも選択可能です。
+Amazon Bedrock上のClaude Sonnet 5.5（メイン）、Claude Haiku 5.5（しっかり議論・インタビューのデフォルト）、Claude Haiku 4.5（バッチ推論のデフォルト）を使用しています。しっかり議論・インタビューモードでは、ペルソナ・ファシリテータ毎にClaude Haiku 5.5 / Claude Haiku 4.5 / Claude Sonnet 5.5 / Claude Sonnet 5から使用モデルを選択できます。管理者が有効化した場合は、Bedrock Mantle経由でGPT-5.6 Terra/Luna、Gemma 4 31Bも選択可能です。
 </details>
 
 <details>

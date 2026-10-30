@@ -111,10 +111,10 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 
 | | `global`（既定） | `jp` |
 |---|---|---|
-| ペルソナ生成・インサイト・レポート | Claude Sonnet 5 | Claude Haiku 5.5 |
+| ペルソナ生成・インサイト・レポート | Claude Sonnet 5.5 | Claude Haiku 5.5 |
 | 議論・インタビューの既定 | Claude Haiku 5.5 | Claude Haiku 5.5 |
 | アンケート（バッチ推論） | Claude Haiku 4.5 | Claude Haiku 4.5 |
-| 議論・インタビューで選べるモデル | Claude Haiku 5.5、Claude Haiku 4.5、Claude Sonnet 5、追加のモデル（有効なときだけ） | Claude Haiku 5.5、Claude Haiku 4.5 |
+| 議論・インタビューで選べるモデル | Claude Haiku 5.5、Claude Haiku 4.5、Claude Sonnet 5.5、Claude Sonnet 5、追加のモデル（有効なときだけ） | Claude Haiku 5.5、Claude Haiku 4.5 |
 
 指定のしかた:
 

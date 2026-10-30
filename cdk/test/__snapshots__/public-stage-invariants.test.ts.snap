@@ -119,7 +119,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "BATCH_INFERENCE_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
   "BATCH_INFERENCE_S3_PREFIX": "batch-inference/",
   "BEDROCK_BATCH_ROLE_ARN": "GetAtt(BedrockBatchRoleD187C6F4.Arn)",
-  "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5",
+  "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5-5",
   "COGNITO_CLIENT_ID": "Ref(AppClient4AE61178)",
   "COGNITO_DOMAIN": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPoolDomain4D6973E96CE551BD).auth.ap-northeast-1.amazoncognito.com",
   "COGNITO_USER_POOL_ID": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPool279BBD4830DEAA77)",
