@@ -288,13 +288,13 @@ class ErrorCode(StrEnum):
         ErrorKind.VALIDATION,
     )
     # The requested count passes, but the filters (or the dataset itself) yield
-    # fewer personas than Bedrock batch inference accepts. The user can fix it by
+    # fewer personas than a survey needs (MIN_SURVEY_PERSONAS). The user can fix it by
     # loosening the filters, hence VALIDATION rather than CAPACITY.
     SURVEY_AVAILABLE_PERSONAS_TOO_FEW = (
         "survey_available_personas_too_few",
         ErrorKind.VALIDATION,
     )
-    # The uploaded dataset itself is below the batch-inference minimum, so no
+    # The uploaded dataset itself is below the survey minimum, so no
     # filter change can rescue it; a different file is needed.
     SURVEY_DATASET_TOO_FEW_ROWS = (
         "survey_dataset_too_few_rows",
@@ -323,16 +323,36 @@ class ErrorCode(StrEnum):
         "nemotron_download_not_allowed",
         ErrorKind.FORBIDDEN,
     )
-    # The batch-inference IAM role is not configured. Only an operator can fix
-    # this, and the variable name itself stays out of the wording.
+    # Batch inference codes. No new code raises them since surveys run on Step
+    # Functions; records that failed before the switch still hold them, so they
+    # stay readable with ``parse()`` and keep their wording (FR11.2).
     SURVEY_BATCH_ROLE_NOT_CONFIGURED = (
         "survey_batch_role_not_configured",
         ErrorKind.CONFIG,
     )
-    # Bedrock reported the job as Failed/Stopped. Its own message goes to the
-    # logs only: it carries bucket names and role ARNs.
     SURVEY_BATCH_JOB_FAILED = ("survey_batch_job_failed", ErrorKind.TRANSIENT)
     SURVEY_BATCH_JOB_TIMED_OUT = ("survey_batch_job_timed_out", ErrorKind.TRANSIENT)
+    # --- Surveys on Step Functions (functional-spec.md ch.3) ---
+    # No state machine (or lease table) is configured, e.g. local runs (BR9.1).
+    SURVEY_RUNNER_NOT_CONFIGURED = ("survey_runner_not_configured", ErrorKind.CONFIG)
+    # Starting kept failing on permissions or configuration for 30 minutes
+    # (NFR4.9a); an operator has to fix the deployment.
+    SURVEY_RUNNER_UNAVAILABLE = ("survey_runner_unavailable", ErrorKind.CONFIG)
+    # The execution ended FAILED or ABORTED (BR3.4).
+    SURVEY_INFERENCE_FAILED = ("survey_inference_failed", ErrorKind.TRANSIENT)
+    # The execution ran past its time limit (BR3.3).
+    SURVEY_EXECUTION_TIMED_OUT = ("survey_execution_timed_out", ErrorKind.TRANSIENT)
+    # More than 5% of the answers (or all of them) could not be had (BR4.5).
+    # Context: ``failed_count``, ``total``.
+    SURVEY_TOO_MANY_FAILED_ANSWERS = (
+        "survey_too_many_failed_answers",
+        ErrorKind.TRANSIENT,
+    )
+    # Running or pending when the switch happened; it can never finish (BR8.1).
+    SURVEY_EXECUTION_INTERRUPTED = (
+        "survey_execution_interrupted",
+        ErrorKind.TRANSIENT,
+    )
     # AI-assisted template authoring.
     SURVEY_AI_UNAVAILABLE = ("survey_ai_unavailable", ErrorKind.CONFIG)
     # The AI produced nothing usable; retrying can succeed.

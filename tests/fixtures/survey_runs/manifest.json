@@ -1,0 +1,19 @@
+{
+  "DestinationBucket": "<bucket>",
+  "MapRunArn": "arn:aws:states:ap-northeast-1:123456789012:mapRun:SurveyRunStateMachine/Map:0b2c4e1a-1111-2222-3333-444455556666",
+  "ResultFiles": {
+    "FAILED": [
+      {
+        "Key": "<prefix>/0b2c4e1a-1111-2222-3333-444455556666/FAILED_0.json",
+        "Size": 512
+      }
+    ],
+    "PENDING": [],
+    "SUCCEEDED": [
+      {
+        "Key": "<prefix>/0b2c4e1a-1111-2222-3333-444455556666/SUCCEEDED_0.json",
+        "Size": 2048
+      }
+    ]
+  }
+}

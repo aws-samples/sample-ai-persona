@@ -19,9 +19,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
  */
 export const TASK_LIST_ACTIONS: readonly string[] = Object.freeze([
   'dynamodb:ListTables',
-  'bedrock:ListFoundationModels',
-  'bedrock:ListInferenceProfiles',
-  'bedrock:ListModelInvocationJobs',
+  // bedrock の一覧の 3 つ（ListFoundationModels など）はアプリのコードから呼ばないため外した
+  // （基盤設計 Q1 の A、NFR レビュー R-05）
   'bedrock-agentcore:ListMemories',
 ]);
 
@@ -45,7 +44,7 @@ export type RestrictedEndpointService =
   | 'secretsmanager'
   | 'cognito-idp'
   | 'bedrock-runtime'
-  | 'bedrock'
+  | 'states'
   | 'bedrock-agent-runtime'
   | 'bedrock-agentcore'
   | 'bedrock-agentcore-control';
@@ -75,13 +74,10 @@ export interface EndpointAccessScope {
   readonly inferenceArns: readonly string[];
   /** このアカウント・リージョンの knowledge-base/*（タスクロールと同じ）。 */
   readonly knowledgeBaseArn: string;
-  /** このアカウント・リージョンの model-invocation-job/*（タスクロールと同じ）。 */
-  readonly batchJobArn: string;
-  /**
-   * バッチ推論のジョブに渡すロール（BedrockBatchRole）。CreateModelInvocationJob の iam:PassRole は、
-   * bedrock のエンドポイントのポリシーでも評価される（BR1.10）。
-   */
-  readonly batchRoleArn: string;
+  /** アンケートのステートマシン（StartExecution、タスクロールと同じ）。 */
+  readonly stateMachineArn: string;
+  /** そのステートマシンの実行（DescribeExecution・StopExecution、タスクロールと同じ）。 */
+  readonly stateMachineExecutionsArn: string;
 }
 
 /** The AWS-managed bucket where ECR stores image layers (`prod-<region>-starport-layer-bucket`). */
@@ -101,7 +97,6 @@ interface EndpointPolicyShape {
 const listActionsOf = (prefix: string, actions: readonly string[]) =>
   actions.filter((action) => action.startsWith(`${prefix}:`));
 
-const bedrockControl = TASK_LIST_ACTIONS.filter((action) => action.startsWith('bedrock:'));
 const agentCore: EndpointPolicyShape = {
   prefix: 'bedrock-agentcore',
   resources: (s) => [s.memoryArn, `${s.memoryArn}/*`],
@@ -127,10 +122,10 @@ const POLICY_SHAPES: Readonly<Record<RestrictedEndpointService, EndpointPolicySh
   secretsmanager: { prefix: 'secretsmanager', resources: (s) => s.secretArns },
   'cognito-idp': { prefix: 'cognito-idp', resources: (s) => [s.userPoolArn], listActions: UNSIGNED_ACTIONS },
   'bedrock-runtime': { prefix: 'bedrock', resources: (s) => s.inferenceArns },
-  bedrock: {
-    prefix: 'bedrock',
-    resources: (s) => [...s.inferenceArns, s.batchJobArn],
-    listActions: bedrockControl,
+  // アンケートの実行の開始・確認・停止（FR9.1、FR9.2、NFR6.2）。操作の絞り込みはタスクロールが受け持つ
+  states: {
+    prefix: 'states',
+    resources: (s) => [s.stateMachineArn, s.stateMachineExecutionsArn],
   },
   'bedrock-agent-runtime': { prefix: 'bedrock', resources: (s) => [s.knowledgeBaseArn] },
   'bedrock-agentcore': agentCore,
@@ -144,8 +139,7 @@ export const RESTRICTED_ENDPOINT_SERVICES: readonly RestrictedEndpointService[] 
 
 /**
  * The statements of one endpoint's policy (functional-spec.md §3): `<prefix>:*` on the app's
- * resources, the list or unsigned APIs on `*`, for S3 `s3:GetObject` on the ECR layer bucket, and
- * for Bedrock `iam:PassRole` on the batch inference role.
+ * resources, the list or unsigned APIs on `*`, and for S3 `s3:GetObject` on the ECR layer bucket.
  * Every statement allows any principal (BR1.2).
  */
 export function endpointPolicyStatements(
@@ -160,11 +154,6 @@ export function endpointPolicyStatements(
   if (service === 's3') {
     // BR1.5: タスクがイメージのレイヤーを取得するため（読み取りだけ）
     statements.push(allow(['s3:GetObject'], [`${scope.ecrLayerBucketArn}/*`]));
-  }
-  if (service === 'bedrock') {
-    // BR1.10: バッチ推論のジョブの作成でロールを渡す。iam:PassRole もエンドポイントのポリシーの対象になる
-    // （AWS Security Blog「How to use the PassRole permission with IAM roles」）。渡せるのはこのロールだけ
-    statements.push(allow(['iam:PassRole'], [scope.batchRoleArn]));
   }
   return statements;
 }

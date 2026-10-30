@@ -431,3 +431,70 @@ def test_a_failure_while_streaming_closes_the_body(s3_service, monkeypatch):
         next(stream.chunks)
 
     assert body.close_calls == 1
+
+
+# --- アンケートのオンデマンド推論（functional-spec.md 2 章、reliability 3.1） ------
+
+
+def _failing_client(monkeypatch, s3_service, operation: str, code: str) -> None:
+    from unittest.mock import Mock
+
+    from botocore.exceptions import ClientError
+
+    client = Mock()
+    getattr(client, operation).side_effect = ClientError(
+        {"Error": {"Code": code, "Message": "m"}}, operation
+    )
+    monkeypatch.setattr(s3_service, "s3_client", client)
+
+
+def test_nemotron_parquet_presence_is_checked_by_key(s3_service, s3_bucket_name):
+    """Manager が head_object を直接呼んでいた箇所の置き換え（exists + path_of）。"""
+    key = "datasets/nemotron/nemotron.parquet"
+    assert not s3_service.exists(s3_service.path_of(key))
+
+    s3_service.upload_file(b"PAR1", key)
+
+    assert s3_service.exists(s3_service.path_of(key))
+
+
+def test_result_csv_presence(s3_service):
+    path = s3_service.upload_file(b"a,b\n", "survey-results/s-1/results.csv")
+
+    assert s3_service.exists(path)
+    s3_service.delete_file(path)
+    assert not s3_service.exists(path)
+
+
+@pytest.mark.parametrize(
+    ("code", "failure_name"),
+    [("AccessDenied", "ACCESS"), ("403", "ACCESS"), ("SlowDown", "TRANSIENT")],
+)
+def test_head_failures_carry_the_failure_class(
+    s3_service, monkeypatch, code, failure_name
+):
+    from src.models.external_failure import FailureClass
+
+    _failing_client(monkeypatch, s3_service, "head_object", code)
+
+    with pytest.raises(S3ServiceError) as info:
+        s3_service.exists("s3://test-bucket/k")
+    assert info.value.failure is FailureClass[failure_name]
+    assert info.value.code is ErrorCode.S3_OPERATION_FAILED
+
+
+@pytest.mark.parametrize(
+    ("code", "failure_name"),
+    [("AccessDenied", "ACCESS"), ("NoSuchBucket", "ACCESS"), ("500", "TRANSIENT")],
+)
+def test_upload_failures_carry_the_failure_class(
+    s3_service, monkeypatch, code, failure_name
+):
+    """完了のまとめで CSV を置けないとき、Manager は分類で扱いを決める（NFR4.8）。"""
+    from src.models.external_failure import FailureClass
+
+    _failing_client(monkeypatch, s3_service, "put_object", code)
+
+    with pytest.raises(S3ServiceError) as info:
+        s3_service.upload_file(b"x", "survey-results/s-1/results.csv")
+    assert info.value.failure is FailureClass[failure_name]

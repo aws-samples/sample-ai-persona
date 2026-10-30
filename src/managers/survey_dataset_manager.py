@@ -43,6 +43,7 @@ from ..models.custom_persona_data import (
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
 from ..models.nemotron_dataset import NemotronDatasetStatus, NemotronSource
 from ..models.sharing import AssetScopeChange, AssetScopeDialog
+from ..models.survey import MIN_SURVEY_PERSONAS
 from ..prompts.survey_prompts import (
     DWH_SEGMENT_SYSTEM_PROMPT,
     STANDARD_COLUMNS,
@@ -127,7 +128,8 @@ def _is_missing_object(error: Exception) -> bool:
 class SurveyDatasetManager:
     """データセット管理 + DWH連携 + フィルタ操作"""
 
-    MIN_SEGMENT_ROWS = 100
+    #: A dataset must hold at least the rows one survey samples (FR4.1)
+    MIN_SEGMENT_ROWS = MIN_SURVEY_PERSONAS
     MAX_SEGMENT_ROWS = 10000
 
     def __init__(
@@ -413,7 +415,7 @@ class SurveyDatasetManager:
         df, parquet_bytes = self.batch_service.convert_csv_to_parquet(
             csv_bytes, column_mapping
         )
-        # バッチ推論の最小レコード数を下回るデータセットは、アンケート実行時に
+        # アンケートの最小人数を下回るデータセットは、アンケート実行時に
         # 必ず失敗する。DWH抽出経路と同じ下限をここでも適用し、使えない
         # データセットを作らせない（Issue #118）。
         self._validate_dataset_row_count(len(df))

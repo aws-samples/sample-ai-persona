@@ -49,6 +49,16 @@ def test_container_keeps_connections_longer_than_the_alb():
     assert int(cmd[cmd.index("--timeout-keep-alive") + 1]) == 310
 
 
+def test_container_waits_for_a_graceful_shutdown_within_the_ecs_stop_timeout():
+    """NFR4.11・R-08: uvicorn の停止の待ちは 60 秒。進行役の回の待ち（30 秒）を含み、
+    ECS の stopTimeout（120 秒）に収まる。"""
+    cmd = _dockerfile_cmd()
+    assert "--timeout-graceful-shutdown" in cmd
+    seconds = int(cmd[cmd.index("--timeout-graceful-shutdown") + 1])
+    assert seconds == 60
+    assert 30 < seconds < 120
+
+
 def test_container_still_serves_the_app_on_port_80():
     cmd = _dockerfile_cmd()
     assert "web.main:app" in cmd

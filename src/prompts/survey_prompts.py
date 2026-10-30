@@ -1,9 +1,10 @@
 """アンケート機能に関するプロンプト定数・ヘルパー関数"""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
-from ..models.survey_template import SurveyTemplate
+from ..models.survey import MIN_SURVEY_PERSONAS
+from ..models.survey_template import Question, SurveyTemplate
 
 # ---------------------------------------------------------------------------
 # ペルソナ属性カラム定義（プロンプト構築で参照）
@@ -95,10 +96,10 @@ DWH_SEGMENT_SYSTEM_PROMPT = (
     "3. ユーザー条件に合致する顧客を特定し、関連テーブルをJOINして集計カラムを付与する\n"
     "4. 結果を「CSVで出力してください」と ask_data_agent に依頼する\n"
     "5. 1顧客1行になるようにする（重複がある場合は集計やDISTINCTで解消）\n"
-    "6. 抽出件数が100件未満の場合は条件を緩和して再試行する\n"
+    f"6. 抽出件数が{MIN_SURVEY_PERSONAS}件未満の場合は条件を緩和して再試行する\n"
     "7. 10,000件を超える場合はサンプリングまたは条件を絞るよう調整する\n\n"
     "# 制約\n"
-    "- 最小100行、最大10,000行\n"
+    f"- 最小{MIN_SURVEY_PERSONAS}行、最大10,000行\n"
     "- 必ず1顧客1行（GROUP BY customer_id 等で集約）\n"
     "- 顧客を一意に識別できるID列を必ず含めること\n"
     "- ask_data_agent に「CSVで出力してください」と依頼してCSV URLを取得すること\n\n"
@@ -159,7 +160,7 @@ DATASET_NAME_GENERATION_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# バッチ推論（ペルソナ回答）
+# ペルソナの回答（Step Functions のオンデマンド推論）
 # ---------------------------------------------------------------------------
 
 PERSONA_RESPONSE_ATTITUDE_PREFIX = (
@@ -314,3 +315,106 @@ def build_persona_system_prompt(
 def build_dataset_name_prompt(condition: str) -> str:
     """データセット名自動生成プロンプトを構築する。"""
     return DATASET_NAME_GENERATION_PROMPT.format(condition=condition)
+
+
+# ---------------------------------------------------------------------------
+# アンケートの回答の依頼（Step Functions のオンデマンド推論）
+# ---------------------------------------------------------------------------
+
+
+def format_questions_for_prompt(questions: Sequence[Question]) -> str:
+    """Turn the questions into the prompt text (wording unchanged, NFR2.4)."""
+    lines: List[str] = []
+    for i, q in enumerate(questions, 1):
+        lines.append(f"質問{i} (ID: {q.id}): {q.text}")
+        if q.question_type == "multiple_choice":
+            if q.allow_multiple:
+                max_note = (
+                    f"（最大{q.max_selections}個まで）" if q.max_selections > 0 else ""
+                )
+                lines.append(f"  タイプ: 選択式・複数回答{max_note}")
+                lines.append("  【必ず以下の選択肢から選んでください】")
+            else:
+                lines.append("  タイプ: 選択式・単一回答")
+                lines.append("  【必ず以下の選択肢から1つ選んでください】")
+            for j, opt in enumerate(q.options, 1):
+                lines.append(f"  {j}. {opt}")
+            if q.allow_multiple:
+                lines.append(
+                    f"  【回答例】{q.options[0]}|{q.options[1] if len(q.options) > 1 else q.options[0]}"
+                )
+                lines.append(
+                    "  【注意】選択肢の文言をそのまま使用し、説明や理由は含めないでください"
+                )
+            else:
+                lines.append(f"  【回答例】{q.options[0]}")
+                lines.append(
+                    "  【注意】選択肢の文言をそのまま使用し、説明や理由は含めないでください"
+                )
+        elif q.question_type == "free_text":
+            lines.append(
+                "  タイプ: 自由記述（あなた自身の経験・価値観・こだわりを具体的に盛り込んで200文字以内で回答してください。一般的・抽象的な回答は避けてください）"
+            )
+        elif q.question_type == "scale_rating":
+            lines.append(
+                f"  タイプ: スケール評価（{q.scale_min}〜{q.scale_max}の整数で回答してください）"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_survey_user_content(
+    questions_text: str,
+    image_names: Sequence[str],
+    image_blocks: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """The user message: the image names and images first, then the questions.
+
+    The order is the same as before the move to Step Functions (NFR2.4).
+    """
+    content: List[Dict[str, Any]] = []
+    if image_blocks:
+        names = "\n".join(f"- {name}" for name in image_names)
+        content.append(
+            {"type": "text", "text": f"以下の画像が添付されています:\n{names}\n"}
+        )
+        content.extend(image_blocks)
+    content.append(
+        {
+            "type": "text",
+            "text": SURVEY_QUESTION_FORMAT_TEMPLATE.format(
+                questions_text=questions_text
+            ),
+        }
+    )
+    return content
+
+
+def _answer_property(question: Question) -> Dict[str, Any]:
+    """The schema of one question's value (BR5.2〜BR5.4, BR5.6)."""
+    if question.question_type == "multiple_choice":
+        option = {"type": "string", "enum": list(question.options)}
+        if question.allow_multiple:
+            return {"type": "array", "items": option}
+        return option
+    if question.question_type == "scale_rating":
+        values = list(range(int(question.scale_min), int(question.scale_max) + 1))
+        return {"type": "integer", "enum": values}
+    return {"type": "string"}
+
+
+def build_answer_schema(questions: Sequence[Question]) -> Dict[str, Any]:
+    """The structured-output schema: every question by ID, required (BR5.1)."""
+    return {
+        "type": "object",
+        "properties": {
+            "answers": {
+                "type": "object",
+                "properties": {q.id: _answer_property(q) for q in questions},
+                "required": [q.id for q in questions],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["answers"],
+        "additionalProperties": False,
+    }

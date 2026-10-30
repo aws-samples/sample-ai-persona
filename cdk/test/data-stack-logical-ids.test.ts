@@ -42,6 +42,8 @@ function expectedPaths(data: string): Record<string, string[]> {
       'Personas',
       'ResourceShares',
       'Sessions',
+      // 進行役の担当者の記録（Step Functions への移行、BR2.3）
+      'SurveyRunLease',
       'SurveyTemplates',
       'Surveys',
       'UploadedFiles',

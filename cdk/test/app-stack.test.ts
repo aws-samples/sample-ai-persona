@@ -698,28 +698,34 @@ test('出力に CloudFront の URL とサービスの名前がある（deploy.sh
   expect(stack.region).toBe('ap-northeast-1');
 });
 
+/** Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`. */
+function statementsOfRole(t: Template, rolePrefix: string): any[] {
+  return Object.values(t.findResources('AWS::IAM::Policy'))
+    .filter((p) =>
+      (p.Properties.Roles as { Ref: string }[]).some((r) => String(r.Ref).startsWith(rolePrefix)),
+    )
+    .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+}
+const actionsIn = (statements: any[]) => statements.flatMap((s) => [s.Action].flat() as string[]);
+const resourcesText = (s: any) => JSON.stringify(s.Resource);
+
 describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1.10、BR2.3、BR2.4）', () => {
-  /** `bedrock:InvokeModel` を持つ文の Resource（タスクロールとバッチ推論ロール）。 */
-  function invokeModelResources(t: Template): { task: string[]; batch: string[] } {
-    const out: { task: string[]; batch: string[] } = { task: [], batch: [] };
-    for (const policy of Object.values(t.findResources('AWS::IAM::Policy'))) {
-      const roles = (policy.Properties.Roles as { Ref: string }[]).map((r) => r.Ref);
-      for (const s of policy.Properties.PolicyDocument.Statement as any[]) {
-        if (!([] as string[]).concat(s.Action).includes('bedrock:InvokeModel')) {
-          continue;
-        }
-        const resources = ([] as unknown[]).concat(s.Resource).map((r) => (typeof r === 'string' ? r : JSON.stringify(r)));
-        out[roles.some((r) => r.startsWith('BedrockBatchRole')) ? 'batch' : 'task'] = resources.sort();
-      }
-    }
-    return out;
+  /** `bedrock:InvokeModel` を持つ文の Resource（タスクロール）。 */
+  function invokeModelResources(t: Template): string[] {
+    const statement = statementsOfRole(t, 'AppTaskDefinitionTaskRole').find((s) =>
+      ([] as string[]).concat(s.Action).includes('bedrock:InvokeModel'),
+    );
+    return ([] as unknown[])
+      .concat(statement.Resource)
+      .map((r) => (typeof r === 'string' ? r : JSON.stringify(r)))
+      .sort();
   }
 
   test('公開の既定: AGENT_MODEL_ID は Haiku 5.5、BEDROCK_MODEL_ID は Sonnet 5.5。INFERENCE_SCOPE はない', () => {
     const env = envOf(template);
     expect(env.AGENT_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
     expect(env.BEDROCK_MODEL_ID).toBe('global.anthropic.claude-sonnet-5-5');
-    expect(env.BATCH_INFERENCE_MODEL_ID).toBe('global.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(env.SURVEY_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
     expect(env).not.toHaveProperty('INFERENCE_SCOPE');
   });
 
@@ -735,16 +741,15 @@ describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1
     expect(env.AGENT_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
   });
 
-  test('jp で明示した global.* と基盤モデルの ID の権限を、両方のロールに同じ一覧で足す（BR2.3、BR2.4）', () => {
+  test('jp で明示した global.* と基盤モデルの ID の権限をタスクロールに足す（BR2.3、BR2.4）', () => {
     const { template: t } = build({
       parameter: {
         inferenceScope: 'jp',
         bedrockModelId: 'global.anthropic.claude-sonnet-5',
-        batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+        agentModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
       },
     });
-    const { task, batch } = invokeModelResources(t);
-    expect(task).toEqual(batch);
+    const task = invokeModelResources(t);
     expect(task).toEqual(
       [
         'arn:aws:bedrock:ap-northeast-1::foundation-model/*',
@@ -768,5 +773,277 @@ describe('AppStack: 推論の範囲とモデル ID（閉域対応 U5 BR1.7、BR1
         },
       }),
     ).toThrow(/agentModelId/);
+  });
+});
+
+// =============================================================================
+// アンケートのステートマシン（基盤設計 2.2・3.1・3.2・4 章、BR2.6、BR3.3、BR3.5、BR3.6）
+// =============================================================================
+
+function stateMachineOf(t: Template): { logicalId: string; resource: any } {
+  const machines = Object.entries(t.findResources('AWS::StepFunctions::StateMachine'));
+  expect(machines).toHaveLength(1);
+  return { logicalId: machines[0][0], resource: machines[0][1] };
+}
+
+function definitionOf(t: Template): any {
+  const raw = stateMachineOf(t).resource.Properties.DefinitionString;
+  expect(typeof raw).toBe('string');
+  return JSON.parse(raw);
+}
+
+describe('AppStack: アンケートのステートマシン', () => {
+  const definition = definitionOf(template);
+  const map = definition.States[definition.StartAt];
+  const child = map.ItemProcessor;
+
+  test('Standard、名前は指定しない、RETAIN、ログは ERROR で入出力なし、トレースなし', () => {
+    const { resource } = stateMachineOf(template);
+    expect(resource.DeletionPolicy).toBe('Retain');
+    expect(resource.UpdateReplacePolicy).toBe('Retain');
+    expect(resource.Properties.StateMachineType).toBe('STANDARD');
+    expect(resource.Properties.StateMachineName).toBeUndefined();
+    expect(resource.Properties.LoggingConfiguration).toMatchObject({
+      Level: 'ERROR',
+      IncludeExecutionData: false,
+    });
+    expect(resource.Properties.TracingConfiguration?.Enabled ?? false).toBe(false);
+  });
+
+  test('実行全体の打ち切りは既定 7,200 秒（BR3.3）', () => {
+    expect(definition.TimeoutSeconds).toBe(7200);
+  });
+
+  test('Distributed Map: S3 の JSONL を読み、子は Express、並列 64、失敗の許容 100%、結果は S3', () => {
+    expect(map.Type).toBe('Map');
+    expect(map.ItemReader).toEqual({
+      Resource: 'arn:aws:states:::s3:getObject',
+      ReaderConfig: { InputType: 'JSONL' },
+      Parameters: { 'Bucket.$': '$.bucket', 'Key.$': '$.input_key' },
+    });
+    expect(child.ProcessorConfig).toEqual({ Mode: 'DISTRIBUTED', ExecutionType: 'EXPRESS' });
+    expect(map.MaxConcurrency).toBe(64);
+    expect(map.ToleratedFailurePercentage).toBe(100);
+    expect(map.ResultWriter).toEqual({
+      Resource: 'arn:aws:states:::s3:putObject',
+      Parameters: { 'Bucket.$': '$.bucket', 'Prefix.$': '$.result_prefix' },
+    });
+    expect(map.End).toBe(true);
+  });
+
+  test('子の実行: Body が S3 にあるかで分け、bedrock:invokeModel を呼ぶ（BR6.3）', () => {
+    const choice = child.States[child.StartAt];
+    expect(choice.Type).toBe('Choice');
+    expect(choice.Choices).toEqual([
+      { Variable: '$.body_s3_uri', IsPresent: true, Next: 'InvokeWithBodyInS3' },
+    ]);
+    expect(choice.Default).toBe('InvokeWithBody');
+    expect(child.States.InvokeWithBody.Parameters).toEqual({
+      'ModelId.$': '$.model_id',
+      'Body.$': '$.body',
+      ContentType: 'application/json',
+      Accept: 'application/json',
+    });
+    expect(child.States.InvokeWithBodyInS3.Parameters).toEqual({
+      'ModelId.$': '$.model_id',
+      Input: { 'S3Uri.$': '$.body_s3_uri' },
+      ContentType: 'application/json',
+      Accept: 'application/json',
+    });
+  });
+
+  test.each(['InvokeWithBody', 'InvokeWithBodyInS3'])(
+    '%s: 応答の本文だけを残し、30 秒で打ち切り、一時的なエラーを再試行する（BR3.5）',
+    (name) => {
+      const task = child.States[name];
+      expect(task.Type).toBe('Task');
+      expect(task.Resource).toBe('arn:aws:states:::bedrock:invokeModel');
+      expect(task.ResultSelector).toEqual({ 'content.$': '$.Body.content' });
+      expect(task.TimeoutSeconds).toBe(30);
+      expect(task.End).toBe(true);
+      expect(task.Retry).toEqual([
+        {
+          ErrorEquals: [
+            'Bedrock.ThrottlingException',
+            'Bedrock.ServiceUnavailableException',
+            'Bedrock.ModelNotReadyException',
+            'Bedrock.InternalServerException',
+            'Bedrock.ModelTimeoutException',
+            'States.Timeout',
+          ],
+          IntervalSeconds: 2,
+          BackoffRate: 2,
+          MaxAttempts: 6,
+          MaxDelaySeconds: 16,
+          JitterStrategy: 'FULL',
+        },
+      ]);
+    },
+  );
+
+  test('再試行の最悪でも Express の 5 分に収まる（NFR3.15）', () => {
+    const task = child.States.InvokeWithBody;
+    const retry = task.Retry[0];
+    let waits = 0;
+    let delay = retry.IntervalSeconds;
+    for (let i = 0; i < retry.MaxAttempts; i += 1) {
+      waits += Math.min(delay, retry.MaxDelaySeconds);
+      delay *= retry.BackoffRate;
+    }
+    expect((retry.MaxAttempts + 1) * task.TimeoutSeconds + waits).toBeLessThan(300);
+  });
+
+  test('ステートマシンのロググループは名前を指定せず、保持 1 か月、RETAIN', () => {
+    const groups = Object.entries(template.findResources('AWS::Logs::LogGroup')).filter(([id]) =>
+      id.startsWith('SurveyRun'),
+    );
+    expect(groups).toHaveLength(1);
+    const [, group] = groups[0];
+    expect(group.DeletionPolicy).toBe('Retain');
+    expect(group.Properties.LogGroupName).toBeUndefined();
+    expect(group.Properties.RetentionInDays).toBe(30);
+  });
+
+  test('実行ロールは推論・survey-runs/ の読み書き・自分の実行・ログの出力だけ（基盤設計 3.1）', () => {
+    const statements = statementsOfRole(template, 'SurveyRun');
+    const actions = new Set(actionsIn(statements));
+    expect([...actions].sort()).toEqual(
+      [
+        'bedrock:InvokeModel',
+        's3:GetObject',
+        's3:PutObject',
+        's3:AbortMultipartUpload',
+        's3:ListMultipartUploadParts',
+        'states:StartExecution',
+        'states:DescribeExecution',
+        'logs:CreateLogDelivery',
+        'logs:GetLogDelivery',
+        'logs:UpdateLogDelivery',
+        'logs:DeleteLogDelivery',
+        'logs:ListLogDeliveries',
+        'logs:PutResourcePolicy',
+        'logs:DescribeResourcePolicies',
+        'logs:DescribeLogGroups',
+      ].sort(),
+    );
+    for (const forbidden of ['s3:GetObjectVersion', 's3:ListBucket', 'states:StopExecution']) {
+      expect(actions.has(forbidden)).toBe(false);
+    }
+    const read = statements.find((s) => [s.Action].flat().includes('s3:GetObject'));
+    expect(resourcesText(read)).toContain('/survey-runs/*');
+    expect(resourcesText(read)).not.toContain('/survey-results/');
+    const write = statements.find((s) => [s.Action].flat().includes('s3:PutObject'));
+    expect(resourcesText(write)).toContain('/survey-runs/*/results/*');
+    const invoke = statements.find((s) => [s.Action].flat().includes('bedrock:InvokeModel'));
+    expect([invoke.Resource].flat().sort()).toEqual(
+      [
+        'arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude-haiku-5-5',
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5',
+      ].sort(),
+    );
+    const roles = Object.entries(template.findResources('AWS::IAM::Role')).filter(([id]) =>
+      id.startsWith('SurveyRun'),
+    );
+    expect(roles).toHaveLength(1);
+    expect(JSON.stringify(roles[0][1].Properties.AssumeRolePolicyDocument)).toContain(
+      'states.amazonaws.com',
+    );
+  });
+
+  test('タスクロールは自分のステートマシンの開始・確認・停止と、担当者の記録の 4 つの操作（基盤設計 3.2）', () => {
+    const task = statementsOfRole(template, 'AppTaskDefinitionTaskRole');
+    const machine = stateMachineOf(template).logicalId;
+    const start = task.filter((s) => [s.Action].flat().includes('states:StartExecution'));
+    expect(start).toHaveLength(1);
+    expect(start[0].Resource).toEqual({ Ref: machine });
+    const follow = task.filter((s) => [s.Action].flat().includes('states:DescribeExecution'));
+    expect(follow).toHaveLength(1);
+    expect([follow[0].Action].flat().sort()).toEqual([
+      'states:DescribeExecution',
+      'states:StopExecution',
+    ]);
+    expect(resourcesText(follow[0])).toContain(':execution:');
+    const lease = task.filter((s) => resourcesText(s).includes('DatabaseSurveyRunLease'));
+    expect(lease).toHaveLength(1);
+    expect([lease[0].Action].flat().sort()).toEqual([
+      'dynamodb:DeleteItem',
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+    ]);
+    expect(resourcesText(lease[0])).not.toContain('/index/');
+  });
+
+  test('タスクロールの Surveys の文に RunQueueIndex を名前で付ける（NFR5.8）', () => {
+    const task = statementsOfRole(template, 'AppTaskDefinitionTaskRole');
+    const surveys = task.filter((s) => resourcesText(s).includes('DatabaseSurveys'));
+    expect(JSON.stringify(surveys)).toContain('/index/RunQueueIndex');
+  });
+
+  test('バッチ推論のロール・権限・一覧の API がない（FR8.2、NFR5.10）', () => {
+    const roles = Object.keys(template.findResources('AWS::IAM::Role'));
+    expect(roles.filter((id) => id.startsWith('BedrockBatchRole'))).toEqual([]);
+    const actions = new Set(actionsIn(statementsOfRole(template, 'AppTaskDefinitionTaskRole')));
+    for (const removed of [
+      'bedrock:CreateModelInvocationJob',
+      'bedrock:GetModelInvocationJob',
+      'bedrock:StopModelInvocationJob',
+      'iam:PassRole',
+      'bedrock:ListFoundationModels',
+      'bedrock:ListInferenceProfiles',
+      'bedrock:ListModelInvocationJobs',
+    ]) {
+      expect(actions.has(removed)).toBe(false);
+    }
+  });
+
+  test('アプリへ実行基盤の 4 つの設定を渡し、バッチ推論の 3 つは渡さない（基盤設計 4 章）', () => {
+    const env = envOf(template);
+    expect(env.SURVEY_STATE_MACHINE_ARN).toEqual({ Ref: stateMachineOf(template).logicalId });
+    expect(JSON.stringify(env.SURVEY_RUN_LEASE_TABLE_NAME)).toContain('DatabaseSurveyRunLease');
+    expect(env.SURVEY_EXECUTION_TIMEOUT_SECONDS).toBe('7200');
+    expect(env.SURVEY_MODEL_ID).toBe('global.anthropic.claude-haiku-5-5');
+    for (const removed of [
+      'BEDROCK_BATCH_ROLE_ARN',
+      'BATCH_INFERENCE_MODEL_ID',
+      'BATCH_INFERENCE_S3_PREFIX',
+    ]) {
+      expect(env).not.toHaveProperty(removed);
+    }
+  });
+
+  test('並列数と打ち切り時間はパラメータで変えられ、アプリにも同じ値を渡す（FR3.4、NFR3.5）', () => {
+    const { template: t } = build({
+      parameter: { surveyMaxConcurrency: 32, surveyExecutionTimeoutSeconds: 3600 },
+    });
+    const d = definitionOf(t);
+    expect(d.States[d.StartAt].MaxConcurrency).toBe(32);
+    expect(d.TimeoutSeconds).toBe(3600);
+    expect(envOf(t).SURVEY_EXECUTION_TIMEOUT_SECONDS).toBe('3600');
+  });
+
+  test.each([
+    { surveyMaxConcurrency: 0 },
+    { surveyMaxConcurrency: 1001 },
+    { surveyMaxConcurrency: 1.5 },
+    { surveyExecutionTimeoutSeconds: 599 },
+    { surveyExecutionTimeoutSeconds: 86401 },
+  ])('範囲外の %p は synth で止まる（NFR3.4、NFR3.5）', (parameter) => {
+    expect(() => build({ parameter })).toThrow(/survey(MaxConcurrency|ExecutionTimeoutSeconds)/);
+  });
+
+  test('jp の範囲ではアンケートのモデルも jp の推論プロファイルと国内の基盤モデル', () => {
+    const { template: t } = build({ parameter: { inferenceScope: 'jp' } });
+    expect(envOf(t).SURVEY_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
+    const invoke = statementsOfRole(t, 'SurveyRun').find((s) =>
+      [s.Action].flat().includes('bedrock:InvokeModel'),
+    );
+    expect([invoke.Resource].flat().sort()).toEqual(
+      [
+        'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.anthropic.claude-haiku-5-5',
+        'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-haiku-5-5',
+        'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.claude-haiku-5-5',
+      ].sort(),
+    );
   });
 });

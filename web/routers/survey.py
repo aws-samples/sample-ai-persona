@@ -44,8 +44,10 @@ from src.managers.survey_template_manager import (
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
 )
+from src.config import config
 from src.managers.file_manager import FileManager
 from src.managers.settings_manager import SettingsManager
+from src.managers.survey_run_manager import SurveyRunManager
 from src.models.authz import Principal
 from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.survey_template import Question, TemplateImage
@@ -66,6 +68,7 @@ from web.error_messages import (  # noqa: E402
 from web.sanitize import render_markdown  # noqa: E402
 from web import asset_scope_views  # noqa: E402
 from ._asset_response import asset_response  # noqa: E402
+from ._survey_runner import SurveyRunnerLoop  # noqa: E402
 
 # マークダウンフィルターを追加
 templates.env.filters["markdown"] = render_markdown
@@ -126,6 +129,29 @@ def get_file_manager() -> FileManager:
     if _file_manager is None:
         _file_manager = FileManager()
     return _file_manager
+
+
+_runner_loop: SurveyRunnerLoop | None = None
+
+
+def get_survey_runner_loop() -> SurveyRunnerLoop | None:
+    """The survey runner's loop of this task, or ``None`` where surveys do not run.
+
+    Only built when a state machine and the lease table are configured
+    (BR9.1); local runs have neither, so no round ever starts there.
+    """
+    global _runner_loop
+    if _runner_loop is None and config.survey_runner_configured:
+        manager = SurveyRunManager()
+        _runner_loop = SurveyRunnerLoop(manager.advance, manager.release_lease)
+    return _runner_loop
+
+
+def _wake_survey_runner() -> None:
+    """Ask for one round right away (after an accept or a delete, WF1 / WF6)."""
+    loop = get_survey_runner_loop()
+    if loop is not None:
+        loop.wake()
 
 
 def _principal(request: Request) -> Principal:
@@ -1216,6 +1242,8 @@ async def delete_survey(
             raise
         logger.error("Failed to delete survey", exc_info=True)
         return toast_response(e, default="削除に失敗しました")
+    # 実行中や待ちのものが消えたら、次の待ちを始められるよう進行役を起こす（WF6）
+    _wake_survey_runner()
     if redirect:
         return Response(status_code=200, headers={"HX-Redirect": "/survey/results"})
     return Response(status_code=200)
@@ -1502,9 +1530,9 @@ async def execute_survey(request: Request) -> Any:
             request, user_message_for(e, default="アンケート作成に失敗しました"), 500
         )
 
-    # 2. バックグラウンドで実行を開始（デフォルトスレッドプールで実行し、executorを占有しない）。
-    #    失敗は実行の中でアンケートに記録される（例外を投げない）
-    asyncio.create_task(asyncio.to_thread(start.run))
+    # 2. 待ちに入れたので、進行役を 1 回起こす（待たない。推論は Step Functions、WF1）。
+    #    失敗は進行役がアンケートに記録する（例外を投げない）
+    _wake_survey_runner()
 
     # 3. 開始メッセージを表示し、結果一覧へ自動遷移
     return templates.TemplateResponse(

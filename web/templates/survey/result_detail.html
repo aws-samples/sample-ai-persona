@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "components/datetime.html" import iso_datetime %}
 {% from "components/icons.html" import icon_chat, icon_arrow_left, icon_document, icon_lightbulb %}
+{% from "survey/partials/status_badge.html" import survey_status_badge %}
 
 {% block content %}
 <div class="max-w-5xl mx-auto" x-data="{ activeTab: 'download' }">
@@ -13,16 +14,7 @@
             <div class="flex items-center gap-4 mt-2 flex-wrap">
                 <span class="text-sm text-gray-500"><time datetime="{{ iso_datetime(survey.created_at) }}">{{ survey.created_at.strftime('%Y/%m/%d %H:%M') }}</time></span>
                 <span class="text-sm text-gray-500">{{ survey.persona_count }}名</span>
-                <span class="px-2 py-0.5 text-xs rounded-full
-                    {% if survey.status == 'completed' %}bg-green-100 text-green-800
-                    {% elif survey.status == 'running' %}bg-blue-100 text-blue-800
-                    {% elif survey.status == 'error' %}bg-red-100 text-red-800
-                    {% else %}bg-gray-100 text-gray-800{% endif %}">
-                    {% if survey.status == 'completed' %}完了
-                    {% elif survey.status == 'running' %}実行中
-                    {% elif survey.status == 'error' %}エラー
-                    {% else %}待機中{% endif %}
-                </span>
+                {{ survey_status_badge(survey) }}
             </div>
             {#- 名前は実行したときの写し（テンプレートや元データを変えても過去の結果は変わらない、BR2.10） #}
             <div class="flex flex-wrap items-center gap-2 mt-3">
@@ -107,6 +99,13 @@
             </div>
             {% endfor %}
         </div>
+    </div>
+    {% endif %}
+
+    {#- 取れなかった回答がある完了（5% 以下、FR5.3・BR4.4）。CSV では回答の列が空欄 #}
+    {% if survey.status == 'completed' and survey.failed_count %}
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+        <p class="text-amber-900 text-sm" data-testid="survey-failed-count">{{ survey.failed_count }} 件の回答を取得できませんでした（CSV では空欄）</p>
     </div>
     {% endif %}
 
@@ -302,6 +301,15 @@
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
         <p class="text-blue-800">アンケートを実行中です。しばらくお待ちください。</p>
+    </div>
+    {% elif survey.status == 'queued' %}
+    {#- 順番や予定時刻は出さない（BR2.5） #}
+    <div class="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center" data-testid="survey-queued-note">
+        {% if survey.start_blocked_since %}
+        <p class="text-gray-800">開始できずに待っています。しばらくたっても始まらない場合は、管理者に連絡してください。</p>
+        {% else %}
+        <p class="text-gray-800">待ちに入りました。前のアンケートが終わったら始まります。</p>
+        {% endif %}
     </div>
     {% endif %}
 </div>

@@ -306,6 +306,136 @@ def test_import_form_has_a_scope_field_defaulting_to_admin_only(ui: UiHarness) -
 
 
 # =============================================================================
+# 待ちと取れなかった件数の表示（frontend-components.md、FR3.3、FR5.3、BR2.5、
+# BR4.4、NFR4.9b、FR4.1）。Jinja と画面の取得だけで確かめる（ブラウザは使わない）
+# =============================================================================
+
+BLOCKED_AT = datetime(2026, 10, 30, 1, 0)
+
+
+def _with(survey: Survey, **fields: Any) -> Survey:
+    from dataclasses import replace
+
+    return replace(survey, **fields)
+
+
+def _status_badges(*surveys: Survey) -> list[str]:
+    import re
+
+    html = render_page(
+        "survey/partials/result_list.html",
+        listing=_listing(list(surveys), ListTab.MINE),
+        current_search="",
+        is_append=False,
+    )
+    badges = re.findall(r'data-testid="survey-status"[^>]*>(.*?)</span>', html, re.S)
+    return [" ".join(b.split()) for b in badges]
+
+
+def test_list_tells_queued_blocked_and_old_waiting_apart():
+    queued = _with(_survey("s1", "待ち"), status="queued")
+    blocked = _with(
+        _survey("s2", "止まった待ち"), status="queued", start_blocked_since=BLOCKED_AT
+    )
+    old = _with(_survey("s3", "旧記録"), status="pending")
+
+    assert _status_badges(queued, blocked, old) == [
+        "待ち",
+        "開始できずに待っています",
+        "待機中",
+    ]
+
+
+def test_list_keeps_the_other_labels():
+    labels = _status_badges(
+        _survey("s1", "完了"),
+        _with(_survey("s2", "実行中"), status="running"),
+        _with(_survey("s3", "失敗"), status="error"),
+    )
+    assert labels == ["完了", "実行中", "エラー"]
+
+
+def test_list_never_shows_an_order_or_a_start_time():
+    """BR2.5: 待ちの間は順番も予定時刻も出さない。"""
+    html = render_page(
+        "survey/partials/result_list.html",
+        listing=_listing([_with(_survey("s1", "待ち"), status="queued")], ListTab.MINE),
+        current_search="",
+        is_append=False,
+    )
+    for word in ("番目", "予定", "開始予定"):
+        assert word not in html
+
+
+def _detail_html(screen_client: Any, survey: Survey) -> str:
+    from src.models.survey import SurveyDetail
+
+    executions = Mock()
+    executions.get_survey_detail.return_value = SurveyDetail(
+        survey=survey, manageable=True, template_name="t", analysis_available=True
+    )
+    with patch("web.routers.survey.get_execution_manager", return_value=executions):
+        response = screen_client.get(f"/survey/results/{survey.id}")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_detail_of_a_queued_survey_explains_the_wait(screen_client):
+    html = _detail_html(screen_client, _with(_survey("s1", "待ち"), status="queued"))
+    assert 'data-testid="survey-queued-note"' in html
+    assert "前のアンケートが終わったら始まります" in html
+
+
+def test_detail_of_a_blocked_survey_says_it_cannot_start(screen_client):
+    survey = _with(
+        _survey("s1", "止まった待ち"), status="queued", start_blocked_since=BLOCKED_AT
+    )
+    html = _detail_html(screen_client, survey)
+    assert "開始できずに待っています" in html
+
+
+def test_detail_shows_how_many_answers_are_missing(screen_client):
+    """FR5.3・BR4.4: 取れなかった件数があれば結果の上に出す。"""
+    survey = _with(_survey("s1", "完了"), failed_count=3)
+    html = _detail_html(screen_client, survey)
+    note = html.split('data-testid="survey-failed-count"', 1)[1].split("</", 1)[0]
+    assert "3 件の回答を取得できませんでした（CSV では空欄）" in note
+
+
+@pytest.mark.parametrize("failed_count", [0, None])
+def test_detail_without_missing_answers_has_no_note(screen_client, failed_count):
+    survey = _with(_survey("s1", "完了"), failed_count=failed_count)
+    assert 'data-testid="survey-failed-count"' not in _detail_html(
+        screen_client, survey
+    )
+
+
+def test_start_form_minimum_is_ten():
+    """FR4.1: 件数の下限の表示は 10。"""
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2] / "web/templates/survey/start.html"
+    ).read_text(encoding="utf-8")
+    assert 'min="10"' in source
+    assert "（10〜1,000）" in source
+    assert "（10〜10,000）" in source
+    assert 'min="100"' not in source
+
+
+@pytest.mark.parametrize(("count", "warned"), [(9, True), (10, False)])
+def test_filter_preview_warns_below_ten(count, warned):
+    """FR4.1: 対象の人数の注意は、下限の 10 名を下回るときだけ出す。"""
+    from web.main import templates
+
+    html = templates.get_template("survey/partials/filter_preview.html").render(
+        count=count, total=500, stats={}, has_filter=True
+    )
+    assert ("アンケート実行には10名以上が必要です" in html) is warned
+    assert ("bg-yellow-50" in html) is warned
+
+
+# =============================================================================
 # member のペルソナ元データの画面
 # =============================================================================
 

@@ -373,7 +373,6 @@ class TestServiceFactorySurveyBatchService:
         mock_config.DYNAMODB_TABLE_PREFIX = "Test"
         mock_config.DYNAMODB_REGION = "us-east-1"
         mock_config.BEDROCK_MODEL_ID = "test-model"
-        mock_config.BATCH_INFERENCE_MODEL_ID = "test-model"
 
         factory = ServiceFactory()
         service = factory.get_survey_batch_service()
@@ -580,6 +579,52 @@ class TestServiceFactoryAuthzServices:
         assert surveys.table_name == "Surveys-physical"
         mock_config.table_name.assert_called_with("Surveys")
         assert surveys.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
+    def test_survey_run_lease_store_uses_its_table(self, mock_config, monkeypatch):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.SURVEY_RUN_LEASE_TABLE_NAME = "Lease-physical"
+
+        factory = ServiceFactory()
+        lease = factory.get_survey_run_lease_store()
+
+        assert lease is factory.get_survey_run_lease_store()
+        assert lease.table_name == "Lease-physical"
+        assert lease.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
+    def test_survey_runner_service_uses_the_state_machine(
+        self, mock_config, monkeypatch
+    ):
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.AWS_REGION = "ap-northeast-1"
+        mock_config.S3_BUCKET_NAME = "app-bucket"
+        mock_config.SURVEY_STATE_MACHINE_ARN = "arn:aws:states:r:1:stateMachine:sm"
+
+        factory = ServiceFactory()
+        runner = factory.get_survey_runner_service()
+
+        assert runner is factory.get_survey_runner_service()
+        assert runner.state_machine_arn == "arn:aws:states:r:1:stateMachine:sm"
+        assert runner.bucket_name == "app-bucket"
+
+    @patch("src.services.service_factory.config")
+    def test_survey_runner_needs_the_configuration(self, mock_config):
+        """BR9.1: 設定がなければ Service を作らない（呼ぶ側が先に確かめる）。"""
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.SURVEY_STATE_MACHINE_ARN = None
+        mock_config.S3_BUCKET_NAME = "app-bucket"
+
+        with pytest.raises(RuntimeError):
+            ServiceFactory().get_survey_runner_service()
 
     @patch("src.services.service_factory.config")
     def test_persona_store_uses_its_table(self, mock_config, monkeypatch):

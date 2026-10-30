@@ -54,6 +54,11 @@ _TEMPLATE = ResourceType.SURVEY_TEMPLATE
 MAX_SURVEY_BYTES = 350 * 1024
 
 
+def _answered(value: Any) -> bool:
+    """Whether a CSV answer cell holds an answer (blank: not answered, BR4.6)."""
+    return value is not None and bool(str(value).strip())
+
+
 class SurveyAnalysisManagerError(CodedError):
     """SurveyAnalysisManager層の基底例外"""
 
@@ -210,7 +215,9 @@ class SurveyAnalysisManager:
 
         for q in template.questions:
             answer_key = f"{q.id}_answer"
-            answers = [r[answer_key] for r in rows if answer_key in r and r[answer_key]]
+            # A blank answer is a persona without an answer (BR4.6): it leaves the
+            # question's counts, but its row stays in the attribute statistics
+            answers = [r[answer_key] for r in rows if _answered(r.get(answer_key))]
 
             if q.question_type == "multiple_choice":
                 counts: Dict[str, int] = {}
@@ -301,7 +308,7 @@ class SurveyAnalysisManager:
 
         for r in rows:
             ans = r.get(answer_key, "")
-            if not ans:
+            if not _answered(ans):
                 continue
             sex = r.get("sex", "")
             age_bracket = self._get_age_bracket(r.get("age", ""))
@@ -333,7 +340,7 @@ class SurveyAnalysisManager:
 
         for r in rows:
             ans = r.get(answer_key, "")
-            if not ans:
+            if not _answered(ans):
                 continue
             try:
                 val = float(ans)

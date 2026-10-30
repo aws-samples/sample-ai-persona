@@ -1,0 +1,20 @@
+{#
+  アンケートの状態の札（一覧と詳細で共通）。色だけでなく文言で状態を示す。
+  queued は「待ち」、権限・設定の失敗で開始できないときは「開始できずに待っています」
+  （NFR4.9b）。pending は切り替え前の記録だけが持つ（BR8.1）。順番や予定時刻は出さない（BR2.5）。
+#}
+{% macro survey_status_badge(survey, size_classes="px-2 py-0.5 text-xs", testid=none) -%}
+{%- set blocked = survey.status == 'queued' and survey.start_blocked_since -%}
+<span {% if testid %}data-testid="{{ testid }}" {% endif %}class="{{ size_classes }} rounded-full
+    {% if survey.status == 'completed' %}bg-green-100 text-green-800
+    {% elif survey.status == 'running' %}bg-blue-100 text-blue-800
+    {% elif survey.status == 'error' %}bg-red-100 text-red-800
+    {% else %}bg-gray-100 text-gray-800{% endif %}">
+    {% if survey.status == 'completed' %}完了
+    {% elif survey.status == 'running' %}実行中
+    {% elif survey.status == 'error' %}エラー
+    {% elif blocked %}開始できずに待っています
+    {% elif survey.status == 'queued' %}待ち
+    {% else %}待機中{% endif %}
+</span>
+{%- endmacro %}

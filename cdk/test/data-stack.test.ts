@@ -21,7 +21,10 @@ const EXPECTED_GSIS: Record<string, string[]> = {
   UploadedFiles: [],
   Datasets: [],
   SurveyTemplates: ['OwnerIndex'],
-  Surveys: ['OwnerIndex'],
+  // アンケートの待ちと実行中の疎な索引（Step Functions への移行、NFR3.10）
+  Surveys: ['OwnerIndex', 'RunQueueIndex'],
+  // 進行役の担当者の記録（GSI なし、BR2.3）
+  SurveyRunLease: [],
   KnowledgeBases: [],
   Jobs: [],
   Sessions: [],
@@ -271,24 +274,68 @@ describe('DataStack: カスタムデータの登録情報とアンケートの O
   });
 
   test.each([
-    { name: 'SurveyTemplates' },
-    { name: 'Surveys' },
-  ])('$name は論理 ID が変わらず（置き換えない）、OwnerIndex（PK owner_sub・SK created_at、KEYS_ONLY）だけを持つ', ({ name }) => {
+    { name: 'SurveyTemplates', indexCount: 1 },
+    { name: 'Surveys', indexCount: 2 },
+  ])('$name は論理 ID が変わらず（置き換えない）、OwnerIndex（PK owner_sub・SK created_at、KEYS_ONLY）を持つ', ({ name, indexCount }) => {
     const table = resources()[logicalIdOf(name)];
     expect(table).toBeDefined();
     expect(table.DeletionPolicy).toBe('Retain');
     expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
     const indexes = table.Properties.GlobalSecondaryIndexes;
-    expect(indexes).toHaveLength(1);
-    expect(indexes[0].IndexName).toBe('OwnerIndex');
-    expect(indexes[0].KeySchema).toEqual([
+    expect(indexes).toHaveLength(indexCount);
+    const owner = indexes.find((index: any) => index.IndexName === 'OwnerIndex');
+    expect(owner.KeySchema).toEqual([
       { AttributeName: 'owner_sub', KeyType: 'HASH' },
       { AttributeName: 'created_at', KeyType: 'RANGE' },
     ]);
-    expect(indexes[0].Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
+    expect(owner.Projection).toEqual({ ProjectionType: 'KEYS_ONLY' });
     const replica = table.Properties.Replicas[0];
     expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
     expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+});
+
+describe('DataStack: アンケートの待ちと担当者の記録（基盤設計 2.1、NFR3.10、NFR4.16、NFR4.17、NFR5.13）', () => {
+  const resources = () => template.findResources('AWS::DynamoDB::GlobalTable');
+
+  test('Surveys に疎な索引 RunQueueIndex（PK run_queue・SK queued_at、射影 ALL）を足す', () => {
+    const table = resources()[logicalIdOf('Surveys')];
+    const index = table.Properties.GlobalSecondaryIndexes.find(
+      (i: any) => i.IndexName === 'RunQueueIndex',
+    );
+    expect(index.KeySchema).toEqual([
+      { AttributeName: 'run_queue', KeyType: 'HASH' },
+      { AttributeName: 'queued_at', KeyType: 'RANGE' },
+    ]);
+    expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
+    expect(table.Properties.AttributeDefinitions).toEqual(
+      expect.arrayContaining([
+        { AttributeName: 'run_queue', AttributeType: 'S' },
+        { AttributeName: 'queued_at', AttributeType: 'S' },
+      ]),
+    );
+  });
+
+  test('SurveyRunLease は PK id、オンデマンド、AWS 管理キー、PITR なし、削除保護、RETAIN、TTL なし', () => {
+    const table = resources()[logicalIdOf('SurveyRunLease')];
+    expect(table).toBeDefined();
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.TableName).toBeUndefined();
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'id', KeyType: 'HASH' }]);
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
+    const replica = table.Properties.Replicas[0];
+    expect(replica.PointInTimeRecoverySpecification).toBeUndefined();
+    expect(replica.DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('SurveyRunLease はアプリの一括の権限の 8 テーブルに入れない（4 つの操作だけを付ける）', () => {
+    expect(Object.values(dataStack.database.applicationTables)).not.toContain(
+      dataStack.database.surveyRunLeaseTable,
+    );
   });
 });
 
@@ -298,11 +345,21 @@ describe('DataStack: アップロード用バケットのライフサイクル�
     return bucket.Properties.LifecycleConfiguration?.Rules ?? [];
   }
 
-  test('ルールは 3 つで、どれも有効', () => {
-    expect(rules()).toHaveLength(3);
+  test('ルールは 4 つで、どれも有効', () => {
+    expect(rules()).toHaveLength(4);
     for (const rule of rules()) {
       expect(rule.Status).toBe('Enabled');
     }
+  });
+
+  test('survey-runs/ の実行の入出力は今の版を 7 日、古いバージョンを 1 日で消す（NFR5.14、NFR3.12）', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireSurveyRuns');
+    expect(rule).toMatchObject({
+      Prefix: 'survey-runs/',
+      ExpirationInDays: 7,
+      NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+    });
+    expect(rule.TagFilters).toBeUndefined();
   });
 
   test('candidates/ の一時 CSV は 1 日で失効', () => {
@@ -334,9 +391,9 @@ describe('DataStack: アップロード用バケットのライフサイクル�
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つを含めて 17 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つ・担当者の記録を含めて 18 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(17);
+    expect(Object.keys(tables)).toHaveLength(18);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

@@ -3,7 +3,11 @@
 U7: BR1.1〜BR1.4、BR1.8、BR2.1、BR2.2、BR2.6〜BR2.10、BR2.12、BR4.2、NFR1.66、
 NFR1.67、NFR1.69〜NFR1.71、NFR1.84、NFR1.86、NFR2.24、NFR2.25、NFR8.26、
 AC2.5.2、AC4.1.2、AC4.4.1、AC4.4.4。DynamoDB と S3 は moto、判定の部品は本物
-（tests/unit/survey_world.py）、バッチ推論はモック。
+（tests/unit/survey_world.py）、ペルソナの抽出と Step Functions はモック。
+
+Step Functions への移行: 作成は queued で保存するだけ（WF1、BR9.1）、下限は 10
+（BR1.1〜BR1.3）、旧記録の中断（BR8.1）、削除で実行を止める（BR7）。推論と完了の
+まとめは tests/unit/test_survey_run_manager.py。
 """
 
 import dataclasses
@@ -43,6 +47,7 @@ from src.prompts.survey_prompts import (
     build_dataset_name_prompt,
     build_insight_prompt,
     build_persona_system_prompt,
+    format_questions_for_prompt,
     STANDARD_COLUMNS,
 )
 from src.services.stores.survey_store import SurveyStore
@@ -112,8 +117,20 @@ class TestValidatePersonaCount:
         SurveyExecutionManager._validate_persona_count(500)
 
     def test_too_low(self) -> None:
-        with pytest.raises(SurveyExecutionValidationError):
-            SurveyExecutionManager._validate_persona_count(99)
+        """BR1.1・FR4.1: 下限は 10（context の min_count も 10）。"""
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
+            min_count=10,
+        ):
+            SurveyExecutionManager._validate_persona_count(9)
+
+    def test_ten_is_enough(self) -> None:
+        SurveyExecutionManager._validate_persona_count(10)
+
+    def test_minimum_has_a_survey_name(self) -> None:
+        """FR4.3: バッチ推論の下限の名前ではなく、アンケートの下限として持つ。"""
+        assert SurveyExecutionManager.MIN_SURVEY_PERSONAS == 10
 
     def test_images_max_1000(self) -> None:
         with pytest.raises(SurveyExecutionValidationError):
@@ -125,99 +142,18 @@ class TestValidatePersonaCount:
 
 
 @pytest.mark.unit
-class TestValidateAnswer:
-    def test_empty_string_returns_empty(self) -> None:
-        q = Question.create_free_text("Q")
-        assert SurveyExecutionManager._validate_answer("", q) == ""
-
-    def test_whitespace_only_returns_empty(self) -> None:
-        q = Question.create_free_text("Q")
-        assert SurveyExecutionManager._validate_answer("   ", q) == ""
-
-    def test_none_returns_empty(self) -> None:
-        q = Question.create_free_text("Q")
-        assert SurveyExecutionManager._validate_answer(None, q) == ""
-
-    def test_free_text_returns_as_is(self) -> None:
-        q = Question.create_free_text("Q")
-        assert (
-            SurveyExecutionManager._validate_answer("hello world", q) == "hello world"
-        )
-
-    def test_free_text_strips_whitespace(self) -> None:
-        q = Question.create_free_text("Q")
-        assert SurveyExecutionManager._validate_answer("  hello  ", q) == "hello"
-
-    def test_multiple_choice_single_valid(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B", "C"])
-        assert SurveyExecutionManager._validate_answer("B", q) == "B"
-
-    def test_multiple_choice_single_invalid(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B", "C"])
-        assert SurveyExecutionManager._validate_answer("D", q) == ""
-
-    def test_multiple_choice_multiple_valid(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B", "C"], allow_multiple=True)
-        assert SurveyExecutionManager._validate_answer("A|C", q) == "A|C"
-
-    def test_multiple_choice_multiple_filters_invalid(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B", "C"], allow_multiple=True)
-        assert SurveyExecutionManager._validate_answer("A|D|B", q) == "A|B"
-
-    def test_multiple_choice_multiple_all_invalid(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B", "C"], allow_multiple=True)
-        assert SurveyExecutionManager._validate_answer("X|Y", q) == ""
-
-    def test_multiple_choice_multiple_respects_max_selections(self) -> None:
-        q = Question.create_multiple_choice(
-            "Q", ["A", "B", "C", "D"], allow_multiple=True, max_selections=2
-        )
-        assert SurveyExecutionManager._validate_answer("A|B|C", q) == "A|B"
-
-    def test_multiple_choice_multiple_ignores_empty_segments(self) -> None:
-        q = Question.create_multiple_choice("Q", ["A", "B"], allow_multiple=True)
-        assert SurveyExecutionManager._validate_answer("A||B|", q) == "A|B"
-
-    def test_scale_rating_valid(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("3", q) == "3"
-
-    def test_scale_rating_min_boundary(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("1", q) == "1"
-
-    def test_scale_rating_max_boundary(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("5", q) == "5"
-
-    def test_scale_rating_below_min(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("0", q) == ""
-
-    def test_scale_rating_above_max(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("6", q) == ""
-
-    def test_scale_rating_non_integer(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("abc", q) == ""
-
-    def test_scale_rating_float_string(self) -> None:
-        q = Question.create_scale_rating("Q")
-        assert SurveyExecutionManager._validate_answer("3.5", q) == ""
-
-
-@pytest.mark.unit
 class TestFormatQuestionsForPrompt:
+    """The question wording moved to survey_prompts unchanged (NFR2.4)."""
+
     def test_free_text_format(self) -> None:
         q = Question.create_free_text("好きな食べ物は？")
-        result = SurveyExecutionManager._format_questions_for_prompt([q])
+        result = format_questions_for_prompt([q])
         assert f"質問1 (ID: {q.id}): 好きな食べ物は？" in result
         assert "自由記述" in result
 
     def test_multiple_choice_single_format(self) -> None:
         q = Question.create_multiple_choice("性別は？", ["男性", "女性", "その他"])
-        result = SurveyExecutionManager._format_questions_for_prompt([q])
+        result = format_questions_for_prompt([q])
         assert "選択式・単一回答" in result
         assert "1. 男性" in result
         assert "2. 女性" in result
@@ -231,7 +167,7 @@ class TestFormatQuestionsForPrompt:
             allow_multiple=True,
             max_selections=2,
         )
-        result = SurveyExecutionManager._format_questions_for_prompt([q])
+        result = format_questions_for_prompt([q])
         assert "選択式・複数回答" in result
         assert "最大2個まで" in result
         assert "読書|映画" in result
@@ -240,128 +176,22 @@ class TestFormatQuestionsForPrompt:
         q = Question.create_multiple_choice(
             "趣味は？", ["読書", "映画"], allow_multiple=True, max_selections=0
         )
-        result = SurveyExecutionManager._format_questions_for_prompt([q])
+        result = format_questions_for_prompt([q])
         assert "選択式・複数回答" in result
         assert "最大" not in result
 
     def test_scale_rating_format(self) -> None:
         q = Question.create_scale_rating("満足度は？")
-        result = SurveyExecutionManager._format_questions_for_prompt([q])
+        result = format_questions_for_prompt([q])
         assert "スケール評価" in result
         assert "1〜5" in result
 
     def test_multiple_questions_numbered(self) -> None:
         q1 = Question.create_free_text("Q1")
         q2 = Question.create_free_text("Q2")
-        result = SurveyExecutionManager._format_questions_for_prompt([q1, q2])
+        result = format_questions_for_prompt([q1, q2])
         assert f"質問1 (ID: {q1.id}): Q1" in result
         assert f"質問2 (ID: {q2.id}): Q2" in result
-
-
-@pytest.mark.unit
-class TestParseBatchResultAnswers:
-    def test_valid_json_with_answers(self, mgr: SurveyExecutionManager) -> None:
-        import json
-
-        q = Question.create_free_text("Q1")
-        result = {
-            "modelOutput": {
-                "content": [
-                    {
-                        "text": json.dumps(
-                            {"answers": [{"question_id": q.id, "answer": "回答テスト"}]}
-                        )
-                    }
-                ]
-            }
-        }
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert len(answers) == 1
-        assert answers[0]["question_id"] == q.id
-        assert answers[0]["answer"] == "回答テスト"
-
-    def test_invalid_json_returns_empty(self, mgr: SurveyExecutionManager) -> None:
-        q = Question.create_free_text("Q1")
-        result = {"modelOutput": {"content": [{"text": "not json at all"}]}}
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert answers == []
-
-    def test_missing_answers_key_returns_empty(
-        self, mgr: SurveyExecutionManager
-    ) -> None:
-        import json
-
-        q = Question.create_free_text("Q1")
-        result = {
-            "modelOutput": {"content": [{"text": json.dumps({"data": "something"})}]}
-        }
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert answers == []
-
-    def test_answers_not_list_returns_empty(self, mgr: SurveyExecutionManager) -> None:
-        import json
-
-        q = Question.create_free_text("Q1")
-        result = {
-            "modelOutput": {
-                "content": [{"text": json.dumps({"answers": "not a list"})}]
-            }
-        }
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert answers == []
-
-    def test_validates_each_answer(self, mgr: SurveyExecutionManager) -> None:
-        import json
-
-        q = Question.create_multiple_choice("Q1", ["A", "B", "C"])
-        result = {
-            "modelOutput": {
-                "content": [
-                    {
-                        "text": json.dumps(
-                            {"answers": [{"question_id": q.id, "answer": "D"}]}
-                        )
-                    }
-                ]
-            }
-        }
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert len(answers) == 1
-        assert answers[0]["answer"] == ""
-
-    def test_unknown_question_id_passes_through(
-        self, mgr: SurveyExecutionManager
-    ) -> None:
-        import json
-
-        q = Question.create_free_text("Q1")
-        result = {
-            "modelOutput": {
-                "content": [
-                    {
-                        "text": json.dumps(
-                            {
-                                "answers": [
-                                    {"question_id": "unknown-id", "answer": "何か"}
-                                ]
-                            }
-                        )
-                    }
-                ]
-            }
-        }
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert len(answers) == 1
-        assert answers[0]["question_id"] == "unknown-id"
-        assert answers[0]["answer"] == "何か"
-
-    def test_empty_content_list_returns_empty(
-        self, mgr: SurveyExecutionManager
-    ) -> None:
-        q = Question.create_free_text("Q1")
-        result = {"modelOutput": {"content": []}}
-        answers = mgr._parse_batch_result_answers(result, [q])
-        assert answers == []
 
 
 @pytest.mark.unit
@@ -518,104 +348,8 @@ class TestSurveyPromptHelpers:
 
 
 @pytest.mark.unit
-class TestSaveResultsToS3:
-    """_save_results_to_s3 のテスト"""
-
-    def test_builds_csv_and_uploads(
-        self, mgr: SurveyExecutionManager, mock_s3_service: Mock
-    ) -> None:
-        q1 = Question.create_free_text("質問1")
-        template = SurveyTemplate.create_new(name="T", questions=[q1])
-
-        personas_df = pl.DataFrame(
-            {
-                "uuid": ["uid1"],
-                "sex": ["男性"],
-                "age": [30],
-                "occupation": ["会社員"],
-                "country": ["JP"],
-                "region": ["東京"],
-                "prefecture": ["東京都"],
-                "marital_status": ["未婚"],
-            }
-        )
-
-        batch_results = [
-            {
-                "recordId": "uid1",
-                "modelOutput": {
-                    "content": [
-                        {
-                            "text": json.dumps(
-                                {
-                                    "answers": [
-                                        {"question_id": q1.id, "answer": "テスト回答"}
-                                    ]
-                                }
-                            )
-                        }
-                    ]
-                },
-            }
-        ]
-
-        mock_s3_service.upload_file.return_value = (
-            "s3://test-bucket/survey-results/sid/results.csv"
-        )
-        result = mgr._save_results_to_s3(batch_results, personas_df, template, "sid")
-
-        assert result == "s3://test-bucket/survey-results/sid/results.csv"
-        uploaded_bytes = mock_s3_service.upload_file.call_args[0][0]
-        csv_text = uploaded_bytes.decode("utf-8-sig")
-        assert "質問1" in csv_text
-        assert "テスト回答" in csv_text
-        assert "男性" in csv_text
-
-    def test_missing_persona_uses_empty(
-        self, mgr: SurveyExecutionManager, mock_s3_service: Mock
-    ) -> None:
-        q1 = Question.create_free_text("Q")
-        template = SurveyTemplate.create_new(name="T", questions=[q1])
-
-        personas_df = pl.DataFrame(
-            {
-                "uuid": ["uid1"],
-                "sex": ["F"],
-                "age": [20],
-                "occupation": ["X"],
-                "country": ["JP"],
-                "region": ["Y"],
-                "prefecture": ["Z"],
-                "marital_status": [""],
-            }
-        )
-
-        batch_results = [
-            {
-                "recordId": "unknown_id",
-                "modelOutput": {
-                    "content": [
-                        {
-                            "text": json.dumps(
-                                {"answers": [{"question_id": q1.id, "answer": "A"}]}
-                            )
-                        }
-                    ]
-                },
-            }
-        ]
-
-        mock_s3_service.upload_file.return_value = "s3://b/k"
-        mgr._save_results_to_s3(batch_results, personas_df, template, "sid")
-
-        uploaded_bytes = mock_s3_service.upload_file.call_args[0][0]
-        csv_text = uploaded_bytes.decode("utf-8-sig")
-        assert "unknown_id" in csv_text
-
-
-@pytest.mark.unit
 class TestEnsureParquetUri:
-    """_ensure_parquet_uri のテスト"""
+    """_ensure_parquet_uri のテスト（有無の確認は S3Service.exists を通す）"""
 
     def test_custom_datasource_skips(
         self, mgr: SurveyExecutionManager, mock_batch_service: Mock
@@ -628,8 +362,7 @@ class TestEnsureParquetUri:
     ) -> None:
         mock_batch_service.has_parquet_uri.return_value = True
         mgr._ensure_parquet_uri("nemotron")
-        # Should not attempt head_object
-        mgr.s3_service.s3_client.head_object.assert_not_called()
+        mgr.s3_service.exists.assert_not_called()
 
     def test_sets_uri_when_exists(
         self,
@@ -638,18 +371,23 @@ class TestEnsureParquetUri:
         mock_s3_service: Mock,
     ) -> None:
         mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.return_value = {}
+        mock_s3_service.exists.return_value = True
         mgr._ensure_parquet_uri("nemotron")
         mock_batch_service.set_parquet_s3_uri.assert_called_once()
 
+    @pytest.mark.parametrize("missing", [False, RuntimeError("check failed")])
     def test_raises_when_not_found(
         self,
         mgr: SurveyExecutionManager,
         mock_batch_service: Mock,
         mock_s3_service: Mock,
+        missing: object,
     ) -> None:
         mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
+        if isinstance(missing, Exception):
+            mock_s3_service.exists.side_effect = missing
+        else:
+            mock_s3_service.exists.return_value = missing
 
         with pytest.raises(SurveyExecutionError) as exc_info:
             mgr._ensure_parquet_uri("nemotron")
@@ -694,17 +432,6 @@ def _batch() -> Mock:
     batch.get_filtered_count.return_value = 1000
     batch.has_parquet_uri.return_value = True
     batch.filter_and_sample_personas.side_effect = lambda *a, **k: _sampled()
-    batch.build_batch_prompts.side_effect = lambda df, systems, users, schema: [
-        {"recordId": f"id{i}", "system": systems[i], "user": users[i]}
-        for i in range(len(systems))
-    ]
-    batch.execute_batch_inference.side_effect = lambda prompts: [
-        {
-            "recordId": p["recordId"],
-            "modelOutput": {"content": [{"text": json.dumps({"answers": []})}]},
-        }
-        for p in prompts
-    ]
     return batch
 
 
@@ -719,12 +446,15 @@ def cache() -> Mock:
 
 
 @pytest.fixture
-def started() -> list:
-    return []
+def runner() -> Mock:
+    """The Step Functions runner (only stop and cleanup are used here)."""
+    return Mock()
 
 
 @pytest.fixture
-def em(survey_world: SurveyWorld, batch: Mock, cache: Mock) -> SurveyExecutionManager:
+def em(
+    survey_world: SurveyWorld, batch: Mock, cache: Mock, runner: Mock
+) -> SurveyExecutionManager:
     return SurveyExecutionManager(
         survey_store=survey_world.survey_store,
         survey_template_store=survey_world.template_store,
@@ -736,6 +466,8 @@ def em(survey_world: SurveyWorld, batch: Mock, cache: Mock) -> SurveyExecutionMa
         custom_persona_data_store=survey_world.custom_store,
         result_cache=cache,
         sleep=lambda _s: None,
+        runner=runner,
+        runner_configured=lambda: True,
     )
 
 
@@ -789,7 +521,7 @@ class TestCreateSurveyDecisions:
         survey = survey_world.survey_store.get(start.survey.id, consistent=True)
         assert survey.owner_sub == "b"
         assert survey.shared_group_ids == frozenset()
-        assert survey.status == "pending"
+        assert survey.status == "queued"
         assert survey.template_snapshot.name == "共有テンプレート"
         assert [q.id for q in survey.template_snapshot.questions] == [
             q.id for q in template.questions
@@ -869,16 +601,16 @@ class TestCreateSurveyDecisions:
     def test_persona_count_is_still_validated(self, em, survey_world):
         template = survey_world.template("a")
         with pytest.raises(SurveyExecutionValidationError):
-            em.create_survey(MEMBER_A, template.id, persona_count=50)
+            em.create_survey(MEMBER_A, template.id, persona_count=9)
         assert _surveys(survey_world) == 0
 
     def test_filtered_count_too_low_suggests_loosening(self, em, survey_world, batch):
         template = survey_world.template("a")
-        batch.get_filtered_count.return_value = 30
+        batch.get_filtered_count.return_value = 9
         with raises_code(
             SurveyExecutionValidationError,
             ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
-            available_count=30,
+            available_count=9,
         ):
             em.create_survey(
                 MEMBER_A, template.id, persona_count=1000, filters={"性別": "男性"}
@@ -904,184 +636,138 @@ class TestCreateSurveyDecisions:
         assert not hasattr(SurveyExecutionManager, "start_survey")
 
 
-class TestBackgroundRun:
-    def _start(self, em, world, principal=MEMBER_A, **kwargs):
-        template = kwargs.pop("template", None) or world.template(principal.sub)
-        return em.create_survey(principal, template.id, **kwargs)
+class TestQueueOnCreate:
+    """WF1: 実行の受付は queued で保存するだけ。推論は進行役が始める（FR3.1、BR9.1）。"""
 
-    def test_runs_from_the_snapshot_and_saves_the_csv(self, em, survey_world, batch):
-        template = survey_world.template("a", "写しで動く")
-        start = em.create_survey(MEMBER_A, template.id)
-        # 開始のあとでテンプレートが消えても、写しで最後まで進む（BR2.2）
-        survey_world.client.delete_item(
-            TableName=survey_world.templates_table,
-            Key={"id": {"S": template.id}},
-        )
+    def test_created_survey_waits_in_the_queue(self, em, survey_world, runner):
+        template = survey_world.template("a")
 
-        start.run()
+        start = em.create_survey(MEMBER_A, template.id, persona_count=10)
 
         survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.status == "completed"
-        assert survey.s3_result_path == (
-            f"s3://{BUCKET}/survey-results/{survey.id}/results.csv"
-        )
-        csv_text = survey_world.s3.download_file(survey.s3_result_path).decode(
-            "utf-8-sig"
-        )
-        assert template.questions[0].text in csv_text
-        assert survey.persona_count == 120
+        assert survey.status == "queued"
+        assert survey.run_queue == "active"
+        assert survey.queued_at is not None
+        assert [s.id for s in survey_world.survey_store.list_run_queue()] == [survey.id]
+        assert runner.mock_calls == []
 
-    def test_custom_data_columns_come_from_the_record(self, em, survey_world, batch):
-        data = survey_world.custom_data("営業データ", "sales")
-        start = self._start(em, survey_world, datasource=f"custom:{data.id}")
-        start.run()
-        system_prompts = batch.build_batch_prompts.call_args.args[1]
-        assert "趣味" in system_prompts[0]
-        assert batch.filter_and_sample_personas.call_args.kwargs["datasource"] == (
-            f"custom:{data.id}"
-        )
+    def test_ten_available_personas_are_enough(self, em, survey_world, batch):
+        template = survey_world.template("a")
+        batch.get_filtered_count.return_value = 10
+        em.create_survey(MEMBER_A, template.id, persona_count=10)
+        assert _surveys(survey_world) == 1
 
-    @pytest.mark.parametrize("what", ["record", "file"])
-    def test_missing_custom_data_is_an_error(self, em, survey_world, batch, logs, what):
-        data = survey_world.custom_data("営業データ", "sales")
-        start = self._start(em, survey_world, datasource=f"custom:{data.id}")
-        if what == "record":
-            survey_world.custom_store.delete(data.id, data.name)
-        else:
-            survey_world.s3.delete_file(survey_world.s3.path_of(data.s3_key))
-
-        start.run()
-
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.status == "error"
-        assert survey.error_code == ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND.value
-        batch.execute_batch_inference.assert_not_called()
-        events = logs.events("survey.dependency_missing")
-        assert events[0]["survey_id"] == survey.id
-        assert events[0]["missing"] == "custom_persona_data"
-
-    def test_unreadable_snapshot_image_stops_the_survey(
-        self, em, survey_world, batch, logs
+    @pytest.mark.parametrize(
+        ("filters", "code", "context"),
+        [
+            (
+                {"性別": "男性"},
+                ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+                {"available_count": 9, "min_count": 10},
+            ),
+            (
+                None,
+                ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+                {"row_count": 9, "min_rows": 10},
+            ),
+        ],
+    )
+    def test_nine_available_personas_are_too_few(
+        self, em, survey_world, batch, filters, code, context
     ):
-        image = _image(survey_world, upload=False)
-        template = survey_world.template("a", images=[image])
-        start = em.create_survey(MEMBER_A, template.id, persona_count=100)
+        """BR1.2: context の下限は 10。"""
+        template = survey_world.template("a")
+        batch.get_filtered_count.return_value = 9
+        with raises_code(SurveyExecutionValidationError, code, **context):
+            em.create_survey(MEMBER_A, template.id, persona_count=10, filters=filters)
+        assert _surveys(survey_world) == 0
 
-        start.run()
-
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.status == "error"
-        assert survey.error_code == ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE.value
-        batch.execute_batch_inference.assert_not_called()
-        assert logs.events("survey.dependency_missing")[0]["missing"] == "image"
-
-    def test_snapshot_image_is_sent_with_the_questions(self, em, survey_world, batch):
-        image = _image(survey_world)
-        template = survey_world.template("a", images=[image])
-        em.create_survey(MEMBER_A, template.id, persona_count=100).run()
-        user_messages = batch.build_batch_prompts.call_args.args[2]
-        assert any(part.get("type") == "image" for part in user_messages[0])
-
-    def test_survey_deleted_while_running_saves_nothing(
-        self, em, survey_world, batch, logs
-    ):
-        start = self._start(em, survey_world)
-
-        def delete_then_answer(prompts):
-            survey_world.client.delete_item(
-                TableName=survey_world.surveys_table,
-                Key={"id": {"S": start.survey.id}},
-            )
-            return _batch().execute_batch_inference(prompts)
-
-        batch.execute_batch_inference.side_effect = delete_then_answer
-
-        start.run()
-
-        assert survey_world.survey_store.get(start.survey.id) is None
-        listed = survey_world.s3.s3_client.list_objects_v2(
-            Bucket=BUCKET, Prefix="survey-results/"
+    def test_no_runner_configured_is_a_config_error(self, survey_world, batch, cache):
+        """BR9.1・FR10.1: 手元（ステートマシンなし）ではアンケートを作らない。"""
+        manager = SurveyExecutionManager(
+            survey_store=survey_world.survey_store,
+            survey_template_store=survey_world.template_store,
+            survey_batch_service=batch,
+            s3_service=survey_world.s3,
+            resource_sharing=survey_world.sharing,
+            owners=survey_world.owners,
+            resource_lookup=survey_world.lookup,
+            custom_persona_data_store=survey_world.custom_store,
+            result_cache=cache,
+            runner_configured=lambda: False,
         )
-        assert listed.get("KeyCount", 0) == 0
-        assert logs.events("survey.dependency_missing")[0]["missing"] == "survey"
+        template = survey_world.template("a")
 
-    def test_failed_final_update_removes_the_csv(self, em, survey_world, monkeypatch):
-        start = self._start(em, survey_world)
-        real = survey_world.survey_store.update_fields
+        with raises_code(SurveyExecutionError, ErrorCode.SURVEY_RUNNER_NOT_CONFIGURED):
+            manager.create_survey(MEMBER_A, template.id)
+        assert _surveys(survey_world) == 0
+        batch.get_filtered_count.assert_not_called()
 
-        def gone_at_completion(survey_id, fields, **kwargs):
-            if fields.get("status") == "completed":
-                return False
-            return real(survey_id, fields, **kwargs)
+    def test_permission_is_checked_before_the_configuration(
+        self, survey_world, batch, cache
+    ):
+        manager = SurveyExecutionManager(
+            survey_store=survey_world.survey_store,
+            survey_template_store=survey_world.template_store,
+            survey_batch_service=batch,
+            s3_service=survey_world.s3,
+            resource_sharing=survey_world.sharing,
+            owners=survey_world.owners,
+            resource_lookup=survey_world.lookup,
+            custom_persona_data_store=survey_world.custom_store,
+            result_cache=cache,
+            runner_configured=lambda: False,
+        )
+        with pytest.raises(AccessDeniedError):
+            manager.create_survey(NO_ROLE, survey_world.template("x").id)
 
+
+class TestLegacyInFlight:
+    """BR8.1・NFR4.19: 切り替え前の running・pending は、読まれたときに中断のエラーにする。"""
+
+    @pytest.mark.parametrize("status", ["running", "pending"])
+    def test_detail_turns_an_old_one_into_an_error(self, em, survey_world, status):
+        survey = survey_world.survey("a", status=status)
+
+        detail = em.get_survey_detail(MEMBER_A, survey.id)
+
+        assert detail.survey.status == "error"
+        assert detail.survey.error_code == ErrorCode.SURVEY_EXECUTION_INTERRUPTED.value
+        stored = survey_world.survey_store.get(survey.id, consistent=True)
+        assert stored.status == "error"
+        assert stored.error_code == ErrorCode.SURVEY_EXECUTION_INTERRUPTED.value
+
+    def test_list_turns_old_ones_into_errors(self, em, survey_world):
+        old = survey_world.survey("a", status="running")
+        queued = survey_world.survey("a", status="queued")
+        new_running = survey_world.survey(
+            "a", status="running", execution_arn="arn:aws:states:r:1:execution:sm:x"
+        )
+
+        listing = em.list_surveys(MEMBER_A, None, None)
+
+        status = {s.id: s.status for s in listing.items}
+        assert status == {
+            old.id: "error",
+            queued.id: "queued",
+            new_running.id: "running",
+        }
+
+    def test_a_failed_write_still_shows_the_error(self, em, survey_world, monkeypatch):
+        survey = survey_world.survey("a", status="pending")
         monkeypatch.setattr(
-            survey_world.survey_store, "update_fields", gone_at_completion
+            survey_world.survey_store, "transition", Mock(return_value=False)
         )
 
-        start.run()
+        detail = em.get_survey_detail(MEMBER_A, survey.id)
 
-        listed = survey_world.s3.s3_client.list_objects_v2(
-            Bucket=BUCKET, Prefix="survey-results/"
-        )
-        assert listed.get("KeyCount", 0) == 0
+        assert detail.survey.status == "error"
+        assert detail.survey.error_code == ErrorCode.SURVEY_EXECUTION_INTERRUPTED.value
 
-    def test_batch_failure_keeps_a_code_and_no_text(
-        self, em, survey_world, batch, logs
-    ):
-        start = self._start(em, survey_world)
-        batch.filter_and_sample_personas.side_effect = RuntimeError(
-            "Batch failed at s3://secret/key"
-        )
-
-        start.run()
-
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.status == "error"
-        assert survey.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
-        assert "secret" not in str(survey.to_dict())
-        failed = logs.events("survey.execution_failed")
-        assert failed[0]["survey_id"] == survey.id
-        assert failed[0]["error_code"] == ErrorCode.SURVEY_EXECUTION_FAILED.value
-        assert "secret" not in json.dumps(failed)
-
-    def test_coded_failure_keeps_its_code(self, em, survey_world, batch):
-        start = self._start(em, survey_world)
-        batch.execute_batch_inference.side_effect = CodedError(
-            "role missing", code=ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED
-        )
-        start.run()
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.error_code == ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED.value
-
-    def test_too_few_sampled_without_filters_points_at_the_dataset(
-        self, em, survey_world, batch
-    ):
-        start = self._start(em, survey_world)
-        batch.filter_and_sample_personas.side_effect = lambda *a, **k: _sampled(2)
-        start.run()
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.error_code == ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS.value
-        assert survey.error_context == {"row_count": 2, "min_rows": 100}
-        batch.execute_batch_inference.assert_not_called()
-
-    def test_too_few_sampled_with_filters_suggests_loosening(
-        self, em, survey_world, batch
-    ):
-        start = self._start(em, survey_world, filters={"性別": "男性"})
-        batch.filter_and_sample_personas.side_effect = lambda *a, **k: _sampled(2)
-        start.run()
-        survey = survey_world.survey_store.get(start.survey.id, consistent=True)
-        assert survey.error_code == ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW.value
-
-    def test_a_vanished_survey_is_logged_and_left_alone(self, em, survey_world, logs):
-        start = self._start(em, survey_world)
-        survey_world.client.delete_item(
-            TableName=survey_world.surveys_table,
-            Key={"id": {"S": start.survey.id}},
-        )
-        start.run()
-        assert survey_world.survey_store.get(start.survey.id) is None
-        assert logs.events("survey.dependency_missing")[0]["missing"] == "survey"
+    def test_completed_old_surveys_are_left_as_they_are(self, em, survey_world):
+        """BR8.2"""
+        survey = survey_world.survey("a")
+        assert em.get_survey_detail(MEMBER_A, survey.id).survey.status == "completed"
 
 
 class TestListSurveys:
@@ -1357,6 +1043,43 @@ class TestDeleteSurvey:
         with raises_code(SurveyExecutionManagerError, ErrorCode.SURVEY_NOT_FOUND):
             em.delete_survey(MEMBER_A, "missing-id")
 
+    def test_running_survey_stops_its_execution(self, em, survey_world, runner):
+        """BR7.1: 実行中なら StopExecution を呼び、実行の場所も消す。"""
+        arn = "arn:aws:states:r:1:execution:sm:x"
+        survey = survey_world.survey("a", status="running", execution_arn=arn)
+
+        em.delete_survey(MEMBER_A, survey.id)
+
+        runner.stop_execution.assert_called_once_with(arn)
+        runner.delete_run.assert_called_once_with(survey.id)
+        assert survey_world.survey_store.get(survey.id) is None
+
+    def test_failed_stop_does_not_stop_the_delete(self, em, survey_world, runner, logs):
+        survey = survey_world.survey(
+            "a", status="running", execution_arn="arn:aws:states:r:1:execution:sm:x"
+        )
+        runner.stop_execution.side_effect = RuntimeError("states down")
+
+        em.delete_survey(MEMBER_A, survey.id)
+
+        assert survey_world.survey_store.get(survey.id) is None
+        assert logs.events("survey.run_stop_failed")[0]["survey_id"] == survey.id
+
+    def test_queued_survey_just_leaves_the_queue(self, em, survey_world, runner):
+        """BR7.2: 待ちなら止める実行はなく、記録を消せば索引からも消える。"""
+        survey = survey_world.survey("a", status="queued")
+
+        em.delete_survey(MEMBER_A, survey.id)
+
+        runner.stop_execution.assert_not_called()
+        runner.delete_run.assert_called_once_with(survey.id)
+        assert survey_world.survey_store.list_run_queue() == []
+
+    def test_completed_survey_does_not_touch_the_runner(self, em, survey_world, runner):
+        survey = survey_world.survey("a")
+        em.delete_survey(MEMBER_A, survey.id)
+        assert runner.mock_calls == []
+
     def test_cleanup_failure_is_logged_and_the_delete_succeeds(
         self, em, survey_world, logs, monkeypatch
     ):
@@ -1388,10 +1111,11 @@ class TestEnsureParquetUriUsesConfiguredKey:
 
         monkeypatch.setattr(config, "NEMOTRON_DATASET_KEY", "closed/nemotron.parquet")
         mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.return_value = {}
+        mock_s3_service.path_of.side_effect = lambda key: f"s3://test-bucket/{key}"
+        mock_s3_service.exists.return_value = True
         mgr._ensure_parquet_uri("nemotron")
-        mock_s3_service.s3_client.head_object.assert_called_once_with(
-            Bucket="test-bucket", Key="closed/nemotron.parquet"
+        mock_s3_service.exists.assert_called_once_with(
+            "s3://test-bucket/closed/nemotron.parquet"
         )
         mock_batch_service.set_parquet_s3_uri.assert_called_once_with(
             "s3://test-bucket/closed/nemotron.parquet"
@@ -1410,7 +1134,7 @@ class TestEnsureParquetUriUsesConfiguredKey:
         monkeypatch.setattr(config, "NEMOTRON_SOURCE", "s3")
         monkeypatch.setattr(config, "NEMOTRON_DATASET_KEY", "closed/nemotron.parquet")
         mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
+        mock_s3_service.exists.return_value = False
         with raises_code(
             SurveyExecutionError, ErrorCode.NEMOTRON_DATASET_NOT_PLACED
         ) as caught:
@@ -1430,6 +1154,6 @@ class TestEnsureParquetUriUsesConfiguredKey:
 
         monkeypatch.setattr(config, "NEMOTRON_SOURCE", "huggingface")
         mock_batch_service.has_parquet_uri.return_value = False
-        mock_s3_service.s3_client.head_object.side_effect = Exception("Not found")
+        mock_s3_service.exists.return_value = False
         with raises_code(SurveyExecutionError, ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED):
             mgr._ensure_parquet_uri("nemotron")

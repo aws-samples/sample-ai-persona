@@ -1,14 +1,20 @@
 """Survey関連モデル（Survey, TemplateImage, PersonaStatistics, VisualAnalysisData, InsightReport）の単体テスト"""
 
 from datetime import datetime
+from decimal import Decimal
+
+import pytest
 
 from src.models.survey import (
+    RUN_QUEUE_ACTIVE,
     Survey,
     InsightReport,
+    SurveyStatus,
     TemplateSnapshot,
     VisualAnalysisData,
     PersonaStatistics,
 )
+from src.models.survey_run import SurveyRunItem, SurveyRunOutcome
 from src.models.survey_template import Question, SurveyTemplate, TemplateImage
 
 
@@ -91,7 +97,7 @@ class TestSurvey:
             datasource="custom_segment",
         )
         assert survey.datasource == "custom_segment"
-        assert survey.status == "pending"
+        assert survey.status == "queued"
 
     def test_create_new_without_datasource(self):
         survey = Survey.create_new(
@@ -361,3 +367,186 @@ class TestSurveyOwnershipAndSnapshot:
             name="s", description="", template_id="t", persona_count=100
         )
         assert legacy.template_name is None
+
+
+# =============================================================================
+# オンデマンド推論への移行（entities.md の Survey、FR3、FR5、FR11）
+# =============================================================================
+
+
+def _base_record(**extra: object) -> dict:
+    """A survey record as DynamoDB holds it (strings for timestamps)."""
+    return {
+        "id": "s-1",
+        "name": "s",
+        "description": "",
+        "template_id": "t",
+        "persona_count": 100,
+        "status": "completed",
+        "created_at": "2026-10-01T00:00:00",
+        "updated_at": "2026-10-01T00:00:00",
+        **extra,
+    }
+
+
+class TestSurveyQueue:
+    """A new survey waits in the queue (FR3.1, FR3.2)."""
+
+    def test_create_new_is_queued_with_run_queue_and_queued_at(self):
+        survey = Survey.create_new(
+            name="s", description="", template_id="t", persona_count=10
+        )
+        assert survey.status == SurveyStatus.QUEUED
+        assert survey.run_queue == RUN_QUEUE_ACTIVE
+        assert survey.queued_at is not None
+        assert survey.queued_at.tzinfo is not None
+        data = survey.to_dict()
+        assert data["status"] == "queued"
+        assert data["run_queue"] == "active"
+        assert data["queued_at"] == survey.queued_at.isoformat()
+
+    def test_create_new_has_no_execution_fields(self):
+        data = Survey.create_new(
+            name="s", description="", template_id="t", persona_count=10
+        ).to_dict()
+        for key in (
+            "execution_arn",
+            "started_at",
+            "start_attempts",
+            "finish_attempts",
+            "model_id",
+            "failed_count",
+            "start_blocked_since",
+        ):
+            assert key not in data
+
+    def test_status_values(self):
+        assert [s.value for s in SurveyStatus] == [
+            "queued",
+            "running",
+            "completed",
+            "error",
+            "pending",
+        ]
+
+
+class TestSurveyExecutionFields:
+    """The new fields round-trip; None and zero counts are not written (BR8.2)."""
+
+    def test_roundtrip_of_every_new_field(self):
+        data = _base_record(
+            status="running",
+            run_queue="active",
+            queued_at="2026-10-30T01:00:00+00:00",
+            execution_arn="arn:aws:states:ap-northeast-1:1:execution:sm:s-1",
+            started_at="2026-10-30T01:00:05+00:00",
+            start_attempts=Decimal("2"),
+            finish_attempts=Decimal("1"),
+            model_id="global.anthropic.claude-haiku-5-5",
+            failed_count=Decimal("3"),
+            start_blocked_since="2026-10-30T01:00:01+00:00",
+        )
+        survey = Survey.from_dict(data)
+        assert survey.run_queue == "active"
+        assert survey.queued_at == datetime.fromisoformat("2026-10-30T01:00:00+00:00")
+        assert survey.execution_arn.endswith(":s-1")
+        assert survey.started_at == datetime.fromisoformat("2026-10-30T01:00:05+00:00")
+        assert survey.start_attempts == 2
+        assert survey.finish_attempts == 1
+        assert survey.model_id == "global.anthropic.claude-haiku-5-5"
+        assert survey.failed_count == 3
+        assert survey.start_blocked_since is not None
+        out = survey.to_dict()
+        assert out["queued_at"] == "2026-10-30T01:00:00+00:00"
+        assert out["started_at"] == "2026-10-30T01:00:05+00:00"
+        assert out["start_attempts"] == 2
+        assert out["finish_attempts"] == 1
+        assert out["failed_count"] == 3
+        assert out["execution_arn"] == data["execution_arn"]
+
+    def test_completed_record_before_the_switch_reads_as_before(self):
+        survey = Survey.from_dict(_base_record(s3_result_path="s3://b/k.csv"))
+        assert survey.run_queue is None
+        assert survey.execution_arn is None
+        assert survey.start_attempts == 0
+        assert survey.finish_attempts == 0
+        assert survey.failed_count is None
+        out = survey.to_dict()
+        for key in ("run_queue", "queued_at", "execution_arn", "failed_count"):
+            assert key not in out
+
+    def test_zero_failed_count_is_kept(self):
+        """failed_count=0 is a fact (all answered), unlike a missing count."""
+        survey = Survey.from_dict(_base_record(failed_count=0))
+        assert survey.failed_count == 0
+        assert survey.to_dict()["failed_count"] == 0
+
+
+class TestLegacyInFlight:
+    """BR8.1: running / pending without an execution and a queue entry."""
+
+    @pytest.mark.parametrize("status", ["running", "pending"])
+    def test_old_running_and_pending_are_interrupted(self, status):
+        assert Survey.from_dict(_base_record(status=status)).is_legacy_in_flight
+
+    def test_new_queued_is_not(self):
+        survey = Survey.create_new(
+            name="s", description="", template_id="t", persona_count=10
+        )
+        assert not survey.is_legacy_in_flight
+
+    def test_new_running_with_execution_is_not(self):
+        survey = Survey.from_dict(
+            _base_record(status="running", run_queue="active", execution_arn="arn:x")
+        )
+        assert not survey.is_legacy_in_flight
+
+    @pytest.mark.parametrize("status", ["completed", "error"])
+    def test_finished_surveys_are_not(self, status):
+        assert not Survey.from_dict(_base_record(status=status)).is_legacy_in_flight
+
+
+class TestSurveyRunItem:
+    """One line of the Distributed Map input (entities.md SurveyRunItem)."""
+
+    def test_body_item(self):
+        item = SurveyRunItem(record_id="p1", model_id="m", body={"a": 1})
+        assert item.to_dict() == {"record_id": "p1", "model_id": "m", "body": {"a": 1}}
+
+    def test_s3_item(self):
+        item = SurveyRunItem(record_id="p1", model_id="m", body_s3_uri="s3://b/k")
+        assert item.to_dict() == {
+            "record_id": "p1",
+            "model_id": "m",
+            "body_s3_uri": "s3://b/k",
+        }
+
+    @pytest.mark.parametrize(
+        "kwargs", [{}, {"body": {"a": 1}, "body_s3_uri": "s3://b/k"}]
+    )
+    def test_exactly_one_of_body_and_uri(self, kwargs):
+        with pytest.raises(ValueError):
+            SurveyRunItem(record_id="p1", model_id="m", **kwargs)
+
+
+class TestSurveyRunOutcome:
+    """The summary built from the execution's results (not stored)."""
+
+    def test_failed_count_is_the_distinct_failed_ids(self):
+        outcome = SurveyRunOutcome(
+            execution_status="SUCCEEDED",
+            answers={"p1": {"q1": "A"}},
+            failed_record_ids=frozenset({"p2", "p3"}),
+            total=3,
+        )
+        assert outcome.failed_count == 2
+        assert outcome.answers["p1"]["q1"] == "A"
+
+    def test_total_must_be_positive(self):
+        with pytest.raises(ValueError):
+            SurveyRunOutcome(
+                execution_status="SUCCEEDED",
+                answers={},
+                failed_record_ids=frozenset(),
+                total=0,
+            )
