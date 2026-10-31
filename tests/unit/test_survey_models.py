@@ -3,6 +3,8 @@
 from datetime import datetime
 from decimal import Decimal
 
+import json
+
 import pytest
 
 from src.models.survey import (
@@ -509,20 +511,31 @@ class TestLegacyInFlight:
 class TestSurveyRunItem:
     """One line of the Distributed Map input (entities.md SurveyRunItem)."""
 
-    def test_body_item(self):
-        item = SurveyRunItem(record_id="p1", model_id="m", body={"a": 1})
-        assert item.to_dict() == {"record_id": "p1", "model_id": "m", "body": {"a": 1}}
+    def test_body_item_embeds_the_encoded_body_as_is(self):
+        """本文は 1 回だけ JSON にしたものを、行にそのまま埋め込む（2 回変換しない）。"""
+        item = SurveyRunItem(record_id="p1", model_id="m", body_json='{"a": "あ"}')
+        line = item.to_json_line()
+        assert json.loads(line) == {
+            "record_id": "p1",
+            "model_id": "m",
+            "body": {"a": "あ"},
+        }
+        assert line.endswith('"body": {"a": "あ"}}')
 
     def test_s3_item(self):
         item = SurveyRunItem(record_id="p1", model_id="m", body_s3_uri="s3://b/k")
-        assert item.to_dict() == {
+        assert json.loads(item.to_json_line()) == {
             "record_id": "p1",
             "model_id": "m",
             "body_s3_uri": "s3://b/k",
         }
 
+    def test_the_line_is_one_line(self):
+        item = SurveyRunItem(record_id="p\n1", model_id="m", body_json='{"a": "x\\ny"}')
+        assert "\n" not in item.to_json_line()
+
     @pytest.mark.parametrize(
-        "kwargs", [{}, {"body": {"a": 1}, "body_s3_uri": "s3://b/k"}]
+        "kwargs", [{}, {"body_json": "{}", "body_s3_uri": "s3://b/k"}]
     )
     def test_exactly_one_of_body_and_uri(self, kwargs):
         with pytest.raises(ValueError):

@@ -11,7 +11,7 @@ NFR4.5〜NFR4.15、observability-requirements.md NFR7.2〜NFR7.9、NFR3.7〜NFR3
 
 import dataclasses
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from unittest.mock import Mock
@@ -79,6 +79,7 @@ class FakeRunner:
     """SurveyRunnerService in memory (Step Functions and survey-runs/)."""
 
     request_body = staticmethod(SurveyRunnerService.request_body)
+    encode_body = staticmethod(SurveyRunnerService.encode_body)
     fits_inline = staticmethod(SurveyRunnerService.fits_inline)
 
     def __init__(self) -> None:
@@ -93,6 +94,8 @@ class FakeRunner:
         self.started: list[str] = []
         self.calls: list[str] = []
         self.fail: dict[str, Exception] = {}
+        self.body_batches: list[int] = []
+        self.after_bodies: Optional[Callable[[], None]] = None
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
@@ -119,17 +122,21 @@ class FakeRunner:
             raise SurveyRunnerServiceError("gone", failure=FailureClass.NOT_FOUND)
         return self.personas[survey_id]
 
-    def write_body(
-        self, survey_id: str, record_id: str, body: Mapping[str, Any]
-    ) -> str:
-        self._call("write_body")
-        key = f"survey-runs/{survey_id}/bodies/{record_id}.json"
-        self.bodies[key] = dict(body)
-        return f"s3://{BUCKET}/{key}"
+    def write_bodies(self, survey_id: str, bodies: Any) -> list[str]:
+        self._call("write_bodies")
+        self.body_batches.append(len(bodies))
+        uris = []
+        for record_id, encoded in bodies:
+            key = f"survey-runs/{survey_id}/bodies/{record_id}.json"
+            self.bodies[key] = json.loads(encoded)
+            uris.append(f"s3://{BUCKET}/{key}")
+        if self.after_bodies is not None:
+            self.after_bodies()
+        return uris
 
     def write_input(self, survey_id: str, lines: Any) -> str:
         self._call("write_input")
-        self.inputs[survey_id] = list(lines)
+        self.inputs[survey_id] = [json.loads(line) for line in lines]
         return f"survey-runs/{survey_id}/input.jsonl"
 
     def find_execution(self, survey_id: str) -> Optional[ExecutionInfo]:
@@ -662,6 +669,18 @@ class TestCompletion:
         assert first.id in runner.deleted
         assert _get(survey_world, second.id).status == "running"
 
+    def test_completion_reads_the_personas_once(self, survey_world, rm, runner, clock):
+        """まとめと CSV の書き出しで、personas.parquet を読み直さない。"""
+        survey = _queue(survey_world, clock)
+        rm.advance()
+        _succeed(runner, survey)
+        runner.calls.clear()
+
+        rm.advance()
+
+        assert _get(survey_world, survey.id).status == "completed"
+        assert runner.calls.count("read_personas") == 1
+
     def test_run_location_is_cleaned_after_completion(
         self, survey_world, rm, runner, clock
     ):
@@ -1181,7 +1200,9 @@ class TestStart:
         )
         assert len(runner.bodies) == 10
         body = next(iter(runner.bodies.values()))
-        assert not SurveyRunnerService.fits_inline(body)
+        assert not SurveyRunnerService.fits_inline(
+            SurveyRunnerService.encode_body(body)
+        )
 
     def test_deleted_while_starting_stops_the_execution(
         self, survey_world, rm, runner, clock, monkeypatch
@@ -1296,6 +1317,38 @@ class TestStart:
         assert content[0]["type"] == "text"
         assert content[1]["type"] == "image"
         assert content[-1]["type"] == "text"
+
+    def test_bodies_go_to_s3_in_batches(self, survey_world, rm, runner, clock):
+        """画像ありの 40 人は 16 人ずつまとめて送る（1 件ずつ順に送らない）。"""
+        image = _png_image(survey_world)
+        survey = _queue(survey_world, clock, count=40, images=[image])
+
+        rm.advance()
+
+        assert runner.body_batches == [16, 16, 8]
+        assert len(runner.inputs[survey.id]) == 40
+        assert _get(survey_world, survey.id).status == "running"
+
+    def test_lost_lease_stops_between_body_batches(
+        self, survey_world, runner, batch, clock
+    ):
+        """BR2.3: 送っている途中で担当を失ったら、次のまとまりを送らず、実行も始めない。"""
+        keeper = FakeKeeper()
+        rm = _manager(survey_world, runner, batch, clock, keeper)
+        image = _png_image(survey_world)
+        survey = _queue(survey_world, clock, count=40, images=[image])
+
+        def lose_lease() -> None:
+            keeper.lost = True
+
+        runner.after_bodies = lose_lease
+
+        rm.advance()
+
+        assert runner.body_batches == [16]
+        assert survey.id not in runner.inputs
+        assert "start_execution" not in runner.calls
+        assert _get(survey_world, survey.id).status == "queued"
 
     def test_unreadable_image_is_an_error(self, survey_world, rm, runner, clock):
         image = _png_image(survey_world, upload=False)

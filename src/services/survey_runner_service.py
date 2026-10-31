@@ -5,7 +5,8 @@ location (functional-spec.md ch.2 and ch.6).
   never runs twice, BR3.1), ``DescribeExecution`` and ``StopExecution``.
 - S3 ``survey-runs/<id>/``: the sampled personas (``personas.parquet``), the
   Distributed Map input (``input.jsonl``), one body per persona for surveys
-  with images (``bodies/<record_id>.json``), and the ResultWriter output under
+  with images or large bodies (``bodies/<record_id>.json``, stored in
+  parallel), and the ResultWriter output under
   ``results/``, read one file at a time (NFR1.7).
 
 Every SDK failure becomes :class:`SurveyRunnerServiceError` with one of the
@@ -18,11 +19,13 @@ Other services are not imported.
 import dataclasses
 import io
 import json
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import IO, Any, Optional
 
 import boto3
 import polars as pl
@@ -43,12 +46,20 @@ MAX_TOKENS = 2048
 #: at most 256 KiB; the rest is room for the item's other keys. Larger bodies
 #: go to S3 (``body_s3_uri``) like those with images.
 MAX_INLINE_BODY_BYTES = 200 * 1024
+#: Bodies stored at once by :meth:`SurveyRunnerService.write_bodies`. A body
+#: with an image is several MB; one at a time, 1,000 personas would take
+#: minutes (longer than the 30 s the task waits for a round when stopping).
+BODY_UPLOAD_CONCURRENCY = 16
+#: The JSONL input stays in memory up to this size, then spills to a file.
+_INPUT_SPOOL_BYTES = 8 * 1024 * 1024
 #: ``DeleteObjects`` accepts at most 1000 keys.
 _DELETE_BATCH = 1000
 _BOTO_CONFIG = BotoConfig(
     retries={"max_attempts": 3, "mode": "standard"},
     connect_timeout=5,
     read_timeout=30,
+    # botocore's default (10) would queue the parallel body uploads
+    max_pool_connections=BODY_UPLOAD_CONCURRENCY,
 )
 
 
@@ -155,10 +166,14 @@ class SurveyRunnerService:
         }
 
     @staticmethod
-    def fits_inline(body: Mapping[str, Any]) -> bool:
-        """Whether ``body`` may travel in the item (UTF-8, as in the JSONL input)."""
-        size = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
-        return size <= MAX_INLINE_BODY_BYTES
+    def encode_body(body: Mapping[str, Any]) -> str:
+        """``body`` as one-line JSON, encoded once for the size check and the item."""
+        return json.dumps(body, ensure_ascii=False)
+
+    @staticmethod
+    def fits_inline(body_json: str) -> bool:
+        """Whether an encoded body may travel in the item (UTF-8, as in the JSONL)."""
+        return len(body_json.encode("utf-8")) <= MAX_INLINE_BODY_BYTES
 
     # --- execution ARNs -------------------------------------------------------------
 
@@ -285,19 +300,45 @@ class SurveyRunnerService:
                 failure=FailureClass.INVALID,
             ) from e
 
-    def write_body(
-        self, survey_id: str, record_id: str, body: Mapping[str, Any]
-    ) -> str:
-        """Store one persona's body; the item carries its URI (BR6.3, NFR3.14)."""
-        key = self._key(survey_id, f"bodies/{record_id}.json")
-        self._put(key, json.dumps(body, ensure_ascii=False).encode("utf-8"))
-        return f"s3://{self.bucket_name}/{key}"
+    def write_bodies(
+        self, survey_id: str, bodies: Sequence[tuple[str, str]]
+    ) -> list[str]:
+        """Store each persona's encoded body in parallel (BR6.3, NFR3.14).
 
-    def write_input(self, survey_id: str, lines: Iterable[Mapping[str, Any]]) -> str:
-        """Write the Distributed Map input, one JSON object per line."""
+        Args:
+            bodies: ``(record_id, body_json)`` pairs from :meth:`encode_body`.
+
+        Returns:
+            The ``s3://`` URIs, in the order of ``bodies``.
+
+        Raises:
+            SurveyRunnerServiceError: A body could not be stored (the first
+                failure; the others are not reported).
+        """
+        keys = [self._key(survey_id, f"bodies/{rid}.json") for rid, _ in bodies]
+        with ThreadPoolExecutor(max_workers=BODY_UPLOAD_CONCURRENCY) as pool:
+            futures = [
+                pool.submit(self._put, key, encoded.encode("utf-8"))
+                for key, (_, encoded) in zip(keys, bodies)
+            ]
+            for future in futures:
+                future.result()
+        return [f"s3://{self.bucket_name}/{key}" for key in keys]
+
+    def write_input(self, survey_id: str, lines: Iterable[str]) -> str:
+        """Write the Distributed Map input, one JSON line each (NFR1.6).
+
+        The lines are consumed one at a time into a spooled file, so the whole
+        input never sits in memory as one string.
+        """
         key = self._key(survey_id, "input.jsonl")
-        content = "\n".join(json.dumps(line, ensure_ascii=False) for line in lines)
-        self._put(key, content.encode("utf-8"))
+        with tempfile.SpooledTemporaryFile(max_size=_INPUT_SPOOL_BYTES) as spool:
+            for index, line in enumerate(lines):
+                if index:
+                    spool.write(b"\n")
+                spool.write(line.encode("utf-8"))
+            spool.seek(0)
+            self._put(key, spool)
         return key
 
     def iter_results(self, manifest_key: str) -> Iterator[RunResult]:
@@ -351,7 +392,7 @@ class SurveyRunnerService:
     def _key(survey_id: str, name: str) -> str:
         return f"{RUN_PREFIX}/{survey_id}/{name}"
 
-    def _put(self, key: str, body: bytes) -> None:
+    def _put(self, key: str, body: bytes | IO[bytes]) -> None:
         try:
             self._s3.put_object(Bucket=self.bucket_name, Key=key, Body=body)
         except (ClientError, BotoCoreError) as e:

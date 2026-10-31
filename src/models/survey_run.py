@@ -1,14 +1,16 @@
 """Value types of one survey execution on Step Functions (entities.md).
 
 - ``SurveyRunItem``: one line of the Distributed Map input (one persona's
-  request). It carries either the Anthropic Messages body itself or, for a
-  survey with images, the ``s3://`` URI of a body stored apart (BR6.3).
+  request). It carries either the encoded Anthropic Messages body or, for a
+  survey with images or a large body, the ``s3://`` URI of a body stored
+  apart (BR6.3).
 - ``SurveyRunOutcome``: what the results of a finished execution add up to.
   It is built once when the execution ends and never stored.
 """
 
+import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Mapping, Optional
 
 
 @dataclass(frozen=True)
@@ -18,30 +20,34 @@ class SurveyRunItem:
     Attributes:
         record_id: The persona's ``uuid``; ties the result to the CSV row.
         model_id: Inference profile the Task invokes.
-        body: The request body (no images, small enough for the item).
+        body_json: The request body, already encoded as one-line JSON (no
+            images, small enough for the item). Encoded once and reused for
+            the size check and the line.
         body_s3_uri: Where the body is stored (images, or too large for the item).
 
     Raises:
-        ValueError: Not exactly one of ``body`` and ``body_s3_uri`` is given.
+        ValueError: Not exactly one of ``body_json`` and ``body_s3_uri`` is given.
     """
 
     record_id: str
     model_id: str
-    body: Optional[Dict[str, Any]] = None
+    body_json: Optional[str] = None
     body_s3_uri: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if (self.body is None) == (self.body_s3_uri is None):
-            raise ValueError("exactly one of body and body_s3_uri is required")
+        if (self.body_json is None) == (self.body_s3_uri is None):
+            raise ValueError("exactly one of body_json and body_s3_uri is required")
 
-    def to_dict(self) -> Dict[str, Any]:
-        """The JSONL line (the absent one of body / body_s3_uri is left out)."""
-        data: Dict[str, Any] = {"record_id": self.record_id, "model_id": self.model_id}
-        if self.body is not None:
-            data["body"] = self.body
-        else:
-            data["body_s3_uri"] = self.body_s3_uri
-        return data
+    def to_json_line(self) -> str:
+        """The JSONL line; the encoded body is embedded as is (no second encoding)."""
+        head = (
+            f'{{"record_id": {json.dumps(self.record_id, ensure_ascii=False)}, '
+            f'"model_id": {json.dumps(self.model_id, ensure_ascii=False)}, '
+        )
+        if self.body_json is not None:
+            return f'{head}"body": {self.body_json}}}'
+        uri = json.dumps(self.body_s3_uri, ensure_ascii=False)
+        return f'{head}"body_s3_uri": {uri}}}'
 
 
 @dataclass(frozen=True)

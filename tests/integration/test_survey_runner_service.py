@@ -11,6 +11,8 @@ S3 は moto、Step Functions は ``unittest.mock`` のクライアントを渡�
 
 import io
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,8 @@ from botocore.exceptions import ClientError, EndpointConnectionError  # noqa: E4
 
 from src.models.external_failure import FailureClass  # noqa: E402
 from src.services.survey_runner_service import (  # noqa: E402
+    _BOTO_CONFIG,
+    BODY_UPLOAD_CONCURRENCY,
     MAX_INLINE_BODY_BYTES,
     SurveyRunnerService,
     SurveyRunnerServiceError,
@@ -301,10 +305,13 @@ class TestInputAndBodies:
     def test_input_is_one_json_line_per_item(self, service, s3):
         key = service.write_input(
             SURVEY_ID,
-            [
-                {"record_id": "p1", "model_id": "m", "body": {"x": "あ"}},
-                {"record_id": "p2", "model_id": "m", "body_s3_uri": "s3://b/k"},
-            ],
+            (
+                line
+                for line in [
+                    '{"record_id": "p1", "model_id": "m", "body": {"x": "あ"}}',
+                    '{"record_id": "p2", "model_id": "m", "body_s3_uri": "s3://b/k"}',
+                ]
+            ),
         )
 
         assert key == f"survey-runs/{SURVEY_ID}/input.jsonl"
@@ -313,15 +320,86 @@ class TestInputAndBodies:
         assert [line["record_id"] for line in lines] == ["p1", "p2"]
         assert lines[0]["body"] == {"x": "あ"}
 
-    def test_body_is_one_file_per_persona(self, service, s3):
-        """NFR3.14: 画像ありの Body は S3 に置き、URI だけを項目に持たせる。"""
-        uri = service.write_body(SURVEY_ID, "p1", {"messages": []})
+    def test_input_is_streamed_not_built_in_memory(self, s3, sfn):
+        """NFR1.6: 1 万人分の JSONL を 1 つの文字列にせず、ファイルとして送る。"""
+        sent: dict[str, Any] = {}
+        client = Mock(wraps=s3)
 
-        key = f"survey-runs/{SURVEY_ID}/bodies/p1.json"
-        assert uri == f"s3://{BUCKET}/{key}"
-        assert json.loads(s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()) == {
-            "messages": []
+        def put_object(**kwargs: Any) -> Any:
+            sent["body_type"] = type(kwargs["Body"])
+            return s3.put_object(**kwargs)
+
+        client.put_object.side_effect = put_object
+        service = SurveyRunnerService(
+            state_machine_arn=SM_ARN,
+            bucket_name=BUCKET,
+            region=REGION,
+            sfn_client=sfn,
+            s3_client=client,
+        )
+
+        service.write_input(SURVEY_ID, (f'{{"record_id": "p{i}"}}' for i in range(3)))
+
+        assert sent["body_type"] not in (bytes, str)
+
+    def test_bodies_are_one_file_per_persona(self, service, s3):
+        """NFR3.14: 画像ありの Body は S3 に置き、URI だけを項目に持たせる。"""
+        uris = service.write_bodies(
+            SURVEY_ID, [("p1", '{"messages": []}'), ("p2", '{"messages": [1]}')]
+        )
+
+        keys = [f"survey-runs/{SURVEY_ID}/bodies/{r}.json" for r in ("p1", "p2")]
+        assert uris == [f"s3://{BUCKET}/{k}" for k in keys]
+        assert json.loads(s3.get_object(Bucket=BUCKET, Key=keys[1])["Body"].read()) == {
+            "messages": [1]
         }
+
+    def test_bodies_are_written_in_parallel(self, sfn):
+        """画像ありの 1,000 人を 1 件ずつ順に送らない（デプロイの停止待ちを超えない）。"""
+        lock = threading.Lock()
+        state = {"now": 0, "most": 0}
+
+        def put_object(**kwargs: Any) -> None:
+            with lock:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+            time.sleep(0.05)
+            with lock:
+                state["now"] -= 1
+
+        client = Mock()
+        client.put_object.side_effect = put_object
+        service = SurveyRunnerService(
+            state_machine_arn=SM_ARN,
+            bucket_name=BUCKET,
+            region=REGION,
+            sfn_client=sfn,
+            s3_client=client,
+        )
+
+        service.write_bodies(SURVEY_ID, [(f"p{i}", "{}") for i in range(16)])
+
+        assert client.put_object.call_count == 16
+        assert state["most"] > 1
+
+    def test_a_failed_body_is_classified(self, sfn):
+        client = Mock()
+        client.put_object.side_effect = _client_error("AccessDenied", 403)
+        service = SurveyRunnerService(
+            state_machine_arn=SM_ARN,
+            bucket_name=BUCKET,
+            region=REGION,
+            sfn_client=sfn,
+            s3_client=client,
+        )
+
+        with pytest.raises(SurveyRunnerServiceError) as info:
+            service.write_bodies(SURVEY_ID, [("p1", "{}"), ("p2", "{}")])
+        assert info.value.failure is FailureClass.ACCESS
+
+    def test_connection_pool_fits_the_parallel_writes(self):
+        """botocore の既定の接続の上限（10）で並列の書き込みが待たされないこと。"""
+        assert _BOTO_CONFIG.max_pool_connections >= BODY_UPLOAD_CONCURRENCY
 
 
 def _place_results(s3: Any) -> str:
@@ -396,10 +474,8 @@ class TestCleanup:
     def test_removes_everything_under_the_run_location(self, service, s3):
         """BR10.1: 抽出した人・入力・Body・結果を消す。ほかのアンケートには触れない。"""
         service.write_personas(SURVEY_ID, pl.DataFrame({"uuid": ["p1"]}))
-        service.write_input(
-            SURVEY_ID, [{"record_id": "p1", "model_id": "m", "body": {}}]
-        )
-        service.write_body(SURVEY_ID, "p1", {})
+        service.write_input(SURVEY_ID, ['{"record_id": "p1", "model_id": "m"}'])
+        service.write_bodies(SURVEY_ID, [("p1", "{}")])
         _place_results(s3)
         s3.put_object(Bucket=BUCKET, Key="survey-runs/other/input.jsonl", Body=b"x")
         s3.put_object(Bucket=BUCKET, Key="survey-results/x/results.csv", Body=b"x")
@@ -444,24 +520,31 @@ class TestFitsInline:
     """子の実行の入力の上限（256 KiB）に余裕を残して、Body を項目に入れるか決める。"""
 
     @staticmethod
-    def _body_of(size: int) -> dict[str, Any]:
-        empty = len(json.dumps({"system": ""}, ensure_ascii=False).encode("utf-8"))
-        return {"system": "a" * (size - empty)}
+    def _encoded(size: int) -> str:
+        return "a" * size
 
     def test_up_to_the_limit_fits(self):
-        assert SurveyRunnerService.fits_inline(self._body_of(MAX_INLINE_BODY_BYTES))
+        assert SurveyRunnerService.fits_inline(self._encoded(MAX_INLINE_BODY_BYTES))
 
     def test_over_the_limit_does_not_fit(self):
         assert not SurveyRunnerService.fits_inline(
-            self._body_of(MAX_INLINE_BODY_BYTES + 1)
+            self._encoded(MAX_INLINE_BODY_BYTES + 1)
         )
 
     def test_size_is_counted_in_utf8_bytes(self):
-        body = {"system": "あ" * (MAX_INLINE_BODY_BYTES // 3)}
-        assert not SurveyRunnerService.fits_inline(body)
+        assert not SurveyRunnerService.fits_inline(
+            "あ" * (MAX_INLINE_BODY_BYTES // 3 + 1)
+        )
 
     def test_limit_leaves_room_below_256_kib(self):
         assert MAX_INLINE_BODY_BYTES <= 256 * 1024 - 16 * 1024
+
+
+def test_encode_body_keeps_non_ascii_and_is_one_line():
+    encoded = SurveyRunnerService.encode_body({"system": "改行\nあり"})
+    assert "\n" not in encoded
+    assert "改行" in encoded
+    assert json.loads(encoded) == {"system": "改行\nあり"}
 
 
 def test_request_body_is_the_anthropic_messages_format():

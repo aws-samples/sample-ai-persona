@@ -327,6 +327,19 @@ class TestStart:
         assert response.status_code == 404
         aw.batch.get_filtered_count.assert_not_called()
 
+    def test_preview_judges_with_the_minimum_from_the_model(
+        self, aw, client, monkeypatch
+    ):
+        """FR4.1: 最少人数はテンプレートに直接書かず、MIN_SURVEY_PERSONAS を使う。"""
+        import web.routers.survey as survey_router
+
+        monkeypatch.setattr(survey_router, "MIN_SURVEY_PERSONAS", 600)
+
+        response = client.post("/survey/preview", data={"datasource": "nemotron"})
+
+        assert response.status_code == 200
+        assert "border-yellow-300" in response.text
+
 
 # =============================================================================
 # 結果（BR1.2〜BR1.4、BR2.6、BR2.8、BR2.11、AC4.1.2、AC4.4.4）

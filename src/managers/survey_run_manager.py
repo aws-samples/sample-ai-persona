@@ -36,7 +36,7 @@ import logging
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -100,6 +100,10 @@ class SurveyRunError(CodedError):
     """A survey cannot be started or finished (stored as its code)."""
 
     code = ErrorCode.SURVEY_EXECUTION_FAILED
+
+
+#: Bodies stored in S3 per batch; the lease is checked between batches.
+_BODY_BATCH = 16
 
 
 class _UnusableRunResult(SurveyRunError):
@@ -482,7 +486,10 @@ class SurveyRunManager:
 
     def _finish(self, survey: Survey, info: Any) -> bool:
         try:
-            outcome = self._collect(survey, info)
+            # Read once for the summary and the CSV
+            personas = self._runner.read_personas(survey.id)
+            questions = list(self._snapshot(survey).questions)
+            outcome = self._collect(survey, info, personas, questions)
         except MemoryError:
             self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
             return True
@@ -498,20 +505,24 @@ class SurveyRunManager:
             )
             return True
         try:
-            self._complete(survey, outcome)
+            self._complete(survey, outcome, personas, questions)
         except _LeaseLost:
             raise
         except Exception as e:
             return self._finish_failed(survey, info, e)
         return True
 
-    def _collect(self, survey: Survey, info: Any) -> SurveyRunOutcome:
+    def _collect(
+        self,
+        survey: Survey,
+        info: Any,
+        personas: pl.DataFrame,
+        questions: list[Any],
+    ) -> SurveyRunOutcome:
         if not info.manifest_key:
             raise _UnusableRunResult("succeeded without a ResultWriter manifest")
-        personas = self._runner.read_personas(survey.id)
         ids = [str(v) for v in personas["uuid"].to_list()]
         expected = set(ids)
-        questions = self._snapshot(survey).questions
         answers: dict[str, dict[str, str]] = {}
         errors: dict[str, str] = {}
         invalid: set[str] = set()
@@ -550,9 +561,13 @@ class SurveyRunManager:
             and failed * 100 <= outcome.total * _FAILED_PER_HUNDRED
         )
 
-    def _complete(self, survey: Survey, outcome: SurveyRunOutcome) -> None:
-        personas = self._runner.read_personas(survey.id)
-        questions = list(self._snapshot(survey).questions)
+    def _complete(
+        self,
+        survey: Survey,
+        outcome: SurveyRunOutcome,
+        personas: pl.DataFrame,
+        questions: list[Any],
+    ) -> None:
         csv_bytes = self._results_csv(personas, questions, outcome)
         self._check_lease()
         key = f"survey-results/{survey.id}/results.csv"
@@ -687,7 +702,8 @@ class SurveyRunManager:
         )
         self._check_lease()
         items = self._items(survey.id, personas, request)
-        self._runner.write_input(survey.id, (item.to_dict() for item in items))
+        # Built lazily: the input is never held in memory as a whole (NFR1.6)
+        self._runner.write_input(survey.id, (item.to_json_line() for item in items))
 
     def _sampled_personas(
         self,
@@ -710,33 +726,56 @@ class SurveyRunManager:
 
     def _items(
         self, survey_id: str, personas: pl.DataFrame, request: _Request
-    ) -> list[SurveyRunItem]:
+    ) -> Iterator[SurveyRunItem]:
+        """One item per persona, in sampling order, built as they are read.
+
+        Bodies that go to S3 (images, or too large for the item, BR6.3) are
+        stored :data:`_BODY_BATCH` at a time in parallel; the lease is checked
+        before each batch (BR2.3). Each body is encoded to JSON once.
+        """
         content = build_survey_user_content(
             request.questions_text, request.image_names, request.image_blocks
         )
-        items: list[SurveyRunItem] = []
+        batch: list[tuple[str, str, bool]] = []
         for row in personas.iter_rows(named=True):
-            record_id = str(row["uuid"])
-            body = self._runner.request_body(
-                build_persona_system_prompt(row, extra_columns=request.extra_columns),
-                content,
-                request.schema,
+            body_json = self._runner.encode_body(
+                self._runner.request_body(
+                    build_persona_system_prompt(
+                        row, extra_columns=request.extra_columns
+                    ),
+                    content,
+                    request.schema,
+                )
             )
-            # Images, or a body too large for the item, go to S3 (BR6.3)
-            if request.image_blocks or not self._runner.fits_inline(body):
-                uri = self._runner.write_body(survey_id, record_id, body)
-                items.append(
-                    SurveyRunItem(
-                        record_id=record_id, model_id=self._model_id, body_s3_uri=uri
-                    )
+            to_s3 = bool(request.image_blocks) or not self._runner.fits_inline(
+                body_json
+            )
+            batch.append((str(row["uuid"]), body_json, to_s3))
+            if len(batch) >= _BODY_BATCH:
+                yield from self._flush(survey_id, batch)
+                batch = []
+        yield from self._flush(survey_id, batch)
+
+    def _flush(
+        self, survey_id: str, batch: list[tuple[str, str, bool]]
+    ) -> Iterator[SurveyRunItem]:
+        stored = [(rid, body_json) for rid, body_json, to_s3 in batch if to_s3]
+        uris: dict[str, str] = {}
+        if stored:
+            self._check_lease()
+            written = self._runner.write_bodies(survey_id, stored)
+            uris = dict(zip((rid for rid, _ in stored), written))
+        for record_id, body_json, to_s3 in batch:
+            if to_s3:
+                yield SurveyRunItem(
+                    record_id=record_id,
+                    model_id=self._model_id,
+                    body_s3_uri=uris[record_id],
                 )
             else:
-                items.append(
-                    SurveyRunItem(
-                        record_id=record_id, model_id=self._model_id, body=body
-                    )
+                yield SurveyRunItem(
+                    record_id=record_id, model_id=self._model_id, body_json=body_json
                 )
-        return items
 
     def _record_start(self, survey: Survey, info: Any) -> _Outcome:
         self._check_lease()

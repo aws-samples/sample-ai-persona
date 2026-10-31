@@ -426,10 +426,15 @@ def test_start_form_minimum_is_ten():
 @pytest.mark.parametrize(("count", "warned"), [(9, True), (10, False)])
 def test_filter_preview_warns_below_ten(count, warned):
     """FR4.1: 対象の人数の注意は、下限の 10 名を下回るときだけ出す。"""
+    from src.models.survey import MIN_SURVEY_PERSONAS
     from web.main import templates
 
     html = templates.get_template("survey/partials/filter_preview.html").render(
-        count=count, total=500, stats={}, has_filter=True
+        count=count,
+        total=500,
+        stats={},
+        has_filter=True,
+        min_count=MIN_SURVEY_PERSONAS,
     )
     assert ("アンケート実行には10名以上が必要です" in html) is warned
     assert ("bg-yellow-50" in html) is warned
