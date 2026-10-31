@@ -3,7 +3,7 @@
 BR4.1〜BR4.7、BR5.1〜BR5.3、NFR1.73、NFR1.74、NFR1.76、NFR1.82、NFR1.85、NFR2.23、
 NFR8.24、AC2.5.1〜AC2.5.3、AC5.2.4、AC5.2.5、AC5.3.1、AC5.3.4。DynamoDB と S3 は moto、
 ResourceLookup・DepartmentDirectory・AccessPolicy は本物（tests/unit/survey_world.py）、
-バッチ推論・エージェント・AI はモック。
+DuckDB の処理（SurveyBatchService）・エージェント・AI はモック。
 """
 
 from unittest.mock import Mock
@@ -340,9 +340,20 @@ class TestUpload:
         with raises_code(CodedError, ErrorCode.CUSTOM_PERSONA_DATA_NAME_TAKEN):
             _upload(dm, name="同じ", avoid_name_conflict=True)
 
+    def test_ten_rows_can_be_registered(self, dm, survey_world, batch):
+        """FR4.1: アンケートの下限（10 件）と同じ件数のデータセットは登録できる。"""
+        batch.convert_csv_to_parquet.side_effect = lambda csv, mapping=None: (
+            pl.DataFrame(
+                {"persona": [f"p{i}" for i in range(10)], "hobby": ["釣り"] * 10}
+            ),
+            b"pq",
+        )
+        data = _upload(dm)
+        assert survey_world.custom_store.get(data.id).row_count == 10
+
     def test_too_few_rows_writes_nothing(self, dm, survey_world, batch):
         batch.convert_csv_to_parquet.side_effect = lambda csv, mapping=None: (
-            pl.DataFrame({"persona": ["a"]}),
+            pl.DataFrame({"persona": [f"p{i}" for i in range(9)]}),
             b"pq",
         )
         with raises_code(
@@ -538,12 +549,26 @@ class TestDwhAndMapping:
         with raises_code(
             SurveyDatasetValidationError, ErrorCode.SEGMENT_ROW_COUNT_TOO_LOW
         ):
-            dm._validate_segment_row_count(10)
+            dm._validate_segment_row_count(9)
         with raises_code(
             SurveyDatasetValidationError, ErrorCode.SEGMENT_ROW_COUNT_TOO_HIGH
         ):
             dm._validate_segment_row_count(20000)
+        dm._validate_segment_row_count(10)
         dm._validate_segment_row_count(500)
+
+    def test_dataset_minimum_is_the_survey_minimum(self):
+        """FR4.1: 登録の下限はアンケートの下限と同じ 1 つの定数。"""
+        from src.models.survey import MIN_SURVEY_PERSONAS
+
+        assert SurveyDatasetManager.MIN_SEGMENT_ROWS == MIN_SURVEY_PERSONAS == 10
+
+    def test_dwh_agent_is_told_the_minimum(self):
+        """DWH の抽出のエージェントに伝える下限も 10 件。"""
+        from src.prompts.survey_prompts import DWH_SEGMENT_SYSTEM_PROMPT
+
+        assert "抽出件数が10件未満の場合" in DWH_SEGMENT_SYSTEM_PROMPT
+        assert "最小10行、最大10,000行" in DWH_SEGMENT_SYSTEM_PROMPT
 
 
 # =============================================================================

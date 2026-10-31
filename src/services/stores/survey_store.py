@@ -1,8 +1,14 @@
 """DynamoDB reads and writes of survey bodies (U7).
 
-``Surveys``: PK ``id``, ``OwnerIndex`` (``owner_sub`` / ``created_at``).
+``Surveys``: PK ``id``, ``OwnerIndex`` (``owner_sub`` / ``created_at``),
+``RunQueueIndex`` (``run_queue`` / ``queued_at``, sparse: only queued and
+running surveys carry ``run_queue``, NFR3.10).
 ``shared_group_ids`` is the copy of the shares; only ``ResourceSharing``
 writes it, together with ``ResourceShares`` (contract C7).
+
+- Every status transition of the survey runner holds only when the status
+  is the expected one, so two tasks doing the same work never both win
+  (NFR4.4).
 
 - A new survey is written only when the ``id`` does not exist yet, and never
   with shares (BR1.1).
@@ -25,7 +31,7 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.models.errors import CodedError, ErrorCode
-from src.models.survey import Survey
+from src.models.survey import RUN_QUEUE_ACTIVE, Survey
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,10 @@ UNPROCESSED_REREADS = 3
 _PROTECTED_COLUMNS = frozenset(
     {"id", "owner_sub", "shared_group_ids", "created_at", "template_snapshot"}
 )
+#: The sparse index of queued and running surveys (CDK Data stack).
+RUN_QUEUE_INDEX = "RunQueueIndex"
+#: The counters :meth:`SurveyStore.add_attempt` may count up (BR3.2, BR3.7).
+_ATTEMPT_COLUMNS = frozenset({"start_attempts", "finish_attempts"})
 
 
 class SurveyStoreError(CodedError):
@@ -64,6 +74,8 @@ class SurveyStore:
         """
         self.table_name = table_name
         self.client = client or boto3.client("dynamodb", region_name=region)
+        #: ``Limit`` of one ``RunQueueIndex`` page (``None``: DynamoDB's 1 MB).
+        self.page_size: Optional[int] = None
         self._serializer = TypeSerializer()
         self._deserializer = TypeDeserializer()
 
@@ -145,6 +157,91 @@ class SurveyStore:
             ValueError: A column the survey's owner, shares, keys or template
                 copy live in.
         """
+        return self._conditional_update(survey_id, fields, remove, expected=None)
+
+    def transition(
+        self,
+        survey_id: str,
+        *,
+        expected: str,
+        fields: Mapping[str, Any],
+        remove: Sequence[str] = (),
+    ) -> bool:
+        """Write the given columns only when the status is ``expected`` (NFR4.4).
+
+        Returns:
+            ``False`` when the survey is gone or its status is another one.
+
+        Raises:
+            ValueError: A protected column (see :meth:`update_fields`).
+            SurveyStoreError: The call failed.
+        """
+        return self._conditional_update(survey_id, fields, remove, expected=expected)
+
+    def add_attempt(
+        self, survey_id: str, column: str, *, expected: str
+    ) -> Optional[int]:
+        """Count ``start_attempts`` / ``finish_attempts`` up by one (BR3.2, BR3.7).
+
+        Returns:
+            The new count, or ``None`` when the status is not ``expected``.
+
+        Raises:
+            ValueError: ``column`` is not one of the two counters.
+            SurveyStoreError: The call failed.
+        """
+        if column not in _ATTEMPT_COLUMNS:
+            raise ValueError(f"not an attempt counter: {column}")
+        try:
+            response = self._call(
+                "update_item",
+                conditional=True,
+                TableName=self.table_name,
+                Key={"id": {"S": survey_id}},
+                UpdateExpression="ADD #c :one",
+                ConditionExpression="attribute_exists(id) AND #s = :expected",
+                ExpressionAttributeNames={"#c": column, "#s": "status"},
+                ExpressionAttributeValues={
+                    ":one": {"N": "1"},
+                    ":expected": {"S": expected},
+                },
+                ReturnValues="UPDATED_NEW",
+            )
+        except _ConditionFailed:
+            return None
+        return int(response["Attributes"][column]["N"])
+
+    def list_run_queue(self) -> list[Survey]:
+        """Every queued and running survey from ``RunQueueIndex`` (NFR3.10).
+
+        The index is eventually consistent: callers re-read a survey with
+        :meth:`get` before acting on it.
+        """
+        surveys: list[Survey] = []
+        params: dict[str, Any] = {
+            "TableName": self.table_name,
+            "IndexName": RUN_QUEUE_INDEX,
+            "KeyConditionExpression": "run_queue = :q",
+            "ExpressionAttributeValues": {":q": {"S": RUN_QUEUE_ACTIVE}},
+        }
+        if self.page_size:
+            params["Limit"] = self.page_size
+        while True:
+            response = self._call("query", **params)
+            surveys.extend(self._survey(item) for item in response.get("Items", []))
+            last = response.get("LastEvaluatedKey")
+            if not last:
+                return surveys
+            params["ExclusiveStartKey"] = last
+
+    def _conditional_update(
+        self,
+        survey_id: str,
+        fields: Mapping[str, Any],
+        remove: Sequence[str],
+        *,
+        expected: Optional[str],
+    ) -> bool:
         refused = (set(fields) | set(remove)) & _PROTECTED_COLUMNS
         if refused:
             raise ValueError(f"columns not updatable here: {sorted(refused)}")
@@ -158,15 +255,24 @@ class SurveyStore:
         removed = {f"#r{i}": column for i, column in enumerate(remove)}
         if removed:
             clauses.append("REMOVE " + ", ".join(removed))
-        if not clauses:
+        if not clauses and expected is None:
             return True
+        condition = "attribute_exists(id)"
+        if expected is not None:
+            condition += " AND #status = :expected"
+            names["#status"] = "status"
+            values[":expected"] = expected
         params: dict[str, Any] = {
             "TableName": self.table_name,
             "Key": {"id": {"S": survey_id}},
-            "UpdateExpression": " ".join(clauses),
-            "ConditionExpression": "attribute_exists(id)",
+            "ConditionExpression": condition,
             "ExpressionAttributeNames": {**names, **removed},
         }
+        if clauses:
+            params["UpdateExpression"] = " ".join(clauses)
+        else:
+            # Nothing to write: only check that the status still holds
+            params["UpdateExpression"] = "SET #status = :expected"
         if values:
             params["ExpressionAttributeValues"] = self._item(values)
         try:

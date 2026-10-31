@@ -2,6 +2,7 @@
 {% from "components/icons.html" import icon_chat, icon_trash %}
 {% from "components/bulk_select.html" import bulk_select_bar, bulk_select_row %}
 {% from "components/status_label.html" import status_label %}
+{% from "survey/partials/status_badge.html" import survey_status_badge %}
 {#
   アンケート結果の一覧パーシャル（M6、U7 BR1.2・BR2.10）。タブ（list_tabpanel）の中身。
   テンプレート名とペルソナ元データの名前は、実行したときの写し（template_snapshot、
@@ -80,16 +81,7 @@
                         {%- endif %}
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-xs text-gray-500">{{ survey.persona_count }}名</span>
-                            <span data-testid="survey-status" class="px-2 py-0.5 text-xs rounded-full
-                                {% if survey.status == 'completed' %}bg-green-100 text-green-800
-                                {% elif survey.status == 'running' %}bg-blue-100 text-blue-800
-                                {% elif survey.status == 'error' %}bg-red-100 text-red-800
-                                {% else %}bg-gray-100 text-gray-800{% endif %}">
-                                {% if survey.status == 'completed' %}完了
-                                {% elif survey.status == 'running' %}実行中
-                                {% elif survey.status == 'error' %}エラー
-                                {% else %}待機中{% endif %}
-                            </span>
+                            {{ survey_status_badge(survey, testid="survey-status") }}
                             {% if survey.insight_report %}
                             <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">レポート</span>
                             {% endif %}

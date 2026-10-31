@@ -1100,7 +1100,7 @@ class TestToastIsVisibleRegardlessOfScroll:
 class TestPersistedFailuresDoNotLeak:
     """永続化した失敗理由が例外文でないこと（Issue #118）。
 
-    アンケートのバッチ推論はバックグラウンドスレッドで実行されるため、失敗は
+    アンケートの実行は進行役（Web タスクのバックグラウンド）が進めるため、失敗は
     起点となったリクエストには返らない。理由はDBに保存され、後続のGETで別の
     リクエストとして描画される。したがって Router の `except` を検査する
     `test_router_does_not_reference_exception_outside_logging` では捕捉できず、

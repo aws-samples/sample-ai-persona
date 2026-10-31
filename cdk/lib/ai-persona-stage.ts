@@ -68,7 +68,7 @@ export class AIPersonaStage extends Stage {
       inferenceScope: this.resolveInferenceScope(props, parameter),
       bedrockModelId: parameter.bedrockModelId,
       agentModelId: parameter.agentModelId,
-      batchInferenceModelId: parameter.batchInferenceModelId,
+      surveyModelId: parameter.surveyModelId,
     });
     const appDesiredCount = this.resolveDesiredCount(parameter);
     const closed = this.profile.deploymentMode === 'closed';

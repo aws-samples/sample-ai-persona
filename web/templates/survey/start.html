@@ -151,7 +151,7 @@
                 {{ icon_users("w-5 h-5 text-purple-600") }} 対象ペルソナ数
                 <span class="text-sm font-normal text-gray-500" x-text="personaCountLabel"></span>
             </label>
-            <input type="number" name="persona_count" value="100" min="100" :max="maxPersonaCount" required
+            <input type="number" name="persona_count" value="100" min="10" :max="maxPersonaCount" required
                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
             <p class="text-xs text-gray-500 mt-1" x-show="hasImages">
                 ⚠️ 画像付きテンプレートは最大1,000人までです
@@ -190,7 +190,7 @@ function surveyStartForm() {
             return this.hasImages ? 1000 : 10000;
         },
         get personaCountLabel() {
-            return this.hasImages ? '（100〜1,000）' : '（100〜10,000）';
+            return this.hasImages ? '（10〜1,000）' : '（10〜10,000）';
         },
         init() {
             // 選んだテンプレートの画像の有無（選択肢の data-has-images。タブを替えても読める）

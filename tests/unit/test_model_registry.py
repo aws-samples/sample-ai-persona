@@ -42,13 +42,13 @@ class TestScopeDefaults:
         defaults = SCOPE_DEFAULTS[InferenceScope.GLOBAL]
         assert defaults.bedrock_model_id == GLOBAL_SONNET_5_5
         assert defaults.agent_model_id == GLOBAL_HAIKU_5_5
-        assert defaults.batch_inference_model_id == GLOBAL_HAIKU_4_5
+        assert defaults.survey_model_id == GLOBAL_HAIKU_5_5
 
     def test_jp_defaults(self):
         defaults = SCOPE_DEFAULTS[InferenceScope.JP]
         assert defaults.bedrock_model_id == JP_HAIKU_5_5
         assert defaults.agent_model_id == JP_HAIKU_5_5
-        assert defaults.batch_inference_model_id == JP_HAIKU_4_5
+        assert defaults.survey_model_id == JP_HAIKU_5_5
 
     def test_only_two_scopes(self):
         assert set(SCOPE_DEFAULTS) == {InferenceScope.GLOBAL, InferenceScope.JP}
@@ -59,7 +59,7 @@ class TestScopeDefaults:
         defaults = SCOPE_DEFAULTS[InferenceScope.GLOBAL]
         assert Config.AGENT_MODEL_ID == defaults.agent_model_id
         assert Config.BEDROCK_MODEL_ID == defaults.bedrock_model_id
-        assert Config.BATCH_INFERENCE_MODEL_ID == defaults.batch_inference_model_id
+        assert Config.SURVEY_MODEL_ID == defaults.survey_model_id
 
 
 class TestScopeTables:

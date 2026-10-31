@@ -210,7 +210,9 @@ def default_sharing_tables() -> list[SharingTable]:
             name_attribute="name",
             not_found=ErrorCode.SURVEY_NOT_FOUND,
             delete_failed=ErrorCode.SURVEY_OPERATION_FAILED,
-            cleanup_attributes=("s3_result_path",),
+            # status と execution_arn は実行中の削除で実行を止めるため（BR7.1）。
+            # 読んだ値のままのときだけ消すので、開始と削除が重なっても止め損ねない
+            cleanup_attributes=("s3_result_path", "status", "execution_arn"),
         ),
     ]
 

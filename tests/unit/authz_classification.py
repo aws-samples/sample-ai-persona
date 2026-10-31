@@ -311,6 +311,10 @@ CLASSIFICATION: dict[str, Entry] = {
     "SurveyExecutionManager.delete_survey": CHECKS,  # delete_with_shares
     "SurveyExecutionManager.normalize_filters": NO_USER_DATA,  # 入力の整形だけ
     "SurveyExecutionManager.generate_default_survey_name": NO_USER_DATA,  # 名前の生成だけ
+    # survey_run_manager.py — 進行役（Web タスクのバックグラウンド。利用者の要求を受けず、
+    # 何も返さない。作成時に判定を通ったアンケートの実行を進めるだけ）
+    "SurveyRunManager.advance": NO_USER_DATA,
+    "SurveyRunManager.release_lease": NO_USER_DATA,  # 担当の記録を手放すだけ
     # survey_template_manager.py — U7（所有・共有・判定、BR1.1〜BR1.7、BR2.3。
     # get_all_templates は list_templates にした）
     "SurveyTemplateManager.create_template": CHECKS,  # resource:create

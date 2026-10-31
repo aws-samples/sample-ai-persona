@@ -36,9 +36,11 @@ const CLOSED_FEATURE_KEYS = ['NEMOTRON_SOURCE', 'NEMOTRON_DATASET_KEY', 'DATA_AG
 /** Bedrock 系のインターフェイス型エンドポイントを提供する AZ（infrastructure-design レビュー R-05）。 */
 const BEDROCK_ENDPOINT_AZS = ['ap-northeast-1a', 'ap-northeast-1c', 'ap-northeast-1d'];
 
-/** U1 のインターフェイス型エンドポイント 10 種（NFR3.7）。 */
+/**
+ * U1 のインターフェイス型エンドポイント 10 種（NFR3.7）。アンケートを Step Functions に移したため、
+ * bedrock（コントロールプレーン）を外して states を足した（FR8.4、FR9.1、NFR6.1）。
+ */
 const INTERFACE_ENDPOINTS = [
-  'bedrock',
   'bedrock-agent-runtime',
   'bedrock-agentcore',
   'bedrock-agentcore-control',
@@ -48,6 +50,7 @@ const INTERFACE_ENDPOINTS = [
   'ecr.dkr',
   'logs',
   'secretsmanager',
+  'states',
 ];
 /** 検証用 EC2 を作るときだけのエンドポイント（BR6.1）。 */
 const VALIDATION_ENDPOINTS = ['ec2messages', 'ssm', 'ssmmessages'];
@@ -658,7 +661,7 @@ function invokeModelResources(template: Template): Record<string, string[]> {
         .concat(statement.Resource)
         .map((r) => (typeof r === 'string' ? r : JSON.stringify(r)));
       for (const role of roles) {
-        const key = role.startsWith('BedrockBatchRole') ? 'batch' : 'task';
+        const key = role.startsWith('SurveyRun') ? 'survey' : 'task';
         result[key] = resources.sort();
       }
     }
@@ -681,13 +684,19 @@ describe('推論の範囲 jp（閉域はコンテキスト closedInferenceScope�
     expect(env.INFERENCE_SCOPE).toBe('jp');
     expect(env.BEDROCK_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
     expect(env.AGENT_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
-    expect(env.BATCH_INFERENCE_MODEL_ID).toBe('jp.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(env.SURVEY_MODEL_ID).toBe('jp.anthropic.claude-haiku-5-5');
   });
 
-  test('閉域の jp: タスクロールとバッチ推論ロールの InvokeModel は同じ国内の一覧', () => {
+  test('閉域の jp: タスクロールは国内の一覧、ステートマシンはアンケートの jp のモデルだけ', () => {
     const resources = invokeModelResources(closedJp.templates.App);
     expect(resources.task).toEqual(JP_INFERENCE_ARNS);
-    expect(resources.batch).toEqual(JP_INFERENCE_ARNS);
+    expect(resources.survey).toEqual(
+      [
+        `arn:aws:bedrock:${REGION}:${ACCOUNT}:inference-profile/jp.anthropic.claude-haiku-5-5`,
+        'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-haiku-5-5',
+        'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.claude-haiku-5-5',
+      ].sort(),
+    );
   });
 
   test('閉域の jp: cdk-nag の違反がない（IAM5 の抑止も同じ一覧から作る）', () => {
@@ -801,11 +810,12 @@ function endpointServicesOf(action: string): string[] | undefined {
     case 'bedrock':
       if (name.startsWith('InvokeModel')) return ['bedrock-runtime'];
       if (name === 'Retrieve') return ['bedrock-agent-runtime'];
-      return ['bedrock'];
-    case 'iam':
-      // PassRole はロールを渡す先のサービスの要求（CreateModelInvocationJob）と一緒に、そのエンドポイントの
-      // ポリシーで評価される（BR1.10）。タスクロールの PassRole はバッチ推論のロールだけ
-      return name === 'PassRole' ? ['bedrock'] : undefined;
+      // GetFoundationModel・GetInferenceProfile は InvokeModel と同じ文に残るコントロールプレーンの
+      // 操作で、アプリのコードは呼ばない。bedrock のエンドポイントは外した（FR8.4、基盤設計 Q1 の A）
+      return CONTROL_PLANE_ACTIONS_NOT_CALLED.includes(action) ? [] : undefined;
+    case 'states':
+      // アンケートの実行の開始・確認・停止（FR9.1、NFR6.1）
+      return ['states'];
     default:
       return undefined;
   }
@@ -813,6 +823,8 @@ function endpointServicesOf(action: string): string[] | undefined {
 
 /** Services the 12 endpoints do not cover (BR1.4: excluded from the coverage check). */
 const NOT_THROUGH_ENDPOINTS = ['kms'];
+/** Bedrock control plane actions on the task role that the app never calls (no endpoint). */
+const CONTROL_PLANE_ACTIONS_NOT_CALLED = ['bedrock:GetFoundationModel', 'bedrock:GetInferenceProfile'];
 
 /** The statements of the task role and the execution role policies. */
 function roleStatements(template: Template): { role: string; statement: TemplateStatement }[] {
@@ -898,6 +910,24 @@ describe('閉域のエンドポイントのポリシー（閉域対応 U2 BR1.1�
     expect(
       cognito.some((s) => ([] as unknown[]).concat(s.Action).includes('cognito-idp:RevokeToken') && s.Resource === '*'),
     ).toBe(true);
+  });
+
+  test('states のエンドポイントはこのアプリのステートマシンとその実行だけを許す（FR9.2、NFR6.2）', () => {
+    const states = statementsOfEndpoint(endpoints.states);
+    expect(states).toHaveLength(1);
+    expect(states[0].Action).toEqual('states:*');
+    const resources = JSON.stringify(states[0].Resource);
+    expect(resources).toContain('SurveyRun');
+    expect(resources).toContain(':execution:');
+    expect(([] as unknown[]).concat(states[0].Resource)).not.toContain('*');
+  });
+
+  test('DynamoDB のエンドポイントのポリシーに担当者の記録のテーブルが入る（NFR6.3）', () => {
+    expect(JSON.stringify(statementsOfEndpoint(endpoints.dynamodb))).toContain('SurveyRunLease');
+  });
+
+  test('bedrock のエンドポイントはない（FR8.4）', () => {
+    expect(endpoints.bedrock).toBeUndefined();
   });
 
   test('BR1.4: タスクロールと実行ロールの文の Resource が、対応するエンドポイントのポリシーに含まれる', () => {

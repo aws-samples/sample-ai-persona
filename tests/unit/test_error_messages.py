@@ -537,3 +537,37 @@ class TestPasswordRuleLabels:
         policy = self._policy()
         labels = [error_messages.password_rule_label(r, policy) for r in PasswordRule]
         assert len(labels) == len(set(labels))
+
+
+class TestSurveyOnDemandWording:
+    """オンデマンド推論のコードがカタログの文言を返すこと（functional-spec.md 3 章）。"""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "SURVEY_RUNNER_NOT_CONFIGURED",
+            "SURVEY_RUNNER_UNAVAILABLE",
+            "SURVEY_INFERENCE_FAILED",
+            "SURVEY_EXECUTION_TIMED_OUT",
+            "SURVEY_EXECUTION_INTERRUPTED",
+        ],
+    )
+    def test_codes_resolve_to_catalog_wording(self, name):
+        code = ErrorCode[name]
+        message = user_message_for(CodedError(code=code), default="既定")
+        assert message == error_messages._CATALOG[code]
+
+    def test_too_many_failed_answers_shows_the_counts(self):
+        code = ErrorCode["SURVEY_TOO_MANY_FAILED_ANSWERS"]
+        message = error_messages.user_message_for_code(
+            code.value, {"failed_count": 60, "total": 1000}
+        )
+        assert "60" in message
+        assert "1000" in message
+        assert message != error_messages.FALLBACK_MESSAGE
+
+    def test_stored_batch_codes_still_resolve(self):
+        """切り替え前のエラーの記録も文言を引ける（FR11.2）。"""
+        for value in ("survey_batch_job_failed", "survey_batch_job_timed_out"):
+            message = error_messages.user_message_for_code(value, None)
+            assert message != error_messages.FALLBACK_MESSAGE

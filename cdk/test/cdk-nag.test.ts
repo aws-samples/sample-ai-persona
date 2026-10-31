@@ -47,6 +47,22 @@ const INFERENCE = [
   'IAM5[Resource::arn:aws:bedrock:*::foundation-model/*]',
 ];
 const taskPolicy = (stage: string) => `${stage}/App/App/TaskDefinition/TaskRole/DefaultPolicy/Resource`;
+/** アンケートのモデル（global の Haiku 5.5。リージョンを * にする 2 つ、基盤設計 3.1）。 */
+const SURVEY_MODEL = [
+  `IAM5[Resource::arn:aws:bedrock:*:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-5-5]`,
+  'IAM5[Resource::arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5]',
+];
+/**
+ * The state machine's name as cdk-nag prints a GetAtt in a rule ID (`<LogicalId.Name>`). The
+ * logical ID comes from the construct path inside the App stack, so it is the same in every Stage.
+ */
+const MACHINE_NAME = '<SurveyRunStateMachine453666ED.Name>';
+/** Executions of the survey state machine (task role: start, describe, stop). */
+const SURVEY_EXECUTIONS =
+  `IAM5[Resource::arn:aws:states:ap-northeast-1:${ACCOUNT}:execution:${MACHINE_NAME}:*]`;
+/** Child executions of the Distributed Map (the state machine's own role). */
+const SURVEY_MAP_RUNS =
+  `IAM5[Resource::arn:aws:states:ap-northeast-1:${ACCOUNT}:execution:${MACHINE_NAME}/*]`;
 
 /**
  * 公開・閉域の Stage に共通の抑止（infrastructure-specification.md「cdk-nag の指摘と扱い」）。
@@ -82,16 +98,21 @@ function commonSuppressions(stage: string): Suppression[] {
       ...['/*', '/uploads/*', '/candidates/*'].map(bucket),
       ...INFERENCE,
       `IAM5[Resource::arn:aws:bedrock:ap-northeast-1:${ACCOUNT}:knowledge-base/*]`,
-      `IAM5[Resource::arn:aws:bedrock:ap-northeast-1:${ACCOUNT}:model-invocation-job/*]`,
       fromData('Memory/Default', 'MemoryArn', '/*'),
       'IAM5[Action::kms:GenerateDataKey*]',
       'IAM5[Action::kms:ReEncrypt*]',
+      // アンケートの実行（このステートマシンの実行の ARN、基盤設計 3.2）
+      SURVEY_EXECUTIONS,
     ),
+    // アンケートのステートマシン（基盤設計 2.2・3.1）: ログは ERROR だけ、トレースは使わない
+    ...on(`${APP}/SurveyRun/StateMachine/Resource`, 'SF1', 'SF2'),
     ...on(
-      `${APP}/BedrockBatchRole/Role/DefaultPolicy/Resource`,
-      ...['/batch-inference/*', '/batch-inference/output/*'].map(bucket),
-      ...INFERENCE,
+      `${APP}/SurveyRun/Role/DefaultPolicy/Resource`,
+      'IAM5[Resource::*]',
+      ...['/survey-runs/*', '/survey-runs/*/results/*'].map(bucket),
+      ...SURVEY_MODEL,
     ),
+    ...on(`${APP}/SurveyRun/ExecutionPolicy/Resource`, SURVEY_MAP_RUNS),
   ];
 }
 

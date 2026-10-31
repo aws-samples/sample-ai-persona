@@ -96,12 +96,15 @@ class Config:
     SUMMARY_MEMORY_STRATEGY_ID: Optional[str] = None
     SEMANTIC_MEMORY_STRATEGY_ID: Optional[str] = None
 
-    # マスアンケート機能設定
-    # バッチ推論用モデル（Claude Haiku 4.5、クロスリージョン推論プロファイル）
-    BATCH_INFERENCE_MODEL_ID: str = SCOPE_DEFAULTS[
-        InferenceScope.GLOBAL
-    ].batch_inference_model_id
-    BEDROCK_BATCH_ROLE_ARN: Optional[str] = None
+    # マスアンケート機能設定（Step Functions のオンデマンド推論）
+    # 回答を生成するモデル（範囲の既定は Haiku 5.5。CDK がいつも渡す）
+    SURVEY_MODEL_ID: str = SCOPE_DEFAULTS[InferenceScope.GLOBAL].survey_model_id
+    # ステートマシンと担当者の記録のテーブル（CDK が渡す）。どちらかがなければ
+    # アンケートを実行しない（手元の実行、BR9.1）
+    SURVEY_STATE_MACHINE_ARN: Optional[str] = None
+    SURVEY_RUN_LEASE_TABLE_NAME: Optional[str] = None
+    # 1 件の実行の打ち切り時間（ステートマシンの TimeoutSeconds と同じ値、BR3.3）
+    SURVEY_EXECUTION_TIMEOUT_SECONDS: int = 7200
 
     # データ分析エージェント連携設定
     DATA_AGENT_RUNTIME_ARN: Optional[str] = None
@@ -243,11 +246,6 @@ class Config:
         # S3設定を環境変数から上書き
         self.S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", self.S3_BUCKET_NAME)
 
-        # マスアンケート機能設定を環境変数から上書き
-        self.BEDROCK_BATCH_ROLE_ARN = os.getenv(
-            "BEDROCK_BATCH_ROLE_ARN", self.BEDROCK_BATCH_ROLE_ARN
-        )
-
         # データ分析エージェント連携設定
         self.DATA_AGENT_RUNTIME_ARN = os.getenv(
             "DATA_AGENT_RUNTIME_ARN", self.DATA_AGENT_RUNTIME_ARN
@@ -281,12 +279,47 @@ class Config:
         if persona_cache_ttl:
             self.PERSONA_CACHE_TTL_SECONDS = int(persona_cache_ttl)
 
+        self._load_survey_runner_settings()
         self._load_closed_feature_settings()
         self._load_asset_delivery_setting()
         self._load_auth_settings()
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()
+
+    def _load_survey_runner_settings(self) -> None:
+        """Read the survey runner settings (infrastructure-specification.md ch.4).
+
+        Raises:
+            ValueError: ``SURVEY_EXECUTION_TIMEOUT_SECONDS`` is not a positive
+                integer.
+        """
+        self.SURVEY_STATE_MACHINE_ARN = (
+            os.getenv("SURVEY_STATE_MACHINE_ARN", "").strip() or None
+        )
+        self.SURVEY_RUN_LEASE_TABLE_NAME = (
+            os.getenv("SURVEY_RUN_LEASE_TABLE_NAME", "").strip() or None
+        )
+        timeout = os.getenv("SURVEY_EXECUTION_TIMEOUT_SECONDS", "").strip()
+        if not timeout:
+            return
+        try:
+            seconds = int(timeout)
+        except ValueError as e:
+            raise ValueError(
+                f"SURVEY_EXECUTION_TIMEOUT_SECONDS must be an integer, got {timeout!r}"
+            ) from e
+        if seconds < 1:
+            raise ValueError(
+                f"SURVEY_EXECUTION_TIMEOUT_SECONDS must be >= 1, got {seconds}"
+            )
+        self.SURVEY_EXECUTION_TIMEOUT_SECONDS = seconds
+
+    @property
+    def survey_runner_configured(self) -> bool:
+        """Whether surveys can run here: both the state machine and the lease
+        table are set (BR9.1). Local runs have neither."""
+        return bool(self.SURVEY_STATE_MACHINE_ARN and self.SURVEY_RUN_LEASE_TABLE_NAME)
 
     def _load_closed_feature_settings(self) -> None:
         """Read the three per-feature values of closed network U3 (BR1.1〜BR1.4).
@@ -377,9 +410,7 @@ class Config:
             os.getenv("BEDROCK_MODEL_ID") or defaults.bedrock_model_id
         )
         self.AGENT_MODEL_ID = os.getenv("AGENT_MODEL_ID") or defaults.agent_model_id
-        self.BATCH_INFERENCE_MODEL_ID = (
-            os.getenv("BATCH_INFERENCE_MODEL_ID") or defaults.batch_inference_model_id
-        )
+        self.SURVEY_MODEL_ID = os.getenv("SURVEY_MODEL_ID") or defaults.survey_model_id
 
     def _load_auth_settings(self) -> None:
         """Override login-related settings from environment variables."""

@@ -37,6 +37,8 @@ uv run python run_htmx.py
 >
 > **テーブル名:** CDK でデプロイしたテーブルを手元から使う場合は、`PERSONAS_TABLE_NAME` などテーブルごとの名前を `.env` に書きます（`.env.example` 参照）。
 
+> **マスアンケートの実行:** アンケートはデプロイした Step Functions のステートマシンで実行します。手元では `SURVEY_STATE_MACHINE_ARN` を空のままにするのが既定で、テンプレートの作成やデータセットの登録はできますが、アンケートの作成は「この環境ではアンケートを実行できません」で止まります（`.env.example` 参照）。
+
 > **httpfs について:** マスアンケート（S3 上の Parquet）や S3 データセットの
 > `analyze_dataset` は DuckDB の httpfs 拡張を使います。手順 2 を実行していないと
 > 起動後の S3 アクセス時に `LOAD httpfs` が失敗します。ローカルの CSV 分析だけを
@@ -95,7 +97,8 @@ ai-persona-system/
 │   │   ├── interview_manager.py         # リアルタイムインタビュー
 │   │   ├── survey_template_manager.py   # テンプレートCRUD + AI設問生成
 │   │   ├── survey_dataset_manager.py    # データセット管理 + DWH連携
-│   │   ├── survey_execution_manager.py  # アンケート実行制御
+│   │   ├── survey_execution_manager.py  # アンケートの作成（待ちに入れる）・削除
+│   │   ├── survey_run_manager.py        # 進行役（待ちのアンケートを Step Functions で実行）
 │   │   ├── survey_analysis_manager.py   # ビジュアル分析 + インサイトレポート
 │   │   ├── report_manager.py            # レポート生成（議論・インタビュー）
 │   │   ├── dataset_manager.py           # 行動データ管理
@@ -105,7 +108,8 @@ ai-persona-system/
 │   │   ├── agent_service.py           # Strands Agent SDK操作
 │   │   ├── stores/                    # DynamoDB のテーブルごとの読み書き（persona_store.py など）
 │   │   ├── s3_service.py              # S3操作
-│   │   ├── survey_batch_service.py    # DuckDB/Parquet + Bedrock Batch Inference
+│   │   ├── survey_batch_service.py    # DuckDB/Parquet（ペルソナの抽出・CSV）
+│   │   ├── survey_runner_service.py   # Step Functions の実行と survey-runs/ の読み書き
 │   │   ├── data_agent_service.py      # DWHエージェントツール
 │   │   └── service_factory.py         # DI用シングルトンファクトリー
 │   ├── prompts/           # プロンプトテンプレート定数・ヘルパー関数

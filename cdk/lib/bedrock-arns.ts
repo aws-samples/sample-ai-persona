@@ -28,9 +28,9 @@ const INFERENCE_PROFILE_ID = /^(global|us|us-gov|eu|apac|au|ca)\.(.+)$/;
  * このアカウントのアプリケーション推論プロファイル（中身の範囲は運用で守る）。明示した `jp.*` 以外の
  * モデル ID は、形で見分けて呼ぶ ARN を足す（BR2.3）。同じ ARN は 1 つにまとめる。
  *
- * タスクロール（推論・バッチ推論の作成）とバッチ推論ロール（InvokeModel）、cdk-nag の抑止で
- * 同じ一覧を使う（BR2.4）。閉域の Bedrock 系のエンドポイントのポリシーもこの一覧から作る（閉域対応 U2
- * BR1.6、endpoint-policies.ts）。
+ * タスクロール（推論）と cdk-nag の抑止で同じ一覧を使う（BR2.4）。閉域の Bedrock 系の
+ * エンドポイントのポリシーもこの一覧から作る（閉域対応 U2 BR1.6、endpoint-policies.ts）。
+ * アンケートのモデルはステートマシンが呼ぶため、ここには入れない（surveyModelArns）。
  *
  * Throws when an explicit model ID is given as an ARN under jp (the foundation model behind it
  * cannot be derived from the ARN).
@@ -51,12 +51,47 @@ export function inferenceArnList(env: InferenceArnEnvironment, input: InferenceA
     applicationProfiles,
   ];
   for (const [name, modelId] of Object.entries(input.explicitModelIds) as [keyof ModelIds, string][]) {
-    if (modelId.startsWith('jp.')) {
+    // アンケートのモデルを呼ぶのはステートマシン（surveyModelArns）で、タスクではない
+    if (modelId.startsWith('jp.') || name === 'surveyModelId') {
       continue;
     }
     arns.push(...explicitModelArns(env, name, modelId));
   }
   return [...new Set(arns)];
+}
+
+/** `global.<model>` / `jp.<model>`: the only shapes a survey model ID may take. */
+const SURVEY_MODEL_ID = /^(global|jp)\.(.+)$/;
+
+/**
+ * アンケートのステートマシンが InvokeModel で呼んでよい ARN（基盤設計 3.1、NFR5.3）。
+ *
+ * - `global.<model>`: このアカウントの推論プロファイル（リージョン `*`）と、それが振り分ける
+ *   基盤モデル（リージョン `*`）
+ * - `jp.<model>`: Stack のリージョンの推論プロファイルと、国内 2 リージョンの基盤モデル
+ *
+ * タスクロールの一覧（inferenceArnList）より狭い。それ以外の接頭辞や ARN の形はエラーにする
+ * （呼べる範囲を黙って広げない）。
+ */
+export function surveyModelArns(env: InferenceArnEnvironment, surveyModelId: string): string[] {
+  const { partition, account, region } = env;
+  const match = SURVEY_MODEL_ID.exec(surveyModelId);
+  if (!match || surveyModelId.startsWith('arn:')) {
+    throw new Error(
+      `surveyModelId の "${surveyModelId}" は使えない（global.* か jp.* の推論プロファイルの ID で渡す）`,
+    );
+  }
+  const [, scope, model] = match;
+  if (scope === 'global') {
+    return [
+      `arn:${partition}:bedrock:*:${account}:inference-profile/${surveyModelId}`,
+      `arn:${partition}:bedrock:*::foundation-model/${model}`,
+    ];
+  }
+  return [
+    `arn:${partition}:bedrock:${region}:${account}:inference-profile/${surveyModelId}`,
+    ...JP_REGIONS.map((jpRegion) => `arn:${partition}:bedrock:${jpRegion}::foundation-model/${model}`),
+  ];
 }
 
 function explicitModelArns(env: InferenceArnEnvironment, name: keyof ModelIds, modelId: string): string[] {

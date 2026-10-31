@@ -62,6 +62,10 @@ class ApiWorld:
             ["# レポート"]
         )
         self.cache = ResultCsvCache()
+        #: The Step Functions runner and the survey runner loop (no real AWS)
+        self.runner = Mock()
+        self.runner_configured = True
+        self.runner_loop = Mock()
         self.templates = SurveyTemplateManager(
             survey_template_store=world.template_store,
             ai_service=self.ai,
@@ -82,6 +86,8 @@ class ApiWorld:
             custom_persona_data_store=world.custom_store,
             result_cache=self.cache,
             sleep=lambda _s: None,
+            runner=self.runner,
+            runner_configured=lambda: self.runner_configured,
         )
         self.analysis = SurveyAnalysisManager(
             survey_store=world.survey_store,
@@ -127,6 +133,7 @@ class ApiWorld:
             ("web.routers.survey.get_analysis_manager", self.analysis),
             ("web.routers.survey.get_dataset_manager", self.datasets),
             ("web.routers.survey.get_file_manager", self.file_manager),
+            ("web.routers.survey.get_survey_runner_loop", self.runner_loop),
             ("web.routers.settings.get_dataset_manager", self.settings_datasets),
             ("web.routers.settings.get_settings_manager", self.settings),
             ("web.routers.sharing.get_sharing_manager", self.sharing),

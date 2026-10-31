@@ -7,11 +7,13 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 export const OWNER_INDEX = 'OwnerIndex';
 /** 紐付けの逆引きの GSI（src/services/stores/persona_binding_store.py が Query する）。 */
 export const TARGET_INDEX = 'TargetIndex';
+/** アンケートの待ちと実行中の疎な索引（src/services/stores/survey_store.py が Query する）。 */
+export const RUN_QUEUE_INDEX = 'RunQueueIndex';
 /**
  * アプリが IndexName で Query する GSI。App スタックはこの名前の GSI だけをタスクロールに
  * 付ける（`<テーブルの ARN>/index/<名前>`、U9）。
  */
-const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([OWNER_INDEX, TARGET_INDEX]);
+const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([OWNER_INDEX, TARGET_INDEX, RUN_QUEUE_INDEX]);
 
 /**
  * v1.0.0 の DynamoDB テーブル（Data スタック）。
@@ -75,6 +77,11 @@ export class Database extends Construct {
    * 7 つの操作を 1 つの文で付ける（タスクロールのポリシーの大きさ、NFR1.81）。
    */
   public readonly customPersonaDataTable: dynamodb.TableV2;
+  /**
+   * アンケートの進行役の担当者の記録（PK id、1 行だけ。BR2.3）。applicationTables には入れず、
+   * App スタックが GetItem・PutItem・UpdateItem・DeleteItem の 4 つだけを付ける（NFR5.8）。
+   */
+  public readonly surveyRunLeaseTable: dynamodb.TableV2;
 
   /** The GSI names defined on each table (recorded where the table is created). */
   private readonly indexNames = new Map<dynamodb.TableV2, string[]>();
@@ -127,6 +134,10 @@ export class Database extends Construct {
     this.surveysTable = this.table('Surveys', {
       globalSecondaryIndexes: [
         gsi(OWNER_INDEX, 'owner_sub', 'created_at', dynamodb.ProjectionType.KEYS_ONLY),
+        // 待ちと実行中だけが載る疎な索引（run_queue は queued・running の間だけ持つ。NFR3.10）。
+        // 射影は ALL（進行役が start_blocked_since などを索引だけで読む）。テーブルは置き換えず、
+        // 1 回の更新で GSI を 1 つ足すだけ（NFR3.11、NFR4.16）
+        gsi(RUN_QUEUE_INDEX, 'run_queue', 'queued_at', dynamodb.ProjectionType.ALL),
       ],
     });
     this.knowledgeBasesTable = this.table('KnowledgeBases');
@@ -189,6 +200,10 @@ export class Database extends Construct {
     // U7: カスタムペルソナデータの登録情報（PK id、名前の押さえの項目 id="name#{名前}" も同じ
     // テーブル、約束 C8）。applicationTables には入れず、App スタックが絞った操作を付ける
     this.customPersonaDataTable = this.table('CustomPersonaData');
+
+    // アンケートの進行役の担当者の記録（BR2.3、基盤設計 2.1）。期限つきの 1 行で、失っても次の回で
+    // 作り直せるため PITR は付けない（NFR4.17）。削除保護・RETAIN・AWS 管理キーはほかと同じ
+    this.surveyRunLeaseTable = this.table('SurveyRunLease', { pitr: false });
 
     // U6: 議論の発言とレポート（ADR-002）。消えると戻せないため PITR と削除保護を付ける
     const seq = { name: 'seq', type: dynamodb.AttributeType.NUMBER };

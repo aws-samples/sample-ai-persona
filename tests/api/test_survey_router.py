@@ -257,17 +257,65 @@ class TestStart:
 
     def test_execute_starts_my_survey(self, aw, client):
         template = aw.template(name="使う")
-        with patch("web.routers.survey.asyncio.to_thread") as to_thread:
-            to_thread.return_value = Mock()
-            with patch("web.routers.survey.asyncio.create_task"):
-                response = client.post(
-                    "/survey/execute",
-                    data={"template_id": template.id, "persona_count": "100"},
-                )
+        response = client.post(
+            "/survey/execute",
+            data={"template_id": template.id, "persona_count": "100"},
+        )
         assert response.status_code == 200
         listed = aw.executions.list_surveys(ME.principal(), "mine", None)
         assert len(listed.items) == 1
         assert listed.items[0].template_snapshot.name == "使う"
+        assert listed.items[0].status == "queued"
+
+    def test_execute_wakes_the_runner_without_waiting(self, aw, client):
+        """NFR1.4・WF1: 受付は保存して進行役を 1 回起こすだけ（推論を待たない）。"""
+        template = aw.template()
+
+        response = client.post(
+            "/survey/execute",
+            data={"template_id": template.id, "persona_count": "10"},
+        )
+
+        assert response.status_code == 200
+        aw.runner_loop.wake.assert_called_once_with()
+        aw.runner.start_execution.assert_not_called()
+
+    def test_ten_personas_are_accepted(self, aw, client):
+        """FR4.1: 下限は 10。"""
+        template = aw.template()
+        assert (
+            client.post(
+                "/survey/execute",
+                data={"template_id": template.id, "persona_count": "10"},
+            ).status_code
+            == 200
+        )
+        response = client.post(
+            "/survey/execute",
+            data={"template_id": template.id, "persona_count": "9"},
+        )
+        assert response.status_code == 400
+        assert response.headers["HX-Retarget"] == "#execute-error"
+
+    def test_no_runner_is_a_config_error_and_nothing_is_saved(self, aw, client):
+        """BR9.1・FR10.1: 手元では CONFIG のエラーを開始画面に出し、何も保存しない。"""
+        from src.models.errors import ErrorCode
+        from web.error_messages import user_message_for_code
+
+        aw.runner_configured = False
+        template = aw.template()
+
+        response = client.post(
+            "/survey/execute",
+            data={"template_id": template.id, "persona_count": "10"},
+        )
+
+        assert response.headers["HX-Retarget"] == "#execute-error"
+        assert response.headers["X-Render-Response"] == "true"
+        message = user_message_for_code(ErrorCode.SURVEY_RUNNER_NOT_CONFIGURED.value)
+        assert message in response.text
+        assert aw.world.client.scan(TableName=aw.world.surveys_table)["Count"] == 0
+        aw.runner_loop.wake.assert_not_called()
 
     def test_filter_options_and_preview_judge_the_datasource(self, aw, client):
         data = aw.world.custom_data("企画向け", "plan")
@@ -278,6 +326,19 @@ class TestStart:
         response = client.post("/survey/preview", data={"datasource": source})
         assert response.status_code == 404
         aw.batch.get_filtered_count.assert_not_called()
+
+    def test_preview_judges_with_the_minimum_from_the_model(
+        self, aw, client, monkeypatch
+    ):
+        """FR4.1: 最少人数はテンプレートに直接書かず、MIN_SURVEY_PERSONAS を使う。"""
+        import web.routers.survey as survey_router
+
+        monkeypatch.setattr(survey_router, "MIN_SURVEY_PERSONAS", 600)
+
+        response = client.post("/survey/preview", data={"datasource": "nemotron"})
+
+        assert response.status_code == 200
+        assert "border-yellow-300" in response.text
 
 
 # =============================================================================
@@ -471,6 +532,28 @@ class TestResults:
         survey = aw.survey()
         assert client.delete(f"/survey/results/{survey.id}").status_code == 200
         assert aw.world.survey_store.get(survey.id) is None
+
+    def test_deleting_a_running_survey_stops_it_and_wakes_the_runner(self, aw, client):
+        """BR7.1・WF6: 実行中を消したら実行を止め、進行役を 1 回起こして次を始める。"""
+        arn = "arn:aws:states:r:1:execution:sm:x"
+        survey = aw.survey(status="running", execution_arn=arn)
+
+        assert client.delete(f"/survey/results/{survey.id}").status_code == 200
+
+        aw.runner.stop_execution.assert_called_once_with(arn)
+        aw.runner_loop.wake.assert_called_once_with()
+
+    def test_detail_of_an_interrupted_old_survey_shows_the_error(self, aw, client):
+        """BR8.1: 切り替え前の running は中断のエラーとして出る。"""
+        from src.models.errors import ErrorCode
+        from web.error_messages import user_message_for_code
+
+        survey = aw.survey(status="running")
+
+        html = client.get(f"/survey/results/{survey.id}").text
+
+        message = user_message_for_code(ErrorCode.SURVEY_EXECUTION_INTERRUPTED.value)
+        assert message in html
 
 
 # =============================================================================

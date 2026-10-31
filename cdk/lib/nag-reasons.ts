@@ -61,10 +61,38 @@ export const NAG_REASONS = {
   bedrockInference:
     '推論で呼ぶモデルはパラメータで変わるため、基盤モデル・このアカウントの推論プロファイルの ' +
     'ARN の種類までに絞る（リージョンはグローバルな推論のため *）',
-  /** IAM5: Bedrock のバッチ推論ジョブ・KB。 */
+  /** IAM5: Bedrock の KB。 */
   bedrockAccountResources:
-    'ジョブ・ナレッジベースの ID は実行時に決まるため、このアカウント・リージョンの ' +
-    'model-invocation-job/*・knowledge-base/* に絞る',
+    'ナレッジベースの ID は利用者が実行時に選ぶため、このアカウント・リージョンの ' +
+    'knowledge-base/* に絞る',
+  /** IAM5: タスクロールのアンケートの実行（基盤設計 3.2）。 */
+  surveyExecutions:
+    '実行の名前はアンケートごとに実行時に決まるため、このステートマシンの実行' +
+    '（execution:<名前>:*）だけに絞る。開始はステートマシンの ARN だけ',
+  /** IAM5: アンケートのステートマシンの子の実行（Distributed Map、基盤設計 3.1）。 */
+  surveyMapRuns:
+    'Distributed Map の子の実行の名前は Step Functions が決めるため、このステートマシンの子の実行' +
+    '（execution:<名前>/*）の DescribeExecution だけを許す（Step Functions 開発者ガイドの最小の例）',
+  /** IAM5: アンケートのステートマシンのロールの survey-runs/ の読み書き。 */
+  surveyRunObjects:
+    'アンケートごとの入力と結果の場所は実行時に決まるため、アップロード用バケットの survey-runs/* の' +
+    '読み取りと survey-runs/*/results/* の書き込みだけを許す',
+  /** IAM5: アンケートのモデル（グローバルな推論のためリージョンが *）。 */
+  surveyModel:
+    'アンケートのモデルだけを許す。グローバルな推論プロファイルは呼び先のリージョンを AWS が選ぶため、' +
+    '推論プロファイルと基盤モデルの ARN のリージョンを * にする',
+  /** IAM5: Step Functions のログの配信（CDK が付ける、リソースを指定できない API）。 */
+  logDeliveryApis:
+    'Step Functions のログの出力に要る logs の配信の API（CreateLogDelivery など）はリソースを指定できない。' +
+    'CDK の StateMachine がログの設定から付ける文で、ほかの * の操作は足さない',
+  /** SF1: アンケートのステートマシンのログ（NFR2.3、NFR5.11）。 */
+  surveyStateMachineLogs:
+    'ログは ERROR だけを入出力なしで出す。ペルソナの属性や回答をログに残さないため、' +
+    'ALL にはしない（基盤設計 2.2）',
+  /** SF2: アンケートのステートマシンの X-Ray（基盤設計 2.2）。 */
+  surveyStateMachineTracing:
+    'X-Ray は使わない: 1 件の推論の流れは子の実行の状態と ResultWriter の結果で追え、' +
+    'dev で費用と管理の対象を増やさない',
   /** IAM5: AgentCore Memory の子のリソース。 */
   memoryChildren:
     'この Stage の AgentCore Memory の子（イベント・記憶のレコード）を操作するため <Memory の ARN>/* を許す',
@@ -122,6 +150,10 @@ export function iam5ResourceId(scope: IConstruct, resource: string): string {
     }
     if (value && typeof value.Ref === 'string') {
       return `<${value.Ref}>`;
+    }
+    if (value && Array.isArray(value['Fn::GetAtt'])) {
+      // cdk-nag prints a GetAtt as <LogicalId.Attribute> (e.g. a state machine's Name)
+      return `<${(value['Fn::GetAtt'] as string[]).join('.')}>`;
     }
     return JSON.stringify(node);
   };

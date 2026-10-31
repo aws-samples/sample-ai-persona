@@ -47,12 +47,13 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "AWS::ElasticLoadBalancingV2::Listener": 1,
   "AWS::ElasticLoadBalancingV2::LoadBalancer": 1,
   "AWS::ElasticLoadBalancingV2::TargetGroup": 1,
-  "AWS::IAM::Policy": 4,
+  "AWS::IAM::Policy": 5,
   "AWS::IAM::Role": 5,
   "AWS::Lambda::Function": 2,
-  "AWS::Logs::LogGroup": 1,
+  "AWS::Logs::LogGroup": 2,
   "AWS::Logs::MetricFilter": 7,
   "AWS::SecretsManager::Secret": 1,
+  "AWS::StepFunctions::StateMachine": 1,
   "Custom::DescribeCognitoUserPoolClient": 1,
   "Custom::VpcRestrictDefaultSG": 1,
 }
@@ -76,6 +77,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "DatabaseResourceShares97F09665 AWS::DynamoDB::GlobalTable",
   "DatabaseSessionsACCE14E8 AWS::DynamoDB::GlobalTable",
   "DatabaseSessionsKey591942AA AWS::KMS::Key",
+  "DatabaseSurveyRunLease24271981 AWS::DynamoDB::GlobalTable",
   "DatabaseSurveyTemplates94E0DB60 AWS::DynamoDB::GlobalTable",
   "DatabaseSurveysAEB1D8E2 AWS::DynamoDB::GlobalTable",
   "DatabaseUploadedFiles6ED989C5 AWS::DynamoDB::GlobalTable",
@@ -93,7 +95,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "AWS::Cognito::UserPool": 1,
   "AWS::Cognito::UserPoolDomain": 1,
   "AWS::Cognito::UserPoolGroup": 2,
-  "AWS::DynamoDB::GlobalTable": 17,
+  "AWS::DynamoDB::GlobalTable": 18,
   "AWS::ECR::Repository": 1,
   "AWS::KMS::Key": 1,
   "AWS::S3::Bucket": 1,
@@ -116,9 +118,6 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "APP_BASE_URL": "https://GetAtt(CloudFrontDistributionEAB06B35.DomainName)",
   "AUTH_MODE": "oidc",
   "AWS_REGION": "ap-northeast-1",
-  "BATCH_INFERENCE_MODEL_ID": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "BATCH_INFERENCE_S3_PREFIX": "batch-inference/",
-  "BEDROCK_BATCH_ROLE_ARN": "GetAtt(BedrockBatchRoleD187C6F4.Arn)",
   "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-5-5",
   "COGNITO_CLIENT_ID": "Ref(AppClient4AE61178)",
   "COGNITO_DOMAIN": "Import(AIPersonaDev-Data:ExportsOutputRefCognitoUserPoolDomain4D6973E96CE551BD).auth.ap-northeast-1.amazoncognito.com",
@@ -143,7 +142,11 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   "S3_BUCKET_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefUploadBucketB0FBA0377290D88A)",
   "SESSIONS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSessionsACCE14E83CC9D000)",
   "SURVEYS_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveysAEB1D8E2CC1C6D7E)",
+  "SURVEY_EXECUTION_TIMEOUT_SECONDS": "7200",
+  "SURVEY_MODEL_ID": "global.anthropic.claude-haiku-5-5",
+  "SURVEY_RUN_LEASE_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveyRunLease242719812E19CF91)",
   "SURVEY_S3_PREFIX": "survey-results/",
+  "SURVEY_STATE_MACHINE_ARN": "Ref(SurveyRunStateMachine453666ED)",
   "SURVEY_TEMPLATES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseSurveyTemplates94E0DB60A667112B)",
   "UPLOADED_FILES_TABLE_NAME": "Import(AIPersonaDev-Data:ExportsOutputRefDatabaseUploadedFiles6ED989C5C1E75869)",
 }
@@ -181,6 +184,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabasePersonasF1218346Arn3688BF1B)/index/OwnerIndex",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyTemplates94E0DB60Arn37B8FB57)/index/OwnerIndex",
       "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)/index/OwnerIndex",
+      "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveysAEB1D8E2Arn0C4E72A8)/index/RunQueueIndex",
     ],
   },
   {
@@ -197,9 +201,6 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
   {
     "Action": [
       "bedrock-agentcore:ListMemories",
-      "bedrock:ListFoundationModels",
-      "bedrock:ListInferenceProfiles",
-      "bedrock:ListModelInvocationJobs",
       "dynamodb:ListTables",
     ],
     "Effect": "Allow",
@@ -332,36 +333,32 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
     ],
   },
   {
-    "Action": [
-      "bedrock:CreateModelInvocationJob",
-      "bedrock:GetModelInvocationJob",
-      "bedrock:ListTagsForResource",
-      "bedrock:StopModelInvocationJob",
-      "bedrock:TagResource",
-      "bedrock:UntagResource",
-    ],
-    "Effect": "Allow",
-    "Resource": [
-      "arn:aws:bedrock:*:123456789012:application-inference-profile/*",
-      "arn:aws:bedrock:*:123456789012:inference-profile/*",
-      "arn:aws:bedrock:*::foundation-model/*",
-      "arn:aws:bedrock:ap-northeast-1:123456789012:model-invocation-job/*",
-    ],
-  },
-  {
     "Action": "bedrock:Retrieve",
     "Effect": "Allow",
     "Resource": "arn:aws:bedrock:ap-northeast-1:123456789012:knowledge-base/*",
   },
   {
-    "Action": "iam:PassRole",
-    "Condition": {
-      "StringEquals": {
-        "iam:PassedToService": "bedrock.amazonaws.com",
-      },
-    },
+    "Action": "states:StartExecution",
     "Effect": "Allow",
-    "Resource": "GetAtt(BedrockBatchRoleD187C6F4.Arn)",
+    "Resource": "Ref(SurveyRunStateMachine453666ED)",
+  },
+  {
+    "Action": [
+      "states:DescribeExecution",
+      "states:StopExecution",
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:states:ap-northeast-1:123456789012:execution:GetAtt(SurveyRunStateMachine453666ED.Name):*",
+  },
+  {
+    "Action": [
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ],
+    "Effect": "Allow",
+    "Resource": "Import(AIPersonaDev-Data:ExportsOutputFnGetAttDatabaseSurveyRunLease24271981Arn1608D905)",
   },
   {
     "Action": [

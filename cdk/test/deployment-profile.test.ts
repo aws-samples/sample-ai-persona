@@ -13,12 +13,13 @@ import { ClosedStageParameters, closedDevParameter, devParameter, prodParameter 
 const GLOBAL_DEFAULTS = {
   bedrockModelId: 'global.anthropic.claude-sonnet-5-5',
   agentModelId: 'global.anthropic.claude-haiku-5-5',
-  batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+  // アンケートは Step Functions のオンデマンド推論で Haiku 5.5（FR2.1、FR2.3）
+  surveyModelId: 'global.anthropic.claude-haiku-5-5',
 };
 const JP_DEFAULTS = {
   bedrockModelId: 'jp.anthropic.claude-haiku-5-5',
   agentModelId: 'jp.anthropic.claude-haiku-5-5',
-  batchInferenceModelId: 'jp.anthropic.claude-haiku-4-5-20251001-v1:0',
+  surveyModelId: 'jp.anthropic.claude-haiku-5-5',
 };
 const MANTLE_MODEL_IDS = ['openai.gpt-5.6-terra', 'openai.gpt-5.6-luna', 'google.gemma-4-31b'];
 
@@ -188,7 +189,7 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
       inferenceScope: parameter.inferenceScope,
       bedrockModelId: parameter.bedrockModelId,
       agentModelId: parameter.agentModelId,
-      batchInferenceModelId: parameter.batchInferenceModelId,
+      surveyModelId: parameter.surveyModelId,
     });
     const publicIds = resolveDeploymentProfile({
       deploymentMode: 'public',
@@ -414,16 +415,16 @@ describe('resolveDeploymentProfile: モデル ID（閉域対応 U5 BR1.5〜BR1.7
     const profile = resolvePublic({
       inferenceScope: 'jp',
       bedrockModelId: 'global.anthropic.claude-sonnet-5',
-      batchInferenceModelId: ' anthropic.claude-haiku-4-5-20251001-v1:0 ',
+      surveyModelId: ' global.anthropic.claude-haiku-5-5-explicit ',
     });
     expect(profile.modelIds).toEqual({
       bedrockModelId: 'global.anthropic.claude-sonnet-5',
       agentModelId: JP_DEFAULTS.agentModelId,
-      batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+      surveyModelId: 'global.anthropic.claude-haiku-5-5-explicit',
     });
     expect(profile.explicitModelIds).toEqual({
       bedrockModelId: 'global.anthropic.claude-sonnet-5',
-      batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+      surveyModelId: 'global.anthropic.claude-haiku-5-5-explicit',
     });
   });
 
@@ -437,7 +438,7 @@ describe('resolveDeploymentProfile: モデル ID（閉域対応 U5 BR1.5〜BR1.7
     for (const parameter of [devParameter, prodParameter, closedDevParameter]) {
       expect(parameter.bedrockModelId).toBeUndefined();
       expect(parameter.agentModelId).toBeUndefined();
-      expect(parameter.batchInferenceModelId).toBeUndefined();
+      expect(parameter.surveyModelId).toBeUndefined();
     }
   });
 
