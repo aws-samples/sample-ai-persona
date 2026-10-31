@@ -6,7 +6,7 @@ location (functional-spec.md ch.2 and ch.6).
 - S3 ``survey-runs/<id>/``: the sampled personas (``personas.parquet``), the
   Distributed Map input (``input.jsonl``), one body per persona for surveys
   with images or large bodies (``bodies/<record_id>.json``, stored in
-  parallel), and the ResultWriter output under
+  parallel as the input is built), and the ResultWriter output under
   ``results/``, read one file at a time (NFR1.7).
 
 Every SDK failure becomes :class:`SurveyRunnerServiceError` with one of the
@@ -19,10 +19,11 @@ Other services are not imported.
 import dataclasses
 import io
 import json
-import tempfile
-from concurrent.futures import ThreadPoolExecutor
 import logging
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+import tempfile
+from collections import deque
+from collections.abc import Iterable, Iterator, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import IO, Any, Optional
@@ -50,6 +51,10 @@ MAX_INLINE_BODY_BYTES = 200 * 1024
 #: with an image is several MB; one at a time, 1,000 personas would take
 #: minutes (longer than the 30 s the task waits for a round when stopping).
 BODY_UPLOAD_CONCURRENCY = 16
+#: Bodies taken ahead of the oldest unfinished one. Larger than the
+#: concurrency, so one slow PUT does not hold the others; it also bounds the
+#: bodies waiting in memory.
+_BODY_LOOKAHEAD = 2 * BODY_UPLOAD_CONCURRENCY
 #: The JSONL input stays in memory up to this size, then spills to a file.
 _INPUT_SPOOL_BYTES = 8 * 1024 * 1024
 #: ``DeleteObjects`` accepts at most 1000 keys.
@@ -114,6 +119,38 @@ class RunResult:
     succeeded: bool
     text: Optional[str] = None
     error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StoredBody:
+    """One persona's body after :meth:`SurveyRunnerService.write_bodies`.
+
+    Attributes:
+        record_id: The persona.
+        body_json: The encoded body, when it was not stored.
+        body_s3_uri: Where it was stored, when it was.
+    """
+
+    record_id: str
+    body_json: Optional[str] = None
+    body_s3_uri: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class _PendingBody:
+    record_id: str
+    body_json: Optional[str]
+    upload: Optional["Future[None]"] = None
+    uri: Optional[str] = None
+
+    def ready(self) -> bool:
+        return self.upload is None or self.upload.done()
+
+    def settled(self) -> StoredBody:
+        if self.upload is None:
+            return StoredBody(record_id=self.record_id, body_json=self.body_json)
+        self.upload.result()  # re-raises the PUT's SurveyRunnerServiceError
+        return StoredBody(record_id=self.record_id, body_s3_uri=self.uri)
 
 
 class SurveyRunnerService:
@@ -301,29 +338,44 @@ class SurveyRunnerService:
             ) from e
 
     def write_bodies(
-        self, survey_id: str, bodies: Sequence[tuple[str, str]]
-    ) -> list[str]:
-        """Store each persona's encoded body in parallel (BR6.3, NFR3.14).
+        self, survey_id: str, bodies: Iterable[tuple[str, str, bool]]
+    ) -> Iterator[StoredBody]:
+        """Store the marked bodies in parallel; yield every body in order (BR6.3).
+
+        ``bodies`` is read one at a time in the caller's thread, so a check the
+        caller makes while producing it runs before each body is stored. Up to
+        :data:`BODY_UPLOAD_CONCURRENCY` PUTs run at once, and up to
+        :data:`_BODY_LOOKAHEAD` bodies are taken ahead of the oldest one still
+        being stored. A body that is not stored is yielded as soon as every
+        body before it is.
 
         Args:
-            bodies: ``(record_id, body_json)`` pairs from :meth:`encode_body`.
-
-        Returns:
-            The ``s3://`` URIs, in the order of ``bodies``.
+            bodies: ``(record_id, body_json, store)`` from :meth:`encode_body`;
+                only those with ``store`` go to S3.
 
         Raises:
             SurveyRunnerServiceError: A body could not be stored (the first
-                failure; the others are not reported).
+                failure in order; the bodies not yet sent are dropped).
         """
-        keys = [self._key(survey_id, f"bodies/{rid}.json") for rid, _ in bodies]
-        with ThreadPoolExecutor(max_workers=BODY_UPLOAD_CONCURRENCY) as pool:
-            futures = [
-                pool.submit(self._put, key, encoded.encode("utf-8"))
-                for key, (_, encoded) in zip(keys, bodies)
-            ]
-            for future in futures:
-                future.result()
-        return [f"s3://{self.bucket_name}/{key}" for key in keys]
+        pending: deque[_PendingBody] = deque()
+        pool = ThreadPoolExecutor(max_workers=BODY_UPLOAD_CONCURRENCY)
+        try:
+            for record_id, body_json, store in bodies:
+                if store:
+                    key = self._key(survey_id, f"bodies/{record_id}.json")
+                    upload = pool.submit(self._put, key, body_json.encode("utf-8"))
+                    uri = f"s3://{self.bucket_name}/{key}"
+                    pending.append(_PendingBody(record_id, None, upload, uri))
+                else:
+                    pending.append(_PendingBody(record_id, body_json))
+                while pending and (
+                    len(pending) > _BODY_LOOKAHEAD or pending[0].ready()
+                ):
+                    yield pending.popleft().settled()
+            while pending:
+                yield pending.popleft().settled()
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def write_input(self, survey_id: str, lines: Iterable[str]) -> str:
         """Write the Distributed Map input, one JSON line each (NFR1.6).

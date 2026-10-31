@@ -534,6 +534,12 @@ class TestSurveyRunItem:
         item = SurveyRunItem(record_id="p\n1", model_id="m", body_json='{"a": "x\\ny"}')
         assert "\n" not in item.to_json_line()
 
+    @pytest.mark.parametrize("body_json", ['{"a":\n1}', '{"a":\r\n1}'])
+    def test_a_body_over_several_lines_is_refused(self, body_json):
+        """埋め込む本文が複数行だと JSONL の行が割れるため、受け付けない。"""
+        with pytest.raises(ValueError):
+            SurveyRunItem(record_id="p1", model_id="m", body_json=body_json)
+
     @pytest.mark.parametrize(
         "kwargs", [{}, {"body_json": "{}", "body_s3_uri": "s3://b/k"}]
     )

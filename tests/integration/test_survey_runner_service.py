@@ -31,6 +31,7 @@ from src.services.survey_runner_service import (  # noqa: E402
     _BOTO_CONFIG,
     BODY_UPLOAD_CONCURRENCY,
     MAX_INLINE_BODY_BYTES,
+    StoredBody,
     SurveyRunnerService,
     SurveyRunnerServiceError,
 )
@@ -344,15 +345,56 @@ class TestInputAndBodies:
 
     def test_bodies_are_one_file_per_persona(self, service, s3):
         """NFR3.14: 画像ありの Body は S3 に置き、URI だけを項目に持たせる。"""
-        uris = service.write_bodies(
-            SURVEY_ID, [("p1", '{"messages": []}'), ("p2", '{"messages": [1]}')]
+        stored = list(
+            service.write_bodies(
+                SURVEY_ID,
+                [("p1", '{"messages": []}', True), ("p2", '{"messages": [1]}', True)],
+            )
         )
 
         keys = [f"survey-runs/{SURVEY_ID}/bodies/{r}.json" for r in ("p1", "p2")]
-        assert uris == [f"s3://{BUCKET}/{k}" for k in keys]
+        assert stored == [
+            StoredBody(record_id=r, body_s3_uri=f"s3://{BUCKET}/{k}")
+            for r, k in zip(("p1", "p2"), keys)
+        ]
         assert json.loads(s3.get_object(Bucket=BUCKET, Key=keys[1])["Body"].read()) == {
             "messages": [1]
         }
+
+    def test_bodies_kept_inline_are_returned_in_order(self, service, s3):
+        """S3 に置かない Body はそのまま返し、全体はもとの順に並ぶ。"""
+        stored = list(
+            service.write_bodies(
+                SURVEY_ID,
+                [("p1", "{}", False), ("p2", "{}", True), ("p3", "[]", False)],
+            )
+        )
+
+        assert [b.record_id for b in stored] == ["p1", "p2", "p3"]
+        assert stored[0] == StoredBody(record_id="p1", body_json="{}")
+        assert stored[1].body_s3_uri is not None
+        assert stored[2] == StoredBody(record_id="p3", body_json="[]")
+        assert _keys(s3, f"survey-runs/{SURVEY_ID}/bodies/") == [
+            f"survey-runs/{SURVEY_ID}/bodies/p2.json"
+        ]
+
+    def test_an_inline_body_does_not_wait_for_a_stored_one(self, sfn):
+        """先頭の S3 に置かない Body は、あとの送信を待たずに返る。"""
+        release = threading.Event()
+        client = Mock()
+        client.put_object.side_effect = lambda **kwargs: release.wait(2)
+        service = _service_with(sfn, client)
+
+        stored = service.write_bodies(
+            SURVEY_ID, iter([("p1", "{}", False), ("p2", "{}", True)])
+        )
+        began = time.monotonic()
+        first = next(stored)
+
+        assert first.record_id == "p1"
+        assert time.monotonic() - began < 0.5
+        release.set()
+        assert next(stored).record_id == "p2"
 
     def test_bodies_are_written_in_parallel(self, sfn):
         """画像ありの 1,000 人を 1 件ずつ順に送らない（デプロイの停止待ちを超えない）。"""
@@ -369,37 +411,71 @@ class TestInputAndBodies:
 
         client = Mock()
         client.put_object.side_effect = put_object
-        service = SurveyRunnerService(
-            state_machine_arn=SM_ARN,
-            bucket_name=BUCKET,
-            region=REGION,
-            sfn_client=sfn,
-            s3_client=client,
-        )
+        service = _service_with(sfn, client)
 
-        service.write_bodies(SURVEY_ID, [(f"p{i}", "{}") for i in range(16)])
+        list(
+            service.write_bodies(SURVEY_ID, [(f"p{i}", "{}", True) for i in range(16)])
+        )
 
         assert client.put_object.call_count == 16
         assert state["most"] > 1
 
+    def test_one_slow_body_does_not_hold_the_others(self, sfn):
+        """遅い PUT が 1 件あっても、ほかの Body は送り続ける（まとまりごとに待たない）。"""
+        lock = threading.Lock()
+        done = {"others": 0, "before_slow": -1}
+
+        def put_object(**kwargs: Any) -> None:
+            if kwargs["Key"].endswith("/p0.json"):
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    with lock:
+                        if done["others"] >= 20:
+                            break
+                    time.sleep(0.005)
+                with lock:
+                    done["before_slow"] = done["others"]
+                return
+            with lock:
+                done["others"] += 1
+
+        client = Mock()
+        client.put_object.side_effect = put_object
+        service = _service_with(sfn, client)
+
+        stored = list(
+            service.write_bodies(SURVEY_ID, [(f"p{i}", "{}", True) for i in range(40)])
+        )
+
+        assert done["before_slow"] >= 20
+        assert [b.record_id for b in stored] == [f"p{i}" for i in range(40)]
+
     def test_a_failed_body_is_classified(self, sfn):
         client = Mock()
         client.put_object.side_effect = _client_error("AccessDenied", 403)
-        service = SurveyRunnerService(
-            state_machine_arn=SM_ARN,
-            bucket_name=BUCKET,
-            region=REGION,
-            sfn_client=sfn,
-            s3_client=client,
-        )
+        service = _service_with(sfn, client)
 
         with pytest.raises(SurveyRunnerServiceError) as info:
-            service.write_bodies(SURVEY_ID, [("p1", "{}"), ("p2", "{}")])
+            list(
+                service.write_bodies(
+                    SURVEY_ID, [("p1", "{}", True), ("p2", "{}", True)]
+                )
+            )
         assert info.value.failure is FailureClass.ACCESS
 
     def test_connection_pool_fits_the_parallel_writes(self):
         """botocore の既定の接続の上限（10）で並列の書き込みが待たされないこと。"""
         assert _BOTO_CONFIG.max_pool_connections >= BODY_UPLOAD_CONCURRENCY
+
+
+def _service_with(sfn: Any, s3_client: Any) -> SurveyRunnerService:
+    return SurveyRunnerService(
+        state_machine_arn=SM_ARN,
+        bucket_name=BUCKET,
+        region=REGION,
+        sfn_client=sfn,
+        s3_client=s3_client,
+    )
 
 
 def _place_results(s3: Any) -> str:
@@ -475,7 +551,7 @@ class TestCleanup:
         """BR10.1: 抽出した人・入力・Body・結果を消す。ほかのアンケートには触れない。"""
         service.write_personas(SURVEY_ID, pl.DataFrame({"uuid": ["p1"]}))
         service.write_input(SURVEY_ID, ['{"record_id": "p1", "model_id": "m"}'])
-        service.write_bodies(SURVEY_ID, [("p1", "{}")])
+        list(service.write_bodies(SURVEY_ID, [("p1", "{}", True)]))
         _place_results(s3)
         s3.put_object(Bucket=BUCKET, Key="survey-runs/other/input.jsonl", Body=b"x")
         s3.put_object(Bucket=BUCKET, Key="survey-results/x/results.csv", Body=b"x")

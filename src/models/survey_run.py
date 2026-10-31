@@ -25,8 +25,12 @@ class SurveyRunItem:
             the size check and the line.
         body_s3_uri: Where the body is stored (images, or too large for the item).
 
+    Unlike the stored models it has no ``to_dict``: its only form outside is
+    the JSONL line, and building a dict would encode the body a second time.
+
     Raises:
-        ValueError: Not exactly one of ``body_json`` and ``body_s3_uri`` is given.
+        ValueError: Not exactly one of ``body_json`` and ``body_s3_uri`` is
+            given, or ``body_json`` spans lines (it would split the JSONL line).
     """
 
     record_id: str
@@ -37,6 +41,10 @@ class SurveyRunItem:
     def __post_init__(self) -> None:
         if (self.body_json is None) == (self.body_s3_uri is None):
             raise ValueError("exactly one of body_json and body_s3_uri is required")
+        if self.body_json is not None and (
+            "\n" in self.body_json or "\r" in self.body_json
+        ):
+            raise ValueError("body_json must be one line")
 
     def to_json_line(self) -> str:
         """The JSONL line; the encoded body is embedded as is (no second encoding)."""
