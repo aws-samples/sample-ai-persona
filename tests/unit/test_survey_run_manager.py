@@ -95,8 +95,9 @@ class FakeRunner:
         self.started: list[str] = []
         self.calls: list[str] = []
         self.fail: dict[str, Exception] = {}
-        self.body_input_types: list[str] = []
         self.after_body: Optional[Callable[[], None]] = None
+        self.bodies_closed = False
+        self.input_fails_after: Optional[int] = None
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
@@ -125,20 +126,29 @@ class FakeRunner:
 
     def write_bodies(self, survey_id: str, bodies: Any) -> Iterator[StoredBody]:
         self._call("write_bodies")
-        self.body_input_types.append(type(bodies).__name__)
-        for record_id, encoded, store in bodies:
-            if not store:
-                yield StoredBody(record_id=record_id, body_json=encoded)
-                continue
-            key = f"survey-runs/{survey_id}/bodies/{record_id}.json"
-            self.bodies[key] = json.loads(encoded)
-            if self.after_body is not None:
-                self.after_body()
-            yield StoredBody(record_id=record_id, body_s3_uri=f"s3://{BUCKET}/{key}")
+        try:
+            for record_id, encoded, store in bodies:
+                if not store:
+                    yield StoredBody(record_id=record_id, body_json=encoded)
+                    continue
+                key = f"survey-runs/{survey_id}/bodies/{record_id}.json"
+                self.bodies[key] = json.loads(encoded)
+                if self.after_body is not None:
+                    self.after_body()
+                yield StoredBody(
+                    record_id=record_id, body_s3_uri=f"s3://{BUCKET}/{key}"
+                )
+        finally:
+            self.bodies_closed = True
 
     def write_input(self, survey_id: str, lines: Any) -> str:
         self._call("write_input")
-        self.inputs[survey_id] = [json.loads(line) for line in lines]
+        read = []
+        for line in lines:
+            if len(read) == self.input_fails_after:
+                raise OSError("no space left on device")
+            read.append(json.loads(line))
+        self.inputs[survey_id] = read
         return f"survey-runs/{survey_id}/input.jsonl"
 
     def find_execution(self, survey_id: str) -> Optional[ExecutionInfo]:
@@ -1340,13 +1350,65 @@ class TestStart:
         """画像ありの 40 人の Body は、まとめて作らず 1 件ずつ渡す（送る側が並列の数を決める）。"""
         image = _png_image(survey_world)
         survey = _queue(survey_world, clock, count=40, images=[image])
+        real = runner.encode_body
+        encoded: list[int] = []
+        encoded_when_stored: list[int] = []
+
+        def counting(body: Any) -> str:
+            encoded.append(1)
+            return real(body)
+
+        runner.encode_body = counting
+        runner.after_body = lambda: encoded_when_stored.append(len(encoded))
 
         rm.advance()
 
-        assert runner.body_input_types == ["generator"]
-        assert len(runner.bodies) == 40
+        assert encoded_when_stored == list(range(1, 41))
         assert len(runner.inputs[survey.id]) == 40
         assert _get(survey_world, survey.id).status == "running"
+
+    def test_lost_lease_after_the_last_body_does_not_write_the_input(
+        self, survey_world, runner, batch, clock
+    ):
+        """BR2.3: 最後の Body を送り終える間に担当を失ったら、入力を書かない。"""
+        keeper = FakeKeeper()
+        rm = _manager(survey_world, runner, batch, clock, keeper)
+        image = _png_image(survey_world)
+        survey = _queue(survey_world, clock, count=10, images=[image])
+
+        def lose_on_the_last() -> None:
+            if len(runner.bodies) == 10:
+                keeper.lost = True
+
+        runner.after_body = lose_on_the_last
+
+        rm.advance()
+
+        assert len(runner.bodies) == 10
+        assert survey.id not in runner.inputs
+        assert "start_execution" not in runner.calls
+
+    def test_a_failing_input_write_closes_the_body_writes(
+        self, survey_world, rm, runner, clock
+    ):
+        """入力を書く側で例外が出たら、本文の送信を閉じる（見られないまま送り続けない）。"""
+        image = _png_image(survey_world)
+        _queue(survey_world, clock, count=40, images=[image])
+        real = runner.write_bodies
+        held: list[Any] = []
+
+        def holding(survey_id: str, bodies: Any) -> Any:
+            gen = real(survey_id, bodies)
+            held.append(gen)  # keeps it from being collected: only close() ends it
+            return gen
+
+        runner.write_bodies = holding
+        runner.input_fails_after = 5
+
+        rm.advance()
+
+        assert runner.bodies_closed
+        assert len(runner.bodies) < 40
 
     def test_lost_lease_stops_before_the_next_body(
         self, survey_world, runner, batch, clock

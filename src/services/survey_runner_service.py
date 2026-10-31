@@ -22,7 +22,7 @@ import json
 import logging
 import tempfile
 from collections import deque
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -138,19 +138,16 @@ class StoredBody:
 
 @dataclass(frozen=True)
 class _PendingBody:
-    record_id: str
-    body_json: Optional[str]
+    body: StoredBody
     upload: Optional["Future[None]"] = None
-    uri: Optional[str] = None
 
     def ready(self) -> bool:
         return self.upload is None or self.upload.done()
 
     def settled(self) -> StoredBody:
-        if self.upload is None:
-            return StoredBody(record_id=self.record_id, body_json=self.body_json)
-        self.upload.result()  # re-raises the PUT's SurveyRunnerServiceError
-        return StoredBody(record_id=self.record_id, body_s3_uri=self.uri)
+        if self.upload is not None:
+            self.upload.result()  # re-raises the PUT's SurveyRunnerServiceError
+        return self.body
 
 
 class SurveyRunnerService:
@@ -339,15 +336,20 @@ class SurveyRunnerService:
 
     def write_bodies(
         self, survey_id: str, bodies: Iterable[tuple[str, str, bool]]
-    ) -> Iterator[StoredBody]:
+    ) -> Generator[StoredBody, None, None]:
         """Store the marked bodies in parallel; yield every body in order (BR6.3).
 
         ``bodies`` is read one at a time in the caller's thread, so a check the
-        caller makes while producing it runs before each body is stored. Up to
-        :data:`BODY_UPLOAD_CONCURRENCY` PUTs run at once, and up to
+        caller makes while producing it (the lease) runs before each body is
+        sent. Up to :data:`BODY_UPLOAD_CONCURRENCY` PUTs run at once, and up to
         :data:`_BODY_LOOKAHEAD` bodies are taken ahead of the oldest one still
         being stored. A body that is not stored is yielded as soon as every
         body before it is.
+
+        When it stops early (a failed PUT, an error raised while producing
+        ``bodies``, or ``close()``), the PUTs not yet started are dropped and
+        those already running are waited for: a running PUT cannot be
+        recalled. Close it (``contextlib.closing``) so that happens at once.
 
         Args:
             bodies: ``(record_id, body_json, store)`` from :meth:`encode_body`;
@@ -355,19 +357,32 @@ class SurveyRunnerService:
 
         Raises:
             SurveyRunnerServiceError: A body could not be stored (the first
-                failure in order; the bodies not yet sent are dropped).
+                failure noticed; no further body is sent after it).
         """
         pending: deque[_PendingBody] = deque()
+        failures: list[BaseException] = []
+
+        def note_failure(upload: "Future[None]") -> None:
+            error = None if upload.cancelled() else upload.exception()
+            if error is not None:
+                failures.append(error)
+
         pool = ThreadPoolExecutor(max_workers=BODY_UPLOAD_CONCURRENCY)
         try:
             for record_id, body_json, store in bodies:
+                if failures:
+                    # Noticed behind a slower body: send nothing more
+                    raise failures[0]
                 if store:
                     key = self._key(survey_id, f"bodies/{record_id}.json")
                     upload = pool.submit(self._put, key, body_json.encode("utf-8"))
+                    upload.add_done_callback(note_failure)
                     uri = f"s3://{self.bucket_name}/{key}"
-                    pending.append(_PendingBody(record_id, None, upload, uri))
+                    body = StoredBody(record_id=record_id, body_s3_uri=uri)
+                    pending.append(_PendingBody(body, upload))
                 else:
-                    pending.append(_PendingBody(record_id, body_json))
+                    body = StoredBody(record_id=record_id, body_json=body_json)
+                    pending.append(_PendingBody(body))
                 while pending and (
                     len(pending) > _BODY_LOOKAHEAD or pending[0].ready()
                 ):

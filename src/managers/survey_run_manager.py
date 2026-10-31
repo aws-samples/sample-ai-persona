@@ -35,8 +35,9 @@ import json
 import logging
 import threading
 import uuid
+from contextlib import closing
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -698,9 +699,21 @@ class SurveyRunManager:
             extra_columns=extra_columns,
         )
         self._check_lease()
-        items = self._items(survey.id, personas, request)
-        # Built lazily: the input is never held in memory as a whole (NFR1.6)
-        self._runner.write_input(survey.id, (item.to_json_line() for item in items))
+        # Built lazily: the input is never held in memory as a whole (NFR1.6).
+        # Closed at once on any error, so no body is sent after it
+        with closing(self._items(survey.id, personas, request)) as items:
+            self._runner.write_input(survey.id, self._lines(items))
+
+    def _lines(self, items: Iterable[SurveyRunItem]) -> Iterator[str]:
+        """The JSONL lines; the lease is checked once more after the last one.
+
+        ``write_input`` stores the input only after reading every line, and the
+        last bodies may take a while to finish: a task that lost the lease
+        meanwhile must not overwrite the input of the one that holds it (BR2.3).
+        """
+        for item in items:
+            yield item.to_json_line()
+        self._check_lease()
 
     def _sampled_personas(
         self,
@@ -723,25 +736,20 @@ class SurveyRunManager:
 
     def _items(
         self, survey_id: str, personas: pl.DataFrame, request: _Request
-    ) -> Iterator[SurveyRunItem]:
+    ) -> Generator[SurveyRunItem, None, None]:
         """One item per persona, in sampling order, built as they are read.
 
         Bodies that go to S3 (images, or too large for the item, BR6.3) are
         stored in parallel while the input is written.
         """
         bodies = self._runner.write_bodies(survey_id, self._bodies(personas, request))
-        for body in bodies:
-            if body.body_s3_uri is not None:
-                yield SurveyRunItem(
-                    record_id=body.record_id,
-                    model_id=self._model_id,
-                    body_s3_uri=body.body_s3_uri,
-                )
-            else:
+        with closing(bodies):
+            for body in bodies:
                 yield SurveyRunItem(
                     record_id=body.record_id,
                     model_id=self._model_id,
                     body_json=body.body_json,
+                    body_s3_uri=body.body_s3_uri,
                 )
 
     def _bodies(
@@ -749,8 +757,8 @@ class SurveyRunManager:
     ) -> Iterator[tuple[str, str, bool]]:
         """``(record_id, body_json, to_s3)`` per persona, each encoded once.
 
-        The lease is checked before each persona (BR2.3), so a body is never
-        stored and the input never written after it is lost.
+        The lease is checked before each persona (BR2.3), so no new body is
+        sent after it is lost (the PUTs already running are waited for).
         """
         content = build_survey_user_content(
             request.questions_text, request.image_names, request.image_blocks

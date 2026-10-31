@@ -450,6 +450,30 @@ class TestInputAndBodies:
         assert done["before_slow"] >= 20
         assert [b.record_id for b in stored] == [f"p{i}" for i in range(40)]
 
+    def test_a_failure_behind_a_slow_body_stops_the_sending(self, sfn):
+        """先頭の PUT が遅くても、後ろの失敗に気づいたら次の Body を送らない。"""
+
+        def put_object(**kwargs: Any) -> None:
+            if kwargs["Key"].endswith("/p0.json"):
+                time.sleep(0.5)
+            elif kwargs["Key"].endswith("/p1.json"):
+                raise _client_error("AccessDenied", 403)
+
+        def slowly_built() -> Any:
+            for i in range(40):
+                time.sleep(0.01)  # building a body takes a moment
+                yield f"p{i}", "{}", True
+
+        client = Mock()
+        client.put_object.side_effect = put_object
+        service = _service_with(sfn, client)
+
+        with pytest.raises(SurveyRunnerServiceError) as info:
+            list(service.write_bodies(SURVEY_ID, slowly_built()))
+
+        assert info.value.failure is FailureClass.ACCESS
+        assert client.put_object.call_count < 10
+
     def test_a_failed_body_is_classified(self, sfn):
         client = Mock()
         client.put_object.side_effect = _client_error("AccessDenied", 403)
