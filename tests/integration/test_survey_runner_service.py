@@ -27,11 +27,11 @@ import boto3  # noqa: E402
 from botocore.exceptions import ClientError, EndpointConnectionError  # noqa: E402
 
 from src.models.external_failure import FailureClass  # noqa: E402
+from src.models.survey_run import SurveyRunItem  # noqa: E402
 from src.services.survey_runner_service import (  # noqa: E402
     _BOTO_CONFIG,
     BODY_UPLOAD_CONCURRENCY,
     MAX_INLINE_BODY_BYTES,
-    StoredBody,
     SurveyRunnerService,
     SurveyRunnerServiceError,
 )
@@ -348,13 +348,14 @@ class TestInputAndBodies:
         stored = list(
             service.write_bodies(
                 SURVEY_ID,
+                "m",
                 [("p1", '{"messages": []}', True), ("p2", '{"messages": [1]}', True)],
             )
         )
 
         keys = [f"survey-runs/{SURVEY_ID}/bodies/{r}.json" for r in ("p1", "p2")]
         assert stored == [
-            StoredBody(record_id=r, body_s3_uri=f"s3://{BUCKET}/{k}")
+            SurveyRunItem(record_id=r, model_id="m", body_s3_uri=f"s3://{BUCKET}/{k}")
             for r, k in zip(("p1", "p2"), keys)
         ]
         assert json.loads(s3.get_object(Bucket=BUCKET, Key=keys[1])["Body"].read()) == {
@@ -366,14 +367,15 @@ class TestInputAndBodies:
         stored = list(
             service.write_bodies(
                 SURVEY_ID,
+                "m",
                 [("p1", "{}", False), ("p2", "{}", True), ("p3", "[]", False)],
             )
         )
 
         assert [b.record_id for b in stored] == ["p1", "p2", "p3"]
-        assert stored[0] == StoredBody(record_id="p1", body_json="{}")
+        assert stored[0] == SurveyRunItem(record_id="p1", model_id="m", body_json="{}")
         assert stored[1].body_s3_uri is not None
-        assert stored[2] == StoredBody(record_id="p3", body_json="[]")
+        assert stored[2] == SurveyRunItem(record_id="p3", model_id="m", body_json="[]")
         assert _keys(s3, f"survey-runs/{SURVEY_ID}/bodies/") == [
             f"survey-runs/{SURVEY_ID}/bodies/p2.json"
         ]
@@ -386,7 +388,7 @@ class TestInputAndBodies:
         service = _service_with(sfn, client)
 
         stored = service.write_bodies(
-            SURVEY_ID, iter([("p1", "{}", False), ("p2", "{}", True)])
+            SURVEY_ID, "m", iter([("p1", "{}", False), ("p2", "{}", True)])
         )
         began = time.monotonic()
         first = next(stored)
@@ -414,7 +416,9 @@ class TestInputAndBodies:
         service = _service_with(sfn, client)
 
         list(
-            service.write_bodies(SURVEY_ID, [(f"p{i}", "{}", True) for i in range(16)])
+            service.write_bodies(
+                SURVEY_ID, "m", [(f"p{i}", "{}", True) for i in range(16)]
+            )
         )
 
         assert client.put_object.call_count == 16
@@ -444,7 +448,9 @@ class TestInputAndBodies:
         service = _service_with(sfn, client)
 
         stored = list(
-            service.write_bodies(SURVEY_ID, [(f"p{i}", "{}", True) for i in range(40)])
+            service.write_bodies(
+                SURVEY_ID, "m", [(f"p{i}", "{}", True) for i in range(40)]
+            )
         )
 
         assert done["before_slow"] >= 20
@@ -475,7 +481,7 @@ class TestInputAndBodies:
         service = _service_with(sfn, client)
 
         with pytest.raises(SurveyRunnerServiceError) as info:
-            list(service.write_bodies(SURVEY_ID, bodies()))
+            list(service.write_bodies(SURVEY_ID, "m", bodies()))
 
         assert info.value.failure is FailureClass.ACCESS
         # Without the check it would take 32 ahead of the stalled p0
@@ -520,7 +526,7 @@ class TestInputAndBodies:
         with pytest.raises(SurveyRunnerServiceError) as info:
             list(
                 service.write_bodies(
-                    SURVEY_ID, [("p1", "{}", True), ("p2", "{}", True)]
+                    SURVEY_ID, "m", [("p1", "{}", True), ("p2", "{}", True)]
                 )
             )
         assert info.value.failure is FailureClass.ACCESS
@@ -613,7 +619,7 @@ class TestCleanup:
         """BR10.1: 抽出した人・入力・Body・結果を消す。ほかのアンケートには触れない。"""
         service.write_personas(SURVEY_ID, pl.DataFrame({"uuid": ["p1"]}))
         service.write_input(SURVEY_ID, ['{"record_id": "p1", "model_id": "m"}'])
-        list(service.write_bodies(SURVEY_ID, [("p1", "{}", True)]))
+        list(service.write_bodies(SURVEY_ID, "m", [("p1", "{}", True)]))
         _place_results(s3)
         s3.put_object(Bucket=BUCKET, Key="survey-runs/other/input.jsonl", Body=b"x")
         s3.put_object(Bucket=BUCKET, Key="survey-results/x/results.csv", Body=b"x")
@@ -676,6 +682,29 @@ class TestFitsInline:
 
     def test_limit_leaves_room_below_256_kib(self):
         assert MAX_INLINE_BODY_BYTES <= 256 * 1024 - 16 * 1024
+
+
+def test_encode_body_escapes_the_unicode_line_separators():
+    """U+2028・U+2029 は JSON の文字列にそのまま入りうるが、行の区切りと読む読み手がある。"""
+    body = {"system": "段落\u2028改行\u2029終わり"}
+
+    encoded = SurveyRunnerService.encode_body(body)
+
+    assert "\u2028" not in encoded and "\u2029" not in encoded
+    assert len(encoded.splitlines()) == 1
+    assert json.loads(encoded) == body
+
+
+def test_a_failure_reading_the_input_file_is_a_service_error(sfn):
+    """PUT が一時ファイルを読むときの OSError も、生のまま外へ出さない。"""
+    client = Mock()
+    client.put_object.side_effect = OSError(5, "Input/output error")
+    service = _service_with(sfn, client)
+
+    with pytest.raises(SurveyRunnerServiceError) as info:
+        service.write_input(SURVEY_ID, iter(['{"record_id": "p1"}']))
+
+    assert info.value.failure is FailureClass.TRANSIENT
 
 
 def test_encode_body_keeps_non_ascii_and_is_one_line():

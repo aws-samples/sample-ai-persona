@@ -95,6 +95,9 @@ _LASTING_CODES = frozenset({ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE})
 _LASTING_KINDS = frozenset(
     {ErrorKind.VALIDATION, ErrorKind.CAPACITY, ErrorKind.NOT_FOUND, ErrorKind.CONFIG}
 )
+#: Lasting codes recorded as they are when a finished execution cannot be
+#: summed up; any other lasting code becomes SURVEY_EXECUTION_FAILED.
+_FINISH_SHOWN_CODES = frozenset({ErrorCode.SURVEY_TEMPLATE_NOT_FOUND})
 
 
 class SurveyRunError(CodedError):
@@ -625,8 +628,12 @@ class SurveyRunManager:
     def _finish_failed(self, survey: Survey, info: Any, error: Exception) -> bool:
         code = getattr(error, "code", None)
         if isinstance(code, ErrorCode) and is_lasting_failure(error):
-            # e.g. SURVEY_TEMPLATE_NOT_FOUND: keep the code, do not retry
-            self._fail(survey, code, getattr(error, "context", None) or None)
+            # Retrying cannot help. Only the survey's own reasons are shown;
+            # an infrastructure code (S3_OBJECT_NOT_FOUND, ...) is not one
+            if code in _FINISH_SHOWN_CODES:
+                self._fail(survey, code, getattr(error, "context", None) or None)
+            else:
+                self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
             return True
         failure = _failure_of(error)
         if failure in (FailureClass.NOT_FOUND, FailureClass.INVALID):
@@ -742,15 +749,11 @@ class SurveyRunManager:
         Bodies that go to S3 (images, or too large for the item, BR6.3) are
         stored in parallel while the input is written.
         """
-        bodies = self._runner.write_bodies(survey_id, self._bodies(personas, request))
-        with closing(bodies):
-            for body in bodies:
-                yield SurveyRunItem(
-                    record_id=body.record_id,
-                    model_id=self._model_id,
-                    body_json=body.body_json,
-                    body_s3_uri=body.body_s3_uri,
-                )
+        items = self._runner.write_bodies(
+            survey_id, self._model_id, self._bodies(personas, request)
+        )
+        with closing(items):
+            yield from items
 
     def _bodies(
         self, personas: pl.DataFrame, request: _Request

@@ -35,6 +35,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from ..models.errors import CodedError, ErrorCode
 from ..models.external_failure import FailureClass, classify_aws_error
+from ..models.survey_run import SurveyRunItem
 
 logger = logging.getLogger(__name__)
 
@@ -122,32 +123,17 @@ class RunResult:
 
 
 @dataclass(frozen=True)
-class StoredBody:
-    """One persona's body after :meth:`SurveyRunnerService.write_bodies`.
-
-    Attributes:
-        record_id: The persona.
-        body_json: The encoded body, when it was not stored.
-        body_s3_uri: Where it was stored, when it was.
-    """
-
-    record_id: str
-    body_json: Optional[str] = None
-    body_s3_uri: Optional[str] = None
-
-
-@dataclass(frozen=True)
 class _PendingBody:
-    body: StoredBody
+    item: SurveyRunItem
     upload: Optional["Future[None]"] = None
 
     def ready(self) -> bool:
         return self.upload is None or self.upload.done()
 
-    def settled(self) -> StoredBody:
+    def settled(self) -> SurveyRunItem:
         if self.upload is not None:
             self.upload.result()  # re-raises the PUT's SurveyRunnerServiceError
-        return self.body
+        return self.item
 
 
 class SurveyRunnerService:
@@ -201,8 +187,14 @@ class SurveyRunnerService:
 
     @staticmethod
     def encode_body(body: Mapping[str, Any]) -> str:
-        """``body`` as one-line JSON, encoded once for the size check and the item."""
-        return json.dumps(body, ensure_ascii=False)
+        """``body`` as one-line JSON, encoded once for the size check and the item.
+
+        U+2028 and U+2029 are left raw by ``json.dumps`` but some readers take
+        them as line breaks; they can only occur inside strings, so escaping
+        them keeps the value.
+        """
+        encoded = json.dumps(body, ensure_ascii=False)
+        return encoded.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
 
     @staticmethod
     def fits_inline(body_json: str) -> bool:
@@ -335,9 +327,12 @@ class SurveyRunnerService:
             ) from e
 
     def write_bodies(
-        self, survey_id: str, bodies: Iterable[tuple[str, str, bool]]
-    ) -> Generator[StoredBody, None, None]:
-        """Store the marked bodies in parallel; yield every body in order (BR6.3).
+        self,
+        survey_id: str,
+        model_id: str,
+        bodies: Iterable[tuple[str, str, bool]],
+    ) -> Generator[SurveyRunItem, None, None]:
+        """Store the marked bodies in parallel; yield every item in order (BR6.3).
 
         ``bodies`` is read one at a time in the caller's thread, so a check the
         caller makes while producing it (the lease) runs before each body is
@@ -357,8 +352,9 @@ class SurveyRunnerService:
         recalled. Close it (``contextlib.closing``) so that happens at once.
 
         Args:
+            model_id: Inference profile every item invokes.
             bodies: ``(record_id, body_json, store)`` from :meth:`encode_body`;
-                only those with ``store`` go to S3.
+                only those with ``store`` go to S3, the others stay in the item.
 
         Raises:
             SurveyRunnerServiceError: A body could not be stored (the first
@@ -382,12 +378,17 @@ class SurveyRunnerService:
                     key = self._key(survey_id, f"bodies/{record_id}.json")
                     upload = pool.submit(self._put, key, body_json.encode("utf-8"))
                     upload.add_done_callback(note_failure)
-                    uri = f"s3://{self.bucket_name}/{key}"
-                    body = StoredBody(record_id=record_id, body_s3_uri=uri)
-                    pending.append(_PendingBody(body, upload))
+                    item = SurveyRunItem(
+                        record_id=record_id,
+                        model_id=model_id,
+                        body_s3_uri=f"s3://{self.bucket_name}/{key}",
+                    )
+                    pending.append(_PendingBody(item, upload))
                 else:
-                    body = StoredBody(record_id=record_id, body_json=body_json)
-                    pending.append(_PendingBody(body))
+                    item = SurveyRunItem(
+                        record_id=record_id, model_id=model_id, body_json=body_json
+                    )
+                    pending.append(_PendingBody(item))
                 while pending and (
                     len(pending) > _BODY_LOOKAHEAD or pending[0].ready()
                 ):
@@ -491,7 +492,8 @@ class SurveyRunnerService:
     def _put(self, key: str, body: bytes | IO[bytes]) -> None:
         try:
             self._s3.put_object(Bucket=self.bucket_name, Key=key, Body=body)
-        except (ClientError, BotoCoreError) as e:
+        except (ClientError, BotoCoreError, OSError) as e:
+            # OSError: the spooled input file could not be read
             raise self._failure("PutObject", e) from e
 
     def _get(self, key: str) -> bytes:

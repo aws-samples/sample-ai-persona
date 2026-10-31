@@ -27,11 +27,11 @@ from src.managers.survey_run_manager import (
 from src.models.errors import CodedError, ErrorCode
 from src.models.external_failure import FailureClass
 from src.models.survey import Survey
+from src.models.survey_run import SurveyRunItem
 from src.models.survey_template import Question, SurveyTemplate, TemplateImage
 from src.services.survey_runner_service import (
     ExecutionInfo,
     RunResult,
-    StoredBody,
     SurveyRunnerService,
     SurveyRunnerServiceError,
 )
@@ -124,19 +124,25 @@ class FakeRunner:
             raise SurveyRunnerServiceError("gone", failure=FailureClass.NOT_FOUND)
         return self.personas[survey_id]
 
-    def write_bodies(self, survey_id: str, bodies: Any) -> Iterator[StoredBody]:
+    def write_bodies(
+        self, survey_id: str, model_id: str, bodies: Any
+    ) -> Iterator[SurveyRunItem]:
         self._call("write_bodies")
         try:
             for record_id, encoded, store in bodies:
                 if not store:
-                    yield StoredBody(record_id=record_id, body_json=encoded)
+                    yield SurveyRunItem(
+                        record_id=record_id, model_id=model_id, body_json=encoded
+                    )
                     continue
                 key = f"survey-runs/{survey_id}/bodies/{record_id}.json"
                 self.bodies[key] = json.loads(encoded)
                 if self.after_body is not None:
                     self.after_body()
-                yield StoredBody(
-                    record_id=record_id, body_s3_uri=f"s3://{BUCKET}/{key}"
+                yield SurveyRunItem(
+                    record_id=record_id,
+                    model_id=model_id,
+                    body_s3_uri=f"s3://{BUCKET}/{key}",
                 )
         finally:
             self.bodies_closed = True
@@ -1023,6 +1029,26 @@ class TestFinishFailures:
         assert done.error_code == ErrorCode.SURVEY_TEMPLATE_NOT_FOUND.value
         assert done.finish_attempts == 0
 
+    def test_a_lasting_infrastructure_code_is_not_shown_as_the_reason(
+        self, survey_world, rm, runner, clock, monkeypatch
+    ):
+        """完了で残すのはアンケートのコードだけ。基盤のコード（S3 の NOT_FOUND など）は画面に出さない。"""
+
+        class Infra(CodedError):
+            code = ErrorCode.S3_OBJECT_NOT_FOUND
+
+        survey = self._succeeded(survey_world, rm, runner, clock)
+        monkeypatch.setattr(
+            rm, "_snapshot", lambda s: (_ for _ in ()).throw(Infra("gone"))
+        )
+
+        rm.advance()
+
+        done = _get(survey_world, survey.id)
+        assert done.status == "error"
+        assert done.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
+        assert done.finish_attempts == 0
+
     def test_transient_failure_retries_three_times(
         self, survey_world, rm, runner, clock
     ):
@@ -1397,8 +1423,8 @@ class TestStart:
         real = runner.write_bodies
         held: list[Any] = []
 
-        def holding(survey_id: str, bodies: Any) -> Any:
-            gen = real(survey_id, bodies)
+        def holding(survey_id: str, model_id: str, bodies: Any) -> Any:
+            gen = real(survey_id, model_id, bodies)
             held.append(gen)  # keeps it from being collected: only close() ends it
             return gen
 
