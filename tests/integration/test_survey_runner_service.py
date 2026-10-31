@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import polars as pl
 import pytest
@@ -451,17 +451,23 @@ class TestInputAndBodies:
         assert [b.record_id for b in stored] == [f"p{i}" for i in range(40)]
 
     def test_a_failure_behind_a_slow_body_stops_the_sending(self, sfn):
-        """先頭の PUT が遅くても、後ろの失敗に気づいたら次の Body を送らない。"""
+        """先頭の PUT が止まっていても、後ろの失敗に気づいたら次の Body を送らない。"""
+        p1_failed = threading.Event()
+        pulled: list[int] = []
 
         def put_object(**kwargs: Any) -> None:
             if kwargs["Key"].endswith("/p0.json"):
-                time.sleep(0.5)
+                time.sleep(1)  # still running when p1 fails; released by itself
             elif kwargs["Key"].endswith("/p1.json"):
+                p1_failed.set()
                 raise _client_error("AccessDenied", 403)
 
-        def slowly_built() -> Any:
+        def bodies() -> Any:
             for i in range(40):
-                time.sleep(0.01)  # building a body takes a moment
+                if i == 2:
+                    # The order is fixed by the event, not by how long it takes
+                    assert p1_failed.wait(5)
+                pulled.append(i)
                 yield f"p{i}", "{}", True
 
         client = Mock()
@@ -469,10 +475,42 @@ class TestInputAndBodies:
         service = _service_with(sfn, client)
 
         with pytest.raises(SurveyRunnerServiceError) as info:
-            list(service.write_bodies(SURVEY_ID, slowly_built()))
+            list(service.write_bodies(SURVEY_ID, bodies()))
 
         assert info.value.failure is FailureClass.ACCESS
-        assert client.put_object.call_count < 10
+        # Without the check it would take 32 ahead of the stalled p0
+        assert len(pulled) < 10
+        assert 39 not in pulled
+
+    def test_a_full_disk_while_writing_the_input_is_a_service_error(self, sfn):
+        """一時ファイルの書き込みの失敗（ディスクがいっぱい）は、生の OSError にしない。"""
+        service = _service_with(sfn, Mock())
+
+        class FullSpool(io.BytesIO):
+            def write(self, data: Any) -> int:
+                raise OSError(28, "No space left on device")
+
+        with patch(
+            "src.services.survey_runner_service.tempfile.SpooledTemporaryFile",
+            lambda **kwargs: FullSpool(),
+        ):
+            with pytest.raises(SurveyRunnerServiceError) as info:
+                service.write_input(SURVEY_ID, iter(['{"record_id": "p1"}']))
+
+        assert info.value.failure is FailureClass.TRANSIENT
+
+    def test_an_error_from_the_lines_passes_through(self, service):
+        """行を作る側の例外（担当の喪失など）は、そのまま通す。"""
+
+        class LeaseLost(Exception):
+            pass
+
+        def lines() -> Any:
+            yield '{"record_id": "p1"}'
+            raise LeaseLost()
+
+        with pytest.raises(LeaseLost):
+            service.write_input(SURVEY_ID, lines())
 
     def test_a_failed_body_is_classified(self, sfn):
         client = Mock()

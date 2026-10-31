@@ -346,6 +346,11 @@ class SurveyRunnerService:
         being stored. A body that is not stored is yielded as soon as every
         body before it is.
 
+        A failed PUT stops the sending as soon as it is noticed, before the
+        next body. While the lookahead is full and the oldest PUT is waited
+        for, nothing is sent; a failure behind it is reported once that wait
+        ends (bounded by the client's timeouts and retries).
+
         When it stops early (a failed PUT, an error raised while producing
         ``bodies``, or ``close()``), the PUTs not yet started are dropped and
         those already running are waited for: a running PUT cannot be
@@ -396,17 +401,41 @@ class SurveyRunnerService:
         """Write the Distributed Map input, one JSON line each (NFR1.6).
 
         The lines are consumed one at a time into a spooled file, so the whole
-        input never sits in memory as one string.
+        input never sits in memory as one string. An error raised while
+        producing ``lines`` passes through unchanged.
+
+        Raises:
+            SurveyRunnerServiceError: The spooled file could not be written
+                (``TRANSIENT``, e.g. the disk is full) or the PUT failed.
         """
         key = self._key(survey_id, "input.jsonl")
         with tempfile.SpooledTemporaryFile(max_size=_INPUT_SPOOL_BYTES) as spool:
             for index, line in enumerate(lines):
-                if index:
-                    spool.write(b"\n")
-                spool.write(line.encode("utf-8"))
-            spool.seek(0)
+                data = (
+                    line.encode("utf-8") if not index else b"\n" + line.encode("utf-8")
+                )
+                self._spool_write(spool, data)
+            try:
+                spool.seek(0)
+            except OSError as e:
+                raise self._spool_failure(e) from e
             self._put(key, spool)
         return key
+
+    @classmethod
+    def _spool_write(cls, spool: IO[bytes], data: bytes) -> None:
+        try:
+            spool.write(data)
+        except OSError as e:
+            raise cls._spool_failure(e) from e
+
+    @staticmethod
+    def _spool_failure(error: OSError) -> SurveyRunnerServiceError:
+        logger.warning("input spool write failed: %s", type(error).__name__)
+        return SurveyRunnerServiceError(
+            f"input spool write failed: {type(error).__name__}",
+            failure=FailureClass.TRANSIENT,
+        )
 
     def iter_results(self, manifest_key: str) -> Iterator[RunResult]:
         """Every item of the ResultWriter output, one result file at a time.

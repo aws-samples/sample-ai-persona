@@ -35,9 +35,9 @@ import json
 import logging
 import threading
 import uuid
-from contextlib import closing
 from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
