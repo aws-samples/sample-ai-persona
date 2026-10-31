@@ -95,9 +95,21 @@ _LASTING_CODES = frozenset({ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE})
 _LASTING_KINDS = frozenset(
     {ErrorKind.VALIDATION, ErrorKind.CAPACITY, ErrorKind.NOT_FOUND, ErrorKind.CONFIG}
 )
-#: Lasting codes recorded as they are when a finished execution cannot be
-#: summed up; any other lasting code becomes SURVEY_EXECUTION_FAILED.
-_FINISH_SHOWN_CODES = frozenset({ErrorCode.SURVEY_TEMPLATE_NOT_FOUND})
+#: Lasting codes recorded as they are when a survey cannot start or be summed
+#: up: the survey's own reasons, the ones its result page can explain. Any
+#: other lasting code (an infrastructure one such as S3_OBJECT_NOT_FOUND)
+#: becomes SURVEY_EXECUTION_FAILED; the original is logged.
+_SHOWN_CODES = frozenset(
+    {
+        ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
+        ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE,
+        ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+        ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+        ErrorCode.NEMOTRON_DATASET_NOT_PLACED,
+        ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+        ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
+    }
+)
 
 
 class SurveyRunError(CodedError):
@@ -628,12 +640,8 @@ class SurveyRunManager:
     def _finish_failed(self, survey: Survey, info: Any, error: Exception) -> bool:
         code = getattr(error, "code", None)
         if isinstance(code, ErrorCode) and is_lasting_failure(error):
-            # Retrying cannot help. Only the survey's own reasons are shown;
-            # an infrastructure code (S3_OBJECT_NOT_FOUND, ...) is not one
-            if code in _FINISH_SHOWN_CODES:
-                self._fail(survey, code, getattr(error, "context", None) or None)
-            else:
-                self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
+            # e.g. SURVEY_TEMPLATE_NOT_FOUND: keep the code, do not retry
+            self._fail_lasting(survey, "finish", code, error)
             return True
         failure = _failure_of(error)
         if failure in (FailureClass.NOT_FOUND, FailureClass.INVALID):
@@ -821,7 +829,7 @@ class SurveyRunManager:
     def _start_failed(self, survey: Survey, error: Exception) -> _Outcome:
         code = getattr(error, "code", None)
         if isinstance(code, ErrorCode) and is_lasting_failure(error):
-            self._fail(survey, code, getattr(error, "context", None) or None)
+            self._fail_lasting(survey, "start", code, error)
             return _Outcome.SKIPPED
         failure = _failure_of(error)
         if failure in (FailureClass.NOT_FOUND, FailureClass.INVALID):
@@ -832,6 +840,24 @@ class SurveyRunManager:
         if self._retry_later(survey, "start_attempts", "start", error):
             return _Outcome.WAITING
         return _Outcome.SKIPPED
+
+    def _fail_lasting(
+        self, survey: Survey, stage: str, code: ErrorCode, error: Exception
+    ) -> None:
+        """A failure retrying cannot fix: its code if the survey's own, else generic."""
+        if code in _SHOWN_CODES:
+            self._fail(survey, code, getattr(error, "context", None) or None)
+            return
+        # Not shown on the result page; the log keeps what actually failed
+        log_event(
+            "survey.error_code_replaced",
+            level="WARNING",
+            survey_id=survey.id,
+            stage=stage,
+            error_code=code.value,
+            error_type=type(error).__name__,
+        )
+        self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
 
     def _start_blocked(self, survey: Survey, error: Exception) -> _Outcome:
         """NFR4.9・NFR4.9a: wait without counting; give up after 30 minutes."""

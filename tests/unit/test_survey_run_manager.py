@@ -285,6 +285,26 @@ def keeper() -> FakeKeeper:
     return FakeKeeper()
 
 
+class _InfraError(CodedError):
+    """An infrastructure failure that retrying cannot fix."""
+
+    code = ErrorCode.S3_OBJECT_NOT_FOUND
+
+
+def _raising(error: Exception) -> Callable[..., Any]:
+    def raise_it(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    return raise_it
+
+
+def _replaced(logs: LogCapture, stage: str) -> dict[str, Any]:
+    (record,) = [
+        r for r in logs.events("survey.error_code_replaced") if r["stage"] == stage
+    ]
+    return {k: v for k, v in record.items() if k not in ("ts", "level")}
+
+
 @pytest.fixture
 def logs(capsys) -> LogCapture:
     return LogCapture(capsys)
@@ -1030,17 +1050,11 @@ class TestFinishFailures:
         assert done.finish_attempts == 0
 
     def test_a_lasting_infrastructure_code_is_not_shown_as_the_reason(
-        self, survey_world, rm, runner, clock, monkeypatch
+        self, survey_world, rm, runner, clock, monkeypatch, logs
     ):
-        """完了で残すのはアンケートのコードだけ。基盤のコード（S3 の NOT_FOUND など）は画面に出さない。"""
-
-        class Infra(CodedError):
-            code = ErrorCode.S3_OBJECT_NOT_FOUND
-
+        """完了で残すのはアンケートのコードだけ。基盤のコードは画面に出さず、ログに残す。"""
         survey = self._succeeded(survey_world, rm, runner, clock)
-        monkeypatch.setattr(
-            rm, "_snapshot", lambda s: (_ for _ in ()).throw(Infra("gone"))
-        )
+        monkeypatch.setattr(rm, "_snapshot", _raising(_InfraError("gone")))
 
         rm.advance()
 
@@ -1048,6 +1062,13 @@ class TestFinishFailures:
         assert done.status == "error"
         assert done.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
         assert done.finish_attempts == 0
+        assert _replaced(logs, "finish") == {
+            "event": "survey.error_code_replaced",
+            "survey_id": survey.id,
+            "stage": "finish",
+            "error_code": ErrorCode.S3_OBJECT_NOT_FOUND.value,
+            "error_type": "_InfraError",
+        }
 
     def test_transient_failure_retries_three_times(
         self, survey_world, rm, runner, clock
@@ -1158,6 +1179,47 @@ class TestStart:
         assert columns[0] == "uuid"
         assert "unrelated_column" not in columns
         assert "persona" in columns
+
+    def test_a_lasting_infrastructure_code_at_start_is_not_shown(
+        self, survey_world, rm, runner, clock, monkeypatch, logs
+    ):
+        """開始でも、基盤のコードは画面に出さずログに残す。やり直さない。"""
+        survey = _queue(survey_world, clock)
+        monkeypatch.setattr(rm, "_snapshot", _raising(_InfraError("gone")))
+
+        rm.advance()
+
+        done = _get(survey_world, survey.id)
+        assert done.status == "error"
+        assert done.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
+        assert done.start_attempts == 0
+        assert _replaced(logs, "start")["error_code"] == (
+            ErrorCode.S3_OBJECT_NOT_FOUND.value
+        )
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            ErrorCode.SURVEY_TEMPLATE_NOT_FOUND,
+            ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE,
+            ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
+            ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
+            ErrorCode.NEMOTRON_DATASET_NOT_PLACED,
+            ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
+            ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
+        ],
+    )
+    def test_the_survey_own_codes_at_start_are_shown(
+        self, survey_world, rm, runner, clock, monkeypatch, logs, code
+    ):
+        """開始の経路が投げるアンケートのコードは、そのまま記録する（画面で原因が分かる）。"""
+        survey = _queue(survey_world, clock)
+        monkeypatch.setattr(rm, "_snapshot", _raising(SurveyRunError("x", code=code)))
+
+        rm.advance()
+
+        assert _get(survey_world, survey.id).error_code == code.value
+        assert logs.events("survey.error_code_replaced") == []
 
     @pytest.mark.parametrize(
         ("filters", "code", "context"),
