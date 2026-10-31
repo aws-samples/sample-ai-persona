@@ -22,27 +22,30 @@ flowchart TB
         CloudFront -->|VPC オリジン| ALB
     end
 
-    subgraph Data["Data スタック（すべて RETAIN）"]
-        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
-        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
-        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
-    end
-
+    SFN["AWS Step Functions<br/>（マスアンケート）"]
     Bedrock[Amazon Bedrock]
+
+    subgraph Data["Data スタック（すべて RETAIN）"]
+        DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
+        S3[(S3)] ~~~ Cognito[Cognito<br/>User Pool] ~~~ Secrets[Secrets<br/>Manager]
+    end
 
     User -->|HTTPS| CloudFront
     WAF -.- CloudFront
-    ECS --> Data
+    ECS -->|開始・確認・停止| SFN
     ECS --> Bedrock
+    ECS --> Data
+    SFN -->|推論| Bedrock
+    SFN -->|入力・結果| S3
 ```
 
-利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF を有効にすると、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF を有効にすると、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
 | `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、Secrets Manager の鍵 |
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF（`enableWaf: true` のときだけ） |
-| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ログ |
+| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、ログ |
 
 ## デプロイ（CloudShell）
 

@@ -19,9 +19,8 @@ flowchart TB
     end
 
     subgraph Data["Data スタック（すべて RETAIN）"]
-        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
-        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
-        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
+        DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
+        S3[(S3)] ~~~ Cognito[Cognito<br/>User Pool] ~~~ Secrets[Secrets<br/>Manager]
     end
 
     Bedrock[Amazon Bedrock]
@@ -44,7 +43,7 @@ flowchart TB
 | スタック | 中身 |
 |---|---|
 | `AIPersonaDevClosed-Data` | 公開構成と同じ Data スタック（テーブル・S3・ECR・AgentCore Memory・鍵・User Pool。すべて RETAIN） |
-| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB・ECS Fargate・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） |
+| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB・ECS Fargate・マスアンケートの Step Functions のステートマシン・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） |
 
 閉域構成は **東京リージョン（`ap-northeast-1`）だけ** で使えます。ほかのリージョンを指定すると、デプロイの前にエラーになります。
 
