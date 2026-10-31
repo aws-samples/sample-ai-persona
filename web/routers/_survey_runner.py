@@ -80,7 +80,13 @@ class SurveyRunnerLoop:
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
-        """Rounds in the background for the app's lifetime, then a clean stop."""
+        """Rounds in the background for the app's lifetime, then a clean stop.
+
+        The loop is one per process; a lifespan started again (e.g. a second
+        ``TestClient``) begins from a cleared stop mark.
+        """
+        self._stopping.clear()
+        self._stopped = asyncio.Event()
         task = asyncio.create_task(self.run_forever())
         try:
             yield

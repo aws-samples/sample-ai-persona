@@ -37,6 +37,7 @@ from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.custom_persona_data import PersonaDataRef
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
+from ..models.external_failure import FailureClass
 from ..models.sharing import ListTab, TabbedList
 from ..models.survey import Survey, SurveyDetail, SurveyStatus, TemplateSnapshot
 from ..services.stores.custom_persona_data_store import CustomPersonaDataStore
@@ -645,7 +646,8 @@ class SurveyExecutionManager:
 
         A running survey's execution is stopped (BR7.1; a failure is logged
         and the delete goes on, the time limit ends the execution). A queued
-        survey just leaves the queue with its body (BR7.2). The run location
+        survey leaves the queue with its body (BR7.2); an execution started
+        for it but not yet recorded is stopped too. The run location
         is removed for both (BR10.1); the caller wakes the survey runner.
 
         Raises:
@@ -671,19 +673,25 @@ class SurveyExecutionManager:
         logger.info("Survey deleted: %s", survey_id)
 
     def _stop_run(self, survey_id: str, deleted: Dict[str, Any]) -> None:
-        """Stop the execution of a deleted running survey; remove its run location."""
+        """Stop the execution of a deleted queued or running survey; remove its run location.
+
+        A queued survey may have an execution too: the task that started it
+        can stop before recording the ARN. The execution is named after the
+        survey, so it is stopped by name; none existing is not a failure.
+        """
         status = deleted.get("status")
         if status not in (SurveyStatus.QUEUED, SurveyStatus.RUNNING):
             return
         runner = self._survey_runner
         if runner is None:
             return
-        arn = deleted.get("execution_arn")
-        if status == SurveyStatus.RUNNING and arn:
-            try:
-                runner.stop_execution(str(arn))
-                log_event("survey.run_stopped", survey_id=survey_id, reason="deleted")
-            except Exception as e:
+        arn = deleted.get("execution_arn") or runner.execution_arn_for(survey_id)
+        try:
+            runner.stop_execution(str(arn))
+            log_event("survey.run_stopped", survey_id=survey_id, reason="deleted")
+        except Exception as e:
+            # No execution yet: the usual delete of a queued survey
+            if getattr(e, "failure", None) is not FailureClass.NOT_FOUND:
                 log_event(
                     "survey.run_stop_failed",
                     level="WARNING",

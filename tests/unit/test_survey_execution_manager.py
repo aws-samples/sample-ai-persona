@@ -22,6 +22,7 @@ from src.config import config
 from src.models.asset_delivery import DeliveryKind, SizeLimit
 from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
+from src.models.external_failure import FailureClass
 
 from src.managers.survey_execution_manager import (
     SurveyExecutionError,
@@ -443,6 +444,12 @@ def batch() -> Mock:
 @pytest.fixture
 def cache() -> Mock:
     return Mock()
+
+
+def _not_found() -> Exception:
+    error = RuntimeError("ExecutionDoesNotExist")
+    error.failure = FailureClass.NOT_FOUND  # type: ignore[attr-defined]
+    return error
 
 
 @pytest.fixture
@@ -1065,15 +1072,35 @@ class TestDeleteSurvey:
         assert survey_world.survey_store.get(survey.id) is None
         assert logs.events("survey.run_stop_failed")[0]["survey_id"] == survey.id
 
-    def test_queued_survey_just_leaves_the_queue(self, em, survey_world, runner):
-        """BR7.2: 待ちなら止める実行はなく、記録を消せば索引からも消える。"""
+    def test_queued_survey_leaves_the_queue_and_stops_a_started_execution(
+        self, em, survey_world, runner
+    ):
+        """BR7.2: 待ちでも、開始の直後に落ちた実行（ARN の記録なし）がありうるので、名前から止める。"""
+        arn = "arn:aws:states:r:1:execution:sm:queued"
+        runner.execution_arn_for.return_value = arn
         survey = survey_world.survey("a", status="queued")
 
         em.delete_survey(MEMBER_A, survey.id)
 
-        runner.stop_execution.assert_not_called()
+        runner.execution_arn_for.assert_called_once_with(survey.id)
+        runner.stop_execution.assert_called_once_with(arn)
         runner.delete_run.assert_called_once_with(survey.id)
         assert survey_world.survey_store.list_run_queue() == []
+
+    def test_no_execution_to_stop_is_not_a_failure(
+        self, em, survey_world, runner, logs
+    ):
+        """実行がまだない（ExecutionDoesNotExist）のは普通の待ちの削除で、警告しない。"""
+        runner.execution_arn_for.return_value = "arn:aws:states:r:1:execution:sm:q"
+        runner.stop_execution.side_effect = _not_found()
+        survey = survey_world.survey("a", status="queued")
+
+        em.delete_survey(MEMBER_A, survey.id)
+
+        assert survey_world.survey_store.get(survey.id) is None
+        assert logs.events("survey.run_stop_failed") == []
+        assert logs.events("survey.run_stopped") == []
+        runner.delete_run.assert_called_once_with(survey.id)
 
     def test_completed_survey_does_not_touch_the_runner(self, em, survey_world, runner):
         survey = survey_world.survey("a")

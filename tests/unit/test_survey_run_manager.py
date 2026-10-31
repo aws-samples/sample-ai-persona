@@ -19,7 +19,11 @@ from unittest.mock import Mock
 import polars as pl
 import pytest
 
-from src.managers.survey_run_manager import LeaseKeeper, SurveyRunManager
+from src.managers.survey_run_manager import (
+    LeaseKeeper,
+    SurveyRunError,
+    SurveyRunManager,
+)
 from src.models.errors import CodedError, ErrorCode
 from src.models.external_failure import FailureClass
 from src.models.survey import Survey
@@ -938,6 +942,40 @@ class TestFinishFailures:
             ErrorCode.SURVEY_EXECUTION_FAILED.value
         )
 
+    def test_success_without_a_manifest_is_an_error_at_once(
+        self, survey_world, rm, runner, clock
+    ):
+        """ResultWriter のマニフェストがない成功は、やり直しても直らないので、すぐにエラーにする。"""
+        survey = self._succeeded(survey_world, rm, runner, clock)
+        info = runner.executions[survey.id]
+        runner.executions[survey.id] = dataclasses.replace(info, manifest_key=None)
+
+        rm.advance()
+
+        done = _get(survey_world, survey.id)
+        assert done.status == "error"
+        assert done.error_code == ErrorCode.SURVEY_EXECUTION_FAILED.value
+        assert done.finish_attempts == 0
+
+    def test_template_gone_keeps_its_code(
+        self, survey_world, rm, runner, clock, monkeypatch
+    ):
+        """テンプレートの写しのない旧記録でテンプレートが消えていたら、そのコードでエラーにする。"""
+        survey = self._succeeded(survey_world, rm, runner, clock)
+        monkeypatch.setattr(
+            rm,
+            "_snapshot",
+            lambda s: (_ for _ in ()).throw(
+                SurveyRunError("gone", code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND)
+            ),
+        )
+
+        rm.advance()
+
+        done = _get(survey_world, survey.id)
+        assert done.error_code == ErrorCode.SURVEY_TEMPLATE_NOT_FOUND.value
+        assert done.finish_attempts == 0
+
     def test_transient_failure_retries_three_times(
         self, survey_world, rm, runner, clock
     ):
@@ -1194,6 +1232,29 @@ class TestStart:
         assert survey.id not in runner.deleted
         assert _get(survey_world, survey.id).status == "running"
         assert _get(survey_world, second.id).status == "queued"
+
+    def test_errored_by_another_task_while_starting_stops_the_execution(
+        self, survey_world, rm, runner, clock
+    ):
+        """queued → running が通らず、ほかのタスクが error にしていたら、始めた実行を止める。"""
+        survey = _queue(survey_world, clock)
+        real = runner.start_execution
+
+        def start_then_errored_elsewhere(survey_id):
+            info = real(survey_id)
+            survey_world.survey_store.transition(
+                survey_id,
+                expected="queued",
+                fields={"status": "error", "error_code": "survey_execution_failed"},
+            )
+            return info
+
+        runner.start_execution = start_then_errored_elsewhere
+
+        rm.advance()
+
+        assert runner.stopped == [_arn(survey.id)]
+        assert _get(survey_world, survey.id).status == "error"
 
     def test_failure_after_another_task_started_keeps_its_run(
         self, survey_world, rm, runner, batch, clock

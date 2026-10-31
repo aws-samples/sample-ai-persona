@@ -70,6 +70,17 @@ class TestSchema:
             "enum": ["寿司", "ラーメン", "カレー"],
         }
 
+    def test_multiple_choice_needs_at_least_one_choice(self):
+        """BR5.3: 空の配列は回答として使えない（parse_answers が外す）ので、スキーマでも許さない。
+
+        構造化出力の配列の制約は minItems の 0 と 1 だけが使える。
+        """
+        prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][
+            "q2"
+        ]
+        assert prop["minItems"] == 1
+        assert parse_answers(_text(q2=[]), QUESTIONS) is None
+
     def test_scale_is_the_integer_enum(self):
         """BR5.4: scale_min〜scale_max の整数の列挙。"""
         prop = build_answer_schema(QUESTIONS)["properties"]["answers"]["properties"][

@@ -102,6 +102,12 @@ class SurveyRunError(CodedError):
     code = ErrorCode.SURVEY_EXECUTION_FAILED
 
 
+class _UnusableRunResult(SurveyRunError):
+    """The finished execution left nothing readable; retrying cannot help."""
+
+    failure = FailureClass.INVALID
+
+
 class _LeaseLost(Exception):
     """The lease was taken by another task while this round worked."""
 
@@ -501,7 +507,7 @@ class SurveyRunManager:
 
     def _collect(self, survey: Survey, info: Any) -> SurveyRunOutcome:
         if not info.manifest_key:
-            raise SurveyRunError("succeeded without a ResultWriter manifest")
+            raise _UnusableRunResult("succeeded without a ResultWriter manifest")
         personas = self._runner.read_personas(survey.id)
         ids = [str(v) for v in personas["uuid"].to_list()]
         expected = set(ids)
@@ -604,6 +610,11 @@ class SurveyRunManager:
         return build_results_csv_bytes(headers, rows)
 
     def _finish_failed(self, survey: Survey, info: Any, error: Exception) -> bool:
+        code = getattr(error, "code", None)
+        if isinstance(code, ErrorCode) and is_lasting_failure(error):
+            # e.g. SURVEY_TEMPLATE_NOT_FOUND: keep the code, do not retry
+            self._fail(survey, code, getattr(error, "context", None) or None)
+            return True
         failure = _failure_of(error)
         if failure in (FailureClass.NOT_FOUND, FailureClass.INVALID):
             self._fail(survey, ErrorCode.SURVEY_EXECUTION_FAILED)
@@ -751,6 +762,9 @@ class SurveyRunManager:
             # Another task recorded the start first: its execution keeps running
             if current.status == SurveyStatus.RUNNING:
                 return _Outcome.STARTED
+            # Ended elsewhere meanwhile (e.g. another task's error): nobody
+            # would watch this execution, so stop it
+            self._stop_quietly(survey.id, info.execution_arn, "ended_elsewhere")
             return _Outcome.SKIPPED
         log_event(
             "survey.run_started",

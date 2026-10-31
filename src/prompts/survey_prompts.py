@@ -395,7 +395,9 @@ def _answer_property(question: Question) -> Dict[str, Any]:
     if question.question_type == "multiple_choice":
         option = {"type": "string", "enum": list(question.options)}
         if question.allow_multiple:
-            return {"type": "array", "items": option}
+            # An empty list is unusable (parse_answers); structured output
+            # accepts only minItems 0 or 1, so max_selections stays in the code
+            return {"type": "array", "items": option, "minItems": 1}
         return option
     if question.question_type == "scale_rating":
         values = list(range(int(question.scale_min), int(question.scale_max) + 1))

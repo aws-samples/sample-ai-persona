@@ -165,6 +165,29 @@ class TestStop:
         asyncio.run(scenario())
         release.assert_called_once()
 
+    def test_the_loop_runs_again_after_a_stop(self):
+        """同じプロセスで lifespan をもう一度始めても（テストの TestClient など）、回が動く。"""
+        rounds = Rounds()
+        loop = SurveyRunnerLoop(rounds, Mock(return_value=True), interval_seconds=60)
+
+        woken: list[bool] = []
+
+        async def one_lifespan() -> None:
+            before = rounds.calls
+            async with loop.running():
+                for _ in range(200):
+                    if rounds.calls > before:
+                        break
+                    await asyncio.sleep(0.01)
+                woken.append(loop.wake())
+
+        asyncio.run(one_lifespan())
+        before = rounds.calls
+        asyncio.run(one_lifespan())
+
+        assert rounds.calls > before
+        assert woken == [True, True]
+
     def test_round_longer_than_the_wait_keeps_the_lease(self):
         """走っている回があるうちに記録を消すと、ほかのタスクが同じ仕事を始めるため。"""
         hold = threading.Event()
