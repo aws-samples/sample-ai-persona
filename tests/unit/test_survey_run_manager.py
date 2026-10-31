@@ -810,6 +810,29 @@ class TestStaleIndex:
         assert _get(survey_world, first.id).status == "running"
         assert _get(survey_world, second.id).status == "queued"
 
+    def test_a_later_survey_already_running_blocks_an_earlier_start(
+        self, survey_world, rm, runner, clock, monkeypatch
+    ):
+        """NFR3.7: 実行中が受付順で後ろにあっても、索引の候補を全件読み直してから始める。
+
+        1 回目は A が索引にまだ見えず B を始める。2 回目は索引で A・B とも queued に見える。
+        """
+        a = _queue(survey_world, clock, at=T0)
+        b = _queue(survey_world, clock, at=T0 + timedelta(seconds=1))
+        stale_a, stale_b = _get(survey_world, a.id), _get(survey_world, b.id)
+        seen = [[stale_b], [stale_a, stale_b]]
+        monkeypatch.setattr(
+            survey_world.survey_store, "list_run_queue", lambda: seen.pop(0)
+        )
+
+        rm.advance()
+        clock.advance(seconds=15)
+        rm.advance()
+
+        assert runner.started == [b.id]
+        assert _get(survey_world, a.id).status == "queued"
+        assert _get(survey_world, b.id).status == "running"
+
     def test_the_fresh_record_is_the_one_watched(
         self, survey_world, rm, runner, clock, monkeypatch
     ):

@@ -382,7 +382,12 @@ class SurveyRunManager:
         return int(self._clock().timestamp())
 
     def _work(self) -> None:
-        surveys = self._surveys.list_run_queue()
+        indexed = self._surveys.list_run_queue()
+        # The index is eventually consistent: a survey started in an earlier
+        # round may still show queued there. Re-read every row before choosing
+        # what to start, so a running one anywhere in the queue holds the slot
+        fresh = self._surveys.get_many([s.id for s in indexed])
+        surveys = [fresh[s.id] for s in indexed if s.id in fresh]
         for survey in (s for s in surveys if s.status == SurveyStatus.RUNNING):
             if not self._watch(survey):
                 return
@@ -398,11 +403,8 @@ class SurveyRunManager:
     # 監視（WF3）。戻り値は「実行の席が空いたか」
     # =========================================================================
 
-    def _watch(self, indexed: Survey) -> bool:
-        # The index is eventually consistent: watch only what is running now
-        survey = self._surveys.get(indexed.id, consistent=True)
-        if survey is None or survey.status != SurveyStatus.RUNNING:
-            return True
+    def _watch(self, survey: Survey) -> bool:
+        # ``survey`` was re-read this round (strongly consistent, see _work)
         arn = survey.execution_arn
         if not arn or not self._runner.is_own_execution(arn):
             # The state machine was created again; the old one cannot be followed
