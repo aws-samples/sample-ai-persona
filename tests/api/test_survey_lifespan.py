@@ -79,6 +79,26 @@ class TestWake:
         assert _wait_until(lambda: rounds.running == 0 and rounds.calls >= 2)
         assert rounds.max_running == 1
 
+    def test_wakes_during_a_long_round_wait_in_one_thread(self):
+        """長い回の間の起動の通知は、待つスレッド 1 本にまとまる。"""
+        hold = threading.Event()
+        rounds = Rounds(hold)
+        loop = SurveyRunnerLoop(rounds, Mock(return_value=True))
+
+        def wake_threads() -> int:
+            return sum(t.name == "survey-run-wake" for t in threading.enumerate())
+
+        loop.wake()
+        assert rounds.started.wait(2)
+        woken = [loop.wake() for _ in range(15)]
+        time.sleep(0.05)
+
+        assert woken == [True] + [False] * 14
+        assert wake_threads() == 2
+        hold.set()
+        assert _wait_until(lambda: rounds.running == 0 and rounds.calls == 2)
+        assert _wait_until(lambda: wake_threads() == 0)
+
     def test_a_failing_round_does_not_break_the_next(self):
         """NFR4.15: 回の中の例外でループは止まらない。"""
         advance = Mock(side_effect=[RuntimeError("boom"), None])

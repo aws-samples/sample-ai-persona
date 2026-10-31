@@ -640,12 +640,19 @@ class SurveyRunManager:
 
     def _start(self, queued: Survey) -> _Outcome:
         survey = self._surveys.get(queued.id, consistent=True)
+        if survey is not None and survey.status == SurveyStatus.RUNNING:
+            # The index still shows it queued; it holds the run slot (NFR3.7)
+            return _Outcome.STARTED
         if survey is None or survey.status != SurveyStatus.QUEUED:
             return _Outcome.SKIPPED
         try:
-            self._prepare(survey)
-            self._check_lease()
-            info = self._runner.start_execution(survey.id)
+            # Started before a restart but not recorded: take it over without
+            # rebuilding the input, whose sources may be gone by now
+            info = self._runner.find_execution(survey.id)
+            if info is None:
+                self._prepare(survey)
+                self._check_lease()
+                info = self._runner.start_execution(survey.id)
         except _LeaseLost:
             raise
         except Exception as e:
@@ -702,7 +709,8 @@ class SurveyRunManager:
                 content,
                 request.schema,
             )
-            if request.image_blocks:
+            # Images, or a body too large for the item, go to S3 (BR6.3)
+            if request.image_blocks or not self._runner.fits_inline(body):
                 uri = self._runner.write_body(survey_id, record_id, body)
                 items.append(
                     SurveyRunItem(

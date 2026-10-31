@@ -120,12 +120,15 @@ class SurveyRunnerLoop:
             self._round_lock.release()
 
     def _woken_round(self) -> None:
-        with self._pending_lock:
-            self._pending = False
-        self._round()
+        # Wakes while this thread waits for the lock are answered by it (one
+        # waiting thread at most); the flag drops once the round can begin
+        self._round(woken=True)
 
-    def _round(self) -> None:
+    def _round(self, *, woken: bool = False) -> None:
         with self._round_lock:
+            if woken:
+                with self._pending_lock:
+                    self._pending = False
             if self._stopping.is_set():
                 return
             try:

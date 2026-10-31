@@ -18,8 +18,8 @@ class SurveyRunItem:
     Attributes:
         record_id: The persona's ``uuid``; ties the result to the CSV row.
         model_id: Inference profile the Task invokes.
-        body: The request body (surveys without images).
-        body_s3_uri: Where the body is stored (surveys with images).
+        body: The request body (no images, small enough for the item).
+        body_s3_uri: Where the body is stored (images, or too large for the item).
 
     Raises:
         ValueError: Not exactly one of ``body`` and ``body_s3_uri`` is given.

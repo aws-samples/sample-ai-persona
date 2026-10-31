@@ -75,6 +75,7 @@ class FakeRunner:
     """SurveyRunnerService in memory (Step Functions and survey-runs/)."""
 
     request_body = staticmethod(SurveyRunnerService.request_body)
+    fits_inline = staticmethod(SurveyRunnerService.fits_inline)
 
     def __init__(self) -> None:
         self.state_machine_arn = SM
@@ -126,6 +127,13 @@ class FakeRunner:
         self._call("write_input")
         self.inputs[survey_id] = list(lines)
         return f"survey-runs/{survey_id}/input.jsonl"
+
+    def find_execution(self, survey_id: str) -> Optional[ExecutionInfo]:
+        self._call("find_execution")
+        existing = self.executions.get(survey_id)
+        if existing is None:
+            return None
+        return dataclasses.replace(existing, reused=True)
 
     def start_execution(self, survey_id: str) -> ExecutionInfo:
         self._call("start_execution")
@@ -275,9 +283,13 @@ def rm(survey_world, runner, batch, clock, keeper) -> SurveyRunManager:
     return _manager(survey_world, runner, batch, clock, keeper)
 
 
-def _template(world: SurveyWorld, images: Optional[list[TemplateImage]] = None):
+def _template(
+    world: SurveyWorld,
+    images: Optional[list[TemplateImage]] = None,
+    questions: Optional[list[Question]] = None,
+):
     template = SurveyTemplate.create_new(
-        name="色の調査", questions=list(QUESTIONS), images=images or []
+        name="色の調査", questions=list(questions or QUESTIONS), images=images or []
     ).owned_by("a")
     world.template_store.put_new(template)
     return template
@@ -292,10 +304,11 @@ def _queue(
     filters: Optional[dict] = None,
     datasource: str = "nemotron",
     images: Optional[list[TemplateImage]] = None,
+    questions: Optional[list[Question]] = None,
 ) -> Survey:
     survey = world.survey(
         "a",
-        _template(world, images),
+        _template(world, images, questions),
         status="queued",
         persona_count=count,
         datasource=datasource,
@@ -776,6 +789,27 @@ class TestStaleIndex:
             assert kept.status == now
             assert kept.error_code is None
 
+    def test_a_survey_already_running_blocks_the_next_start(
+        self, survey_world, rm, runner, clock, monkeypatch
+    ):
+        """NFR3.7: 索引ではまだ queued でも、読み直して running なら次を始めない。"""
+        first = _queue(survey_world, clock, at=T0)
+        stale = _get(survey_world, first.id)
+        rm.advance()
+        second = _queue(survey_world, clock, at=T0 + timedelta(seconds=1))
+        monkeypatch.setattr(
+            survey_world.survey_store,
+            "list_run_queue",
+            lambda: [stale, _get(survey_world, second.id)],
+        )
+        clock.advance(seconds=15)
+
+        rm.advance()
+
+        assert runner.started == [first.id]
+        assert _get(survey_world, first.id).status == "running"
+        assert _get(survey_world, second.id).status == "queued"
+
     def test_the_fresh_record_is_the_one_watched(
         self, survey_world, rm, runner, clock, monkeypatch
     ):
@@ -1038,6 +1072,55 @@ class TestStart:
         assert running.status == "running"
         assert running.started_at == began
         assert running.start_attempts == 0
+
+    def test_execution_started_before_a_restart_is_recorded_without_preparing(
+        self, survey_world, rm, runner, batch, clock
+    ):
+        """開始の直後に落ちた実行は、入力を作り直さずに running として記録する。
+
+        元データが消えていても、動いている実行をエラーにせず、実行用ファイルも消さない。
+        """
+        survey = _queue(survey_world, clock)
+        began = T0 - timedelta(minutes=1)
+        runner.executions[survey.id] = ExecutionInfo(
+            execution_arn=_arn(survey.id), status="RUNNING", start_date=began
+        )
+        batch.has_parquet_uri.return_value = False
+
+        rm.advance()
+
+        running = _get(survey_world, survey.id)
+        assert running.status == "running"
+        assert running.started_at == began
+        assert running.execution_arn == _arn(survey.id)
+        assert "write_input" not in runner.calls
+        assert "start_execution" not in runner.calls
+        assert survey.id not in runner.deleted
+
+    def test_large_bodies_go_to_s3_without_images(
+        self, survey_world, rm, runner, clock
+    ):
+        """子の実行の入力の上限（256 KiB）を超えそうな Body は、画像がなくても S3 に置く。"""
+        options = [f"選択肢{i}・" + "あ" * 100 for i in range(400)]
+        questions = [
+            Question(
+                id="q1",
+                text="当てはまるものは？",
+                question_type="multiple_choice",
+                options=options,
+            )
+        ]
+        survey = _queue(survey_world, clock, count=10, questions=questions)
+
+        rm.advance()
+
+        lines = runner.inputs[survey.id]
+        assert all(
+            set(line) == {"record_id", "model_id", "body_s3_uri"} for line in lines
+        )
+        assert len(runner.bodies) == 10
+        body = next(iter(runner.bodies.values()))
+        assert not SurveyRunnerService.fits_inline(body)
 
     def test_deleted_while_starting_stops_the_execution(
         self, survey_world, rm, runner, clock, monkeypatch

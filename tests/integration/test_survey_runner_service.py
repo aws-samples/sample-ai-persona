@@ -26,6 +26,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError  # noqa: E4
 
 from src.models.external_failure import FailureClass  # noqa: E402
 from src.services.survey_runner_service import (  # noqa: E402
+    MAX_INLINE_BODY_BYTES,
     SurveyRunnerService,
     SurveyRunnerServiceError,
 )
@@ -413,6 +414,54 @@ class TestCleanup:
 
     def test_nothing_to_remove_is_fine(self, service):
         service.delete_run(SURVEY_ID)
+
+
+class TestFindExecution:
+    """再起動の前に始めた実行を、開始の前に見つける。"""
+
+    def test_existing_execution_is_returned_as_reused(self, service, sfn):
+        info = service.find_execution(SURVEY_ID)
+
+        sfn.describe_execution.assert_called_once_with(executionArn=EXEC_ARN)
+        assert info is not None
+        assert info.reused
+        assert info.start_date == STARTED
+
+    def test_no_execution_is_none(self, service, sfn):
+        sfn.describe_execution.side_effect = _client_error("ExecutionDoesNotExist")
+
+        assert service.find_execution(SURVEY_ID) is None
+
+    def test_other_failures_are_raised(self, service, sfn):
+        sfn.describe_execution.side_effect = _client_error("AccessDeniedException")
+
+        with pytest.raises(SurveyRunnerServiceError) as info:
+            service.find_execution(SURVEY_ID)
+        assert info.value.failure is FailureClass.ACCESS
+
+
+class TestFitsInline:
+    """子の実行の入力の上限（256 KiB）に余裕を残して、Body を項目に入れるか決める。"""
+
+    @staticmethod
+    def _body_of(size: int) -> dict[str, Any]:
+        empty = len(json.dumps({"system": ""}, ensure_ascii=False).encode("utf-8"))
+        return {"system": "a" * (size - empty)}
+
+    def test_up_to_the_limit_fits(self):
+        assert SurveyRunnerService.fits_inline(self._body_of(MAX_INLINE_BODY_BYTES))
+
+    def test_over_the_limit_does_not_fit(self):
+        assert not SurveyRunnerService.fits_inline(
+            self._body_of(MAX_INLINE_BODY_BYTES + 1)
+        )
+
+    def test_size_is_counted_in_utf8_bytes(self):
+        body = {"system": "あ" * (MAX_INLINE_BODY_BYTES // 3)}
+        assert not SurveyRunnerService.fits_inline(body)
+
+    def test_limit_leaves_room_below_256_kib(self):
+        assert MAX_INLINE_BODY_BYTES <= 256 * 1024 - 16 * 1024
 
 
 def test_request_body_is_the_anthropic_messages_format():

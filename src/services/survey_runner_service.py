@@ -15,6 +15,7 @@ retry mode). What to do with a failure is decided by ``SurveyRunManager``.
 Other services are not imported.
 """
 
+import dataclasses
 import io
 import json
 import logging
@@ -38,6 +39,10 @@ RUN_PREFIX = "survey-runs"
 #: The Anthropic Messages body of one request (BR6.2).
 ANTHROPIC_VERSION = "bedrock-2023-05-31"
 MAX_TOKENS = 2048
+#: Largest body kept in the Distributed Map item. A child execution's input is
+#: at most 256 KiB; the rest is room for the item's other keys. Larger bodies
+#: go to S3 (``body_s3_uri``) like those with images.
+MAX_INLINE_BODY_BYTES = 200 * 1024
 #: ``DeleteObjects`` accepts at most 1000 keys.
 _DELETE_BATCH = 1000
 _BOTO_CONFIG = BotoConfig(
@@ -149,6 +154,12 @@ class SurveyRunnerService:
             },
         }
 
+    @staticmethod
+    def fits_inline(body: Mapping[str, Any]) -> bool:
+        """Whether ``body`` may travel in the item (UTF-8, as in the JSONL input)."""
+        size = len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+        return size <= MAX_INLINE_BODY_BYTES
+
     # --- execution ARNs -------------------------------------------------------------
 
     def execution_arn_for(self, survey_id: str) -> str:
@@ -204,6 +215,20 @@ class SurveyRunnerService:
             status="RUNNING",
             start_date=response["startDate"],
         )
+
+    def find_execution(self, survey_id: str) -> Optional[ExecutionInfo]:
+        """The survey's execution if it was started already, else ``None``.
+
+        A task that stopped between ``StartExecution`` and recording the start
+        leaves a running execution behind; it is taken over (``reused``).
+        """
+        try:
+            info = self.describe_execution(self.execution_arn_for(survey_id))
+        except SurveyRunnerServiceError as e:
+            if e.failure is FailureClass.NOT_FOUND:
+                return None
+            raise
+        return dataclasses.replace(info, reused=True)
 
     def describe_execution(self, execution_arn: str) -> ExecutionInfo:
         """The execution's status, start and (when finished) manifest key."""
