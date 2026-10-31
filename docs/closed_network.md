@@ -36,8 +36,6 @@ flowchart TB
     SFN -->|入力・結果| S3
 ```
 
-マスアンケートは、アプリが `states` のエンドポイントを通して Step Functions の実行を始め、確認し、止めます。ペルソナごとの推論（Bedrock）と入力・結果の S3 の読み書きは Step Functions のサービス自身が行い、VPC を通りません。このためアプリは Bedrock のコントロールプレーン（`bedrock`）のエンドポイントを使わず、作りません（推論の `bedrock-runtime` は議論・インタビューで使います）。
-
 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、指定した FQDN で内部 ALB へ HTTPS で届きます。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。社内のネットワークから FQDN を引くときは、Resolver Inbound Endpoint へ社内 DNS から転送します。ログインは Cognito の Managed Login ではなく、アプリ自身のログイン画面で行います。
 
 | スタック | 中身 |
@@ -259,7 +257,7 @@ aws s3 cp s3://<バケット名>/survey-results/<アンケートの ID>/results.
 
 | 項目 | 月額 |
 |---|---|
-| VPC エンドポイント（10 種、AZ の数 1。`bedrock` の代わりに `states`） | 約 102 USD |
+| VPC エンドポイント（10 種、AZ の数 1） | 約 102 USD |
 | ECS Fargate（1 vCPU、4 GB） | 約 53 USD |
 | Amazon Bedrock | 約 13 USD |
 | 内部 ALB | 約 20 USD |
