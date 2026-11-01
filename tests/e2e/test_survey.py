@@ -1,7 +1,7 @@
 """§6 マスアンケート regression flows (up to target preview; no survey execution).
 
 §6.1 CSV upload with column mapping, §6.2 template CRUD and AI draft generation,
-§6.3 start page target preview. Executing a survey (Bedrock batch inference) and
+§6.3 start page target preview. Executing a survey (Step Functions) and
 §6.4 results are out of scope because a run takes far too long for regression.
 """
 

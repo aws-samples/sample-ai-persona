@@ -1,0 +1,38 @@
+[
+  {
+    "ExecutionArn": "arn:aws:states:ap-northeast-1:123456789012:express:SurveyRunStateMachine/Map:0b2c4e1a:1",
+    "Input": "{\"record_id\":\"p-1\",\"model_id\":\"global.anthropic.claude-haiku-5-5\",\"body\":{\"anthropic_version\":\"bedrock-2023-05-31\",\"max_tokens\":2048,\"system\":\"架空のペルソナ\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"設問\"}]}]}}",
+    "InputDetails": {"Included": true},
+    "Name": "1",
+    "Output": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"answers\\\":{\\\"q1\\\":\\\"A\\\",\\\"q2\\\":[\\\"X\\\",\\\"Y\\\"],\\\"q3\\\":4,\\\"q4\\\":\\\"架空の自由記述\\\"}}\"}]}",
+    "OutputDetails": {"Included": true},
+    "StartDate": "2026-10-30T01:00:01.000Z",
+    "StateMachineArn": "arn:aws:states:ap-northeast-1:123456789012:stateMachine:SurveyRunStateMachine/Map:0b2c4e1a",
+    "Status": "SUCCEEDED",
+    "StopDate": "2026-10-30T01:00:05.000Z"
+  },
+  {
+    "ExecutionArn": "arn:aws:states:ap-northeast-1:123456789012:express:SurveyRunStateMachine/Map:0b2c4e1a:2",
+    "Input": "{\"record_id\":\"p-2\",\"model_id\":\"global.anthropic.claude-haiku-5-5\",\"body_s3_uri\":\"s3://<bucket>/survey-runs/s-1/bodies/p-2.json\"}",
+    "InputDetails": {"Included": true},
+    "Name": "2",
+    "Output": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"answers\\\":{\\\"q1\\\":\\\"B\\\",\\\"q2\\\":[\\\"Y\\\"],\\\"q3\\\":2,\\\"q4\\\":\\\"画像を見た感想\\\"}}\"}]}",
+    "OutputDetails": {"Included": true},
+    "StartDate": "2026-10-30T01:00:01.000Z",
+    "StateMachineArn": "arn:aws:states:ap-northeast-1:123456789012:stateMachine:SurveyRunStateMachine/Map:0b2c4e1a",
+    "Status": "SUCCEEDED",
+    "StopDate": "2026-10-30T01:00:06.000Z"
+  },
+  {
+    "ExecutionArn": "arn:aws:states:ap-northeast-1:123456789012:express:SurveyRunStateMachine/Map:0b2c4e1a:3",
+    "Input": "{\"record_id\":\"p-3\",\"model_id\":\"global.anthropic.claude-haiku-5-5\",\"body\":{\"anthropic_version\":\"bedrock-2023-05-31\"}}",
+    "InputDetails": {"Included": true},
+    "Name": "3",
+    "Output": "{\"content\":[{\"type\":\"text\",\"text\":\"これはJSONではない\"}]}",
+    "OutputDetails": {"Included": true},
+    "StartDate": "2026-10-30T01:00:01.000Z",
+    "StateMachineArn": "arn:aws:states:ap-northeast-1:123456789012:stateMachine:SurveyRunStateMachine/Map:0b2c4e1a",
+    "Status": "SUCCEEDED",
+    "StopDate": "2026-10-30T01:00:04.000Z"
+  }
+]

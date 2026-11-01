@@ -1,5 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import { bedrockInferenceArns, inferenceArnList } from '../lib/bedrock-arns';
+import { bedrockInferenceArns, inferenceArnList, surveyModelArns } from '../lib/bedrock-arns';
 import { PUBLIC_PROFILE } from '../lib/deployment-profile';
 
 /**
@@ -73,7 +73,7 @@ describe('inferenceArnList: jp（BR2.2、BR2.3）', () => {
   test('接頭辞のない基盤モデルの ID は Stack のリージョンの基盤モデルを足す', () => {
     const arns = inferenceArnList(ENV, {
       inferenceScope: 'jp',
-      explicitModelIds: { batchInferenceModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0' },
+      explicitModelIds: { agentModelId: 'anthropic.claude-haiku-4-5-20251001-v1:0' },
     });
     expect(arns).toEqual([
       ...JP_ARNS,
@@ -86,8 +86,7 @@ describe('inferenceArnList: jp（BR2.2、BR2.3）', () => {
       inferenceScope: 'jp',
       explicitModelIds: {
         bedrockModelId: 'global.anthropic.claude-sonnet-5',
-        agentModelId: 'global.anthropic.claude-sonnet-5',
-        batchInferenceModelId: 'us.anthropic.claude-sonnet-5',
+        agentModelId: 'us.anthropic.claude-sonnet-5',
       },
     });
     expect(arns).toEqual([
@@ -104,6 +103,41 @@ describe('inferenceArnList: jp（BR2.2、BR2.3）', () => {
     expect(() =>
       inferenceArnList(ENV, { inferenceScope: 'jp', explicitModelIds: { bedrockModelId: arn } }),
     ).toThrow(/bedrockModelId.*arn:aws:bedrock.*ID で渡す/);
+  });
+});
+
+describe('surveyModelArns: アンケートのステートマシンが呼ぶモデル（基盤設計 3.1、NFR5.3）', () => {
+  test('global はこのアカウントの推論プロファイルと、リージョン * の基盤モデルの 2 つ', () => {
+    expect(surveyModelArns(ENV, 'global.anthropic.claude-haiku-5-5')).toEqual([
+      'arn:aws:bedrock:*:123456789012:inference-profile/global.anthropic.claude-haiku-5-5',
+      'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5',
+    ]);
+  });
+
+  test('jp は Stack のリージョンの推論プロファイルと、国内 2 リージョンの基盤モデル', () => {
+    expect(surveyModelArns(ENV, 'jp.anthropic.claude-haiku-5-5')).toEqual([
+      'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.anthropic.claude-haiku-5-5',
+      'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-haiku-5-5',
+      'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.claude-haiku-5-5',
+    ]);
+  });
+
+  test.each([
+    'us.anthropic.claude-haiku-5-5',
+    'anthropic.claude-haiku-5-5',
+    'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.anthropic.claude-haiku-5-5',
+    '',
+  ])('global・jp 以外の %p は名前を示してエラー（今より広げない）', (value) => {
+    expect(() => surveyModelArns(ENV, value)).toThrow(/surveyModelId/);
+  });
+
+  test('アンケートのモデルはタスクロールの推論の一覧に足さない（呼ぶのはステートマシン）', () => {
+    expect(
+      inferenceArnList(ENV, {
+        inferenceScope: 'jp',
+        explicitModelIds: { surveyModelId: 'global.anthropic.claude-haiku-5-5' },
+      }),
+    ).toEqual(JP_ARNS);
   });
 });
 

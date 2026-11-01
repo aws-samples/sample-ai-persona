@@ -35,8 +35,8 @@ function scope(overrides: Partial<EndpointAccessScope> = {}): EndpointAccessScop
     memoryArn: arn('bedrock-agentcore', 'memory/m-1'),
     inferenceArns: inferenceArnList(ENV, { inferenceScope: 'global', explicitModelIds: {} }),
     knowledgeBaseArn: arn('bedrock', 'knowledge-base/*'),
-    batchJobArn: arn('bedrock', 'model-invocation-job/*'),
-    batchRoleArn: `arn:aws:iam::${ACCOUNT}:role/BedrockBatchRole`,
+    stateMachineArn: arn('states', 'stateMachine:SurveyRun'),
+    stateMachineExecutionsArn: arn('states', 'execution:SurveyRun:*'),
     ...overrides,
   };
 }
@@ -71,7 +71,6 @@ describe('endpointPolicyStatements: 12 種のサービスごとの文（function
   test('対象は 12 種（ゲートウェイ型 2 とアプリが使うインターフェイス型 10）で、SSM の 3 つは含まない（BR1.7）', () => {
     expect([...RESTRICTED_ENDPOINT_SERVICES].sort()).toEqual(
       [
-        'bedrock',
         'bedrock-agent-runtime',
         'bedrock-agentcore',
         'bedrock-agentcore-control',
@@ -83,8 +82,11 @@ describe('endpointPolicyStatements: 12 種のサービスごとの文（function
         'logs',
         's3',
         'secretsmanager',
+        // アンケートの実行の開始・確認・停止（FR9.1）。bedrock のコントロールプレーンは外した（FR8.4）
+        'states',
       ],
     );
+    expect(RESTRICTED_ENDPOINT_SERVICES).not.toContain('bedrock');
     for (const service of ['ssm', 'ssmmessages', 'ec2messages']) {
       expect(RESTRICTED_ENDPOINT_SERVICES).not.toContain(service);
     }
@@ -120,19 +122,17 @@ describe('endpointPolicyStatements: 12 種のサービスごとの文（function
     }
   });
 
-  test('bedrock: 推論の ARN とバッチ推論のジョブ、一覧の API 3 つ、バッチ推論のロールの iam:PassRole（BR1.10）', () => {
-    expect(shapeOf('bedrock')).toEqual({
-      'bedrock:*': [...s.inferenceArns, s.batchJobArn].sort(),
-      'bedrock:ListFoundationModels,bedrock:ListInferenceProfiles,bedrock:ListModelInvocationJobs': ['*'],
-      'iam:PassRole': [s.batchRoleArn],
+  test('states: このアプリのステートマシンとその実行に states:*（NFR6.2、基盤設計 3.3）', () => {
+    expect(shapeOf('states')).toEqual({
+      'states:*': [s.stateMachineArn, s.stateMachineExecutionsArn].sort(),
     });
   });
 
-  test('iam:PassRole は bedrock のエンドポイントだけに入る（ほかのエンドポイントからロールは渡せない）', () => {
+  test('iam:PassRole はどのエンドポイントにも入らない（バッチ推論のロールを外した）', () => {
     const withPassRole = RESTRICTED_ENDPOINT_SERVICES.filter((service) =>
       statementsOf(service).some((statement) => statement.Action.includes('iam:PassRole')),
     );
-    expect(withPassRole).toEqual(['bedrock']);
+    expect(withPassRole).toEqual([]);
   });
 
   test('S3: アプリのバケットと <ARN>/*、ECR のレイヤーのバケットは s3:GetObject だけ（BR1.5）', () => {
@@ -170,8 +170,6 @@ describe('endpointPolicyStatements: Bedrock 系の推論のリソースは Bedro
     expect(runtime).toHaveLength(1);
     expect(runtime[0].Action).toEqual(['bedrock:*']);
     expect([...runtime[0].Resource].sort()).toEqual([...inferenceArns].sort());
-    const control = statementsOf('bedrock', scope({ inferenceArns })).find((st) => st.Action[0] === 'bedrock:*');
-    expect(control?.Resource).toEqual(expect.arrayContaining(inferenceArns));
   });
 
   test('jp で global.* を明示したときは、その推論プロファイルの ARN がエンドポイントにも入る', () => {

@@ -12,18 +12,19 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { AwsCustomResource } from 'aws-cdk-lib/custom-resources';
 import { AppParameter } from '../parameters';
-import { bedrockInferenceArns } from './bedrock-arns';
-import { BedrockBatchRole } from './constructs/bedrock-batch-role';
+import { bedrockInferenceArns, surveyModelArns } from './bedrock-arns';
 import { allowIngressFromCidrs, ClosedNetwork } from './constructs/closed-network';
 import { CloudFrontDistribution } from './constructs/cloudfront';
 import { PASSWORD_POLICY } from './constructs/cognito';
 import { FargateAppService } from './constructs/fargate-service';
+import { SurveyRunStateMachine } from './constructs/survey-run-state-machine';
 import { ValidationEnvironment } from './constructs/validation-environment';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
 import { AuthMode, ResolvedProfile, resolveDeploymentProfile } from './deployment-profile';
 import { ecrLayerBucketArn, EndpointAccessScope, TASK_LIST_ACTIONS } from './endpoint-policies';
 import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
+import { resolveSurveyRunSettings, SurveyRunSettings } from './survey-run';
 
 /**
  * AwsCustomResource のシングルトンの Lambda の construct ID。CDK は公開の定数
@@ -157,12 +158,14 @@ export class AppStack extends Stack {
         inferenceScope: parameter.inferenceScope,
         bedrockModelId: parameter.bedrockModelId,
         agentModelId: parameter.agentModelId,
-        batchInferenceModelId: parameter.batchInferenceModelId,
+        surveyModelId: parameter.surveyModelId,
         enableAdditionalPersonaModels: parameter.enableAdditionalPersonaModels,
       });
     const closed = profile.closedNetwork;
-    // 推論の ARN（U5 BR2.4）: タスクロール・バッチ推論ロール・cdk-nag の抑止で同じ一覧
+    // 推論の ARN（U5 BR2.4）: タスクロールと cdk-nag の抑止で同じ一覧
     const inferenceArns = bedrockInferenceArns(this, profile);
+    // アンケートの並列数と打ち切り時間（範囲外なら synth で止める、NFR3.4・NFR3.5）
+    const surveySettings = resolveSurveyRunSettings(parameter);
     const imageTag = this.resolveImageTag();
 
     const network = closed
@@ -194,9 +197,12 @@ export class AppStack extends Stack {
       });
     }
 
-    const batchRole = new BedrockBatchRole(this, 'BedrockBatchRole', {
+    // アンケートのステートマシン（基盤設計 2.2）。推論は Step Functions のサービスが呼ぶ
+    const { partition, account, region } = this;
+    const surveyRun = new SurveyRunStateMachine(this, 'SurveyRun', {
       bucket: data.uploadBucket.bucket,
-      inferenceArns,
+      modelArns: surveyModelArns({ partition, account, region }, profile.modelIds.surveyModelId),
+      settings: surveySettings,
     });
 
     const app = new FargateAppService(this, 'App', {
@@ -212,7 +218,7 @@ export class AppStack extends Stack {
           parameter,
           profile,
           data,
-          batchRole.role.roleArn,
+          { stateMachine: surveyRun, settings: surveySettings },
           this.authEnvironment(profile, data),
         ),
         // U3 閉域（BR5.1）: 閉域のタスクにだけ末尾に足す。公開の環境変数の並びは変えない（BR5.2）
@@ -247,7 +253,7 @@ export class AppStack extends Stack {
     app.container.addEnvironment('COGNITO_CLIENT_ID', client.userPoolClientId);
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
-    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, batchRole.role.roleArn, profile, inferenceArns);
+    this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, surveyRun, profile, inferenceArns);
     // 閉域対応 U2（BR1.1、BR1.3）: アクセス先の資源（ロググループ・秘密）ができてから、タスクロールと
     // 同じ参照でエンドポイントのポリシーを付ける
     if (network) {
@@ -257,7 +263,7 @@ export class AppStack extends Stack {
           logGroup,
           [data.tokenEncryptionKeys, data.loginCookieSigningKey, clientSecret],
           inferenceArns,
-          batchRole.role.roleArn,
+          surveyRun,
         ),
       );
     }
@@ -265,7 +271,7 @@ export class AppStack extends Stack {
     // cdk-nag の抑止（U9、NFR7.15、NFR3.14）。理由は nag-reasons.ts
     acknowledgeAll(clientSecret, ['SMG4'], NAG_REASONS.cognitoClientSecret);
     this.acknowledgeCustomResourceRole();
-    this.acknowledgeIamWildcards(app, batchRole, data, parameter, inferenceArns);
+    this.acknowledgeIamWildcards(app, surveyRun, data, parameter, inferenceArns);
 
     new CfnOutput(this, 'AppUrl', { value: appBaseUrl });
     new CfnOutput(this, 'ClusterName', { value: app.cluster.clusterName });
@@ -291,6 +297,7 @@ export class AppStack extends Stack {
       database.personaBindingsTable,
       ...Object.values(database.discussionChildTables),
       database.customPersonaDataTable,
+      database.surveyRunLeaseTable,
     ];
   }
 
@@ -303,7 +310,7 @@ export class AppStack extends Stack {
     logGroup: logs.ILogGroup,
     secrets: secretsmanager.ISecret[],
     inferenceArns: string[],
-    batchRoleArn: string,
+    surveyRun: SurveyRunStateMachine,
   ): EndpointAccessScope {
     const { partition, account, region } = this;
     return {
@@ -318,9 +325,9 @@ export class AppStack extends Stack {
       memoryArn: data.memory.memoryArn,
       inferenceArns,
       knowledgeBaseArn: `arn:${partition}:bedrock:${region}:${account}:knowledge-base/*`,
-      batchJobArn: `arn:${partition}:bedrock:${region}:${account}:model-invocation-job/*`,
-      // タスクロールの iam:PassRole と同じロール（grantTaskRole）
-      batchRoleArn,
+      // タスクロールの states の文と同じ参照（grantTaskRole、基盤設計 3.3）
+      stateMachineArn: surveyRun.stateMachine.stateMachineArn,
+      stateMachineExecutionsArn: surveyRun.executionsArn,
     };
   }
 
@@ -434,7 +441,7 @@ export class AppStack extends Stack {
    */
   private acknowledgeIamWildcards(
     app: FargateAppService,
-    batchRole: BedrockBatchRole,
+    surveyRun: SurveyRunStateMachine,
     data: DataStack,
     parameter: AppParameter,
     inferenceArns: string[],
@@ -450,11 +457,11 @@ export class AppStack extends Stack {
     acknowledgeAll(taskPolicy, inference, NAG_REASONS.bedrockInference);
     acknowledgeAll(
       taskPolicy,
-      ['model-invocation-job/*', 'knowledge-base/*'].map((resource) =>
-        iam5ResourceId(this, `arn:${this.partition}:bedrock:${this.region}:${this.account}:${resource}`),
-      ),
+      [iam5ResourceId(this, `arn:${this.partition}:bedrock:${this.region}:${this.account}:knowledge-base/*`)],
       NAG_REASONS.bedrockAccountResources,
     );
+    // アンケートの実行（開始・確認・停止）は、このステートマシンの実行だけ（基盤設計 3.2）
+    acknowledgeAll(taskPolicy, [iam5ResourceId(this, surveyRun.executionsArn)], NAG_REASONS.surveyExecutions);
     acknowledgeAll(
       taskPolicy,
       [iam5ExportedResourceId(data, data.memory.memoryArn, '/*')],
@@ -479,13 +486,31 @@ export class AppStack extends Stack {
     }
     acknowledgeAll(defaultPolicyOf(executionRole), ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
 
-    const batchPolicy = defaultPolicyOf(batchRole.role);
+    this.acknowledgeSurveyRun(surveyRun, bucketObjects);
+  }
+
+  /** The survey state machine's cdk-nag findings (基盤設計 2.2・3.1). */
+  private acknowledgeSurveyRun(
+    surveyRun: SurveyRunStateMachine,
+    bucketObjects: (...suffixes: string[]) => string[],
+  ): void {
+    acknowledgeAll(surveyRun.stateMachine, ['SF1'], NAG_REASONS.surveyStateMachineLogs);
+    acknowledgeAll(surveyRun.stateMachine, ['SF2'], NAG_REASONS.surveyStateMachineTracing);
+    const rolePolicy = defaultPolicyOf(surveyRun.role);
+    acknowledgeAll(rolePolicy, ['IAM5[Resource::*]'], NAG_REASONS.logDeliveryApis);
     acknowledgeAll(
-      batchPolicy,
-      bucketObjects('/batch-inference/*', '/batch-inference/output/*'),
-      NAG_REASONS.bucketObjects,
+      rolePolicy,
+      bucketObjects('/survey-runs/*', '/survey-runs/*/results/*'),
+      NAG_REASONS.surveyRunObjects,
     );
-    acknowledgeAll(batchPolicy, inference, NAG_REASONS.bedrockInference);
+    // `*` を含む ARN だけが IAM5 の指摘になる（jp のプロファイルの ARN には `*` がない）
+    const modelArns = surveyRun.modelArns.filter((arn) => arn.includes('*'));
+    acknowledgeAll(rolePolicy, modelArns.map((arn) => iam5ResourceId(this, arn)), NAG_REASONS.surveyModel);
+    acknowledgeAll(
+      surveyRun.executionPolicy,
+      [iam5ResourceId(this, surveyRun.childExecutionsArn)],
+      NAG_REASONS.surveyMapRuns,
+    );
   }
 
   private resolveImageTag(): string {
@@ -521,7 +546,7 @@ export class AppStack extends Stack {
     parameter: AppParameter,
     profile: ResolvedProfile,
     data: DataStack,
-    batchRoleArn: string,
+    survey: { stateMachine: SurveyRunStateMachine; settings: SurveyRunSettings },
     auth: AuthEnvironment,
   ): Record<string, string> {
     const region = this.region;
@@ -562,10 +587,12 @@ export class AppStack extends Stack {
       ENABLE_ADDITIONAL_PERSONA_MODELS: String(parameter.enableAdditionalPersonaModels ?? false),
       // optional のため未指定時は既定 true。String(undefined) で "undefined" が渡るのを防ぐ
       ENABLE_DATASET_ANALYSIS: String(parameter.enableDatasetAnalysis ?? true),
-      BEDROCK_BATCH_ROLE_ARN: batchRoleArn,
-      BATCH_INFERENCE_MODEL_ID: profile.modelIds.batchInferenceModelId,
       SURVEY_S3_PREFIX: parameter.surveyS3Prefix ?? 'survey-results/',
-      BATCH_INFERENCE_S3_PREFIX: parameter.batchInferenceS3Prefix ?? 'batch-inference/',
+      // アンケートの実行基盤（基盤設計 4 章、src/config.py の SURVEY_*）。打ち切り時間はステートマシンと同じ値
+      SURVEY_STATE_MACHINE_ARN: survey.stateMachine.stateMachine.stateMachineArn,
+      SURVEY_RUN_LEASE_TABLE_NAME: data.database.surveyRunLeaseTable.tableName,
+      SURVEY_EXECUTION_TIMEOUT_SECONDS: String(survey.settings.timeoutSeconds),
+      SURVEY_MODEL_ID: profile.modelIds.surveyModelId,
       ...(auth.passwordPolicy ?? {}),
     };
     if (parameter.dataAgentRuntimeArn) {
@@ -655,7 +682,7 @@ export class AppStack extends Stack {
     taskRole: iam.IRole,
     parameter: AppParameter,
     data: DataStack,
-    batchRoleArn: string,
+    surveyRun: SurveyRunStateMachine,
     profile: ResolvedProfile,
     inferenceArns: string[],
   ): void {
@@ -775,28 +802,25 @@ export class AppStack extends Stack {
       ],
       resources: inferenceArns,
     }));
-    // バッチ推論（アンケート）。CreateModelInvocationJob はジョブの ARN と使うモデルの ARN の
-    // 両方で認可される（Bedrock ユーザーガイド「Required permissions for batch inference」）
-    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: [
-        'bedrock:CreateModelInvocationJob', 'bedrock:GetModelInvocationJob',
-        'bedrock:StopModelInvocationJob',
-        'bedrock:TagResource', 'bedrock:UntagResource', 'bedrock:ListTagsForResource',
-      ],
-      resources: [
-        `arn:${partition}:bedrock:${this.region}:${account}:model-invocation-job/*`,
-        ...inferenceArns,
-      ],
-    }));
     // ナレッジベースの検索は、このアカウント・リージョンの KB だけ
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['bedrock:Retrieve'],
       resources: [`arn:${partition}:bedrock:${this.region}:${account}:knowledge-base/*`],
     }));
+    // アンケートの実行（基盤設計 3.2、NFR5.6）: 開始はこのステートマシンだけ、確認と停止はその実行だけ。
+    // バッチ推論のジョブの操作と iam:PassRole は付けない（FR8.2）
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['iam:PassRole'],
-      resources: [batchRoleArn],
-      conditions: { StringEquals: { 'iam:PassedToService': 'bedrock.amazonaws.com' } },
+      actions: ['states:StartExecution'],
+      resources: [surveyRun.stateMachine.stateMachineArn],
+    }));
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['states:DescribeExecution', 'states:StopExecution'],
+      resources: [surveyRun.executionsArn],
+    }));
+    // 進行役の担当者の記録（BR2.3）。条件付きの取得・延長・手放しの 4 つの操作だけ
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+      resources: [data.database.surveyRunLeaseTable.tableArn],
     }));
     // AgentCore Memory は、この Stage の Memory だけ（ListMemories は上の一覧の文）。
     // ListEvents などの子の操作のため <ARN>/* も並べる

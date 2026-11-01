@@ -4,31 +4,32 @@ SurveyExecutionManager
 
 v1.0.0 U7 (``functional-design/rules.md``):
 
-- BR2.1: starting a survey checks, in order, ``ai:execute``, the template's
+- BR2.1: starting a survey checks, in order, ``ai:execute``, that surveys
+  can run here (a state machine is configured, BR9.1), the template's
   ``ensure_readable`` and the persona data (Nemotron downloaded, or custom
-  data the user may use); then its size (350KB). Nothing is written and no
-  batch job is queued unless every check passes.
+  data the user may use); then the count (10 or more, BR1.1〜BR1.3) and the
+  size (350KB). Nothing is written unless every check passes.
 - BR1.1 / BR2.7: the runner owns the survey; it starts unshared and carries a
   snapshot of the template (name, questions, image references) and the
   custom data's name.
-- BR2.2: the background run uses the snapshot and the datasource only; it
-  does not decide again. Missing custom data (record or file) or an
-  unreadable snapshot image stops it with an error code; a survey deleted
-  meanwhile is not written back, and a CSV already put is removed.
+- FR3.1: an accepted survey is saved ``queued``; ``SurveyRunManager`` (the
+  survey runner) starts it on Step Functions when it is first in line.
+- BR8.1: a ``running`` / ``pending`` survey from before the switch (no
+  execution, no queue entry) is turned into ``SURVEY_EXECUTION_INTERRUPTED``
+  when a list or the detail reads it.
 - BR1.2 / BR1.3: lists are tabbed; detail, download and images need read.
 - BR2.8: result images are only the snapshot's, signed after the read check.
-- BR1.8: delete removes the body and its share items, then the CSV (three
-  tries, then ``survey.cleanup_failed``) and the cached CSV.
+- BR1.8 / BR7: delete removes the body and its share items, stops a running
+  execution (a failure is logged), removes the run location, then the CSV
+  (three tries, then ``survey.cleanup_failed``) and the cached CSV.
 
-Logs: ``survey.dependency_missing``, ``survey.execution_failed`` and
-``survey.cleanup_failed`` (IDs and codes only, NFR3.13).
+Logs: ``survey.run_stop_failed`` and ``survey.cleanup_failed`` (IDs and codes
+only, NFR3.13).
 """
 
-import base64
-import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -36,13 +37,10 @@ from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.custom_persona_data import PersonaDataRef
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
-from ..models.nemotron_dataset import NemotronSource
+from ..models.external_failure import FailureClass
 from ..models.sharing import ListTab, TabbedList
-from ..models.survey import Survey, SurveyDetail, TemplateSnapshot
-from ..services.stores.custom_persona_data_store import (
-    CustomPersonaDataStore,
-    CustomPersonaDataStoreError,
-)
+from ..models.survey import Survey, SurveyDetail, SurveyStatus, TemplateSnapshot
+from ..services.stores.custom_persona_data_store import CustomPersonaDataStore
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
 from ..services.survey_batch_service import SurveyBatchService
@@ -58,9 +56,10 @@ from .components.owner_directory import OwnerDirectory
 from .components.resource_lookup import ResourceLookup
 from .components.resource_sharing import SEARCH_LIMIT, ResourceSharing
 from .components.sharing_runtime import access_parts_from, sharing_parts_from
+from .components.survey_persona_source import MIN_SURVEY_PERSONAS, SurveyPersonaSource
 from .shared.cleanup import run_cleanup
-from .shared.result_csv_cache import shared_result_cache
 from .shared.structured_log import log_event
+from .shared.result_csv_cache import shared_result_cache
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +98,6 @@ class SurveyExecutionError(SurveyExecutionManagerError):
     pass
 
 
-class _SurveyGone(Exception):
-    """The survey was deleted while it ran (not written back, BR2.2 (c))."""
-
-
 class ResultCache(Protocol):
     """What deleting needs from ``ResultCsvCache`` (shared with the analysis)."""
 
@@ -114,22 +109,19 @@ class SurveyStart:
     """A survey that passed every start check (BR2.1).
 
     Attributes:
-        survey: The saved survey (``pending``).
-        run: Runs it (batch inference); the caller schedules it in the
-            background. It records failures on the survey and never raises.
+        survey: The saved survey (``queued``). The caller wakes the survey
+            runner, which starts it when it is first in line (WF1).
     """
 
     survey: Survey
-    run: Callable[[], None]
 
 
 class SurveyExecutionManager:
     """アンケート実行制御"""
 
-    #: バッチ推論1ジョブあたりの最小レコード数（Bedrockのクォータ）。
-    #: これを下回る入力でジョブを作ると Bedrock 側の検証で Failed になるため、
-    #: 希望数だけでなく「実際に集まった件数」もこの値で検証する。
-    MIN_BATCH_RECORDS = 100
+    #: アンケートの最小人数（FR4.1、FR4.3）。希望数だけでなく、作成時と開始時に
+    #: 「実際に集まる人数」もこの値で確かめる（BR1.2、BR1.4）。
+    MIN_SURVEY_PERSONAS = MIN_SURVEY_PERSONAS
 
     def __init__(
         self,
@@ -144,13 +136,15 @@ class SurveyExecutionManager:
         result_cache: Optional[ResultCache] = None,
         sleep: Callable[[float], None] = time.sleep,
         asset_delivery: Optional[AssetDelivery] = None,
+        runner: Optional[Any] = None,
+        runner_configured: Callable[[], bool] = lambda: config.survey_runner_configured,
     ) -> None:
         """Create the manager.
 
         Args:
             survey_store: Survey bodies.
             survey_template_store: Template bodies (copied into new surveys).
-            survey_batch_service: Persona sampling and batch inference.
+            survey_batch_service: Persona sampling (DuckDB).
             s3_service: Result CSVs, images and custom data files.
             resource_sharing: The per-task ``ResourceSharing`` (tabs, delete).
             owners: The owner-name copy (display only).
@@ -161,6 +155,9 @@ class SurveyExecutionManager:
             asset_delivery: Serves result CSVs and images (closed network U4;
                 built from ``s3_service`` and ``Config.ASSET_DELIVERY`` when
                 omitted).
+            runner: ``SurveyRunnerService`` (stops an execution on delete;
+                from ``service_factory`` when omitted and configured).
+            runner_configured: Whether surveys can run here (BR9.1).
         """
         self._surveys = survey_store or service_factory.get_survey_store()
         self._templates = (
@@ -177,8 +174,18 @@ class SurveyExecutionManager:
         self._cache = result_cache
         self._sleep = sleep
         self._delivery = asset_delivery
+        self._runner = runner
+        self._runner_configured = runner_configured
+        self._persona_source = SurveyPersonaSource(self.batch_service, self.s3_service)
 
     # --- parts (built lazily) -------------------------------------------------------
+
+    @property
+    def _survey_runner(self) -> Optional[Any]:
+        """The Step Functions runner, or ``None`` where surveys do not run."""
+        if self._runner is None and self._runner_configured():
+            self._runner = service_factory.get_survey_runner_service()
+        return self._runner
 
     @property
     def _asset_delivery(self) -> AssetDelivery:
@@ -231,19 +238,25 @@ class SurveyExecutionManager:
         filters: Optional[Dict[str, Any]] = None,
         datasource: Optional[str] = None,
     ) -> SurveyStart:
-        """Check every start condition, then save a ``pending`` survey (BR2.1).
+        """Check every start condition, then save a ``queued`` survey (BR2.1, WF1).
 
         Returns:
-            The saved survey and the run the caller schedules.
+            The saved survey; the caller wakes the survey runner.
 
         Raises:
             AccessDeniedError: The user lacks ``ai:execute``.
-            CodedError: ``SURVEY_TEMPLATE_NOT_FOUND``,
+            CodedError: ``SURVEY_RUNNER_NOT_CONFIGURED``,
+                ``SURVEY_TEMPLATE_NOT_FOUND``,
                 ``CUSTOM_PERSONA_DATA_NOT_FOUND``, ``LOOKUP_UNAVAILABLE``,
                 ``SURVEY_DATASET_NOT_DOWNLOADED``, count validation codes,
                 ``SURVEY_TEMPLATE_TOO_LARGE`` or ``SURVEY_OPERATION_FAILED``.
         """
         AccessPolicy.require(principal, Permission.AI_EXECUTE, resource_type=_SURVEY)
+        if not self._runner_configured():
+            raise SurveyExecutionError(
+                "no survey state machine is configured",
+                code=ErrorCode.SURVEY_RUNNER_NOT_CONFIGURED,
+            )
         template_target = self._resource_lookup.get(_TEMPLATE, template_id)
         AccessPolicy.ensure_readable(
             principal, template_target, ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
@@ -281,8 +294,8 @@ class SurveyExecutionManager:
             raise SurveyExecutionError(
                 "survey save failed", code=ErrorCode.SURVEY_OPERATION_FAILED
             ) from e
-        logger.info("Survey created: %s", survey.id)
-        return SurveyStart(survey=survey, run=lambda: self._execute_survey(survey.id))
+        logger.info("Survey queued: %s", survey.id)
+        return SurveyStart(survey=survey)
 
     def _usable_datasource(
         self, principal: Principal, datasource: Optional[str]
@@ -313,216 +326,8 @@ class SurveyExecutionManager:
             raise LookupUnavailableError("template body unreadable") from e
 
     # =========================================================================
-    # 裏の実行（BR2.2、NFR1.86）
+    # 読み書き
     # =========================================================================
-
-    def _execute_survey(self, survey_id: str) -> None:
-        """Run one survey in the background; failures are stored as codes."""
-        try:
-            survey = self._read_survey(survey_id)
-            if survey is None or not self._update(
-                survey_id, {"status": "running", "updated_at": _now()}
-            ):
-                self._dependency_missing(survey_id, "survey")
-                return
-            self._run(survey)
-        except _SurveyGone:
-            self._dependency_missing(survey_id, "survey")
-        except Exception as e:
-            self._mark_survey_failed(survey_id, e)
-
-    def _run(self, survey: Survey) -> None:
-        ref = PersonaDataRef.parse(survey.datasource)
-        extra_columns = self._extra_columns(survey.id, ref)
-        if ref.is_nemotron:
-            self._ensure_parquet_uri(ref.value)
-        snapshot = survey.template_snapshot or self._legacy_snapshot(survey)
-        image_contents = self._snapshot_images(survey.id, snapshot)
-        sampled = self.batch_service.filter_and_sample_personas(
-            survey.filters or {}, survey.persona_count, datasource=ref.value
-        )
-        # 作成から実行までの間にデータが差し替わることがあるため、ジョブを作る直前にも
-        # 実際に集まった行数を確かめる（Bedrock 側で Failed になる前に止める）。
-        if len(sampled) < self.MIN_BATCH_RECORDS:
-            self._raise_too_few(len(sampled), survey.filters)
-        prompts = self._build_prompts(sampled, snapshot, image_contents, extra_columns)
-        results = self.batch_service.execute_batch_inference(prompts)
-        if self._read_survey(survey.id) is None:
-            raise _SurveyGone()
-        s3_path = self._save_results_to_s3(results, sampled, snapshot, survey.id)
-        completed = self._update(
-            survey.id,
-            {
-                "status": "completed",
-                "s3_result_path": s3_path,
-                "persona_count": len(sampled),
-                "updated_at": _now(),
-            },
-        )
-        if not completed:
-            self._cleanup(
-                survey.id, "results", lambda: self.s3_service.delete_file(s3_path)
-            )
-            raise _SurveyGone()
-        logger.info("Survey completed: %s", survey.id)
-
-    def _extra_columns(
-        self, survey_id: str, ref: PersonaDataRef
-    ) -> Optional[List[Dict[str, str]]]:
-        """The custom data's columns from its record, by ID (BR2.2 (a))."""
-        if ref.custom_id is None:
-            return None
-        try:
-            record = self._custom_persona_data.get(ref.custom_id)
-            present = record is not None and self.s3_service.exists(
-                self.s3_service.path_of(record.s3_key)
-            )
-        except CustomPersonaDataStoreError as e:
-            raise SurveyExecutionError(
-                "custom persona data unreadable",
-                code=ErrorCode.SURVEY_EXECUTION_FAILED,
-            ) from e
-        if record is None or not present:
-            self._dependency_missing(survey_id, "custom_persona_data")
-            raise SurveyExecutionError(
-                "custom persona data is gone",
-                code=ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
-            )
-        return record.extra_column_dicts()
-
-    def _legacy_snapshot(self, survey: Survey) -> TemplateSnapshot:
-        """A survey saved without a snapshot reads its template (before v1.0.0)."""
-        template = self._read_template(survey.template_id)
-        if template is None:
-            raise SurveyExecutionError(
-                "survey template is gone", code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
-            )
-        return TemplateSnapshot.from_template(template)
-
-    def _snapshot_images(
-        self, survey_id: str, snapshot: TemplateSnapshot
-    ) -> List[Dict[str, Any]]:
-        """The snapshot's images, compressed; any failure stops the run (BR2.2 (b))."""
-        from .shared.file_utils import compress_image_for_batch
-
-        contents: List[Dict[str, Any]] = []
-        for image in snapshot.images:
-            try:
-                if image.file_path.startswith("s3://"):
-                    raw = self.s3_service.download_file(image.file_path)
-                else:
-                    with open(image.file_path, "rb") as f:
-                        raw = f.read()
-                compressed, media_type = compress_image_for_batch(raw)
-            except Exception as e:
-                self._dependency_missing(survey_id, "image")
-                raise SurveyExecutionError(
-                    f"template image unreadable ({type(e).__name__})",
-                    code=ErrorCode.SURVEY_TEMPLATE_IMAGE_UNAVAILABLE,
-                ) from e
-            contents.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(compressed).decode("utf-8"),
-                    },
-                }
-            )
-        return contents
-
-    def _build_prompts(
-        self,
-        sampled: Any,
-        snapshot: TemplateSnapshot,
-        image_contents: List[Dict[str, Any]],
-        extra_columns: Optional[List[Dict[str, str]]],
-    ) -> Any:
-        from ..prompts.survey_prompts import (
-            SURVEY_QUESTION_FORMAT_TEMPLATE,
-            build_persona_system_prompt,
-        )
-
-        questions_text = self._format_questions_for_prompt(list(snapshot.questions))
-        system_prompts: List[str] = []
-        user_messages: List[List[Dict[str, Any]]] = []
-        for row in sampled.iter_rows(named=True):
-            system_prompts.append(
-                build_persona_system_prompt(row, extra_columns=extra_columns)
-            )
-            user_content: List[Dict[str, Any]] = []
-            if image_contents:
-                names = "\n".join(f"- {img.name}" for img in snapshot.images)
-                user_content.append(
-                    {
-                        "type": "text",
-                        "text": f"以下の画像が添付されています:\n{names}\n",
-                    }
-                )
-                user_content.extend(image_contents)
-            user_content.append(
-                {
-                    "type": "text",
-                    "text": SURVEY_QUESTION_FORMAT_TEMPLATE.format(
-                        questions_text=questions_text
-                    ),
-                }
-            )
-            user_messages.append(user_content)
-        output_schema = {
-            "type": "object",
-            "properties": {
-                "answers": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "question_id": {"type": "string"},
-                            "answer": {"type": "string"},
-                        },
-                        "required": ["question_id", "answer"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["answers"],
-            "additionalProperties": False,
-        }
-        return self.batch_service.build_batch_prompts(
-            sampled, system_prompts, user_messages, output_schema
-        )
-
-    def _mark_survey_failed(self, survey_id: str, exc: Exception) -> None:
-        """Store the failure as an error code (never the exception text)."""
-        code = getattr(exc, "code", None)
-        if not isinstance(code, ErrorCode) or code is ErrorCode.UNKNOWN:
-            code = ErrorCode.SURVEY_EXECUTION_FAILED
-        context = getattr(exc, "context", None)
-        fields: Dict[str, Any] = {
-            "status": "error",
-            "error_code": code.value,
-            "updated_at": _now(),
-        }
-        remove: tuple[str, ...] = ()
-        if isinstance(context, dict) and context:
-            fields["error_context"] = dict(context)
-        else:
-            remove = ("error_context",)
-        logger.error("Survey execution failed: %s", type(exc).__name__)
-        log_event("survey.execution_failed", survey_id=survey_id, error_code=code.value)
-        try:
-            self._surveys.update_fields(survey_id, fields, remove=remove)
-        except SurveyStoreError:
-            logger.error("Recording the survey failure failed", exc_info=True)
-
-    def _dependency_missing(self, survey_id: str, missing: str) -> None:
-        log_event(
-            "survey.dependency_missing",
-            level="WARNING",
-            survey_id=survey_id,
-            missing=missing,
-        )
 
     def _read_survey(self, survey_id: str) -> Optional[Survey]:
         try:
@@ -530,218 +335,45 @@ class SurveyExecutionManager:
         except SurveyStoreError as e:
             raise LookupUnavailableError("survey body unreadable") from e
 
-    def _update(self, survey_id: str, fields: Dict[str, Any]) -> bool:
-        return self._surveys.update_fields(survey_id, fields)
-
     def _ensure_parquet_uri(self, datasource: str) -> None:
         """nemotron使用時、batch_serviceにS3 URIをセットする。
 
-        The key is ``Config.NEMOTRON_DATASET_KEY`` (closed network U3 BR2.1).
-        A missing file never triggers a download: it stops with
-        ``NEMOTRON_DATASET_NOT_PLACED`` when the file is placed beforehand
-        (``s3``), else ``SURVEY_DATASET_NOT_DOWNLOADED`` (BR2.4).
+        The key is ``Config.NEMOTRON_DATASET_KEY`` (closed network U3 BR2.1);
+        its presence is checked through ``S3Service.exists``. A missing file
+        never triggers a download: it stops with ``NEMOTRON_DATASET_NOT_PLACED``
+        when the file is placed beforehand (``s3``), else
+        ``SURVEY_DATASET_NOT_DOWNLOADED`` (BR2.4).
         """
-        if datasource.startswith("custom:") or self.batch_service.has_parquet_uri():
-            return
-        key = config.NEMOTRON_DATASET_KEY
-        bucket = self.s3_service.bucket_name
+        self._persona_source.ensure_dataset(datasource, SurveyExecutionError)
+
+    def _settle_legacy(self, survey: Survey) -> Survey:
+        """A running / pending survey from batch inference becomes an error (BR8.1).
+
+        The write is conditional on the status read; even when it fails the
+        survey is shown as interrupted.
+        """
+        if not survey.is_legacy_in_flight:
+            return survey
+        code = ErrorCode.SURVEY_EXECUTION_INTERRUPTED
         try:
-            self.s3_service.s3_client.head_object(Bucket=bucket, Key=key)
-        except Exception as e:
-            # The S3 key is a file path: logged here, never put in the context.
-            logger.warning(
-                "Nemotron parquet not usable at %s: %s", key, type(e).__name__
+            self._surveys.transition(
+                survey.id,
+                expected=survey.status,
+                fields={
+                    "status": SurveyStatus.ERROR.value,
+                    "error_code": code.value,
+                    "updated_at": datetime.now().isoformat(),
+                },
+                remove=("error_context",),
             )
-            if config.NEMOTRON_SOURCE == NemotronSource.S3:
-                raise SurveyExecutionError(
-                    "nemotron parquet is not placed",
-                    code=ErrorCode.NEMOTRON_DATASET_NOT_PLACED,
-                ) from e
-            raise SurveyExecutionError(
-                "nemotron parquet uri is not configured",
-                code=ErrorCode.SURVEY_DATASET_NOT_DOWNLOADED,
-            ) from e
-        self.batch_service.set_parquet_s3_uri(f"s3://{bucket}/{key}")
-
-    def _save_results_to_s3(
-        self,
-        batch_results: List[Dict[str, Any]],
-        personas_df: Any,
-        template: Any,
-        survey_id: str,
-    ) -> str:
-        """バッチ推論結果をCSV化してS3に保存する（キーはアンケートの ID、BR2.9）。"""
-
-        from .shared.file_utils import build_results_csv_bytes
-
-        attribute_headers = [
-            "persona_id",
-            "sex",
-            "age",
-            "occupation",
-            "country",
-            "region",
-            "prefecture",
-            "marital_status",
-        ]
-        question_headers: List[str] = []
-        for q in template.questions:
-            question_headers.extend([f"{q.id}_text", f"{q.id}_answer"])
-
-        all_headers = attribute_headers + question_headers
-
-        persona_index: Dict[str, Dict[str, Any]] = {}
-        for row in personas_df.iter_rows(named=True):
-            rid = str(row.get("uuid", ""))
-            persona_index[rid] = row
-
-        rows: List[List[str]] = []
-        for result in batch_results:
-            record_id = result.get("recordId", "")
-            persona_row = persona_index.get(record_id)
-
-            row_data: List[str] = []
-            if persona_row is not None:
-                row_data.append(record_id)
-                for col in attribute_headers[1:]:
-                    val = persona_row.get(col, "")
-                    row_data.append(str(val) if val is not None else "")
-            else:
-                row_data = [record_id] + [""] * 7
-
-            answers = self._parse_batch_result_answers(result, template.questions)
-            answer_map = {a["question_id"]: a["answer"] for a in answers}
-
-            for q in template.questions:
-                row_data.append(q.text)
-                row_data.append(str(answer_map.get(q.id, "")))
-
-            rows.append(row_data)
-
-        csv_bytes = build_results_csv_bytes(all_headers, rows)
-        s3_key = f"survey-results/{survey_id}/results.csv"
-        return self.s3_service.upload_file(csv_bytes, s3_key)
-
-    def _parse_batch_result_answers(
-        self, result: Dict[str, Any], questions: List[Any]
-    ) -> List[Dict[str, str]]:
-        """バッチ推論結果から回答データをパース・バリデーションする。"""
-        try:
-            model_output = result.get("modelOutput", {})
-            if isinstance(model_output, dict):
-                content = model_output.get("content", [])
-                if isinstance(content, list) and len(content) > 0:
-                    text = content[0].get("text", "")
-                else:
-                    text = str(model_output)
-            else:
-                text = str(model_output)
-
-            data = json.loads(text)
-            if "answers" not in data or not isinstance(data["answers"], list):
-                return []
-
-            question_map = {q.id: q for q in questions}
-            validated_answers = []
-
-            for answer_obj in data["answers"]:
-                question_id = answer_obj.get("question_id", "")
-                answer = answer_obj.get("answer", "")
-
-                question = question_map.get(question_id)
-                if not question:
-                    validated_answers.append(
-                        {"question_id": question_id, "answer": answer}
-                    )
-                    continue
-
-                validated_answers.append(
-                    {
-                        "question_id": question_id,
-                        "answer": self._validate_answer(answer, question),
-                    }
-                )
-
-            return validated_answers
-        except Exception as e:
-            logger.warning("Failed to parse batch result: %s", type(e).__name__)
-            return []
-
-    @staticmethod
-    def _validate_answer(answer: str, question: Any) -> str:
-        """回答バリデーション。無効な場合は空文字列を返す。"""
-        if not answer or not answer.strip():
-            return ""
-        answer = answer.strip()
-
-        if question.question_type == "multiple_choice":
-            if question.allow_multiple:
-                selected = [s.strip() for s in answer.split("|") if s.strip()]
-                valid_selected = [s for s in selected if s in question.options]
-                if not valid_selected:
-                    return ""
-                if (
-                    question.max_selections > 0
-                    and len(valid_selected) > question.max_selections
-                ):
-                    valid_selected = valid_selected[: question.max_selections]
-                return "|".join(valid_selected)
-            else:
-                return answer if answer in question.options else ""
-
-        elif question.question_type == "scale_rating":
-            try:
-                value = int(answer)
-                if question.scale_min <= value <= question.scale_max:
-                    return str(value)
-                return ""
-            except ValueError:
-                return ""
-
-        return answer
-
-    @staticmethod
-    def _format_questions_for_prompt(questions: List[Any]) -> str:
-        """質問リストをプロンプト用テキストに変換する。"""
-        lines: List[str] = []
-        for i, q in enumerate(questions, 1):
-            lines.append(f"質問{i} (ID: {q.id}): {q.text}")
-            if q.question_type == "multiple_choice":
-                if q.allow_multiple:
-                    max_note = (
-                        f"（最大{q.max_selections}個まで）"
-                        if q.max_selections > 0
-                        else ""
-                    )
-                    lines.append(f"  タイプ: 選択式・複数回答{max_note}")
-                    lines.append("  【必ず以下の選択肢から選んでください】")
-                else:
-                    lines.append("  タイプ: 選択式・単一回答")
-                    lines.append("  【必ず以下の選択肢から1つ選んでください】")
-                for j, opt in enumerate(q.options, 1):
-                    lines.append(f"  {j}. {opt}")
-                if q.allow_multiple:
-                    lines.append(
-                        f"  【回答例】{q.options[0]}|{q.options[1] if len(q.options) > 1 else q.options[0]}"
-                    )
-                    lines.append(
-                        "  【注意】選択肢の文言をそのまま使用し、説明や理由は含めないでください"
-                    )
-                else:
-                    lines.append(f"  【回答例】{q.options[0]}")
-                    lines.append(
-                        "  【注意】選択肢の文言をそのまま使用し、説明や理由は含めないでください"
-                    )
-            elif q.question_type == "free_text":
-                lines.append(
-                    "  タイプ: 自由記述（あなた自身の経験・価値観・こだわりを具体的に盛り込んで200文字以内で回答してください。一般的・抽象的な回答は避けてください）"
-                )
-            elif q.question_type == "scale_rating":
-                lines.append(
-                    f"  タイプ: スケール評価（{q.scale_min}〜{q.scale_max}の整数で回答してください）"
-                )
-            lines.append("")
-        return "\n".join(lines)
+        except SurveyStoreError:
+            logger.warning("Marking an interrupted survey failed", exc_info=True)
+        return replace(
+            survey,
+            status=SurveyStatus.ERROR.value,
+            error_code=code.value,
+            error_context=None,
+        )
 
     # =========================================================================
     # 一覧（BR1.2）
@@ -796,7 +428,7 @@ class SurveyExecutionManager:
             raise LookupUnavailableError("survey bodies unreadable") from e
         bodies = [found[i] for i in dict.fromkeys(survey_ids) if i in found]
         return [
-            s
+            self._settle_legacy(s)
             for s in bodies
             if self._resource_sharing.can_read_body(principal, _SURVEY, s.to_dict())
         ]
@@ -900,7 +532,7 @@ class SurveyExecutionManager:
         Raises:
             CodedError: ``SURVEY_NOT_FOUND``.
         """
-        survey = self._readable_survey(principal, survey_id)
+        survey = self._settle_legacy(self._readable_survey(principal, survey_id))
         manageable = self._resource_sharing.can_manage_body(
             principal, _SURVEY, survey.to_dict()
         )
@@ -949,7 +581,7 @@ class SurveyExecutionManager:
 
     @staticmethod
     def _result_path(survey: Survey) -> str:
-        if survey.status != "completed" or not survey.s3_result_path:
+        if survey.status != SurveyStatus.COMPLETED or not survey.s3_result_path:
             raise SurveyExecutionManagerError(
                 "survey has no result yet", code=ErrorCode.SURVEY_RESULT_NOT_READY
             )
@@ -1012,6 +644,12 @@ class SurveyExecutionManager:
     def delete_survey(self, principal: Principal, survey_id: str) -> None:
         """Delete the body and its shares, then the CSV and the cache (BR1.8).
 
+        A running survey's execution is stopped (BR7.1; a failure is logged
+        and the delete goes on, the time limit ends the execution). A queued
+        survey leaves the queue with its body (BR7.2); an execution started
+        for it but not yet recorded is stopped too. The run location
+        is removed for both (BR10.1); the caller wakes the survey runner.
+
         Raises:
             CodedError: ``SURVEY_NOT_FOUND`` / ``SURVEY_OPERATION_FAILED``.
             AccessDeniedError: Readable but not manageable.
@@ -1023,6 +661,7 @@ class SurveyExecutionManager:
             raise SurveyExecutionManagerError(
                 "nothing to delete", code=ErrorCode.SURVEY_NOT_FOUND
             )
+        self._stop_run(survey_id, deleted)
         result_path = deleted.get("s3_result_path")
         if result_path:
             self._cleanup(
@@ -1032,6 +671,34 @@ class SurveyExecutionManager:
             )
         self.result_cache.evict(survey_id)
         logger.info("Survey deleted: %s", survey_id)
+
+    def _stop_run(self, survey_id: str, deleted: Dict[str, Any]) -> None:
+        """Stop the execution of a deleted queued or running survey; remove its run location.
+
+        A queued survey may have an execution too: the task that started it
+        can stop before recording the ARN. The execution is named after the
+        survey, so it is stopped by name; none existing is not a failure.
+        """
+        status = deleted.get("status")
+        if status not in (SurveyStatus.QUEUED, SurveyStatus.RUNNING):
+            return
+        runner = self._survey_runner
+        if runner is None:
+            return
+        arn = deleted.get("execution_arn") or runner.execution_arn_for(survey_id)
+        try:
+            runner.stop_execution(str(arn))
+            log_event("survey.run_stopped", survey_id=survey_id, reason="deleted")
+        except Exception as e:
+            # No execution yet: the usual delete of a queued survey
+            if getattr(e, "failure", None) is not FailureClass.NOT_FOUND:
+                log_event(
+                    "survey.run_stop_failed",
+                    level="WARNING",
+                    survey_id=survey_id,
+                    error_type=type(e).__name__,
+                )
+        self._cleanup(survey_id, "run_location", lambda: runner.delete_run(survey_id))
 
     def _cleanup(self, survey_id: str, step: str, action: Callable[[], object]) -> None:
         run_cleanup(
@@ -1074,12 +741,13 @@ class SurveyExecutionManager:
 
     @staticmethod
     def _validate_persona_count(count: int, has_images: bool = False) -> None:
-        """ペルソナ数のバリデーション。"""
-        if not isinstance(count, int) or count < 100:
+        """ペルソナ数のバリデーション（下限 10、BR1.1〜BR1.3）。"""
+        minimum = MIN_SURVEY_PERSONAS
+        if not isinstance(count, int) or count < minimum:
             raise SurveyExecutionValidationError(
-                f"target count {count} below minimum 100",
+                f"target count {count} below minimum {minimum}",
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
-                context={"min_count": 100},
+                context={"min_count": minimum},
             )
         if has_images and count > 1000:
             raise SurveyExecutionValidationError(
@@ -1100,9 +768,8 @@ class SurveyExecutionManager:
         """フィルタ適用後に実際に集められるペルソナ数を検証する。
 
         ``persona_count`` は「希望数」でしかなく、サンプリングSQLの ``LIMIT`` は
-        上限にすぎない。条件に合致する行が少なければそれだけしか集まらず、
-        バッチ推論の最小レコード数を下回った入力で Bedrock に投げてしまう。
-        ここで実件数を確かめ、ジョブを作る前（課金前）に弾く。
+        上限にすぎない。条件に合致する行が少なければそれだけしか集まらないため、
+        ここで実件数を確かめ、アンケートの最小人数を下回るなら作らない（BR1.2）。
         """
         source = datasource or "nemotron"
         self._ensure_parquet_uri(source)
@@ -1121,34 +788,9 @@ class SurveyExecutionManager:
                 code=ErrorCode.SURVEY_OPERATION_FAILED,
             ) from e
 
-        if available < self.MIN_BATCH_RECORDS:
-            self._raise_too_few(available, filters)
-
-    def _raise_too_few(self, available: int, filters: Optional[Dict[str, Any]]) -> None:
-        """件数不足を、フィルタの有無に応じた案内で送出する。
-
-        フィルタありなら「条件を緩める」で解決しうるが、フィルタなしで足りない
-        のはデータセット自体が小さいということ。「条件を緩めて」と案内しても
-        緩めるフィルタが無く、利用者が次に取れる行動にならない（Issue #118）。
-        """
-        if filters:
-            raise SurveyExecutionValidationError(
-                f"only {available} personas match the filters "
-                f"(minimum {self.MIN_BATCH_RECORDS})",
-                code=ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW,
-                context={
-                    "available_count": available,
-                    "min_count": self.MIN_BATCH_RECORDS,
-                },
-            )
-        raise SurveyExecutionValidationError(
-            f"datasource has only {available} personas "
-            f"(minimum {self.MIN_BATCH_RECORDS})",
-            code=ErrorCode.SURVEY_DATASET_TOO_FEW_ROWS,
-            context={
-                "row_count": available,
-                "min_rows": self.MIN_BATCH_RECORDS,
-            },
+        # フィルタありなら「条件を緩める」、なしならデータセットが小さいと案内する
+        SurveyPersonaSource.require_enough(
+            available, filters, SurveyExecutionValidationError
         )
 
     @staticmethod
@@ -1156,7 +798,3 @@ class SurveyExecutionManager:
         """デフォルトのアンケート名を生成する（テンプレート名 + 日付）。"""
         date_str = datetime.now().strftime("%Y%m%d")
         return f"{template_name} {date_str}"
-
-
-def _now() -> str:
-    return datetime.now().isoformat()

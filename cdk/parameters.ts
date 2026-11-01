@@ -89,10 +89,14 @@ export interface AppParameter {
   // 有効時はtaskRoleにbedrock-mantle権限を付与する
   enableAdditionalPersonaModels?: boolean;
 
-  // マスアンケート機能設定
-  batchInferenceModelId?: string;
+  // マスアンケート機能設定（Step Functions のオンデマンド推論）。3 つとも省略できる
+  /** 回答を作るモデル。省略は範囲の既定（Haiku 5.5）。global.* か jp.* の推論プロファイルの ID だけ。 */
+  surveyModelId?: string;
+  /** 1 件の実行の並列数（Distributed Map の MaxConcurrency、1〜1,000、既定 64）。 */
+  surveyMaxConcurrency?: number;
+  /** 1 件の実行の打ち切り時間（秒、600〜86,400、既定 7,200）。並列数と組で決める（cdk/README.md）。 */
+  surveyExecutionTimeoutSeconds?: number;
   surveyS3Prefix?: string;
-  batchInferenceS3Prefix?: string;
 
   // データセット構造化分析ツール(analyze_dataset)のkill switch（既定: 有効）。
   // 無効化するとペルソナに analyze_dataset ツールが登録されずプロンプトも付与されない。
@@ -133,7 +137,6 @@ export const devParameter: AppParameter = {
 
   // マスアンケート機能設定
   surveyS3Prefix: 'survey-results/',
-  batchInferenceS3Prefix: 'batch-inference/',
 
   // データセット構造化分析ツール（既定: 有効）
   enableDatasetAnalysis: true,
@@ -190,7 +193,6 @@ export const prodParameter: AppParameter = {
 
   // マスアンケート機能設定
   surveyS3Prefix: 'survey-results/',
-  batchInferenceS3Prefix: 'batch-inference/',
 
   // データセット構造化分析ツール（既定: 有効）
   enableDatasetAnalysis: true,

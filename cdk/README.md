@@ -22,27 +22,30 @@ flowchart TB
         CloudFront -->|VPC オリジン| ALB
     end
 
-    subgraph Data["Data スタック（すべて RETAIN）"]
-        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
-        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
-        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
-    end
-
+    SFN["AWS Step Functions<br/>（マスアンケート）"]
     Bedrock[Amazon Bedrock]
+
+    subgraph Data["Data スタック（すべて RETAIN）"]
+        DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
+        S3[(S3)] ~~~ Cognito[Cognito<br/>User Pool] ~~~ Secrets[Secrets<br/>Manager]
+    end
 
     User -->|HTTPS| CloudFront
     WAF -.- CloudFront
-    ECS --> Data
+    ECS -->|開始・確認・停止| SFN
     ECS --> Bedrock
+    ECS --> Data
+    SFN -->|推論| Bedrock
+    SFN -->|入力・結果| S3
 ```
 
-利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF を有効にすると、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF を有効にすると、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
 | `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、Secrets Manager の鍵 |
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF（`enableWaf: true` のときだけ） |
-| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、ログ |
+| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、ログ |
 
 ## デプロイ（CloudShell）
 
@@ -81,6 +84,9 @@ v1.0.0 では `deploy.sh` のオプションで機能を切り替えません。
 | `enableDatasetAnalysis` | `true` | データセット構造化分析ツール |
 | `dataAgentRuntimeArn` / `dataAgentRegion` | なし | データ分析エージェント連携 |
 | `inferenceScope` | `global` | 推論の範囲（下の「[推論の範囲](#推論の範囲inferencescope)」） |
+| `surveyModelId` | 範囲の既定（Claude Haiku 5.5） | マスアンケートのモデル。`global.` か `jp.` の推論プロファイル ID |
+| `surveyMaxConcurrency` | 64 | マスアンケート 1 件の実行で同時に呼ぶ推論の数（1〜1000）。下の「[マスアンケートの並列数と打ち切り時間](#マスアンケートの並列数と打ち切り時間)」 |
+| `surveyExecutionTimeoutSeconds` | 7200 | マスアンケート 1 件の実行の打ち切り時間（秒、600〜86400） |
 | `enableMcpGateway` | `false` | MCP Gateway は後続リリースで提供します。v1.0.0 では `true` にできません |
 
 ### 更新時の再デプロイ
@@ -113,7 +119,7 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 |---|---|---|
 | ペルソナ生成・インサイト・レポート | Claude Sonnet 5.5 | Claude Haiku 5.5 |
 | 議論・インタビューの既定 | Claude Haiku 5.5 | Claude Haiku 5.5 |
-| アンケート（バッチ推論） | Claude Haiku 4.5 | Claude Haiku 4.5 |
+| マスアンケート | Claude Haiku 5.5 | Claude Haiku 5.5 |
 | 議論・インタビューで選べるモデル | Claude Haiku 5.5、Claude Haiku 4.5、Claude Sonnet 5.5、Claude Sonnet 5、追加のモデル（有効なときだけ） | Claude Haiku 5.5、Claude Haiku 4.5 |
 
 指定のしかた:
@@ -126,6 +132,22 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 - `jp` は、リージョンが `ap-northeast-1` か `ap-northeast-3` のときだけ使えます
 - `jp` と追加のモデル（`enableAdditionalPersonaModels: true`）は同時に使えません。追加のモデルは米国のリージョンを呼ぶためです
 - 範囲を変えても、保存済みのペルソナのモデル設定は書き換えません。アプリが呼ぶときに、範囲の中の同じモデルに読み替えます
+
+## マスアンケートの並列数と打ち切り時間
+
+マスアンケートは Step Functions のステートマシン（Distributed Map、子の実行は Express）で、ペルソナごとに Bedrock の推論を呼びます。アプリ（Web タスクの進行役）は待ちのアンケートを 1 件ずつ実行に渡し、終わったら次を始めます。
+
+1 件の所要時間は並列数にほぼ反比例します。10,000 件のアンケートの目安は次のとおりです（dev の試験の 1,000 件 73 秒から見積もった値。モデルの応答時間とスロットリングで変わります）。
+
+| `surveyMaxConcurrency` | 10,000 件の所要時間の目安 | 合わせる `surveyExecutionTimeoutSeconds` |
+|---|---|---|
+| 64（既定） | 約 12 分 | 7200（既定）で足りる |
+| 16 | 約 48 分 | 7200（既定）で足りる |
+| 8 | 約 96 分 | 7200 では余裕が少ないため 10800 以上 |
+
+- 並列数を上げると、同じモデルを使う議論・インタビューのスロットリングが増えることがあります。上げるときは Bedrock のクォータ（`EstimatedTPMQuotaUsage`・`InvocationThrottles`）を確かめてください
+- 打ち切り時間を過ぎた実行は Step Functions が止め、アプリはアンケートをエラー（制限時間内に終わらなかった）にします。アプリにも同じ値を渡します（`SURVEY_EXECUTION_TIMEOUT_SECONDS`）
+- 実行の入力と結果は、アップロード用バケットの `survey-runs/` に置き、7 日で消えます（古いバージョンは 1 日）
 
 ## 運用（管理者向け）
 

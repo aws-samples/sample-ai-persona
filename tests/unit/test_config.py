@@ -413,7 +413,7 @@ class TestAssetDeliverySetting:
 class TestInferenceScopeSetting:
     """閉域対応 U5 の推論の範囲 INFERENCE_SCOPE（BR3.1〜BR3.4）。"""
 
-    _MODEL_KEYS = ("BEDROCK_MODEL_ID", "AGENT_MODEL_ID", "BATCH_INFERENCE_MODEL_ID")
+    _MODEL_KEYS = ("BEDROCK_MODEL_ID", "AGENT_MODEL_ID", "SURVEY_MODEL_ID")
 
     def _config(self, **env: str):
         from src.config import Config
@@ -433,10 +433,7 @@ class TestInferenceScopeSetting:
         assert cfg.INFERENCE_SCOPE == "global"
         assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5-5"
         assert cfg.AGENT_MODEL_ID == "global.anthropic.claude-haiku-5-5"
-        assert (
-            cfg.BATCH_INFERENCE_MODEL_ID
-            == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-        )
+        assert cfg.SURVEY_MODEL_ID == "global.anthropic.claude-haiku-5-5"
 
     @pytest.mark.parametrize("value", ["jp", "JP", " Jp "])
     def test_jp_is_read_case_insensitively(self, value):
@@ -463,27 +460,72 @@ class TestInferenceScopeSetting:
         cfg = self._config(INFERENCE_SCOPE="jp")
         assert cfg.BEDROCK_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
         assert cfg.AGENT_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
-        assert (
-            cfg.BATCH_INFERENCE_MODEL_ID
-            == "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
-        )
+        assert cfg.SURVEY_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
 
     def test_explicit_model_env_is_used_as_is_even_in_jp(self):
         cfg = self._config(
             INFERENCE_SCOPE="jp",
             BEDROCK_MODEL_ID="global.anthropic.claude-sonnet-5",
             AGENT_MODEL_ID="custom.agent-model",
-            BATCH_INFERENCE_MODEL_ID="anthropic.claude-haiku-4-5-20251001-v1:0",
+            SURVEY_MODEL_ID="global.anthropic.claude-haiku-5-5",
         )
         assert cfg.BEDROCK_MODEL_ID == "global.anthropic.claude-sonnet-5"
         assert cfg.AGENT_MODEL_ID == "custom.agent-model"
-        assert (
-            cfg.BATCH_INFERENCE_MODEL_ID == "anthropic.claude-haiku-4-5-20251001-v1:0"
-        )
+        assert cfg.SURVEY_MODEL_ID == "global.anthropic.claude-haiku-5-5"
 
     def test_empty_model_env_means_the_scope_default(self):
         cfg = self._config(INFERENCE_SCOPE="jp", AGENT_MODEL_ID="")
         assert cfg.AGENT_MODEL_ID == "jp.anthropic.claude-haiku-5-5"
+
+
+class TestSurveyRunnerSettings:
+    """アンケートの実行基盤の設定（基盤設計 4 章、BR9.1、BR3.3）。"""
+
+    _KEYS = (
+        "SURVEY_STATE_MACHINE_ARN",
+        "SURVEY_RUN_LEASE_TABLE_NAME",
+        "SURVEY_EXECUTION_TIMEOUT_SECONDS",
+    )
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        base = {k: v for k, v in os.environ.items() if k not in self._KEYS}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    def test_values_are_read(self):
+        cfg = self._config(
+            SURVEY_STATE_MACHINE_ARN="arn:aws:states:r:1:stateMachine:sm",
+            SURVEY_RUN_LEASE_TABLE_NAME="AIPersona-SurveyRunLease",
+            SURVEY_EXECUTION_TIMEOUT_SECONDS="3600",
+        )
+        assert cfg.SURVEY_STATE_MACHINE_ARN == "arn:aws:states:r:1:stateMachine:sm"
+        assert cfg.SURVEY_RUN_LEASE_TABLE_NAME == "AIPersona-SurveyRunLease"
+        assert cfg.SURVEY_EXECUTION_TIMEOUT_SECONDS == 3600
+        assert cfg.survey_runner_configured
+
+    def test_timeout_defaults_to_two_hours(self):
+        """BR3.3: 既定はステートマシンの TimeoutSeconds の既定と同じ 7200 秒。"""
+        assert self._config().SURVEY_EXECUTION_TIMEOUT_SECONDS == 7200
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {},
+            {"SURVEY_STATE_MACHINE_ARN": "arn:aws:states:r:1:stateMachine:sm"},
+            {"SURVEY_RUN_LEASE_TABLE_NAME": "Lease"},
+            {"SURVEY_STATE_MACHINE_ARN": "", "SURVEY_RUN_LEASE_TABLE_NAME": "Lease"},
+        ],
+    )
+    def test_not_configured_when_either_is_missing(self, env):
+        """BR9.1: どちらかがなければアンケートを実行しない（手元の実行）。"""
+        assert not self._config(**env).survey_runner_configured
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_bad_timeout_stops_the_start(self, value):
+        with pytest.raises(ValueError, match="SURVEY_EXECUTION_TIMEOUT_SECONDS"):
+            self._config(SURVEY_EXECUTION_TIMEOUT_SECONDS=value)
 
 
 class TestGlobalConfigInstance:

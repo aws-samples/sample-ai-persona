@@ -1,13 +1,14 @@
+{# FR4.1: min_count is MIN_SURVEY_PERSONAS (src/models/survey.py), passed by the router #}
 <div class="border rounded-lg p-4 mt-4
     {% if count == 0 %}border-red-300 bg-red-50
-    {% elif count < 100 %}border-yellow-300 bg-yellow-50
+    {% elif count < min_count %}border-yellow-300 bg-yellow-50
     {% else %}border-green-300 bg-green-50{% endif %}">
 
     <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-semibold text-gray-900">フィルタプレビュー</h3>
         <span class="text-lg font-bold
             {% if count == 0 %}text-red-700
-            {% elif count < 100 %}text-yellow-700
+            {% elif count < min_count %}text-yellow-700
             {% else %}text-green-700{% endif %}">
             {{ "{:,}".format(count) }} / {{ "{:,}".format(total) }} 名
         </span>
@@ -15,8 +16,8 @@
 
     {% if count == 0 %}
     <p class="text-sm text-red-700">該当するペルソナがありません。フィルタ条件を変更してください。</p>
-    {% elif count < 100 %}
-    <p class="text-sm text-yellow-700">該当ペルソナが100名未満です。アンケート実行には100名以上が必要です。</p>
+    {% elif count < min_count %}
+    <p class="text-sm text-yellow-700">該当ペルソナが{{ min_count }}名未満です。アンケート実行には{{ min_count }}名以上が必要です。</p>
     {% else %}
     {% if not has_filter %}
     <p class="text-sm text-gray-500 mb-2">フィルタなし（全ペルソナが対象）</p>

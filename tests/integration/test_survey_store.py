@@ -5,6 +5,7 @@ BR1.5・NFR1.87（更新は渡した列だけ。所有者・共有・キー・�
 NFR2.21（まとめ読みは強い整合性で、未処理のキーは読み直す）、NFR2.25（本体の大きさ）。
 """
 
+from datetime import datetime
 from typing import Any
 from unittest.mock import Mock
 
@@ -37,6 +38,8 @@ def client(monkeypatch) -> Any:
                 {"AttributeName": "id", "AttributeType": "S"},
                 {"AttributeName": "owner_sub", "AttributeType": "S"},
                 {"AttributeName": "created_at", "AttributeType": "S"},
+                {"AttributeName": "run_queue", "AttributeType": "S"},
+                {"AttributeName": "queued_at", "AttributeType": "S"},
             ],
             BillingMode="PAY_PER_REQUEST",
             GlobalSecondaryIndexes=[
@@ -47,7 +50,16 @@ def client(monkeypatch) -> Any:
                         {"AttributeName": "created_at", "KeyType": "RANGE"},
                     ],
                     "Projection": {"ProjectionType": "KEYS_ONLY"},
-                }
+                },
+                # Same shape as the CDK Data stack's RunQueueIndex (sparse)
+                {
+                    "IndexName": "RunQueueIndex",
+                    "KeySchema": [
+                        {"AttributeName": "run_queue", "KeyType": "HASH"},
+                        {"AttributeName": "queued_at", "KeyType": "RANGE"},
+                    ],
+                    "Projection": {"ProjectionType": "ALL"},
+                },
             ],
         )
         yield c
@@ -281,3 +293,157 @@ class TestFailures:
         with pytest.raises(SurveyStoreError) as exc_info:
             store.get("x")
         assert exc_info.value.code is ErrorCode.DATABASE_OPERATION_FAILED
+
+
+# =============================================================================
+# Step Functions への移行: 待ちの索引と条件付きの遷移（NFR3.10、NFR4.4）
+# =============================================================================
+
+
+def _queued(store: SurveyStore, at: str, **kwargs: Any) -> Survey:
+    survey = _survey(**kwargs)
+    survey.queued_at = datetime.fromisoformat(at)
+    store.put_new(survey)
+    return survey
+
+
+class TestRunQueue:
+    """Only queued and running surveys are in RunQueueIndex (NFR3.10)."""
+
+    def test_lists_queued_and_running_but_not_finished(self, store):
+        a = _queued(store, "2026-10-30T01:00:00+00:00")
+        b = _queued(store, "2026-10-30T01:00:01+00:00")
+        done = _queued(store, "2026-10-30T01:00:02+00:00")
+        assert store.transition(b.id, expected="queued", fields={"status": "running"})
+        assert store.transition(
+            done.id,
+            expected="queued",
+            fields={"status": "error"},
+            remove=("run_queue",),
+        )
+
+        listed = {s.id: s.status for s in store.list_run_queue()}
+
+        assert listed == {a.id: "queued", b.id: "running"}
+
+    def test_old_surveys_without_run_queue_are_not_listed(self, store):
+        survey = _survey()
+        survey.run_queue = None
+        survey.queued_at = None
+        store.put_new(survey)
+
+        assert store.list_run_queue() == []
+
+    def test_reads_every_page(self, store, client):
+        for i in range(3):
+            _queued(store, f"2026-10-30T01:00:0{i}+00:00")
+        pages = Mock(wraps=client.query)
+        store.client = Mock(wraps=client)
+        store.client.query = pages
+        store.page_size = 1
+
+        assert len(store.list_run_queue()) == 3
+        assert pages.call_count >= 3
+
+
+class TestTransition:
+    """Every transition holds only when the status is the expected one (NFR4.4)."""
+
+    def test_queued_to_running_writes_the_execution(self, store, client):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+
+        ok = store.transition(
+            survey.id,
+            expected="queued",
+            fields={
+                "status": "running",
+                "execution_arn": "arn:aws:states:r:1:execution:sm:x",
+                "started_at": "2026-10-30T01:00:05+00:00",
+                "model_id": "m",
+            },
+            remove=("start_blocked_since",),
+        )
+
+        assert ok
+        got = store.get(survey.id, consistent=True)
+        assert got.status == "running"
+        assert got.execution_arn.endswith(":x")
+        assert got.run_queue == "active"
+
+    def test_running_to_completed_removes_run_queue(self, store):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+        store.transition(survey.id, expected="queued", fields={"status": "running"})
+
+        ok = store.transition(
+            survey.id,
+            expected="running",
+            fields={"status": "completed", "failed_count": 0, "persona_count": 10},
+            remove=("run_queue",),
+        )
+
+        assert ok
+        got = store.get(survey.id, consistent=True)
+        assert got.status == "completed"
+        assert got.run_queue is None
+        assert got.failed_count == 0
+        assert store.list_run_queue() == []
+
+    @pytest.mark.parametrize("expected", ["running", "completed", "error"])
+    def test_unexpected_status_does_not_transition(self, store, expected):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+
+        assert not store.transition(
+            survey.id, expected=expected, fields={"status": "error"}
+        )
+        assert store.get(survey.id, consistent=True).status == "queued"
+
+    def test_deleted_survey_does_not_transition(self, store):
+        assert not store.transition(
+            "gone", expected="queued", fields={"status": "running"}
+        )
+        assert store.get("gone") is None
+
+    def test_protected_columns_are_refused(self, store):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+        with pytest.raises(ValueError):
+            store.transition(
+                survey.id, expected="queued", fields={"owner_sub": "someone"}
+            )
+
+    def test_start_blocked_since_is_written_and_cleared(self, store):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+
+        store.transition(
+            survey.id,
+            expected="queued",
+            fields={"start_blocked_since": "2026-10-30T01:01:00+00:00"},
+        )
+        assert store.get(survey.id, consistent=True).start_blocked_since is not None
+        store.transition(
+            survey.id, expected="queued", fields={}, remove=("start_blocked_since",)
+        )
+
+        assert store.get(survey.id, consistent=True).start_blocked_since is None
+
+
+class TestAttempts:
+    """start_attempts / finish_attempts count up under the status condition."""
+
+    def test_adds_one_and_returns_the_new_count(self, store):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+
+        assert store.add_attempt(survey.id, "start_attempts", expected="queued") == 1
+        assert store.add_attempt(survey.id, "start_attempts", expected="queued") == 2
+        assert store.get(survey.id, consistent=True).start_attempts == 2
+
+    def test_wrong_status_counts_nothing(self, store):
+        survey = _queued(store, "2026-10-30T01:00:00+00:00")
+
+        assert (
+            store.add_attempt(survey.id, "finish_attempts", expected="running") is None
+        )
+        assert store.get(survey.id, consistent=True).finish_attempts == 0
+
+    def test_only_the_two_counters(self, store):
+        with pytest.raises(ValueError):
+            store.add_attempt("x", "persona_count", expected="queued")

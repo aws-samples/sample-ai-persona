@@ -381,3 +381,33 @@ class TestClosedNetworkLoginCodes:
             "LOGIN_CHALLENGE_EXPIRED",
         ):
             assert ErrorCode[name].value == name.lower()
+
+
+class TestSurveyOnDemandCodes:
+    """アンケートのオンデマンド推論のコード（functional-spec.md 3 章、NFR4.9a）。"""
+
+    @pytest.mark.parametrize(
+        ("name", "kind"),
+        [
+            ("SURVEY_RUNNER_NOT_CONFIGURED", ErrorKind.CONFIG),
+            ("SURVEY_RUNNER_UNAVAILABLE", ErrorKind.CONFIG),
+            ("SURVEY_INFERENCE_FAILED", ErrorKind.TRANSIENT),
+            ("SURVEY_EXECUTION_TIMED_OUT", ErrorKind.TRANSIENT),
+            ("SURVEY_TOO_MANY_FAILED_ANSWERS", ErrorKind.TRANSIENT),
+            ("SURVEY_EXECUTION_INTERRUPTED", ErrorKind.TRANSIENT),
+        ],
+    )
+    def test_kind(self, name, kind):
+        assert ErrorCode[name].kind is kind
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "survey_batch_role_not_configured",
+            "survey_batch_job_failed",
+            "survey_batch_job_timed_out",
+        ],
+    )
+    def test_codes_stored_before_the_switch_still_parse(self, value):
+        """Records written by batch inference keep their code (FR11.2)."""
+        assert ErrorCode.parse(value) is not None

@@ -3,12 +3,48 @@ Survey, InsightReport, and VisualAnalysisData data models for the Mass Survey fe
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Dict, List, Optional
 import uuid
 
 from .errors import ErrorCode
 from .survey_template import Question, SurveyTemplate, TemplateImage
+
+
+class SurveyStatus(StrEnum):
+    """Where a survey is in its life (functional-spec.md ch.5).
+
+    ``pending`` is only held by records written before the move to Step
+    Functions; new surveys start ``queued`` so the two are told apart (BR8.1).
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+    PENDING = "pending"
+
+
+#: ``run_queue`` of queued and running surveys; the partition key of the
+#: sparse ``RunQueueIndex`` (only these surveys appear in it, NFR3.10).
+RUN_QUEUE_ACTIVE = "active"
+
+#: Fewest personas a survey runs with, and so the fewest rows a dataset may be
+#: registered or extracted with (FR4.1; was the batch inference minimum 100).
+MIN_SURVEY_PERSONAS = 10
+
+
+def _read_time(value: Any) -> Optional[datetime]:
+    """An ISO 8601 timestamp read back from a record, or ``None``."""
+    if not value:
+        return None
+    return value if isinstance(value, datetime) else datetime.fromisoformat(value)
+
+
+def _read_int(value: Any) -> Optional[int]:
+    """A number read back from DynamoDB (``Decimal``) as an int, or ``None``."""
+    return None if value is None else int(value)
 
 
 @dataclass
@@ -126,6 +162,13 @@ class Survey:
     ``shared_group_ids`` は ``ResourceSharing`` だけが書く共有先、``template_snapshot``
     は開始時のテンプレートの写し、``datasource_name`` は開始時のカスタムペルソナ
     データの名前（表示用）。
+
+    Step Functions への移行（entities.md）: ``run_queue`` と ``queued_at`` は
+    queued・running の間だけ持つ（疎な索引のキー）。``execution_arn``・
+    ``started_at``・``model_id`` は実行を始めたときに書く。``start_attempts`` と
+    ``finish_attempts`` は開始と完了のまとめの一時的な失敗の回数、
+    ``start_blocked_since`` は権限・設定の失敗で開始できなくなった時刻、
+    ``failed_count`` は取れなかった回答の件数。
     """
 
     id: str
@@ -134,7 +177,7 @@ class Survey:
     template_id: str
     persona_count: int
     filters: Optional[Dict[str, Any]]
-    status: str  # "pending", "running", "completed", "error"
+    status: str  # a SurveyStatus value
     s3_result_path: Optional[str]
     insight_report: Optional[InsightReport]
     created_at: datetime
@@ -153,6 +196,15 @@ class Survey:
     shared_group_ids: frozenset[str] = field(default_factory=frozenset)
     template_snapshot: Optional[TemplateSnapshot] = None
     datasource_name: Optional[str] = None
+    run_queue: Optional[str] = None
+    queued_at: Optional[datetime] = None
+    execution_arn: Optional[str] = None
+    started_at: Optional[datetime] = None
+    start_attempts: int = 0
+    finish_attempts: int = 0
+    model_id: Optional[str] = None
+    failed_count: Optional[int] = None
+    start_blocked_since: Optional[datetime] = None
 
     @classmethod
     def create_new(
@@ -167,7 +219,7 @@ class Survey:
         template_snapshot: Optional[TemplateSnapshot] = None,
         datasource_name: Optional[str] = None,
     ) -> "Survey":
-        """Create a new, unshared Survey with auto-generated ID and timestamps."""
+        """Create a new, unshared, queued Survey with ID and timestamps (FR3.1)."""
         now = datetime.now()
         return cls(
             id=str(uuid.uuid4()),
@@ -176,7 +228,9 @@ class Survey:
             template_id=template_id,
             persona_count=persona_count,
             filters=filters,
-            status="pending",
+            status=SurveyStatus.QUEUED.value,
+            run_queue=RUN_QUEUE_ACTIVE,
+            queued_at=datetime.now(timezone.utc),
             s3_result_path=None,
             insight_report=None,
             created_at=now,
@@ -223,7 +277,39 @@ class Survey:
             result["template_snapshot"] = self.template_snapshot.to_dict()
         if self.datasource_name:
             result["datasource_name"] = self.datasource_name
+        result.update(self._execution_dict())
         return result
+
+    def _execution_dict(self) -> Dict[str, Any]:
+        """The queue and execution fields that are set (zero counts left out)."""
+        data: Dict[str, Any] = {}
+        for name in ("run_queue", "execution_arn", "model_id"):
+            value = getattr(self, name)
+            if value:
+                data[name] = value
+        for name in ("queued_at", "started_at", "start_blocked_since"):
+            moment = getattr(self, name)
+            if moment is not None:
+                data[name] = moment.isoformat()
+        for name in ("start_attempts", "finish_attempts"):
+            if getattr(self, name):
+                data[name] = getattr(self, name)
+        if self.failed_count is not None:
+            data["failed_count"] = self.failed_count
+        return data
+
+    @property
+    def is_legacy_in_flight(self) -> bool:
+        """Running or pending without an execution or a queue entry (BR8.1).
+
+        Only records started by batch inference look like this; they can never
+        finish now.
+        """
+        return (
+            self.status in (SurveyStatus.RUNNING, SurveyStatus.PENDING)
+            and not self.execution_arn
+            and not self.run_queue
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Survey":
@@ -251,6 +337,15 @@ class Survey:
             if data.get("template_snapshot")
             else None,
             datasource_name=data.get("datasource_name") or None,
+            run_queue=data.get("run_queue") or None,
+            queued_at=_read_time(data.get("queued_at")),
+            execution_arn=data.get("execution_arn") or None,
+            started_at=_read_time(data.get("started_at")),
+            start_attempts=_read_int(data.get("start_attempts")) or 0,
+            finish_attempts=_read_int(data.get("finish_attempts")) or 0,
+            model_id=data.get("model_id") or None,
+            failed_count=_read_int(data.get("failed_count")),
+            start_blocked_since=_read_time(data.get("start_blocked_since")),
         )
 
     @property

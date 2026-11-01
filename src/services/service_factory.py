@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .stores.persona_candidate_store import PersonaCandidateStore
     from .stores.persona_store import PersonaStore
     from .stores.resource_share_store import ResourceShareStore
+    from .stores.survey_run_lease_store import SurveyRunLeaseStore
     from .stores.survey_store import SurveyStore
     from .stores.survey_template_store import SurveyTemplateStore
     from .stores.uploaded_file_store import UploadedFileStore
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from .memory.memory_service import MemoryService
     from .s3_service import S3Service
     from .survey_batch_service import SurveyBatchService
+    from .survey_runner_service import SurveyRunnerService
 
 
 class ServiceFactory:
@@ -82,6 +84,8 @@ class ServiceFactory:
         self._dataset_store: Optional["DatasetStore"] = None
         self._survey_template_store: Optional["SurveyTemplateStore"] = None
         self._survey_store: Optional["SurveyStore"] = None
+        self._survey_run_lease_store: Optional["SurveyRunLeaseStore"] = None
+        self._survey_runner_service: Optional["SurveyRunnerService"] = None
         self._persona_store: Optional["PersonaStore"] = None
         self._knowledge_base_store: Optional["KnowledgeBaseStore"] = None
         self._uploaded_file_store: Optional["UploadedFileStore"] = None
@@ -537,6 +541,42 @@ class ServiceFactory:
                         table_name=config.table_name("Surveys"),
                     )
         return self._survey_store
+
+    def get_survey_run_lease_store(self) -> "SurveyRunLeaseStore":
+        """Return the store of the survey runner's lease (BR2.3)."""
+        if self._survey_run_lease_store is None:
+            with self._lock:
+                if self._survey_run_lease_store is None:
+                    from .stores.survey_run_lease_store import SurveyRunLeaseStore
+
+                    self.logger.info("Creating new SurveyRunLeaseStore instance")
+                    self._survey_run_lease_store = SurveyRunLeaseStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.SURVEY_RUN_LEASE_TABLE_NAME or "",
+                    )
+        return self._survey_run_lease_store
+
+    def get_survey_runner_service(self) -> "SurveyRunnerService":
+        """Return the Step Functions runner of surveys.
+
+        Raises:
+            RuntimeError: ``SURVEY_STATE_MACHINE_ARN`` is not set (callers check
+                ``config.survey_runner_configured`` first, BR9.1).
+        """
+        if self._survey_runner_service is None:
+            with self._lock:
+                if self._survey_runner_service is None:
+                    if not config.SURVEY_STATE_MACHINE_ARN:
+                        raise RuntimeError("SURVEY_STATE_MACHINE_ARN is not set")
+                    from .survey_runner_service import SurveyRunnerService
+
+                    self.logger.info("Creating new SurveyRunnerService instance")
+                    self._survey_runner_service = SurveyRunnerService(
+                        state_machine_arn=config.SURVEY_STATE_MACHINE_ARN,
+                        bucket_name=config.S3_BUCKET_NAME or "",
+                        region=config.AWS_REGION,
+                    )
+        return self._survey_runner_service
 
     def get_survey_template_store(self) -> "SurveyTemplateStore":
         """Return the store of survey template bodies (U7)."""

@@ -21,12 +21,24 @@ const REGION = 'ap-northeast-1';
 /** `Resource: "*"` を残してよい操作と理由。リソースを指定できない API だけ。 */
 const WILDCARD_EXCEPTIONS: Record<string, string> = {
   'dynamodb:ListTables': '一覧の API で、リソースを指定できない（起動時の接続の確認）',
-  'bedrock:ListFoundationModels': '一覧の API で、リソースを指定できない',
-  'bedrock:ListInferenceProfiles': '一覧の API で、リソースを指定できない',
-  'bedrock:ListModelInvocationJobs': '一覧の API で、リソースを指定できない',
   'bedrock-agentcore:ListMemories': '一覧の API で、リソースを指定できない',
   'ecr:GetAuthorizationToken': '認可トークンの取得で、リソースを指定できない。CDK が実行ロールに足す',
+  // アンケートのステートマシンのログの出力（NFR5.6）。CloudWatch Logs の配信の API は
+  // リソースを指定できない（CDK がステートマシンの実行ロールに足す）
+  'logs:CreateLogDelivery': 'ログの配信の API で、リソースを指定できない',
+  'logs:GetLogDelivery': 'ログの配信の API で、リソースを指定できない',
+  'logs:UpdateLogDelivery': 'ログの配信の API で、リソースを指定できない',
+  'logs:DeleteLogDelivery': 'ログの配信の API で、リソースを指定できない',
+  'logs:ListLogDeliveries': 'ログの配信の API で、リソースを指定できない',
+  'logs:PutResourcePolicy': 'ログの配信の API で、リソースを指定できない',
+  'logs:DescribeResourcePolicies': 'ログの配信の API で、リソースを指定できない',
+  'logs:DescribeLogGroups': 'ログの配信の API で、リソースを指定できない',
 };
+/** アンケートのステートマシンが呼ぶモデル（global の Haiku 5.5、基盤設計 3.1）。 */
+const SURVEY_MODEL_ARNS = [
+  `arn:aws:bedrock:*:${ACCOUNT}:inference-profile/global.anthropic.claude-haiku-5-5`,
+  'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5',
+];
 /** enableAdditionalPersonaModels のときだけ足す例外。 */
 const MANTLE_WILDCARD_EXCEPTIONS: Record<string, string> = {
   'bedrock-mantle:CallWithBearerToken':
@@ -54,6 +66,8 @@ function queriedIndexArns(data: string): string[] {
     `${tableArn('Personas')}/index/OwnerIndex`,
     `${tableArn('SurveyTemplates')}/index/OwnerIndex`,
     `${tableArn('Surveys')}/index/OwnerIndex`,
+    // 進行役が待ちと実行中を読む疎な索引（src/services/stores/survey_store.py）
+    `${tableArn('Surveys')}/index/RunQueueIndex`,
   ];
 }
 
@@ -171,28 +185,40 @@ describe.each(VARIANTS)('IAM（$name）', ({ data: DATA, build, expectedWildcard
     }
   });
 
-  test('bedrock:CreateModelInvocationJob はジョブの ARN と推論の 3 つの ARN', () => {
-    const statements = withAction(docs, 'bedrock:CreateModelInvocationJob');
-    expect(statements.length).toBeGreaterThan(0);
-    const resources = statements.flatMap(resourcesOf);
-    expect(resources).toEqual(
-      expect.arrayContaining([
-        `arn:aws:bedrock:${REGION}:${ACCOUNT}:model-invocation-job/*`,
-        ...INFERENCE_ARNS,
-      ]),
-    );
-    expect(resources).not.toContain('*');
+  test('バッチ推論の操作と iam:PassRole はどのロールにもない（FR8.2、NFR5.10）', () => {
+    for (const action of [
+      'bedrock:CreateModelInvocationJob',
+      'bedrock:GetModelInvocationJob',
+      'iam:PassRole',
+    ]) {
+      expect(withAction(docs, action)).toEqual([]);
+    }
   });
 
-  test('bedrock:InvokeModel（タスクロールとバッチ推論ロール）は推論の 3 つの ARN だけ', () => {
-    const statements = withAction(docs, 'bedrock:InvokeModel');
-    const holders = docs
-      .filter((d) => d.document.Statement.some((s) => actionsOf(s).includes('bedrock:InvokeModel')))
-      .flatMap((d) => d.roles);
-    expect(holders.some((r) => r.startsWith('AppTaskDefinitionTaskRole'))).toBe(true);
-    expect(holders.some((r) => r.startsWith('BedrockBatchRole'))).toBe(true);
-    for (const s of statements) {
-      expect([...resourcesOf(s)].sort()).toEqual([...INFERENCE_ARNS].sort());
+  test('bedrock:InvokeModel: タスクロールは推論の 3 つの ARN、ステートマシンはアンケートのモデルだけ', () => {
+    const holders = (d: PolicyDoc) =>
+      d.document.Statement.some((s) => actionsOf(s).includes('bedrock:InvokeModel'));
+    const task = docs.filter((d) => holders(d) && d.roles.some((r) => r.startsWith('AppTaskDefinitionTaskRole')));
+    const survey = docs.filter((d) => holders(d) && d.roles.some((r) => r.startsWith('SurveyRun')));
+    expect(task.length).toBeGreaterThan(0);
+    expect(survey.length).toBeGreaterThan(0);
+    const resources = (list: PolicyDoc[]) =>
+      statementsOf(list)
+        .filter((s) => actionsOf(s).includes('bedrock:InvokeModel'))
+        .flatMap(resourcesOf)
+        .sort();
+    expect(resources(task)).toEqual([...INFERENCE_ARNS].sort());
+    expect(resources(survey)).toEqual([...SURVEY_MODEL_ARNS].sort());
+  });
+
+  test('states の操作はこのアプリのステートマシンとその実行だけ（NFR5.5、NFR5.7）', () => {
+    for (const action of ['states:StartExecution', 'states:DescribeExecution', 'states:StopExecution']) {
+      const statements = withAction(docs, action);
+      expect(statements.length).toBeGreaterThan(0);
+      for (const s of statements) {
+        expect(resourcesOf(s)).not.toContain('*');
+        expect(JSON.stringify(resourcesOf(s))).toContain('SurveyRun');
+      }
     }
   });
 

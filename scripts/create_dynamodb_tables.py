@@ -31,6 +31,20 @@ OWNER_INDEX_ATTRIBUTES = [
     {"AttributeName": "owner_sub", "AttributeType": "S"},
     {"AttributeName": "created_at", "AttributeType": "S"},
 ]
+# Sparse index of queued and running surveys (only rows with run_queue are in it), the same
+# shape as the CDK Data stack's RunQueueIndex (projection ALL: the runner reads whole rows).
+RUN_QUEUE_INDEX = {
+    "IndexName": "RunQueueIndex",
+    "KeySchema": [
+        {"AttributeName": "run_queue", "KeyType": "HASH"},
+        {"AttributeName": "queued_at", "KeyType": "RANGE"},
+    ],
+    "Projection": {"ProjectionType": "ALL"},
+}
+RUN_QUEUE_INDEX_ATTRIBUTES = [
+    {"AttributeName": "run_queue", "AttributeType": "S"},
+    {"AttributeName": "queued_at", "AttributeType": "S"},
+]
 
 
 class DynamoDBTableCreator:
@@ -247,7 +261,7 @@ class DynamoDBTableCreator:
                 raise
 
     def create_surveys_table(self) -> bool:
-        """Create the Surveys table with OwnerIndex."""
+        """Create the Surveys table with OwnerIndex and RunQueueIndex."""
         table_name = f"{self.table_prefix}_Surveys"
 
         try:
@@ -257,9 +271,10 @@ class DynamoDBTableCreator:
                 AttributeDefinitions=[
                     {"AttributeName": "id", "AttributeType": "S"},
                     *OWNER_INDEX_ATTRIBUTES,
+                    *RUN_QUEUE_INDEX_ATTRIBUTES,
                 ],
                 BillingMode="PAY_PER_REQUEST",
-                GlobalSecondaryIndexes=[OWNER_INDEX],
+                GlobalSecondaryIndexes=[OWNER_INDEX, RUN_QUEUE_INDEX],
                 SSESpecification={"Enabled": True, "SSEType": "KMS"},
                 Tags=[
                     {"Key": "Application", "Value": "AIPersonaSystem"},

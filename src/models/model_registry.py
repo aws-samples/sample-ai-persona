@@ -54,21 +54,22 @@ class ScopeDefaults:
 
     bedrock_model_id: str  # ペルソナの生成・インサイト・レポート（BEDROCK_MODEL_ID）
     agent_model_id: str  # 議論・インタビューの既定（AGENT_MODEL_ID）
-    batch_inference_model_id: str  # アンケートのバッチ推論（BATCH_INFERENCE_MODEL_ID）
+    survey_model_id: str  # アンケートの回答の生成（SURVEY_MODEL_ID）
 
 
-# BR1.6 と計画の「設計からの変更」（2026-10-27）。jp のバッチ推論は Haiku 4.5
-# （Haiku 5.5 はバッチ推論の対応表にない）。値の一致は pytest と jest の両方で固定する（BR4.6）
+# BR1.6 と計画の「設計からの変更」（2026-10-27）。アンケートは Step Functions の
+# オンデマンド推論で Haiku 5.5 を使う（FR2.1）。値の一致は pytest と jest の両方で固定する
+# （FR2.3、BR4.6）
 SCOPE_DEFAULTS: dict[InferenceScope, ScopeDefaults] = {
     InferenceScope.GLOBAL: ScopeDefaults(
         bedrock_model_id="global.anthropic.claude-sonnet-5-5",
         agent_model_id="global.anthropic.claude-haiku-5-5",
-        batch_inference_model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        survey_model_id="global.anthropic.claude-haiku-5-5",
     ),
     InferenceScope.JP: ScopeDefaults(
         bedrock_model_id="jp.anthropic.claude-haiku-5-5",
         agent_model_id="jp.anthropic.claude-haiku-5-5",
-        batch_inference_model_id="jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+        survey_model_id="jp.anthropic.claude-haiku-5-5",
     ),
 }
 

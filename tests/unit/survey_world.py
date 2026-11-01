@@ -38,6 +38,7 @@ from src.services.stores.knowledge_base_store import KnowledgeBaseStore
 from src.services.stores.persona_binding_store import PersonaBindingStore
 from src.services.stores.resource_share_store import ResourceShareStore
 from src.services.s3_service import S3Service
+from src.services.stores.survey_run_lease_store import SurveyRunLeaseStore
 from src.services.stores.survey_store import SurveyStore
 from src.services.stores.survey_template_store import SurveyTemplateStore
 
@@ -67,6 +68,15 @@ _OWNER_INDEX = {
         {"AttributeName": "created_at", "KeyType": "RANGE"},
     ],
     "Projection": {"ProjectionType": "KEYS_ONLY"},
+}
+#: The sparse index of queued and running surveys (CDK Data stack).
+_RUN_QUEUE_INDEX = {
+    "IndexName": "RunQueueIndex",
+    "KeySchema": [
+        {"AttributeName": "run_queue", "KeyType": "HASH"},
+        {"AttributeName": "queued_at", "KeyType": "RANGE"},
+    ],
+    "Projection": {"ProjectionType": "ALL"},
 }
 
 
@@ -113,7 +123,11 @@ class SurveyWorld:
         self.shares_table = "U7_ResourceShares"
         self.custom_table = "U7_CustomPersonaData"
         self.bindings_table = "U7_PersonaBindings"
+        self.lease_table = "U7_SurveyRunLease"
         self._create_tables()
+        self.lease_store = SurveyRunLeaseStore(
+            region=REGION, table_name=self.lease_table, client=self.client
+        )
         self.binding_store = PersonaBindingStore(
             region=REGION,
             table_name=self.bindings_table,
@@ -167,7 +181,9 @@ class SurveyWorld:
         self.owners.labels.side_effect = lambda subs: {s: f"利用者{s}" for s in subs}
 
     def _create_tables(self) -> None:
-        def table(name: str, *, owner_index: bool = False) -> None:
+        def table(
+            name: str, *, owner_index: bool = False, run_queue_index: bool = False
+        ) -> None:
             attributes = [{"AttributeName": "id", "AttributeType": "S"}]
             extra: dict[str, Any] = {}
             if owner_index:
@@ -176,6 +192,12 @@ class SurveyWorld:
                     {"AttributeName": "created_at", "AttributeType": "S"},
                 ]
                 extra["GlobalSecondaryIndexes"] = [_OWNER_INDEX]
+            if run_queue_index:
+                attributes += [
+                    {"AttributeName": "run_queue", "AttributeType": "S"},
+                    {"AttributeName": "queued_at", "AttributeType": "S"},
+                ]
+                extra["GlobalSecondaryIndexes"].append(_RUN_QUEUE_INDEX)
             self.client.create_table(
                 TableName=name,
                 KeySchema=[{"AttributeName": "id", "KeyType": "HASH"}],
@@ -185,7 +207,8 @@ class SurveyWorld:
             )
 
         table(self.templates_table, owner_index=True)
-        table(self.surveys_table, owner_index=True)
+        table(self.surveys_table, owner_index=True, run_queue_index=True)
+        table(self.lease_table)
         table(self.datasets_table)
         table(self.kb_table)
         table(self.custom_table)
@@ -281,7 +304,15 @@ class SurveyWorld:
         name: str = "結果",
         csv: bytes | None = None,
         created_at: datetime | None = None,
+        execution_arn: str | None = None,
+        persona_count: int = 100,
     ) -> Survey:
+        """Seed a survey.
+
+        ``queued`` keeps its queue entry; ``running`` keeps it only with an
+        ``execution_arn`` (otherwise it is a record from before the switch to
+        Step Functions); every other status has left the queue.
+        """
         template = template or SurveyTemplate.create_new(
             name="写しのテンプレート", questions=[Question.create_free_text("Q")]
         )
@@ -289,7 +320,7 @@ class SurveyWorld:
             name=name,
             description="",
             template_id=template.id,
-            persona_count=100,
+            persona_count=persona_count,
             datasource=datasource,
             owner_sub=owner,
             template_snapshot=TemplateSnapshot.from_template(template)
@@ -299,6 +330,12 @@ class SurveyWorld:
         if created_at is not None:
             survey = replace(survey, created_at=created_at, updated_at=created_at)
         survey.status = status
+        if status == "running" and execution_arn:
+            survey.execution_arn = execution_arn
+            survey.started_at = survey.queued_at
+        elif status != "queued":
+            survey.run_queue = None
+            survey.queued_at = None
         if status == "completed":
             key = f"survey-results/{survey.id}/results.csv"
             survey.s3_result_path = self.s3.upload_file(csv or results_csv(), key)

@@ -53,7 +53,9 @@ export const CLOSED_ENDPOINTS: readonly EndpointSpec[] = [
   { service: 'secretsmanager', id: 'SecretsManager', purpose: 'タスクの起動時の秘密', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER },
   { service: 'cognito-idp', id: 'CognitoIdp', purpose: '管理 API のログイン（AdminInitiateAuth）と利用者の一覧', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP },
   { service: 'bedrock-runtime', id: 'BedrockRuntime', purpose: '推論（ペルソナの生成・議論）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME },
-  { service: 'bedrock', id: 'Bedrock', purpose: 'バッチ推論・モデルの一覧（U3 のアンケートで使う）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK },
+  // アンケートの実行の開始・確認・停止（FR9.1）。Bedrock と S3 を呼ぶのは Step Functions のサービス自身で、
+  // VPC を通らない（NFR6.4）。bedrock（コントロールプレーン）のエンドポイントは使うところがなくなったため外した（FR8.4）
+  { service: 'states', id: 'StepFunctions', purpose: 'アンケートの実行（StartExecution・DescribeExecution・StopExecution）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS },
   { service: 'bedrock-agent-runtime', id: 'BedrockAgentRuntime', purpose: 'ナレッジベースの検索（Retrieve）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_AGENT_RUNTIME },
   { service: 'bedrock-agentcore', id: 'BedrockAgentCore', purpose: 'AgentCore Memory のデータプレーン', onlyWithTestEnvironment: false, policy: 'restricted', awsService: ec2.InterfaceVpcEndpointAwsService.BEDROCK_AGENTCORE },
   { service: 'bedrock-agentcore-control', id: 'BedrockAgentCoreControl', purpose: 'AgentCore Memory の Strategy ID の取得（GetMemory）', onlyWithTestEnvironment: false, policy: 'restricted', awsService: new ec2.InterfaceVpcEndpointAwsService('bedrock-agentcore-control') },

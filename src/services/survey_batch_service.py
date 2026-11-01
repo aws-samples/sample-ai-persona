@@ -1,13 +1,13 @@
 """
 SurveyBatchService
-DuckDB/Parquetクエリ + Bedrock Batch Inference + HuggingFace DL に特化した
-Service層クラス。他のServiceに依存しない。
+DuckDB/Parquetクエリ（ペルソナの抽出）+ 統計の要約 + HuggingFace DL に特化した
+Service層クラス。他のServiceに依存しない。回答の生成（推論）は Step Functions で行い、
+SurveyRunnerService が受け持つ（バッチ推論の呼び出しは外した、FR8.1）。
 
 S3への読み書きはManager層が担当し、本Serviceは純粋なSDK操作のみを行う。
 """
 
 import io
-import json
 import logging
 import re
 import threading
@@ -105,7 +105,7 @@ _VALID_COLUMNS = frozenset(
 
 
 class SurveyBatchService:
-    """DuckDB/Parquetクエリ + Bedrock Batch Inference + HuggingFace DL
+    """DuckDB/Parquetクエリ + 統計の要約 + HuggingFace DL
 
     他のServiceに依存しない。S3操作はManager層が担当する。
     DuckDB接続に必要な bucket_name / region_name はコンストラクタで受け取る。
@@ -554,183 +554,6 @@ class SurveyBatchService:
         return stats
 
     # =========================================================================
-    # Batch Inference
-    # =========================================================================
-
-    def execute_batch_inference(
-        self,
-        prompts: List[Dict[str, Any]],
-        model_id: str | None = None,
-        s3_input_prefix: str = "batch-inference/input/",
-        s3_output_prefix: str = "batch-inference/output/",
-    ) -> List[Dict[str, Any]]:
-        """Bedrock Batch Inference APIを使用して非同期推論を実行する。
-
-        boto3クライアントを直接生成する（S3Service非依存）。
-        """
-        import boto3
-        from ..config import Config
-
-        try:
-            cfg = Config()
-            if model_id is None:
-                model_id = cfg.BATCH_INFERENCE_MODEL_ID
-            role_arn = cfg.BEDROCK_BATCH_ROLE_ARN
-            if not role_arn:
-                raise SurveyBatchServiceError(
-                    "BEDROCK_BATCH_ROLE_ARN is not configured",
-                    code=ErrorCode.SURVEY_BATCH_ROLE_NOT_CONFIGURED,
-                )
-
-            bedrock_client = boto3.client("bedrock", region_name=cfg.AWS_REGION)
-            s3_client = boto3.client("s3", region_name=cfg.AWS_REGION)
-
-            job_id = str(uuid.uuid4())
-            input_key = f"{s3_input_prefix}{job_id}/input.jsonl"
-            jsonl_content = "\n".join(
-                json.dumps(p, ensure_ascii=False) for p in prompts
-            )
-
-            s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=input_key,
-                Body=jsonl_content.encode("utf-8"),
-            )
-            input_s3_uri = f"s3://{self.bucket_name}/{input_key}"
-            output_s3_uri = f"s3://{self.bucket_name}/{s3_output_prefix}{job_id}/"
-
-            logger.info(f"Uploaded batch input to {input_s3_uri}")
-
-            response = bedrock_client.create_model_invocation_job(
-                jobName=f"survey-batch-{job_id[:8]}",
-                modelId=model_id,
-                roleArn=role_arn,
-                inputDataConfig={"s3InputDataConfig": {"s3Uri": input_s3_uri}},
-                outputDataConfig={"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
-            )
-            job_arn = response["jobArn"]
-            logger.info(f"Created batch inference job: {job_arn}")
-
-            results = self._poll_batch_job(bedrock_client, job_arn)
-
-            if results is None:
-                output_results = self._fetch_batch_output(
-                    s3_client, self.bucket_name, f"{s3_output_prefix}{job_id}/"
-                )
-                return output_results
-
-            return results
-
-        except SurveyBatchServiceError:
-            raise
-        except Exception as e:
-            # 例外文には bucket 名・ロールARN・botocore の詳細が載る。ログにのみ
-            # 残し、ユーザー向け文言はコード経由で解決する（Issue #118）。
-            logger.error("Batch inference failed", exc_info=True)
-            raise SurveyBatchServiceError(
-                f"batch inference failed ({type(e).__name__})",
-                code=ErrorCode.SURVEY_BATCH_JOB_FAILED,
-            ) from e
-
-    def _poll_batch_job(
-        self,
-        bedrock_client: Any,
-        job_arn: str,
-        poll_interval: int = 60,
-        max_wait: int = 18000,
-    ) -> Optional[List[Dict[str, Any]]]:
-        """バッチ推論ジョブの完了をポーリングする。"""
-        elapsed = 0
-        while elapsed < max_wait:
-            response = bedrock_client.get_model_invocation_job(jobIdentifier=job_arn)
-            status = response["status"]
-            logger.info(f"Batch job status: {status} (elapsed: {elapsed}s)")
-
-            if status == "Completed":
-                return None
-            elif status in ("Failed", "Stopped"):
-                # Bedrock の message は S3 パスやロールARNを含むためログのみ。
-                logger.error(
-                    "Batch job ended as %s: %s",
-                    status,
-                    response.get("message", "no message"),
-                )
-                raise SurveyBatchServiceError(
-                    f"batch job ended with status {status}",
-                    code=ErrorCode.SURVEY_BATCH_JOB_FAILED,
-                )
-
-            time.sleep(poll_interval)  # nosemgrep: arbitrary-sleep
-            elapsed += poll_interval
-
-        raise SurveyBatchServiceError(
-            f"batch job did not finish within {max_wait}s",
-            code=ErrorCode.SURVEY_BATCH_JOB_TIMED_OUT,
-        )
-
-    def _fetch_batch_output(
-        self, s3_client: Any, bucket_name: str, output_prefix: str
-    ) -> List[Dict[str, Any]]:
-        """S3からバッチ推論の出力結果を取得する。"""
-        results: List[Dict[str, Any]] = []
-
-        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=output_prefix)
-        for obj in response.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".jsonl") or key.endswith(".jsonl.out"):
-                data = s3_client.get_object(Bucket=bucket_name, Key=key)
-                content = data["Body"].read().decode("utf-8")
-                for line in content.strip().split("\n"):
-                    if line.strip():
-                        results.append(json.loads(line))
-
-        logger.info(f"Fetched {len(results)} results from batch output")
-        return results
-
-    # =========================================================================
-    # Batch Inference入力構築（Bedrock API形式固有）
-    # =========================================================================
-
-    def build_batch_prompts(
-        self,
-        personas_df: pl.DataFrame,
-        system_prompts: List[str],
-        user_messages: List[List[Dict[str, Any]]],
-        output_schema: dict,
-    ) -> List[Dict[str, Any]]:
-        """ペルソナごとのBedrock Batch Inference入力を構築する。
-
-        Args:
-            personas_df: ペルソナデータ（uuid列必須）
-            system_prompts: 各ペルソナ用のシステムプロンプト文字列リスト
-            user_messages: 各ペルソナ用のユーザーメッセージcontent配列リスト
-            output_schema: Structured Output用JSONスキーマ
-
-        Returns:
-            Bedrock Batch Inference用のJSONL入力リスト
-        """
-        prompts: List[Dict[str, Any]] = []
-
-        for i, row in enumerate(personas_df.iter_rows(named=True)):
-            record_id = str(row.get("uuid", f"p{i}"))
-            prompt = {
-                "recordId": record_id,
-                "modelInput": {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 2048,
-                    "system": system_prompts[i],
-                    "messages": [{"role": "user", "content": user_messages[i]}],
-                    "output_config": {
-                        "format": {"type": "json_schema", "schema": output_schema}
-                    },
-                },
-            }
-            prompts.append(prompt)
-
-        logger.info(f"Built {len(prompts)} batch inference prompts")
-        return prompts
-
-    # =========================================================================
     # 統計要約生成（Polars/DataFrame操作）
     # =========================================================================
 
@@ -847,13 +670,22 @@ class SurveyBatchService:
         return demo
 
     @staticmethod
+    def _answered(df: pl.DataFrame, answer_col: str) -> pl.DataFrame:
+        """Rows that answered the question (a blank answer is no answer, BR4.6)."""
+        column = pl.col(answer_col)
+        return df.filter(
+            column.is_not_null() & (column.cast(pl.Utf8).str.strip_chars() != "")
+        )
+
+    @staticmethod
     def _analyze_multiple_choice(
         df: pl.DataFrame,
         answer_col: str,
         options: List[str],
         allow_multiple: bool = False,
     ) -> Dict[str, Any]:
-        """選択式質問の分析。"""
+        """選択式質問の分析。分母は回答のあった人数（BR4.6）。"""
+        df = SurveyBatchService._answered(df, answer_col)
         total = len(df)
         if allow_multiple:
             counter: Dict[str, int] = {}
@@ -910,7 +742,10 @@ class SurveyBatchService:
         answer_col: str,
         allow_multiple: bool = False,
     ) -> Dict[str, Any]:
-        """選択式質問の属性別クロス集計。"""
+        """選択式質問の属性別クロス集計（空欄の回答は外す、BR4.6）。"""
+        df = SurveyBatchService._answered(df, answer_col)
+        if df.is_empty():
+            return {}
         if allow_multiple:
             rows = []
             for row in df.iter_rows(named=True):
@@ -994,8 +829,8 @@ class SurveyBatchService:
     def _sample_free_text(
         df: pl.DataFrame, answer_col: str, limit: int = 10
     ) -> List[str]:
-        """自由記述のサンプル抽出。"""
-        responses = df[answer_col].drop_nulls().to_list()
+        """自由記述のサンプル抽出（空欄は外す、BR4.6）。"""
+        responses = SurveyBatchService._answered(df, answer_col)[answer_col].to_list()
         responses.sort(key=len, reverse=True)
         return responses[:limit]
 

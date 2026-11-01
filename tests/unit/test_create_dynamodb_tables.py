@@ -24,7 +24,8 @@ EXPECTED_GSIS: dict[str, list[str]] = {
     "UploadedFiles": [],
     "Datasets": [],
     "SurveyTemplates": ["OwnerIndex"],
-    "Surveys": ["OwnerIndex"],
+    # 待ちと実行中の疎な索引（Step Functions への移行、NFR3.10）
+    "Surveys": ["OwnerIndex", "RunQueueIndex"],
     "KnowledgeBases": [],
     "Jobs": [],
 }

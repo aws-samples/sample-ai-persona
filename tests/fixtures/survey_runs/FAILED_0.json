@@ -1,0 +1,14 @@
+[
+  {
+    "Cause": "Rate exceeded (Service: BedrockRuntime, Status Code: 429)",
+    "Error": "Bedrock.ThrottlingException",
+    "ExecutionArn": "arn:aws:states:ap-northeast-1:123456789012:express:SurveyRunStateMachine/Map:0b2c4e1a:4",
+    "Input": "{\"record_id\":\"p-4\",\"model_id\":\"global.anthropic.claude-haiku-5-5\",\"body\":{\"anthropic_version\":\"bedrock-2023-05-31\"}}",
+    "InputDetails": {"Included": true},
+    "Name": "4",
+    "StartDate": "2026-10-30T01:00:01.000Z",
+    "StateMachineArn": "arn:aws:states:ap-northeast-1:123456789012:stateMachine:SurveyRunStateMachine/Map:0b2c4e1a",
+    "Status": "FAILED",
+    "StopDate": "2026-10-30T01:04:31.000Z"
+  }
+]

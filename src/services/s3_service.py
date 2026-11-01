@@ -13,12 +13,27 @@ from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 from ..models.asset_delivery import AssetStream
 from ..models.errors import CodedError, ErrorCode
+from ..models.external_failure import FailureClass, classify_aws_error
 
 logger = logging.getLogger(__name__)
 
 
 class S3ServiceError(CodedError):
-    """S3サービス関連のエラー"""
+    """S3サービス関連のエラー
+
+    Attributes:
+        failure: How a background caller should handle it (reliability 3.1).
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        code: ErrorCode | None = None,
+        failure: FailureClass = FailureClass.TRANSIENT,
+    ) -> None:
+        super().__init__(message, code=code)
+        self.failure = failure
 
 
 #: Size of one streamed read (closed network U4, BR2.2).
@@ -116,12 +131,20 @@ class S3Service:
             raise S3ServiceError(
                 "AWS credentials not found",
                 code=ErrorCode.S3_OPERATION_FAILED,
+                failure=FailureClass.ACCESS,
             ) from e
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(f"Failed to upload file to S3: {error_code} - {str(e)}")
             raise S3ServiceError(
                 f"s3 upload failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+                failure=classify_aws_error(error_code),
+            ) from e
+        except BotoCoreError as e:
+            logger.error("S3 upload unreachable: %s", type(e).__name__)
+            raise S3ServiceError(
+                f"s3 upload unreachable ({type(e).__name__})",
                 code=ErrorCode.S3_OPERATION_FAILED,
             ) from e
 
@@ -246,6 +269,13 @@ class S3Service:
             logger.error("Failed to check an S3 object: %s", error_code)
             raise S3ServiceError(
                 f"s3 head failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+                failure=classify_aws_error(error_code),
+            ) from e
+        except BotoCoreError as e:
+            logger.error("S3 head unreachable: %s", type(e).__name__)
+            raise S3ServiceError(
+                f"s3 head unreachable ({type(e).__name__})",
                 code=ErrorCode.S3_OPERATION_FAILED,
             ) from e
 

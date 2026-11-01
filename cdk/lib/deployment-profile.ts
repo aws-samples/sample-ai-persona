@@ -68,27 +68,27 @@ export interface ModelIds {
   bedrockModelId: string;
   /** 議論・インタビューの既定（AGENT_MODEL_ID）。 */
   agentModelId: string;
-  /** アンケートのバッチ推論（BATCH_INFERENCE_MODEL_ID）。 */
-  batchInferenceModelId: string;
+  /** アンケートの回答（SURVEY_MODEL_ID。Step Functions のステートマシンが呼ぶ）。 */
+  surveyModelId: string;
 }
 
-const MODEL_ID_NAMES: readonly (keyof ModelIds)[] = ['bedrockModelId', 'agentModelId', 'batchInferenceModelId'];
+const MODEL_ID_NAMES: readonly (keyof ModelIds)[] = ['bedrockModelId', 'agentModelId', 'surveyModelId'];
 
 /**
  * 範囲ごとの既定のモデル ID（U5 BR1.6 と計画の「設計からの変更」）。src/models/model_registry.py の
- * SCOPE_DEFAULTS と同じ値（BR4.6。pytest と jest の両方に同じ値を書いて固定する）。jp のバッチ推論が
- * Haiku 4.5 なのは、Haiku 5.5 がバッチ推論の対応表にないため。
+ * SCOPE_DEFAULTS と同じ値（BR4.6、FR2.3。pytest と jest の両方に同じ値を書いて固定する）。
+ * アンケートは Step Functions のオンデマンド推論で Haiku 5.5 を使う（FR2.1）。
  */
 export const SCOPE_DEFAULTS: Readonly<Record<InferenceScope, Readonly<ModelIds>>> = Object.freeze({
   global: Object.freeze({
     bedrockModelId: 'global.anthropic.claude-sonnet-5-5',
     agentModelId: 'global.anthropic.claude-haiku-5-5',
-    batchInferenceModelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+    surveyModelId: 'global.anthropic.claude-haiku-5-5',
   }),
   jp: Object.freeze({
     bedrockModelId: 'jp.anthropic.claude-haiku-5-5',
     agentModelId: 'jp.anthropic.claude-haiku-5-5',
-    batchInferenceModelId: 'jp.anthropic.claude-haiku-4-5-20251001-v1:0',
+    surveyModelId: 'jp.anthropic.claude-haiku-5-5',
   }),
 });
 
@@ -121,7 +121,7 @@ export interface DeploymentProfileInput {
   /** 明示したモデル ID（省略・空・空白は範囲の既定、BR1.5）。 */
   bedrockModelId?: string;
   agentModelId?: string;
-  batchInferenceModelId?: string;
+  surveyModelId?: string;
 }
 
 /** The Nemotron key the app has always used (src/models/nemotron_dataset.py). */

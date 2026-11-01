@@ -19,18 +19,21 @@ flowchart TB
     end
 
     subgraph Data["Data スタック（すべて RETAIN）"]
-        DynamoDB[(DynamoDB)] ~~~ S3[(S3)]
-        ECR[ECR] ~~~ Cognito[Cognito<br/>User Pool]
-        Memory[AgentCore<br/>Memory] ~~~ Secrets[Secrets<br/>Manager]
+        DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
+        S3[(S3)] ~~~ Cognito[Cognito<br/>User Pool] ~~~ Secrets[Secrets<br/>Manager]
     end
 
     Bedrock[Amazon Bedrock]
+    SFN["AWS Step Functions<br/>（マスアンケート）"]
 
     Client -->|HTTPS| ALB
     EC2 -->|HTTPS| ALB
     DNS -->|DNS| R
     EP --> Data
     EP --> Bedrock
+    EP --> SFN
+    SFN -->|推論| Bedrock
+    SFN -->|入力・結果| S3
 ```
 
 利用者は閉域の VPC の中（許可した CIDR か検証用 EC2）から、指定した FQDN で内部 ALB へ HTTPS で届きます。アプリは AWS のサービスへ VPC エンドポイントだけを通って届き、外へ出る経路はありません。社内のネットワークから FQDN を引くときは、Resolver Inbound Endpoint へ社内 DNS から転送します。ログインは Cognito の Managed Login ではなく、アプリ自身のログイン画面で行います。
@@ -38,7 +41,7 @@ flowchart TB
 | スタック | 中身 |
 |---|---|
 | `AIPersonaDevClosed-Data` | 公開構成と同じ Data スタック（テーブル・S3・ECR・AgentCore Memory・鍵・User Pool。すべて RETAIN） |
-| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB・ECS Fargate・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） |
+| `AIPersonaDevClosed-App` | 閉域の VPC・VPC エンドポイント・Private Hosted Zone・内部 ALB・ECS Fargate・マスアンケートの Step Functions のステートマシン・検証用 EC2（任意）・Resolver Inbound Endpoint（任意） |
 
 閉域構成は **東京リージョン（`ap-northeast-1`）だけ** で使えます。ほかのリージョンを指定すると、デプロイの前にエラーになります。
 
@@ -243,10 +246,10 @@ aws s3 cp s3://<バケット名>/survey-results/<アンケートの ID>/results.
 
 | 構成 | 月額の目安 |
 |---|---|
-| 最小（エンドポイントの AZ の数 1） | 約 210 USD |
-| 最小 ＋ 検証用 EC2 | 約 310 USD |
-| エンドポイントの AZ の数 2 | 約 310 USD |
-| エンドポイントの AZ の数 2 ＋ 検証用 EC2 | 約 440 USD |
+| 最小（エンドポイントの AZ の数 1） | 約 200 USD |
+| 最小 ＋ 検証用 EC2 | 約 300 USD |
+| エンドポイントの AZ の数 2 | 約 300 USD |
+| エンドポイントの AZ の数 2 ＋ 検証用 EC2 | 約 430 USD |
 
 社内 DNS から使う（Resolver を作る）ときは、どの構成でも約 183 USD 増えます。
 
@@ -256,11 +259,11 @@ aws s3 cp s3://<バケット名>/survey-results/<アンケートの ID>/results.
 |---|---|
 | VPC エンドポイント（10 種、AZ の数 1） | 約 102 USD |
 | ECS Fargate（1 vCPU、4 GB） | 約 53 USD |
-| Amazon Bedrock | 約 24 USD |
+| Amazon Bedrock | 約 13 USD |
 | 内部 ALB | 約 20 USD |
 | その他（AgentCore Memory、ECR、S3、DynamoDB、Secrets Manager、KMS） | 約 8 USD |
 
-- 公開構成（約 152 USD）と比べると、NAT Gateway（約 47 USD）がなくなり、VPC エンドポイントの費用が増えます
+- 公開構成（約 141 USD）と比べると、NAT Gateway（約 47 USD）がなくなり、VPC エンドポイントの費用が増えます
 - エンドポイントの費用は AZ の数に比例します。AZ の数 2 では約 204 USD です
 - 検証用 EC2 は、EC2 本体（Windows、t3.medium で約 70 USD）と、そのためのエンドポイント 3 種（AZ の数 1 で約 31 USD、2 で約 61 USD）がかかります。EC2 は止めておけば本体の料金はかかりません
 - ほかに、エンドポイントのデータ処理料（1 GB あたり 0.01 USD）と Resolver の問い合わせの料金がかかります。料金は変わることがあるため、デプロイの前に料金ページで確かめてください

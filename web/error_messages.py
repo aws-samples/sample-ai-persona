@@ -242,6 +242,29 @@ _CATALOG: dict[ErrorCode, str] = {
         "バッチ推論が制限時間内に完了しませんでした。"
         "対象ペルソナ数を減らして再度お試しください。"
     ),
+    ErrorCode.SURVEY_RUNNER_NOT_CONFIGURED: (
+        "この環境ではアンケートを実行できません。"
+        "アンケートの実行基盤が設定されていません。管理者に連絡してください。"
+    ),
+    ErrorCode.SURVEY_RUNNER_UNAVAILABLE: (
+        "アンケートの実行基盤を利用できないため、アンケートを開始できませんでした。"
+        "管理者に連絡してください。"
+    ),
+    ErrorCode.SURVEY_INFERENCE_FAILED: (
+        "回答の生成に失敗しました。時間をおいてアンケートを作り直してください。"
+    ),
+    ErrorCode.SURVEY_EXECUTION_TIMED_OUT: (
+        "回答の生成が制限時間内に終わりませんでした。"
+        "対象ペルソナ数を減らすか、時間をおいてアンケートを作り直してください。"
+    ),
+    ErrorCode.SURVEY_TOO_MANY_FAILED_ANSWERS: (
+        "{total}件中{failed_count}件の回答を取得できなかったため、"
+        "アンケートを完了できませんでした。時間をおいてアンケートを作り直してください。"
+    ),
+    ErrorCode.SURVEY_EXECUTION_INTERRUPTED: (
+        "システムの切り替えでアンケートの実行が中断されました。"
+        "お手数ですが、アンケートを作り直してください。"
+    ),
     ErrorCode.SURVEY_AI_UNAVAILABLE: (
         "AIによる生成機能が利用できません。設定を確認してください。"
     ),

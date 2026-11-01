@@ -305,7 +305,12 @@ class TestRegistration:
         assert survey.name_attribute == "name"
         assert survey.not_found is ErrorCode.SURVEY_NOT_FOUND
         assert survey.delete_failed is ErrorCode.SURVEY_OPERATION_FAILED
-        assert survey.cleanup_attributes == ("s3_result_path",)
+        # status と execution_arn: 実行中の削除で実行を止める（BR7.1）
+        assert survey.cleanup_attributes == (
+            "s3_result_path",
+            "status",
+            "execution_arn",
+        )
 
     def test_ownerless_survey_cannot_be_shared_alone_or_in_bulk(
         self, store, departments

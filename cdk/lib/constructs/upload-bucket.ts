@@ -13,6 +13,7 @@ import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
  * - `candidates/` の生成候補の一時 CSV は 1 日で失効（候補そのものは 8 時間）
  * - タグ `pending=true`（紐付く前のアップロード）は 1 日で失効（使えるのは 24 時間）
  * - 古いバージョンは 7 日で削除、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日で中止
+ * - `survey-runs/` のアンケートの実行の入出力は 7 日で失効、古いバージョンは 1 日（NFR5.14）
  */
 export class UploadBucket extends Construct {
   public readonly bucket: s3.Bucket;
@@ -42,6 +43,15 @@ export class UploadBucket extends Construct {
           noncurrentVersionExpiration: Duration.days(7),
           expiredObjectDeleteMarker: true,
           abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+        // アンケートの実行の入出力（ペルソナの属性・依頼の本文・回答が入る）。アプリは終わったら消す
+        // （BR10.1）。消し損ねの備えに今の版を 7 日、消したあとの古いバージョンを 1 日で消す（NFR5.14）。
+        // 上の全体の規則（古いバージョン 7 日）と重なるが、S3 は短い方を守る
+        {
+          id: 'ExpireSurveyRuns',
+          prefix: 'survey-runs/',
+          expiration: Duration.days(7),
+          noncurrentVersionExpiration: Duration.days(1),
         },
       ],
     });

@@ -3,6 +3,7 @@ AIペルソナシステム - メインアプリケーション
 FastAPI + Jinja2 + htmxベースのWebアプリケーション
 """
 
+import contextlib
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -68,8 +69,12 @@ async def lifespan(app: FastAPI) -> Any:
     AuthManager.check_startup(config)
     # AgentCore Memory の Strategy ID を引く（引けなければ長期記憶を無効にして続ける）
     await anyio.to_thread.run_sync(prepare_long_term_memory)
-    yield
-    logger.info("AIペルソナシステムをシャットダウン中...")
+    # アンケートの進行役（15 秒ごと）。ステートマシンが設定されているときだけ（BR9.1）。
+    # 止めるときは新しい回を始めず、走っている回を待ってから担当を手放す（NFR4.10）
+    runner_loop = survey.get_survey_runner_loop()
+    async with runner_loop.running() if runner_loop else contextlib.nullcontext():
+        yield
+        logger.info("AIペルソナシステムをシャットダウン中...")
 
 
 # FastAPIアプリケーション

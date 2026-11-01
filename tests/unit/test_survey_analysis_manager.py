@@ -330,6 +330,74 @@ class TestComputeVisualAnalysis:
         assert result.scale_rating_charts[0]["average"] == 4.0
 
 
+class TestBlankAnswers:
+    """BR4.6・FR5.5: 取れなかった人の空欄は設問ごとの集計から外し、行は属性の集計に残す。"""
+
+    @pytest.fixture
+    def rows(self, sample_template: SurveyTemplate) -> list[dict[str, str]]:
+        q_mc, q_scale, _ = sample_template.questions
+        return [
+            {
+                f"{q_mc.id}_answer": "赤",
+                f"{q_scale.id}_answer": "4",
+                "sex": "男性",
+                "age": "25",
+            },
+            {
+                f"{q_mc.id}_answer": "青",
+                f"{q_scale.id}_answer": "2",
+                "sex": "女性",
+                "age": "35",
+            },
+            {
+                f"{q_mc.id}_answer": "",
+                f"{q_scale.id}_answer": "",
+                "sex": "男性",
+                "age": "45",
+            },
+            {
+                f"{q_mc.id}_answer": "  ",
+                f"{q_scale.id}_answer": " ",
+                "sex": "女性",
+                "age": "55",
+            },
+        ]
+
+    def test_choice_counts_only_answered_rows(self, am, sample_template, rows):
+        result = am._compute_visual_analysis(rows, sample_template)
+        chart = result.multiple_choice_charts[0]
+        assert chart["respondent_count"] == 2
+        assert chart["total_count"] == 4
+        assert sum(chart["counts"]) == 2
+        assert set(chart["options"]) == {"赤", "青", "緑"}
+        assert sum(chart["cross_tab"]["sex_n"].values()) == 2
+
+    def test_scale_average_ignores_blanks(self, sample_template, rows):
+        result = SurveyAnalysisManager._compute_visual_analysis(
+            Mock(), rows, sample_template
+        )
+        chart = result.scale_rating_charts[0]
+        assert chart["average"] == 3.0
+        assert sum(chart["distribution"].values()) == 2
+
+    def test_persona_statistics_keep_every_row(self, am, sample_template, rows):
+        stats = am._compute_persona_statistics(rows)
+        assert stats.total_count == 4
+        assert stats.sex_distribution == {"男性": 2, "女性": 2}
+
+    def test_blank_rows_in_a_real_csv(self, am, survey_world, sample_template):
+        """parse_results_csv は空欄の行を捨てない（属性の集計に残す）。"""
+        from src.managers.shared.file_utils import parse_results_csv
+
+        q_mc = sample_template.questions[0]
+        csv_bytes = (f"sex,age,{q_mc.id}_answer\n男性,25,赤\n女性,35,\n").encode(
+            "utf-8-sig"
+        )
+        rows = parse_results_csv(csv_bytes)
+        assert len(rows) == 2
+        assert rows[1][f"{q_mc.id}_answer"] == ""
+
+
 class TestGetAgeBracket:
     def test_normal(self) -> None:
         assert SurveyAnalysisManager._get_age_bracket("25") == "20代"
