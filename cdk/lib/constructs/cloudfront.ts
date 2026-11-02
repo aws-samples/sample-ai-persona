@@ -78,7 +78,7 @@ export class CloudFrontDistribution extends Construct {
     acknowledgeAll(this.distribution, ['CFR3'], NAG_REASONS.accessLogs);
     acknowledgeAll(this.distribution, ['CFR4'], NAG_REASONS.cloudFrontDefaultCertificate);
     if (!props.webAclArn) {
-      // enableWaf: false の構成だけ WebACL がない（利用者の指示で WAF を任意にした、2026-10-17）
+      // enableWaf: false にした構成だけ WebACL がない（既定は有効、2026-11-02）
       acknowledgeAll(this.distribution, ['CFR2'], NAG_REASONS.wafOptional);
     }
   }

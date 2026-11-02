@@ -263,7 +263,7 @@ aws s3 cp s3://<バケット名>/survey-results/<アンケートの ID>/results.
 | 内部 ALB | 約 20 USD |
 | その他（AgentCore Memory、ECR、S3、DynamoDB、Secrets Manager、KMS） | 約 8 USD |
 
-- 公開構成（約 141 USD）と比べると、NAT Gateway（約 47 USD）がなくなり、VPC エンドポイントの費用が増えます
+- 公開構成（約 149 USD）と比べると、NAT Gateway（約 47 USD）と WAF（約 8 USD）がなくなり、VPC エンドポイントの費用が増えます
 - エンドポイントの費用は AZ の数に比例します。AZ の数 2 では約 204 USD です
 - 検証用 EC2 は、EC2 本体（Windows、t3.medium で約 70 USD）と、そのためのエンドポイント 3 種（AZ の数 1 で約 31 USD、2 で約 61 USD）がかかります。EC2 は止めておけば本体の料金はかかりません
 - ほかに、エンドポイントのデータ処理料（1 GB あたり 0.01 USD）と Resolver の問い合わせの料金がかかります。料金は変わることがあるため、デプロイの前に料金ページで確かめてください

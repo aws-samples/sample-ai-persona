@@ -148,9 +148,9 @@ describe('createDevStage（U9、bin/app.ts と同じ組み立て）', () => {
     const s = createDevStage(new cdk.App(), {
       account: ACCOUNT,
       enableAdditionalPersonaModels: true,
-      enableWaf: true,
+      enableWaf: false,
     });
-    Template.fromStack(edgeOf(s)).resourceCountIs('AWS::WAFv2::WebACL', 1);
+    Template.fromStack(edgeOf(s)).resourceCountIs('AWS::WAFv2::WebACL', 0);
     const taskDef = Object.values(
       Template.fromStack(s.app).findResources('AWS::ECS::TaskDefinition'),
     )[0];
@@ -160,11 +160,11 @@ describe('createDevStage（U9、bin/app.ts と同じ組み立て）', () => {
       ),
     );
     expect(env.ENABLE_ADDITIONAL_PERSONA_MODELS).toBe('true');
-    expect(devParameter.enableWaf).toBe(false);
+    expect(devParameter.enableWaf).toBe(true);
     expect(devParameter.enableAdditionalPersonaModels).toBe(false);
 
     const defaults = createDevStage(new cdk.App(), { account: ACCOUNT });
-    Template.fromStack(edgeOf(defaults)).resourceCountIs('AWS::WAFv2::WebACL', 0);
+    Template.fromStack(edgeOf(defaults)).resourceCountIs('AWS::WAFv2::WebACL', 1);
   });
 });
 

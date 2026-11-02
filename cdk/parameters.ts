@@ -127,8 +127,8 @@ export const devParameter: AppParameter = {
   containerCpu: '1024',
   containerMemory: '4096',
 
-  // CloudFront + WAF設定
-  enableWaf: false,
+  // CloudFront + WAF設定（既定: 有効。費用を抑えるなら false）
+  enableWaf: true,
 
   agentCoreMemoryEventExpiryDays: 30,
 
