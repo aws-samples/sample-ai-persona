@@ -123,15 +123,13 @@ const PUBLIC_SUPPRESSIONS: Suppression[] = [
   ...on(`${PUBLIC}/App/CloudFront/Distribution/Resource`, 'CFR1', 'CFR3', 'CFR4'),
 ];
 
-/** 既定の dev の値（enableWaf: false）: WebACL がないため CFR2 も抑止する（利用者の指示）。 */
-const DEFAULT_SUPPRESSIONS: Suppression[] = [
+/** 既定の dev の値（enableWaf: true）: WebACL があるため CFR2 は出ない。 */
+const DEFAULT_SUPPRESSIONS: Suppression[] = PUBLIC_SUPPRESSIONS;
+
+/** 追加のペルソナモデルを有効にし WAF を無効にした値: WebACL がないため CFR2 も抑止し、Mantle の project が増える。 */
+const MANTLE_NO_WAF_SUPPRESSIONS: Suppression[] = [
   ...PUBLIC_SUPPRESSIONS,
   ...on(`${PUBLIC}/App/CloudFront/Distribution/Resource`, 'CFR2'),
-];
-
-/** 追加のペルソナモデルと WAF を有効にした値: CFR2 は出ず、Mantle の project が増える。 */
-const MANTLE_WAF_SUPPRESSIONS: Suppression[] = [
-  ...PUBLIC_SUPPRESSIONS,
   ...on(taskPolicy(PUBLIC), `IAM5[Resource::arn:aws:bedrock-mantle:*:${ACCOUNT}:project/*]`),
 ];
 
@@ -168,10 +166,10 @@ const PUBLIC_STACKS = [`${PUBLIC}-App`, `${PUBLIC}-Data`, `${PUBLIC}-Edge`];
 const VARIANTS: Variant[] = [
   { name: '既定の dev の値', build: () => build({}), stackNames: PUBLIC_STACKS, expected: DEFAULT_SUPPRESSIONS },
   {
-    name: 'enableAdditionalPersonaModels: true・enableWaf: true',
-    build: () => build({ enableAdditionalPersonaModels: true, enableWaf: true }),
+    name: 'enableAdditionalPersonaModels: true・enableWaf: false',
+    build: () => build({ enableAdditionalPersonaModels: true, enableWaf: false }),
     stackNames: PUBLIC_STACKS,
-    expected: MANTLE_WAF_SUPPRESSIONS,
+    expected: MANTLE_NO_WAF_SUPPRESSIONS,
   },
   {
     name: '閉域の Stage（検証用 EC2 あり）',

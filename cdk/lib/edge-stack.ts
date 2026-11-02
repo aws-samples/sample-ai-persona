@@ -109,8 +109,8 @@ function baseRules(ipSetArn?: string): wafv2.CfnWebACL.RuleProperty[] {
  * Edge スタック: CloudFront 用の WAF WebACL（us-east-1、FR1.8）。
  *
  * v0 の WafStack の中身（IP 制限、共通ルール、全体のレート制限）を移した。U9 で
- * ログイン系の URL のレート制限を先頭に足した。WebACL は enableWaf: true のときだけ作る
- * （利用者の指示、2026-10-17。false では NoWafPlaceholder だけを置く）。App スタックへは
+ * ログイン系の URL のレート制限を先頭に足した。WebACL は enableWaf: true（既定）のときだけ作る
+ * （false では NoWafPlaceholder だけを置く。2026-10-17 に任意にし、2026-11-02 に既定を有効にした）。App スタックへは
  * WebACL の ARN を crossRegionReferences で渡す（約束 C10）。
  */
 export class EdgeStack extends Stack {

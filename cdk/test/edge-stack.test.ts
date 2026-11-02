@@ -12,7 +12,7 @@ import {
  * Edge スタック（CloudFront 用 WAF、us-east-1）の検査。FR1.8、NFR4.15〜NFR4.18、NFR8.27。
  *
  * U9: ログイン系の URL のレート制限（LoginRateLimit）は enableWaf: true のときに作る WebACL に
- * 足す。enableWaf: false では WebACL を作らない（利用者の指示で設計から変えた、2026-10-17）。
+ * 足す。enableWaf: false では WebACL を作らない（2026-10-17 に任意にし、2026-11-02 に既定を有効にした）。
  */
 
 jest.setTimeout(60_000);

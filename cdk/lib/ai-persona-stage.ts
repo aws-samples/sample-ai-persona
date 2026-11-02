@@ -83,7 +83,7 @@ export class AIPersonaStage extends Stage {
       this.edge = new EdgeStack(this, 'Edge', {
         env: { account, region: EDGE_REGION },
         envName: parameter.envName,
-        enableWaf: parameter.enableWaf ?? false,
+        enableWaf: parameter.enableWaf ?? true,
         allowedIpAddresses: parameter.allowedIpAddresses,
         crossRegionReferences: true,
         description: `AI Persona v1 CloudFront WAF (${EDGE_REGION}) - ${parameter.envName}`,

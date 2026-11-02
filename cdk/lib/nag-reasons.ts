@@ -30,9 +30,9 @@ export const NAG_REASONS = {
   /** CFR1（warning、Infrastructure Design Q4 A）。 */
   geoRestriction:
     '国で絞る要件がない。入口はアプリのログイン（Cognito）と WAF で守る',
-  /** CFR2（warning）: enableWaf が false の構成だけで出る（利用者の指示、2026-10-17）。 */
+  /** CFR2（warning）: enableWaf を false にした構成だけで出る（既定は有効、2026-11-02）。 */
   wafOptional:
-    'WAF は parameters.ts の enableWaf で利用者が選ぶ（費用）。dev の既定は無効で、' +
+    'WAF は parameters.ts の enableWaf で利用者が選ぶ（費用）。既定は有効で、無効にした構成では' +
     'ログイン系の総当たりは Cognito の試行回数の上限とアプリの回路遮断で守る',
   /** CFR4。 */
   cloudFrontDefaultCertificate:

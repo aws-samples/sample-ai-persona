@@ -28,9 +28,11 @@ AI ペルソナシステムは利用する各 AWS サービスは従量課金で
 | 8 | AWS Secrets Manager | $1.2 | ログインに使う鍵（シークレット 3 つ） |
 | 9 | AWS KMS | $1.0 | ログインセッションの暗号化（カスタマー管理キー 1 つ） |
 | 10 | Amazon DynamoDB | $0.3 | データベース |
-| | **合計** | **$140.5** | - |
+| 11 | AWS WAF<br>(us-east-1) | $8.0 | CloudFront の入口の保護（WebACL 1 つ、ルール 3 つ） |
+| | **合計** | **$148.5** | - |
 
-- 固定コストは約 $119.5（Fargate $53.1、NAT Gateway の基本料金 $45.3、ALB の基本料金 $17.7、ECR $1.2、Secrets Manager $1.2、KMS $1.0）。
+- 固定コストは約 $127.5（Fargate $53.1、NAT Gateway の基本料金 $45.3、ALB の基本料金 $17.7、WAF $8.0、ECR $1.2、Secrets Manager $1.2、KMS $1.0）。
+- WAF は既定で有効です。WebACL $5 とルール 3 つ（$1 ずつ）の月額で、リクエストの料金（100 万件あたり $0.60）は本試算の利用量では数セントです。`cdk/parameters.ts` の `enableWaf` を `false` にすると約 $8 減ります。
 - 変動コストとして Bedrock、AgentCore Memory、ALB の LCU、NAT Gateway のデータ処理、S3、DynamoDB、Step Functions があります。ペルソナ生成・議論・アンケートなどの実行量に比例します。
 - マスアンケートは Step Functions（Distributed Map、子の実行は Express）でペルソナごとに推論を呼びます。Step Functions の料金は推論の費用に比べて小さく、表には含めていません。単価は [AWS Step Functions 料金](https://aws.amazon.com/step-functions/pricing/) で確認してください。
 
@@ -82,7 +84,6 @@ Claude Haiku 5.5 は、入力が 10 万トークンを超えるプロンプト�
 | 項目 | 発生条件 |
 |------|---------|
 | Amazon CloudFront | 従量課金の無料枠（月 1TB のデータ転送、1,000 万リクエスト）を超えた場合 |
-| AWS WAF | `enableWaf: true` の場合。**CloudFront 用 WebACL は us-east-1 に作成されるため us-east-1 の料金が適用されます**。WebACL 単位およびルール単位の月額料金とリクエスト課金が発生します |
 | Amazon Cognito | Essentials ティアの無料枠（月 10,000 MAU）を超えた場合 |
 | Amazon CloudWatch Logs | ECS コンテナログ（30 日保管）、WAF メトリクスの取り込み・保管 |
 | Amazon Bedrock Knowledge Bases | ナレッジベース連携機能を利用する場合。ベクトルストア（OpenSearch Serverless 等）の費用が別途発生します |
