@@ -1,6 +1,6 @@
 """OidcService（Cognito との通信）と回路遮断器の結合テスト。
 
-httpx の MockTransport を注入し、Cognito の token・revoke・JWKS を模す。ID トークンは
+httpx2 の MockTransport を注入し、Cognito の token・revoke・JWKS を模す。ID トークンは
 テストで作った RSA 鍵で署名する（unit-test-instructions.md のモックの方針）。
 BR1.4、BR1.11、BR1.13、NFR4.5、NFR5.4、reliability-design.md の回路遮断器。
 """
@@ -11,7 +11,7 @@ import json
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-import httpx
+import httpx2
 import pytest
 from joserfc import jwt
 from joserfc.jwk import RSAKey
@@ -50,7 +50,7 @@ def _id_token(key: RSAKey = _KEY, **overrides: Any) -> str:
     return jwt.encode({"alg": "RS256", "kid": "test-kid"}, claims, key)
 
 
-def _token_response(id_token: str | None = None, **extra: Any) -> httpx.Response:
+def _token_response(id_token: str | None = None, **extra: Any) -> httpx2.Response:
     body = {
         "access_token": "access-token-1",
         "refresh_token": "refresh-token-1",
@@ -59,27 +59,27 @@ def _token_response(id_token: str | None = None, **extra: Any) -> httpx.Response
         "expires_in": 3600,
         **extra,
     }
-    return httpx.Response(200, json=body)
+    return httpx2.Response(200, json=body)
 
 
 class FakeCognito:
     """MockTransport の振る舞いを差し替えられる Cognito の代役。"""
 
     def __init__(self) -> None:
-        self.token: Callable[[httpx.Request], httpx.Response] = (
+        self.token: Callable[[httpx2.Request], httpx2.Response] = (
             lambda request: _token_response()
         )
-        self.revoke: Callable[[httpx.Request], httpx.Response] = (
-            lambda request: httpx.Response(200)
+        self.revoke: Callable[[httpx2.Request], httpx2.Response] = (
+            lambda request: httpx2.Response(200)
         )
-        self.jwks: Callable[[httpx.Request], httpx.Response] = (
-            lambda request: httpx.Response(
+        self.jwks: Callable[[httpx2.Request], httpx2.Response] = (
+            lambda request: httpx2.Response(
                 200, json={"keys": [_KEY.as_dict(private=False)]}
             )
         )
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         path = request.url.path
         if path.endswith("/.well-known/jwks.json"):
@@ -88,7 +88,7 @@ class FakeCognito:
             return self.token(request)
         if path == "/oauth2/revoke":
             return self.revoke(request)
-        return httpx.Response(404)
+        return httpx2.Response(404)
 
     def calls_to(self, path: str) -> int:
         return sum(1 for r in self.requests if r.url.path == path)
@@ -127,13 +127,13 @@ def service(cognito, clock, opened) -> OidcService:
         client_secret="test-client-secret",
         domain=DOMAIN,
         redirect_uri=REDIRECT,
-        transport=httpx.MockTransport(cognito),
+        transport=httpx2.MockTransport(cognito),
         breaker=breaker,
         wall_clock=lambda: NOW,
     )
 
 
-def _form(request: httpx.Request) -> dict[str, list[str]]:
+def _form(request: httpx2.Request) -> dict[str, list[str]]:
     return parse_qs(request.content.decode())
 
 
@@ -215,7 +215,7 @@ class TestRefresh:
         assert form["refresh_token"] == ["refresh-token-1"]
 
     def test_invalid_grant_is_permanent(self, service, cognito):
-        cognito.token = lambda request: httpx.Response(
+        cognito.token = lambda request: httpx2.Response(
             400, json={"error": "invalid_grant"}
         )
         with raises_code(OidcError, ErrorCode.OIDC_GRANT_INVALID):
@@ -232,24 +232,24 @@ class TestRefresh:
         ],
     )
     def test_unreachable_cognito_is_transient(self, service, cognito, behaviour):
-        def raise_timeout(request: httpx.Request) -> httpx.Response:
-            raise httpx.ReadTimeout("timed out", request=request)
+        def raise_timeout(request: httpx2.Request) -> httpx2.Response:
+            raise httpx2.ReadTimeout("timed out", request=request)
 
-        def raise_connect(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("unreachable", request=request)
+        def raise_connect(request: httpx2.Request) -> httpx2.Response:
+            raise httpx2.ConnectError("unreachable", request=request)
 
         if behaviour == "timeout":
             cognito.token = raise_timeout
         elif behaviour == "connect":
             cognito.token = raise_connect
         elif behaviour == "server_error":
-            cognito.token = lambda request: httpx.Response(503, text="unavailable")
+            cognito.token = lambda request: httpx2.Response(503, text="unavailable")
         elif behaviour == "throttled":
-            cognito.token = lambda request: httpx.Response(
+            cognito.token = lambda request: httpx2.Response(
                 429, json={"error": "too_many_requests"}
             )
         else:
-            cognito.jwks = lambda request: httpx.Response(503)
+            cognito.jwks = lambda request: httpx2.Response(503)
 
         with raises_code(OidcError, ErrorCode.OIDC_UNAVAILABLE):
             service.refresh("refresh-token-1")
@@ -266,7 +266,7 @@ class TestRevokeAndLogout:
         assert form["token"] == ["refresh-token-1"]
 
     def test_failed_revoke_raises(self, service, cognito):
-        cognito.revoke = lambda request: httpx.Response(503)
+        cognito.revoke = lambda request: httpx2.Response(503)
         with pytest.raises(OidcError):
             service.revoke("refresh-token-1")
 
@@ -280,7 +280,7 @@ class TestRevokeAndLogout:
 
 class TestCircuitBreaker:
     def _fail_five_times(self, service, cognito) -> None:
-        cognito.token = lambda request: httpx.Response(503)
+        cognito.token = lambda request: httpx2.Response(503)
         for _ in range(5):
             with pytest.raises(OidcError):
                 service.refresh("refresh-token-1")
@@ -327,7 +327,7 @@ class TestCircuitBreaker:
         assert opened == ["opened", "opened"]
 
     def test_permanent_failures_do_not_count(self, service, cognito, opened):
-        cognito.token = lambda request: httpx.Response(
+        cognito.token = lambda request: httpx2.Response(
             400, json={"error": "invalid_grant"}
         )
         for _ in range(6):
@@ -338,7 +338,7 @@ class TestCircuitBreaker:
 
 
 def test_error_messages_do_not_contain_tokens(service, cognito):
-    cognito.token = lambda request: httpx.Response(
+    cognito.token = lambda request: httpx2.Response(
         400, json={"error": "invalid_grant", "error_description": "secret-token-x"}
     )
     with pytest.raises(OidcError) as exc_info:
@@ -348,16 +348,16 @@ def test_error_messages_do_not_contain_tokens(service, cognito):
     assert "secret-token-x" not in text
 
 
-class ClosableTransport(httpx.MockTransport):
+class ClosableTransport(httpx2.MockTransport):
     """MockTransport that refuses requests after close (like a closed pool)."""
 
-    def __init__(self, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+    def __init__(self, handler: Callable[[httpx2.Request], httpx2.Response]) -> None:
         super().__init__(handler)
         self.closed = False
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         if self.closed:
-            raise httpx.ConnectError("transport closed")
+            raise httpx2.ConnectError("transport closed")
         return super().handle_request(request)
 
     def close(self) -> None:
@@ -367,7 +367,7 @@ class ClosableTransport(httpx.MockTransport):
 class TestSharedTransport:
     """The pooled transport outlives each short-lived client (concurrent users)."""
 
-    def _service(self, transport: httpx.BaseTransport) -> OidcService:
+    def _service(self, transport: httpx2.BaseTransport) -> OidcService:
         return OidcService(
             user_pool_id=POOL_ID,
             client_id=CLIENT_ID,
@@ -394,12 +394,14 @@ class TestSharedTransport:
         transport = ClosableTransport(cognito)
         service = self._service(transport)
 
-        def token_while_another_user_finishes(request: httpx.Request) -> httpx.Response:
+        def token_while_another_user_finishes(
+            request: httpx2.Request,
+        ) -> httpx2.Response:
             # 別の利用者の処理がこの要求の途中で終わる（そのクライアントが閉じられる）
             service.create_authorization_request()
             service.revoke("other-refresh-token")
             if transport.closed:
-                raise httpx.ConnectError("connection closed by another client")
+                raise httpx2.ConnectError("connection closed by another client")
             return _token_response()
 
         cognito.token = token_while_another_user_finishes

@@ -12,6 +12,11 @@ with PKCE (S256), exchanges the code, refreshes and revokes tokens; joserfc
 (Authlib's JOSE successor; ``authlib.jose`` is deprecated in Authlib 1.8)
 verifies the ID token signature and ``iss`` / ``aud`` / ``exp`` / ``nonce``.
 
+HTTP goes through httpx2, the maintained continuation of httpx that Authlib
+1.9+ builds its clients on. Transports, clients and exceptions here must come
+from the same package as Authlib's ``OAuth2Client``, so this module uses
+httpx2 throughout (plain httpx is only Authlib's deprecated fallback).
+
 Endpoints are the fixed Cognito URLs derived from the user pool and the
 Managed Login domain, so no discovery document is fetched. The JWKS is fetched
 once and kept in the process; an unknown ``kid`` triggers one re-fetch.
@@ -38,7 +43,7 @@ from threading import Lock
 from typing import Any, Callable
 from urllib.parse import urlencode
 
-import httpx
+import httpx2
 
 # Authlib ships no type information; the three imports below are untyped.
 from authlib.common.security import generate_token  # type: ignore[import-untyped]
@@ -77,25 +82,25 @@ class _TransientStatusError(Exception):
         self.status_code = status_code
 
 
-def _raise_for_transient_status(response: httpx.Response) -> None:
+def _raise_for_transient_status(response: httpx2.Response) -> None:
     if response.status_code == 429 or response.status_code >= 500:
         raise _TransientStatusError(response.status_code)
 
 
-class _SharedTransport(httpx.BaseTransport):
+class _SharedTransport(httpx2.BaseTransport):
     """Lend the service's pooled transport to a short-lived client.
 
-    ``httpx.Client.close()`` (and leaving its ``with`` block) closes its
+    ``httpx2.Client.close()`` (and leaving its ``with`` block) closes its
     transport. Each call builds its own client, so closing the real pool there
     would drop connections other users' token exchanges and refreshes are still
     using. This wrapper forwards requests and ignores ``close()``; the service
     owns the pool and closes it in :meth:`OidcService.close`.
     """
 
-    def __init__(self, transport: httpx.BaseTransport) -> None:
+    def __init__(self, transport: httpx2.BaseTransport) -> None:
         self._transport = transport
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         return self._transport.handle_request(request)
 
     def close(self) -> None:
@@ -136,7 +141,7 @@ class OidcService:
         client_secret: str,
         domain: str,
         redirect_uri: str,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
         breaker: CircuitBreaker | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         wall_clock: Callable[[], float] = time.time,
@@ -149,7 +154,7 @@ class OidcService:
             client_secret: App client secret (from Secrets Manager via ECS).
             domain: Managed Login domain host, without scheme.
             redirect_uri: ``APP_BASE_URL + /auth/callback``.
-            transport: httpx transport (tests inject ``MockTransport``).
+            transport: httpx2 transport (tests inject ``MockTransport``).
             breaker: Circuit breaker; a fresh one when omitted.
             timeout: Upper bound for every Cognito call, in seconds.
             wall_clock: Epoch-seconds clock used for ``exp`` checks.
@@ -160,7 +165,7 @@ class OidcService:
         self._client_secret = client_secret
         self._base = f"https://{domain}"
         self._redirect_uri = redirect_uri
-        self._pool = transport or httpx.HTTPTransport()
+        self._pool = transport or httpx2.HTTPTransport()
         self._transport = _SharedTransport(self._pool)
         self.breaker = breaker or CircuitBreaker()
         self.timeout_seconds = timeout
@@ -263,7 +268,7 @@ class OidcService:
                     token=refresh_token,
                     token_type_hint="refresh_token",
                 )
-        except (_TransientStatusError, httpx.HTTPError) as e:
+        except (_TransientStatusError, httpx2.HTTPError) as e:
             raise OidcError(f"revoke failed: {type(e).__name__}") from e
         if response.status_code != 200:
             raise OidcError(
@@ -304,7 +309,7 @@ class OidcService:
                 f"{operation} rejected by Cognito: {e.error}",
                 code=ErrorCode.OIDC_GRANT_INVALID,
             ) from e
-        except (_TransientStatusError, httpx.HTTPError, ValueError) as e:
+        except (_TransientStatusError, httpx2.HTTPError, ValueError) as e:
             self.breaker.record_failure()
             raise OidcError(f"{operation} failed: {type(e).__name__}") from e
         self.breaker.record_success()
@@ -338,7 +343,7 @@ class OidcService:
                 return self._jwks
         self._admit("JWKS fetch")
         try:
-            with httpx.Client(
+            with httpx2.Client(
                 transport=self._transport,
                 timeout=self.timeout_seconds,
                 event_hooks={"response": [_raise_for_transient_status]},
@@ -346,7 +351,7 @@ class OidcService:
                 response = client.get(f"{self.issuer}/.well-known/jwks.json")
                 response.raise_for_status()
                 key_set = KeySet.import_key_set(response.json())
-        except (_TransientStatusError, httpx.HTTPError, ValueError, JoseError) as e:
+        except (_TransientStatusError, httpx2.HTTPError, ValueError, JoseError) as e:
             self.breaker.record_failure()
             raise OidcError(f"JWKS fetch failed: {type(e).__name__}") from e
         self.breaker.record_success()
