@@ -20,7 +20,10 @@ export const CLOUDFRONT_ORIGIN_FACING_PREFIX_LISTS: Record<string, string> = {
   'us-east-1': 'pl-3b927c52',
 };
 
-const CONTAINER_PORT = 80;
+/** 公開構成の ALB リスナー（CloudFront の VPC オリジンからの HTTP）。 */
+const HTTP_LISTENER_PORT = 80;
+/** アプリのコンテナポート。コンテナは非ルートで動くため 1024 以上にする（Dockerfile の EXPOSE と揃える）。 */
+const CONTAINER_PORT = 8080;
 const HTTPS_PORT = 443;
 
 /**
@@ -61,7 +64,8 @@ export interface FargateAppServiceProps {
  * - タスク 1 vCPU / 4 GB、デプロイのサーキットブレーカーと自動ロールバック、
  *   ローリング（最小 100%・最大 200%）、stopTimeout 120 秒
  * - 内部 ALB は HTTP 80、無操作タイムアウト 300 秒（SSE）。ヘルスチェック /health
- * - ALB は CloudFront のプレフィックスリストからの 80 番だけを受け、タスクは ALB からだけを受ける
+ * - ターゲット（コンテナ）は HTTP 8080。コンテナは非ルートで動く（Dockerfile の USER）
+ * - ALB は CloudFront のプレフィックスリストからの 80 番だけを受け、タスクは ALB からの 8080 だけを受ける
  * - 閉域の入口（ingress.kind = closed）では HTTPS 443 のリスナーだけを作り、タスクの SG を
  *   外向きなしで作る（U1 閉域、BR5.1・BR5.2・BR5.4）
  */
@@ -97,7 +101,7 @@ export class FargateAppService extends Construct {
     if (ingress.kind === 'cloudfront') {
       this.loadBalancerSecurityGroup.addIngressRule(
         ec2.Peer.prefixList(this.cloudFrontPrefixListId()),
-        ec2.Port.tcp(CONTAINER_PORT),
+        ec2.Port.tcp(HTTP_LISTENER_PORT),
         'CloudFront origin-facing',
       );
     }
@@ -112,7 +116,7 @@ export class FargateAppService extends Construct {
     const listener =
       ingress.kind === 'cloudfront'
         ? this.loadBalancer.addListener('Http', {
-          port: CONTAINER_PORT,
+          port: HTTP_LISTENER_PORT,
           protocol: elbv2.ApplicationProtocol.HTTP,
           open: false,
         })
