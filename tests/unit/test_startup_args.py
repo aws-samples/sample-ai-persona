@@ -59,10 +59,20 @@ def test_container_waits_for_a_graceful_shutdown_within_the_ecs_stop_timeout():
     assert 30 < seconds < 120
 
 
-def test_container_still_serves_the_app_on_port_80():
+def test_container_serves_the_app_on_an_unprivileged_port():
+    """非ルートは 1024 未満を bind できないため 8080（CDK の CONTAINER_PORT と揃える）。"""
     cmd = _dockerfile_cmd()
     assert "web.main:app" in cmd
-    assert cmd[cmd.index("--port") + 1] == "80"
+    assert cmd[cmd.index("--port") + 1] == "8080"
+
+
+def test_container_runs_as_a_non_root_user():
+    """最後の USER が root（UID 0）でない。"""
+    text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    users = re.findall(r"^USER\s+(\S+)\s*$", text, re.MULTILINE)
+    assert users, "Dockerfile に USER がない"
+    user = users[-1].split(":")[0]
+    assert user not in ("root", "0")
 
 
 @pytest.mark.parametrize(

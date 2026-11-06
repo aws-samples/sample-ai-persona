@@ -261,9 +261,9 @@ describe('FargateAppService（閉域の入口、BR5.1・BR5.2、NFR4.1・NFR4.2�
     });
   });
 
-  test('ターゲットは HTTP 80 の /health（TLS は ALB で終わる、BR5.2）', () => {
+  test('ターゲットは HTTP 8080 の /health（TLS は ALB で終わる、BR5.2）', () => {
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-      Port: 80,
+      Port: 8080,
       Protocol: 'HTTP',
       HealthCheckPath: '/health',
     });
@@ -285,7 +285,7 @@ describe('FargateAppService（閉域の入口、BR5.1・BR5.2、NFR4.1・NFR4.2�
     expect(albSg.Properties.SecurityGroupIngress ?? []).toEqual([]);
   });
 
-  test('タスクの SG は外向きが空（ルールは App スタックが足す）。受け入れは ALB からの 80 だけ', () => {
+  test('タスクの SG は外向きが空（ルールは App スタックが足す）。受け入れは ALB からの 8080 だけ', () => {
     const taskSgId = logicalIdOf(stack, service.taskSecurityGroup);
     const albSgId = logicalIdOf(stack, service.loadBalancerSecurityGroup);
     const taskSg = template.findResources('AWS::EC2::SecurityGroup')[taskSgId];
@@ -294,8 +294,8 @@ describe('FargateAppService（閉域の入口、BR5.1・BR5.2、NFR4.1・NFR4.2�
     const ingress = separateRules(template, 'AWS::EC2::SecurityGroupIngress', taskSgId);
     expect(ingress).toEqual([
       expect.objectContaining({
-        FromPort: 80,
-        ToPort: 80,
+        FromPort: 8080,
+        ToPort: 8080,
         SourceSecurityGroupId: { 'Fn::GetAtt': [albSgId, 'GroupId'] },
       }),
     ]);
@@ -558,8 +558,8 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
       [
         'ALB in 10.10.0.0/16 tcp 443',
         'ALB in Validation tcp 443',
-        'ALB out Task tcp 80',
-        'Task in ALB tcp 80',
+        'ALB out Task tcp 8080',
+        'Task in ALB tcp 8080',
         'Task out Endpoint tcp 443',
         'Task out pl-61a54008 tcp 443',
         'Task out pl-78a54011 tcp 443',

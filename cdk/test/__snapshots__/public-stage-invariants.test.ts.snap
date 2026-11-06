@@ -4,7 +4,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
 {
   "AppAlbSecurityGroup3AB06DB6": {
     "egress": [
-      ""GetAtt(AppServiceSecurityGroupA4191BE9.GroupId)" tcp 80-80",
+      ""GetAtt(AppServiceSecurityGroupA4191BE9.GroupId)" tcp 8080-8080",
     ],
     "ingress": [
       ""pl-58a04531" tcp 80-80",
@@ -15,7 +15,7 @@ exports[`公開の Stage AIPersonaDev の写し（変更の前に固定、NFR7.1
       ""0.0.0.0/0" -1 -",
     ],
     "ingress": [
-      ""GetAtt(AppAlbSecurityGroup3AB06DB6.GroupId)" tcp 80-80",
+      ""GetAtt(AppAlbSecurityGroup3AB06DB6.GroupId)" tcp 8080-8080",
     ],
   },
 }

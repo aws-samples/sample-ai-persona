@@ -103,7 +103,7 @@ describe('AppStack: ネットワーク', () => {
   test('ターゲットのヘルスチェックは /health・30 秒・正常 2・異常 3、登録解除の遅延 30 秒', () => {
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetType: 'ip',
-      Port: 80,
+      Port: 8080,
       HealthCheckPath: '/health',
       HealthCheckIntervalSeconds: 30,
       HealthyThresholdCount: 2,
@@ -152,9 +152,9 @@ describe('AppStack: Fargate', () => {
     });
   });
 
-  test('stopTimeout 120 秒、コンテナポート 80', () => {
+  test('stopTimeout 120 秒、コンテナポート 8080（非ルートで bind できる番号）', () => {
     expect(container(template).StopTimeout).toBe(120);
-    expect(container(template).PortMappings[0].ContainerPort).toBe(80);
+    expect(container(template).PortMappings[0].ContainerPort).toBe(8080);
   });
 
   test('環境変数: AUTH_MODE=oidc、APP_BASE_URL、Cognito、テーブルごとの名前', () => {
