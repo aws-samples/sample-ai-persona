@@ -214,11 +214,38 @@ cd "${PROJECT_ROOT}"
 # ===== Step 0: 作業ツリーとイメージのタグ =====
 log_step "Step 0: 作業ツリーとイメージのタグ"
 
-# 汚れた作業ツリーからビルドすると、同じタグに別の中身のイメージができる（R-10）
-if [[ "${RESTART_APP}" == "false" && -n "$(git status --porcelain)" ]]; then
-  log_error "作業ツリーに未コミットの変更があります。コミットするか退避してから実行してください"
-  git status --short
-  exit 1
+image_affecting_changes() {
+  # イメージに入るファイルの未コミットの変更を出す（git status --porcelain の形）。
+  # .dockerignore で外したパス（cdk/parameters.ts・docs/ など）はイメージの中身を変えないため見ない。
+  # Dockerfile と .dockerignore はイメージに入らないがビルドを変えるため、常に見る。
+  # .dockerignore がない、または ! で戻すパターンがあるときは、解釈せずに作業ツリー全体を見る
+  local pathspecs=(.) line
+  if [[ ! -f .dockerignore ]] || grep -qE '^[[:space:]]*!' .dockerignore; then
+    git status --porcelain --untracked-files=all
+    return
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    line="${line#/}"
+    line="${line%/}"
+    [[ -z "${line}" || "${line}" == "Dockerfile" || "${line}" == ".dockerignore" ]] && continue
+    pathspecs+=(":(exclude,glob)${line}" ":(exclude,glob)${line}/**")
+  done < .dockerignore
+  git status --porcelain --untracked-files=all -- "${pathspecs[@]}"
+}
+
+# イメージに入るファイルが未コミットのままビルドすると、同じタグに別の中身のイメージができる（R-10）
+if [[ "${RESTART_APP}" == "false" ]]; then
+  IMAGE_CHANGES=$(image_affecting_changes)
+  if [[ -n "${IMAGE_CHANGES}" ]]; then
+    log_error "作業ツリーに、コンテナイメージに入るファイルの未コミットの変更があります"
+    log_error "イメージのタグにコミットのハッシュを使うため、コミットするか退避してから実行してください"
+    log_error "（cdk/parameters.ts など、イメージに入らないファイルの変更はコミットしなくて構いません）"
+    echo "${IMAGE_CHANGES}"
+    exit 1
+  fi
 fi
 
 IMAGE_TAG="${IMAGE_TAG_OVERRIDE:-$(git rev-parse --short HEAD)}"
