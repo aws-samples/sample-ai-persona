@@ -1607,7 +1607,8 @@ async def visual_analysis(request: Request, survey_id: str) -> Any:
     )
 
 
-@router.get("/results/{survey_id}/report/generate")
+# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）
+@router.post("/results/{survey_id}/report/generate")
 async def generate_report_stream(request: Request, survey_id: str) -> Any:
     """インサイトレポートをSSEストリーミングで生成し、完了時に自動保存する
 

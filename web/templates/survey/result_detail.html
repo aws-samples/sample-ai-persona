@@ -255,7 +255,8 @@
 
                 var fullContent = '';
                 var output = document.getElementById('stream-output');
-                var es = new EventSource('/survey/results/' + surveyId + '/report/generate');
+                // 生成は CSRF の検査を受ける POST で始める（NFR4.13）
+                var es = new PostEventSource('/survey/results/' + surveyId + '/report/generate');
 
                 es.onmessage = function(e) {
                     var data = JSON.parse(e.data);

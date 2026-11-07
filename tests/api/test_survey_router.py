@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 import pytest
 
 from src.models.authz import ResourceType
+from src.models.errors import ErrorCode
 from tests.api.u7_world import ADMIN_USER, ME, OTHER, PEER_SUB, ApiWorld
 
 TEMPLATE = ResourceType.SURVEY_TEMPLATE
@@ -385,11 +386,21 @@ class TestResults:
     def test_shared_reader_cannot_delete_or_generate(self, aw, client):
         survey = self._shared(aw)
         assert client.delete(f"/survey/results/{survey.id}").status_code == 403
-        response = client.get(
+        response = client.post(
             f"/survey/results/{survey.id}/report/generate",
-            headers={"Sec-Fetch-Site": "same-origin"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert response.status_code == 403
+        aw.ai.generate_standard_report_streaming.assert_not_called()
+
+    def test_report_starts_only_from_a_checked_post(self, aw, client):
+        # GET（リンクの遷移・画像）や他サイトのフォームからは生成を始めない（NFR4.13）
+        survey = aw.survey(name="自分の結果")
+        url = f"/survey/results/{survey.id}/report/generate"
+        assert client.get(url).status_code == 405
+        refused = client.post(url, headers={"HX-Request": ""})
+        assert refused.status_code == 403
+        assert refused.json()["error_code"] == ErrorCode.CSRF_FAILED.value
         aw.ai.generate_standard_report_streaming.assert_not_called()
 
     @pytest.mark.parametrize(

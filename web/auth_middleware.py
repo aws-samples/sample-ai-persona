@@ -78,8 +78,6 @@ ROLE_EXEMPT_PATHS: frozenset[str] = frozenset({NO_ROLE_PATH, "/signout"})
 
 #: Requests the user did not trigger (BR1.9). ``(method, path pattern)``.
 PASSIVE_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # web/routers/discussion.py stream_discussion (SSE)
-    ("GET", re.compile(r"/discussion/stream")),
     # web/routers/interview.py stream_interview_messages (SSE)
     ("GET", re.compile(r"/interview/[^/]+/stream")),
     # web/routers/interview.py get_session_status (status polling)
