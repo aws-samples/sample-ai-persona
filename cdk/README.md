@@ -39,7 +39,7 @@ flowchart TB
     SFN -->|入力・結果| S3
 ```
 
-利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。状態を持つもの（テーブル、S3、ECR、User Pool、AgentCore Memory、鍵）は Data スタックにあり、すべて RETAIN です。App スタックは壊して作り直せます。
+利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
@@ -49,12 +49,12 @@ flowchart TB
 
 ## デプロイ
 
-デプロイの方法は 2 つあります。どちらで作っても同じ環境になります。
+デプロイの方法は 2 つあります。
 
-| 方法 | 向いている人 | 必要なもの |
+| 方法 | 向いているケース | 前提条件 |
 |---|---|---|
-| **A. CloudShell でスクリプトを実行する（推奨）** | まず動かしたい人。コマンド 1 つで終わります | AWS マネジメントコンソールにサインインできること |
-| **B. 手元の端末で `cdk deploy` を 1 段ずつ実行する** | CloudShell を使えない人、各段の中身を確かめながら進めたい人 | AWS CLI v2、Node.js 22、Docker、Git と、デプロイ先のアカウントの資格情報 |
+| **A. CloudShell でスクリプトを実行する（推奨）** | すぐにデプロイしたい。B の前提条件の環境がない。 | AWS マネジメントコンソールにサインイン可能 |
+| **B. 手元の端末で `cdk deploy` を 1 段ずつ実行する** | ローカルPCからデプロイしたい。パラメータやコードをカスタマイズしたい。 | AWS CLI v2、Node.js 22、Docker、Git、デプロイ先の AWS アカウントの資格情報 |
 
 方法 A の `deploy.sh` は、方法 B の手順を順に自動で実行するスクリプトです。
 
@@ -67,7 +67,7 @@ flowchart TB
 
 ### 設定（`cdk/parameters.ts`）
 
-デプロイの前に決めます。機能の切り替えは `cdk/parameters.ts` で行います。既定のままでも動きます。変えるときは、ファイルを編集してそのままデプロイできます。
+機能の切り替えは `cdk/parameters.ts` で行います。既定のままでも動きます。変えるときは、ファイルを編集してそのままデプロイできます。
 
 | 項目 | 既定 | 説明 |
 |---|---|---|
@@ -84,7 +84,7 @@ flowchart TB
 
 ### 方法 A: CloudShell でスクリプトを実行する（推奨）
 
-1. AWS マネジメントコンソールにサインインし、リージョンを東京（ap-northeast-1）にして CloudShell を開きます
+1. AWS マネジメントコンソールにサインインし、CloudShell を開きます(デフォルト：東京（ap-northeast-1）にして)
 2. 次を実行します
 
    ```bash
@@ -95,13 +95,11 @@ flowchart TB
 
 3. 終わると、アプリの URL と、最初の admin を作るコマンドが表示されます。続けて「[デプロイ後: 最初の admin を作る](#デプロイ後-最初の-admin-を作る)」へ進みます
 
-途中で ID を手で書き写す必要はありません。
-
 必要に応じて、次のオプションを付けます。
 
-| オプション | 使いどころ |
+| オプション | 説明 |
 |---|---|
-| `--region <リージョン>` | 東京以外にデプロイする（Data・App のリージョン。Edge は常に us-east-1） |
+| `--region <リージョン>` | 東京（ap-northeast-1）以外にデプロイする（Edge は us-east-1） |
 | `--inference-scope jp` | 推論を国内に限る（下の「[推論の範囲](#推論の範囲inferencescope)」） |
 | `--image-tag <タグ>` | 前の版に戻す（下の「[前の版に戻す](#前の版に戻す)」） |
 | `--restart-app` | Secrets Manager の秘密の値を書き換えたあとに、タスクを入れ替える |
@@ -111,7 +109,7 @@ flowchart TB
 始める前に、次を確かめます。
 
 - AWS CLI v2、Node.js 22、Docker、Git が使える
-- デプロイ先のアカウントの資格情報が設定されている（`aws sts get-caller-identity` でアカウント ID が出る）
+- デプロイ先の AWS アカウントの資格情報が設定されている（`aws sts get-caller-identity` でアカウント ID が出る）
 - リポジトリを取得している。アプリのコードを変えたときはコミットしてある（イメージのタグにコミットの短いハッシュを使うため。`cdk/parameters.ts` の変更はコミット不要）
 
 以下のコマンドは、すべてリポジトリのルートで、同じターミナルで続けて実行します。
@@ -261,7 +259,7 @@ CloudShell（または方法 B の前提をそろえた端末）で、リポジ�
 2. `--purge-retained` を付けたときは、続けて削除するデータの一覧が表示され、Stage 名（`AIPersonaDev`）の入力を求められます。一致しなければ、何も削除せずに終わります
 3. 終わると、削除したスタックが表示されます。データを残したときは、残っているリソースの一覧も表示されます
 
-| オプション | 使いどころ |
+| オプション | 説明 |
 |---|---|
 | `--purge-retained` | 残るリソース（上の表）も削除する。元に戻せません |
 | `--closed` | 閉域構成（`AIPersonaDevClosed`）を削除する（[閉域構成ガイド](../docs/closed_network.md#環境の削除)） |
@@ -329,8 +327,8 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 
 指定のしかた:
 
-- **続けて使う（推奨）**: `parameters.ts` の `devParameter`（閉域は `closedDevParameter`）に `inferenceScope: 'jp'` を書いてコミットします
-- **一度だけ**: `./deploy.sh --inference-scope jp`。次の再デプロイで付け忘れると `global` に戻ります
+- `parameters.ts` の `devParameter`（閉域は `closedDevParameter`）の `inferenceScope: 'jp'` に変更
+- `./deploy.sh --inference-scope jp`。次の再デプロイで付け忘れると `global` に戻ります
 
 制約:
 
@@ -355,28 +353,6 @@ Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国�
 - 実行の入力と結果は、アップロード用バケットの `survey-runs/` に置き、7 日で消えます（古いバージョンは 1 日）
 
 ## 運用（管理者向け）
-
-どの作業も、admin の手元の資格情報で行います。スクリプトは既定では件数や差分を出すだけで、何も変えません。結果を確かめてから `--apply` を付けて流してください。
-
-### 削除で残ったものの後始末
-
-議論・アンケート・カスタムペルソナデータを消したとき、まれに発言・レポート・S3 のファイルが残ることがあります。次のスクリプトで見つけて消します。
-
-```bash
-uv run python scripts/cleanup_discussion_orphans.py --region ap-northeast-1 [--apply]
-uv run python scripts/cleanup_survey_orphans.py --region ap-northeast-1 [--apply]
-```
-
-テーブル名・バケット名は、アプリと同じ環境変数（`src/config.py`）で渡します。保存の途中のものを消さないよう、書かれてから 1 時間たっていないものは対象にしません。
-
-### 共有の索引の作り直し
-
-共有の状態がおかしいとき（共有したはずのものが共有先に見えない、など）や、テーブルを PITR で戻したあとに、共有の索引（`ResourceShares` テーブル）を各データの共有設定から作り直します。
-
-```bash
-uv run python scripts/rebuild_resource_shares.py --region ap-northeast-1 \
-  --shares-table <ResourceShares の物理名> [--apply]
-```
 
 ### テーブルを PITR で戻す
 
@@ -408,14 +384,6 @@ Secrets Manager の `TokenEncryptionKeys`（`{"current": "v1", "k_v1": "..."}`�
 ### 「ログインできない、403 が出る」と言われたら
 
 WAF が有効（既定）だと、ログイン画面へ同じ IP から 5 分に 100 件を超える要求があったときに 403 で止めます。us-east-1 の WAF のコンソールで WebACL `ai-persona-v1-waf-<env>` の「Sampled requests」を開き、ルール `LoginRateLimit` で止めた送り元を確かめます。出口の IP を多くの人で共有する組織で正当な利用者が止まっているなら、`cdk/lib/edge-stack.ts` の閾値を上げて Edge スタックをデプロイし直します（`cd cdk && npx cdk deploy AIPersonaDev/Edge`）。
-
-### アプリのログに `AccessDenied` が出たら
-
-権限が足りません。足りない操作か ARN を IAM の文に足したコミットを作り、App スタックだけをデプロイし直します。`deploy.sh` は Data スタックも更新するため使いません。
-
-```bash
-cd cdk && npx cdk deploy AIPersonaDev/App -c imageTag=<今のタグ>
-```
 
 ## 手元の開発
 
