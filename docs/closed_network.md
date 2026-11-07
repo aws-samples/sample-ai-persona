@@ -144,7 +144,6 @@ CloudShell のプロジェクトルートで次を実行します。`AIPersonaDe
 ./destroy.sh --closed --purge-retained    # スタックを削除し、データもすべて削除する
 ```
 
-- 東京以外にデプロイしたときは、同じ `--region` を付けます
 - DynamoDB・S3・Cognito などのデータは、既定では RETAIN のため残ります。残るリソースと `--purge-retained` の動きは [CDK デプロイガイドの「環境の削除」](../cdk/README.md#環境の削除) を参照してください。`--purge-retained` を付けると、S3 に置いた Nemotron のデータも消えます
 - 検証用 EC2・VPC エンドポイント・Resolver は App スタックと一緒に消えます
 - ACM の証明書と、社内 DNS に足したレコードは、このスクリプトでは消しません。不要なら手で消してください
