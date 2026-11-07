@@ -111,6 +111,54 @@ cd cdk && npx cdk diff 'AIPersonaDev/*' -c imageTag=$(git rev-parse --short HEAD
 - 新しいタスクが起動に失敗したときは、ECS が自動で前の版に戻すため、手で戻す必要はありません
 - 前の版のアプリは、新しい版で増えたデータ（議論の発言、カスタムデータの利用範囲など）を読まないことがあります。もう一度新しい版のイメージでデプロイすれば元どおり見えます
 
+## 環境の削除
+
+CloudShell のプロジェクトルートで `./destroy.sh` を実行します。スタックを App → Edge（us-east-1）→ Data の順に削除します。確認で `yes` と入力すると始まります。
+
+```bash
+./destroy.sh                     # スタックを削除する（データは残す）
+./destroy.sh --purge-retained    # スタックを削除し、データもすべて削除する
+```
+
+| オプション | 使いどころ |
+|---|---|
+| `--purge-retained` | 残るリソース（下の表）も削除する。元に戻せません |
+| `--closed` | 閉域構成（`AIPersonaDevClosed`）を削除する（[閉域構成ガイド](../docs/closed_network.md#環境の削除)） |
+| `--region <リージョン>` | Data・App のリージョン（既定 ap-northeast-1）。デプロイしたときと同じ値にする |
+| `--force` | スタック削除の確認を省く。`--purge-retained` の確認は省けません |
+
+### 残るリソース
+
+データを守るため、次のリソースは RETAIN で、スタックを消しても AWS に残ります。`./destroy.sh` だけなら、最後に残ったリソースの一覧を表示します。
+
+| スタック | 残るリソース |
+|---|---|
+| `AIPersonaDev-Data` | DynamoDB のテーブル、KMS キー（セッションのテーブルの暗号化）、S3 のアップロード用バケット、Cognito User Pool、ECR のリポジトリ、AgentCore Memory、Secrets Manager の鍵 |
+| `AIPersonaDev-App` | アプリとマスアンケートのロググループ、Step Functions のステートマシン、Cognito のアプリクライアントの秘密 |
+
+- 再デプロイすると新しいリソースが作られます。残ったリソースのデータは引き継がれません
+- 残ったリソースは課金が続きます（DynamoDB・S3 の保存量、ECR のイメージ、KMS キー、Secrets Manager の秘密など）。不要なら `--purge-retained` で消してください
+- 閉域構成（`AIPersonaDevClosed-Data`・`AIPersonaDevClosed-App`）でも、残るリソースは同じです
+
+### データも削除する（`--purge-retained`）
+
+スタックをすべて削除し終えてから、残るリソースを削除します。
+
+- 実行前に削除するリソースの一覧を表示し、Stage 名（`AIPersonaDev`）の入力を求めます。`--force` を付けていても省けません。一致しなければ何も削除しません
+- DynamoDB のテーブルと Cognito User Pool は削除保護を外してから、S3 のバケットは全バージョンを消してから削除します
+- Secrets Manager の秘密は、削除後 7 日間は復元できます。KMS キーはテーブルを消したあとに削除を予約し、7 日後に消えます（それまでは取り消せます）。それ以外は元に戻せません
+- スタックの削除に失敗したときは、データには手を付けずに止まります。データの削除で失敗したものがあれば、残りを削除したあとに一覧を表示して終了コード 1 で終わります
+
+### v0 の環境の削除
+
+v1.0.0 より前の `deploy.sh` で作ったスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）は、`./destroy.sh` では削除しません。v0 は v1 からの切り戻しのために残しておけます。v1 で問題がないことを確かめてから、次のスクリプトで削除します。
+
+```bash
+./scripts/destroy-v0.sh [--env dev] [--region us-east-1]
+```
+
+v0 を削除すると、v1 から v0 へは切り戻せなくなります。
+
 ## 推論の範囲（`inferenceScope`）
 
 Bedrock の推論を送ってよい範囲を `global`（既定）か `jp`（国内）から選びます。公開・閉域のどちらの構成でも使えます。範囲に合わせて、既定のモデル・選べるモデル・IAM の権限がまとめて変わります。

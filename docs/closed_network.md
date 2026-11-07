@@ -135,6 +135,20 @@ CloudShell で次を実行します（前提は公開構成と同じで、作業
 
 Resolver とエンドポイントの AZ の数は、`deploy.sh` が今の環境と比べます。Resolver があるのに Resolver の引数がないときと、エンドポイントが 2 AZ なのに `--endpoint-az-count` がないときは、AWS を変える前に止まって、付けるべき引数を案内します。
 
+## 環境の削除
+
+CloudShell のプロジェクトルートで次を実行します。`AIPersonaDevClosed-App` → `AIPersonaDevClosed-Data` の順に削除します。公開構成の Stage（`AIPersonaDev`）には触れません。
+
+```bash
+./destroy.sh --closed                     # スタックを削除する（データは残す）
+./destroy.sh --closed --purge-retained    # スタックを削除し、データもすべて削除する
+```
+
+- 東京以外にデプロイしたときは、同じ `--region` を付けます
+- DynamoDB・S3・Cognito などのデータは、既定では RETAIN のため残ります。残るリソースと `--purge-retained` の動きは [CDK デプロイガイドの「環境の削除」](../cdk/README.md#環境の削除) を参照してください。`--purge-retained` を付けると、S3 に置いた Nemotron のデータも消えます
+- 検証用 EC2・VPC エンドポイント・Resolver は App スタックと一緒に消えます
+- ACM の証明書と、社内 DNS に足したレコードは、このスクリプトでは消しません。不要なら手で消してください
+
 ## 検証用 EC2 から使う
 
 `--create-test-environment` を付けると、閉域のサブネットに Windows Server 2022（日本語）の EC2 を 1 台作ります。Systems Manager の Fleet Manager のリモートデスクトップで入ります。
