@@ -86,6 +86,82 @@ def test_dirty_working_tree_stops_before_any_aws_call(workspace):
     assert calls.read_text() == ""
 
 
+GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+
+
+@pytest.fixture
+def image_workspace(workspace):
+    """The workspace plus the real .dockerignore and files inside and outside the image."""
+    repo, bin_dir, calls = workspace
+    shutil.copy(ROOT / ".dockerignore", repo / ".dockerignore")
+    for rel in ("cdk/parameters.ts", "Dockerfile", "src/app.py", "docs/guide.md"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("original\n")
+    subprocess.run([*GIT, "add", "."], cwd=repo, check=True)
+    subprocess.run([*GIT, "commit", "-q", "-m", "files"], cwd=repo, check=True)
+    return repo, bin_dir, calls
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "cdk/parameters.ts",
+        "docs/guide.md",
+        "scripts/new_tool.py",
+        "cdk/lib/new-construct.ts",
+    ],
+)
+def test_changes_outside_the_image_do_not_stop_the_deploy(image_workspace, rel):
+    """Files excluded by .dockerignore do not change the image, so no commit is needed."""
+    repo, bin_dir, calls = image_workspace
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text("edited by the user\n")
+
+    result = _run([], repo, bin_dir)
+
+    assert "未コミット" not in result.stdout + result.stderr
+    # 作業ツリーの検査を通り、AWS の呼び出しまで進む（偽の aws は失敗する）
+    assert "aws sts get-caller-identity" in calls.read_text()
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "src/app.py",
+        "Dockerfile",
+        ".dockerignore",
+        "web/templates/new.html",
+        "pyproject.toml",
+    ],
+)
+def test_changes_inside_the_image_stop_before_any_aws_call(image_workspace, rel):
+    repo, bin_dir, calls = image_workspace
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text("edited by the user\n")
+
+    result = _run([], repo, bin_dir)
+
+    assert result.returncode != 0
+    assert "作業ツリー" in result.stdout + result.stderr
+    assert rel in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
+def test_negation_in_dockerignore_falls_back_to_checking_everything(image_workspace):
+    """A `!` pattern re-includes files, so the script does not try to interpret it."""
+    repo, bin_dir, calls = image_workspace
+    with (repo / ".dockerignore").open("a") as f:
+        f.write("!cdk/parameters.ts\n")
+    subprocess.run([*GIT, "commit", "-q", "-am", "negation"], cwd=repo, check=True)
+    (repo / "cdk" / "parameters.ts").write_text("edited by the user\n")
+
+    result = _run([], repo, bin_dir)
+
+    assert result.returncode != 0
+    assert "作業ツリー" in result.stdout + result.stderr
+    assert calls.read_text() == ""
+
+
 def test_unknown_option_is_rejected(workspace):
     repo, bin_dir, calls = workspace
     result = _run(["--skip-cognito"], repo, bin_dir)
