@@ -370,35 +370,42 @@
                       }
                   }
 
-                  // モードに応じたURLを構築
-                  let url = `/discussion/stream?topic=${encodeURIComponent(this.topic)}&persona_ids=${encodeURIComponent(this.$store.discussionSetup.selectedPersonas.map(p => p.id).join(','))}&mode=${this.mode}`;
+                  // 議論の条件は POST の本文で送る（URL に載せない。NFR4.13）
+                  const params = new URLSearchParams({
+                      topic: this.topic,
+                      persona_ids: this.$store.discussionSetup.selectedPersonas.map(p => p.id).join(','),
+                      mode: this.mode,
+                  });
                   if (this.mode === 'agent') {
-                      url += `&rounds=${this.rounds}&additional_instructions=${encodeURIComponent(this.additionalInstructions)}&enable_memory=${this.enableMemory}&memory_mode=${this.memoryMode}&enable_dataset=${this.enableDataset}&enable_kb=${this.enableKB}`;
-                      // per-persona モデル選択（URLエンコードしたJSON文字列1個で送る）
+                      params.set('rounds', this.rounds);
+                      params.set('additional_instructions', this.additionalInstructions);
+                      params.set('enable_memory', this.enableMemory);
+                      params.set('memory_mode', this.memoryMode);
+                      params.set('enable_dataset', this.enableDataset);
+                      params.set('enable_kb', this.enableKB);
+                      // per-persona モデル選択（JSON文字列1個で送る）
                       const selectedModels = {};
                       this.$store.discussionSetup.selectedPersonas.forEach(p => {
                           if (this.personaModels[p.id]) selectedModels[p.id] = this.personaModels[p.id];
                       });
                       if (Object.keys(selectedModels).length > 0) {
-                          url += `&persona_models_json=${encodeURIComponent(JSON.stringify(selectedModels))}`;
+                          params.set('persona_models_json', JSON.stringify(selectedModels));
                       }
                       if (this.facilitatorModel) {
-                          url += `&facilitator_model=${encodeURIComponent(this.facilitatorModel)}`;
+                          params.set('facilitator_model', this.facilitatorModel);
                       }
                   }
-                  // カテゴリーをJSON形式でURLに追加
+                  // カテゴリーをJSON形式で送る
                   if (this.customizeCategories && this.categories.length > 0) {
-                      const categoriesJson = JSON.stringify(this.categories);
-                      url += `&categories_json=${encodeURIComponent(categoriesJson)}`;
+                      params.set('categories_json', JSON.stringify(this.categories));
                   }
-                  // ドキュメントIDを追加
+                  // ドキュメントIDを送る
                   if (this.uploadedDocuments && this.uploadedDocuments.length > 0) {
-                      const docIds = this.uploadedDocuments.map(d => d.file_id).join(',');
-                      url += `&document_ids=${encodeURIComponent(docIds)}`;
+                      params.set('document_ids', this.uploadedDocuments.map(d => d.file_id).join(','));
                   }
                   // 既存接続があれば閉じてから新規接続（多重接続防止）
                   if (this._eventSource) this._eventSource.close();
-                  const eventSource = new EventSource(url);
+                  const eventSource = new PostEventSource('/discussion/stream', params);
                   this._eventSource = eventSource;
                   let discussionComplete = false;
                   
@@ -518,9 +525,8 @@
                   eventSource.onmessage = function(event) {
                       const data = JSON.parse(event.data);
                       if (data.type === 'keepalive') return;  // 表示対象外。キューに積まない
-                      // 完了/エラーは受信した時点で即座に接続を閉じる。
-                      // 一時停止・低速でキュー処理(close)が遅れると、サーバ側ストリーム終了後に
-                      // EventSource が自動再接続し議論が再実行されるため、表示(キュー)とは分離して即閉じる。
+                      // 完了/エラーは受信した時点で即座に接続を閉じる（表示(キュー)とは分離する）。
+                      // PostEventSource は自動で再接続しないため、議論が再実行されることはない。
                       if (data.type === 'complete' || data.type === 'error' || data.type === 'stopped') {
                           discussionComplete = true;
                           eventSource.close();
@@ -721,9 +727,8 @@
                       if (discussionComplete) {
                           return; // 正常完了後の切断は無視
                       }
-                      // EventSource.CONNECTING(0) = ブラウザが自動再接続中 → 待つ
-                      // EventSource.CLOSED(2) = 再接続不可 → エラー表示
-                      if (eventSource.readyState === EventSource.CLOSED) {
+                      // PostEventSource は再接続しない。完了前に切れたらエラー表示
+                      if (eventSource.readyState === PostEventSource.CLOSED) {
                           self._streamingActive = false;
                           loading.innerHTML = `<p class='text-red-600'>接続エラーが発生しました。「設定に戻る」からもう一度議論を開始してください。</p>`;
                       }

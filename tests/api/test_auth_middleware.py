@@ -57,7 +57,7 @@ def _small_app(manager: Mock, *, sample_rate: float = 0.0, stream: Any = None) -
             Route("/page", _whoami),
             Route("/api/thing", _whoami),
             Route("/health", _ok),
-            Route("/discussion/stream", _whoami),
+            Route("/interview/abc-123/stream", _whoami),
         ]
     )
     return AuthMiddleware(
@@ -201,7 +201,7 @@ class TestSignedInRequests:
         manager = _manager()
         with TestClient(_small_app(manager)) as c:
             c.cookies.set("session_id", "sid")
-            c.get("/discussion/stream")
+            c.get("/interview/abc-123/stream")
             c.get("/page")
         passive_flags = [
             call.kwargs["passive"] for call in manager.check_request.call_args_list
@@ -211,7 +211,8 @@ class TestSignedInRequests:
     @pytest.mark.parametrize(
         ("method", "path", "expected"),
         [
-            ("GET", "/discussion/stream", True),
+            # 議論の開始は利用者の操作（POST、NFR4.13）。受け身にしない
+            ("POST", "/discussion/stream", False),
             ("GET", "/interview/abc-123/stream", True),
             ("GET", "/interview/abc-123/status", True),
             ("GET", "/survey/persona-data/nemotron-status", True),

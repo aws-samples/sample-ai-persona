@@ -249,6 +249,8 @@ aria-expanded="false" aria-controls="menu-{{ key }}" :aria-expanded="(openMenu =
        afterSwap / beforeRequest / afterRequest を重複登録していたため、
        fade-in が二重に適用されていた（Issue #117 ステップ5）。 #}
     <script src="{{ static_url('js/app.js') }}"></script>
+    {# AI を動かす SSE は POST で始める（NFR4.13）。EventSource の代わりに使う #}
+    <script src="{{ static_url('js/post-event-source.js') }}"></script>
 
     {% block scripts %}{% endblock %}
 </body>
