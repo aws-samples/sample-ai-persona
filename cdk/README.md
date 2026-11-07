@@ -152,7 +152,7 @@ docker build --platform linux/amd64 -t ${ECR_URI}:${IMAGE_TAG} .
 docker push ${ECR_URI}:${IMAGE_TAG}
 ```
 
-- アプリは x86_64 で動きます。Apple シリコンの Mac でも `--platform linux/amd64` を付けてください
+- アプリは x86_64（`linux/amd64`）で動きます。ビルドは x86_64 の端末か CloudShell で行ってください。Apple シリコンの Mac で `--platform linux/amd64` を付けてビルドすると、エミュレーションのため DuckDB の拡張を入れる手順で失敗します
 - ECR のタグは上書きできません。同じタグのイメージを送信済みのとき（コードを変えずに再デプロイするときなど）は、このステップを飛ばして構いません
 
 **ステップ 4. App スタック**
