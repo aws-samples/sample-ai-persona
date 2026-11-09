@@ -230,7 +230,9 @@ delete_stack() {
 # ===== RETAIN のリソースの削除（--purge-retained） =====
 empty_versioned_bucket() {
   # 全バージョンと削除マーカーを 1000 件ずつ消す（バージョニング有効のバケットは s3 rm では空にならない）
-  local bucket="$1" region="$2" payload
+  # delete-objects は個別の削除に失敗しても終了コード 0 を返し、失敗は応答の Errors にだけ載る。
+  # 見落とすと同じオブジェクトを消し続けて止まらないため、1 件でもあれば理由を出して止める
+  local bucket="$1" region="$2" payload errors
   while true; do
     payload=$(aws s3api list-object-versions --bucket "${bucket}" --region "${region}" \
       --max-keys 1000 --no-paginate --output json \
@@ -239,8 +241,14 @@ empty_versioned_bucket() {
     if ! grep -q '"Key"' <<< "${payload}"; then
       return 0
     fi
-    aws s3api delete-objects --bucket "${bucket}" --region "${region}" --delete "${payload}" > /dev/null ||
+    errors=$(aws s3api delete-objects --bucket "${bucket}" --region "${region}" --delete "${payload}" \
+      --query 'Errors[].[Code, Key, Message]' --output text) || return 1
+    if [[ -n "${errors}" && "${errors}" != "None" ]]; then
+      log_error "${bucket} のオブジェクトを削除できませんでした（先頭 10 件: コード キー 理由）"
+      head -n 10 <<< "${errors}" | while IFS= read -r line; do log_error "  ${line}"; done
+      log_error "権限・Object Lock・MFA Delete などの原因を取り除いてから再実行してください"
       return 1
+    fi
   done
 }
 
