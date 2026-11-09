@@ -18,7 +18,7 @@
 
 ### 環境の削除
 
-`./destroy.sh` でスタックを削除します。データ（DynamoDB・S3 など）は残ります。データも消すときは、スタックの削除後に `./scripts/purge-retained.sh` を実行します。詳しくは [環境の削除](./cdk/README.md#環境の削除)（閉域構成は [閉域構成ガイド](./docs/closed_network.md#環境の削除)）を参照してください。
+`./destroy.sh` でスタックを削除します。詳しくは [環境の削除](./cdk/README.md#環境の削除)（閉域構成は [閉域構成ガイド](./docs/closed_network.md#環境の削除)）を参照してください。
 
 ### ローカル開発
 
