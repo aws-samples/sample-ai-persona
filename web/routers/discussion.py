@@ -309,26 +309,27 @@ async def get_discussion_result_partial(request: Request, discussion_id: str) ->
     )
 
 
-# 受け身の要求（BR1.9）: SSE。web/auth_middleware.py の PASSIVE_REQUESTS に載せている
-# GET で AI を動かすため web/middleware.py が Sec-Fetch-Site を確かめる（NFR4.13）
-@router.get("/stream")
+# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）。
+# 画面は web/static/js/post-event-source.js で応答のストリームを読む。GET の SSE だと
+# 共有レポートの <img src> などから閲覧者の権限で始められてしまうため
+@router.post("/stream")
 async def stream_discussion(
     request: Request,
-    topic: str,
-    persona_ids: str,
-    mode: str = "traditional",
-    rounds: int = 3,
-    additional_instructions: str = "",
-    enable_memory: bool = False,
-    memory_mode: str = "full",
-    enable_dataset: bool = False,
-    enable_kb: bool = False,
-    categories_json: str = "",
-    document_ids: str = "",
-    persona_models_json: str = "",
-    facilitator_model: str = "",
+    topic: str = Form(...),
+    persona_ids: str = Form(...),
+    mode: str = Form("traditional"),
+    rounds: int = Form(3),
+    additional_instructions: str = Form(""),
+    enable_memory: bool = Form(False),
+    memory_mode: str = Form("full"),
+    enable_dataset: bool = Form(False),
+    enable_kb: bool = Form(False),
+    categories_json: str = Form(""),
+    document_ids: str = Form(""),
+    persona_models_json: str = Form(""),
+    facilitator_model: str = Form(""),
 ) -> Any:
-    """議論ストリーミングエンドポイント（SSE）- 簡易モード・エージェントモード両対応"""
+    """Stream a live discussion (SSE over the POST response), classic or agent."""
     principal = _principal(request)
     ids = [pid.strip() for pid in persona_ids.split(",") if pid.strip()]
 
@@ -908,13 +909,13 @@ def _stream_agent_events(run: Callable[[Any], None], default: str) -> Any:
     yield _sse({"type": "done"})
 
 
-# GET で AI を動かすため web/middleware.py が Sec-Fetch-Site を確かめる（NFR4.13）
-@router.get("/{discussion_id}/report/generate")
+# AI を動かして保存するので、開始は CSRF の検査を受ける POST にする（NFR4.13）
+@router.post("/{discussion_id}/report/generate")
 async def generate_report_stream(
     request: Request,
     discussion_id: str,
-    template_type: str = "summary",
-    custom_prompt: Optional[str] = None,
+    template_type: str = Form("summary"),
+    custom_prompt: Optional[str] = Form(None),
 ) -> Any:
     """レポートをSSEストリーミングで生成する（読める人、BR4.1）"""
     principal = _principal(request)

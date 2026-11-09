@@ -10,12 +10,11 @@ CSRF保護ミドルウェア
 - ログイン関連のフォーム送信（``POST /signout``）はカスタムヘッダーを付けられない
   ため、``Origin`` がアプリ自身（設定 ``APP_BASE_URL`` のスキーム・ホスト・ポート）
   と一致することで通す（Functional Design レビュー R-12）
-- v1.0.0 U6: SSE のため GET で AI を動かす入口（:data:`SAME_ORIGIN_GET_PATHS`）は
-  ``Sec-Fetch-Site: same-origin`` を確かめる（他サイトからの最上位の遷移で
-  ``SameSite=Lax`` の cookie が付いて動くのを防ぐ）
+- AI を動かす入口（議論・レポートの SSE）は POST にしてこの検査を受けさせる
+  （NFR4.13）。GET の SSE を ``Sec-Fetch-Site: same-origin`` で守る方式は、同じ
+  オリジンに置かれた ``<img src>`` などからの要求を区別できないためやめた
 """
 
-import re
 from typing import Any, TextIO
 from urllib.parse import urlsplit
 
@@ -34,14 +33,6 @@ EXEMPT_PATHS = {"/health"}
 #: カスタムヘッダーの代わりに Origin で確かめるフォーム送信。U8 で閉域構成の
 #: ログイン（M2）と初回パスワード変更（M3）のフォームを足した（BR4.6、約束 C11）
 ORIGIN_CHECKED_PATHS = {"/signout", "/login", "/auth/new-password"}
-#: SSE のため GET で AI を動かす入口（U6、security-design.md §4、NFR4.13）。
-#: ``Sec-Fetch-Site`` が ``same-origin`` でなければ（ない場合も）断る。
-#: ``EventSource`` / ``fetch`` は同じオリジンへの要求でこの値を送る
-SAME_ORIGIN_GET_PATHS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"/discussion/stream"),
-    re.compile(r"/discussion/[^/]+/report/generate"),
-)
-
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
@@ -82,20 +73,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return origin is not None and origin == self._allowed_origin
         return False
 
-    @staticmethod
-    def _same_origin_get_refused(request: Request) -> bool:
-        return (
-            request.method == "GET"
-            and any(p.fullmatch(request.url.path) for p in SAME_ORIGIN_GET_PATHS)
-            and request.headers.get("Sec-Fetch-Site") != "same-origin"
-        )
-
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         if (
             request.method in UNSAFE_METHODS
             and request.url.path not in EXEMPT_PATHS
             and not self._passes(request)
-        ) or self._same_origin_get_refused(request):
+        ):
             record_event(
                 "auth.csrf_rejected",
                 stream=self._log_stream,

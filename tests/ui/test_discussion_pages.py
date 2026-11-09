@@ -249,7 +249,14 @@ def test_a_participant_gone_while_running_shows_the_stop_panel(
         headers=SSE_HEADERS,
     )
     ui.page.fill("#topic", "新商品のマーケティングについて")
-    ui.page.click("button:has-text('リアルタイム議論を開始')")
+    with ui.page.expect_request("**/discussion/stream") as started:
+        ui.page.click("button:has-text('リアルタイム議論を開始')")
+    # 開始は CSRF の検査を受ける POST（NFR4.13）。条件は本文で送り URL に載せない
+    request = started.value
+    assert request.method == "POST"
+    assert request.headers.get("x-requested-with") == "XMLHttpRequest"
+    assert "?" not in request.url
+    assert "topic=" in (request.post_data or "")
 
     panel = ui.page.wait_for_selector("[data-conversation-stopped]")
     assert panel.get_attribute("role") == "alert"

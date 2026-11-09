@@ -166,8 +166,10 @@ window.__generateReport = function(template, showCustomPrompt, showDataDrivenPro
     } else if (showDataDrivenPrompt) {
         prompt = document.getElementById('data-driven-prompt-input')?.value || '';
     }
-    var url = '/discussion/' + discussionId + '/report/generate?template_type=' + template;
-    if (prompt) url += '&custom_prompt=' + encodeURIComponent(prompt);
+    // 生成は CSRF の検査を受ける POST で始める（NFR4.13）
+    var url = '/discussion/' + discussionId + '/report/generate';
+    var params = new URLSearchParams({template_type: template});
+    if (prompt) params.set('custom_prompt', prompt);
 
     alpineData.generating = true;
 
@@ -183,7 +185,7 @@ window.__generateReport = function(template, showCustomPrompt, showDataDrivenPro
     var fullContent = '';
     var output = document.getElementById('stream-output');
     var thinkingStream = document.getElementById('thinking-stream');
-    var es = new EventSource(url);
+    var es = new PostEventSource(url, params);
 
     // thinking イベント（data_driven 時の tool_call/tool_result/thinking）
     if (isDataDriven) {

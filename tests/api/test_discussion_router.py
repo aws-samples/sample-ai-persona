@@ -23,8 +23,10 @@ from tests.dialog_helpers import dialog_markup
 
 #: A full-page request (the client sends ``HX-Request`` by default).
 PAGE = {"HX-Request": ""}
-#: The browser's own ``EventSource`` / fetch (NFR4.13).
-SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
+#: The page's own ``fetch`` (``web/static/js/post-event-source.js``, NFR4.13).
+FETCH = {"X-Requested-With": "XMLHttpRequest"}
+#: Clears the client's default ``HX-Request``: a form posted from another site.
+NO_CUSTOM_HEADER = {"HX-Request": ""}
 
 
 @pytest.fixture
@@ -763,38 +765,45 @@ class TestStart:
 
 
 class TestStream:
-    def _params(self, **extra):
-        params = {
+    """The live discussion starts only from a CSRF-checked POST (NFR4.13)."""
+
+    def _form(self, **extra):
+        form = {
             "topic": "新商品のマーケティングについて",
             "persona_ids": "p1,p2",
         }
-        params.update(extra)
-        return params
+        form.update(extra)
+        return form
 
-    @pytest.mark.parametrize("site", [None, "cross-site", "same-site", "none"])
-    def test_other_sites_are_refused(self, aw, client, site):
-        headers = {"Sec-Fetch-Site": site} if site else {}
-        response = client.get(
-            "/discussion/stream", params=self._params(), headers=headers
+    def test_get_does_not_start_a_discussion(self, aw, client):
+        # <img src> や リンクの遷移（GET）からは始められない
+        # GET の入口はない（``/{discussion_id}`` に当たって 404 になる）
+        response = client.get("/discussion/stream", params=self._form())
+        assert response.status_code in (404, 405)
+        aw.ai.facilitate_discussion_streaming.assert_not_called()
+
+    def test_post_without_the_custom_header_is_refused(self, aw, client):
+        # 他サイトのフォーム送信はカスタムヘッダーを付けられない
+        response = client.post(
+            "/discussion/stream", data=self._form(), headers=NO_CUSTOM_HEADER
         )
         assert response.status_code == 403
         assert response.json()["error_code"] == ErrorCode.CSRF_FAILED.value
         aw.ai.facilitate_discussion_streaming.assert_not_called()
 
-    def test_same_origin_runs_and_saves(self, aw, client):
-        response = client.get(
-            "/discussion/stream", params=self._params(), headers=SAME_ORIGIN
-        )
+    def test_post_runs_and_saves(self, aw, client):
+        response = client.post("/discussion/stream", data=self._form(), headers=FETCH)
         assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
         events = _sse(response)
         assert events[-1]["type"] == "complete"
         assert events[-1]["discussion_id"] in aw.world.store.bodies
 
     def test_unreadable_persona_stops(self, aw, client):
-        response = client.get(
+        response = client.post(
             "/discussion/stream",
-            params=self._params(persona_ids="p1,p3"),
-            headers=SAME_ORIGIN,
+            data=self._form(persona_ids="p1,p3"),
+            headers=FETCH,
         )
         assert [e["type"] for e in _sse(response)] == ["stopped"]
         aw.ai.facilitate_discussion_streaming.assert_not_called()
@@ -802,21 +811,23 @@ class TestStream:
     def test_agent_mode_passes_persona_models_json(self, aw, client):
         run = Mock(return_value=iter([]))
         with patch.object(aw.agent_discussions, "run_agent_discussion_streaming", run):
-            response = client.get(
+            response = client.post(
                 "/discussion/stream",
-                params=self._params(
+                data=self._form(
                     mode="agent",
+                    rounds="2",
+                    enable_memory="true",
                     persona_models_json=json.dumps({"p1": "openai.gpt-5.6-terra"}),
                     facilitator_model="global.anthropic.claude-sonnet-5",
                 ),
-                headers=SAME_ORIGIN,
+                headers=FETCH,
             )
         assert response.status_code == 200
-        assert run.call_args.kwargs["persona_models"] == {"p1": "openai.gpt-5.6-terra"}
-        assert (
-            run.call_args.kwargs["facilitator_model"]
-            == "global.anthropic.claude-sonnet-5"
-        )
+        kwargs = run.call_args.kwargs
+        assert kwargs["persona_models"] == {"p1": "openai.gpt-5.6-terra"}
+        assert kwargs["facilitator_model"] == "global.anthropic.claude-sonnet-5"
+        assert kwargs["rounds"] == 2
+        assert kwargs["enable_memory"] is True
 
 
 # =============================================================================
@@ -991,17 +1002,22 @@ class TestReports:
         response = client.get(f"/discussion/{discussion.id}/report/nonexistent")
         assert response.status_code == 404
 
-    def test_generate_needs_same_origin(self, aw, client):
+    def test_generate_starts_only_from_a_checked_post(self, aw, client):
         discussion = aw.discussion()
         url = f"/discussion/{discussion.id}/report/generate"
-        assert client.get(url).status_code == 403
-        response = client.get(url, headers=SAME_ORIGIN)
+        # GET の入口はない（``/{id}/report/{report_id}`` に当たって 404 になる）
+        assert client.get(url).status_code in (404, 405)
+        refused = client.post(url, headers=NO_CUSTOM_HEADER)
+        assert refused.status_code == 403
+        assert refused.json()["error_code"] == ErrorCode.CSRF_FAILED.value
+        aw.ai.generate_standard_report_streaming.assert_not_called()
+        response = client.post(url, headers=FETCH)
         assert [e["type"] for e in _sse(response)][-1] == "done"
 
     def test_shared_reader_may_generate(self, aw, client):
         discussion = aw.discussion(PEER, shared_with=("sales",))
-        response = client.get(
-            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        response = client.post(
+            f"/discussion/{discussion.id}/report/generate", headers=FETCH
         )
         events = _sse(response)
         assert [e["content"] for e in events if e["type"] == "chunk"] == [
@@ -1011,17 +1027,18 @@ class TestReports:
 
     def test_unrelated_user_cannot_generate(self, aw, client):
         discussion = aw.discussion(STRANGER)
-        response = client.get(
-            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        response = client.post(
+            f"/discussion/{discussion.id}/report/generate", headers=FETCH
         )
         assert _sse(response)[-1]["type"] == "error"
         aw.ai.generate_standard_report_streaming.assert_not_called()
 
     def test_invalid_template_type(self, aw, client):
         discussion = aw.discussion()
-        response = client.get(
-            f"/discussion/{discussion.id}/report/generate?template_type=poem",
-            headers=SAME_ORIGIN,
+        response = client.post(
+            f"/discussion/{discussion.id}/report/generate",
+            data={"template_type": "poem"},
+            headers=FETCH,
         )
         assert _sse(response)[-1]["type"] == "error"
 
@@ -1064,10 +1081,10 @@ class TestDataDrivenReportNotAllowed:
         with patch(
             "src.managers.report_manager.ReportManager.generate_report_streaming"
         ) as generate:
-            response = client.get(
-                f"/discussion/{discussion.id}/report/generate"
-                "?template_type=data_driven",
-                headers=SAME_ORIGIN,
+            response = client.post(
+                f"/discussion/{discussion.id}/report/generate",
+                data={"template_type": "data_driven"},
+                headers=FETCH,
             )
         assert response.status_code == 200
         events = _sse(response)
@@ -1094,8 +1111,8 @@ class TestDataDrivenReportNotAllowed:
 
     def test_other_templates_still_stream(self, aw, client, agent_not_allowed):
         discussion = aw.discussion()
-        response = client.get(
-            f"/discussion/{discussion.id}/report/generate", headers=SAME_ORIGIN
+        response = client.post(
+            f"/discussion/{discussion.id}/report/generate", headers=FETCH
         )
         assert [e["type"] for e in _sse(response)][-1] == "done"
 
