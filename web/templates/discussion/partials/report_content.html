@@ -130,8 +130,16 @@
                             } else if (data.type === 'tool_call') {
                                 var div = document.createElement('div');
                                 div.className = 'text-sm text-blue-700 bg-blue-50 rounded p-2 border-l-4 border-blue-400';
-                                div.innerHTML = '<span class="font-semibold">' + DOMPurify.sanitize(data.content) + '</span>';
-                                if (data.detail) div.innerHTML += '<div class="text-xs text-blue-600 mt-1">' + DOMPurify.sanitize(data.detail) + '</div>';
+                                var label = document.createElement('span');
+                                label.className = 'font-semibold';
+                                label.textContent = data.content;
+                                div.appendChild(label);
+                                if (data.detail) {
+                                    var detailDiv = document.createElement('div');
+                                    detailDiv.className = 'text-xs text-blue-600 mt-1';
+                                    detailDiv.textContent = data.detail;
+                                    div.appendChild(detailDiv);
+                                }
                                 thinking.appendChild(div);
                             } else if (data.type === 'tool_result') {
                                 var details = document.createElement('details');

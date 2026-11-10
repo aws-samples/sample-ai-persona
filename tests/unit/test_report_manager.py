@@ -294,6 +294,17 @@ class TestSave:
         with raises_code(ReportManagerError, ErrorCode.REPORT_OPERATION_FAILED):
             manager.save_report(OWNER, discussion.id, "poem", "内容", None)
 
+    def test_invalid_template_type_on_a_missing_discussion_is_not_found(self, manager):
+        # 権限確認をテンプレート種別の検証より先に行う（入力をプレビューに戻さない）
+        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
+            manager.save_report(OWNER, "no-such-discussion", "poem", "内容", None)
+
+    def test_invalid_template_type_from_a_shared_reader_is_denied(self, manager, world):
+        discussion = _seed(world)
+        world.share(discussion.id, "sales")
+        with pytest.raises(AccessDeniedError):
+            manager.save_report(PEER, discussion.id, "poem", "内容", None)
+
 
 class TestUpdateAndDelete:
     def test_owner_updates_and_deletes(self, manager, world):

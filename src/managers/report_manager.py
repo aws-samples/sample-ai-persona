@@ -397,6 +397,8 @@ class ReportManager:
             AccessDeniedError: 読めるが管理できない
         """
         if template_type not in REPORT_TEMPLATE_TYPES:
+            # 権限を先に確かめる（議論に触れない人の入力をプレビューに描画させない）
+            self._discussion_records.ensure_manageable(principal, discussion_id)
             raise ReportManagerError(
                 f"unknown template type {template_type!r}",
                 code=ErrorCode.REPORT_OPERATION_FAILED,

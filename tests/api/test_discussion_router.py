@@ -974,6 +974,15 @@ class TestManageOnly:
         assert "data-report-save-error" in response.text
         assert aw.world.store.bodies[discussion.id]["report_count"] == 3
 
+    def test_invalid_template_on_a_missing_discussion_is_not_rendered(self, aw, client):
+        # 存在しない議論では、不正なテンプレート種別でも入力をプレビューに描画しない
+        response = client.post(
+            "/discussion/no-such-discussion/report/save",
+            data={"template_type": "__nope__", "content": "PREVIEW-MARKER"},
+        )
+        assert response.status_code == 404
+        assert "PREVIEW-MARKER" not in response.text
+
 
 # =============================================================================
 # レポートの参照・生成（BR4.1、BR4.3）
