@@ -125,7 +125,7 @@ def _deletes(calls: Path) -> list[str]:
     return [line for line in calls.read_text().splitlines() if "delete-stack " in line]
 
 
-# RETAIN のリソースを変える・消す呼び出し（--purge-retained のときだけ出てよい）
+# RETAIN のリソースを変える・消す呼び出し（destroy.sh では出てはならない）
 DATA_MUTATIONS = (
     "update-table",
     "delete-table",
@@ -143,10 +143,6 @@ DATA_MUTATIONS = (
     "s3 rb",
     "schedule-key-deletion",
 )
-
-
-def _index(lines: list[str], needle: str) -> int:
-    return next(i for i, line in enumerate(lines) if needle in line)
 
 
 @pytest.mark.parametrize("script", [SCRIPT, V0_SCRIPT])
@@ -222,132 +218,42 @@ def test_never_touches_v0_stacks_or_retained_data(repo, tmp_path):
     assert "persona-table" in result.stdout
 
 
-def test_help_lists_purge_option(repo, tmp_path):
+def test_help_points_to_the_purge_script(repo, tmp_path):
     bin_dir, calls = _aws(tmp_path)
     result = _run(repo / "destroy.sh", ["--help"], repo, bin_dir)
 
-    assert "--purge-retained" in result.stdout
+    assert "scripts/purge-retained.sh" in result.stdout
+    assert "--purge-retained" not in result.stdout
     assert calls.read_text() == ""
 
 
-@pytest.mark.parametrize("typed", ["", "yes", "AIPersonaDevClosed"])
-def test_purge_requires_the_stage_name_even_with_force(repo, tmp_path, typed):
+def test_the_removed_purge_option_points_to_the_purge_script(repo, tmp_path):
     bin_dir, calls = _aws(tmp_path)
-    result = _run(
-        repo / "destroy.sh",
-        ["--purge-retained", "--force"],
-        repo,
-        bin_dir,
-        stdin=f"{typed}\n",
-    )
-
-    assert result.returncode == 0
-    assert _deletes(calls) == []
-    log = calls.read_text()
-    for data_call in DATA_MUTATIONS:
-        assert data_call not in log
-
-
-def test_purge_deletes_retained_resources_after_every_stack(repo, tmp_path):
-    bin_dir, calls = _aws(tmp_path)
-    result = _run(
-        repo / "destroy.sh",
-        ["--purge-retained", "--force"],
-        repo,
-        bin_dir,
-        stdin="AIPersonaDev\n",
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    lines = calls.read_text().splitlines()
-    last_stack_delete = _index(lines, "delete-stack --stack-name AIPersonaDev-Data")
-    first_purge = min(
-        i for i, line in enumerate(lines) if any(m in line for m in DATA_MUTATIONS)
-    )
-    assert last_stack_delete < first_purge
-
-    # 削除保護を外してから消す
-    assert _index(lines, "update-table --table-name persona-table") < _index(
-        lines, "delete-table --table-name persona-table"
-    )
-    assert "--no-deletion-protection-enabled" in lines[_index(lines, "update-table")]
-    pool_update = lines[
-        _index(lines, "update-user-pool --user-pool-id ap-northeast-1_pool")
-    ]
-    assert "--deletion-protection INACTIVE" in pool_update
-    assert _index(lines, "update-user-pool") < _index(lines, "delete-user-pool ")
-
-    # バージョニング有効のバケットは全バージョンを消してからバケットを消す
-    assert _index(lines, "delete-objects --bucket upload-bucket") < _index(
-        lines, "delete-bucket --bucket upload-bucket"
-    )
-    assert (
-        "delete-repository --repository-name app-repo"
-        in lines[_index(lines, "delete-repository")]
-    )
-    assert "--force" in lines[_index(lines, "delete-repository")]
-    assert (
-        "delete-memory --memory-id AIPersona_v1_dev-abc123 "
-        in lines[_index(lines, "delete-memory")]
-    )
-    secret = lines[_index(lines, "delete-secret")]
-    assert SECRET_ARN in secret
-    assert "--recovery-window-in-days 7" in secret
-    assert "--force-delete-without-recovery" not in secret
-    assert (
-        "delete-log-group --log-group-name app-log-group"
-        in lines[_index(lines, "delete-log-group")]
-    )
-    assert STATE_MACHINE_ARN in lines[_index(lines, "delete-state-machine")]
-
-    # KMS キーは最後に削除を予約する（即時には消さない）
-    kms = _index(lines, "schedule-key-deletion")
-    assert f"--key-id {KMS_KEY_ID} " in lines[kms]
-    assert "--pending-window-in-days 7" in lines[kms]
-    assert kms > _index(lines, "delete-table --table-name persona-table")
-    assert kms == max(
-        i for i, line in enumerate(lines) if any(m in line for m in DATA_MUTATIONS)
-    )
-
-
-def test_purge_failure_continues_and_exits_non_zero(repo, tmp_path):
-    bin_dir, calls = _aws(tmp_path, fail_on="delete-table")
-    result = _run(
-        repo / "destroy.sh",
-        ["--purge-retained", "--force"],
-        repo,
-        bin_dir,
-        stdin="AIPersonaDev\n",
-    )
+    result = _run(repo / "destroy.sh", ["--purge-retained", "--force"], repo, bin_dir)
 
     assert result.returncode != 0
-    log = calls.read_text()
-    assert "delete-table --table-name persona-table" in log
-    # 1 件の失敗で止めず、残りは消す
-    assert "delete-bucket --bucket upload-bucket" in log
-    assert "delete-state-machine" in log
-    assert "persona-table" in result.stdout + result.stderr
+    assert "scripts/purge-retained.sh" in result.stdout + result.stderr
+    assert calls.read_text() == ""
 
 
-def test_purge_stops_before_data_when_a_stack_delete_fails(repo, tmp_path):
+def test_the_end_of_a_delete_points_to_the_purge_script(repo, tmp_path):
+    bin_dir, _ = _aws(tmp_path)
+    result = _run(repo / "destroy.sh", ["--closed", "--force"], repo, bin_dir)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "./scripts/purge-retained.sh --closed" in result.stdout
+
+
+def test_a_failed_stack_delete_stops_the_later_stacks(repo, tmp_path):
     bin_dir, calls = _aws(
         tmp_path, fail_on="wait stack-delete-complete --stack-name AIPersonaDev-App"
     )
-    result = _run(
-        repo / "destroy.sh",
-        ["--purge-retained", "--force"],
-        repo,
-        bin_dir,
-        stdin="AIPersonaDev\n",
-    )
+    result = _run(repo / "destroy.sh", ["--force"], repo, bin_dir)
 
     assert result.returncode != 0
     assert _deletes(calls) == [
         "aws cloudformation delete-stack --stack-name AIPersonaDev-App --region ap-northeast-1",
     ]
-    log = calls.read_text()
-    for data_call in DATA_MUTATIONS:
-        assert data_call not in log
 
 
 def test_declining_the_prompt_deletes_nothing(repo, tmp_path):
