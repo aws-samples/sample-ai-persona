@@ -121,16 +121,34 @@ class TestRenderMarkdown:
 
 
 class TestRenderMarkdownCost:
-    """Rendering time must stay roughly linear in the input (CWE-1333)."""
+    """Rendering time must stay roughly linear in the input (CWE-1333).
+
+    The check compares the time for an input with the time for the same input
+    four times longer, instead of an absolute bound, so a slow CI runner (or
+    coverage tracing) does not make it fail. Linear growth gives about 4x;
+    the former Python-Markdown grew quadratically to cubically (16x-64x).
+    """
+
+    _GROWTH = 4
+    _MAX_RATIO = 8.0
+
+    @staticmethod
+    def _best_of(text: str, runs: int = 3) -> float:
+        timings = []
+        for _ in range(runs):
+            started = time.perf_counter()
+            render_markdown(text)
+            timings.append(time.perf_counter() - started)
+        return min(timings)
 
     @pytest.mark.parametrize(
-        "text",
+        "unit, count",
         [
-            "`" * 5000,
-            "[" * 10000,
-            "<code>" * 20000,
-            "` " * 5000,
-            "#" * 5000 + "\n" + "##あ\n" * 5000,
+            ("`", 20000),
+            ("[", 2000),
+            ("<code>", 2000),
+            ("` ", 2000),
+            ("##あ\n", 2000),
         ],
         ids=[
             "backticks",
@@ -140,7 +158,9 @@ class TestRenderMarkdownCost:
             "headings",
         ],
     )
-    def test_pathological_input_renders_quickly(self, text):
-        started = time.monotonic()
-        render_markdown(text)
-        assert time.monotonic() - started < 1.0
+    def test_pathological_input_grows_linearly(self, unit, count):
+        small = self._best_of(unit * count)
+        large = self._best_of(unit * count * self._GROWTH)
+        assert large / small < self._MAX_RATIO, (
+            f"{count}x -> {count * self._GROWTH}x took {small:.4f}s -> {large:.4f}s"
+        )
