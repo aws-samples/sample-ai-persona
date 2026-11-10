@@ -261,7 +261,7 @@ function startDwhExtraction() {
             processChunk();
         })
         .catch(err => {
-            thinkingStream.innerHTML += '<div class="text-red-600 text-sm p-2">接続エラー: ' + err.message + '</div>';
+            thinkingStream.innerHTML += '<div class="text-red-600 text-sm p-2">接続エラー: ' + escapeHtml(err.message) + '</div>';
             btn.disabled = false;
             btn.classList.remove('opacity-50');
             spinner.classList.add('hidden');
@@ -307,8 +307,6 @@ function handleDwhEvent(type, data, streamEl, progressTextEl, resultEl) {
                 content.className = 'mt-2 prose prose-sm max-w-none max-h-64 overflow-y-auto text-gray-700';
                 if (window.marked && window.DOMPurify) {
                     content.innerHTML = DOMPurify.sanitize(marked.parse(entry.content, {breaks: true}));
-                } else if (window.marked) {
-                    content.innerHTML = marked.parse(entry.content, {breaks: true});
                 } else {
                     content.textContent = entry.content;
                 }

@@ -1,5 +1,9 @@
 """render_markdown (sanitize.py) の単体テスト"""
 
+import time
+
+import pytest
+
 from web.sanitize import render_markdown
 
 
@@ -71,3 +75,92 @@ class TestRenderMarkdown:
         url = "https://bucket.s3.amazonaws.com/key?X-Amz-Signature=abc123"
         result = render_markdown(f"CSV: {url}")
         assert f'href="{url}"' in result
+
+    def test_single_newline_becomes_line_break(self):
+        result = render_markdown("1行目\n2行目")
+        assert "<br" in result
+
+    def test_fenced_code_keeps_language_class(self):
+        result = render_markdown("```python\nprint(1)\n```")
+        assert 'class="language-python"' in result
+
+    def test_allowed_raw_html_passes_through(self):
+        result = render_markdown("<u>下線</u>")
+        assert "<u>下線</u>" in result
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            ("これは**「重要」**です", "<strong>「重要」</strong>"),
+            ("結果は**50%**でした", "<strong>50%</strong>"),
+            ("*「強調」*します", "<em>「強調」</em>"),
+        ],
+    )
+    def test_emphasis_next_to_japanese(self, text, expected):
+        assert expected in render_markdown(text)
+
+    def test_emphasis_still_needs_a_closing_marker(self):
+        assert "<strong>" not in render_markdown("これは**閉じていない")
+
+    @pytest.mark.parametrize(
+        "text", ["//example.com/x", "ftp://example.com", "mailto:a@example.com"]
+    )
+    def test_only_http_urls_are_autolinked(self, text):
+        assert "<a" not in render_markdown(text)
+
+    @pytest.mark.parametrize(
+        "text, tag", [("##見出し", "<h2>見出し</h2>"), ("#見出し", "<h1>見出し</h1>")]
+    )
+    def test_heading_without_space_after_hashes(self, text, tag):
+        assert tag in render_markdown(text)
+
+    def test_hashes_inside_code_block_are_kept(self):
+        result = render_markdown("```\n#include <stdio.h>\n```")
+        assert "<h1>" not in result
+        assert "#include" in result
+
+
+class TestRenderMarkdownCost:
+    """Rendering time must stay roughly linear in the input (CWE-1333).
+
+    The check compares the time for an input with the time for the same input
+    four times longer, instead of an absolute bound, so a slow CI runner (or
+    coverage tracing) does not make it fail. Linear growth gives about 4x;
+    the former Python-Markdown grew quadratically to cubically (16x-64x).
+    """
+
+    _GROWTH = 4
+    _MAX_RATIO = 8.0
+
+    @staticmethod
+    def _best_of(text: str, runs: int = 3) -> float:
+        timings = []
+        for _ in range(runs):
+            started = time.perf_counter()
+            render_markdown(text)
+            timings.append(time.perf_counter() - started)
+        return min(timings)
+
+    @pytest.mark.parametrize(
+        "unit, count",
+        [
+            ("`", 20000),
+            ("[", 2000),
+            ("<code>", 2000),
+            ("` ", 2000),
+            ("##あ\n", 2000),
+        ],
+        ids=[
+            "backticks",
+            "brackets",
+            "unclosed-code",
+            "spaced-backticks",
+            "headings",
+        ],
+    )
+    def test_pathological_input_grows_linearly(self, unit, count):
+        small = self._best_of(unit * count)
+        large = self._best_of(unit * count * self._GROWTH)
+        assert large / small < self._MAX_RATIO, (
+            f"{count}x -> {count * self._GROWTH}x took {small:.4f}s -> {large:.4f}s"
+        )

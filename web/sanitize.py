@@ -1,13 +1,26 @@
-"""Markdown→HTML変換時のXSS対策サニタイズユーティリティ"""
+"""Markdown→HTML変換時のXSS対策サニタイズユーティリティ
+
+変換は markdown-it-py（CommonMark 準拠で、処理時間が入力長にほぼ比例する）で行い、
+入力中の生の HTML も通したうえで、最後に nh3 で許可したタグ・属性だけを残す。
+
+日本語の AI 出力を以前（Python-Markdown）と同じように表示するため、CommonMark と
+異なる点を 2 つ補っている（`#` の直後に空白がない見出し、日本語に隣接した強調）。
+強調の補正は markdown-it-py の内部（``StateInline.scanDelims``）に合わせて書いているため、
+依存のメジャーバージョンを上げるときは ``tests/unit/test_sanitize.py`` で確かめる。
+"""
 
 import re
+import types
+from typing import Sequence
 
-import markdown  # type: ignore[import-untyped]
 import nh3
-
-_URL_RE = re.compile(
-    r'(?<!["\'>=/])(https?://[^\s<>\'")\]]+[^\s<>\'")\].,;:!?])', re.ASCII
-)
+from markdown_it import MarkdownIt
+from markdown_it.common.utils import isMdAsciiPunct, isPunctChar, isWhiteSpace
+from markdown_it.renderer import RendererHTML
+from markdown_it.rules_inline import emphasis
+from markdown_it.rules_inline.state_inline import Scanned, StateInline
+from markdown_it.token import Token
+from markdown_it.utils import EnvType, OptionsDict
 
 # markdownフィルタで許可するHTMLタグ
 ALLOWED_TAGS = {
@@ -63,34 +76,132 @@ ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
 }
 
 
-def _linkify_urls(html: str) -> str:
-    """HTML内のプレーンテキストURLをクリッカブルリンクに変換する。
+# 日本語（かな・漢字・全角記号）の範囲
+_CJK_RANGES = (
+    (0x3000, 0x303F),  # CJK symbols and punctuation (「」、。)
+    (0x3040, 0x30FF),  # Hiragana, Katakana
+    (0x31F0, 0x31FF),  # Katakana phonetic extensions
+    (0x3400, 0x4DBF),  # CJK unified ideographs extension A
+    (0x4E00, 0x9FFF),  # CJK unified ideographs
+    (0xF900, 0xFAFF),  # CJK compatibility ideographs
+    (0xFF00, 0xFFEF),  # Halfwidth and fullwidth forms
+)
 
-    既に<a>タグ内にあるURLは変換しない。
+
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in _CJK_RANGES)
+
+
+def _scan_delims_cjk(self: StateInline, start: int, canSplitWord: bool) -> Scanned:
+    """``StateInline.scanDelims`` that also lets ``*`` / ``_`` open/close next to Japanese.
+
+    CommonMark does not treat ``**「重要」**です`` or ``**50%**でした`` as
+    emphasis, because the markers sit between punctuation and a letter.
+    Japanese has no spaces between words, so a marker next to a CJK character
+    is also accepted as flanking (the rule Python-Markdown effectively used).
     """
+    pos = start
+    maximum = self.posMax
+    marker = self.src[start]
+    last_char = self.src[start - 1] if start > 0 else " "
+    while pos < maximum and self.src[pos] == marker:
+        pos += 1
+    count = pos - start
+    next_char = self.src[pos] if pos < maximum else " "
 
-    def _replace(match: re.Match[str]) -> str:
-        url = match.group(1)
-        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+    last_punct = isMdAsciiPunct(ord(last_char)) or isPunctChar(last_char)
+    next_punct = isMdAsciiPunct(ord(next_char)) or isPunctChar(next_char)
+    last_space = isWhiteSpace(ord(last_char))
+    next_space = isWhiteSpace(ord(next_char))
 
-    parts = re.split(
-        r"(<a[^>]*>.*?</a>|<code[^>]*>.*?</code>|<pre[^>]*>.*?</pre>)",
-        html,
-        flags=re.DOTALL,
+    left_flanking = not next_space and (
+        not next_punct or last_space or last_punct or _is_cjk(last_char)
     )
-    result = []
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            result.append(_URL_RE.sub(_replace, part))
-        else:
-            result.append(part)
-    return "".join(result)
+    right_flanking = not last_space and (
+        not last_punct or next_space or next_punct or _is_cjk(next_char)
+    )
+    can_open = left_flanking and (canSplitWord or not right_flanking or last_punct)
+    can_close = right_flanking and (canSplitWord or not left_flanking or next_punct)
+    return Scanned(can_open, can_close, count)
+
+
+def _emphasis_cjk(state: StateInline, silent: bool) -> bool:
+    """The emphasis rule, scanning delimiters with :func:`_scan_delims_cjk`."""
+    if "scanDelims" not in vars(state):
+        state.scanDelims = types.MethodType(_scan_delims_cjk, state)  # type: ignore[method-assign]
+    return emphasis.tokenize(state, silent)
+
+
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_ATX_WITHOUT_SPACE_RE = re.compile(r"^( {0,3}#{1,6})(?=[^\s#])")
+
+
+def _space_after_atx_hashes(text: str) -> str:
+    """Insert the space CommonMark requires after heading hashes (``##見出し``).
+
+    Python-Markdown accepted headings without the space and Japanese AI output
+    often omits it. Lines inside fenced code blocks are left untouched.
+    """
+    lines = text.split("\n")
+    fence = ""
+    for i, line in enumerate(lines):
+        match = _FENCE_RE.match(line)
+        if match:
+            marker = match.group(1)
+            if not fence:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = ""
+            continue
+        if not fence:
+            lines[i] = _ATX_WITHOUT_SPACE_RE.sub(r"\1 ", line, count=1)
+    return "\n".join(lines)
+
+
+def _build_renderer() -> MarkdownIt:
+    """Build the shared Markdown renderer.
+
+    ``breaks`` keeps the former ``nl2br`` behaviour, ``table`` the former
+    ``tables`` extension (fenced code is part of CommonMark). Only explicit
+    ``http(s)://`` URLs are auto-linked, as before.
+
+    Raises:
+        RuntimeError: linkify-it-py (the ``linkify`` extra) is not installed.
+    """
+    md = MarkdownIt(
+        "commonmark", {"breaks": True, "html": True, "linkify": True}
+    ).enable(["table", "linkify"])
+    if md.linkify is None:
+        raise RuntimeError("linkify-it-py is required: install markdown-it-py[linkify]")
+    md.linkify.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
+    for schema in ("//", "ftp:", "mailto:"):
+        md.linkify.add(schema, None)  # http(s):// だけを自動リンクにする
+    md.inline.ruler.at("emphasis", _emphasis_cjk)
+
+    def link_open(
+        self: RendererHTML,
+        tokens: Sequence[Token],
+        idx: int,
+        options: OptionsDict,
+        env: EnvType,
+    ) -> str:
+        token = tokens[idx]
+        if token.markup == "linkify":
+            # 自動リンクにした URL だけ新しいタブで開く（rel は nh3 が付ける）
+            token.attrSet("target", "_blank")
+        return self.renderToken(tokens, idx, options, env)
+
+    md.add_render_rule("link_open", link_open)
+    return md
+
+
+_md = _build_renderer()
 
 
 def render_markdown(text: str) -> str:
-    """マークダウンをHTMLに変換し、サニタイズして返す"""
-    html = markdown.markdown(text, extensions=["tables", "fenced_code", "nl2br"])
-    html = _linkify_urls(html)
+    """Render Markdown to HTML and keep only the allowed tags and attributes."""
+    html = _md.render(_space_after_atx_hashes(text))
     return nh3.clean(
         html,
         tags=ALLOWED_TAGS,
