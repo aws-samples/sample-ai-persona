@@ -28,7 +28,7 @@ dependencies = [
     "authlib>=1.9.1",
     "itsdangerous>=2.2.0",
     "httpx2>=2.16.0",
-    "markdown-it-py[linkify]>=4.0.0",
+    "markdown-it-py[linkify]>=4.0.0,<5",
 ]
 
 [project.optional-dependencies]

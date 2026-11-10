@@ -19,8 +19,8 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.discussion import DiscussionView
-from ..models.discussion_report import REPORT_TEMPLATE_TYPES, DiscussionReport
-from ..models.errors import CodedError, ErrorCode, ParticipantNotFoundError
+from ..models.discussion_report import DiscussionReport
+from ..models.errors import CodedError, ParticipantNotFoundError
 from ..models.persona import Persona
 from ..prompts.report_prompts import (
     build_data_driven_followup_system_prompt,
@@ -391,18 +391,14 @@ class ReportManager:
     ) -> DiscussionReport:
         """生成済みレポートを保存する（ID はサーバーが振る）。
 
+        権限の確認はテンプレート種別の検証より先に部品側で行う（議論に触れない人の
+        入力をプレビューに描画させない）。
+
         Raises:
-            ReportManagerError: ``REPORT_OPERATION_FAILED``（テンプレート種別が不正）
-            CodedError: ``DISCUSSION_NOT_FOUND``、``REPORT_LIMIT_REACHED``
+            CodedError: ``DISCUSSION_NOT_FOUND``、``REPORT_LIMIT_REACHED``、
+                ``REPORT_OPERATION_FAILED``（テンプレート種別が不正）
             AccessDeniedError: 読めるが管理できない
         """
-        if template_type not in REPORT_TEMPLATE_TYPES:
-            # 権限を先に確かめる（議論に触れない人の入力をプレビューに描画させない）
-            self._discussion_records.ensure_manageable(principal, discussion_id)
-            raise ReportManagerError(
-                f"unknown template type {template_type!r}",
-                code=ErrorCode.REPORT_OPERATION_FAILED,
-            )
         return self._discussion_records.save_report(
             principal, discussion_id, template_type, content, custom_prompt
         )

@@ -311,11 +311,17 @@ function templateForm() {
 
         renderMarkdown(text) {
             if (!text) return '';
+            // サニタイズできないときは HTML として扱わずエスケープした文字列を返す
+            const escaped = () => {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            };
+            if (!window.marked || !window.DOMPurify) return escaped();
             try {
-                const html = window.marked ? marked.parse(text, {breaks: true}) : text;
-                return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+                return DOMPurify.sanitize(marked.parse(text, {breaks: true}));
             } catch (e) {
-                return text;
+                return escaped();
             }
         },
 

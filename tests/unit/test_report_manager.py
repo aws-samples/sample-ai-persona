@@ -291,7 +291,7 @@ class TestSave:
 
     def test_invalid_template_type_is_refused(self, manager, world):
         discussion = _seed(world)
-        with raises_code(ReportManagerError, ErrorCode.REPORT_OPERATION_FAILED):
+        with raises_code(CodedError, ErrorCode.REPORT_OPERATION_FAILED):
             manager.save_report(OWNER, discussion.id, "poem", "内容", None)
 
     def test_invalid_template_type_on_a_missing_discussion_is_not_found(self, manager):

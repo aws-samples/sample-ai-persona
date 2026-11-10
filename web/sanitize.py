@@ -2,8 +2,14 @@
 
 変換は markdown-it-py（CommonMark 準拠で、処理時間が入力長にほぼ比例する）で行い、
 入力中の生の HTML も通したうえで、最後に nh3 で許可したタグ・属性だけを残す。
+
+日本語の AI 出力を以前（Python-Markdown）と同じように表示するため、CommonMark と
+異なる点を 2 つ補っている（`#` の直後に空白がない見出し、日本語に隣接した強調）。
+強調の補正は markdown-it-py の内部（``StateInline.scanDelims``）に合わせて書いているため、
+依存のメジャーバージョンを上げるときは ``tests/unit/test_sanitize.py`` で確かめる。
 """
 
+import re
 import types
 from typing import Sequence
 
@@ -88,7 +94,7 @@ def _is_cjk(char: str) -> bool:
 
 
 def _scan_delims_cjk(self: StateInline, start: int, canSplitWord: bool) -> Scanned:
-    """``StateInline.scanDelims`` that also lets ``*`` open/close next to Japanese.
+    """``StateInline.scanDelims`` that also lets ``*`` / ``_`` open/close next to Japanese.
 
     CommonMark does not treat ``**「重要」**です`` or ``**50%**でした`` as
     emphasis, because the markers sit between punctuation and a letter.
@@ -122,8 +128,35 @@ def _scan_delims_cjk(self: StateInline, start: int, canSplitWord: bool) -> Scann
 
 def _emphasis_cjk(state: StateInline, silent: bool) -> bool:
     """The emphasis rule, scanning delimiters with :func:`_scan_delims_cjk`."""
-    state.scanDelims = types.MethodType(_scan_delims_cjk, state)  # type: ignore[method-assign]
+    if "scanDelims" not in vars(state):
+        state.scanDelims = types.MethodType(_scan_delims_cjk, state)  # type: ignore[method-assign]
     return emphasis.tokenize(state, silent)
+
+
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_ATX_WITHOUT_SPACE_RE = re.compile(r"^( {0,3}#{1,6})(?=[^\s#])")
+
+
+def _space_after_atx_hashes(text: str) -> str:
+    """Insert the space CommonMark requires after heading hashes (``##見出し``).
+
+    Python-Markdown accepted headings without the space and Japanese AI output
+    often omits it. Lines inside fenced code blocks are left untouched.
+    """
+    lines = text.split("\n")
+    fence = ""
+    for i, line in enumerate(lines):
+        match = _FENCE_RE.match(line)
+        if match:
+            marker = match.group(1)
+            if not fence:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = ""
+            continue
+        if not fence:
+            lines[i] = _ATX_WITHOUT_SPACE_RE.sub(r"\1 ", line, count=1)
+    return "\n".join(lines)
 
 
 def _build_renderer() -> MarkdownIt:
@@ -132,12 +165,18 @@ def _build_renderer() -> MarkdownIt:
     ``breaks`` keeps the former ``nl2br`` behaviour, ``table`` the former
     ``tables`` extension (fenced code is part of CommonMark). Only explicit
     ``http(s)://`` URLs are auto-linked, as before.
+
+    Raises:
+        RuntimeError: linkify-it-py (the ``linkify`` extra) is not installed.
     """
     md = MarkdownIt(
         "commonmark", {"breaks": True, "html": True, "linkify": True}
     ).enable(["table", "linkify"])
-    assert md.linkify is not None  # linkify-it-py is a declared dependency
+    if md.linkify is None:
+        raise RuntimeError("linkify-it-py is required: install markdown-it-py[linkify]")
     md.linkify.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
+    for schema in ("//", "ftp:", "mailto:"):
+        md.linkify.add(schema, None)  # http(s):// だけを自動リンクにする
     md.inline.ruler.at("emphasis", _emphasis_cjk)
 
     def link_open(
@@ -162,7 +201,7 @@ _md = _build_renderer()
 
 def render_markdown(text: str) -> str:
     """Render Markdown to HTML and keep only the allowed tags and attributes."""
-    html = _md.render(text)
+    html = _md.render(_space_after_atx_hashes(text))
     return nh3.clean(
         html,
         tags=ALLOWED_TAGS,

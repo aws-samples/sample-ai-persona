@@ -102,6 +102,23 @@ class TestRenderMarkdown:
     def test_emphasis_still_needs_a_closing_marker(self):
         assert "<strong>" not in render_markdown("これは**閉じていない")
 
+    @pytest.mark.parametrize(
+        "text", ["//example.com/x", "ftp://example.com", "mailto:a@example.com"]
+    )
+    def test_only_http_urls_are_autolinked(self, text):
+        assert "<a" not in render_markdown(text)
+
+    @pytest.mark.parametrize(
+        "text, tag", [("##見出し", "<h2>見出し</h2>"), ("#見出し", "<h1>見出し</h1>")]
+    )
+    def test_heading_without_space_after_hashes(self, text, tag):
+        assert tag in render_markdown(text)
+
+    def test_hashes_inside_code_block_are_kept(self):
+        result = render_markdown("```\n#include <stdio.h>\n```")
+        assert "<h1>" not in result
+        assert "#include" in result
+
 
 class TestRenderMarkdownCost:
     """Rendering time must stay roughly linear in the input (CWE-1333)."""
@@ -113,8 +130,15 @@ class TestRenderMarkdownCost:
             "[" * 10000,
             "<code>" * 20000,
             "` " * 5000,
+            "#" * 5000 + "\n" + "##あ\n" * 5000,
         ],
-        ids=["backticks", "brackets", "unclosed-code", "spaced-backticks"],
+        ids=[
+            "backticks",
+            "brackets",
+            "unclosed-code",
+            "spaced-backticks",
+            "headings",
+        ],
     )
     def test_pathological_input_renders_quickly(self, text):
         started = time.monotonic()
