@@ -492,7 +492,7 @@ class TestBindingReaders:
             "metadata_filters": {"a": "b"},
         }
         assert created["knowledge_base_id"] == "KB123"
-        assert created["kb_type"] == "vector"
+        assert created["kb_type"] == "self_managed"
         assert service.get_kb_tools(None, None) == ([], None)
 
     def test_get_kb_tools_passes_the_managed_kb_type(self, monkeypatch):

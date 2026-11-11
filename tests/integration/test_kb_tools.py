@@ -1,14 +1,16 @@
 """KB 検索ツール（kb_tools）が組み立てる Retrieve リクエストのテスト。
 
-通常の KB は vectorSearchConfiguration、Managed KB は managedSearchConfiguration を使う。
+Self-managed KB は vectorSearchConfiguration、Managed KB は managedSearchConfiguration を使う。
 boto3 クライアントはモックに差し替える。
 """
 
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
-from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_VECTOR
+from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_SELF_MANAGED
 from src.services.knowledge_base.kb_tools import create_kb_retrieval_tool
 
 
@@ -27,8 +29,8 @@ def _retrieval_configuration(client: Mock) -> dict:
 
 
 class TestRetrievalConfiguration:
-    def test_vector_kb_uses_vector_search(self, client):
-        tool = create_kb_retrieval_tool("KB1", {"a": "1"}, kb_type=KB_TYPE_VECTOR)
+    def test_self_managed_kb_uses_vector_search(self, client):
+        tool = create_kb_retrieval_tool("KB1", {"a": "1"}, kb_type=KB_TYPE_SELF_MANAGED)
         assert "本文" in tool("質問", max_results=3)
         assert _retrieval_configuration(client) == {
             "vectorSearchConfiguration": {
@@ -37,7 +39,7 @@ class TestRetrievalConfiguration:
             }
         }
 
-    def test_kb_type_defaults_to_vector_search(self, client):
+    def test_kb_type_defaults_to_self_managed_search(self, client):
         create_kb_retrieval_tool("KB1")("質問")
         assert list(_retrieval_configuration(client)) == ["vectorSearchConfiguration"]
 
@@ -68,3 +70,44 @@ class TestRetrievalConfiguration:
         tool = create_kb_retrieval_tool("KB1", kb_type=KB_TYPE_MANAGED)
         assert "空" in tool("  ")
         client.retrieve.assert_not_called()
+
+
+def _client_error(code: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": "m"}}, "Retrieve")
+
+
+class TestRetrievalFailures:
+    @pytest.mark.parametrize("kb_type", [KB_TYPE_SELF_MANAGED, KB_TYPE_MANAGED])
+    def test_validation_error_warns_that_the_kb_type_may_be_wrong(
+        self, client, caplog, kb_type
+    ):
+        client.retrieve.side_effect = _client_error("ValidationException")
+        tool = create_kb_retrieval_tool("KB1", kb_type=kb_type)
+
+        with caplog.at_level(logging.WARNING, logger=KB_TOOLS_LOGGER):
+            assert "続行" in tool("質問")
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == KB_TOOLS_LOGGER
+        ]
+        assert len(warnings) == 1
+        assert "kb_type" in warnings[0].getMessage()
+        assert kb_type in warnings[0].getMessage()
+
+    def test_other_client_errors_do_not_warn_about_the_kb_type(self, client, caplog):
+        client.retrieve.side_effect = _client_error("ThrottlingException")
+        tool = create_kb_retrieval_tool("KB1", kb_type=KB_TYPE_MANAGED)
+
+        with caplog.at_level(logging.WARNING, logger=KB_TOOLS_LOGGER):
+            tool("質問")
+
+        assert not [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "kb_type" in r.getMessage()
+        ]
+
+
+KB_TOOLS_LOGGER = "src.services.knowledge_base.kb_tools"

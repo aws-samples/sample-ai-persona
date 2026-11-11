@@ -9,7 +9,7 @@ from typing import Dict, Callable
 import boto3
 from botocore.exceptions import ClientError
 
-from ...models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_VECTOR
+from ...models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_SELF_MANAGED
 
 try:
     from strands import tool
@@ -52,7 +52,7 @@ def create_kb_retrieval_tool(
     knowledge_base_id: str,
     metadata_filters: Dict[str, str] | None = None,
     region: str = "us-east-1",
-    kb_type: str = KB_TYPE_VECTOR,
+    kb_type: str = KB_TYPE_SELF_MANAGED,
 ) -> Callable:
     """
     ペルソナ用のナレッジベース検索ツールを作成
@@ -61,7 +61,7 @@ def create_kb_retrieval_tool(
         knowledge_base_id: Bedrock Knowledge Base ID
         metadata_filters: メタデータフィルタ（キー=値ペア）
         region: AWSリージョン
-        kb_type: KB の種類（``vector`` または ``managed``。検索設定のキーが変わる）
+        kb_type: KB の種類（``self_managed`` または ``managed``。検索設定のキーが変わる）
 
     Returns:
         Callable: Strands SDKツールとして使用可能な関数
@@ -135,6 +135,13 @@ def create_kb_retrieval_tool(
                 error_code,
                 str(e),
             )
+            if error_code == "ValidationException":
+                logger.warning(
+                    "KB retrieval was rejected: kb=%s, kb_type=%s. The registered "
+                    "knowledge base type may not match the knowledge base in Bedrock.",
+                    knowledge_base_id,
+                    kb_type,
+                )
             if error_code == "ResourceNotFoundException":
                 return "ナレッジベースが見つかりません。設定を確認してください。"
             if error_code == "AccessDeniedException":

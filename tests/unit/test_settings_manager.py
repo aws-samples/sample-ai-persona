@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.errors import CodedError, ErrorCode
-from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_VECTOR
+from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_SELF_MANAGED
 from src.models.sharing import AssetScopeChange
 from src.models.persona_binding import PersonaBinding
 from src.services.stores.persona_binding_store import PersonaBindingStoreError
@@ -100,9 +100,9 @@ class TestKnowledgeBases:
         assert listing.items[0].shared_group_ids == frozenset()
         assert listing.scope_labels[kb.id] == []
 
-    def test_create_defaults_to_a_vector_kb(self, manager):
+    def test_create_defaults_to_a_self_managed_kb(self, manager):
         kb = manager.create_knowledge_base(ADMIN, "KB1", "n")
-        assert kb.kb_type == KB_TYPE_VECTOR
+        assert kb.kb_type == KB_TYPE_SELF_MANAGED
 
     def test_create_a_managed_kb(self, manager):
         kb = manager.create_knowledge_base(ADMIN, "KB1", "n", kb_type="managed")

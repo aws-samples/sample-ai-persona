@@ -22,10 +22,16 @@ from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.authz import Principal
 from src.models.dataset import DatasetColumn
 from src.models.errors import CodedError, ErrorCode, ErrorKind
+from src.models.knowledge_base import (
+    KB_TYPE_LABELS,
+    KB_TYPE_RECOMMENDED,
+    KB_TYPE_SELF_MANAGED,
+)
 from src.models.sharing import ScopedAssets
 from web import asset_scope_views
 from web.error_messages import (
     error_kind_of,
+    is_correctable,
     mark_renderable,
     toast_response,
     user_message_for,
@@ -36,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+# 表示ヘルパー: KB の種類の表示名（選択肢の並びと一覧の表示に使う）
+templates.env.globals["kb_type_labels"] = KB_TYPE_LABELS
+templates.env.globals["kb_type_recommended"] = KB_TYPE_RECOMMENDED
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -380,7 +389,7 @@ async def create_knowledge_base(
     knowledge_base_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
-    kb_type: str = Form("vector"),
+    kb_type: str = Form(KB_TYPE_SELF_MANAGED),
 ) -> Any:
     """ナレッジベース登録"""
     principal = _principal(request)
@@ -400,6 +409,12 @@ async def create_knowledge_base(
     except Exception as e:
         if error_kind_of(e) in _ACCESS_KINDS:
             raise
+        if is_correctable(e):
+            # 入力の誤り（知らない種類など）。サーバーの失敗としては扱わない
+            logger.warning("KB registration was refused: %s", error_kind_of(e))
+            return toast_response(
+                e, default="ナレッジベースの登録に失敗しました", status_code=400
+            )
         # 再試行で解決しうるエラーは入力フォームを消さずトーストで通知する
         logger.error("KB registration failed", exc_info=True)
         return toast_response(

@@ -4,6 +4,7 @@
 U7 の対応: BR3.1、BR3.2、BR6.3、NFR1.72、NFR3.13、NFR4.14、AC5.2.1〜AC5.2.3、AC5.3.1〜AC5.3.3。
 """
 
+import re
 from contextlib import ExitStack
 from datetime import datetime
 
@@ -268,39 +269,17 @@ class TestSettingsModalsUseSharedDialog:
         form = form[: form.index("</form>")]
 
         assert 'name="kb_type"' in form
-        assert 'value="vector"' in form
+        assert 'value="self_managed"' in form
         assert 'value="managed"' in form
 
+    def test_kb_register_preselects_the_recommended_managed_kb(self, aw, client):
+        html = client.get("/settings/").text
+        form = html[html.index('hx-post="/settings/knowledge-bases"') :]
+        form = form[: form.index("</form>")]
 
-class TestManagedKnowledgeBase:
-    def test_register_a_managed_kb_and_list_its_type(self, aw, client):
-        response = client.post(
-            "/settings/knowledge-bases",
-            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "managed"},
-        )
-
-        assert response.status_code == 200
-        assert 'data-testid="kb-type"' in response.text
-        assert "Managed" in response.text
-        body = client.get("/settings/api/knowledge-bases").json()
-        assert [kb["kb_type"] for kb in body] == ["managed"]
-
-    def test_register_without_a_type_keeps_the_vector_kb(self, aw, client):
-        client.post(
-            "/settings/knowledge-bases", data={"knowledge_base_id": "KB9", "name": "n"}
-        )
-
-        body = client.get("/settings/api/knowledge-bases").json()
-        assert [kb["kb_type"] for kb in body] == ["vector"]
-
-    def test_unknown_type_registers_nothing(self, aw, client):
-        response = client.post(
-            "/settings/knowledge-bases",
-            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "kendra"},
-        )
-
-        assert response.status_code >= 400
-        assert client.get("/settings/api/knowledge-bases").json() == []
+        assert re.search(r'<option value="managed"[^>]*\sselected', form)
+        assert not re.search(r'<option value="self_managed"[^>]*\sselected', form)
+        assert form.index('value="managed"') < form.index('value="self_managed"')
 
     def test_upload_still_uses_fetch_with_requested_with(self, aw, client):
         html = client.get("/settings/").text
@@ -319,6 +298,48 @@ class TestManagedKnowledgeBase:
         assert "data-dialog-remove-on-close" in outer
         assert f'hx-put="/settings/datasets/{dataset.id}"' in html
         assert ".remove()" not in html
+
+
+class TestManagedKnowledgeBase:
+    def test_register_a_managed_kb_and_list_its_type(self, aw, client):
+        response = client.post(
+            "/settings/knowledge-bases",
+            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "managed"},
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="kb-type"' in response.text
+        assert "Managed" in response.text
+        body = client.get("/settings/api/knowledge-bases").json()
+        assert [kb["kb_type"] for kb in body] == ["managed"]
+
+    def test_register_without_a_type_keeps_the_self_managed_kb(self, aw, client):
+        client.post(
+            "/settings/knowledge-bases", data={"knowledge_base_id": "KB9", "name": "n"}
+        )
+
+        body = client.get("/settings/api/knowledge-bases").json()
+        assert [kb["kb_type"] for kb in body] == ["self_managed"]
+
+    def test_unknown_type_registers_nothing(self, aw, client):
+        response = client.post(
+            "/settings/knowledge-bases",
+            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "kendra"},
+        )
+
+        assert response.status_code == 400
+        assert client.get("/settings/api/knowledge-bases").json() == []
+
+    def test_list_labels_each_kb_type(self, aw, client):
+        for kb_id, kb_type in (("KB1", "self_managed"), ("KB2", "managed")):
+            client.post(
+                "/settings/knowledge-bases",
+                data={"knowledge_base_id": kb_id, "name": kb_id, "kb_type": kb_type},
+            )
+
+        html = client.get("/settings/knowledge-bases").text
+        assert "種類: Self-managed KB" in html
+        assert "種類: Managed KB" in html
 
 
 # =============================================================================
