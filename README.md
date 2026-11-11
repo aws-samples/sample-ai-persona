@@ -16,6 +16,8 @@
 
 最新のコードを取り込んで再デプロイする場合は [更新時の再デプロイ](./cdk/README.md#更新時の再デプロイ) を参照してください。
 
+v0（v0.19.x 以前）から v1.x 系へ上げる場合は、再デプロイではなく v1 を新しくデプロイしてデータを移します。[移行ガイド](./docs/migration_v0_to_v1.md) を参照してください。
+
 ### 環境の削除
 
 `./destroy.sh` でスタックを削除します。詳しくは [環境の削除](./cdk/README.md#環境の削除)（閉域構成は [閉域構成ガイド](./docs/closed_network.md#環境の削除)）を参照してください。
@@ -103,6 +105,7 @@ AI ペルソナシステムは、他の AWS ソリューションと連携する
 | 開発者向け | [CDKデプロイガイド](cdk/README.md) |
 | 開発者向け | [閉域構成ガイド](docs/closed_network.md) |
 | 管理者向け | [利用者・ロール・グループの管理](docs/user_management.md) |
+| 管理者向け | [移行ガイド](docs/migration_v0_to_v1.md) |
 | 開発者向け | [ローカル開発ガイド](docs/local_development.md) |
 | 共通 | [データ分析エージェント連携ガイド](docs/data_agent_integration.md) |
 | 共通 | [AI ペルソナ MCP Server 設定ガイド](docs/remote_mcp_setup.md)（v1.0.0 では未対応） |

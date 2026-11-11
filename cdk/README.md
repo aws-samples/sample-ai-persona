@@ -315,7 +315,7 @@ npx cdk destroy 'AIPersonaDev/*' -c region=${REGION}
 
 ### v0 の環境を削除する
 
-v1.0.0 より前の `deploy.sh` で作ったスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）は、上の方法では削除されません。v0 は v1 からの切り戻しのために残しておけます。v1 で問題がないことを確かめてから、次のスクリプトで削除します。
+v1.0.0 より前の `deploy.sh` で作ったスタック（`AIPersona-dev`、`AIPersonaEcr-dev`、`AIPersonaCognito-dev` など）は、上の方法では削除されません。v0 は v1 からの切り戻しのために残しておけます。v0 のデータを v1 へ移す手順は [移行ガイド](../docs/migration_v0_to_v1.md) を参照してください。v0 の dev 環境はスタックを削除するとデータも消えるため、移行と確認が終わってから、次のスクリプトで削除します。
 
 ```bash
 ./scripts/destroy-v0.sh [--env dev] [--region us-east-1]
