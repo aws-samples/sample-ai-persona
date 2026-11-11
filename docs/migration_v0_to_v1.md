@@ -145,6 +145,7 @@ uv run python scripts/migrate_v0_to_v1.py --default-owner <手順 3 の admin �
 |---|---|
 | `mapping_skip` | 対応表で `skip` にした |
 | `persona_missing` / `target_missing` | 紐付けの相手（ペルソナ、データセット、ナレッジベース）が v1 にない |
+| `persona_not_from_v0` | 紐付けのペルソナが v0 にない（v1 にしかないペルソナには紐付けを移さない） |
 | `not_in_s3` | データセットのファイルが S3 にない（ローカルで動かしていた環境のデータ） |
 | `name_taken` | v1 に同じ名前の別のカスタムペルソナデータがある |
 | `name_invalid` | カスタムペルソナデータの名前が空か 100 文字を超える |

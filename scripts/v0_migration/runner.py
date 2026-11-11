@@ -496,9 +496,15 @@ class Migration:
             rows.append((convert.dataset_binding(item), "datasets", "dataset"))
         for item in self._scan_v0("persona_kb_bindings", rep):
             rows.append((convert.kb_binding(item), "knowledge_bases", "knowledge_base"))
+        # v0 never checked that a binding's persona exists, so a binding may
+        # name a persona that only v1 has; only v0 personas get bindings
+        v0_personas = {str(p["id"]) for p in self._scan_v0_quiet("personas")}
         existing: dict[str, set[str]] = {}
         for binding, target_kind, target_type in rows:
             label = f"{binding.persona_id} → {binding.target_key}"
+            if binding.persona_id not in v0_personas:
+                rep.skip("persona_not_from_v0", label)
+                continue
             if self.mapping.skipped(
                 "persona", binding.persona_id
             ) or self.mapping.skipped(target_type, binding.target_id):

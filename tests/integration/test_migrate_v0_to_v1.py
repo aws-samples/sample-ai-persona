@@ -688,3 +688,29 @@ def test_closed_deployment_creates_users_without_an_invitation(world, monkeypatc
     [call] = calls
     assert call["MessageAction"] == "SUPPRESS"
     assert "DesiredDeliveryMediums" not in call
+
+
+def test_binding_to_a_persona_not_from_v0_is_skipped(world):
+    """A v0 binding that points at a v1-only persona is not written (v0 never checked the ID)."""
+    c, v0, v1 = world
+    _put(
+        c.v1_dynamodb,
+        v1.table("personas"),
+        {"id": "v1-only", "name": "v1", "created_at": "2026-02-01T09:00:00"},
+    )
+    _put(
+        c.v0_dynamodb,
+        v0.table("persona_dataset_bindings"),
+        {
+            "id": "b9",
+            "persona_id": "v1-only",
+            "dataset_id": "ds1",
+            "binding_keys": {},
+            "created_at": "2026-01-01T09:00:00",
+        },
+    )
+    report = _run(world, apply=True)
+    assert report["bindings"].skipped["persona_not_from_v0"] == 1
+    assert report["bindings"].created == 2
+    bindings = _scan(c.v1_dynamodb, v1.table("persona_bindings"))
+    assert all(b["persona_id"] != "v1-only" for b in bindings)
