@@ -261,6 +261,47 @@ class TestSettingsModalsUseSharedDialog:
         assert 'hx-post="/settings/knowledge-bases"' in html
         assert "dialogClose" in html
 
+    def test_kb_register_offers_both_kb_types(self, aw, client):
+        html = client.get("/settings/").text
+        dialog_markup(html, "kb-register-modal")
+        form = html[html.index('hx-post="/settings/knowledge-bases"') :]
+        form = form[: form.index("</form>")]
+
+        assert 'name="kb_type"' in form
+        assert 'value="vector"' in form
+        assert 'value="managed"' in form
+
+
+class TestManagedKnowledgeBase:
+    def test_register_a_managed_kb_and_list_its_type(self, aw, client):
+        response = client.post(
+            "/settings/knowledge-bases",
+            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "managed"},
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="kb-type"' in response.text
+        assert "Managed" in response.text
+        body = client.get("/settings/api/knowledge-bases").json()
+        assert [kb["kb_type"] for kb in body] == ["managed"]
+
+    def test_register_without_a_type_keeps_the_vector_kb(self, aw, client):
+        client.post(
+            "/settings/knowledge-bases", data={"knowledge_base_id": "KB9", "name": "n"}
+        )
+
+        body = client.get("/settings/api/knowledge-bases").json()
+        assert [kb["kb_type"] for kb in body] == ["vector"]
+
+    def test_unknown_type_registers_nothing(self, aw, client):
+        response = client.post(
+            "/settings/knowledge-bases",
+            data={"knowledge_base_id": "KB9", "name": "n", "kb_type": "kendra"},
+        )
+
+        assert response.status_code >= 400
+        assert client.get("/settings/api/knowledge-bases").json() == []
+
     def test_upload_still_uses_fetch_with_requested_with(self, aw, client):
         html = client.get("/settings/").text
 

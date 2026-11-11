@@ -7,6 +7,13 @@ from datetime import datetime
 from typing import Dict, Any
 import uuid
 
+#: A knowledge base that the team built on its own vector store.
+KB_TYPE_VECTOR = "vector"
+#: An Amazon Bedrock Managed Knowledge Base (searched with managed search).
+KB_TYPE_MANAGED = "managed"
+#: The knowledge base types an admin may register.
+KB_TYPES = frozenset({KB_TYPE_VECTOR, KB_TYPE_MANAGED})
+
 
 @dataclass
 class KnowledgeBase:
@@ -14,6 +21,7 @@ class KnowledgeBase:
 
     U7: ``shared_group_ids`` は利用範囲（組織資産、BR5.1）。空なら admin だけが使える。
     書くのは利用範囲の変更だけ（BR1.5）。
+    ``kb_type`` は検索のしかた（通常の KB か Managed KB か）。古いレコードは通常の KB。
     """
 
     id: str
@@ -23,10 +31,15 @@ class KnowledgeBase:
     created_at: datetime
     updated_at: datetime
     shared_group_ids: frozenset[str] = field(default_factory=frozenset)
+    kb_type: str = KB_TYPE_VECTOR
 
     @classmethod
     def create_new(
-        cls, knowledge_base_id: str, name: str, description: str = ""
+        cls,
+        knowledge_base_id: str,
+        name: str,
+        description: str = "",
+        kb_type: str = KB_TYPE_VECTOR,
     ) -> "KnowledgeBase":
         now = datetime.now()
         return cls(
@@ -36,6 +49,7 @@ class KnowledgeBase:
             description=description,
             created_at=now,
             updated_at=now,
+            kb_type=kb_type,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -50,6 +64,7 @@ class KnowledgeBase:
             "knowledge_base_id": self.knowledge_base_id,
             "name": self.name,
             "description": self.description,
+            "kb_type": self.kb_type,
             "created_at": self.created_at.isoformat()
             if isinstance(self.created_at, datetime)
             else self.created_at,
@@ -68,6 +83,7 @@ class KnowledgeBase:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
+            kb_type=data.get("kb_type") or KB_TYPE_VECTOR,
         )
 
 

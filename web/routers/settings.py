@@ -380,6 +380,7 @@ async def create_knowledge_base(
     knowledge_base_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
+    kb_type: str = Form("vector"),
 ) -> Any:
     """ナレッジベース登録"""
     principal = _principal(request)
@@ -391,6 +392,7 @@ async def create_knowledge_base(
             knowledge_base_id,
             name,
             description,
+            kb_type,
         )
         knowledge_bases = await _run(
             settings_manager.get_all_knowledge_bases, principal

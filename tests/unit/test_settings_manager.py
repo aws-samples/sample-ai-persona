@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.errors import CodedError, ErrorCode
+from src.models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_VECTOR
 from src.models.sharing import AssetScopeChange
 from src.models.persona_binding import PersonaBinding
 from src.services.stores.persona_binding_store import PersonaBindingStoreError
@@ -98,6 +99,22 @@ class TestKnowledgeBases:
         assert [k.id for k in listing.items] == [kb.id]
         assert listing.items[0].shared_group_ids == frozenset()
         assert listing.scope_labels[kb.id] == []
+
+    def test_create_defaults_to_a_vector_kb(self, manager):
+        kb = manager.create_knowledge_base(ADMIN, "KB1", "n")
+        assert kb.kb_type == KB_TYPE_VECTOR
+
+    def test_create_a_managed_kb(self, manager):
+        kb = manager.create_knowledge_base(ADMIN, "KB1", "n", kb_type="managed")
+        assert manager.get_all_knowledge_bases(ADMIN).items[0].kb_type == (
+            KB_TYPE_MANAGED
+        )
+        assert kb.kb_type == KB_TYPE_MANAGED
+
+    def test_unknown_kb_type_is_refused_and_creates_nothing(self, manager):
+        with raises_code(SettingsManagerError, ErrorCode.REQUEST_INVALID):
+            manager.create_knowledge_base(ADMIN, "KB1", "n", kb_type="kendra")
+        assert manager.get_all_knowledge_bases(ADMIN).items == []
 
     def test_delete(self, manager, survey_world):
         kb = survey_world.knowledge_base()

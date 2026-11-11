@@ -12,6 +12,7 @@
             <p class="text-sm text-gray-500 mt-0.5">{{ kb.description }}</p>
             {% endif %}
             <p class="text-sm text-gray-500 mt-1">ナレッジベースID: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{ kb.knowledge_base_id }}</code></p>
+            <p class="text-sm text-gray-500 mt-1" data-testid="kb-type">種類: {{ "Managed KB" if kb.kb_type == "managed" else "Self-managed KB" }}</p>
             <p class="text-sm text-gray-700 mt-1" data-testid="kb-scope">利用範囲: {{ scope | join("、") if scope else "admin のみ" }}</p>
         </div>
         <div class="flex items-center gap-3">

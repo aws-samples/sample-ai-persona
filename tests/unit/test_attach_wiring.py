@@ -492,4 +492,22 @@ class TestBindingReaders:
             "metadata_filters": {"a": "b"},
         }
         assert created["knowledge_base_id"] == "KB123"
+        assert created["kb_type"] == "vector"
         assert service.get_kb_tools(None, None) == ([], None)
+
+    def test_get_kb_tools_passes_the_managed_kb_type(self, monkeypatch):
+        from src.models.knowledge_base import KB_TYPE_MANAGED, KnowledgeBase
+        from src.models.persona_binding import PersonaBinding
+        from src.services import agent_service as module
+
+        created = {}
+        monkeypatch.setattr(
+            "src.services.knowledge_base.kb_tools.create_kb_retrieval_tool",
+            lambda **kw: created.update(kw) or "tool",
+        )
+        service = module.AgentService.__new__(module.AgentService)
+        kb = KnowledgeBase.create_new("KB123", "社内KB", kb_type=KB_TYPE_MANAGED)
+
+        service.get_kb_tools(PersonaBinding.for_kb("p1", kb.id), kb)
+
+        assert created["kb_type"] == KB_TYPE_MANAGED

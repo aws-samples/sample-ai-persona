@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 from ..config import config
 from ..models.authz import Permission, Principal, ResourceType
 from ..models.errors import CodedError, ErrorCode
-from ..models.knowledge_base import KnowledgeBase
+from ..models.knowledge_base import KB_TYPE_VECTOR, KB_TYPES, KnowledgeBase
 from ..models.persona_binding import KB_TARGET_KEY
 from ..models.sharing import AssetScopeChange, AssetScopeDialog, ScopedAssets
 from ..services.stores.knowledge_base_store import KnowledgeBaseStore
@@ -114,13 +114,24 @@ class SettingsManager:
         knowledge_base_id: str,
         name: str,
         description: str = "",
+        kb_type: str = KB_TYPE_VECTOR,
     ) -> KnowledgeBase:
-        """KB を登録する（利用範囲は admin だけで始まる、BR5.1）。"""
+        """KB を登録する（利用範囲は admin だけで始まる、BR5.1）。
+
+        Raises:
+            SettingsManagerError: ``REQUEST_INVALID`` when ``kb_type`` is not
+                one of ``KB_TYPES``.
+        """
         self._require_manage(principal)
+        if kb_type not in KB_TYPES:
+            raise SettingsManagerError(
+                "unknown knowledge base type", code=ErrorCode.REQUEST_INVALID
+            )
         kb = KnowledgeBase.create_new(
             knowledge_base_id=knowledge_base_id.strip(),
             name=name.strip(),
             description=description.strip(),
+            kb_type=kb_type,
         )
         self._kbs.put_new(kb)
         logger.info("Knowledge base registered: %s", kb.id)
