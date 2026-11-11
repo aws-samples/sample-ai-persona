@@ -5,8 +5,13 @@ is already in v1 is counted as migrated and left as it is; a run stopped
 half-way is simply run again. Children are written before their parent
 (messages and reports before the discussion body, objects before the item
 that points at them), so a parent present in v1 means it is complete.
-Departments are set afterwards with ``ResourceShareStore.write_shares``,
-which writes the body column and the share index in one transaction.
+Departments and usage scopes are set after the body, and again on a re-run
+while the body still has none: shares with ``ResourceShareStore.write_shares``
+(body column and index in one transaction), usage scopes with the stores'
+``update_scope``.
+
+The owners in the mapping are checked before anything is written, users
+included. One broken v0 item is reported as a failure and the run goes on.
 
 v0 is only read: ``Scan``, ``GetObject`` / ``HeadObject`` and ``ListUsers``.
 """
@@ -18,19 +23,23 @@ import logging
 import tempfile
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import polars as pl
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import ClientError
 
 from src.models.authz import ResourceType, Role
-from src.models.custom_persona_data import CustomPersonaData
+from src.models.custom_persona_data import (
+    CUSTOM_FILE_PREFIX,
+    CustomPersonaData,
+    reservation_id,
+)
 from src.models.errors import CodedError
-from src.models.persona_binding import KB_TARGET_KEY
 from src.models.sharing import SHAREABLE_TYPES
+from src.services.cognito_groups_service import GROUP_PREFIX
 from src.services.stores.custom_persona_data_store import (
     CustomPersonaDataConditionFailed,
     CustomPersonaDataNameTaken,
@@ -51,14 +60,17 @@ from .discover import Environment
 from .owners import MappingError, OwnerMapping, OwnerResolver
 from .report import KindReport, Report
 from .selection import KINDS
-from .users import V0User, normalize_email, plan_users
+from .users import UserPlan, V0User, normalize_email, plan_users
 
 logger = logging.getLogger(__name__)
 
 #: Group every re-created user joins (admins are switched by hand afterwards).
 MEMBER_GROUP = f"role:{Role.MEMBER.value}"
-_DEPARTMENT_PREFIX = "group:"
-_CUSTOM_PREFIX = "persona-dataset/custom/"
+#: Largest discussion body DynamoDB accepts.
+_MAX_ITEM_BYTES = 400 * 1024
+
+#: ``update_scope(id, add=..., remove=...)`` of a usage-scoped store.
+ScopeUpdate = Callable[..., Any]
 
 
 class SourceMissing(RuntimeError):
@@ -75,6 +87,14 @@ class Clients:
     v1_dynamodb: Any
     v1_s3: Any
     v1_cognito: Any
+
+
+@dataclass(frozen=True)
+class V1User:
+    """A user of the v1 pool (the ``Username`` is what the admin APIs take)."""
+
+    username: str
+    sub: str
 
 
 @dataclass
@@ -134,6 +154,12 @@ class Migration:
         self._deserializer = TypeDeserializer()
         self._serializer = TypeSerializer()
         self._custom_ids: dict[str, str] = {}
+        self._v0_items: dict[str, list[dict[str, Any]]] = {}
+        self._v0_custom: list[tuple[str, str]] | None = None
+        self._v0_persona_ids: set[str] = set()
+        self._binding_keys: dict[str, set[str]] = {}
+        self._images: dict[str, dict[str, Any]] = {}
+        self._documents: dict[str, dict[str, Any]] = {}
         ddb, region, t = clients.v1_dynamodb, v1.region, v1.table
         self.personas = PersonaStore(
             region=region, table_name=t("personas"), client=ddb
@@ -176,22 +202,22 @@ class Migration:
 
         Raises:
             MappingError: The default owner, a mapped owner or a mapped
-                department is not in the v1 pool (nothing is written).
+                department is not usable. Raised before anything is written
+                (users included); after the users step only when a mapped
+                owner could not be created.
         """
         self._check_departments()
         v1_users = self._v1_users()
-        planned: set[str] = set()
+        user_plan: UserPlan | None = None
         if "users" in self.kinds:
-            planned = self._users(set(v1_users))
-            if self.apply:
-                v1_users = self._v1_users()
-                planned = set()
-        self.resolver = OwnerResolver(
-            v1_users,
-            default_email=self.default_owner,
-            mapping=self.mapping,
-            planned_emails=planned,
-        )
+            user_plan = self._plan_users(set(v1_users))
+        planned = set(user_plan.create) if user_plan else set()
+        # Checked before any write: a typo here must not create users first
+        self.resolver = self._resolver(v1_users, planned)
+        if user_plan is not None:
+            self._users(user_plan, v1_users)
+            if self.apply and user_plan.create:
+                self.resolver = self._resolver(self._v1_users(), set())
         steps: Mapping[str, Callable[[], None]] = {
             "datasets": self._datasets,
             "knowledge_bases": self._knowledge_bases,
@@ -206,6 +232,16 @@ class Migration:
             if kind in steps:
                 steps[kind]()
         return self.report
+
+    def _resolver(
+        self, users: Mapping[str, V1User], planned: set[str]
+    ) -> OwnerResolver:
+        return OwnerResolver(
+            {email: user.sub for email, user in users.items()},
+            default_email=self.default_owner,
+            mapping=self.mapping,
+            planned_emails=planned,
+        )
 
     @property
     def owner_resolver(self) -> OwnerResolver:
@@ -222,24 +258,26 @@ class Migration:
         paginator = self.c.v1_cognito.get_paginator("list_groups")
         for page in paginator.paginate(UserPoolId=self.v1.user_pool_id):
             names.update(g["GroupName"] for g in page.get("Groups") or [])
-        missing = sorted(g for g in wanted if f"{_DEPARTMENT_PREFIX}{g}" not in names)
+        missing = sorted(g for g in wanted if f"{GROUP_PREFIX}{g}" not in names)
         if missing:
             raise MappingError(
                 "departments not in the v1 pool (create group:<slug> first): "
                 + ", ".join(missing)
             )
 
-    def _v1_users(self) -> dict[str, str]:
-        """Normalized email -> ``sub`` of every user in the v1 pool."""
-        subs: dict[str, str] = {}
+    def _v1_users(self) -> dict[str, V1User]:
+        """Normalized email -> user of every user in the v1 pool."""
+        users: dict[str, V1User] = {}
         paginator = self.c.v1_cognito.get_paginator("list_users")
         for page in paginator.paginate(UserPoolId=self.v1.user_pool_id):
             for user in page.get("Users") or []:
                 attrs = {a["Name"]: a["Value"] for a in user.get("Attributes") or []}
                 email = normalize_email(attrs.get("email"))
                 if email and attrs.get("sub"):
-                    subs[email] = attrs["sub"]
-        return subs
+                    users[email] = V1User(
+                        str(user.get("Username") or email), attrs["sub"]
+                    )
+        return users
 
     def _v0_users(self) -> list[V0User]:
         users: list[V0User] = []
@@ -256,17 +294,33 @@ class Migration:
                 )
         return users
 
-    def _users(self, v1_emails: set[str]) -> set[str]:
-        """Create the missing users; returns the emails that would be created."""
+    def _plan_users(self, v1_emails: set[str]) -> UserPlan:
         rep = self.report["users"]
         v0_users = self._v0_users()
         rep.source = len(v0_users)
-        plan = plan_users(v0_users, v1_emails)
+        return plan_users(v0_users, v1_emails)
+
+    def _users(self, plan: UserPlan, v1_users: Mapping[str, V1User]) -> None:
+        """Create the missing users and give ``role:member`` to group-less ones.
+
+        A v1 user with the same email keeps its groups; only one with no group
+        at all (left by an earlier run that stopped between the two calls)
+        gets ``role:member``.
+        """
+        rep = self.report["users"]
         rep.existing = len(plan.existing)
-        if plan.existing:
+        untouched: list[str] = []
+        for email in plan.existing:
+            try:
+                self._member_if_groupless(
+                    rep, email, v1_users[email].username, untouched
+                )
+            except Exception as e:  # noqa: BLE001 - reported per user, the run goes on
+                rep.fail(f"{email}: {_describe(e)}")
+        if untouched:
             rep.messages.append(
                 "既存のためスキップ（作成もグループの変更もしない）: "
-                + ", ".join(plan.existing)
+                + ", ".join(untouched)
             )
         for username, reason in plan.invalid:
             rep.skip(reason, username)
@@ -274,157 +328,218 @@ class Migration:
             if not self.apply:
                 rep.created += 1
                 continue
-            try:
-                delivery: dict[str, Any] = (
-                    {"DesiredDeliveryMediums": ["EMAIL"]}
-                    if self.invite
-                    else {"MessageAction": "SUPPRESS"}
-                )
-                self.c.v1_cognito.admin_create_user(
-                    UserPoolId=self.v1.user_pool_id,
-                    Username=email,
-                    UserAttributes=[
-                        {"Name": "email", "Value": email},
-                        {"Name": "email_verified", "Value": "true"},
-                    ],
-                    **delivery,
-                )
-            except ClientError as e:
-                if _code(e) == "UsernameExistsException":
-                    rep.existing += 1
-                    rep.messages.append(f"既存のためスキップ: {email}")
-                else:
-                    rep.fail(f"{email}: {_code(e)}")
-                continue
-            try:
-                self.c.v1_cognito.admin_add_user_to_group(
-                    UserPoolId=self.v1.user_pool_id,
-                    Username=email,
-                    GroupName=MEMBER_GROUP,
-                )
-            except ClientError as e:
-                rep.fail(f"{email}: {MEMBER_GROUP} に追加できません（{_code(e)}）")
-                continue
-            rep.created += 1
-        return set(plan.create)
+            self._create_user(rep, email)
+
+    def _member_if_groupless(
+        self, rep: KindReport, email: str, username: str, untouched: list[str]
+    ) -> None:
+        groups = self.c.v1_cognito.admin_list_groups_for_user(
+            UserPoolId=self.v1.user_pool_id, Username=username
+        ).get("Groups")
+        if groups:
+            untouched.append(email)
+            return
+        if self.apply:
+            self._add_member(username)
+            rep.messages.append(
+                f"グループがないため {MEMBER_GROUP} を付けました: {email}"
+            )
+        else:
+            rep.messages.append(
+                f"グループがないため {MEMBER_GROUP} を付ける予定: {email}"
+            )
+
+    def _create_user(self, rep: KindReport, email: str) -> None:
+        delivery: dict[str, Any] = (
+            {"DesiredDeliveryMediums": ["EMAIL"]}
+            if self.invite
+            else {"MessageAction": "SUPPRESS"}
+        )
+        try:
+            self.c.v1_cognito.admin_create_user(
+                UserPoolId=self.v1.user_pool_id,
+                Username=email,
+                UserAttributes=[
+                    {"Name": "email", "Value": email},
+                    {"Name": "email_verified", "Value": "true"},
+                ],
+                **delivery,
+            )
+        except ClientError as e:
+            if _code(e) == "UsernameExistsException":
+                rep.existing += 1
+                rep.messages.append(f"既存のためスキップ: {email}")
+            else:
+                rep.fail(f"{email}: {_code(e)}")
+            return
+        try:
+            self._add_member(email)
+        except ClientError as e:
+            rep.fail(
+                f"{email}: {MEMBER_GROUP} に追加できません（{_code(e)}）。"
+                "再実行すると追加します"
+            )
+            return
+        rep.created += 1
+
+    def _add_member(self, username: str) -> None:
+        self.c.v1_cognito.admin_add_user_to_group(
+            UserPoolId=self.v1.user_pool_id, Username=username, GroupName=MEMBER_GROUP
+        )
 
     # --- organization assets ------------------------------------------------------
 
     def _datasets(self) -> None:
         rep = self.report["datasets"]
-        for item in self._scan_v0("datasets", rep):
-            item_id = str(item["id"])
-            if self._mapped_skip("dataset", item_id, rep):
-                continue
-            found = convert.dataset(
-                item, src_bucket=self.v0.bucket, dst_bucket=self.v1.bucket
-            )
-            if found is None:
-                rep.skip("not_in_s3", f"{item_id}（{item.get('s3_path')}）")
-                continue
-            plan: convert.DatasetPlan = found
-            groups = self.mapping.groups("dataset", item_id)
+        self._each(rep, self._scan_v0("datasets", rep), self._dataset)
 
-            def write(
-                plan: convert.DatasetPlan = plan, groups: frozenset[str] = groups
-            ) -> None:
-                self._copy_all(plan.copies)
-                self.datasets.put_new(plan.dataset)
-                if groups:
-                    self.datasets.update_scope(
-                        plan.dataset.id, add=groups, remove=frozenset()
-                    )
+    def _dataset(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["datasets"]
+        item_id = str(item["id"])
+        if self._mapped_skip("dataset", item_id, rep):
+            return
+        found = convert.dataset(
+            item, src_bucket=self.v0.bucket, dst_bucket=self.v1.bucket
+        )
+        if found is None:
+            rep.skip("not_in_s3", f"{item_id}（{item.get('s3_path')}）")
+            return
+        plan: convert.DatasetPlan = found
 
-            self._migrate("datasets", item_id, rep, write, shared=bool(groups))
+        def write() -> None:
+            self._copy_all(plan.copies)
+            self.datasets.put_new(plan.dataset)
+
+        self._migrate(
+            "datasets",
+            item_id,
+            rep,
+            write,
+            scope=(self.datasets.update_scope, "dataset"),
+        )
 
     def _knowledge_bases(self) -> None:
         rep = self.report["knowledge_bases"]
-        items = list(self._scan_v0("knowledge_bases", rep))
+        items = self._scan_v0("knowledge_bases", rep)
         if items and self.v0.region != self.v1.region:
             rep.warn(
                 f"Bedrock のナレッジベースはリージョンごとの資源です。v1（{self.v1.region}）から"
                 f"v0（{self.v0.region}）のナレッジベースは使えないため、v1 のリージョンに作り直して"
                 "登録を更新してください"
             )
-        for item in items:
-            item_id = str(item["id"])
-            if self._mapped_skip("knowledge_base", item_id, rep):
-                continue
-            kb = convert.knowledge_base(item)
-            groups = self.mapping.groups("knowledge_base", item_id)
+        self._each(rep, items, self._knowledge_base)
 
-            def write(kb: Any = kb, groups: frozenset[str] = groups) -> None:
-                self.kbs.put_new(kb)
-                if groups:
-                    self.kbs.update_scope(kb.id, add=groups, remove=frozenset())
-
-            self._migrate("knowledge_bases", item_id, rep, write, shared=bool(groups))
+    def _knowledge_base(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["knowledge_bases"]
+        item_id = str(item["id"])
+        if self._mapped_skip("knowledge_base", item_id, rep):
+            return
+        kb = convert.knowledge_base(item)
+        self._migrate(
+            "knowledge_bases",
+            item_id,
+            rep,
+            lambda: self.kbs.put_new(kb),
+            scope=(self.kbs.update_scope, "knowledge_base"),
+        )
 
     def _custom_persona_data(self) -> None:
         rep = self.report["custom_persona_data"]
         objects = self._v0_custom_objects()
         rep.source = len(objects)
         for key, modified in objects:
-            name = convert.custom_name_from_key(key)
-            if name is None:
-                continue
-            if self._mapped_skip("custom_persona_data", name, rep):
-                continue
             try:
-                record = convert.custom_persona_data(
-                    name,
-                    meta=None,
-                    columns=[],
-                    row_count=0,
-                    registered_by=self.owner_resolver.default_sub,
-                    registered_at=modified,
-                )
-            except CodedError:
-                rep.skip("name_invalid", name)
-                continue
-            if self._exists("custom_persona_data", record.id):
-                rep.existing += 1
-                self._custom_ids[name] = record.id
-                continue
-            if not self.apply:
-                rep.created += 1
-                self._custom_ids[name] = record.id
-                continue
-            groups = self.mapping.groups("custom_persona_data", name)
-            try:
-                full = self._read_custom(key, name, modified, groups)
-                self._copy(convert.Copy(key, full.s3_key))
-                self.custom.put_new(full)
-            except CustomPersonaDataConditionFailed:
-                rep.existing += 1
-            except CustomPersonaDataNameTaken:
-                rep.skip("name_taken", f"{name}（v1 に同じ名前の別のデータがあります）")
-                continue
+                self._custom_one(rep, key, modified)
+            except MappingError:
+                raise
             except Exception as e:  # noqa: BLE001 - reported per item, the run goes on
-                rep.fail(f"{name}: {_describe(e)}")
-                continue
-            else:
-                rep.created += 1
-                if groups:
-                    rep.shared += 1
+                rep.fail(f"{key}: {_describe(e)}")
+
+    def _custom_one(self, rep: KindReport, key: str, modified: str) -> None:
+        name = convert.custom_name_from_key(key)
+        if name is None or self._mapped_skip("custom_persona_data", name, rep):
+            return
+        try:
+            record = convert.custom_persona_data(
+                name,
+                meta=None,
+                columns=[],
+                row_count=0,
+                registered_by=self.owner_resolver.default_sub,
+                registered_at=modified,
+            )
+        except CodedError:
+            rep.skip("name_invalid", name)
+            return
+        groups = self.mapping.groups("custom_persona_data", name)
+        if self._exists("custom_persona_data", record.id):
+            rep.existing += 1
             self._custom_ids[name] = record.id
+            self._scope(
+                rep, "custom_persona_data", record.id, groups, self.custom.update_scope
+            )
+            return
+        holder = self._name_holder(record.name)
+        if holder is not None and holder != record.id:
+            # Checked before the copy so nothing is left in the v1 bucket
+            rep.skip("name_taken", f"{name}（v1 に同じ名前の別のデータがあります）")
+            return
+        if not self.apply:
+            rep.created += 1
+            if groups:
+                rep.shared += 1
+            self._custom_ids[name] = record.id
+            return
+        try:
+            full = self._read_custom(key, name, modified, groups)
+            self._copy(convert.Copy(key, full.s3_key))
+            self.custom.put_new(full)
+        except CustomPersonaDataConditionFailed:
+            rep.existing += 1
+        except CustomPersonaDataNameTaken:
+            rep.skip("name_taken", f"{name}（v1 に同じ名前の別のデータがあります）")
+            return
+        else:
+            rep.created += 1
+            if groups:
+                rep.shared += 1
+        self._custom_ids[name] = record.id
+
+    def _name_holder(self, name: str) -> str | None:
+        """ID of the v1 record holding ``name``, or ``None``."""
+        response = self.c.v1_dynamodb.get_item(
+            TableName=self.v1.table("custom_persona_data"),
+            Key={"id": {"S": reservation_id(name)}},
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        if not item:
+            return None
+        return str(item.get("data_id", {}).get("S") or "")
 
     def _v0_custom_objects(self) -> list[tuple[str, str]]:
-        """``(key, last modified ISO)`` of the v0 custom data files."""
+        """``(key, last modified as naive UTC ISO)`` of the v0 custom data files."""
+        if self._v0_custom is not None:
+            return self._v0_custom
         objects: list[tuple[str, str]] = []
         paginator = self.c.v0_s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self.v0.bucket, Prefix=_CUSTOM_PREFIX):
+        for page in paginator.paginate(
+            Bucket=self.v0.bucket, Prefix=CUSTOM_FILE_PREFIX
+        ):
             for obj in page.get("Contents") or []:
                 key = str(obj["Key"])
                 if convert.custom_name_from_key(key) is None:
                     continue
                 modified = obj.get("LastModified")
                 at = (
-                    modified.astimezone().replace(tzinfo=None)
+                    modified
                     if isinstance(modified, datetime)
-                    else datetime.now()
+                    else datetime.now(timezone.utc)
                 )
+                if at.tzinfo is not None:
+                    at = at.astimezone(timezone.utc).replace(tzinfo=None)
                 objects.append((key, at.isoformat()))
+        self._v0_custom = objects
         return objects
 
     def _read_custom(
@@ -432,7 +547,7 @@ class Migration:
     ) -> CustomPersonaData:
         """The full record: columns and rows read from the parquet file."""
         meta: Mapping[str, Any] | None = None
-        meta_key = f"{_CUSTOM_PREFIX}{name}.meta.json"
+        meta_key = f"{CUSTOM_FILE_PREFIX}{name}.meta.json"
         try:
             body = self.c.v0_s3.get_object(Bucket=self.v0.bucket, Key=meta_key)["Body"]
             meta = json.loads(body.read().decode("utf-8"))
@@ -460,160 +575,153 @@ class Migration:
 
     def _personas(self) -> None:
         rep = self.report["personas"]
-        for item in self._scan_v0("personas", rep):
-            item_id = str(item["id"])
-            if self._mapped_skip("persona", item_id, rep):
-                continue
-            try:
-                plan = convert.persona(
-                    item,
-                    owner_sub=self.owner_resolver.owner("persona", item_id),
-                    src_bucket=self.v0.bucket,
-                    dst_bucket=self.v1.bucket,
-                )
-            except Exception as e:  # noqa: BLE001 - a broken v0 item is reported
-                rep.fail(f"{item_id}: {_describe(e)}")
-                continue
-            for warning in plan.warnings:
-                rep.warn(f"{item_id}: {warning}")
+        self._each(rep, self._scan_v0("personas", rep), self._persona)
 
-            def write(plan: convert.PersonaPlan = plan) -> None:
-                self._copy_all(plan.copies)
-                self.personas.put_new(plan.persona)
+    def _persona(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["personas"]
+        item_id = str(item["id"])
+        if self._mapped_skip("persona", item_id, rep):
+            return
+        plan = convert.persona(
+            item,
+            owner_sub=self.owner_resolver.owner("persona", item_id),
+            src_bucket=self.v0.bucket,
+            dst_bucket=self.v1.bucket,
+        )
+        for warning in plan.warnings:
+            rep.warn(f"{item_id}: {warning}")
 
-            self._migrate(
-                "personas",
-                item_id,
-                rep,
-                write,
-                share=(ResourceType.PERSONA, "personas", "persona"),
-            )
+        def write() -> None:
+            self._copy_all(plan.copies)
+            self.personas.put_new(plan.persona)
+
+        self._migrate(
+            "personas",
+            item_id,
+            rep,
+            write,
+            share=(ResourceType.PERSONA, "personas", "persona"),
+        )
 
     def _bindings(self) -> None:
         rep = self.report["bindings"]
-        rows: list[tuple[Any, str, str]] = []
-        for item in self._scan_v0("persona_dataset_bindings", rep):
-            rows.append((convert.dataset_binding(item), "datasets", "dataset"))
-        for item in self._scan_v0("persona_kb_bindings", rep):
-            rows.append((convert.kb_binding(item), "knowledge_bases", "knowledge_base"))
         # v0 never checked that a binding's persona exists, so a binding may
         # name a persona that only v1 has; only v0 personas get bindings
-        v0_personas = {str(p["id"]) for p in self._scan_v0_quiet("personas")}
-        existing: dict[str, set[str]] = {}
-        for binding, target_kind, target_type in rows:
-            label = f"{binding.persona_id} → {binding.target_key}"
-            if binding.persona_id not in v0_personas:
-                rep.skip("persona_not_from_v0", label)
-                continue
-            if self.mapping.skipped(
-                "persona", binding.persona_id
-            ) or self.mapping.skipped(target_type, binding.target_id):
-                rep.skip("mapping_skip", label)
-                continue
-            if not self._present_or_exists("personas", binding.persona_id):
-                rep.skip("persona_missing", label)
-                continue
-            if not self._present_or_exists(target_kind, binding.target_id):
-                rep.skip("target_missing", label)
-                continue
-            if binding.persona_id not in existing:
-                existing[binding.persona_id] = {
-                    b.target_key
-                    for b in self.bindings.list_for_persona(binding.persona_id)
-                }
-            keys = existing[binding.persona_id]
-            if binding.target_key in keys:
-                rep.existing += 1
-                continue
-            if binding.target_key == KB_TARGET_KEY and KB_TARGET_KEY in keys:
-                rep.existing += 1
-                continue
-            if self.apply:
-                try:
-                    self.bindings.put(binding)
-                except Exception as e:  # noqa: BLE001
-                    rep.fail(f"{label}: {_describe(e)}")
-                    continue
-            keys.add(binding.target_key)
-            rep.created += 1
+        self._v0_persona_ids = {str(p["id"]) for p in self._v0_scan("personas")}
+        self._binding_keys = {}
+        self._each(
+            rep, self._scan_v0("persona_dataset_bindings", rep), self._dataset_binding
+        )
+        self._each(rep, self._scan_v0("persona_kb_bindings", rep), self._kb_binding)
+
+    def _dataset_binding(self, item: Mapping[str, Any]) -> None:
+        self._binding(convert.dataset_binding(item), "datasets", "dataset")
+
+    def _kb_binding(self, item: Mapping[str, Any]) -> None:
+        self._binding(convert.kb_binding(item), "knowledge_bases", "knowledge_base")
+
+    def _binding(self, binding: Any, target_kind: str, target_type: str) -> None:
+        rep = self.report["bindings"]
+        label = f"{binding.persona_id} → {binding.target_key}"
+        if binding.persona_id not in self._v0_persona_ids:
+            rep.skip("persona_not_from_v0", label)
+            return
+        if self.mapping.skipped("persona", binding.persona_id) or self.mapping.skipped(
+            target_type, binding.target_id
+        ):
+            rep.skip("mapping_skip", label)
+            return
+        if not self._present_or_exists("personas", binding.persona_id):
+            rep.skip("persona_missing", label)
+            return
+        if not self._present_or_exists(target_kind, binding.target_id):
+            rep.skip("target_missing", label)
+            return
+        keys = self._binding_keys.get(binding.persona_id)
+        if keys is None:
+            keys = {
+                b.target_key for b in self.bindings.list_for_persona(binding.persona_id)
+            }
+            self._binding_keys[binding.persona_id] = keys
+        if binding.target_key in keys:
+            rep.existing += 1
+            return
+        if self.apply:
+            self.bindings.put(binding)
+        keys.add(binding.target_key)
+        rep.created += 1
 
     # --- surveys -------------------------------------------------------------------
 
     def _survey_templates(self) -> None:
         rep = self.report["survey_templates"]
-        by_path = {
+        self._images = {
             str(f["file_path"]): f
-            for f in self._scan_v0_quiet("uploaded_files")
+            for f in self._v0_scan("uploaded_files")
             if f.get("file_type") == "survey_image" and f.get("file_path")
         }
-        for item in self._scan_v0("survey_templates", rep):
-            item_id = str(item["id"])
-            if self._mapped_skip("survey_template", item_id, rep):
-                continue
-            try:
-                plan = convert.template(
-                    item,
-                    owner_sub=self.owner_resolver.owner("survey_template", item_id),
-                    files_by_path=by_path,
-                    src_bucket=self.v0.bucket,
-                    dst_bucket=self.v1.bucket,
-                    now_epoch=self.now_epoch,
-                )
-            except Exception as e:  # noqa: BLE001
-                rep.fail(f"{item_id}: {_describe(e)}")
-                continue
-            for warning in plan.warnings:
-                rep.warn(f"{item_id}: {warning}")
+        self._each(rep, self._scan_v0("survey_templates", rep), self._survey_template)
 
-            def write(plan: convert.TemplatePlan = plan) -> None:
-                self._write_files(plan.files)
-                self.templates.put_new(plan.template)
+    def _survey_template(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["survey_templates"]
+        item_id = str(item["id"])
+        if self._mapped_skip("survey_template", item_id, rep):
+            return
+        plan = convert.template(
+            item,
+            owner_sub=self.owner_resolver.owner("survey_template", item_id),
+            files_by_path=self._images,
+            src_bucket=self.v0.bucket,
+            dst_bucket=self.v1.bucket,
+            now_epoch=self.now_epoch,
+        )
+        for warning in plan.warnings:
+            rep.warn(f"{item_id}: {warning}")
 
-            self._migrate(
-                "survey_templates",
-                item_id,
-                rep,
-                write,
-                share=(
-                    ResourceType.SURVEY_TEMPLATE,
-                    "survey_templates",
-                    "survey_template",
-                ),
-            )
+        def write() -> None:
+            self._write_files(plan.files)
+            self.templates.put_new(plan.template)
+
+        self._migrate(
+            "survey_templates",
+            item_id,
+            rep,
+            write,
+            share=(ResourceType.SURVEY_TEMPLATE, "survey_templates", "survey_template"),
+        )
 
     def _surveys(self) -> None:
         rep = self.report["surveys"]
         if "custom_persona_data" not in self.kinds:
             self._custom_ids = self._existing_custom_ids()
-        for item in self._scan_v0("surveys", rep):
-            item_id = str(item["id"])
-            if self._mapped_skip("survey", item_id, rep):
-                continue
-            try:
-                plan = convert.survey(
-                    item,
-                    owner_sub=self.owner_resolver.owner("survey", item_id),
-                    custom_ids=self._custom_ids,
-                    src_bucket=self.v0.bucket,
-                    dst_bucket=self.v1.bucket,
-                )
-            except Exception as e:  # noqa: BLE001
-                rep.fail(f"{item_id}: {_describe(e)}")
-                continue
-            for warning in plan.warnings:
-                rep.warn(f"{item_id}: {warning}")
+        self._each(rep, self._scan_v0("surveys", rep), self._survey)
 
-            def write(plan: convert.SurveyPlan = plan) -> None:
-                self._copy_all(plan.copies)
-                self.surveys.put_new(plan.survey)
+    def _survey(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["surveys"]
+        item_id = str(item["id"])
+        if self._mapped_skip("survey", item_id, rep):
+            return
+        plan = convert.survey(
+            item,
+            owner_sub=self.owner_resolver.owner("survey", item_id),
+            custom_ids=self._custom_ids,
+            src_bucket=self.v0.bucket,
+            dst_bucket=self.v1.bucket,
+        )
+        for warning in plan.warnings:
+            rep.warn(f"{item_id}: {warning}")
 
-            self._migrate(
-                "surveys",
-                item_id,
-                rep,
-                write,
-                share=(ResourceType.SURVEY, "surveys", "survey"),
-            )
+        def write() -> None:
+            self._copy_all(plan.copies)
+            self.surveys.put_new(plan.survey)
+
+        self._migrate(
+            "surveys",
+            item_id,
+            rep,
+            write,
+            share=(ResourceType.SURVEY, "surveys", "survey"),
+        )
 
     def _existing_custom_ids(self) -> dict[str, str]:
         """Names of the v0 custom data whose migrated record is in v1."""
@@ -641,72 +749,93 @@ class Migration:
 
     def _discussions(self) -> None:
         rep = self.report["discussions"]
-        files = {
+        self._documents = {
             str(f["id"]): f
-            for f in self._scan_v0_quiet("uploaded_files")
+            for f in self._v0_scan("uploaded_files")
             if f.get("file_type") == "discussion_document"
         }
-        for item in self._scan_v0("discussions", rep):
-            item_id = str(item["id"])
-            if self._mapped_skip("discussion", item_id, rep):
-                continue
-            try:
-                plan = convert.discussion(
-                    item,
-                    owner_sub=self.owner_resolver.owner("discussion", item_id),
-                    files=files,
-                    src_bucket=self.v0.bucket,
-                    dst_bucket=self.v1.bucket,
-                    now_epoch=self.now_epoch,
-                )
-                size = DiscussionStore.item_size(plan.discussion.to_dict())
-            except Exception as e:  # noqa: BLE001
-                rep.fail(f"{item_id}: {_describe(e)}")
-                continue
-            if size > 400 * 1024:
-                rep.fail(f"{item_id}: 本体が 400KB を超えます（{size} bytes）")
-                continue
-            for warning in plan.warnings:
-                rep.warn(f"{item_id}: {warning}")
+        self._each(rep, self._scan_v0("discussions", rep), self._discussion)
 
-            def write(plan: convert.DiscussionPlan = plan) -> None:
-                self._write_files(plan.files)
-                if plan.messages:
-                    self.discussions.write_messages(plan.messages)
-                for report in plan.reports:
-                    self._put_plain(
-                        self.v1.table("discussion_reports"), report.to_dict()
-                    )
-                self.discussions.put_new(plan.discussion.to_dict())
+    def _discussion(self, item: Mapping[str, Any]) -> None:
+        rep = self.report["discussions"]
+        item_id = str(item["id"])
+        if self._mapped_skip("discussion", item_id, rep):
+            return
+        plan = convert.discussion(
+            item,
+            owner_sub=self.owner_resolver.owner("discussion", item_id),
+            files=self._documents,
+            src_bucket=self.v0.bucket,
+            dst_bucket=self.v1.bucket,
+            now_epoch=self.now_epoch,
+        )
+        size = DiscussionStore.item_size(plan.discussion.to_dict())
+        if size > _MAX_ITEM_BYTES:
+            rep.fail(f"{item_id}: 本体が 400KB を超えます（{size} bytes）")
+            return
+        for warning in plan.warnings:
+            rep.warn(f"{item_id}: {warning}")
 
-            self._migrate(
-                "discussions",
-                item_id,
-                rep,
-                write,
-                share=(ResourceType.DISCUSSION, "discussions", "discussion"),
-            )
+        def write() -> None:
+            self._write_files(plan.files)
+            if plan.messages:
+                self.discussions.write_messages(plan.messages)
+            for report in plan.reports:
+                self._put_plain(self.v1.table("discussion_reports"), report.to_dict())
+            self.discussions.put_new(plan.discussion.to_dict())
+
+        self._migrate(
+            "discussions",
+            item_id,
+            rep,
+            write,
+            share=(ResourceType.DISCUSSION, "discussions", "discussion"),
+        )
 
     # --- shared steps --------------------------------------------------------------
+
+    def _each(
+        self,
+        rep: KindReport,
+        items: Iterable[Mapping[str, Any]],
+        handle: Callable[[Mapping[str, Any]], None],
+    ) -> None:
+        """Handle every item; a broken one is a failure and the run goes on."""
+        for item in items:
+            try:
+                handle(item)
+            except MappingError:
+                raise
+            except SourceMissing as e:
+                rep.fail(
+                    f"{item.get('id', '(id なし)')}: {e}"
+                    "（対応表で skip にするか、v0 側を直してください）"
+                )
+            except Exception as e:  # noqa: BLE001 - reported per item, the run goes on
+                rep.fail(f"{item.get('id', '(id なし)')}: {_describe(e)}")
 
     def _migrate(
         self,
         kind: str,
         item_id: str,
         rep: KindReport,
-        write: Callable[[], None],
+        write: Callable[[], Any],
         *,
         share: tuple[ResourceType, str, str] | None = None,
-        shared: bool = False,
+        scope: tuple[ScopeUpdate, str] | None = None,
     ) -> None:
         """Write one item unless v1 has it, then set its departments.
 
+        The departments are set also when the item was already in v1 and has
+        none yet, so a run stopped between the two steps is completed by the
+        next one.
+
         Args:
             share: ``(resource type, table key, mapping type)`` of a shareable
-                body; its departments are set after the write.
-            shared: The write itself sets a usage scope (counted only).
+                body (``ResourceShares``).
+            scope: ``(update_scope, mapping type)`` of an organization asset
+                (usage scope on the body only).
         """
-        groups = self.mapping.groups(share[2], item_id) if share else frozenset()
         if self._exists(kind, item_id):
             rep.existing += 1
         elif not self.apply:
@@ -714,24 +843,29 @@ class Migration:
         else:
             try:
                 write()
-            except SourceMissing as e:
-                rep.fail(
-                    f"{item_id}: {e}（対応表で skip にするか、v0 側を直してください）"
-                )
-                return
-            except Exception as e:  # noqa: BLE001 - reported per item, the run goes on
-                if self._exists(kind, item_id):
-                    rep.existing += 1
-                else:
-                    rep.fail(f"{item_id}: {_describe(e)}")
-                    return
+            except SourceMissing:
+                raise
+            except Exception:
+                if not self._exists(kind, item_id):
+                    raise
+                rep.existing += 1
             else:
                 rep.created += 1
         self.present.add(kind, item_id)
-        if shared:
-            rep.shared += 1
-        if share and groups:
-            self._share(rep, share[0], share[1], item_id, groups)
+        if share:
+            groups = self.mapping.groups(share[2], item_id)
+            if groups:
+                self._share(rep, share[0], share[1], item_id, groups)
+        if scope:
+            groups = self.mapping.groups(scope[1], item_id)
+            self._scope(rep, kind, item_id, groups, scope[0])
+
+    def _current_groups(self, table_key: str, item_id: str) -> dict[str, Any] | None:
+        return self.shares.get_item(
+            self.v1.table(table_key),
+            item_id,
+            ["shared_group_ids", "owner_sub", "created_at"],
+        )
 
     def _share(
         self,
@@ -742,13 +876,10 @@ class Migration:
         groups: frozenset[str],
     ) -> None:
         assert resource_type in SHAREABLE_TYPES
-        table = self.v1.table(table_key)
         if not self.apply:
             rep.shared += 1
             return
-        current = self.shares.get_item(
-            table, item_id, ["shared_group_ids", "owner_sub", "created_at"]
-        )
+        current = self._current_groups(table_key, item_id)
         if current is None:
             rep.fail(f"{item_id}: 共有を設定する本体が v1 にありません")
             return
@@ -765,7 +896,7 @@ class Migration:
             return
         try:
             self.shares.write_shares(
-                table,
+                self.v1.table(table_key),
                 resource_type,
                 item_id,
                 expected=frozenset(),
@@ -774,7 +905,47 @@ class Migration:
                 owner_sub=str(current["owner_sub"]),
             )
         except Exception as e:  # noqa: BLE001
-            rep.fail(f"{item_id}: 共有の設定に失敗（{_describe(e)}）")
+            rep.fail(
+                f"{item_id}: 共有の設定に失敗（{_describe(e)}）。再実行すると設定します"
+            )
+            return
+        rep.shared += 1
+
+    def _scope(
+        self,
+        rep: KindReport,
+        table_key: str,
+        item_id: str,
+        groups: frozenset[str],
+        update: ScopeUpdate,
+    ) -> None:
+        """Set the usage scope of an organization asset that has none yet."""
+        if not groups:
+            return
+        if not self.apply:
+            rep.shared += 1
+            return
+        current = self._current_groups(table_key, item_id)
+        if current is None:
+            rep.fail(f"{item_id}: 利用範囲を設定する本体が v1 にありません")
+            return
+        now = frozenset(current.get("shared_group_ids") or ())
+        if now == groups:
+            return
+        if now:
+            rep.warn(
+                f"{item_id}: v1 の利用範囲（{', '.join(sorted(now))}）が対応表と違うため変更しません"
+            )
+            return
+        try:
+            result = update(item_id, add=groups, remove=frozenset())
+        except Exception as e:  # noqa: BLE001
+            rep.fail(
+                f"{item_id}: 利用範囲の設定に失敗（{_describe(e)}）。再実行すると設定します"
+            )
+            return
+        if result is False:
+            rep.fail(f"{item_id}: 利用範囲を設定できません（組織の資産ではありません）")
             return
         rep.shared += 1
 
@@ -841,16 +1012,24 @@ class Migration:
             SourceClient=self.c.v0_s3,
         )
 
-    def _scan_v0(self, key: str, rep: KindReport) -> Iterator[dict[str, Any]]:
-        items = list(self._scan_v0_quiet(key))
+    def _scan_v0(self, key: str, rep: KindReport) -> list[dict[str, Any]]:
+        """Every item of a v0 table, counted as the source of ``rep``."""
+        items = self._v0_scan(key)
         rep.source += len(items)
-        return iter(items)
+        return items
 
-    def _scan_v0_quiet(self, key: str) -> Iterator[dict[str, Any]]:
-        paginator = self.c.v0_dynamodb.get_paginator("scan")
-        for page in paginator.paginate(TableName=self.v0.table(key)):
-            for item in page.get("Items") or []:
-                yield {k: self._deserializer.deserialize(v) for k, v in item.items()}
+    def _v0_scan(self, key: str) -> list[dict[str, Any]]:
+        """Every item of a v0 table (each table is scanned once per run)."""
+        if key not in self._v0_items:
+            items: list[dict[str, Any]] = []
+            paginator = self.c.v0_dynamodb.get_paginator("scan")
+            for page in paginator.paginate(TableName=self.v0.table(key)):
+                for item in page.get("Items") or []:
+                    items.append(
+                        {k: self._deserializer.deserialize(v) for k, v in item.items()}
+                    )
+            self._v0_items[key] = items
+        return self._v0_items[key]
 
 
 def _code(error: ClientError) -> str:

@@ -714,3 +714,127 @@ def test_binding_to_a_persona_not_from_v0_is_skipped(world):
     assert report["bindings"].created == 2
     bindings = _scan(c.v1_dynamodb, v1.table("persona_bindings"))
     assert all(b["persona_id"] != "v1-only" for b in bindings)
+
+
+# --- re-run safety (code review) -----------------------------------------------
+
+
+def test_bad_owner_stops_before_any_user_is_created(world, tmp_path):
+    c, v0, v1 = world
+    with pytest.raises(MappingError):
+        Migration(
+            v0=v0,
+            v1=v1,
+            clients=c,
+            kinds=select_kinds(None, None),
+            mapping=load_mapping(None),
+            default_owner="typo@example.com",
+            apply=True,
+        ).run()
+    mapping = _mapping(tmp_path, "persona,p1,nobody@example.com,,\n")
+    with pytest.raises(MappingError, match="nobody@example.com"):
+        _run(world, apply=True, mapping=mapping)
+    assert len(c.v1_cognito.list_users(UserPoolId=v1.user_pool_id)["Users"]) == 1
+    assert _v1_items(c, v1) == 0
+
+
+def test_usage_scope_is_set_again_on_a_rerun(world, tmp_path, monkeypatch):
+    from src.services.stores.dataset_store import DatasetStore
+    from src.services.stores.knowledge_base_store import KnowledgeBaseStore
+
+    c, _v0, v1 = world
+    mapping = _mapping(tmp_path, "dataset,ds1,,sales,\nknowledge_base,k1,,sales,\n")
+
+    def boom(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("throttled")
+
+    with monkeypatch.context() as m:
+        m.setattr(DatasetStore, "update_scope", boom)
+        m.setattr(KnowledgeBaseStore, "update_scope", boom)
+        first = _run(world, apply=True, mapping=mapping)
+    assert first["datasets"].failed == 1
+    assert first["datasets"].shared == 0
+    assert first["knowledge_bases"].failed == 1
+    again = _run(world, apply=True, mapping=mapping)
+    assert again.failed == 0
+    assert again["datasets"].shared == 1
+    [dataset] = _scan(c.v1_dynamodb, v1.table("datasets"))
+    assert dataset["shared_group_ids"] == {"sales"}
+    [kb] = _scan(c.v1_dynamodb, v1.table("knowledge_bases"))
+    assert kb["shared_group_ids"] == {"sales"}
+    third = _run(world, apply=True, mapping=mapping)
+    assert third["datasets"].shared == 0
+
+
+def test_broken_v0_items_do_not_stop_the_run(world):
+    c, v0, v1 = world
+    _put(
+        c.v0_dynamodb,
+        v0.table("persona_dataset_bindings"),
+        {"id": "broken", "persona_id": "p1", "created_at": "2026-01-01T09:00:00"},
+    )
+    _put(
+        c.v0_dynamodb,
+        v0.table("personas"),
+        {"id": "p-broken", "name": "壊れた", "created_at": "not-a-date"},
+    )
+    report = _run(world, apply=True)
+    assert report["bindings"].failed == 1
+    assert report["bindings"].created == 2
+    assert report["personas"].failed == 1
+    assert len(_scan(c.v1_dynamodb, v1.table("discussions"))) == 1
+
+
+def test_custom_name_taken_in_v1_copies_nothing(world):
+    c, _v0, v1 = world
+    _put(
+        c.v1_dynamodb,
+        v1.table("custom_persona_data"),
+        {"id": "name#営業", "data_id": "other", "created_at": "2026-01-01T09:00:00"},
+    )
+    report = _run(world, apply=True, include=["custom_persona_data"])
+    assert report["custom_persona_data"].skipped["name_taken"] == 1
+    key = custom_file_key(stable_id("custom_persona_data", "営業"))
+    listed = c.v1_s3.list_objects_v2(Bucket=V1_BUCKET, Prefix=key)
+    assert listed.get("KeyCount", 0) == 0
+
+
+def test_custom_registered_at_is_utc(world):
+    from datetime import datetime, timedelta, timezone
+
+    c, _v0, v1 = world
+    _run(world, apply=True, include=["custom_persona_data"])
+    custom_id = stable_id("custom_persona_data", "営業")
+    [record] = [
+        i
+        for i in _scan(c.v1_dynamodb, v1.table("custom_persona_data"))
+        if i["id"] == custom_id
+    ]
+    at = datetime.fromisoformat(record["registered_at"])
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert abs(at - now_utc) < timedelta(minutes=5)
+
+
+def test_dry_run_counts_custom_data_scope(world, tmp_path):
+    report = _run(
+        world,
+        apply=False,
+        mapping=_mapping(tmp_path, "custom_persona_data,営業,,sales,\n"),
+    )
+    assert report["custom_persona_data"].shared == 1
+
+
+def test_existing_user_without_any_group_gets_member(world):
+    c, _v0, v1 = world
+    pool = v1.user_pool_id
+    c.v1_cognito.admin_create_user(
+        UserPoolId=pool,
+        Username="member@example.com",
+        UserAttributes=[{"Name": "email", "Value": "member@example.com"}],
+    )
+    report = _run(world, apply=True, include=["users"])
+    assert _groups(c, pool, "member@example.com") == {MEMBER_GROUP}
+    assert _groups(c, pool, ADMIN) == {"role:admin"}
+    assert report["users"].existing == 2
+    dry = _run(world, apply=False, include=["users"])
+    assert dry["users"].existing == 2
