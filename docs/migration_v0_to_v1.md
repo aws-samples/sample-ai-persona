@@ -67,7 +67,7 @@ CloudShell（v1 のリージョン）で、リポジトリを取得します。C
 git clone https://github.com/aws-samples/sample-ai-persona.git
 cd sample-ai-persona
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.local/bin/env
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 export UV_CACHE_DIR=/tmp/uv-cache UV_PROJECT_ENVIRONMENT=/tmp/ai-persona-venv
 uv sync --no-dev
 ```
