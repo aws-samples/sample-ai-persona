@@ -91,6 +91,9 @@ def session_context(
 ) -> Generator[BrowserContext, None, None]:
     """Session-wide context used for shared setup and teardown."""
     context = browser.new_context(**browser_context_args)
+    # Local login happens through a redirect on the first screen request; without
+    # it the teardown deletes below are rejected with 401 and records are left behind.
+    context.request.get("/survey/results")
     yield context
     headers = {"HX-Request": "true"}
     for discussion_id in created.discussion_ids:
