@@ -39,7 +39,14 @@ from ..models.custom_persona_data import PersonaDataRef
 from ..models.errors import CodedError, ErrorCode, LookupUnavailableError
 from ..models.external_failure import FailureClass
 from ..models.sharing import ListTab, TabbedList
-from ..models.survey import Survey, SurveyDetail, SurveyStatus, TemplateSnapshot
+from ..models.survey import (
+    MAX_SURVEY_PERSONAS,
+    MAX_SURVEY_PERSONAS_WITH_IMAGES,
+    Survey,
+    SurveyDetail,
+    SurveyStatus,
+    TemplateSnapshot,
+)
 from ..services.stores.custom_persona_data_store import CustomPersonaDataStore
 from ..services.s3_service import S3Service
 from ..services.service_factory import service_factory
@@ -749,17 +756,18 @@ class SurveyExecutionManager:
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
                 context={"min_count": minimum},
             )
-        if has_images and count > 1000:
+        if has_images and count > MAX_SURVEY_PERSONAS_WITH_IMAGES:
             raise SurveyExecutionValidationError(
-                f"target count {count} exceeds 1000 for image survey",
+                f"target count {count} exceeds {MAX_SURVEY_PERSONAS_WITH_IMAGES} "
+                "for image survey",
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES,
-                context={"max_count": 1000},
+                context={"max_count": MAX_SURVEY_PERSONAS_WITH_IMAGES},
             )
-        if not has_images and count > 10000:
+        if not has_images and count > MAX_SURVEY_PERSONAS:
             raise SurveyExecutionValidationError(
-                f"target count {count} exceeds 10000",
+                f"target count {count} exceeds {MAX_SURVEY_PERSONAS}",
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,
-                context={"max_count": 10000},
+                context={"max_count": MAX_SURVEY_PERSONAS},
             )
 
     def _validate_available_personas(

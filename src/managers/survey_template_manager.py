@@ -23,6 +23,7 @@ decides with ``AccessPolicy`` (``functional-design/rules.md``):
 
 import logging
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 _TEMPLATE = ResourceType.SURVEY_TEMPLATE
 #: Largest template body written (NFR2.25).
 MAX_TEMPLATE_BYTES = 200 * 1024
+#: Images one template may carry (questions refer to them by name).
+MAX_TEMPLATE_IMAGES = 3
 #: Owner label of a template without owner (before v1.0.0).
 OWNER_UNKNOWN = "所有者不明"
 #: Most rows a search returns.
@@ -634,17 +637,34 @@ class SurveyTemplateManager:
     @staticmethod
     def _validate_images(images: List[TemplateImage]) -> None:
         """画像リストのバリデーション。"""
-        if len(images) > 1:
+        if len(images) > MAX_TEMPLATE_IMAGES:
             raise SurveyTemplateValidationError(
-                f"{len(images)} images attached, max is 1",
+                f"{len(images)} images attached, max is {MAX_TEMPLATE_IMAGES}",
                 code=ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES,
+                context={"max_images": MAX_TEMPLATE_IMAGES},
             )
+        seen: set[str] = set()
         for img in images:
             if not img.name or not img.name.strip():
                 raise SurveyTemplateValidationError(
                     "image name is blank",
                     code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING,
                 )
+            # The name goes into the prompt as one list item
+            if any(unicodedata.category(ch).startswith("C") for ch in img.name):
+                raise SurveyTemplateValidationError(
+                    "image name has control characters",
+                    code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID,
+                )
+            # Questions refer to an image by its name, so names must be unique
+            # (full-width forms, spacing and case do not tell two names apart)
+            key = " ".join(unicodedata.normalize("NFKC", img.name).split()).casefold()
+            if key in seen:
+                raise SurveyTemplateValidationError(
+                    "image names are duplicated",
+                    code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED,
+                )
+            seen.add(key)
 
     def _validate_ai_messages(self, messages: List[Dict[str, str]]) -> None:
         if not isinstance(messages, list) or not messages:

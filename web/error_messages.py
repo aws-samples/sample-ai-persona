@@ -173,7 +173,7 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.SURVEY_TEMPLATE_TOO_FEW_OPTIONS: (
         "選択式質問「{question_text}」には2つ以上の選択肢が必要です"
     ),
-    ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES: "画像は1枚まで添付できます",
+    ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES: "画像は{max_images}枚まで添付できます",
     ErrorCode.SURVEY_TEMPLATE_TOO_LARGE: (
         "テンプレートの内容が大きすぎます。質問や選択肢の数・長さを減らしてください"
     ),
@@ -193,6 +193,12 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.SETTINGS_NOT_FOUND: "お探しのページが見つかりません",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
+    ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID: (
+        "画像の名前に改行などの制御文字は使えません"
+    ),
+    ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED: (
+        "画像の名前が重複しています。画像ごとに違う名前を付けてください"
+    ),
     ErrorCode.SURVEY_PERSONA_COUNT_INVALID: "ペルソナ数は整数で入力してください",
     ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW: (
         "対象ペルソナ数は{min_count}以上で指定してください"

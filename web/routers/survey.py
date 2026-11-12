@@ -40,6 +40,7 @@ from src.managers.survey_execution_manager import (
     SurveyExecutionValidationError,
 )
 from src.managers.survey_template_manager import (
+    MAX_TEMPLATE_IMAGES,
     SurveyTemplateManager,
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
@@ -50,7 +51,11 @@ from src.managers.settings_manager import SettingsManager
 from src.managers.survey_run_manager import SurveyRunManager
 from src.models.authz import Principal
 from src.models.errors import CodedError, ErrorCode, ErrorKind
-from src.models.survey import MIN_SURVEY_PERSONAS
+from src.models.survey import (
+    MAX_SURVEY_PERSONAS,
+    MAX_SURVEY_PERSONAS_WITH_IMAGES,
+    MIN_SURVEY_PERSONAS,
+)
 from src.models.survey_template import Question, TemplateImage
 
 logger = logging.getLogger(__name__)
@@ -815,13 +820,28 @@ async def templates_list(
     return templates.TemplateResponse(request, "survey/templates_list.html", context)
 
 
+def _template_form_limits() -> dict[str, int]:
+    """Image limits the template form shows and checks before uploading."""
+    max_bytes = FileManager.SURVEY_IMAGE_MAX_SIZE
+    return {
+        "max_images": MAX_TEMPLATE_IMAGES,
+        "max_image_bytes": max_bytes,
+        "max_image_mb": max_bytes // (1024 * 1024),
+    }
+
+
 @router.get("/templates/new", response_class=HTMLResponse)
 async def template_new(request: Request) -> Any:
     """テンプレート作成画面"""
     return templates.TemplateResponse(
         request,
         "survey/template_form.html",
-        {"request": request, "title": "テンプレート作成", "template": None},
+        {
+            "request": request,
+            "title": "テンプレート作成",
+            "template": None,
+            **_template_form_limits(),
+        },
     )
 
 
@@ -967,6 +987,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
             "template": tmpl,
             "questions_json": [q.to_dict() for q in tmpl.questions],
             "images_json": images_with_urls,
+            **_template_form_limits(),
         },
     )
 
@@ -1061,6 +1082,9 @@ async def survey_start_page(
             "custom_data": custom_data,
             "nemotron_available": nemotron_available,
             "datasource_counts": datasource_counts,
+            "min_personas": MIN_SURVEY_PERSONAS,
+            "max_personas": MAX_SURVEY_PERSONAS,
+            "max_personas_with_images": MAX_SURVEY_PERSONAS_WITH_IMAGES,
         },
     )
 

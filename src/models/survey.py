@@ -33,6 +33,10 @@ RUN_QUEUE_ACTIVE = "active"
 #: Fewest personas a survey runs with, and so the fewest rows a dataset may be
 #: registered or extracted with (FR4.1; was the batch inference minimum 100).
 MIN_SURVEY_PERSONAS = 10
+#: Most personas one survey may target, and the most when its template has images
+#: (each persona then carries its own request body with the images).
+MAX_SURVEY_PERSONAS = 10_000
+MAX_SURVEY_PERSONAS_WITH_IMAGES = 1_000
 
 
 def _read_time(value: Any) -> Optional[datetime]:
