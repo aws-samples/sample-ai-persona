@@ -267,7 +267,7 @@ class SurveyExecutionManager:
             raise SurveyExecutionManagerError(
                 "survey template is gone", code=ErrorCode.SURVEY_TEMPLATE_NOT_FOUND
             )
-        self._validate_persona_count(persona_count, bool(template.images))
+        self._validate_persona_count(persona_count)
         self._validate_available_personas(filters, ref.value)
         if not name or not name.strip():
             name = self.generate_default_survey_name(template.name)
@@ -740,7 +740,7 @@ class SurveyExecutionManager:
     # =========================================================================
 
     @staticmethod
-    def _validate_persona_count(count: int, has_images: bool = False) -> None:
+    def _validate_persona_count(count: int) -> None:
         """ペルソナ数のバリデーション（下限 10、BR1.1〜BR1.3）。"""
         minimum = MIN_SURVEY_PERSONAS
         if not isinstance(count, int) or count < minimum:
@@ -749,13 +749,7 @@ class SurveyExecutionManager:
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_LOW,
                 context={"min_count": minimum},
             )
-        if has_images and count > 1000:
-            raise SurveyExecutionValidationError(
-                f"target count {count} exceeds 1000 for image survey",
-                code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES,
-                context={"max_count": 1000},
-            )
-        if not has_images and count > 10000:
+        if count > 10000:
             raise SurveyExecutionValidationError(
                 f"target count {count} exceeds 10000",
                 code=ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,

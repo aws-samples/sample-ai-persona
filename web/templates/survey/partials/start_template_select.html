@@ -10,12 +10,11 @@
 <input type="hidden" name="tab" value="{{ tab }}" data-start-template-tab>
 <label for="start-template" class="sr-only">テンプレート</label>
 <select id="start-template" name="template_id" required x-model="templateId"
-        @change="hasImages = ($event.target.selectedOptions[0] || {}).dataset?.hasImages === '1'"
         data-testid="start-template-select"
         class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
     <option value="">テンプレートを選択してください</option>
     {% for tmpl in listing.items %}
-    <option value="{{ tmpl.id }}" data-has-images="{{ '1' if tmpl.images else '0' }}"
+    <option value="{{ tmpl.id }}"
             {%- if tmpl.id == selected_template %} selected{% endif %}>{{ tmpl.name }}（{{ tmpl.questions|length }}問）</option>
     {% endfor %}
 </select>

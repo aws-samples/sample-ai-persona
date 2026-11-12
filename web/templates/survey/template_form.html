@@ -54,9 +54,9 @@
                     <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                     画像(オプション)
                 </h2>
-                <span class="text-sm text-gray-500" x-text="images.length + '/1枚'"></span>
+                <span class="text-sm text-gray-500" x-text="images.length + '/' + maxImages + '枚'"></span>
             </div>
-            <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、5MB以下、1枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
+            <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、5MB以下、{{ max_images }}枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
 
             <!-- アップロード済み画像一覧 -->
             <template x-for="(img, idx) in images" :key="img.id">
@@ -74,7 +74,7 @@
             </template>
 
             <!-- アップロードエリア -->
-            <div x-show="images.length < 1"
+            <div x-show="images.length < maxImages"
                  class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-400 transition-colors cursor-pointer"
                  @click="$refs.imageInput.click()"
                  @dragover.prevent="$el.classList.add('border-indigo-400', 'bg-indigo-50')"
@@ -82,7 +82,7 @@
                  @drop.prevent="handleDrop($event)">
                 <svg class="w-8 h-8 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
                 <p class="text-sm text-gray-500">クリックまたはドラッグ&ドロップで画像をアップロード</p>
-                <input type="file" x-ref="imageInput" class="hidden" accept="image/png,image/jpeg"
+                <input type="file" x-ref="imageInput" class="hidden" accept="image/png,image/jpeg" multiple
                        @change="handleFileSelect($event)">
             </div>
             <div x-show="uploading" class="text-center py-2">
@@ -293,6 +293,7 @@ function templateForm() {
     return {
         name: '{{ template.name if template else "" }}',
         questions: initialQuestions.map(q => ({...q, _key: keyCounter++})),
+        maxImages: {{ max_images }},
         images: initialImages.map(img => ({...img})),
         uploading: false,
 
@@ -411,18 +412,26 @@ function templateForm() {
 
         async handleFileSelect(event) {
             const files = event.target.files;
-            if (files.length > 0) await this.uploadImage(files[0]);
+            await this.uploadImages(files);
             event.target.value = '';
         },
 
         async handleDrop(event) {
             event.target.classList.remove('border-indigo-400', 'bg-indigo-50');
             const files = event.dataTransfer.files;
-            if (files.length > 0) await this.uploadImage(files[0]);
+            await this.uploadImages(files);
+        },
+
+        async uploadImages(files) {
+            // 空き枠の数まで順に上げる（並列にすると枠を超える）
+            const room = this.maxImages - this.images.length;
+            for (const file of Array.from(files).slice(0, room)) {
+                await this.uploadImage(file);
+            }
         },
 
         async uploadImage(file) {
-            if (this.images.length >= 1) return;
+            if (this.images.length >= this.maxImages) return;
             if (!file.type.match(/^image\/(png|jpeg)$/)) {
                 alert('PNG/JPEG画像のみアップロードできます');
                 return;

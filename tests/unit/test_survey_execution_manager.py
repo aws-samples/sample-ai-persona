@@ -133,13 +133,14 @@ class TestValidatePersonaCount:
         """FR4.3: バッチ推論の下限の名前ではなく、アンケートの下限として持つ。"""
         assert SurveyExecutionManager.MIN_SURVEY_PERSONAS == 10
 
-    def test_images_max_1000(self) -> None:
-        with pytest.raises(SurveyExecutionValidationError):
-            SurveyExecutionManager._validate_persona_count(1001, has_images=True)
-
-    def test_no_images_max_10000(self) -> None:
-        with pytest.raises(SurveyExecutionValidationError):
-            SurveyExecutionManager._validate_persona_count(10001, has_images=False)
+    def test_max_10000_with_or_without_images(self) -> None:
+        SurveyExecutionManager._validate_persona_count(10000)
+        with raises_code(
+            SurveyExecutionValidationError,
+            ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,
+            max_count=10000,
+        ):
+            SurveyExecutionManager._validate_persona_count(10001)
 
 
 @pytest.mark.unit

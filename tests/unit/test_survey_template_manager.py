@@ -35,6 +35,8 @@ from tests.unit.survey_world import (
 TEMPLATE = ResourceType.SURVEY_TEMPLATE
 FILE_1 = "11111111-1111-4111-8111-111111111111"
 FILE_2 = "22222222-2222-4222-8222-222222222222"
+FILE_3 = "33333333-3333-4333-8333-333333333333"
+FILE_4 = "44444444-4444-4444-8444-444444444444"
 
 
 @pytest.fixture
@@ -68,10 +70,10 @@ def sample_questions() -> list:
     ]
 
 
-def _image(file_id: str, owner: str = "a") -> TemplateImage:
+def _image(file_id: str, owner: str = "a", name: str = "画像") -> TemplateImage:
     return TemplateImage(
         id=f"img-{file_id[:4]}",
-        name="画像",
+        name=name,
         file_path=f"s3://bucket/uploads/{owner}/survey_image/{file_id}_a.png",
         mime_type="image/png",
         original_filename="a.png",
@@ -172,6 +174,51 @@ class TestCreateTemplate:
     def test_empty_name_raises(self, mgr, sample_questions):
         with pytest.raises(SurveyTemplateValidationError):
             mgr.create_template(MEMBER_A, "  ", sample_questions)
+
+    def test_three_images_are_accepted(self, mgr, survey_world, sample_questions):
+        images = [
+            _image(FILE_1, name="案A"),
+            _image(FILE_2, name="案B"),
+            _image(FILE_3, name="案C"),
+        ]
+        template = mgr.create_template(MEMBER_A, "比較", sample_questions, images)
+        survey_world.files.attach_all.assert_called_once_with(
+            MEMBER_A, [FILE_1, FILE_2, FILE_3], "survey_template", template.id
+        )
+        assert len(_stored(survey_world, template.id)["images"]["L"]) == 3
+
+    def test_four_images_are_rejected_with_the_limit(
+        self, mgr, survey_world, sample_questions
+    ):
+        images = [
+            _image(f, name=f"案{i}")
+            for i, f in enumerate([FILE_1, FILE_2, FILE_3, FILE_4])
+        ]
+        with raises_code(
+            CodedError, ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES, max_images=3
+        ):
+            mgr.create_template(MEMBER_A, "多い", sample_questions, images)
+        survey_world.files.attach_all.assert_not_called()
+
+    def test_duplicate_image_names_are_rejected(self, mgr, sample_questions):
+        images = [_image(FILE_1, name="案A"), _image(FILE_2, name=" 案a ")]
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED):
+            mgr.create_template(MEMBER_A, "重複", sample_questions, images)
+
+    def test_blank_image_name_is_rejected(self, mgr, sample_questions):
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING):
+            mgr.create_template(
+                MEMBER_A, "空", sample_questions, [_image(FILE_1, name=" ")]
+            )
+
+    def test_update_applies_the_same_limit(self, mgr, sample_questions):
+        template = mgr.create_template(MEMBER_A, "元", sample_questions)
+        images = [
+            _image(f, name=f"案{i}")
+            for i, f in enumerate([FILE_1, FILE_2, FILE_3, FILE_4])
+        ]
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_TOO_MANY_IMAGES):
+            mgr.update_template(MEMBER_A, template.id, "元", sample_questions, images)
 
     def test_no_questions_raises(self, mgr):
         with pytest.raises(SurveyTemplateValidationError):

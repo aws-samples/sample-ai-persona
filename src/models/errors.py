@@ -271,6 +271,10 @@ class ErrorCode(StrEnum):
         "survey_template_image_name_missing",
         ErrorKind.VALIDATION,
     )
+    SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED = (
+        "survey_template_image_name_duplicated",
+        ErrorKind.VALIDATION,
+    )
     SURVEY_PERSONA_COUNT_INVALID = (
         "survey_persona_count_invalid",
         ErrorKind.VALIDATION,
@@ -281,10 +285,6 @@ class ErrorCode(StrEnum):
     )
     SURVEY_TARGET_COUNT_TOO_HIGH = (
         "survey_target_count_too_high",
-        ErrorKind.VALIDATION,
-    )
-    SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES = (
-        "survey_target_count_too_high_with_images",
         ErrorKind.VALIDATION,
     )
     # The requested count passes, but the filters (or the dataset itself) yield

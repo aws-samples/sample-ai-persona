@@ -40,6 +40,7 @@ from src.managers.survey_execution_manager import (
     SurveyExecutionValidationError,
 )
 from src.managers.survey_template_manager import (
+    MAX_TEMPLATE_IMAGES,
     SurveyTemplateManager,
     SurveyTemplateManagerError,
     SurveyTemplateValidationError,
@@ -821,7 +822,12 @@ async def template_new(request: Request) -> Any:
     return templates.TemplateResponse(
         request,
         "survey/template_form.html",
-        {"request": request, "title": "テンプレート作成", "template": None},
+        {
+            "request": request,
+            "title": "テンプレート作成",
+            "template": None,
+            "max_images": MAX_TEMPLATE_IMAGES,
+        },
     )
 
 
@@ -967,6 +973,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
             "template": tmpl,
             "questions_json": [q.to_dict() for q in tmpl.questions],
             "images_json": images_with_urls,
+            "max_images": MAX_TEMPLATE_IMAGES,
         },
     )
 

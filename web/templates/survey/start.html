@@ -149,13 +149,10 @@
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <label class="block text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
                 {{ icon_users("w-5 h-5 text-purple-600") }} 対象ペルソナ数
-                <span class="text-sm font-normal text-gray-500" x-text="personaCountLabel"></span>
+                <span class="text-sm font-normal text-gray-500" >（10〜10,000）</span>
             </label>
-            <input type="number" name="persona_count" value="100" min="10" :max="maxPersonaCount" required
+            <input type="number" name="persona_count" value="100" min="10" max="10000" required
                    class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500">
-            <p class="text-xs text-gray-500 mt-1" x-show="hasImages">
-                ⚠️ 画像付きテンプレートは最大1,000人までです
-            </p>
         </div>
 
         <!-- 実行ボタン -->
@@ -183,22 +180,8 @@
 function surveyStartForm() {
     return {
         templateId: {{ (selected_template or '') | tojson }},
-        hasImages: false,
         datasourceCounts: {{ datasource_counts | tojson }},
         currentDatasource: document.querySelector('select[name="datasource"]')?.value || '',
-        get maxPersonaCount() {
-            return this.hasImages ? 1000 : 10000;
-        },
-        get personaCountLabel() {
-            return this.hasImages ? '（10〜1,000）' : '（10〜10,000）';
-        },
-        init() {
-            // 選んだテンプレートの画像の有無（選択肢の data-has-images。タブを替えても読める）
-            this.$watch('templateId', (value) => {
-                const option = value ? document.querySelector(`#start-template option[value="${CSS.escape(value)}"]`) : null;
-                this.hasImages = !!option && option.dataset.hasImages === '1';
-            });
-        },
         collectFilters() {
             // DOM上のフィルタ入力から値を収集
             const filters = {};
