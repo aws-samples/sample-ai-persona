@@ -211,6 +211,34 @@ class TestCreateTemplate:
                 MEMBER_A, "空", sample_questions, [_image(FILE_1, name=" ")]
             )
 
+    @pytest.mark.parametrize("second", [" 案a ", "案Ａ", "\u3000案A\u3000"])
+    def test_names_are_compared_without_width_spacing_or_case(
+        self, mgr, sample_questions, second
+    ):
+        images = [_image(FILE_1, name="案A"), _image(FILE_2, name=second)]
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED):
+            mgr.create_template(MEMBER_A, "重複", sample_questions, images)
+
+    def test_inner_spacing_does_not_make_a_new_name(self, mgr, sample_questions):
+        images = [_image(FILE_1, name="案 A"), _image(FILE_2, name="案  A")]
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED):
+            mgr.create_template(MEMBER_A, "重複", sample_questions, images)
+
+    @pytest.mark.parametrize("name", ["案\nA", "案\tA", "案\u200bA"])
+    def test_names_with_control_characters_are_rejected(
+        self, mgr, sample_questions, name
+    ):
+        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID):
+            mgr.create_template(
+                MEMBER_A, "制御文字", sample_questions, [_image(FILE_1, name=name)]
+            )
+
+    def test_full_width_space_inside_a_name_is_allowed(self, mgr, sample_questions):
+        template = mgr.create_template(
+            MEMBER_A, "空白", sample_questions, [_image(FILE_1, name="案　A")]
+        )
+        assert template.images[0].name == "案　A"
+
     def test_update_applies_the_same_limit(self, mgr, sample_questions):
         template = mgr.create_template(MEMBER_A, "元", sample_questions)
         images = [

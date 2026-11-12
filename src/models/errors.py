@@ -271,6 +271,10 @@ class ErrorCode(StrEnum):
         "survey_template_image_name_missing",
         ErrorKind.VALIDATION,
     )
+    SURVEY_TEMPLATE_IMAGE_NAME_INVALID = (
+        "survey_template_image_name_invalid",
+        ErrorKind.VALIDATION,
+    )
     SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED = (
         "survey_template_image_name_duplicated",
         ErrorKind.VALIDATION,

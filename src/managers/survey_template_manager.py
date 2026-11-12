@@ -23,6 +23,7 @@ decides with ``AccessPolicy`` (``functional-design/rules.md``):
 
 import logging
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -649,8 +650,15 @@ class SurveyTemplateManager:
                     "image name is blank",
                     code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING,
                 )
+            # The name goes into the prompt as one list item
+            if any(unicodedata.category(ch).startswith("C") for ch in img.name):
+                raise SurveyTemplateValidationError(
+                    "image name has control characters",
+                    code=ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID,
+                )
             # Questions refer to an image by its name, so names must be unique
-            key = img.name.strip().casefold()
+            # (full-width forms, spacing and case do not tell two names apart)
+            key = " ".join(unicodedata.normalize("NFKC", img.name).split()).casefold()
             if key in seen:
                 raise SurveyTemplateValidationError(
                     "image names are duplicated",

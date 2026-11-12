@@ -486,3 +486,89 @@ def test_member_persona_data_screen_has_no_management(
         assert ui.page.locator(f"[data-testid='{testid}']").count() == 0, testid
     assert ui.page.locator("[data-testid='persona-data-member-note']").is_visible()
     ui.check_a11y()
+
+
+# =============================================================================
+# テンプレートの画像の複数アップロード
+# =============================================================================
+
+_STUB_UPLOAD = """() => {
+    let n = 0;
+    window.alerts = [];
+    window.alert = (message) => window.alerts.push(message);
+    window.fetch = async () => {
+        n += 1;
+        return { json: async () => ({
+            file_id: `f${n}`,
+            file_path: `s3://b/uploads/u/survey_image/f${n}_a.png`,
+            mime_type: 'image/png',
+            original_filename: 'a.png',
+            preview_url: '',
+        }) };
+    };
+}"""
+
+_UPLOAD = """async (specs) => {
+    const data = Alpine.$data(document.querySelector('[x-data="templateForm()"]'));
+    const files = specs.map(([name, type, size]) =>
+        new File([new Uint8Array(size)], name, { type }));
+    await data.uploadImages(files);
+    return { names: data.images.map((img) => img.name), alerts: window.alerts };
+}"""
+
+
+def _template_form(ui: UiHarness, screen_client: Any) -> None:
+    ui.load_screen(screen_client, "/survey/templates/new")
+    ui.settle()
+    ui.page.evaluate(_STUB_UPLOAD)
+
+
+def test_template_form_names_each_uploaded_image_apart(
+    ui: UiHarness, screen_client: Any
+) -> None:
+    """同じファイル名を続けて選んでも、仮の名前は重ならない（空のまま送らない）。"""
+    _template_form(ui, screen_client)
+    result = ui.page.evaluate(
+        _UPLOAD, [["image.png", "image/png", 10], ["image.png", "image/png", 10]]
+    )
+    assert result["names"] == ["画像1", "画像2"]
+    assert result["alerts"] == []
+
+
+def test_template_form_keeps_to_the_limit_and_says_what_it_left_out(
+    ui: UiHarness, screen_client: Any
+) -> None:
+    """形式の違うファイルは枠を使わず、枠を超えた分は件数を知らせる。"""
+    from src.managers.survey_template_manager import MAX_TEMPLATE_IMAGES
+
+    _template_form(ui, screen_client)
+    specs = [["x.gif", "image/gif", 10]] + [
+        [f"{i}.png", "image/png", 10] for i in range(MAX_TEMPLATE_IMAGES + 1)
+    ]
+    result = ui.page.evaluate(_UPLOAD, specs)
+    assert len(result["names"]) == MAX_TEMPLATE_IMAGES
+    assert len(set(result["names"])) == MAX_TEMPLATE_IMAGES
+    assert len(result["alerts"]) == 1
+    assert "x.gif" in result["alerts"][0]
+    assert "1枚は追加しませんでした" in result["alerts"][0]
+
+
+def test_template_form_ignores_files_added_while_uploading(
+    ui: UiHarness, screen_client: Any
+) -> None:
+    """上げている間の追加は受けない（枠を超えて並ばない）。"""
+    from src.managers.survey_template_manager import MAX_TEMPLATE_IMAGES
+
+    _template_form(ui, screen_client)
+    count = ui.page.evaluate(
+        """async (limit) => {
+            const data = Alpine.$data(document.querySelector('[x-data="templateForm()"]'));
+            const file = (i) => new File([new Uint8Array(10)], `${i}.png`, { type: 'image/png' });
+            const first = data.uploadImages(Array.from({ length: limit }, (_, i) => file(i)));
+            const second = data.uploadImages([file(90), file(91)]);
+            await Promise.all([first, second]);
+            return data.images.length;
+        }""",
+        MAX_TEMPLATE_IMAGES,
+    )
+    assert count == MAX_TEMPLATE_IMAGES

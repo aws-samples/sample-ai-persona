@@ -193,6 +193,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.SETTINGS_NOT_FOUND: "お探しのページが見つかりません",
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_MISSING: "画像には名前を設定してください",
+    ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_INVALID: (
+        "画像の名前に改行などの制御文字は使えません"
+    ),
     ErrorCode.SURVEY_TEMPLATE_IMAGE_NAME_DUPLICATED: (
         "画像の名前が重複しています。画像ごとに違う名前を付けてください"
     ),

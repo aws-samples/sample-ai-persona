@@ -56,7 +56,7 @@
                 </h2>
                 <span class="text-sm text-gray-500" x-text="images.length + '/' + maxImages + '枚'"></span>
             </div>
-            <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、5MB以下、{{ max_images }}枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
+            <p class="text-xs text-gray-500 mb-3">広告や商品画像などをアップロードできます（PNG/JPEG、{{ max_image_mb }}MB以下、{{ max_images }}枚まで）。特定の画像について質問する場合は、質問文に画像の名前を含めてください。</p>
 
             <!-- アップロード済み画像一覧 -->
             <template x-for="(img, idx) in images" :key="img.id">
@@ -294,6 +294,8 @@ function templateForm() {
         name: '{{ template.name if template else "" }}',
         questions: initialQuestions.map(q => ({...q, _key: keyCounter++})),
         maxImages: {{ max_images }},
+        maxImageBytes: {{ max_image_bytes }},
+        maxImageMb: {{ max_image_mb }},
         images: initialImages.map(img => ({...img})),
         uploading: false,
 
@@ -423,24 +425,45 @@ function templateForm() {
         },
 
         async uploadImages(files) {
-            // 空き枠の数まで順に上げる（並列にすると枠を超える）
-            const room = this.maxImages - this.images.length;
-            for (const file of Array.from(files).slice(0, room)) {
-                await this.uploadImage(file);
+            // 上げている間の追加は受けない（空き枠の数え直しが重なって枠を超えるため）
+            if (this.uploading) return;
+            // 形式とサイズの合わない画像を先に除き、残りを空き枠の数まで順に上げる
+            const notices = [];
+            const accepted = [];
+            for (const file of Array.from(files)) {
+                if (!/^image\/(png|jpeg)$/.test(file.type)) {
+                    notices.push(`${file.name}: PNG/JPEG画像のみアップロードできます`);
+                } else if (file.size > this.maxImageBytes) {
+                    notices.push(`${file.name}: ファイルサイズは${this.maxImageMb}MB以下にしてください`);
+                } else {
+                    accepted.push(file);
+                }
             }
+            const room = this.maxImages - this.images.length;
+            const queued = accepted.slice(0, room);
+            if (accepted.length > queued.length) {
+                notices.push(`画像は${this.maxImages}枚までのため、${accepted.length - queued.length}枚は追加しませんでした`);
+            }
+            if (notices.length) alert(notices.join('\n'));
+            if (!queued.length) return;
+            this.uploading = true;
+            try {
+                for (const file of queued) await this.uploadImage(file);
+            } finally {
+                this.uploading = false;
+            }
+        },
+
+        nextImageName() {
+            // 名前を付けない画像にも、重ならない仮の名前を付ける（質問文で画像を指すため）
+            const used = new Set(this.images.map(img => (img.name || '').trim().toLowerCase()));
+            let n = 1;
+            while (used.has(`画像${n}`)) n++;
+            return `画像${n}`;
         },
 
         async uploadImage(file) {
             if (this.images.length >= this.maxImages) return;
-            if (!file.type.match(/^image\/(png|jpeg)$/)) {
-                alert('PNG/JPEG画像のみアップロードできます');
-                return;
-            }
-            if (file.size > 5 * 1024 * 1024) {
-                alert('ファイルサイズは5MB以下にしてください');
-                return;
-            }
-            this.uploading = true;
             try {
                 const formData = new FormData();
                 formData.append('file', file);
@@ -450,7 +473,7 @@ function templateForm() {
                 // プレビュー用URL: サーバーから返された署名付きURLを優先
                 this.images.push({
                     id: data.file_id,
-                    name: '',
+                    name: this.nextImageName(),
                     file_path: data.file_path,
                     mime_type: data.mime_type,
                     original_filename: data.original_filename,
@@ -459,8 +482,6 @@ function templateForm() {
                 });
             } catch (e) {
                 alert('アップロードに失敗しました: ' + e.message);
-            } finally {
-                this.uploading = false;
             }
         },
 
@@ -502,7 +523,7 @@ function templateForm() {
         imagesForSubmit() {
             return this.images.map(img => ({
                 id: img.id,
-                name: img.name || img.original_filename,
+                name: (img.name || '').trim(),
                 file_path: img.file_path,
                 mime_type: img.mime_type,
                 original_filename: img.original_filename,

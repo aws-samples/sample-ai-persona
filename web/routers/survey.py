@@ -820,6 +820,16 @@ async def templates_list(
     return templates.TemplateResponse(request, "survey/templates_list.html", context)
 
 
+def _template_form_limits() -> dict[str, int]:
+    """Image limits the template form shows and checks before uploading."""
+    max_bytes = FileManager.SURVEY_IMAGE_MAX_SIZE
+    return {
+        "max_images": MAX_TEMPLATE_IMAGES,
+        "max_image_bytes": max_bytes,
+        "max_image_mb": max_bytes // (1024 * 1024),
+    }
+
+
 @router.get("/templates/new", response_class=HTMLResponse)
 async def template_new(request: Request) -> Any:
     """テンプレート作成画面"""
@@ -830,7 +840,7 @@ async def template_new(request: Request) -> Any:
             "request": request,
             "title": "テンプレート作成",
             "template": None,
-            "max_images": MAX_TEMPLATE_IMAGES,
+            **_template_form_limits(),
         },
     )
 
@@ -977,7 +987,7 @@ async def template_edit(request: Request, template_id: str) -> Any:
             "template": tmpl,
             "questions_json": [q.to_dict() for q in tmpl.questions],
             "images_json": images_with_urls,
-            "max_images": MAX_TEMPLATE_IMAGES,
+            **_template_form_limits(),
         },
     )
 
