@@ -51,7 +51,11 @@ from src.managers.settings_manager import SettingsManager
 from src.managers.survey_run_manager import SurveyRunManager
 from src.models.authz import Principal
 from src.models.errors import CodedError, ErrorCode, ErrorKind
-from src.models.survey import MIN_SURVEY_PERSONAS
+from src.models.survey import (
+    MAX_SURVEY_PERSONAS,
+    MAX_SURVEY_PERSONAS_WITH_IMAGES,
+    MIN_SURVEY_PERSONAS,
+)
 from src.models.survey_template import Question, TemplateImage
 
 logger = logging.getLogger(__name__)
@@ -1068,6 +1072,9 @@ async def survey_start_page(
             "custom_data": custom_data,
             "nemotron_available": nemotron_available,
             "datasource_counts": datasource_counts,
+            "min_personas": MIN_SURVEY_PERSONAS,
+            "max_personas": MAX_SURVEY_PERSONAS,
+            "max_personas_with_images": MAX_SURVEY_PERSONAS_WITH_IMAGES,
         },
     )
 

@@ -23,6 +23,7 @@ from src.models.asset_delivery import DeliveryKind, SizeLimit
 from src.models.authz import ResourceType
 from src.models.errors import AccessDeniedError, CodedError, ErrorCode
 from src.models.external_failure import FailureClass
+from src.models.survey import MAX_SURVEY_PERSONAS, MAX_SURVEY_PERSONAS_WITH_IMAGES
 
 from src.managers.survey_execution_manager import (
     SurveyExecutionError,
@@ -133,23 +134,28 @@ class TestValidatePersonaCount:
         """FR4.3: バッチ推論の下限の名前ではなく、アンケートの下限として持つ。"""
         assert SurveyExecutionManager.MIN_SURVEY_PERSONAS == 10
 
-    def test_images_max_1000(self) -> None:
-        SurveyExecutionManager._validate_persona_count(1000, has_images=True)
+    def test_images_have_their_own_max(self) -> None:
+        limit = MAX_SURVEY_PERSONAS_WITH_IMAGES
+        SurveyExecutionManager._validate_persona_count(limit, has_images=True)
         with raises_code(
             SurveyExecutionValidationError,
             ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES,
-            max_count=1000,
+            max_count=limit,
         ):
-            SurveyExecutionManager._validate_persona_count(1001, has_images=True)
+            SurveyExecutionManager._validate_persona_count(limit + 1, has_images=True)
 
-    def test_no_images_max_10000(self) -> None:
-        SurveyExecutionManager._validate_persona_count(10000, has_images=False)
+    def test_no_images_max(self) -> None:
+        limit = MAX_SURVEY_PERSONAS
+        SurveyExecutionManager._validate_persona_count(limit, has_images=False)
         with raises_code(
             SurveyExecutionValidationError,
             ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH,
-            max_count=10000,
+            max_count=limit,
         ):
-            SurveyExecutionManager._validate_persona_count(10001, has_images=False)
+            SurveyExecutionManager._validate_persona_count(limit + 1, has_images=False)
+
+    def test_the_image_max_is_below_the_plain_max(self) -> None:
+        assert MAX_SURVEY_PERSONAS_WITH_IMAGES < MAX_SURVEY_PERSONAS
 
 
 @pytest.mark.unit

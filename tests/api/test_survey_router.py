@@ -15,6 +15,11 @@ import pytest
 
 from src.models.authz import ResourceType
 from src.models.errors import ErrorCode
+from src.models.survey import (
+    MAX_SURVEY_PERSONAS,
+    MAX_SURVEY_PERSONAS_WITH_IMAGES,
+    MIN_SURVEY_PERSONAS,
+)
 from tests.api.u7_world import ADMIN_USER, ME, OTHER, PEER_SUB, ApiWorld
 
 TEMPLATE = ResourceType.SURVEY_TEMPLATE
@@ -223,6 +228,13 @@ class TestStart:
         assert "営業向けデータ" in html
         assert f"custom:{usable.id}" in html
         assert "企画向けデータ" not in html
+
+    def test_start_page_takes_the_persona_limits_from_the_constants(self, aw, client):
+        html = client.get("/survey/start").text
+        assert f"minPersonas: {MIN_SURVEY_PERSONAS}," in html
+        assert f"maxPersonas: {MAX_SURVEY_PERSONAS}," in html
+        assert f"maxPersonasWithImages: {MAX_SURVEY_PERSONAS_WITH_IMAGES}," in html
+        assert f'min="{MIN_SURVEY_PERSONAS}"' in html
 
     def test_shared_template_tab_on_the_start_page(self, aw, client):
         shared = aw.template(PEER_SUB, name="共有されたテンプレート")
