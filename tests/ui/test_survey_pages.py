@@ -411,15 +411,18 @@ def test_detail_without_missing_answers_has_no_note(screen_client, failed_count)
 
 
 def test_start_form_minimum_is_ten():
-    """FR4.1: 件数の下限の表示は 10。"""
+    """FR4.1: 件数の下限は 10。画面の数値は定数から描画し、直書きしない。"""
     from pathlib import Path
+
+    from src.models.survey import MIN_SURVEY_PERSONAS
 
     source = (
         Path(__file__).resolve().parents[2] / "web/templates/survey/start.html"
     ).read_text(encoding="utf-8")
-    assert 'min="10"' in source
-    assert "（10〜1,000）" in source
-    assert "（10〜10,000）" in source
+    assert MIN_SURVEY_PERSONAS == 10
+    assert 'min="{{ min_personas }}"' in source
+    assert "{{ max_personas }}" in source
+    assert "{{ max_personas_with_images }}" in source
     assert 'min="100"' not in source
 
 
