@@ -201,6 +201,9 @@ _CATALOG: dict[ErrorCode, str] = {
         "対象ペルソナ数は{min_count}以上で指定してください"
     ),
     ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH: "対象ペルソナ数は{max_count}人までです",
+    ErrorCode.SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES: (
+        "画像付きアンケートの場合、対象ペルソナ数は{max_count}人までです"
+    ),
     ErrorCode.SURVEY_AVAILABLE_PERSONAS_TOO_FEW: (
         "条件に合致するペルソナが{available_count}人しかいません。"
         "アンケートの実行には{min_count}人以上が必要です。フィルタ条件を緩めてください。"

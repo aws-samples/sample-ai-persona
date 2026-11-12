@@ -287,6 +287,10 @@ class ErrorCode(StrEnum):
         "survey_target_count_too_high",
         ErrorKind.VALIDATION,
     )
+    SURVEY_TARGET_COUNT_TOO_HIGH_WITH_IMAGES = (
+        "survey_target_count_too_high_with_images",
+        ErrorKind.VALIDATION,
+    )
     # The requested count passes, but the filters (or the dataset itself) yield
     # fewer personas than a survey needs (MIN_SURVEY_PERSONAS). The user can fix it by
     # loosening the filters, hence VALIDATION rather than CAPACITY.
