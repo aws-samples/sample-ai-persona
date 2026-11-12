@@ -69,6 +69,17 @@
                     />
                     <p class="text-xs text-gray-400 mt-1">Bedrock Knowledge BasesのID（英数字）</p>
                 </div>
+
+                <div class="mb-4">
+                    <label for="kb-register-type" class="block text-sm font-medium text-gray-700 mb-2">種類 <span class="text-red-500">*</span></label>
+                    <select id="kb-register-type" name="kb_type" required
+                        class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        {%- for value, label in kb_type_labels.items() %}
+                        <option value="{{ value }}"{% if value == kb_type_recommended %} selected{% endif %}>{{ label }}</option>
+                        {%- endfor %}
+                    </select>
+                    <p class="text-xs text-gray-400 mt-1">Bedrock で作成したときの種類に合わせてください（検索のしかたが変わります）</p>
+                </div>
                 
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">名前 <span class="text-red-500">*</span></label>

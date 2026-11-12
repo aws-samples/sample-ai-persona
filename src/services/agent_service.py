@@ -962,6 +962,7 @@ class AgentService:
             knowledge_base_id=knowledge_base.knowledge_base_id,
             metadata_filters=filters,
             region=config.AWS_REGION,
+            kb_type=knowledge_base.kb_type,
         )
         tools.append(kb_tool)
         return tools, {

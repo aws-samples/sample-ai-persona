@@ -2,7 +2,14 @@
 
 from datetime import datetime
 
-from src.models.knowledge_base import KnowledgeBase
+from src.models.knowledge_base import (
+    KB_TYPE_LABELS,
+    KB_TYPE_MANAGED,
+    KB_TYPE_RECOMMENDED,
+    KB_TYPE_SELF_MANAGED,
+    KB_TYPES,
+    KnowledgeBase,
+)
 from src.models.persona_binding import PersonaBinding
 
 
@@ -29,6 +36,34 @@ class TestKnowledgeBase:
         assert restored.description == kb.description
         assert restored.created_at == kb.created_at
         assert restored.updated_at == kb.updated_at
+
+    def test_kb_type_defaults_to_self_managed(self):
+        kb = KnowledgeBase.create_new("KB1", "test")
+        assert kb.kb_type == KB_TYPE_SELF_MANAGED
+
+    def test_managed_kb_type_roundtrips(self):
+        kb = KnowledgeBase.create_new("KB1", "test", kb_type=KB_TYPE_MANAGED)
+        restored = KnowledgeBase.from_dict(kb.to_dict())
+        assert restored.kb_type == KB_TYPE_MANAGED
+
+    def test_record_without_kb_type_reads_as_self_managed(self):
+        data = KnowledgeBase.create_new("KB1", "test").to_dict()
+        del data["kb_type"]
+        assert KnowledgeBase.from_dict(data).kb_type == KB_TYPE_SELF_MANAGED
+
+    def test_unknown_stored_kb_type_reads_as_self_managed(self):
+        data = KnowledgeBase.create_new("KB1", "test").to_dict()
+        data["kb_type"] = "Managed"
+        assert KnowledgeBase.from_dict(data).kb_type == KB_TYPE_SELF_MANAGED
+
+    def test_every_kb_type_has_a_label(self):
+        assert set(KB_TYPE_LABELS) == KB_TYPES
+        assert KB_TYPE_LABELS[KB_TYPE_SELF_MANAGED] == "Self-managed KB"
+
+    def test_the_recommended_type_is_managed_and_listed_first(self):
+        assert KB_TYPE_RECOMMENDED == KB_TYPE_MANAGED
+        assert next(iter(KB_TYPE_LABELS)) == KB_TYPE_RECOMMENDED
+        assert KB_TYPE_LABELS[KB_TYPE_MANAGED] == "Managed KB"
 
     def test_to_dict_datetime_format(self):
         kb = KnowledgeBase.create_new("KB1", "test")

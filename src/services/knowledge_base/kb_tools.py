@@ -9,6 +9,8 @@ from typing import Dict, Callable
 import boto3
 from botocore.exceptions import ClientError
 
+from ...models.knowledge_base import KB_TYPE_MANAGED, KB_TYPE_SELF_MANAGED
+
 try:
     from strands import tool
 except ImportError:
@@ -35,10 +37,22 @@ def _build_metadata_filter(metadata_filters: Dict[str, str]) -> dict:
     return {"filter": {"andAll": filter_conditions}}
 
 
+def _search_configuration_key(kb_type: str) -> str:
+    """Return the Retrieve search configuration key for the knowledge base type.
+
+    A Managed Knowledge Base takes ``managedSearchConfiguration``; every other
+    knowledge base takes ``vectorSearchConfiguration``.
+    """
+    if kb_type == KB_TYPE_MANAGED:
+        return "managedSearchConfiguration"
+    return "vectorSearchConfiguration"
+
+
 def create_kb_retrieval_tool(
     knowledge_base_id: str,
     metadata_filters: Dict[str, str] | None = None,
     region: str = "us-east-1",
+    kb_type: str = KB_TYPE_SELF_MANAGED,
 ) -> Callable:
     """
     ペルソナ用のナレッジベース検索ツールを作成
@@ -47,12 +61,14 @@ def create_kb_retrieval_tool(
         knowledge_base_id: Bedrock Knowledge Base ID
         metadata_filters: メタデータフィルタ（キー=値ペア）
         region: AWSリージョン
+        kb_type: KB の種類（``self_managed`` または ``managed``。検索設定のキーが変わる）
 
     Returns:
         Callable: Strands SDKツールとして使用可能な関数
     """
     client = boto3.client("bedrock-agent-runtime", region_name=region)
     filter_config = _build_metadata_filter(metadata_filters or {})
+    search_key = _search_configuration_key(kb_type)
 
     @tool
     def search_knowledge_base(query: str, max_results: int = 5) -> str:
@@ -78,7 +94,7 @@ def create_kb_retrieval_tool(
                 "knowledgeBaseId": knowledge_base_id,
                 "retrievalQuery": {"text": query.strip()},
                 "retrievalConfiguration": {
-                    "vectorSearchConfiguration": {
+                    search_key: {
                         "numberOfResults": max_results,
                         **filter_config,
                     }
@@ -119,6 +135,13 @@ def create_kb_retrieval_tool(
                 error_code,
                 str(e),
             )
+            if error_code == "ValidationException":
+                logger.warning(
+                    "KB retrieval was rejected: kb=%s, kb_type=%s. The registered "
+                    "knowledge base type may not match the knowledge base in Bedrock.",
+                    knowledge_base_id,
+                    kb_type,
+                )
             if error_code == "ResourceNotFoundException":
                 return "ナレッジベースが見つかりません。設定を確認してください。"
             if error_code == "AccessDeniedException":
