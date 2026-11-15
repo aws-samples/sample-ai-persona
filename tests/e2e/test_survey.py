@@ -27,7 +27,8 @@ SAMPLE_CSV = (
 class SurveyRecords:
     """Survey-side records created by this module (the only ones teardown deletes)."""
 
-    dataset_names: list[str] = field(default_factory=list)
+    #: ``(name, id)`` of each uploaded dataset; screens and URLs use the id.
+    datasets: list[tuple[str, str]] = field(default_factory=list)
     template_ids: list[str] = field(default_factory=list)
 
 
@@ -42,9 +43,9 @@ def survey_records(
         session_context.request.delete(
             f"/survey/templates/{template_id}", headers=headers
         )
-    for name in records.dataset_names:
+    for _, dataset_id in records.datasets:
         session_context.request.delete(
-            f"/survey/persona-data/custom/{name}", headers=headers
+            f"/survey/persona-data/custom/{dataset_id}", headers=headers
         )
 
 
@@ -56,10 +57,10 @@ def survey_csv(tmp_path_factory: pytest.TempPathFactory, run_tag: str) -> Path:
     return path
 
 
-def _require_dataset(records: SurveyRecords) -> str:
-    if not records.dataset_names:
+def _require_dataset(records: SurveyRecords) -> tuple[str, str]:
+    if not records.datasets:
         pytest.skip("custom dataset was not uploaded")
-    return records.dataset_names[0]
+    return records.datasets[0]
 
 
 def _require_template(records: SurveyRecords) -> str:
@@ -90,10 +91,16 @@ def test_custom_dataset_upload_with_mapping(
         'form[hx-post="/survey/persona-data/confirm-mapping"] [type=submit]'
     ).click()
     expect(page.locator("#custom-upload-result")).to_contain_text(
-        f"{dataset_name} をアップロードしました", timeout=120_000
+        f"{dataset_name} を登録しました", timeout=120_000
     )
-    survey_records.dataset_names.append(dataset_name)
-    expect(page.locator("#custom-dataset-list")).to_contain_text(dataset_name)
+    delete_button = page.locator("#custom-dataset-list").get_by_label(
+        f"{dataset_name} を削除", exact=True
+    )
+    expect(delete_button).to_have_count(1)
+    delete_url = delete_button.get_attribute("hx-delete") or ""
+    dataset_id = delete_url.removeprefix("/survey/persona-data/custom/")
+    assert dataset_id and dataset_id != delete_url, delete_url
+    survey_records.datasets.append((dataset_name, dataset_id))
 
 
 def test_template_create_and_edit(
@@ -134,11 +141,11 @@ def test_template_create_and_edit(
 
 
 def test_survey_start_target_preview(page: Page, survey_records: SurveyRecords) -> None:
-    dataset_name = _require_dataset(survey_records)
+    _, dataset_id = _require_dataset(survey_records)
     template_id = _require_template(survey_records)
     page.goto("/survey/start", timeout=PARQUET_TIMEOUT_MS)
     page.locator('select[name="template_id"]').select_option(template_id)
-    page.locator('select[name="datasource"]').select_option(f"custom:{dataset_name}")
+    page.locator('select[name="datasource"]').select_option(f"custom:{dataset_id}")
     expect(page.locator("#filter-fields")).not_to_be_empty(timeout=PARQUET_TIMEOUT_MS)
 
     page.locator('button:has-text("対象ペルソナをプレビュー")').click()
@@ -177,12 +184,12 @@ def test_template_delete_from_list(page: Page, survey_records: SurveyRecords) ->
 def test_custom_dataset_delete_from_list(
     page: Page, survey_records: SurveyRecords
 ) -> None:
-    dataset_name = _require_dataset(survey_records)
+    dataset_name, dataset_id = _require_dataset(survey_records)
     page.goto("/survey/persona-data")
     dataset_list = page.locator("#custom-dataset-list")
     expect(dataset_list).to_contain_text(dataset_name)
     dataset_list.locator(
-        f'button[hx-delete="/survey/persona-data/custom/{dataset_name}"]'
+        f'button[hx-delete="/survey/persona-data/custom/{dataset_id}"]'
     ).click()
     expect(dataset_list).not_to_contain_text(dataset_name)
-    survey_records.dataset_names.remove(dataset_name)
+    survey_records.datasets.remove((dataset_name, dataset_id))
