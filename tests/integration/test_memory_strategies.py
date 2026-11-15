@@ -259,27 +259,24 @@ def test_list_all_unexpected_error_is_wrapped(strategy):
         strategy.list_all("p1")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "nextToken を追わず 1 ページ目しか返さない"
-        "（summary_strategy.py:357-362, semantic_strategy.py:370-374）"
-    ),
-)
-def test_list_all_follows_pagination(strategy):
-    with Stubber(strategy._client.gmdp_client) as stub:
-        stub.add_response(
-            "list_memory_records",
-            {
-                "memoryRecordSummaries": [_summary(strategy, rid("r1"))],
-                "nextToken": "t2",
-            },
-        )
-        stub.add_response(
-            "list_memory_records",
-            {"memoryRecordSummaries": [_summary(strategy, rid("r2"))]},
-        )
-        entries = strategy.list_all("p1")
+def test_list_all_follows_pagination(strategy, stub):
+    """Every page is read, so the memory screen and per-strategy deletes see all records."""
+    first = {"memoryId": MEMORY_ID, "namespace": _prefix(strategy)}
+    stub.add_response(
+        "list_memory_records",
+        {
+            "memoryRecordSummaries": [_summary(strategy, rid("r1"))],
+            "nextToken": "t2",
+        },
+        first,
+    )
+    stub.add_response(
+        "list_memory_records",
+        {"memoryRecordSummaries": [_summary(strategy, rid("r2"))]},
+        {**first, "nextToken": "t2"},
+    )
+
+    entries = strategy.list_all("p1")
 
     assert [e.id for e in entries] == [rid("r1"), rid("r2")]
 

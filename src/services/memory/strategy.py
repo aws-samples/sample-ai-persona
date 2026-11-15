@@ -34,6 +34,25 @@ def record_namespaces(response: Dict[str, Any]) -> List[str]:
     return [n for n in namespaces if isinstance(n, str)]
 
 
+def list_all_record_summaries(
+    client: Any, memory_id: str, namespace: str
+) -> List[Dict[str, Any]]:
+    """Every ``ListMemoryRecords`` summary under ``namespace``, following ``nextToken``.
+
+    The API returns one page at a time; reading only the first page hides
+    records from the memory screen and from per-strategy deletes.
+    """
+    params: Dict[str, Any] = {"memoryId": memory_id, "namespace": namespace}
+    summaries: List[Dict[str, Any]] = []
+    while True:
+        page = client.list_memory_records(**params)
+        summaries.extend(page.get("memoryRecordSummaries", []))
+        next_token = page.get("nextToken")
+        if not next_token:
+            return summaries
+        params["nextToken"] = next_token
+
+
 class MemoryStrategy(ABC):
     """
     記憶戦略の抽象基底クラス

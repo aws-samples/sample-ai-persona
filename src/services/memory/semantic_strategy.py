@@ -14,7 +14,12 @@ from botocore.exceptions import ClientError
 
 from src.models.memory import MemoryEntry
 
-from .strategy import MemoryStrategy, is_under_namespaces, record_namespaces
+from .strategy import (
+    MemoryStrategy,
+    is_under_namespaces,
+    list_all_record_summaries,
+    record_namespaces,
+)
 from .summary_strategy import MemoryOperationError
 
 logger = logging.getLogger(__name__)
@@ -367,11 +372,9 @@ class SemanticStrategy(MemoryStrategy):
         try:
             namespace_prefix = self._build_actor_namespace_prefix(actor_id)
 
-            records = self._client.list_memory_records(
-                memoryId=self.memory_id, namespace=namespace_prefix
+            all_records = list_all_record_summaries(
+                self._client, self.memory_id, namespace_prefix
             )
-
-            all_records = records.get("memoryRecordSummaries", [])
 
             entries = []
             for record in all_records:

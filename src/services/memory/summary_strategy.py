@@ -22,7 +22,12 @@ from botocore.exceptions import ClientError
 
 from src.models.memory import MemoryEntry
 
-from .strategy import MemoryStrategy, is_under_namespaces, record_namespaces
+from .strategy import (
+    MemoryStrategy,
+    is_under_namespaces,
+    list_all_record_summaries,
+    record_namespaces,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -350,12 +355,9 @@ class SummaryStrategy(MemoryStrategy):
             namespace_prefix = self._build_actor_namespace_prefix(actor_id)
 
             # Use list_memory_records to get all records without semantic search
-            records = self._client.list_memory_records(
-                memoryId=self.memory_id, namespace=namespace_prefix
+            all_records = list_all_record_summaries(
+                self._client, self.memory_id, namespace_prefix
             )
-
-            # Handle pagination if needed
-            all_records = records.get("memoryRecordSummaries", [])
 
             # Convert API response to MemoryEntry objects
             entries = []
