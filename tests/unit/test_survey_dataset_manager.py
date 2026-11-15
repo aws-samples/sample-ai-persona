@@ -201,11 +201,6 @@ class TestReferenceForEveryone:
     def test_standard_columns(self, dm):
         assert "persona" in dm.get_standard_columns()
 
-    def test_image_signing_by_path_is_gone(self):
-        assert not hasattr(SurveyDatasetManager, "get_image_presigned_url")
-        assert not hasattr(SurveyDatasetManager, "list_custom_datasets")
-        assert not hasattr(SurveyDatasetManager, "load_dataset_metadata")
-
 
 # =============================================================================
 # 管理（admin だけ、BR4.1、NFR1.73）

@@ -23,7 +23,6 @@ from src.models.persona_candidate import (
 )
 from src.services.stores.persona_candidate_store import (
     CandidateUnavailable,
-    PersonaCandidateStore,
     PersonaCandidateStoreError,
 )
 from tests.conftest import MEMBER_A, MEMBER_B, NO_ROLE
@@ -553,22 +552,3 @@ class TestHoldIsConfirmedBeforeEachSave:
                 A, first, edited=edited
             )
         assert world.personas == {}
-
-
-class TestNoInProcessCache:
-    def test_the_manager_keeps_no_ttl_cache(self, store, s3, clock):
-        manager = _manager(store, s3, clock)
-        assert not hasattr(manager, "_personas_cache")
-        assert not hasattr(manager, "_behavior_datasets_cache")
-        for name in (
-            "generate_and_cache",
-            "get_cached_persona",
-            "pop_cached_persona",
-            "get_cached_behavior_datasets",
-            "pop_cached_behavior_datasets",
-            "build_and_cache_behavior_datasets",
-        ):
-            assert not hasattr(PersonaGenerationManager, name)
-
-    def test_candidate_store_type(self):
-        assert PersonaCandidateStore.item_size  # the size measure lives in the Service

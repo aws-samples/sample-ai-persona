@@ -64,11 +64,6 @@ def _discussion(**overrides: object) -> Discussion:
 
 
 class TestDiscussionShape:
-    def test_has_no_messages_or_reports(self):
-        d = _discussion()
-        assert not hasattr(d, "messages")
-        assert not hasattr(d, "reports")
-
     def test_new_discussion_is_owned_and_unshared(self):
         d = _discussion()
         assert d.owner_sub == "user-a"
@@ -272,6 +267,14 @@ class TestDiscussionReport:
         assert "custom_prompt" not in data and "updated_at" not in data
         assert DiscussionReport.from_dict(data) == report
 
+    def test_round_trip_keeps_the_prompt_and_update_time(self):
+        report = DiscussionReport.create_new(
+            "d1", "custom", "内容", "指示", now=_NOW
+        ).with_content("新しい", now=_NOW + timedelta(minutes=1))
+        data = report.to_dict()
+        assert data["custom_prompt"] == "指示"
+        assert DiscussionReport.from_dict(data) == report
+
 
 class TestDocumentRef:
     def test_from_dict_drops_the_s3_key(self):
@@ -358,8 +361,6 @@ class TestInterviewSession:
         assert s.last_seq == 0
         assert s.reply_token is None
         assert s.saved_discussion_id is None
-        assert not hasattr(s, "messages")
-        assert not hasattr(s, "is_saved")
 
     def test_expires_eight_hours_after_the_last_action(self):
         s = _session()

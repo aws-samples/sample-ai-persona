@@ -282,6 +282,33 @@ class TestAIService:
             )
             assert second_insight["confidence_score"] == 0.72
 
+    def test_extract_insights_falls_back_to_bullet_text(self):
+        """A bullet-list reply (no JSON) is parsed into categorized insights."""
+        bullet_response = (
+            "- [顧客ニーズ] ユーザーは使いやすさと効率性を最も重視している\n"
+            "- [商品開発] シンプルで直感的なユーザーインターフェースの設計が必要\n"
+            "- 分類のない気づきもその他として残る\n"
+        )
+        messages = [
+            Message.create_new(
+                persona_id="1",
+                persona_name="田中太郎",
+                content="これは十分に長いテストメッセージです。商品について詳細に議論しています。",
+            ),
+        ]
+
+        with patch.object(
+            self.ai_service, "_retry_with_backoff", return_value=bullet_response
+        ):
+            result = self.ai_service.extract_insights(messages)
+
+        assert [(i["category"], i["description"]) for i in result] == [
+            ("顧客ニーズ", "ユーザーは使いやすさと効率性を最も重視している"),
+            ("商品開発", "シンプルで直感的なユーザーインターフェースの設計が必要"),
+            ("その他", "分類のない気づきもその他として残る"),
+        ]
+        assert all(i["confidence_score"] == 0.6 for i in result)
+
     def test_extract_insights_with_custom_categories(self):
         """カスタムカテゴリーでのインサイト抽出のテスト"""
         from src.models.insight_category import InsightCategory

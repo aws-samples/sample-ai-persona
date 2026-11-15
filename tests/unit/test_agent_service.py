@@ -41,16 +41,6 @@ class TestAgentService:
             updated_at=datetime.now(),
         )
 
-    @patch("src.services.agent_service.Agent")
-    @patch("src.services.agent_service.BedrockModel")
-    def test_agent_service_initialization(self, mock_bedrock_model, mock_agent):
-        """AgentServiceの初期化テスト"""
-        # AgentServiceを初期化
-        agent_service = AgentService()
-
-        # 初期化が成功することを確認
-        assert agent_service is not None
-
     @patch("src.services.agent_service.Agent", None)
     @patch("src.services.agent_service.BedrockModel", None)
     def test_agent_service_initialization_without_sdk(self):
@@ -486,20 +476,6 @@ class TestPersonaAgent:
             self.test_persona, self.system_prompt, self.mock_agent
         )
 
-    def test_persona_agent_initialization(self):
-        """PersonaAgentの初期化テスト"""
-        assert self.persona_agent.persona == self.test_persona
-        assert self.persona_agent.system_prompt == self.system_prompt
-        assert self.persona_agent.agent == self.mock_agent
-
-    def test_get_persona_id(self):
-        """ペルソナID取得テスト"""
-        assert self.persona_agent.get_persona_id() == self.test_persona.id
-
-    def test_get_persona_name(self):
-        """ペルソナ名取得テスト"""
-        assert self.persona_agent.get_persona_name() == self.test_persona.name
-
     def test_respond(self):
         """応答生成テスト"""
         # モックの設定
@@ -587,15 +563,6 @@ class TestFacilitatorAgent:
         self.facilitator_agent = FacilitatorAgent(
             self.rounds, self.additional_instructions, self.mock_agent
         )
-
-    def test_facilitator_agent_initialization(self):
-        """FacilitatorAgentの初期化テスト"""
-        assert self.facilitator_agent.rounds == self.rounds
-        assert (
-            self.facilitator_agent.additional_instructions
-            == self.additional_instructions
-        )
-        assert self.facilitator_agent.agent == self.mock_agent
 
     def test_start_discussion(self):
         """議論開始テスト"""

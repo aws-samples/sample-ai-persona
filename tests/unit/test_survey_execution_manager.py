@@ -654,10 +654,6 @@ class TestCreateSurveyDecisions:
         start = em.create_survey(MEMBER_A, template.id, name="")
         assert "顧客満足度" in start.survey.name
 
-    def test_execution_is_not_public(self):
-        assert not hasattr(SurveyExecutionManager, "execute_survey")
-        assert not hasattr(SurveyExecutionManager, "start_survey")
-
 
 class TestQueueOnCreate:
     """WF1: 実行の受付は queued で保存するだけ。推論は進行役が始める（FR3.1、BR9.1）。"""

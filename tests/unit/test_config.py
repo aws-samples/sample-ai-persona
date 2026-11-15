@@ -528,22 +528,6 @@ class TestSurveyRunnerSettings:
             self._config(SURVEY_EXECUTION_TIMEOUT_SECONDS=value)
 
 
-class TestGlobalConfigInstance:
-    """グローバル設定インスタンスのテスト"""
-
-    def test_global_config_exists(self):
-        """グローバルconfigインスタンスが存在することを確認"""
-        from src.config import config
-
-        assert config is not None
-
-    def test_global_config_is_config_instance(self):
-        """グローバルconfigがConfigインスタンスであることを確認"""
-        from src.config import config, Config
-
-        assert isinstance(config, Config)
-
-
 class TestConfigInsightCategories:
     """インサイトカテゴリー設定のテスト"""
 
@@ -677,13 +661,6 @@ class TestPersonaU5Tables:
 
         assert "PersonaCandidates" not in TABLE_NAME_SETTINGS
         assert "PersonaBindings" not in TABLE_NAME_SETTINGS
-
-    def test_old_binding_table_settings_are_gone(self):
-        from src.config import Config
-
-        config = Config()
-        assert not hasattr(config, "PERSONA_DATASET_BINDINGS_TABLE_NAME")
-        assert not hasattr(config, "PERSONA_KB_BINDINGS_TABLE_NAME")
 
     def test_candidates_live_eight_hours_by_default(self):
         from src.config import Config

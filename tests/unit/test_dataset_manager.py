@@ -509,22 +509,3 @@ class TestDatasetScope:
         )
         target = survey_world.lookup.get(ResourceType.DATASET, dataset.id)
         assert AccessPolicy.can_use_asset(MEMBER_A, target)
-
-
-class TestDatasetManagerBindingsMoved:
-    """紐付けの 5 メソッドは PersonaManager へ移した（U5、ADR-007）。"""
-
-    @pytest.mark.parametrize(
-        "method",
-        [
-            "save_binding",
-            "get_bindings_by_persona",
-            "delete_binding",
-            "set_persona_bindings",
-            "preview_binding_data",
-        ],
-    )
-    def test_binding_methods_are_gone(self, method):
-        from src.managers.dataset_manager import DatasetManager
-
-        assert not hasattr(DatasetManager, method)

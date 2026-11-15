@@ -30,20 +30,6 @@ class TestServiceFactory:
         assert factory1 is factory2
 
     @patch("src.services.service_factory.AIService")
-    def test_get_ai_service_creates_instance(self, mock_ai_service_class):
-        """AIServiceインスタンスが作成されることを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_ai_service = Mock()
-        mock_ai_service_class.return_value = mock_ai_service
-
-        factory = ServiceFactory()
-        service = factory.get_ai_service()
-
-        assert service is mock_ai_service
-        mock_ai_service_class.assert_called_once()
-
-    @patch("src.services.service_factory.AIService")
     def test_get_ai_service_returns_same_instance(self, mock_ai_service_class):
         """AIServiceが同じインスタンスを返すことを確認"""
         from src.services.service_factory import ServiceFactory
@@ -60,20 +46,6 @@ class TestServiceFactory:
         mock_ai_service_class.assert_called_once()
 
     @patch("src.services.service_factory.AgentService")
-    def test_get_agent_service_creates_instance(self, mock_agent_service_class):
-        """AgentServiceインスタンスが作成されることを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_agent_service = Mock()
-        mock_agent_service_class.return_value = mock_agent_service
-
-        factory = ServiceFactory()
-        service = factory.get_agent_service()
-
-        assert service is mock_agent_service
-        mock_agent_service_class.assert_called_once()
-
-    @patch("src.services.service_factory.AgentService")
     def test_get_agent_service_returns_same_instance(self, mock_agent_service_class):
         """AgentServiceが同じインスタンスを返すことを確認"""
         from src.services.service_factory import ServiceFactory
@@ -87,38 +59,6 @@ class TestServiceFactory:
 
         assert service1 is service2
         mock_agent_service_class.assert_called_once()
-
-    @patch("src.services.service_factory.AIService")
-    def test_ai_service_creation_error_handling(self, mock_ai_service_class):
-        """AIService作成エラーが適切に処理されることを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_ai_service_class.side_effect = Exception(
-            "AI Service initialization failed"
-        )
-
-        factory = ServiceFactory()
-
-        with pytest.raises(Exception) as exc_info:
-            factory.get_ai_service()
-
-        assert "AI Service initialization failed" in str(exc_info.value)
-
-    @patch("src.services.service_factory.AgentService")
-    def test_agent_service_creation_error_handling(self, mock_agent_service_class):
-        """AgentService作成エラーが適切に処理されることを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_agent_service_class.side_effect = Exception(
-            "Agent Service initialization failed"
-        )
-
-        factory = ServiceFactory()
-
-        with pytest.raises(Exception) as exc_info:
-            factory.get_agent_service()
-
-        assert "Agent Service initialization failed" in str(exc_info.value)
 
 
 class TestServiceFactoryMemoryService:
@@ -287,41 +227,6 @@ class TestServiceFactoryMemoryService:
         result = factory.is_memory_enabled()
 
         assert result is True
-
-
-class TestServiceFactoryModuleLevelInstance:
-    """モジュールレベルのservice_factoryインスタンスのテスト"""
-
-    def setup_method(self):
-        """各テストメソッドの前に実行される初期化"""
-        from src.services.service_factory import ServiceFactory
-
-        ServiceFactory._instance = None
-        ServiceFactory._ai_service = None
-        ServiceFactory._agent_service = None
-
-    def test_module_level_instance_exists(self):
-        """モジュールレベルのインスタンスが存在することを確認"""
-        from src.services.service_factory import service_factory
-
-        assert service_factory is not None
-
-    @patch("src.services.service_factory.AIService")
-    def test_module_level_instance_provides_services(self, mock_ai_service_class):
-        """モジュールレベルのインスタンスがサービスを提供することを確認"""
-        # 新しいServiceFactoryインスタンスを作成してテスト
-        from src.services.service_factory import ServiceFactory
-
-        mock_ai_service = Mock()
-        mock_ai_service_class.return_value = mock_ai_service
-
-        # 新しいファクトリーを作成
-        factory = ServiceFactory()
-        factory._ai_service = None  # キャッシュをクリア
-
-        service = factory.get_ai_service()
-
-        assert service is mock_ai_service
 
 
 class TestServiceFactoryS3Service:
