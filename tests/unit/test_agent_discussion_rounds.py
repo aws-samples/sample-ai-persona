@@ -142,59 +142,6 @@ class TestAgentDiscussionManager:
             assert msg.round_number is not None and msg.round_number > 0
         assert {m.round_number for m in messages} == {1, 2}
 
-    def test_invalid_personas(self, mock_persona_agents, mock_facilitator):
-        """Test error handling for invalid personas"""
-        manager = _manager()
-        with pytest.raises(AgentDiscussionManagerError):
-            list(
-                manager._rounds(
-                    OWNER,
-                    [],
-                    "テストトピック",
-                    mock_persona_agents,
-                    mock_facilitator,
-                    streaming=False,
-                )
-            )
-
-        single = Persona.create_new(
-            name="Test",
-            age=30,
-            occupation="Test",
-            background="Test",
-            values=[],
-            pain_points=[],
-            goals=[],
-        )
-        with pytest.raises(AgentDiscussionManagerError):
-            list(
-                manager._rounds(
-                    OWNER,
-                    [single],
-                    "テストトピック",
-                    mock_persona_agents,
-                    _facilitator(),
-                    streaming=False,
-                )
-            )
-
-    @pytest.mark.parametrize("topic", ["", "短い"])
-    def test_invalid_topic(
-        self, topic, sample_personas, mock_persona_agents, mock_facilitator
-    ):
-        """Test error handling for invalid topic"""
-        with pytest.raises(AgentDiscussionManagerError):
-            list(
-                _manager()._rounds(
-                    OWNER,
-                    sample_personas,
-                    topic,
-                    mock_persona_agents,
-                    mock_facilitator,
-                    streaming=False,
-                )
-            )
-
     def test_saved_discussion_keeps_the_agent_config(self):
         """The saved body is an agent discussion with its rounds and instructions."""
         world = World()

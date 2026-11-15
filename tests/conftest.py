@@ -48,13 +48,18 @@ botocore.session.create_loader = functools.lru_cache(maxsize=None)(  # type: ign
 def pytest_configure(config: pytest.Config) -> None:
     """Register markers that are not declared in pyproject.toml.
 
-    ``ui`` (U3) is registered here because pyproject.toml is a protected
+    ``ui`` (U3) and ``infra`` are registered here because pyproject.toml is a protected
     config file that is not edited by hand (team practices).
     """
     config.addinivalue_line(
         "markers",
         "ui: Component behaviour tests in a headless browser "
         "(Playwright + axe-core, no running app, no AWS)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "infra: Deploy scripts and start-up / infrastructure settings "
+        "(tests/infra/, fake aws and npx, no AWS)",
     )
 
 

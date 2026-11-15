@@ -131,5 +131,6 @@ tests/
 ├── integration/       # 統合テスト（モックDB、AIモック）
 ├── api/               # APIエンドポイントテスト
 ├── ui/                # 画面の部品のテスト（Playwright + axe-core、マーカー ui）
+├── infra/             # デプロイのスクリプト・起動設定・WAF の検査（偽の aws・npx、マーカー infra）
 └── e2e/               # 実画面の回帰テスト（起動中のアプリと実 AWS、手動で -m e2e）
 ```
