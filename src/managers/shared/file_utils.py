@@ -121,6 +121,9 @@ def analyze_csv_schema(
     rows: list[list[str]] = []
     row_count = 0
     for row in reader:
+        # 空行は csv.reader が [] で返す。DuckDB は空行を行として読まないため数えない
+        if not row:
+            continue
         row_count += 1
         if len(rows) < sample_rows:
             rows.append(row)

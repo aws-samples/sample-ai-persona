@@ -226,7 +226,11 @@ def test_list_all_lists_the_actor_namespace(strategy, stub):
     stub.add_response(
         "list_memory_records",
         {"memoryRecordSummaries": [_summary(strategy, rid("r1"), "a")]},
-        {"memoryId": MEMORY_ID, "namespace": _prefix(strategy, "p9")},
+        {
+            "memoryId": MEMORY_ID,
+            "namespace": _prefix(strategy, "p9"),
+            "maxResults": 100,
+        },
     )
 
     entries = strategy.list_all("p9")
@@ -261,7 +265,7 @@ def test_list_all_unexpected_error_is_wrapped(strategy):
 
 def test_list_all_follows_pagination(strategy, stub):
     """Every page is read, so the memory screen and per-strategy deletes see all records."""
-    first = {"memoryId": MEMORY_ID, "namespace": _prefix(strategy)}
+    first = {"memoryId": MEMORY_ID, "namespace": _prefix(strategy), "maxResults": 100}
     stub.add_response(
         "list_memory_records",
         {
@@ -279,6 +283,36 @@ def test_list_all_follows_pagination(strategy, stub):
     entries = strategy.list_all("p1")
 
     assert [e.id for e in entries] == [rid("r1"), rid("r2")]
+
+
+def test_list_all_refuses_a_repeated_token(strategy, stub):
+    """A token the service already sent stops the listing instead of looping."""
+    for _ in range(2):
+        stub.add_response(
+            "list_memory_records",
+            {
+                "memoryRecordSummaries": [_summary(strategy, rid("r1"))],
+                "nextToken": "t",
+            },
+        )
+    with pytest.raises(MemoryOperationError) as exc_info:
+        strategy.list_all("p1")
+    assert "repeated" in str(exc_info.value.__cause__)
+
+
+def test_list_all_refuses_more_than_the_page_cap(strategy, stub, monkeypatch):
+    """Past MAX_LIST_PAGES the listing fails rather than returning part of it."""
+    from src.services.memory import strategy as strategy_module
+
+    monkeypatch.setattr(strategy_module, "MAX_LIST_PAGES", 2)
+    for token in ("t1", "t2"):
+        stub.add_response(
+            "list_memory_records",
+            {"memoryRecordSummaries": [], "nextToken": token},
+        )
+    with pytest.raises(MemoryOperationError) as exc_info:
+        strategy.list_all("p1")
+    assert "more than 2 pages" in str(exc_info.value.__cause__)
 
 
 # --- delete (get_memory_record + delete_memory_record) --------------------

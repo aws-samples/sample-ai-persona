@@ -34,6 +34,27 @@ def record_namespaces(response: Dict[str, Any]) -> List[str]:
     return [n for n in namespaces if isinstance(n, str)]
 
 
+#: Records read per ``ListMemoryRecords`` page.
+LIST_PAGE_SIZE = 100
+#: Most pages one listing reads (10,000 records). A listing runs inside a
+#: request, so it is bounded even if the service keeps returning tokens.
+MAX_LIST_PAGES = 100
+
+
+def list_page_params(
+    memory_id: str, namespace: str, next_token: Optional[str] = None
+) -> Dict[str, Any]:
+    """The ``ListMemoryRecords`` parameters for one page under ``namespace``."""
+    params: Dict[str, Any] = {
+        "memoryId": memory_id,
+        "namespace": namespace,
+        "maxResults": LIST_PAGE_SIZE,
+    }
+    if next_token:
+        params["nextToken"] = next_token
+    return params
+
+
 def list_all_record_summaries(
     client: Any, memory_id: str, namespace: str
 ) -> List[Dict[str, Any]]:
@@ -41,16 +62,27 @@ def list_all_record_summaries(
 
     The API returns one page at a time; reading only the first page hides
     records from the memory screen and from per-strategy deletes.
+
+    Raises:
+        RuntimeError: The service repeated a token or more than
+            ``MAX_LIST_PAGES`` pages were needed. The listing is refused rather
+            than cut short, so a delete never works from a partial list.
     """
-    params: Dict[str, Any] = {"memoryId": memory_id, "namespace": namespace}
     summaries: List[Dict[str, Any]] = []
-    while True:
-        page = client.list_memory_records(**params)
+    seen_tokens: set[str] = set()
+    next_token: Optional[str] = None
+    for _ in range(MAX_LIST_PAGES):
+        page = client.list_memory_records(
+            **list_page_params(memory_id, namespace, next_token)
+        )
         summaries.extend(page.get("memoryRecordSummaries", []))
         next_token = page.get("nextToken")
         if not next_token:
             return summaries
-        params["nextToken"] = next_token
+        if next_token in seen_tokens:
+            raise RuntimeError("ListMemoryRecords repeated a nextToken")
+        seen_tokens.add(next_token)
+    raise RuntimeError(f"ListMemoryRecords needed more than {MAX_LIST_PAGES} pages")
 
 
 class MemoryStrategy(ABC):

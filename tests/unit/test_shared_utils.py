@@ -634,6 +634,13 @@ class TestAnalyzeCsvSchema:
         assert row_count == 150
         assert len(columns) == 2
 
+    def test_blank_lines_are_not_rows(self):
+        """Blank lines (which DuckDB skips) are not counted as rows."""
+        csv_bytes = "id,name\n1,a\n\n2,b\n\n".encode("utf-8")
+        _, row_count = analyze_csv_schema(csv_bytes)
+
+        assert row_count == 2
+
     def test_returns_dataset_column_instances(self):
         """DatasetColumnインスタンスが返ること"""
         csv_bytes = self._make_csv("col1", ["abc"])

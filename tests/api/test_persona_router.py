@@ -315,6 +315,51 @@ class TestPersonaGenerateEndpoint:
         assert "event: result" in response.text
 
     @patch("web.routers.persona.get_persona_generation_manager")
+    def test_failed_generation_reads_the_awaited_exception(
+        self, mock_get_gen_manager, client, monkeypatch
+    ):
+        """The failure is read from the awaited future.
+
+        An unread one makes asyncio log 'Future exception was never retrieved'
+        with the exception text when it is collected.
+        """
+        import asyncio
+
+        import web.routers.persona as persona_router
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        wrapped: list[asyncio.Future] = []
+        original_wrap_future = asyncio.wrap_future
+
+        def recording_wrap_future(future, *args, **kwargs):
+            waiting = original_wrap_future(future, *args, **kwargs)
+            wrapped.append(waiting)
+            return waiting
+
+        monkeypatch.setattr(
+            persona_router.asyncio, "wrap_future", recording_wrap_future
+        )
+        mock_manager = Mock()
+        mock_manager.generate.side_effect = PersonaGenerationManagerError("secret")
+        mock_get_gen_manager.return_value = mock_manager
+
+        content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        response = client.post(
+            "/persona/generate",
+            files=[
+                ("files", ("i.txt", BytesIO(content.encode("utf-8")), "text/plain"))
+            ],
+            data={"data_type": "interview", "persona_count": 1},
+        )
+
+        assert "event: error" in response.text
+        assert len(wrapped) == 1
+        # asyncio clears _log_traceback once the exception has been read
+        assert wrapped[0]._log_traceback is False
+
+    @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_manager_error(self, mock_get_gen_manager, client):
         """PersonaGenerationManagerErrorが適切に処理されることを確認（SSE）"""
         from src.managers.persona_generation_manager import (

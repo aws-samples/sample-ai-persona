@@ -488,6 +488,8 @@ async def generate_persona(
         # 完了まで keepalive を送信し続ける。終わったらすぐに結果を返す
         # （一定時間ごとに確かめると、終わってから最大でその時間だけ待たせる）
         waiting = asyncio.wrap_future(future)
+        # 途中で接続が切れて下の result() まで来ないときも、例外を読んでおく
+        waiting.add_done_callback(lambda f: f.cancelled() or f.exception())
         while True:
             done, _ = await asyncio.wait({waiting}, timeout=_KEEPALIVE_SECONDS)
             if done:
@@ -495,7 +497,9 @@ async def generate_persona(
             yield _sse_event("keepalive", "")
 
         try:
-            result = future.result()
+            # wrap した側から読む（どこからも読まないと、失敗したときに asyncio が
+            # 「Future exception was never retrieved」を例外の文面ごとログに出す）
+            result = waiting.result()
             generated_personas = result.personas
             thinking_log = result.thinking_log
 
