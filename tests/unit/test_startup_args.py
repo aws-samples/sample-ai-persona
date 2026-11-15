@@ -80,3 +80,8 @@ def test_container_runs_as_a_non_root_user():
 )
 def test_local_runner_uses_the_same_settings(name, expected):
     assert _run_htmx_kwargs().get(name) == expected
+
+
+def test_local_runner_listens_on_loopback_only():
+    """手元のログイン（AUTH_MODE=local）は検証がないため、同じネットワークの人から届かせない。"""
+    assert _run_htmx_kwargs().get("host") == "127.0.0.1"

@@ -18,7 +18,8 @@ load_dotenv()
 if __name__ == "__main__":
     uvicorn.run(
         "web.main:app",
-        host="0.0.0.0",
+        # 手元のログイン（AUTH_MODE=local）は検証がないため、このマシンからだけ受ける
+        host="127.0.0.1",
         port=8000,
         reload=True,
         reload_dirs=["web", "src"],
