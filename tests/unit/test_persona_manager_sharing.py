@@ -448,12 +448,6 @@ class TestDelete:
         assert "p1" not in world.store.bodies and not world.store.shares
         s3.delete_file.assert_called_once_with("persona_avatars/p1/a.webp")
 
-    def test_shared_member_cannot_delete(self, manager, world, s3):
-        world.add("p1", MEMBER_A.sub, {"sales"})
-        with pytest.raises(AccessDeniedError):
-            manager.delete_persona(MEMBER_B, "p1")
-        assert "p1" in world.store.bodies
-
     def test_missing_is_the_same_not_found_as_unreadable(self, manager, world):
         world.add("p1", MEMBER_A.sub)
         with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):

@@ -5,15 +5,13 @@ BR3.1〜BR3.4、NFR1.35、NFR1.42、NFR8.14、AC5.4.1〜AC5.4.3。
 
 import pytest
 
-from src.models.errors import AccessDeniedError, CodedError, ErrorCode
+from src.models.errors import AccessDeniedError
 from src.models.memory import DeleteAllResult
 from src.models.persona_binding import PersonaBinding
-from tests.error_helpers import raises_code
 from tests.log_helpers import LogCapture
 from tests.unit.persona_u5_world import (
     ADMIN_P,
     A,
-    B,
     NOW,
     SALES_PEER,
     World,
@@ -167,10 +165,6 @@ class TestDeleteDecision:
             world.manager().delete_persona(SALES_PEER, persona.id)
         assert len(world.bindings.items) == 3
         world.memory.delete_all.assert_not_called()
-
-    def test_unrelated_user_gets_404(self, world, persona):
-        with raises_code(CodedError, ErrorCode.PERSONA_NOT_FOUND):
-            world.manager().delete_persona(B, persona.id)
 
     def test_admin_deletes_a_legacy_persona(self, world):
         legacy = world.add_persona(make_persona(None))

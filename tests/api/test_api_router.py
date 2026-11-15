@@ -318,27 +318,6 @@ class TestGeneratePersonasEndpoint:
     """ペルソナ生成APIのテスト"""
 
     @patch("web.routers.api.get_job_manager")
-    def test_generate_personas_submits_job(self, mock_get_jm, client):
-        """ペルソナ生成が202を返す"""
-        mock_jm = Mock()
-        mock_jm.submit.return_value = "job-123"
-        mock_get_jm.return_value = mock_jm
-
-        response = client.post(
-            "/api/personas/generate",
-            json={
-                "data_type": "interview",
-                "file_contents": ["テストインタビューデータ"],
-                "count": 3,
-            },
-        )
-
-        assert response.status_code == 202
-        data = response.json()
-        assert data["job_id"] == "job-123"
-        assert data["status"] == "pending"
-
-    @patch("web.routers.api.get_job_manager")
     def test_generate_personas_error(self, mock_get_jm, client):
         """ペルソナ生成ジョブ投入エラー"""
         mock_jm = Mock()

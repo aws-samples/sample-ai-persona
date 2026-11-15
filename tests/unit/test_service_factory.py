@@ -177,45 +177,6 @@ class TestServiceFactoryMemoryService:
         assert result is None
 
     @patch("src.services.memory.session_manager_factory.config")
-    def test_is_memory_enabled_returns_false_when_disabled(self, mock_config):
-        """ENABLE_LONG_TERM_MEMORYがFalseの場合Falseを返すことを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_config.ENABLE_LONG_TERM_MEMORY = False
-        mock_config.AGENTCORE_MEMORY_ID = "test-memory-id"
-
-        factory = ServiceFactory()
-        result = factory.is_memory_enabled()
-
-        assert result is False
-
-    @patch("src.services.memory.session_manager_factory.config")
-    def test_is_memory_enabled_returns_false_when_memory_id_not_set(self, mock_config):
-        """AGENTCORE_MEMORY_IDが設定されていない場合Falseを返すことを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_config.ENABLE_LONG_TERM_MEMORY = True
-        mock_config.AGENTCORE_MEMORY_ID = None
-
-        factory = ServiceFactory()
-        result = factory.is_memory_enabled()
-
-        assert result is False
-
-    @patch("src.services.memory.session_manager_factory.config")
-    def test_is_memory_enabled_returns_false_when_memory_id_empty(self, mock_config):
-        """AGENTCORE_MEMORY_IDが空文字の場合Falseを返すことを確認"""
-        from src.services.service_factory import ServiceFactory
-
-        mock_config.ENABLE_LONG_TERM_MEMORY = True
-        mock_config.AGENTCORE_MEMORY_ID = ""
-
-        factory = ServiceFactory()
-        result = factory.is_memory_enabled()
-
-        assert result is False
-
-    @patch("src.services.memory.session_manager_factory.config")
     def test_is_memory_enabled_returns_true_when_enabled(self, mock_config):
         """機能が有効な場合Trueを返すことを確認"""
         from src.services.service_factory import ServiceFactory

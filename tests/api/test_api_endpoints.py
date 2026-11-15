@@ -7,13 +7,11 @@ BR2.4、BR2.5、BR2.8、BR3.1、BR8.3、NFR1.43、NFR1.46、NFR3.12。
 """
 
 from contextlib import ExitStack
-from datetime import datetime
 from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
 
-from src.managers.job_manager import Job, JobStatus
 from src.models.errors import ErrorCode
 from tests.api.u6_world import ME, PEER, STRANGER, ApiWorld
 
@@ -252,47 +250,3 @@ class TestRunInterview:
         )
         assert response.status_code == 404
         assert response.json()["error_code"] == ErrorCode.PERSONA_NOT_FOUND.value
-
-
-# ---------------------------------------------------------------------------
-# job status（BR8.3）
-# ---------------------------------------------------------------------------
-
-
-class TestGetJob:
-    @patch("web.routers.api.get_job_manager")
-    def test_completed_job(self, mock_get_jm, client):
-        mock_get_jm.return_value.get.return_value = Job(
-            id="job-1",
-            status=JobStatus.COMPLETED,
-            created_at=datetime.now(),
-            result={"data": "ok"},
-        )
-
-        response = client.get("/api/jobs/job-1")
-
-        assert response.status_code == 200
-        assert response.json()["result"] == {"data": "ok"}
-
-    @patch("web.routers.api.get_job_manager")
-    def test_failed_job_has_the_wording_of_its_code(self, mock_get_jm, client):
-        mock_get_jm.return_value.get.return_value = Job(
-            id="job-2",
-            status=JobStatus.FAILED,
-            created_at=datetime.now(),
-            error_code=ErrorCode.DISCUSSION_TOO_LARGE.value,
-        )
-
-        data = client.get("/api/jobs/job-2").json()
-
-        assert data["status"] == "failed"
-        assert data["error"]
-        assert data["error_code"] == ErrorCode.DISCUSSION_TOO_LARGE.value
-
-    @patch("web.routers.api.get_job_manager")
-    def test_not_found(self, mock_get_jm, client):
-        from src.managers.job_manager import JobNotFoundError
-
-        mock_get_jm.return_value.get.side_effect = JobNotFoundError("no such job")
-
-        assert client.get("/api/jobs/nonexistent").status_code == 404

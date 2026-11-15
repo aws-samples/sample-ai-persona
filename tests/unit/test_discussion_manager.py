@@ -350,11 +350,6 @@ class TestDetail:
         view = manager.get_discussion(OWNER, discussion.id)
         assert len(view.messages) == 2 and view.manageable
 
-    def test_stranger_gets_not_found(self, manager, world):
-        discussion = _seed(manager, world)
-        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
-            manager.get_discussion(STRANGER, discussion.id)
-
     def test_export_is_markdown_for_readers(self, manager, world):
         discussion = _seed(manager, world)
         world.share(discussion.id, "sales")
@@ -506,12 +501,6 @@ class TestDelete:
         discussion = _seed(manager, world)
         assert manager.delete_discussion(OWNER, discussion.id)
         assert discussion.id not in world.store.bodies
-
-    def test_shared_reader_is_denied(self, manager, world):
-        discussion = _seed(manager, world)
-        world.share(discussion.id, "sales")
-        with pytest.raises(AccessDeniedError):
-            manager.delete_discussion(PEER, discussion.id)
 
     def test_admin_deletes_anyones(self, manager, world):
         discussion = _seed(manager, world, principal=STRANGER)

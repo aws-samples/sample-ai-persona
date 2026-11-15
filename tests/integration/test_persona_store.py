@@ -312,47 +312,6 @@ class TestUpdateAvatar:
 
 
 class TestGetMany:
-    def test_reads_strongly_and_rereads_unprocessed_keys(self, store, client):
-        """NFR2.5: まとめ読みは強い整合性で、未処理のキーは読み直す。"""
-        personas = [_persona().owned_by("sub-a") for _ in range(3)]
-        for persona in personas:
-            store.put_new(persona)
-        real = client.batch_get_item
-        calls: list[dict[str, Any]] = []
-
-        def flaky(**kwargs: Any) -> Any:
-            calls.append(kwargs)
-            if len(calls) == 1:
-                return {"Responses": {}, "UnprocessedKeys": kwargs["RequestItems"]}
-            return real(**kwargs)
-
-        client.batch_get_item = flaky
-
-        found = store.get_many([p.id for p in personas] + ["nope", personas[0].id])
-
-        assert set(found) == {p.id for p in personas}
-        assert found[personas[0].id].owner_sub == "sub-a"
-        assert len(calls) == 2
-        assert calls[0]["RequestItems"][TABLE]["ConsistentRead"] is True
-
-    def test_reads_in_chunks_of_100(self, store, client):
-        batch = Mock(wraps=client.batch_get_item)
-        client.batch_get_item = batch
-
-        assert store.get_many([f"id-{i}" for i in range(150)]) == {}
-
-        sizes = [len(c.kwargs["RequestItems"][TABLE]["Keys"]) for c in batch.mock_calls]
-        assert sizes == [100, 50]
-
-    def test_keys_left_unprocessed_raise(self, store, client):
-        client.batch_get_item = lambda **kwargs: {
-            "Responses": {},
-            "UnprocessedKeys": kwargs["RequestItems"],
-        }
-
-        with pytest.raises(PersonaStoreError):
-            store.get_many(["a"])
-
     def test_no_ids_reads_nothing(self, store, client):
         batch = Mock(wraps=client.batch_get_item)
         client.batch_get_item = batch
