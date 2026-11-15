@@ -196,64 +196,6 @@ class TestDatasetManagerSchemaAnalysis:
             departments=Mock(),
         )
 
-    def test_analyze_schema_basic(self, dataset_manager):
-        """基本的なスキーマ解析テスト"""
-        csv_content = b"id,name,age\n1,Alice,30\n2,Bob,25"
-
-        columns, row_count = dataset_manager.analyze_schema(ADMIN, csv_content)
-
-        assert len(columns) == 3
-        assert columns[0].name == "id"
-        assert columns[1].name == "name"
-        assert columns[2].name == "age"
-        assert row_count == 2
-
-    def test_analyze_schema_type_inference(self, dataset_manager):
-        """型推論テスト"""
-        csv_content = b"int_col,float_col,str_col\n1,1.5,hello\n2,2.5,world"
-
-        columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
-
-        assert columns[0].data_type == "integer"
-        assert columns[1].data_type == "float"
-        assert columns[2].data_type == "string"
-
-    def test_analyze_schema_date_inference(self, dataset_manager):
-        """日付型推論テスト"""
-        csv_content = b"date_col,value\n2024-01-01,100\n2024-02-01,200"
-
-        columns, _ = dataset_manager.analyze_schema(ADMIN, csv_content)
-
-        assert columns[0].data_type == "date"
-        assert columns[1].data_type == "integer"
-
-    def test_analyze_schema_empty_file(self, dataset_manager):
-        """空ファイルのスキーマ解析テスト"""
-        csv_content = b""
-
-        columns, row_count = dataset_manager.analyze_schema(ADMIN, csv_content)
-
-        assert columns == []
-        assert row_count == 0
-
-    def test_analyze_schema_many_rows(self, dataset_manager):
-        """sample_rows以上の行数カウントテスト"""
-        header = "id,name\n"
-        rows = "".join(f"{i},name{i}\n" for i in range(150))
-        csv_content = (header + rows).encode("utf-8")
-
-        columns, row_count = dataset_manager.analyze_schema(
-            ADMIN, csv_content, sample_rows=50
-        )
-
-        assert len(columns) == 2
-        assert row_count == 150
-
-    def test_infer_type_empty_values(self, dataset_manager):
-        """空値のみの場合はstring"""
-        result = dataset_manager._infer_type(["", "  ", ""])
-        assert result == "string"
-
     def test_analyze_schema_rejects_empty_header(self, dataset_manager):
         """空ヘッダー列は FILE_CSV_HEADER_INVALID で弾く（DuckDBが列名を全リネームする）。"""
         from src.managers.dataset_manager import DatasetManagerError
@@ -269,6 +211,13 @@ class TestDatasetManagerSchemaAnalysis:
         csv_content = b"user_id,amount,amount\nU001,100,10\n"
         with raises_code(DatasetManagerError, ErrorCode.FILE_CSV_HEADER_INVALID):
             dataset_manager.analyze_schema(ADMIN, csv_content)
+
+    def test_analyze_schema_lets_a_wrong_encoding_through(self, dataset_manager):
+        """文字コードの誤りはヘッダーの誤りに変えず、これまでどおりそのまま上げる。"""
+        with pytest.raises(UnicodeDecodeError):
+            dataset_manager.analyze_schema(
+                ADMIN, "id,名前\n1,太郎\n".encode("shift_jis")
+            )
 
     def test_analyze_schema_strips_whitespace_headers(self, dataset_manager):
         """前後空白ヘッダーは正規化して受け入れる（DuckDBのtrimと揃える）。"""

@@ -15,10 +15,7 @@ v1.0.0 U7 (``functional-design/rules.md``):
 Members see the datasets they may use through ``PersonaManager`` (U5).
 """
 
-import csv
-import io
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Any, List, Optional
@@ -38,7 +35,7 @@ from .components.access_policy import AccessPolicy
 from .components.department_directory import DepartmentDirectory
 from .components.sharing_runtime import sharing_parts_from
 from .shared.asset_scope import scope_dialog, scope_labels
-from .shared.file_utils import normalize_csv_headers
+from .shared.file_utils import analyze_csv_schema
 from .shared.structured_log import log_event
 
 logger = logging.getLogger(__name__)
@@ -119,75 +116,17 @@ class DatasetManager:
     def _analyze_schema(
         self, file_content: bytes, sample_rows: int = 100
     ) -> tuple[List[DatasetColumn], int]:
-        text = file_content.decode("utf-8-sig")
-        reader = csv.reader(io.StringIO(text))
-
-        # ヘッダー取得
-        headers = next(reader, [])
-        if not headers:
-            return [], 0
-        # ヘッダー名を正規化・検証（空/重複は DuckDB read_csv_auto がリネームして
-        # クエリ列名と乖離するため、アップロード時点で明確に弾く）。
+        # ヘッダーの空・重複は DuckDB read_csv_auto がリネームしてクエリの列名と
+        # 食い違うため、アップロードの時点で弾く。文字コードの誤りはそのまま上げる
+        # （UnicodeDecodeError も ValueError の仲間なので先に分ける）
         try:
-            headers = normalize_csv_headers(headers)
+            return analyze_csv_schema(file_content, sample_rows)
+        except UnicodeDecodeError:
+            raise
         except ValueError as e:
             raise DatasetManagerError(
                 "csv header is invalid", code=ErrorCode.FILE_CSV_HEADER_INVALID
             ) from e
-
-        # 全行を数え、先頭 sample_rows 行だけを型推定に使う
-        rows: list[list[str]] = []
-        row_count = 0
-        for row in reader:
-            row_count += 1
-            if len(rows) < sample_rows:
-                rows.append(row)
-
-        columns = []
-        for idx, header in enumerate(headers):
-            data_type = self._infer_type(
-                [row[idx] if idx < len(row) else "" for row in rows]
-            )
-            columns.append(DatasetColumn(name=header, data_type=data_type))
-
-        return columns, row_count
-
-    def _infer_type(self, values: List[str]) -> str:
-        """値のリストから型を推定"""
-        non_empty = [v for v in values if v.strip()]
-        if not non_empty:
-            return "string"
-
-        # 整数チェック
-        if all(self._is_int(v) for v in non_empty):
-            return "integer"
-
-        # 浮動小数点チェック
-        if all(self._is_float(v) for v in non_empty):
-            return "float"
-
-        # 日付チェック（YYYY-MM-DD形式）
-        if all(self._is_date(v) for v in non_empty):
-            return "date"
-
-        return "string"
-
-    def _is_int(self, v: str) -> bool:
-        try:
-            int(v.replace(",", ""))
-            return True
-        except ValueError:
-            return False
-
-    def _is_float(self, v: str) -> bool:
-        try:
-            float(v.replace(",", ""))
-            return True
-        except ValueError:
-            return False
-
-    def _is_date(self, v: str) -> bool:
-        return bool(re.match(r"^\d{4}-\d{2}-\d{2}", v))
 
     def upload_csv(
         self,

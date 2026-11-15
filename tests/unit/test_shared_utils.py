@@ -610,6 +610,13 @@ class TestAnalyzeCsvSchema:
         assert columns[0].data_type == "string"
         assert columns[1].data_type == "string"
 
+    def test_blank_column_is_string(self):
+        """値が空白だけのカラムはstringとして推定されること"""
+        csv_bytes = self._make_csv("id,memo", ["1,", "2,  "])
+        columns, _ = analyze_csv_schema(csv_bytes)
+
+        assert [c.data_type for c in columns] == ["integer", "string"]
+
     def test_empty_csv(self):
         """空CSVで空リストと0が返ること"""
         csv_bytes = "".encode("utf-8-sig")
