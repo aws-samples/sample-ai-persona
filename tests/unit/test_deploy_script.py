@@ -39,10 +39,10 @@ def _run(args: list[str], cwd: Path, path_prefix: Path) -> subprocess.CompletedP
     )
 
 
-@pytest.fixture
-def workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """deploy.sh と cdk/bin/app.ts だけを持つ Git の作業ツリー。"""
-    repo = tmp_path / "repo"
+@pytest.fixture(scope="module")
+def template_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """deploy.sh と cdk/bin/app.ts だけを持つ Git の作業ツリー（1 度だけ作る）。"""
+    repo = tmp_path_factory.mktemp("template") / "repo"
     (repo / "cdk" / "bin").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "deploy.sh")
     (repo / "cdk" / "bin" / "app.ts").write_text("// stub\n")
@@ -50,6 +50,14 @@ def workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
     subprocess.run([*git, "init", "-q"], cwd=repo, check=True)
     subprocess.run([*git, "add", "."], cwd=repo, check=True)
     subprocess.run([*git, "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return repo
+
+
+@pytest.fixture
+def workspace(tmp_path: Path, template_repo: Path) -> tuple[Path, Path, Path]:
+    """テストごとの作業ツリー（ひな形を複製するので、変更はほかのテストに残らない）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(template_repo, repo, symlinks=True)
     calls = tmp_path / "calls.log"
     calls.touch()
     bin_dir = tmp_path / "bin"

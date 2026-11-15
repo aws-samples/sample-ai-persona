@@ -4,6 +4,7 @@
 CI環境でのテスト実行に必要な共通設定とフィクスチャを提供します。
 """
 
+import functools
 import os
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Generator, Iterable
 from unittest.mock import Mock
 
+import botocore.session
 import pytest
 
 # web.main を import する前にログイン方式を手元専用にする（BR1.15、WF5 の 4）。
@@ -33,6 +35,14 @@ from src.models.persona import Persona
 from src.models.discussion import Discussion
 from src.models.message import Message
 from src.models.insight import Insight
+
+# botocore の Loader（サービス定義の読み込み）をセッション間で使い回す。moto は始めるたびに
+# boto3.DEFAULT_SESSION を捨てるため、テストごとに新しいセッションが Loader を作り直し、
+# データディレクトリを走査し直していた（クライアント 1 つで約 35 ms。moto のテストの準備時間の
+# 大半）。Loader が持つのは読み取り専用のサービス定義だけなので、共有しても結果は変わらない。
+botocore.session.create_loader = functools.lru_cache(maxsize=None)(  # type: ignore[assignment]
+    botocore.session.create_loader
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:

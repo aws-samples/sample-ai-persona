@@ -19,6 +19,8 @@ env:
   ENABLE_DATASET_INTEGRATION: "false"
 
 jobs:
+  # unit・integration・api・ui は互いに待たずに並べて動かす。待たせると、ジョブが
+  # 増えるたびにランナーの空き待ちが加わり、CI 全体が数十分かかっていた
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -50,7 +52,6 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    needs: unit
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +80,6 @@ jobs:
 
   api:
     runs-on: ubuntu-latest
-    needs: unit
     steps:
       - uses: actions/checkout@v4
 
@@ -153,7 +153,6 @@ jobs:
   # GitHub Actions は CI=true を設定するため、Chromium が無ければ skip ではなく失敗する
   ui:
     runs-on: ubuntu-latest
-    needs: unit
     steps:
       - uses: actions/checkout@v4
 
