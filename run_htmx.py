@@ -24,7 +24,7 @@ if __name__ == "__main__":
         reload=True,
         reload_dirs=["web", "src"],
         # Dockerfile の CMD と同じ設定。uvicorn のアクセスログはクエリ（code・state）を
-        # 出すため止め、アプリの http.access に置き換える（NFR3.3）
+        # 出すため止め、アプリの http.access に置き換える
         access_log=False,
         timeout_keep_alive=310,
     )
