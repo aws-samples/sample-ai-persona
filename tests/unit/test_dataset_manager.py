@@ -247,7 +247,7 @@ class TestDatasetManagerSchemaAnalysis:
         )
 
         assert len(columns) == 2
-        assert row_count == 149
+        assert row_count == 150
 
     def test_infer_type_empty_values(self, dataset_manager):
         """空値のみの場合はstring"""

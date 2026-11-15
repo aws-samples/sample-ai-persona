@@ -135,17 +135,13 @@ class DatasetManager:
                 "csv header is invalid", code=ErrorCode.FILE_CSV_HEADER_INVALID
             ) from e
 
-        # サンプル行を読み取って型推定
-        rows = []
-        for i, row in enumerate(reader):
-            if i >= sample_rows:
-                break
-            rows.append(row)
-
-        # 残りの行数をカウント
-        row_count = len(rows)
-        for _ in reader:
+        # 全行を数え、先頭 sample_rows 行だけを型推定に使う
+        rows: list[list[str]] = []
+        row_count = 0
+        for row in reader:
             row_count += 1
+            if len(rows) < sample_rows:
+                rows.append(row)
 
         columns = []
         for idx, header in enumerate(headers):

@@ -119,14 +119,11 @@ def analyze_csv_schema(
     headers = normalize_csv_headers(headers)
 
     rows: list[list[str]] = []
-    for i, row in enumerate(reader):
-        if i >= sample_rows:
-            break
-        rows.append(row)
-
-    row_count = len(rows)
-    for _ in reader:
+    row_count = 0
+    for row in reader:
         row_count += 1
+        if len(rows) < sample_rows:
+            rows.append(row)
 
     columns: list[DatasetColumn] = []
     for idx, header in enumerate(headers):

@@ -623,8 +623,8 @@ class TestAnalyzeCsvSchema:
         csv_bytes = self._make_csv("id,name", rows)
         columns, row_count = analyze_csv_schema(csv_bytes, sample_rows=100)
 
-        # 実装はbreakで1行消費するため、100 + 残り49 = 149
-        assert row_count == 149
+        # sample_rows を超えた行も含めて全行を数える
+        assert row_count == 150
         assert len(columns) == 2
 
     def test_returns_dataset_column_instances(self):
