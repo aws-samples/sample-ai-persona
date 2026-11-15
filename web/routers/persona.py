@@ -54,6 +54,9 @@ from web.error_messages import (
 
 logger = logging.getLogger(__name__)
 
+#: Seconds between keepalives while personas are being generated (SSE).
+_KEEPALIVE_SECONDS = 3
+
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 
@@ -482,9 +485,13 @@ async def generate_persona(
             custom_prompt or None,
         )
 
-        # 完了まで keepalive を送信し続ける
-        while not future.done():
-            await asyncio.sleep(3)
+        # 完了まで keepalive を送信し続ける。終わったらすぐに結果を返す
+        # （一定時間ごとに確かめると、終わってから最大でその時間だけ待たせる）
+        waiting = asyncio.wrap_future(future)
+        while True:
+            done, _ = await asyncio.wait({waiting}, timeout=_KEEPALIVE_SECONDS)
+            if done:
+                break
             yield _sse_event("keepalive", "")
 
         try:

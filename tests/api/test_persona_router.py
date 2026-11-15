@@ -173,6 +173,42 @@ class TestPersonaGenerateEndpoint:
         assert principal.sub == "local:dev@example.com"
         # 画面に出す候補の ID は candidate_id（保存で送り返す）
         assert f'value="{sample_persona.id}"' in response.text
+        # すぐ終わった生成は keepalive を待たずに結果を返す
+        assert "event: keepalive" not in response.text
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_sends_keepalives_while_running(
+        self, mock_get_gen_manager, client, sample_persona, monkeypatch
+    ):
+        """生成が終わるまで keepalive を送り、終わったら結果を返す。"""
+        import time
+
+        import web.routers.persona as persona_router
+        from src.managers.persona_generation_manager import GenerationResult
+
+        monkeypatch.setattr(persona_router, "_KEEPALIVE_SECONDS", 0.01)
+
+        def slow_generate(*args, **kwargs):
+            time.sleep(0.2)
+            return GenerationResult([sample_persona], [])
+
+        mock_manager = Mock()
+        mock_manager.generate.side_effect = slow_generate
+        mock_get_gen_manager.return_value = mock_manager
+
+        content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        response = client.post(
+            "/persona/generate",
+            files=[
+                ("files", ("i.txt", BytesIO(content.encode("utf-8")), "text/plain"))
+            ],
+            data={"data_type": "interview", "persona_count": 1},
+        )
+
+        assert response.status_code == 200
+        text = response.text
+        assert "event: keepalive" in text
+        assert text.index("event: keepalive") < text.index("event: result")
 
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_rejects_unsupported_extension(
