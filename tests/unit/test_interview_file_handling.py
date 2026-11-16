@@ -8,7 +8,6 @@ InterviewManager が生のバイト列を受け取らないことを確かめる
 
 import pytest
 
-from src.managers.interview_manager import InterviewManager
 from src.managers.shared.document_loader import prepare_document_contents
 
 
@@ -47,14 +46,3 @@ class TestAttachmentContents:
             )
             == []
         )
-
-
-@pytest.mark.unit
-class TestNoRawBytesInTheManager:
-    def test_the_raw_file_paths_are_gone(self):
-        for name in (
-            "_validate_and_convert_files",
-            "send_user_message_with_files",
-            "send_user_message_streaming_with_files",
-        ):
-            assert not hasattr(InterviewManager, name)

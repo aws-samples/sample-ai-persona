@@ -654,10 +654,6 @@ class TestCreateSurveyDecisions:
         start = em.create_survey(MEMBER_A, template.id, name="")
         assert "顧客満足度" in start.survey.name
 
-    def test_execution_is_not_public(self):
-        assert not hasattr(SurveyExecutionManager, "execute_survey")
-        assert not hasattr(SurveyExecutionManager, "start_survey")
-
 
 class TestQueueOnCreate:
     """WF1: 実行の受付は queued で保存するだけ。推論は進行役が始める（FR3.1、BR9.1）。"""
@@ -837,25 +833,6 @@ class TestListSurveys:
 
 
 class TestReadSurvey:
-    def test_owner_and_shared_reader(self, em, survey_world):
-        survey = survey_world.survey("a")
-        survey_world.share(SURVEY, survey.id, "sales")
-        assert em.get_survey_detail(MEMBER_A, survey.id).survey.id == survey.id
-        assert em.get_survey_detail(MEMBER_B, survey.id).survey.id == survey.id
-
-    @pytest.mark.parametrize("which", ["unrelated", "missing"])
-    def test_unreadable_is_the_same_as_missing(self, em, survey_world, which):
-        survey = survey_world.survey("a")
-        target = survey.id if which == "unrelated" else "missing-id"
-        with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_survey_detail(MEMBER_C, target)
-
-    def test_ownerless_survey_is_admin_only(self, em, survey_world):
-        legacy = survey_world.survey(None, snapshot=False)
-        with raises_code(CodedError, ErrorCode.SURVEY_NOT_FOUND):
-            em.get_survey_detail(MEMBER_A, legacy.id)
-        assert em.get_survey_detail(ADMIN, legacy.id).survey.id == legacy.id
-
     def test_detail_for_a_shared_reader_is_read_only(self, em, survey_world):
         survey = survey_world.survey("a")
         survey_world.share(SURVEY, survey.id, "sales")

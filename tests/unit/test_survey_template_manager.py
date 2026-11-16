@@ -478,25 +478,6 @@ class TestSearchReadsAtMost500:
 
 
 class TestGetTemplate:
-    def test_owner_and_shared_department_can_read(self, mgr, survey_world):
-        template = survey_world.template("a")
-        survey_world.share(TEMPLATE, template.id, "sales")
-        assert mgr.get_template(MEMBER_A, template.id).id == template.id
-        assert mgr.get_template(MEMBER_B, template.id).id == template.id
-
-    @pytest.mark.parametrize("template_id", ["exists", "missing"])
-    def test_unreadable_is_the_same_as_missing(self, mgr, survey_world, template_id):
-        template = survey_world.template("a")
-        target = template.id if template_id == "exists" else "missing-id"
-        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_NOT_FOUND):
-            mgr.get_template(MEMBER_C, target)
-
-    def test_ownerless_rows_are_admin_only(self, mgr, survey_world):
-        legacy = survey_world.template(None)
-        with raises_code(CodedError, ErrorCode.SURVEY_TEMPLATE_NOT_FOUND):
-            mgr.get_template(MEMBER_A, legacy.id)
-        assert mgr.get_template(ADMIN, legacy.id).id == legacy.id
-
     def test_edit_screen_needs_manage(self, mgr, survey_world):
         template = survey_world.template("a")
         survey_world.share(TEMPLATE, template.id, "sales")

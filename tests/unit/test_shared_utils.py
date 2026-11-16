@@ -610,6 +610,13 @@ class TestAnalyzeCsvSchema:
         assert columns[0].data_type == "string"
         assert columns[1].data_type == "string"
 
+    def test_blank_column_is_string(self):
+        """値が空白だけのカラムはstringとして推定されること"""
+        csv_bytes = self._make_csv("id,memo", ["1,", "2,  "])
+        columns, _ = analyze_csv_schema(csv_bytes)
+
+        assert [c.data_type for c in columns] == ["integer", "string"]
+
     def test_empty_csv(self):
         """空CSVで空リストと0が返ること"""
         csv_bytes = "".encode("utf-8-sig")
@@ -623,9 +630,16 @@ class TestAnalyzeCsvSchema:
         csv_bytes = self._make_csv("id,name", rows)
         columns, row_count = analyze_csv_schema(csv_bytes, sample_rows=100)
 
-        # 実装はbreakで1行消費するため、100 + 残り49 = 149
-        assert row_count == 149
+        # sample_rows を超えた行も含めて全行を数える
+        assert row_count == 150
         assert len(columns) == 2
+
+    def test_blank_lines_are_not_rows(self):
+        """Blank lines (which DuckDB skips) are not counted as rows."""
+        csv_bytes = "id,name\n1,a\n\n2,b\n\n".encode("utf-8")
+        _, row_count = analyze_csv_schema(csv_bytes)
+
+        assert row_count == 2
 
     def test_returns_dataset_column_instances(self):
         """DatasetColumnインスタンスが返ること"""

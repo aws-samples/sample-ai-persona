@@ -1,6 +1,7 @@
 """エラーコード + 文言カタログ方式の契約テスト（Issue #112）"""
 
 import json
+import string
 
 import pytest
 
@@ -31,6 +32,27 @@ class TestCatalogCoverage:
         ]
         assert not missing, f"カタログ未登録のErrorCode: {missing}"
 
+    def test_every_code_resolves_to_its_filled_wording(self):
+        """Every catalogued code reaches its own wording, never the fallback.
+
+        Each template's placeholders are filled with a sample value, so a
+        template that cannot be filled (a typo, a bad format spec) fails here.
+        """
+        sentinel = "SENTINEL_GENERIC_FAILURE"
+        failed = []
+        for code, template in error_messages._CATALOG.items():
+            names = {f for _, f, _, _ in string.Formatter().parse(template) if f}
+            context: dict[str, object] = {name: 1 for name in names}
+            if "field" in names:
+                context["field"] = "not-a-known-field"
+            message = user_message_for(
+                CodedError("diag", code=code, context=context), default=sentinel
+            )
+            expected = template.format(**{**context, "field": "入力値"})
+            if message != expected:
+                failed.append(code.name)
+        assert not failed, f"文言に解決できないコード: {failed}"
+
     def test_unknown_is_not_catalogued(self):
         """UNKNOWN は「コード未設定」を表す番兵であり文言を持たない。"""
         assert ErrorCode.UNKNOWN not in error_messages._CATALOG
@@ -39,30 +61,6 @@ class TestCatalogCoverage:
         """同一文言が複数コードに割り当てられていないこと（コード分割の妥当性）。"""
         wordings = list(error_messages._CATALOG.values())
         assert len(wordings) == len(set(wordings))
-
-
-class TestAuthWording:
-    """ログインのコードが既定文言に落ちず、カタログの文言を返すこと（U1）。"""
-
-    @pytest.mark.parametrize(
-        "code",
-        [
-            ErrorCode.AUTH_REQUIRED,
-            ErrorCode.SESSION_EXPIRED,
-            ErrorCode.CSRF_FAILED,
-            ErrorCode.LOOKUP_UNAVAILABLE,
-            # U2（約束 C5 の残り）
-            ErrorCode.ROLE_REQUIRED,
-            ErrorCode.ACCESS_DENIED,
-            ErrorCode.REQUEST_INVALID,
-            ErrorCode.HTTP_ERROR,
-        ],
-    )
-    def test_auth_codes_resolve_to_catalog_wording(self, code):
-        sentinel = "SENTINEL_GENERIC_FAILURE"
-        assert user_message_for(CodedError("diag", code=code), default=sentinel) != (
-            sentinel
-        )
 
 
 class TestResolution:
@@ -323,21 +321,6 @@ class TestNotFoundToastWording:
 class TestSharingWording:
     """共有のコード（U4）がカタログの文言を返し、上限を補間すること。"""
 
-    @pytest.mark.parametrize(
-        "code",
-        [
-            ErrorCode.SHARE_SCOPE_INVALID,
-            ErrorCode.SHARE_NO_DEPARTMENT,
-            ErrorCode.SHARE_OWNER_MISSING,
-            ErrorCode.SHARE_NO_TARGET,
-            ErrorCode.SHARE_UPDATE_FAILED,
-        ],
-    )
-    def test_codes_resolve_to_catalog_wording(self, code):
-        message = user_message_for(CodedError(code=code), default="既定")
-        assert message != "既定"
-        assert message == error_messages._CATALOG[code]
-
     def test_target_limit_is_interpolated(self):
         message = user_message_for(
             CodedError(
@@ -355,18 +338,6 @@ class TestSharingWording:
 
 class TestPersonaU5Wording:
     """U5 のコードがカタログの文言を返し、上限を補間すること。"""
-
-    @pytest.mark.parametrize(
-        "code",
-        [
-            ErrorCode.GENERATION_RESULT_TOO_LARGE,
-            ErrorCode.FILE_NOT_FOUND,
-            ErrorCode.KB_BINDING_NOT_FOUND,
-        ],
-    )
-    def test_codes_resolve_to_catalog_wording(self, code):
-        message = user_message_for(CodedError(code=code), default="既定")
-        assert message == error_messages._CATALOG[code]
 
     def test_attach_limit_is_interpolated(self):
         message = user_message_for(
@@ -386,19 +357,6 @@ class TestPersonaU5Wording:
 class TestDiscussionInterviewWording:
     """U6 のコードがカタログの文言を返すこと（BR2.7、NFR1.59、NFR1.60）。"""
 
-    @pytest.mark.parametrize(
-        "code",
-        [
-            ErrorCode.DISCUSSION_TOO_LARGE,
-            ErrorCode.DISCUSSION_OPERATION_FAILED,
-            ErrorCode.INTERVIEW_SESSION_OPERATION_FAILED,
-            ErrorCode.CONCURRENT_UPDATE,
-        ],
-    )
-    def test_codes_resolve_to_catalog_wording(self, code):
-        message = user_message_for(CodedError(code=code), default="既定")
-        assert message == error_messages._CATALOG[code]
-
     def test_concurrent_update_tells_a_reply_is_in_progress(self):
         """NFR Requirements の決定: 「応答の途中です」の趣旨で、入力を残すトースト。"""
         message = user_message_for(CodedError(code=ErrorCode.CONCURRENT_UPDATE))
@@ -408,26 +366,6 @@ class TestDiscussionInterviewWording:
 
 class TestSurveyOrgAssetWording:
     """U7 のコードがカタログの文言を返すこと（BR3.1、BR4.4、NFR2.25）。"""
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "SETTINGS_NOT_FOUND",
-            "CUSTOM_PERSONA_DATA_NOT_FOUND",
-            "CUSTOM_PERSONA_DATA_NAME_INVALID",
-            "CUSTOM_PERSONA_DATA_NAME_TAKEN",
-            "SURVEY_TEMPLATE_TOO_LARGE",
-            "SURVEY_REPORT_TOO_LARGE",
-            "SURVEY_TEMPLATE_IMAGE_UNAVAILABLE",
-        ],
-    )
-    def test_codes_resolve_to_catalog_wording(self, name):
-        code = ErrorCode[name]
-        context = {"max_length": 100}
-        message = user_message_for(
-            CodedError(code=code, context=context), default="既定"
-        )
-        assert message == error_messages._CATALOG[code].format(**context)
 
     @pytest.mark.parametrize(
         "name", ["SETTINGS_NOT_FOUND", "CUSTOM_PERSONA_DATA_NOT_FOUND"]
@@ -450,21 +388,6 @@ class TestSurveyOrgAssetWording:
 
 class TestClosedNetworkLoginWording:
     """U8 のログインのコード（M2・M3）がカタログの文言を返すこと。"""
-
-    _NAMES = (
-        "LOGIN_FAILED",
-        "LOGIN_RATE_LIMITED",
-        "LOGIN_UNAVAILABLE",
-        "PASSWORD_POLICY_NOT_MET",
-        "PASSWORD_CONFIRMATION_MISMATCH",
-        "LOGIN_CHALLENGE_EXPIRED",
-    )
-
-    @pytest.mark.parametrize("name", _NAMES)
-    def test_codes_resolve_to_catalog_wording(self, name):
-        code = ErrorCode[name]
-        message = user_message_for(CodedError(code=code), default="既定")
-        assert message == error_messages._CATALOG[code]
 
     def test_login_failure_wording_does_not_depend_on_the_reason(self):
         """BR1.4: 理由（context）が違っても文言は同じ。"""
@@ -541,21 +464,6 @@ class TestPasswordRuleLabels:
 
 class TestSurveyOnDemandWording:
     """オンデマンド推論のコードがカタログの文言を返すこと（functional-spec.md 3 章）。"""
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "SURVEY_RUNNER_NOT_CONFIGURED",
-            "SURVEY_RUNNER_UNAVAILABLE",
-            "SURVEY_INFERENCE_FAILED",
-            "SURVEY_EXECUTION_TIMED_OUT",
-            "SURVEY_EXECUTION_INTERRUPTED",
-        ],
-    )
-    def test_codes_resolve_to_catalog_wording(self, name):
-        code = ErrorCode[name]
-        message = user_message_for(CodedError(code=code), default="既定")
-        assert message == error_messages._CATALOG[code]
 
     def test_too_many_failed_answers_shows_the_counts(self):
         code = ErrorCode["SURVEY_TOO_MANY_FAILED_ANSWERS"]

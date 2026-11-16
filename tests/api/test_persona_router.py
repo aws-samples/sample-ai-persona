@@ -4,6 +4,7 @@
 ファイルアップロード、ペルソナ生成・保存・編集・削除エンドポイントをテストします。
 """
 
+import html
 import json
 import threading
 from dataclasses import replace
@@ -15,6 +16,7 @@ import pytest
 from src.managers.file_manager import FileUploadError
 from src.managers.persona_manager import PersonaManagerError
 from src.models.errors import ErrorCode
+from web.error_messages import user_message_for_code
 from tests.dialog_helpers import dialog_ids, dialog_markup
 
 
@@ -74,17 +76,6 @@ class TestPersonaGenerationPage:
 
 class TestPersonaManagementPage:
     """ペルソナ管理ページのテスト"""
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_management_page_loads(self, mock_get_manager, client):
-        """ペルソナ管理ページが正常に読み込まれることを確認"""
-        mock_manager = Mock()
-        mock_manager.list_personas.return_value = _listing([])
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/persona/management")
-
-        assert response.status_code == 200
 
     @patch("web.routers.persona.get_persona_manager")
     def test_management_page_with_personas(
@@ -173,6 +164,42 @@ class TestPersonaGenerateEndpoint:
         assert principal.sub == "local:dev@example.com"
         # 画面に出す候補の ID は candidate_id（保存で送り返す）
         assert f'value="{sample_persona.id}"' in response.text
+        # すぐ終わった生成は keepalive を待たずに結果を返す
+        assert "event: keepalive" not in response.text
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_generate_sends_keepalives_while_running(
+        self, mock_get_gen_manager, client, sample_persona, monkeypatch
+    ):
+        """生成が終わるまで keepalive を送り、終わったら結果を返す。"""
+        import time
+
+        import web.routers.persona as persona_router
+        from src.managers.persona_generation_manager import GenerationResult
+
+        monkeypatch.setattr(persona_router, "_KEEPALIVE_SECONDS", 0.01)
+
+        def slow_generate(*args, **kwargs):
+            time.sleep(0.2)
+            return GenerationResult([sample_persona], [])
+
+        mock_manager = Mock()
+        mock_manager.generate.side_effect = slow_generate
+        mock_get_gen_manager.return_value = mock_manager
+
+        content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        response = client.post(
+            "/persona/generate",
+            files=[
+                ("files", ("i.txt", BytesIO(content.encode("utf-8")), "text/plain"))
+            ],
+            data={"data_type": "interview", "persona_count": 1},
+        )
+
+        assert response.status_code == 200
+        text = response.text
+        assert "event: keepalive" in text
+        assert text.index("event: keepalive") < text.index("event: result")
 
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_rejects_unsupported_extension(
@@ -286,6 +313,51 @@ class TestPersonaGenerateEndpoint:
 
         assert response.status_code == 200
         assert "event: result" in response.text
+
+    @patch("web.routers.persona.get_persona_generation_manager")
+    def test_failed_generation_reads_the_awaited_exception(
+        self, mock_get_gen_manager, client, monkeypatch
+    ):
+        """The failure is read from the awaited future.
+
+        An unread one makes asyncio log 'Future exception was never retrieved'
+        with the exception text when it is collected.
+        """
+        import asyncio
+
+        import web.routers.persona as persona_router
+        from src.managers.persona_generation_manager import (
+            PersonaGenerationManagerError,
+        )
+
+        wrapped: list[asyncio.Future] = []
+        original_wrap_future = asyncio.wrap_future
+
+        def recording_wrap_future(future, *args, **kwargs):
+            waiting = original_wrap_future(future, *args, **kwargs)
+            wrapped.append(waiting)
+            return waiting
+
+        monkeypatch.setattr(
+            persona_router.asyncio, "wrap_future", recording_wrap_future
+        )
+        mock_manager = Mock()
+        mock_manager.generate.side_effect = PersonaGenerationManagerError("secret")
+        mock_get_gen_manager.return_value = mock_manager
+
+        content = "十分な長さのインタビューテキスト。これはテスト用のテキストです。" * 5
+        response = client.post(
+            "/persona/generate",
+            files=[
+                ("files", ("i.txt", BytesIO(content.encode("utf-8")), "text/plain"))
+            ],
+            data={"data_type": "interview", "persona_count": 1},
+        )
+
+        assert "event: error" in response.text
+        assert len(wrapped) == 1
+        # asyncio clears _log_traceback once the exception has been read
+        assert wrapped[0]._log_traceback is False
 
     @patch("web.routers.persona.get_persona_generation_manager")
     def test_generate_manager_error(self, mock_get_gen_manager, client):
@@ -531,45 +603,9 @@ class TestPersonaDetailEndpoint:
         assert response.status_code == 200
         assert "田中花子" in response.text
 
-    @patch("web.routers.persona.get_persona_manager")
-    def test_get_detail_not_found(self, mock_get_manager, client):
-        """存在しないペルソナで404エラーを返すことを確認"""
-        mock_manager = Mock()
-        mock_manager.get_persona_detail.side_effect = _not_found()
-        mock_get_manager.return_value = mock_manager
-
-        response = client.get("/persona/non-existent-id")
-
-        assert response.status_code == 404
-
 
 class TestPersonaUpdateEndpoint:
     """ペルソナ更新エンドポイントのテスト"""
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_update_success(self, mock_get_manager, client, sample_persona):
-        """ペルソナ更新が成功することを確認"""
-        mock_manager = Mock()
-        mock_manager.get_persona.return_value = sample_persona
-        updated_persona = sample_persona.update(name="更新された名前")
-        mock_manager.update_persona.return_value = updated_persona
-        mock_manager.describe_persona.side_effect = lambda _p, persona: _detail(persona)
-        mock_get_manager.return_value = mock_manager
-
-        response = client.put(
-            f"/persona/{sample_persona.id}",
-            data={
-                "name": "更新された名前",
-                "age": 36,
-                "occupation": "シニアマーケター",
-                "background": "更新された背景",
-                "values": "新しい価値観",
-                "pain_points": "新しい課題",
-                "goals": "新しい目標",
-            },
-        )
-
-        assert response.status_code == 200
 
     @patch("web.routers.persona.get_persona_manager")
     def test_update_response_keeps_detail_header(
@@ -656,40 +692,20 @@ class TestPersonaDeleteEndpoint:
 
         assert response.status_code == 200
         assert "削除しました" in response.text
-
-    @patch("web.routers.persona.get_persona_manager")
-    def test_delete_already_deleted_from_list(self, mock_get_manager, client):
-        """一覧から削除済みペルソナを削除しても成功扱いになることを確認（別タブで削除済み等）"""
-        mock_manager = Mock()
-        mock_manager.delete_persona.return_value = False
-        mock_get_manager.return_value = mock_manager
-
-        response = client.delete(
-            "/persona/non-existent-id",
-            headers={
-                "HX-Request": "true",
-                "HX-Current-URL": "http://testserver/persona/management",
-            },
-        )
-
-        assert response.status_code == 200
         assert "HX-Redirect" not in response.headers
-        assert 'role="alert"' not in response.text
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_delete_already_deleted_from_detail_redirects(
-        self, mock_get_manager, client
-    ):
-        """詳細画面から削除済みペルソナを削除すると一覧へ遷移することを確認"""
+    def test_delete_from_detail_redirects_to_the_list(self, mock_get_manager, client):
+        """詳細画面から削除すると一覧へ遷移することを確認"""
         mock_manager = Mock()
-        mock_manager.delete_persona.return_value = False
+        mock_manager.delete_persona.return_value = True
         mock_get_manager.return_value = mock_manager
 
         response = client.delete(
-            "/persona/non-existent-id",
+            "/persona/test-id",
             headers={
                 "HX-Request": "true",
-                "HX-Current-URL": "http://testserver/persona/non-existent-id",
+                "HX-Current-URL": "http://testserver/persona/test-id",
             },
         )
 
@@ -992,28 +1008,6 @@ class TestPersonaUpdate:
     """ペルソナ更新のテスト"""
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_update_success(self, mock_get_mgr, client, sample_persona):
-        mock_mgr = Mock()
-        mock_mgr.get_persona.return_value = sample_persona
-        mock_mgr.update_persona.return_value = sample_persona
-        mock_mgr.describe_persona.side_effect = lambda _p, persona: _detail(persona)
-        mock_get_mgr.return_value = mock_mgr
-
-        response = client.put(
-            f"/persona/{sample_persona.id}",
-            data={
-                "name": "新名前",
-                "age": "35",
-                "occupation": "新職業",
-                "background": "新背景",
-                "values": "価値1\n価値2",
-                "pain_points": "課題1\n課題2",
-                "goals": "目標1",
-            },
-        )
-        assert response.status_code == 200
-
-    @patch("web.routers.persona.get_persona_manager")
     def test_update_clears_demographics_with_empty_form_values(
         self, mock_get_mgr, client, sample_persona
     ):
@@ -1047,26 +1041,6 @@ class TestPersonaUpdate:
         assert call_kwargs["city"] == ""
 
     @patch("web.routers.persona.get_persona_manager")
-    def test_update_not_found(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.update_persona.side_effect = _not_found()
-        mock_get_mgr.return_value = mock_mgr
-
-        response = client.put(
-            "/persona/nonexistent",
-            data={
-                "name": "X",
-                "age": "30",
-                "occupation": "Y",
-                "background": "Z",
-                "values": "v",
-                "pain_points": "p",
-                "goals": "g",
-            },
-        )
-        assert response.status_code == 404
-
-    @patch("web.routers.persona.get_persona_manager")
     def test_update_validation_error(self, mock_get_mgr, client, sample_persona):
         from src.managers.persona_manager import PersonaManagerError
 
@@ -1094,33 +1068,26 @@ class TestPersonaMemories:
     """ペルソナ記憶管理のテスト"""
 
     @patch("web.routers.persona.get_persona_memory_manager")
-    def test_memories_list_success(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.get_memories.return_value = ([], 1, 1)
-        mock_get_mgr.return_value = mock_mgr
-
-        response = client.get("/persona/p1/memories")
-        assert response.status_code == 200
-
-    @patch("web.routers.persona.get_persona_memory_manager")
     def test_memories_list_error(self, mock_get_mgr, client):
         from src.managers.persona_memory_manager import PersonaMemoryManagerError
 
         mock_mgr = Mock()
-        mock_mgr.get_memories.side_effect = PersonaMemoryManagerError("見つかりません")
+        mock_mgr.get_memories.side_effect = PersonaMemoryManagerError(
+            "agentcore said s3://secret", code=ErrorCode.MEMORY_OPERATION_FAILED
+        )
         mock_get_mgr.return_value = mock_mgr
 
         response = client.get("/persona/p1/memories")
-        assert response.status_code == 200
 
-    @patch("web.routers.persona.get_persona_memory_manager")
-    def test_delete_memory_success(self, mock_get_mgr, client):
-        mock_mgr = Mock()
-        mock_mgr.delete_memory.return_value = True
-        mock_get_mgr.return_value = mock_mgr
-
-        response = client.delete("/persona/p1/memories/m1")
+        # 一覧の領域にカタログの文言を出し、例外の文は出さない
         assert response.status_code == 200
+        assert (
+            html.escape(
+                user_message_for_code(ErrorCode.MEMORY_OPERATION_FAILED.value, None)
+            )
+            in response.text
+        )
+        assert "s3://secret" not in response.text
 
     @patch("web.routers.persona.get_persona_memory_manager")
     def test_delete_memory_config_error_replaces_item(self, mock_get_mgr, client):

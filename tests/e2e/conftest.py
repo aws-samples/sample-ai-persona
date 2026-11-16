@@ -112,6 +112,7 @@ def generated_personas(
     Returns ``[{"id": ..., "name": ...}, ...]``. Shared by persona, discussion
     and interview tests so the expensive generation runs once per session.
     """
+    before = _accessible_persona_ids(session_context)
     page = session_context.new_page()
     page.goto("/persona/generation")
     page.locator("#file-input").set_input_files(DATA_DIR / "interview_sample.txt")
@@ -121,20 +122,34 @@ def generated_personas(
 
     candidates = page.locator('#save-personas-form input[name="persona_check"]')
     expect(candidates).to_have_count(3, timeout=LLM_TIMEOUT_MS)
-
-    personas = []
     for i in range(3):
-        checkbox = candidates.nth(i)
-        persona_id = checkbox.get_attribute("value") or ""
-        name = page.locator(f'label[for="persona-{persona_id}"] .font-semibold').first
-        personas.append({"id": persona_id, "name": name.inner_text().strip()})
-        checkbox.check()
+        candidates.nth(i).check()
 
     page.locator("#save-selected-btn").click()
     expect(page.locator("#save-result")).to_contain_text("3人のペルソナを保存しました")
-    created.persona_ids.extend(p["id"] for p in personas)
     page.close()
+
+    # Saving gives each persona a new ID (the checkbox value is the candidate's),
+    # so the saved ones are read back as the personas that were not there before.
+    personas = [
+        {"id": p["id"], "name": p["name"]}
+        for p in _accessible_personas(session_context)
+        if p["id"] not in before
+    ]
+    created.persona_ids.extend(p["id"] for p in personas)
+    assert len(personas) == 3, f"expected 3 saved personas, found {personas}"
     return personas
+
+
+def _accessible_personas(context: BrowserContext) -> list[dict[str, str]]:
+    response = context.request.get("/api/personas")
+    assert response.ok, f"/api/personas returned {response.status}"
+    personas: list[dict[str, str]] = response.json()
+    return personas
+
+
+def _accessible_persona_ids(context: BrowserContext) -> set[str]:
+    return {p["id"] for p in _accessible_personas(context)}
 
 
 def discussion_id_from_url(url: str) -> str:

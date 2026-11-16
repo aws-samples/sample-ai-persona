@@ -23,6 +23,7 @@ uv run mypy src/ web/            # 型チェック
 | src/managers/ | `uv run pytest tests/unit/ -q` |
 | src/services/ | `uv run pytest tests/integration/ -q` |
 | web/routers/ | `uv run pytest tests/api/ -q` |
+| deploy.sh, scripts/*.sh, Dockerfile, run_htmx.py | `uv run pytest tests/infra/ -q` |
 | web/templates/, 主要画面フロー | `uv run pytest -m e2e`（アプリ起動が前提。初回のみ `uv run playwright install chromium`） |
 | cdk/ | `cd cdk && npx tsc --noEmit && npm test && npx cdk synth --no-staging` |
 

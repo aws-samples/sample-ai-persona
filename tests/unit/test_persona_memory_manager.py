@@ -667,3 +667,23 @@ class TestMemoryContentStaysOutOfLogs:
 
         assert caplog.records  # 何も記録しない状態での空振りを防ぐ
         assert_not_leaked(_CONTENT_MARK, caplog, logs.records(), raised)
+
+
+class TestKnowledgeFileContentLimit:
+    """The converted file obeys the same length rule as a typed knowledge entry."""
+
+    @pytest.fixture
+    def memory_manager(self):
+        return PersonaMemoryManager(memory_service=Mock())
+
+    def test_over_the_limit_is_rejected_with_the_lengths(self, memory_manager):
+        with raises_code(
+            PersonaMemoryManagerError,
+            ErrorCode.KNOWLEDGE_FILE_CONTENT_TOO_LONG,
+            max_length=10000,
+            content_length=10001,
+        ):
+            memory_manager.check_knowledge_file_content("A" * 10001)
+
+    def test_exactly_the_limit_passes(self, memory_manager):
+        memory_manager.check_knowledge_file_content("A" * 10000)

@@ -259,9 +259,6 @@ class TestGetPersonasForUse:
             manager.get_personas_for_use(NO_ROLE, ["nonexistent"])
         assert world.personas.calls == 0
 
-    def test_the_unchecked_read_is_gone(self, manager):
-        assert not hasattr(manager, "get_persona_unchecked")
-
 
 class TestEditPersona:
     """update_persona のテスト（所有者として編集する。判定は test_persona_manager_sharing）"""

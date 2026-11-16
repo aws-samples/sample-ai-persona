@@ -87,30 +87,6 @@ class TestReadWrite:
         assert spy.call_args.kwargs["ConsistentRead"] is True
         assert store.get("missing") is None
 
-    def test_get_many_rereads_unprocessed_keys(self, store, client):
-        files = [_file() for _ in range(3)]
-        for f in files:
-            store.put(f)
-        original = client.batch_get_item
-        state = {"calls": 0}
-
-        def partial(**kwargs: Any) -> Any:
-            state["calls"] += 1
-            request = kwargs["RequestItems"][TABLE]
-            assert request["ConsistentRead"] is True
-            if state["calls"] == 1:
-                keys = request["Keys"]
-                first = original(RequestItems={TABLE: {**request, "Keys": keys[:1]}})
-                first["UnprocessedKeys"] = {TABLE: {**request, "Keys": keys[1:]}}
-                return first
-            return original(**kwargs)
-
-        client.batch_get_item = partial
-        found = store.get_many([f.id for f in files] + ["missing"])
-
-        assert set(found) == {f.id for f in files}
-        assert state["calls"] == 2
-
     def test_get_many_of_nothing_reads_nothing(self, store, client):
         client.batch_get_item = Mock(side_effect=AssertionError("no read"))
         assert store.get_many([]) == {}

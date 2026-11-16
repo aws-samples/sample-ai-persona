@@ -876,11 +876,6 @@ class TestSurveyImages:
         assert resp.headers["Cache-Control"] == "private, no-store"
         close.assert_called()
 
-    def test_path_signing_helper_is_gone(self):
-        import web.routers.survey as survey_router
-
-        assert not hasattr(survey_router, "_get_image_preview_url")
-
 
 # =============================================================================
 # CSRF（NFR4.14）

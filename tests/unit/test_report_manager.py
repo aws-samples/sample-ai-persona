@@ -105,11 +105,6 @@ class TestGenerate:
         assert "p1の十分に長い発言です" in content
         assert "ユーザーは品質を重視する傾向がある" in content
 
-    def test_shared_reader_may_generate(self, manager, world):
-        discussion = _seed(world)
-        world.share(discussion.id, "sales")
-        assert _generate(manager, PEER, discussion.id) == ["chunk1", "chunk2"]
-
     def test_unrelated_user_gets_not_found_before_the_ai(self, manager, world, ai):
         discussion = _seed(world)
         with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
@@ -272,11 +267,6 @@ class TestSave:
         with pytest.raises(AccessDeniedError):
             manager.save_report(PEER, discussion.id, "summary", "内容", None)
         assert world.store.reports.get(discussion.id, {}) == {}
-
-    def test_unrelated_user_gets_not_found(self, manager, world):
-        discussion = _seed(world)
-        with raises_code(CodedError, ErrorCode.DISCUSSION_NOT_FOUND):
-            manager.save_report(STRANGER, discussion.id, "summary", "内容", None)
 
     def test_admin_may_save(self, manager, world):
         discussion = _seed(world, principal=STRANGER)

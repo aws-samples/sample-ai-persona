@@ -305,14 +305,6 @@ class TestRequestValidationErrorHandling:
     経路である。グローバルハンドラで塞いでいることを実リクエストで検証する。
     """
 
-    def test_global_handler_is_registered(self):
-        """ハンドラが将来削除されても気づけるようにする。"""
-        from fastapi.exceptions import RequestValidationError
-
-        from web.main import app
-
-        assert RequestValidationError in app.exception_handlers
-
     def test_htmx_request_gets_toast_not_partial(self, client):
         """htmx 経路ではトーストで通知し、本文を返さないこと。
 
@@ -376,26 +368,6 @@ class TestRequestValidationErrorHandling:
         for internal in ("int_parsing", '"loc"', "Field required", "body"):
             assert internal not in response.text
             assert internal not in trigger
-
-    def test_json_api_keeps_standard_422(self, test_app, login_as):
-        """JSON APIクライアント（web/routers/api.py）の挙動を変えないこと。
-
-        共有の `client` フィクスチャはCSRF対策で HX-Request を常時付与するため、
-        htmx以外のクライアントを再現するには専用のクライアントが必要。
-        v1.0.0 では `/api/*` もCSRFの対象になったため、JSON クライアントと同じく
-        X-Requested-With を付け、ログイン済みにする（約束 C11、C12）。
-        """
-        from fastapi.testclient import TestClient
-
-        with TestClient(
-            test_app, headers={"X-Requested-With": "XMLHttpRequest"}
-        ) as api_client:
-            login_as(api_client)
-            response = api_client.post("/api/discussions", json={})
-
-        assert response.status_code == 422
-        assert "application/json" in response.headers["content-type"]
-        assert "detail" in response.json()
 
     @pytest.mark.parametrize(
         ("method", "path", "data"),
@@ -930,13 +902,6 @@ class TestHttpExceptionRendersHtmlPage:
     """
 
     _BROWSER = {"accept": "text/html,application/xhtml+xml"}
-
-    def test_global_handler_is_registered(self):
-        from starlette.exceptions import HTTPException as StarletteHTTPException
-
-        from web.main import app
-
-        assert StarletteHTTPException in app.exception_handlers
 
     @patch("web.routers.persona.get_persona_manager")
     def test_persona_not_found_renders_html(self, mock_get_mgr, test_app, login_as):

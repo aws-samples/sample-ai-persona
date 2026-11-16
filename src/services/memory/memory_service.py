@@ -20,7 +20,12 @@ from botocore.exceptions import BotoCoreError, ClientError, ParamValidationError
 from src.models.memory import DeleteAllResult, MemoryEntry
 
 from .retry import RetryExhaustedError, with_retry
-from .strategy import MemoryStrategy, is_under_namespaces, record_namespaces
+from .strategy import (
+    MemoryStrategy,
+    is_under_namespaces,
+    list_page_params,
+    record_namespaces,
+)
 from .summary_strategy import MemoryOperationError, SummaryStrategy
 from .semantic_strategy import SemanticStrategy
 
@@ -47,8 +52,6 @@ DELETE_CLIENT_CONFIG = Config(
 #: Longest one call can take (connect 2 s + read 5 s). With less than this left
 #: before the deadline, no call is started.
 CALL_BUDGET_SECONDS = 7.0
-#: Records read per ``ListMemoryRecords`` page.
-LIST_PAGE_SIZE = 100
 
 
 class _DeleteStopped(Exception):
@@ -575,13 +578,7 @@ class MemoryService:
     def _list_page(
         self, client: Any, namespace: str, next_token: Optional[str]
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "memoryId": self.memory_id,
-            "namespace": namespace,
-            "maxResults": LIST_PAGE_SIZE,
-        }
-        if next_token:
-            params["nextToken"] = next_token
+        params = list_page_params(self.memory_id, namespace, next_token)
         try:
             page: dict[str, Any] = client.list_memory_records(**params)
             return page

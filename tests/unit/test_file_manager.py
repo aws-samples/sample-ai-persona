@@ -239,9 +239,6 @@ class TestFileManagerKnowledgeFile:
             attachments=Mock(),
         )
 
-    def test_upload_knowledge_file_is_gone(self):
-        assert not hasattr(FileManager, "upload_knowledge_file")
-
     def test_conversion_saves_nothing(self):
         content = ("テスト知識ファイルの内容です。" * 10).encode("utf-8")
         markdown_text = self.file_manager.convert_file_to_markdown(

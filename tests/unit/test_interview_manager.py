@@ -931,9 +931,6 @@ class TestReadAndEnd:
             manager.get_interview_session(OWNER, session.id)
         assert manager.get_active_sessions_count() == 0
 
-    def test_no_manual_cleanup(self, manager):
-        assert not hasattr(manager, "cleanup_inactive_sessions")
-
 
 # =============================================================================
 # 文面
