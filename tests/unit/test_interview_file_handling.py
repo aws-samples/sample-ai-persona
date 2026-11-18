@@ -141,3 +141,48 @@ class TestImageFitsModelLimits:
         assert (
             prepare_document_contents(_metadata(path, "image/png", "broken.png")) == []
         )
+
+
+@pytest.mark.unit
+class TestImageFormatAndDecodeLimits:
+    """形式は中身で決め、展開が重すぎる画像は外す（#217 のレビュー指摘）"""
+
+    def test_format_follows_content_not_extension(self, tmp_path):
+        raw = _image_bytes((400, 300), fmt="JPEG")
+        path = tmp_path / "photo.png"
+        path.write_bytes(raw)
+
+        (block,) = prepare_document_contents(_metadata(path, "image/png", "photo.png"))
+
+        assert block["image"]["format"] == "jpeg"
+        assert block["image"]["source"]["bytes"] == raw
+
+    def test_unsupported_format_is_reencoded(self, tmp_path):
+        path = tmp_path / "scan.bmp"
+        path.write_bytes(_image_bytes((400, 300), fmt="BMP"))
+
+        (block,) = prepare_document_contents(_metadata(path, "image/bmp", "scan.bmp"))
+
+        assert block["image"]["format"] == "jpeg"
+        assert _decoded_size(block["image"]["source"]["bytes"]) == (400, 300)
+
+    def test_image_over_pixel_limit_is_skipped(self, tmp_path, monkeypatch):
+        from src.managers.shared import file_utils
+
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_SOURCE_PIXELS", 1_000_000)
+        path = tmp_path / "huge.png"
+        path.write_bytes(_image_bytes((2500, 500)))
+
+        assert prepare_document_contents(_metadata(path, "image/png", "huge.png")) == []
+
+    def test_large_jpeg_is_shrunk(self, tmp_path):
+        from src.managers.shared.file_utils import MODEL_IMAGE_MAX_SIDE
+
+        path = tmp_path / "big.jpg"
+        path.write_bytes(_image_bytes((5000, 4000), fmt="JPEG"))
+
+        (block,) = prepare_document_contents(_metadata(path, "image/jpeg", "big.jpg"))
+
+        width, height = _decoded_size(block["image"]["source"]["bytes"])
+        assert max(width, height) <= MODEL_IMAGE_MAX_SIDE
+        assert width / height == pytest.approx(1.25, rel=0.02)

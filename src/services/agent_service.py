@@ -126,22 +126,28 @@ def _is_input_rejected(error: BaseException) -> bool:
     """Whether the model refused the request itself (sending it again fails again).
 
     Bedrock answers with a ``ValidationException`` and the Mantle (OpenAI
-    compatible) endpoint with HTTP 400. Anything else (timeouts, throttling,
-    service errors) is treated as transient. The cause chain is followed in
-    case the SDK error is wrapped.
+    compatible) endpoint with HTTP 400. Only the explicit cause chain
+    (``__cause__``) is followed, so an error that was merely being handled when
+    another one was raised does not count. A context window overflow is not a
+    rejection of the input even though Bedrock reports it as a
+    ``ValidationException``. Anything else (timeouts, throttling, service
+    errors) is treated as transient.
     """
     from botocore.exceptions import ClientError
+    from strands.types.exceptions import ContextWindowOverflowException
 
     seen: set[int] = set()
     current: Optional[BaseException] = error
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        if isinstance(current, ContextWindowOverflowException):
+            return False
         if isinstance(current, ClientError):
             if current.response.get("Error", {}).get("Code") == "ValidationException":
                 return True
         elif _is_openai_bad_request(current):
             return True
-        current = current.__cause__ or current.__context__
+        current = current.__cause__
     return False
 
 
@@ -270,6 +276,14 @@ class PersonaAgent:
         self.logger.info(
             f"Set {len(self._document_contents)} documents for persona {self.persona.name}"
         )
+
+    def add_document_contents(self, document_contents: List[Dict[str, Any]]) -> None:
+        """Add documents for the next turn, keeping the ones still pending.
+
+        Documents returned after a transient failure stay pending until they
+        are sent, so new attachments are added after them (Issue #217).
+        """
+        self._document_contents = self._document_contents + list(document_contents)
 
     def respond(
         self,

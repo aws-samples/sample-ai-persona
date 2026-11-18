@@ -1341,9 +1341,45 @@ REJECTIONS = {
     "mantle_400": _mantle_rejection,
     "wrapped_validation": _wrapped_rejection,
 }
+
+
+def _context_overflow():
+    from strands.types.exceptions import ContextWindowOverflowException
+
+    try:
+        try:
+            raise _validation_error("Input is too long for requested model.")
+        except Exception as e:
+            raise ContextWindowOverflowException(str(e)) from e
+    except ContextWindowOverflowException as overflow:
+        return overflow
+
+
+def _unrelated_validation_in_context():
+    """A ValidationException that was only being handled (``__context__``)."""
+    try:
+        try:
+            raise _bedrock_rejection()
+        except Exception:
+            raise TimeoutError("read timed out")
+    except TimeoutError as timeout:
+        return timeout
+
+
+def _validation_error(message):
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "ValidationException", "Message": message}},
+        "ConverseStream",
+    )
+
+
 TRANSIENT_FAILURES = {
     "timeout": lambda: TimeoutError("read timed out"),
     "bedrock_unavailable": _bedrock_throttled,
+    "context_overflow": _context_overflow,
+    "validation_only_in_context": _unrelated_validation_in_context,
 }
 
 
@@ -1463,6 +1499,20 @@ class TestPersonaAgentFailureRecovery:
 
         assert strands_agent.calls[-1] == [{"text": "次の質問"}, self.IMAGE]
         assert _images(strands_agent.messages) == [self.IMAGE]
+
+    def test_added_documents_keep_the_returned_ones(self):
+        strands_agent = _FailingStrandsAgent(TimeoutError("read timed out"))
+        agent = self._agent(strands_agent)
+        pdf = {"document": {"name": "a", "format": "pdf", "source": {"bytes": b"%PDF"}}}
+        agent.set_document_contents([pdf])
+        with pytest.raises(AgentCommunicationError):
+            agent.respond("この資料は？")
+
+        strands_agent.error = None
+        agent.add_document_contents([self.IMAGE])
+        agent.respond("この画像は？")
+
+        assert strands_agent.calls[-1] == [{"text": "この画像は？"}, pdf, self.IMAGE]
 
     def test_successful_turn_keeps_history(self):
         strands_agent = _FailingStrandsAgent()

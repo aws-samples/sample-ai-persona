@@ -682,7 +682,9 @@ class TestAttachments:
         assert stored.documents[0].filename == "資料.txt"
         (first, *_) = store.query_messages(session.id, up_to=1)
         assert first.document_ids == (FILE_1,)
-        agents.made[0].set_document_contents.assert_called()
+        # 追加する（置き換えない）。一時的な失敗で戻した添付を消さないため（#217）
+        agents.made[0].add_document_contents.assert_called()
+        agents.made[0].set_document_contents.assert_not_called()
 
     def test_an_unreadable_new_file_stops_the_send(self, manager, world, store):
         world.files.attachable_file.side_effect = CodedError(

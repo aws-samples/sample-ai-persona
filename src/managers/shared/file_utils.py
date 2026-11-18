@@ -293,6 +293,12 @@ _MODEL_IMAGE_TARGET_SIDE = (
     1568  # Claude が縮小せずに読む長辺。これより大きくしても意味がない
 )
 _MODEL_IMAGE_QUALITIES = (85, 70, 50, 30)
+# 展開する画素数の上限。PNG などは原寸で展開するため、これで一時的なメモリを抑える
+# （25MP の RGBA で約 100 MiB）。上限内の画像は縮めずに渡すので、この上限に当たるのは
+# 長辺 2000 px を大きく超える画像だけ
+MODEL_IMAGE_MAX_SOURCE_PIXELS = 25_000_000
+# 中身から判定した形式 → Bedrock の image.format
+_MODEL_IMAGE_FORMATS = {"PNG": "png", "JPEG": "jpeg", "GIF": "gif", "WEBP": "webp"}
 
 
 def fit_image_for_model(
@@ -300,9 +306,13 @@ def fit_image_for_model(
 ) -> tuple[bytes, str] | None:
     """Return the image shrunk to the model's limits as ``(bytes, format)``.
 
-    An image already within the limits is returned unchanged. A larger one is
-    resized and re-encoded as JPEG. An image that cannot be decoded is returned
-    unchanged when it is small enough (the model decides), otherwise ``None``.
+    The format is taken from the decoded content, not from ``image_format``
+    (which comes from the file extension). An image within the limits in a
+    format the model accepts is returned unchanged; any other image is resized
+    and re-encoded as JPEG. An image with more than
+    ``MODEL_IMAGE_MAX_SOURCE_PIXELS`` pixels is not decoded and ``None`` is
+    returned. An image that cannot be decoded is returned unchanged when it is
+    small enough (the model decides), otherwise ``None``.
     """
     from PIL import Image
     from PIL.Image import Resampling
@@ -310,12 +320,21 @@ def fit_image_for_model(
     try:
         img: Any = Image.open(io.BytesIO(image_bytes))
         size = img.size
+        decoded_format = _MODEL_IMAGE_FORMATS.get(img.format or "")
     except Exception:
         return _passthrough_if_small(image_bytes, image_format)
-    if len(image_bytes) <= MODEL_IMAGE_MAX_BYTES and max(size) <= MODEL_IMAGE_MAX_SIDE:
-        return image_bytes, image_format
+    if (
+        decoded_format is not None
+        and len(image_bytes) <= MODEL_IMAGE_MAX_BYTES
+        and max(size) <= MODEL_IMAGE_MAX_SIDE
+    ):
+        return image_bytes, decoded_format
+    if size[0] * size[1] > MODEL_IMAGE_MAX_SOURCE_PIXELS:
+        return None
 
     try:
+        # JPEG only (no-op otherwise): decode at a reduced DCT scale
+        img.draft("RGB", (_MODEL_IMAGE_TARGET_SIDE, _MODEL_IMAGE_TARGET_SIDE))
         img.thumbnail(
             (_MODEL_IMAGE_TARGET_SIDE, _MODEL_IMAGE_TARGET_SIDE), Resampling.LANCZOS
         )
