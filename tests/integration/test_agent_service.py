@@ -659,8 +659,8 @@ class TestPersonaAgentMultimodal:
         call_args = self.mock_agent.call_args[0][0]
         assert isinstance(call_args, list)
         assert len(call_args) == 2  # テキスト + 画像
-        assert "text" in call_args[0]
-        assert "image" in call_args[1]
+        assert "image" in call_args[0]  # 画像は文章の前に置く
+        assert "text" in call_args[1]
 
         # ドキュメントコンテンツがクリアされていることを確認（1回のみ渡す）
         assert len(self.persona_agent._document_contents) == 0
@@ -1336,8 +1336,19 @@ def _wrapped_rejection():
         return wrapped
 
 
+def _bedrock_stream_rejection():
+    """Errors raised mid-stream use a lowercase code (``validationException``)."""
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "validationException", "Message": "invalid image"}},
+        "ConverseStream",
+    )
+
+
 REJECTIONS = {
     "bedrock_validation": _bedrock_rejection,
+    "bedrock_stream_validation": _bedrock_stream_rejection,
     "mantle_400": _mantle_rejection,
     "wrapped_validation": _wrapped_rejection,
 }
@@ -1497,7 +1508,7 @@ class TestPersonaAgentFailureRecovery:
     ):
         strands_agent = self._fail_then_succeed(make_error(), streaming)
 
-        assert strands_agent.calls[-1] == [{"text": "次の質問"}, self.IMAGE]
+        assert strands_agent.calls[-1] == [self.IMAGE, {"text": "次の質問"}]
         assert _images(strands_agent.messages) == [self.IMAGE]
 
     def test_added_documents_keep_the_returned_ones(self):
@@ -1512,7 +1523,30 @@ class TestPersonaAgentFailureRecovery:
         agent.add_document_contents([self.IMAGE])
         agent.respond("この画像は？")
 
-        assert strands_agent.calls[-1] == [{"text": "この画像は？"}, pdf, self.IMAGE]
+        # 画像は文章の前、資料は文章の後（Claude は画像が先のほうが精度が高い）
+        assert strands_agent.calls[-1] == [self.IMAGE, {"text": "この画像は？"}, pdf]
+
+    def test_concurrent_call_does_not_rewind_history(self):
+        """``ConcurrencyException``: this call added nothing, the other one did."""
+        from strands.types.exceptions import ConcurrencyException
+
+        strands_agent = _FailingStrandsAgent()
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+        in_flight = {"role": "user", "content": [{"text": "先に送った質問"}]}
+
+        def busy(prompt):
+            strands_agent.messages.append(in_flight)
+            raise ConcurrencyException("another invocation is in progress")
+
+        strands_agent.__class__ = type(
+            "_Busy", (_FailingStrandsAgent,), {"__call__": lambda self, p: busy(p)}
+        )
+        with pytest.raises(AgentCommunicationError):
+            agent.respond("この画像は？")
+
+        assert strands_agent.messages[-1] == in_flight
+        assert agent._document_contents == [self.IMAGE]
 
     def test_successful_turn_keeps_history(self):
         strands_agent = _FailingStrandsAgent()

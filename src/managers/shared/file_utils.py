@@ -285,59 +285,87 @@ def compress_image_for_batch(
 
 
 # Bedrock 上の Claude が受け付ける画像の上限（Issue #217）。
-# 1 枚 3.75 MB（base64 後 5 MB）まで。1 リクエストの画像が 20 枚を超えると長辺 2000 px
-# までになる。会話の履歴に画像が溜まっていくため、常に 2000 px に収める。
+# 1 枚 3.75 MB（base64 後 5 MB）まで。1 リクエストの画像が 20 枚を超えると、1 枚あたりの
+# 寸法の上限が厳しくなる。会話の履歴に画像が溜まっていくため、常に長辺 2000 px に収める。
+# 縮めるときもこの長辺にする（Claude 4.7 以降は長辺 2576 px まで読むため、小さくしすぎない）
 MODEL_IMAGE_MAX_BYTES = 3_750_000
 MODEL_IMAGE_MAX_SIDE = 2000
-_MODEL_IMAGE_TARGET_SIDE = (
-    1568  # Claude が縮小せずに読む長辺。これより大きくしても意味がない
-)
 _MODEL_IMAGE_QUALITIES = (85, 70, 50, 30)
 # 展開する画素数の上限。PNG などは原寸で展開するため、これで一時的なメモリを抑える
-# （25MP の RGBA で約 100 MiB）。上限内の画像は縮めずに渡すので、この上限に当たるのは
-# 長辺 2000 px を大きく超える画像だけ
+# （25MP の RGBA で約 100 MiB）。JPEG は縮小しながら展開する（draft）ので、アバター画像と
+# 同じく 50MP まで受ける（4800 万画素のスマートフォン写真を含む）
 MODEL_IMAGE_MAX_SOURCE_PIXELS = 25_000_000
-# 中身から判定した形式 → Bedrock の image.format
-_MODEL_IMAGE_FORMATS = {"PNG": "png", "JPEG": "jpeg", "GIF": "gif", "WEBP": "webp"}
+MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS = 50_000_000
+# 中身から判定した形式 → Bedrock の image.format。カメラの JPEG の多くは MPO（JPEG に
+# 別の画像を付け足した形式）と判定されるが、先頭は普通の JPEG として読める
+_MODEL_IMAGE_FORMATS = {
+    "PNG": "png",
+    "JPEG": "jpeg",
+    "MPO": "jpeg",
+    "GIF": "gif",
+    "WEBP": "webp",
+}
+_JPEG_FORMATS = frozenset({"JPEG", "MPO"})
+# EXIF の向き → 正しい向きに戻す変換。モデルはメタデータを読まないため画素を回す
+_EXIF_ORIENTATION = 0x0112
+_ORIENTATION_TRANSPOSE = {
+    2: "FLIP_LEFT_RIGHT",
+    3: "ROTATE_180",
+    4: "FLIP_TOP_BOTTOM",
+    5: "TRANSPOSE",
+    6: "ROTATE_270",
+    7: "TRANSVERSE",
+    8: "ROTATE_90",
+}
 
 
 def fit_image_for_model(
     image_bytes: bytes, image_format: str
 ) -> tuple[bytes, str] | None:
-    """Return the image shrunk to the model's limits as ``(bytes, format)``.
+    """Return the image prepared for the model as ``(bytes, format)``.
 
     The format is taken from the decoded content, not from ``image_format``
-    (which comes from the file extension). An image within the limits in a
-    format the model accepts is returned unchanged; any other image is resized
-    and re-encoded as JPEG. An image with more than
-    ``MODEL_IMAGE_MAX_SOURCE_PIXELS`` pixels is not decoded and ``None`` is
-    returned. An image that cannot be decoded is returned unchanged when it is
-    small enough (the model decides), otherwise ``None``.
+    (which comes from the file extension). An upright image within the limits
+    in a format the model accepts is returned unchanged. Any other image is
+    resized to fit ``MODEL_IMAGE_MAX_SIDE``, turned upright according to its
+    EXIF orientation (the model does not read metadata) and re-encoded as JPEG.
+    An image with more pixels than the source limit is not decoded and
+    ``None`` is returned. An image that cannot be decoded is returned unchanged
+    when it is small enough (the model decides), otherwise ``None``.
     """
     from PIL import Image
-    from PIL.Image import Resampling
+    from PIL.Image import Resampling, Transpose
 
     try:
         img: Any = Image.open(io.BytesIO(image_bytes))
         size = img.size
-        decoded_format = _MODEL_IMAGE_FORMATS.get(img.format or "")
+        source_format = img.format or ""
+        decoded_format = _MODEL_IMAGE_FORMATS.get(source_format)
+        orientation = img.getexif().get(_EXIF_ORIENTATION)
     except Exception:
         return _passthrough_if_small(image_bytes, image_format)
+    transpose = _ORIENTATION_TRANSPOSE.get(orientation)
     if (
         decoded_format is not None
+        and transpose is None
         and len(image_bytes) <= MODEL_IMAGE_MAX_BYTES
         and max(size) <= MODEL_IMAGE_MAX_SIDE
     ):
         return image_bytes, decoded_format
-    if size[0] * size[1] > MODEL_IMAGE_MAX_SOURCE_PIXELS:
+    max_pixels = (
+        MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS
+        if source_format in _JPEG_FORMATS
+        else MODEL_IMAGE_MAX_SOURCE_PIXELS
+    )
+    if size[0] * size[1] > max_pixels:
         return None
 
     try:
         # JPEG only (no-op otherwise): decode at a reduced DCT scale
-        img.draft("RGB", (_MODEL_IMAGE_TARGET_SIDE, _MODEL_IMAGE_TARGET_SIDE))
-        img.thumbnail(
-            (_MODEL_IMAGE_TARGET_SIDE, _MODEL_IMAGE_TARGET_SIDE), Resampling.LANCZOS
-        )
+        img.draft("RGB", (MODEL_IMAGE_MAX_SIDE, MODEL_IMAGE_MAX_SIDE))
+        img.thumbnail((MODEL_IMAGE_MAX_SIDE, MODEL_IMAGE_MAX_SIDE), Resampling.LANCZOS)
+        if transpose is not None:
+            img = img.transpose(Transpose[transpose])
         img = _flatten_for_jpeg(img)
         for quality in _MODEL_IMAGE_QUALITIES:
             buf = io.BytesIO()

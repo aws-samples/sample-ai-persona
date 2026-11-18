@@ -143,12 +143,20 @@ def _is_input_rejected(error: BaseException) -> bool:
         if isinstance(current, ContextWindowOverflowException):
             return False
         if isinstance(current, ClientError):
-            if current.response.get("Error", {}).get("Code") == "ValidationException":
+            # Errors raised mid-stream use a lowercase code (validationException)
+            code = str(current.response.get("Error", {}).get("Code", ""))
+            if code.lower() == "validationexception":
                 return True
         elif _is_openai_bad_request(current):
             return True
         current = current.__cause__
     return False
+
+
+def _is_concurrent_call(error: BaseException) -> bool:
+    from strands.types.exceptions import ConcurrencyException
+
+    return isinstance(error, ConcurrencyException)
 
 
 def _is_openai_bad_request(error: BaseException) -> bool:
@@ -419,7 +427,11 @@ class PersonaAgent:
         documents = (
             _documents_with_mantle_filenames(taken) if self.requires_mantle else taken
         )
-        return [{"text": prompt}] + documents, taken
+        # Images go before the text (Claude reads them more accurately that way);
+        # other documents stay after it
+        images = [d for d in documents if "image" in d]
+        others = [d for d in documents if "image" not in d]
+        return images + [{"text": prompt}] + others, taken
 
     def _recover_from_failure(
         self,
@@ -434,7 +446,10 @@ class PersonaAgent:
         a rejected image again would fail every later turn, while dropping it
         after a transient failure would leave the persona answering without it.
         """
-        _restore_history(self.agent, history)
+        # Another invocation was in progress: this call added nothing, and
+        # rewinding would erase what the other call is adding
+        if not _is_concurrent_call(error):
+            _restore_history(self.agent, history)
         if taken and not _is_input_rejected(error):
             self._document_contents = taken + self._document_contents
 

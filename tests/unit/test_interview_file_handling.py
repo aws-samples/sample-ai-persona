@@ -103,7 +103,8 @@ class TestImageFitsModelLimits:
         (block,) = prepare_document_contents(_metadata(path, "image/png", "wide.png"))
 
         width, height = _decoded_size(block["image"]["source"]["bytes"])
-        assert max(width, height) <= MODEL_IMAGE_MAX_SIDE
+        # 縮める先は長辺の上限そのもの（Claude 4.7 以降は長辺 2576 px まで読む）
+        assert max(width, height) == MODEL_IMAGE_MAX_SIDE
         assert width / height == pytest.approx(20, rel=0.05)
 
     def test_image_within_limits_is_passed_unchanged(self, tmp_path):
@@ -186,3 +187,77 @@ class TestImageFormatAndDecodeLimits:
         width, height = _decoded_size(block["image"]["source"]["bytes"])
         assert max(width, height) <= MODEL_IMAGE_MAX_SIDE
         assert width / height == pytest.approx(1.25, rel=0.02)
+
+
+def _jpeg_with_orientation(size, orientation):
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGB", size, (200, 100, 50))
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif)
+    return buf.getvalue()
+
+
+@pytest.mark.unit
+class TestImageAccuracy:
+    """モデルが正しく読めるように渡す（#217 の追加対応）"""
+
+    def test_exif_orientation_is_applied(self, tmp_path):
+        path = tmp_path / "portrait.jpg"
+        path.write_bytes(_jpeg_with_orientation((300, 200), 6))
+
+        (block,) = prepare_document_contents(
+            _metadata(path, "image/jpeg", "portrait.jpg")
+        )
+
+        assert _decoded_size(block["image"]["source"]["bytes"]) == (200, 300)
+
+    def test_upright_jpeg_with_exif_is_passed_unchanged(self, tmp_path):
+        raw = _jpeg_with_orientation((300, 200), 1)
+        path = tmp_path / "upright.jpg"
+        path.write_bytes(raw)
+
+        (block,) = prepare_document_contents(
+            _metadata(path, "image/jpeg", "upright.jpg")
+        )
+
+        assert block["image"]["source"]["bytes"] == raw
+
+    def test_camera_mpo_is_passed_as_jpeg(self, tmp_path):
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 200), (1, 2, 3)).save(
+            buf,
+            format="MPO",
+            save_all=True,
+            append_images=[Image.new("RGB", (300, 200))],
+        )
+        path = tmp_path / "camera.jpg"
+        path.write_bytes(buf.getvalue())
+
+        (block,) = prepare_document_contents(
+            _metadata(path, "image/jpeg", "camera.jpg")
+        )
+
+        assert block["image"]["format"] == "jpeg"
+        assert block["image"]["source"]["bytes"] == buf.getvalue()
+
+    def test_jpeg_has_a_higher_pixel_limit(self, tmp_path, monkeypatch):
+        from src.managers.shared import file_utils
+
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_SOURCE_PIXELS", 1_000_000)
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS", 4_000_000)
+        path = tmp_path / "phone.jpg"
+        path.write_bytes(_image_bytes((2500, 1000), fmt="JPEG"))
+
+        (block,) = prepare_document_contents(_metadata(path, "image/jpeg", "phone.jpg"))
+
+        width, _ = _decoded_size(block["image"]["source"]["bytes"])
+        assert width == file_utils.MODEL_IMAGE_MAX_SIDE
