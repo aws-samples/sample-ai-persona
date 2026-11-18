@@ -18,6 +18,7 @@ from src.services.agent_service import (
     PersonaAgent,
     FacilitatorAgent,
     _documents_with_mantle_filenames,
+    _is_input_rejected,
 )
 from src.models.persona import Persona
 from src.models.message import Message
@@ -1394,6 +1395,22 @@ TRANSIENT_FAILURES = {
 }
 
 
+class TestIsInputRejected:
+    """Which failures mean "the model refused this input" (Issue #217)."""
+
+    @pytest.mark.parametrize(
+        "make_error", list(REJECTIONS.values()), ids=list(REJECTIONS)
+    )
+    def test_rejections(self, make_error):
+        assert _is_input_rejected(make_error()) is True
+
+    @pytest.mark.parametrize(
+        "make_error", list(TRANSIENT_FAILURES.values()), ids=list(TRANSIENT_FAILURES)
+    )
+    def test_transient_failures(self, make_error):
+        assert _is_input_rejected(make_error()) is False
+
+
 class _FailingStrandsAgent:
     """Strands Agent stand-in: appends the prompt, then fails like Bedrock does."""
 
@@ -1470,13 +1487,8 @@ class TestPersonaAgentFailureRecovery:
         return strands_agent
 
     @pytest.mark.parametrize("streaming", [False, True])
-    @pytest.mark.parametrize(
-        "make_error",
-        list({**REJECTIONS, **TRANSIENT_FAILURES}.values()),
-        ids=list({**REJECTIONS, **TRANSIENT_FAILURES}),
-    )
-    def test_failed_turn_is_removed_from_history(self, make_error, streaming):
-        strands_agent = _FailingStrandsAgent(make_error())
+    def test_failed_turn_is_removed_from_history(self, streaming):
+        strands_agent = _FailingStrandsAgent(_bedrock_rejection())
         before = list(strands_agent.messages)
         agent = self._agent(strands_agent)
         agent.set_document_contents([self.IMAGE])
@@ -1490,23 +1502,17 @@ class TestPersonaAgentFailureRecovery:
         assert strands_agent.messages == before
 
     @pytest.mark.parametrize("streaming", [False, True])
-    @pytest.mark.parametrize(
-        "make_error", list(REJECTIONS.values()), ids=list(REJECTIONS)
-    )
-    def test_rejected_documents_are_not_attached_again(self, make_error, streaming):
-        strands_agent = self._fail_then_succeed(make_error(), streaming)
+    def test_rejected_documents_are_not_attached_again(self, streaming):
+        strands_agent = self._fail_then_succeed(_bedrock_rejection(), streaming)
 
         assert strands_agent.calls[-1] == "次の質問"
         assert _images(strands_agent.messages) == []
 
     @pytest.mark.parametrize("streaming", [False, True])
-    @pytest.mark.parametrize(
-        "make_error", list(TRANSIENT_FAILURES.values()), ids=list(TRANSIENT_FAILURES)
-    )
-    def test_documents_are_attached_once_after_transient_failure(
-        self, make_error, streaming
-    ):
-        strands_agent = self._fail_then_succeed(make_error(), streaming)
+    def test_documents_are_attached_once_after_transient_failure(self, streaming):
+        strands_agent = self._fail_then_succeed(
+            TimeoutError("read timed out"), streaming
+        )
 
         assert strands_agent.calls[-1] == [self.IMAGE, {"text": "次の質問"}]
         assert _images(strands_agent.messages) == [self.IMAGE]

@@ -15,6 +15,9 @@ from src.managers.shared.document_loader import (
     SUPPORTED_MIME_TYPES,
 )
 from src.managers.shared.file_utils import (
+    MODEL_IMAGE_MAX_BYTES,
+    MODEL_IMAGE_MAX_SIDE,
+    fit_image_for_model,
     detect_encoding,
     extract_text_from_bytes,
     get_csv_preview,
@@ -794,3 +797,142 @@ class TestParseCsvFirstRowWithMapping:
 
         assert result["col1"] == "v1"
         assert result["col2"] == "v2"
+
+
+def _image_bytes(size, fmt="PNG", mode="RGB", color=(200, 100, 50), noise=False):
+    import io
+    import os
+
+    from PIL import Image
+
+    if noise:
+        img = Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+    else:
+        img = Image.new(mode, size, color)
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _jpeg_with_orientation(size, orientation):
+    import io
+
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 100, 50)).save(buf, format="JPEG", exif=exif)
+    return buf.getvalue()
+
+
+def _decode(data):
+    import io
+
+    from PIL import Image
+
+    return Image.open(io.BytesIO(data))
+
+
+@pytest.mark.unit
+class TestFitImageForModel:
+    """画像を Bedrock 上の Claude の上限に収め、正しく読めるように渡す（Issue #217）
+
+    上限は 1 枚 3.75 MB（base64 後 5 MB）。履歴に画像が溜まると 1 リクエストの画像が
+    20 枚を超えるため、長辺も 2000 px に収める。
+    """
+
+    # --- そのまま渡す ---
+
+    def test_image_within_limits_is_passed_unchanged(self):
+        raw = _image_bytes((800, 600))
+        assert fit_image_for_model(raw, "png") == (raw, "png")
+
+    def test_upright_jpeg_with_exif_is_passed_unchanged(self):
+        raw = _jpeg_with_orientation((300, 200), 1)
+        assert fit_image_for_model(raw, "jpeg") == (raw, "jpeg")
+
+    def test_format_follows_content_not_extension(self):
+        raw = _image_bytes((400, 300), fmt="JPEG")
+        assert fit_image_for_model(raw, "png") == (raw, "jpeg")
+
+    def test_camera_mpo_is_passed_as_jpeg(self):
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 200)).save(
+            buf,
+            format="MPO",
+            save_all=True,
+            append_images=[Image.new("RGB", (300, 200))],
+        )
+        assert fit_image_for_model(buf.getvalue(), "jpeg") == (buf.getvalue(), "jpeg")
+
+    # --- 縮める・作り直す ---
+
+    def test_large_image_is_shrunk_under_byte_limit(self):
+        raw = _image_bytes((1800, 1800), noise=True)
+        assert len(raw) > MODEL_IMAGE_MAX_BYTES
+
+        data, image_format = fit_image_for_model(raw, "png")
+
+        assert len(data) <= MODEL_IMAGE_MAX_BYTES
+        assert image_format == "jpeg"
+
+    def test_long_side_is_shrunk_to_the_max_side(self):
+        # 縮める先は長辺の上限そのもの（Claude 4.7 以降は長辺 2576 px まで読む）
+        data, _ = fit_image_for_model(_image_bytes((6000, 300)), "png")
+
+        assert _decode(data).size == (MODEL_IMAGE_MAX_SIDE, 100)
+
+    def test_unsupported_format_is_reencoded(self):
+        data, image_format = fit_image_for_model(
+            _image_bytes((400, 300), fmt="BMP"), "png"
+        )
+
+        assert image_format == "jpeg"
+        assert _decode(data).size == (400, 300)
+
+    def test_exif_orientation_is_applied(self):
+        # モデルはメタデータを読まないため、画素を正しい向きに回す
+        data, _ = fit_image_for_model(_jpeg_with_orientation((300, 200), 6), "jpeg")
+
+        assert _decode(data).size == (200, 300)
+
+    def test_transparent_image_is_flattened_on_white(self):
+        raw = _image_bytes((4000, 100), mode="RGBA", color=(0, 0, 0, 0))
+
+        data, _ = fit_image_for_model(raw, "png")
+
+        assert _decode(data).convert("RGB").getpixel((0, 0)) > (240, 240, 240)
+
+    # --- 外す ---
+
+    def test_undecodable_image_over_limit_is_dropped(self):
+        raw = b"\x89PNG\r\n" + b"\0" * MODEL_IMAGE_MAX_BYTES
+        assert fit_image_for_model(raw, "png") is None
+
+    def test_pixel_limit_is_higher_for_jpeg(self, monkeypatch):
+        """JPEG は縮小しながら展開するため、画素数の上限が高い"""
+        from src.managers.shared import file_utils
+
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_SOURCE_PIXELS", 1_000_000)
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS", 4_000_000)
+
+        assert fit_image_for_model(_image_bytes((2500, 1000)), "png") is None
+        data, _ = fit_image_for_model(_image_bytes((2500, 1000), fmt="JPEG"), "jpeg")
+        assert _decode(data).size == (MODEL_IMAGE_MAX_SIDE, 800)
+
+    # --- build_content_block との接続 ---
+
+    def test_content_block_uses_the_fitted_image(self):
+        block = build_content_block(
+            _image_bytes((400, 300), fmt="BMP"), "image/bmp", "a.bmp"
+        )
+        assert block["image"]["format"] == "jpeg"
+
+    def test_content_block_is_none_when_the_image_cannot_fit(self):
+        raw = b"\x89PNG\r\n" + b"\0" * MODEL_IMAGE_MAX_BYTES
+        assert build_content_block(raw, "image/png", "broken.png") is None
