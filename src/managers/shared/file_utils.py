@@ -337,21 +337,13 @@ def fit_image_for_model(
     from PIL.Image import Resampling, Transpose
 
     try:
+        # Image.open reads only the header: size and format, no pixel data
         img: Any = Image.open(io.BytesIO(image_bytes))
         size = img.size
         source_format = img.format or ""
-        decoded_format = _MODEL_IMAGE_FORMATS.get(source_format)
-        orientation = img.getexif().get(_EXIF_ORIENTATION)
     except Exception:
         return _passthrough_if_small(image_bytes, image_format)
-    transpose = _ORIENTATION_TRANSPOSE.get(orientation)
-    if (
-        decoded_format is not None
-        and transpose is None
-        and len(image_bytes) <= MODEL_IMAGE_MAX_BYTES
-        and max(size) <= MODEL_IMAGE_MAX_SIDE
-    ):
-        return image_bytes, decoded_format
+    # Checked before anything that may decode the pixel data
     max_pixels = (
         MODEL_IMAGE_MAX_JPEG_SOURCE_PIXELS
         if source_format in _JPEG_FORMATS
@@ -359,6 +351,18 @@ def fit_image_for_model(
     )
     if size[0] * size[1] > max_pixels:
         return None
+    try:
+        transpose = _ORIENTATION_TRANSPOSE.get(_header_orientation(img))
+    except Exception:
+        return _passthrough_if_small(image_bytes, image_format)
+    decoded_format = _MODEL_IMAGE_FORMATS.get(source_format)
+    if (
+        decoded_format is not None
+        and transpose is None
+        and len(image_bytes) <= MODEL_IMAGE_MAX_BYTES
+        and max(size) <= MODEL_IMAGE_MAX_SIDE
+    ):
+        return image_bytes, decoded_format
 
     try:
         # JPEG only (no-op otherwise): decode at a reduced DCT scale
@@ -375,6 +379,19 @@ def fit_image_for_model(
     except Exception:
         return _passthrough_if_small(image_bytes, image_format)
     return None
+
+
+def _header_orientation(img: Any) -> int:
+    """The EXIF orientation (1 = upright), read only when it came with the header.
+
+    Pillow's PNG ``getexif()`` decodes the whole image to look for an EXIF chunk
+    after the pixel data, so it is called only when the EXIF block was already
+    read on open (JPEG, MPO and WebP keep it before the pixel data).
+    """
+    if "exif" not in img.info:
+        return 1
+    orientation = img.getexif().get(_EXIF_ORIENTATION)
+    return orientation if isinstance(orientation, int) else 1
 
 
 def _passthrough_if_small(

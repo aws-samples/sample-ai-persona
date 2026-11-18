@@ -914,6 +914,46 @@ class TestFitImageForModel:
         raw = b"\x89PNG\r\n" + b"\0" * MODEL_IMAGE_MAX_BYTES
         assert fit_image_for_model(raw, "png") is None
 
+    @staticmethod
+    def _forbid_png_decode(monkeypatch):
+        from PIL import PngImagePlugin
+
+        def load(self):
+            raise AssertionError("the PNG pixel data was decoded")
+
+        monkeypatch.setattr(PngImagePlugin.PngImageFile, "load", load)
+
+    def test_png_over_pixel_limit_is_dropped_without_decoding(self, monkeypatch):
+        """Pillow の PNG は getexif() で画像全体を展開する。上限の確認はその前に行う"""
+        from src.managers.shared import file_utils
+
+        monkeypatch.setattr(file_utils, "MODEL_IMAGE_MAX_SOURCE_PIXELS", 1_000_000)
+        raw = _image_bytes((2500, 1000))
+        self._forbid_png_decode(monkeypatch)
+
+        assert fit_image_for_model(raw, "png") is None
+
+    def test_png_within_limits_is_passed_without_decoding(self, monkeypatch):
+        raw = _image_bytes((800, 600))
+        self._forbid_png_decode(monkeypatch)
+
+        # 拡張子は jpeg。中身から形式を決められた（展開の失敗で素通りしていない）ことを見る
+        assert fit_image_for_model(raw, "jpeg") == (raw, "png")
+
+    def test_png_exif_before_pixel_data_is_applied(self):
+        import io
+
+        from PIL import Image
+
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 200)).save(buf, format="PNG", exif=exif)
+
+        data, _ = fit_image_for_model(buf.getvalue(), "png")
+
+        assert _decode(data).size == (200, 300)
+
     def test_pixel_limit_is_higher_for_jpeg(self, monkeypatch):
         """JPEG は縮小しながら展開するため、画素数の上限が高い"""
         from src.managers.shared import file_utils
