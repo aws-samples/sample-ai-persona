@@ -103,6 +103,56 @@ def _clear_agent_history(agent: Any, label: str) -> None:
         _logger.info(f"Cleared conversation history for {label}")
 
 
+def _history_snapshot(agent: Any) -> Optional[List[Any]]:
+    """The agent's conversation history before a call (``None`` if it has none)."""
+    messages = getattr(agent, "messages", None)
+    return list(messages) if isinstance(messages, list) else None
+
+
+def _restore_history(agent: Any, snapshot: Optional[List[Any]]) -> None:
+    """Put the history back as it was before a failed call.
+
+    Strands adds the prompt to ``agent.messages`` before calling the model and
+    keeps it when the call fails, so a rejected input (e.g. an image Bedrock
+    refuses) would be sent again on every later turn (Issue #217).
+    """
+    messages = getattr(agent, "messages", None)
+    if snapshot is None or not isinstance(messages, list):
+        return
+    messages[:] = snapshot
+
+
+def _is_input_rejected(error: BaseException) -> bool:
+    """Whether the model refused the request itself (sending it again fails again).
+
+    Bedrock answers with a ``ValidationException`` and the Mantle (OpenAI
+    compatible) endpoint with HTTP 400. Anything else (timeouts, throttling,
+    service errors) is treated as transient. The cause chain is followed in
+    case the SDK error is wrapped.
+    """
+    from botocore.exceptions import ClientError
+
+    seen: set[int] = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ClientError):
+            if current.response.get("Error", {}).get("Code") == "ValidationException":
+                return True
+        elif _is_openai_bad_request(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_openai_bad_request(error: BaseException) -> bool:
+    try:
+        import openai
+    except ImportError:
+        return False
+    return isinstance(error, openai.BadRequestError)
+
+
 def _dispose_agent(agent_ref: Any, label: str) -> None:
     """Strands Agentリソースを解放する共通ヘルパー。解放後 agent_ref は呼び出し側で None にすること。"""
     _logger = logging.getLogger(__name__)
@@ -242,24 +292,13 @@ class PersonaAgent:
             AgentCommunicationError: エージェント通信エラー
         """
         try:
-            # コンテキストを含めたプロンプトを構築
-            full_prompt = prompt
-
-            # マルチモーダルコンテンツがある場合はContentBlockリストとして渡す
-            if include_documents and self._document_contents:
-                # テキストとドキュメントを組み合わせたContentBlockリストを作成
-                documents = (
-                    _documents_with_mantle_filenames(self._document_contents)
-                    if self.requires_mantle
-                    else self._document_contents
-                )
-                content_blocks = [{"text": full_prompt}] + documents
-                result = self.agent(content_blocks)
-                # ドキュメントは最初の呼び出しでのみ渡す（会話履歴に残るため）
-                self._document_contents = []
-            else:
-                # テキストのみの場合
-                result = self.agent(full_prompt)
+            agent_input, taken = self._take_agent_input(prompt, include_documents)
+            history = _history_snapshot(self.agent)
+            try:
+                result = self.agent(agent_input)
+            except Exception as e:
+                self._recover_from_failure(history, taken, e)
+                raise
 
             # AgentResultからテキストコンテンツを正しく抽出
             response = self._extract_text_from_result(result, self.agent)
@@ -295,7 +334,8 @@ class PersonaAgent:
             AgentCommunicationError: エージェント通信エラー
         """
         try:
-            full_prompt = prompt
+            agent_input, taken = self._take_agent_input(prompt, include_documents)
+            history = _history_snapshot(self.agent)
             token_queue: queue.Queue[Optional[str]] = queue.Queue()
 
             class _TokenCapture:
@@ -312,18 +352,9 @@ class PersonaAgent:
             def _run_agent() -> None:
                 nonlocal agent_error
                 try:
-                    if include_documents and self._document_contents:
-                        documents = (
-                            _documents_with_mantle_filenames(self._document_contents)
-                            if self.requires_mantle
-                            else self._document_contents
-                        )
-                        content_blocks = [{"text": full_prompt}] + documents
-                        self.agent(content_blocks)
-                        self._document_contents = []
-                    else:
-                        self.agent(full_prompt)
+                    self.agent(agent_input)
                 except Exception as e:
+                    self._recover_from_failure(history, taken, e)
                     agent_error = e
                 finally:
                     token_queue.put(None)
@@ -356,6 +387,42 @@ class PersonaAgent:
             raise AgentCommunicationError(
                 error_msg, code=ErrorCode.AGENT_COMMUNICATION_FAILED
             ) from e
+
+    def _take_agent_input(
+        self, prompt: str, include_documents: bool
+    ) -> tuple[str | List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Build the agent input, taking the pending documents out.
+
+        Returns:
+            ``(agent_input, taken_documents)``. Once sent the documents live in
+            the conversation history, so they are not attached again unless the
+            call fails (see :meth:`_recover_from_failure`).
+        """
+        if not (include_documents and self._document_contents):
+            return prompt, []
+        taken = self._document_contents
+        self._document_contents = []
+        documents = (
+            _documents_with_mantle_filenames(taken) if self.requires_mantle else taken
+        )
+        return [{"text": prompt}] + documents, taken
+
+    def _recover_from_failure(
+        self,
+        history: Optional[List[Any]],
+        taken: List[Dict[str, Any]],
+        error: BaseException,
+    ) -> None:
+        """Undo a failed call so the next turn is not affected (Issue #217).
+
+        The history is put back as it was. The documents taken for the call are
+        returned for the next turn unless the model rejected the input: sending
+        a rejected image again would fail every later turn, while dropping it
+        after a transient failure would leave the persona answering without it.
+        """
+        _restore_history(self.agent, history)
+        if taken and not _is_input_rejected(error):
+            self._document_contents = taken + self._document_contents
 
     def _extract_text_from_result(self, result: Any, agent: Any = None) -> str:
         """AgentResultからテキストコンテンツを抽出"""

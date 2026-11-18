@@ -9,6 +9,7 @@ from datetime import datetime
 from src.models.errors import ErrorCode
 from src.services.agent_service import (
     AgentService,
+    AgentCommunicationError,
     AgentConfigurationError,
     AgentInitializationError,
     AgentServiceError,
@@ -1288,3 +1289,185 @@ class TestColumnMappingStructuredOutput:
         result = AgentService().suggest_column_mapping_with_llm("prompt")
 
         assert result["mapping"] == {"age": "年齢"}
+
+
+def _bedrock_rejection():
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": "messages.0.content.1.image.source.base64: image exceeds 5 MB maximum",
+            }
+        },
+        "ConverseStream",
+    )
+
+
+def _mantle_rejection():
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://bedrock-mantle.example/v1/responses")
+    return openai.BadRequestError(
+        "invalid image",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+
+
+def _bedrock_throttled():
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "ServiceUnavailableException", "Message": "busy"}},
+        "ConverseStream",
+    )
+
+
+def _wrapped_rejection():
+    try:
+        try:
+            raise _bedrock_rejection()
+        except Exception as e:
+            raise RuntimeError("event loop failed") from e
+    except RuntimeError as wrapped:
+        return wrapped
+
+
+REJECTIONS = {
+    "bedrock_validation": _bedrock_rejection,
+    "mantle_400": _mantle_rejection,
+    "wrapped_validation": _wrapped_rejection,
+}
+TRANSIENT_FAILURES = {
+    "timeout": lambda: TimeoutError("read timed out"),
+    "bedrock_unavailable": _bedrock_throttled,
+}
+
+
+class _FailingStrandsAgent:
+    """Strands Agent stand-in: appends the prompt, then fails like Bedrock does."""
+
+    def __init__(self, error=None):
+        self.messages: list = [
+            {"role": "user", "content": [{"text": "前の質問"}]},
+            {"role": "assistant", "content": [{"text": "前の答え"}]},
+        ]
+        self.callback_handler = None
+        self.error = error
+        self.calls: list = []
+
+    def __call__(self, prompt):
+        self.calls.append(prompt)
+        content = prompt if isinstance(prompt, list) else [{"text": prompt}]
+        self.messages.append({"role": "user", "content": content})
+        if self.error is not None:
+            raise self.error
+        self.messages.append({"role": "assistant", "content": [{"text": "答え"}]})
+        if self.callback_handler:
+            self.callback_handler(data="答え")
+        return "答え"
+
+
+def _images(messages):
+    return [
+        block
+        for message in messages
+        for block in message["content"]
+        if "image" in block
+    ]
+
+
+class TestPersonaAgentFailureRecovery:
+    """呼び出しが失敗しても、次の発言に失敗を持ち越さない（Issue #217）
+
+    入力が拒否されたら添付を捨てる（送り直すと拒否され続ける）。一時的な失敗なら
+    添付を戻し、次の発言で 1 回だけ渡す（ペルソナが画像を見ないまま答えないように）。
+    """
+
+    IMAGE = {"image": {"format": "png", "source": {"bytes": b"rejected"}}}
+
+    def _agent(self, strands_agent):
+        persona = Persona(
+            id="p1",
+            name="田中太郎",
+            age=35,
+            occupation="会社員",
+            background="IT企業",
+            values=["効率性"],
+            pain_points=["時間不足"],
+            goals=["キャリアアップ"],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        return PersonaAgent(persona, "prompt", strands_agent)
+
+    def _fail_then_succeed(self, error, streaming):
+        strands_agent = _FailingStrandsAgent(error)
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+
+        with pytest.raises(AgentCommunicationError):
+            if streaming:
+                list(agent.respond_streaming("この画像は？"))
+            else:
+                agent.respond("この画像は？")
+
+        strands_agent.error = None
+        if streaming:
+            assert "".join(agent.respond_streaming("次の質問")) == "答え"
+        else:
+            assert agent.respond("次の質問") == "答え"
+        return strands_agent
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize(
+        "make_error",
+        list({**REJECTIONS, **TRANSIENT_FAILURES}.values()),
+        ids=list({**REJECTIONS, **TRANSIENT_FAILURES}),
+    )
+    def test_failed_turn_is_removed_from_history(self, make_error, streaming):
+        strands_agent = _FailingStrandsAgent(make_error())
+        before = list(strands_agent.messages)
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+
+        with pytest.raises(AgentCommunicationError):
+            if streaming:
+                list(agent.respond_streaming("この画像は？"))
+            else:
+                agent.respond("この画像は？")
+
+        assert strands_agent.messages == before
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize(
+        "make_error", list(REJECTIONS.values()), ids=list(REJECTIONS)
+    )
+    def test_rejected_documents_are_not_attached_again(self, make_error, streaming):
+        strands_agent = self._fail_then_succeed(make_error(), streaming)
+
+        assert strands_agent.calls[-1] == "次の質問"
+        assert _images(strands_agent.messages) == []
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize(
+        "make_error", list(TRANSIENT_FAILURES.values()), ids=list(TRANSIENT_FAILURES)
+    )
+    def test_documents_are_attached_once_after_transient_failure(
+        self, make_error, streaming
+    ):
+        strands_agent = self._fail_then_succeed(make_error(), streaming)
+
+        assert strands_agent.calls[-1] == [{"text": "次の質問"}, self.IMAGE]
+        assert _images(strands_agent.messages) == [self.IMAGE]
+
+    def test_successful_turn_keeps_history(self):
+        strands_agent = _FailingStrandsAgent()
+        agent = self._agent(strands_agent)
+
+        agent.respond("質問")
+
+        assert len(strands_agent.messages) == 4

@@ -284,6 +284,74 @@ def compress_image_for_batch(
     return buf.getvalue(), "image/jpeg"
 
 
+# Bedrock 上の Claude が受け付ける画像の上限（Issue #217）。
+# 1 枚 3.75 MB（base64 後 5 MB）まで。1 リクエストの画像が 20 枚を超えると長辺 2000 px
+# までになる。会話の履歴に画像が溜まっていくため、常に 2000 px に収める。
+MODEL_IMAGE_MAX_BYTES = 3_750_000
+MODEL_IMAGE_MAX_SIDE = 2000
+_MODEL_IMAGE_TARGET_SIDE = (
+    1568  # Claude が縮小せずに読む長辺。これより大きくしても意味がない
+)
+_MODEL_IMAGE_QUALITIES = (85, 70, 50, 30)
+
+
+def fit_image_for_model(
+    image_bytes: bytes, image_format: str
+) -> tuple[bytes, str] | None:
+    """Return the image shrunk to the model's limits as ``(bytes, format)``.
+
+    An image already within the limits is returned unchanged. A larger one is
+    resized and re-encoded as JPEG. An image that cannot be decoded is returned
+    unchanged when it is small enough (the model decides), otherwise ``None``.
+    """
+    from PIL import Image
+    from PIL.Image import Resampling
+
+    try:
+        img: Any = Image.open(io.BytesIO(image_bytes))
+        size = img.size
+    except Exception:
+        return _passthrough_if_small(image_bytes, image_format)
+    if len(image_bytes) <= MODEL_IMAGE_MAX_BYTES and max(size) <= MODEL_IMAGE_MAX_SIDE:
+        return image_bytes, image_format
+
+    try:
+        img.thumbnail(
+            (_MODEL_IMAGE_TARGET_SIDE, _MODEL_IMAGE_TARGET_SIDE), Resampling.LANCZOS
+        )
+        img = _flatten_for_jpeg(img)
+        for quality in _MODEL_IMAGE_QUALITIES:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality)
+            if buf.tell() <= MODEL_IMAGE_MAX_BYTES:
+                return buf.getvalue(), "jpeg"
+    except Exception:
+        return _passthrough_if_small(image_bytes, image_format)
+    return None
+
+
+def _passthrough_if_small(
+    image_bytes: bytes, image_format: str
+) -> tuple[bytes, str] | None:
+    if len(image_bytes) <= MODEL_IMAGE_MAX_BYTES:
+        return image_bytes, image_format
+    return None
+
+
+def _flatten_for_jpeg(img: Any) -> Any:
+    """Convert to a JPEG-compatible mode, putting transparency on white."""
+    from PIL import Image
+
+    if img.mode in ("RGB", "L"):
+        return img
+    if img.mode in ("RGBA", "LA", "P", "PA"):
+        rgba = img.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    return img.convert("RGB")
+
+
 def _infer_column_type(values: list[str]) -> str:
     """値リストからカラムの型を推定する。"""
     non_empty = [v for v in values if v.strip()]
