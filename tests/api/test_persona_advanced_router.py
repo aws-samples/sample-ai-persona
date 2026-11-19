@@ -467,6 +467,31 @@ class TestStartGeneration:
         adv.generations.start_generation.assert_not_called()
 
 
+class TestFrame:
+    """``_frame`` keeps one event intact whatever line breaks the value holds."""
+
+    @pytest.mark.parametrize("data", ["a\r\nb", "a\rb", "a\nb", "a\r\n\rb\n"])
+    def test_carriage_returns_do_not_split_the_event(self, data: str) -> None:
+        from web.routers.persona_advanced import _frame
+
+        frame = _frame("result", data, 3)
+
+        # SSE は \r\n・\r・\n のどれでも行を分ける。\r が残ると data でない行ができる
+        assert "\r" not in frame
+        body = frame[: -len("\n\n")]
+        assert "\n\n" not in body
+        lines = body.split("\n")
+        assert lines[:2] == ["event: result", "id: 3"]
+        assert all(line.startswith("data: ") for line in lines[2:])
+        joined = "\n".join(line[len("data: ") :] for line in lines[2:])
+        assert joined == data.replace("\r\n", "\n").replace("\r", "\n")
+
+    def test_empty_data_is_one_empty_data_line(self) -> None:
+        from web.routers.persona_advanced import _frame
+
+        assert _frame("done", "") == "event: done\ndata: \n\n"
+
+
 class TestEvents:
     URL = f"/persona/advanced/generations/{s.GENERATION_ID}/events"
 

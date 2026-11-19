@@ -58,7 +58,10 @@ from ...models.errors import CodedError, ErrorCode
 from ...models.persona_candidate import MAX_CANDIDATE_ITEM_BYTES, PersonaCandidate
 from ...models.source_file import SourceFile
 from ...services.service_factory import service_factory
-from ...services.stores.advanced_generation_store import AdvancedGenerationStoreError
+from ...services.stores.advanced_generation_store import (
+    AdvancedGenerationStore,
+    AdvancedGenerationStoreError,
+)
 from ...services.stores.persona_candidate_store import PersonaCandidateStore
 from ..components.access_policy import AccessPolicy
 from ..components.advanced_generation_policy import AdvancedGenerationPolicy
@@ -74,7 +77,6 @@ if TYPE_CHECKING:
     from ...services.agent_service import AgentService
     from ...services.s3_service import S3Service
     from ...services.sandbox_service import SandboxService, SandboxSession
-    from ...services.stores.advanced_generation_store import AdvancedGenerationStore
     from ...services.stores.app_settings_store import AppSettingsStore
     from ...services.stores.source_file_store import SourceFileStore
 
@@ -835,6 +837,12 @@ class AdvancedPersonaGenerationManager:
             for c in candidates
         ):
             raise _fail(ErrorCode.GENERATION_RESULT_TOO_LARGE, "candidate too large")
+        done_updates: dict[str, Any] = {
+            "analysis_run": run.to_dict(),
+            "analysis_record_id": generation.generation_id,
+            "candidate_ids": [c.candidate_id for c in candidates],
+        }
+        self._check_item_size(state, done_updates)
         self._candidates.put_all(candidates)
         part_counts = self._store.put_result_parts(
             generation.generation_id,
@@ -851,12 +859,7 @@ class AdvancedPersonaGenerationManager:
             generation.generation_id,
             GenerationStatus.VERIFYING,
             GenerationStatus.DONE,
-            updates={
-                "part_counts": part_counts,
-                "analysis_run": run.to_dict(),
-                "analysis_record_id": generation.generation_id,
-                "candidate_ids": [c.candidate_id for c in candidates],
-            },
+            updates={"part_counts": part_counts, **done_updates},
         ):
             raise _StopRun()
         self._close_stage(state)
@@ -867,6 +870,27 @@ class AdvancedPersonaGenerationManager:
             persona_count=len(candidates),
             unverified=len(verification.unverified_segment_ids),
         )
+
+    @staticmethod
+    def _check_item_size(state: _Run, done_updates: Mapping[str, Any]) -> None:
+        """The generation item stays within its limit once ``done`` is written.
+
+        entities.md: one item is up to 64KB; large results go to ResultPart.
+        Measured before the candidates and the result parts are written.
+        """
+        assert state.plan is not None
+        item = {
+            **state.generation.to_dict(),
+            "plan": state.plan.to_dict(),
+            # the slice counts are not known yet; they are a few digits each
+            "part_counts": {name.value: 0 for name in ResultPartName},
+            "status": GenerationStatus.DONE.value,
+            **done_updates,
+        }
+        if AdvancedGenerationStore.item_size(item) > int(
+            config.ADVANCED_GENERATION_ITEM_MAX_BYTES
+        ):
+            raise _fail(ErrorCode.GENERATION_RESULT_TOO_LARGE, "generation too large")
 
     # --- failure and the end ----------------------------------------------------
 

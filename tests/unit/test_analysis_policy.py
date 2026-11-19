@@ -40,7 +40,6 @@ class TestTools:
             AnalysisTool.ANALYZE_DATASET,
             AnalysisTool.CLUSTER_SEGMENTS,
         )
-        assert not policy.allows("run_code")
 
     def test_limits_come_from_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(config, "ADVANCED_TOOL_MAX_CALLS", 7)

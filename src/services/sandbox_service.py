@@ -85,12 +85,6 @@ class SandboxCapacityError(SandboxServiceError):
     """The session quota stayed exhausted after the retries."""
 
 
-class SandboxTimeoutError(SandboxServiceError):
-    """A call to the sandbox did not answer in time."""
-
-    code = ErrorCode.GENERATION_TIMEOUT
-
-
 @dataclass(frozen=True)
 class SandboxSession:
     """Handle of one generation's session (its ID may be logged)."""

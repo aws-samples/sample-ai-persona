@@ -439,9 +439,6 @@ class AnalysisToolPolicy:
             self, "tools", tuple(AnalysisTool(str(t)) for t in self.tools)
         )
 
-    def allows(self, tool: AnalysisTool | str) -> bool:
-        return str(tool) in {t.value for t in self.tools}
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "tools": [t.value for t in self.tools],

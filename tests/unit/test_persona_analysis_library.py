@@ -363,19 +363,40 @@ def http_base() -> Iterator[str]:
         server.server_close()
 
 
+@pytest.fixture()
+def https_base(
+    lib: ModuleType, http_base: str, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[str]:
+    """An ``https://`` base the library accepts, served by the local server.
+
+    The library takes ``https://`` only. The test side, not the library, turns
+    the scheme back to ``http://`` when the request is opened, so production
+    keeps refusing plain http.
+    """
+    real_urlopen = lib.urllib.request.urlopen
+    https = "https://" + http_base[len("http://") :]
+
+    def urlopen(url: str, *args: Any, **kwargs: Any) -> Any:
+        assert url.startswith(https)
+        return real_urlopen(http_base + url[len(https) :], *args, **kwargs)
+
+    monkeypatch.setattr(lib.urllib.request, "urlopen", urlopen)
+    yield https
+
+
 _SECRET_QUERY = "?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA"
 
 
 class TestDownload:
     def test_downloads_to_the_sources_folder(
-        self, lib: ModuleType, tmp_path: Path, http_base: str
+        self, lib: ModuleType, tmp_path: Path, https_base: str
     ) -> None:
         result = _call(
             lib,
             tmp_path,
             "download",
             source_id="src1",
-            url=f"{http_base}/ok{_SECRET_QUERY}",
+            url=f"{https_base}/ok{_SECRET_QUERY}",
         )
 
         assert result["value"] == {
@@ -386,23 +407,54 @@ class TestDownload:
         assert (tmp_path / "sources" / "src1").read_bytes() == _SMALL_CSV
 
     def test_a_refused_url_reports_only_the_status(
-        self, lib: ModuleType, tmp_path: Path, http_base: str
+        self, lib: ModuleType, tmp_path: Path, https_base: str
     ) -> None:
         result = _call(
             lib,
             tmp_path,
             "download",
             source_id="src1",
-            url=f"{http_base}/expired{_SECRET_QUERY}",
+            url=f"{https_base}/expired{_SECRET_QUERY}",
         )
 
         assert result["value"] == {"ok": False, "bytes": 0, "http_status": 403}
         assert "X-Amz" not in json.dumps(result)
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1:9/ok",
+            "HTTP://127.0.0.1:9/ok",
+            "file:///etc/passwd",
+            "ftp://example.com/data.csv",
+        ],
+    )
+    def test_anything_but_https_is_refused_before_opening(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        url: str,
+    ) -> None:
+        opened: list[str] = []
+        monkeypatch.setattr(lib.urllib.request, "urlopen", opened.append)
+
+        result = _call(
+            lib, tmp_path, "download", source_id="src1", url=f"{url}{_SECRET_QUERY}"
+        )
+
+        assert result == {
+            "ok": False,
+            "error": {"code": "INVALID_ARGUMENT", "context": {"field": "url"}},
+        }
+        assert opened == []
+        assert not (tmp_path / "sources" / "src1").exists()
+
     def test_the_command_line_prints_no_url(
         self, tmp_path: Path, http_base: str
     ) -> None:
-        url = f"{http_base}/expired{_SECRET_QUERY}"
+        # https:// to a plain-http server: the TLS handshake fails in the library
+        url = "https://" + http_base[len("http://") :] + f"/expired{_SECRET_QUERY}"
         args = base64.b64encode(
             json.dumps({"source_id": "src1", "url": url}).encode()
         ).decode()
@@ -426,7 +478,7 @@ class TestDownload:
         assert "X-Amz" not in done.stdout + done.stderr
         assert "127.0.0.1" not in done.stdout + done.stderr
         result = json.loads(done.stdout.strip().splitlines()[-1])
-        assert result["value"]["http_status"] == 403
+        assert result["value"] == {"ok": False, "bytes": 0, "http_status": None}
 
 
 class TestDispatch:

@@ -190,15 +190,6 @@ class TestSourceFile:
         with pytest.raises(ValueError):
             _source_file(size_bytes=0)
 
-    def test_in_use_mark_expires(self):
-        sf = _source_file().update(
-            in_use_by="gen-1", in_use_until=NOW + timedelta(minutes=5)
-        )
-
-        assert sf.is_in_use(NOW)
-        assert not sf.is_in_use(NOW + timedelta(minutes=5))
-        assert not _source_file().is_in_use(NOW)
-
     def test_status_values(self):
         assert [s.value for s in SourceFileStatus] == [
             "uploading",

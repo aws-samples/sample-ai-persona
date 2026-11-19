@@ -54,6 +54,7 @@ flowchart TB
 - **Hugging Face からの Nemotron の取得**: 代わりに、事前に S3 に置いたファイルを使います（下の「[Nemotron のデータを置く](#nemotron-のデータを置く)」）
 - **データ分析エージェント（Data Agent）連携**
 - **追加のペルソナのモデル**（Bedrock Mantle 経由の GPT・Gemma）
+- **ペルソナの高度な生成（ベータ）**: 閉域の Stage では `ENABLE_ADVANCED_GENERATION=false` で無効にしており、ペルソナ生成画面に「高度な生成」のタブが出ません
 
 ## 事前の準備
 

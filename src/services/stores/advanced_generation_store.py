@@ -246,6 +246,21 @@ class AdvancedGenerationStore:
             for name, value in item.items()
         )
 
+    @classmethod
+    def item_size(cls, data: Mapping[str, Any]) -> int:
+        """Size of a generation item as written: its keys plus ``data`` (NFR5.1).
+
+        Args:
+            data: Plain attribute values (``AdvancedGeneration.to_dict()`` shape).
+        """
+        serializer = TypeSerializer()
+        item: dict[str, Any] = {
+            k: serializer.serialize(_to_dynamo(v)) for k, v in data.items()
+        }
+        item["pk"] = {"S": generation_pk(str(data.get("generation_id", "")))}
+        item["sk"] = {"S": _GENERATION_SK}
+        return cls._size(item)
+
     # --- start ----------------------------------------------------------------------
 
     def create_with_lock(

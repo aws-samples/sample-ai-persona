@@ -712,6 +712,37 @@ class TestRun:
         assert generation is not None
         assert generation.error_code == ErrorCode.GENERATION_RESULT_TOO_LARGE.value
 
+    def test_generation_item_over_its_size_limit_fails_before_done(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        # entities.md「1 つの item は 64KB まで」: done で書く本体の大きさを先に測る
+        monkeypatch.setattr(config, "ADVANCED_GENERATION_ITEM_MAX_BYTES", 600)
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None
+        assert generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_RESULT_TOO_LARGE.value
+        assert generation.analysis_run is None
+        assert generation.candidate_ids is None
+        for name in ResultPartName:
+            assert env.generations.read_result_parts(generation_id, name) == []
+
+    def test_generation_item_within_its_size_limit_is_done(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None
+        assert generation.status is GenerationStatus.DONE
+        size = AdvancedGenerationStore.item_size(generation.to_dict())
+        assert 0 < size <= config.ADVANCED_GENERATION_ITEM_MAX_BYTES
+
     def test_heartbeat_is_written_while_running(self, env: _Env) -> None:
         manager = env.manager(heartbeat_seconds=0.005)
         generation_id = _start(manager, env.ready_file())

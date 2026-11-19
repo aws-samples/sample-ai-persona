@@ -295,14 +295,6 @@ class SourceFile:
         """A copy with ``changes`` applied (the instance itself never changes)."""
         return replace(self, **changes)
 
-    def is_in_use(self, now: datetime) -> bool:
-        """Whether a generation holds the in-use mark (an expired mark is free)."""
-        return (
-            self.in_use_by is not None
-            and self.in_use_until is not None
-            and now < self.in_use_until
-        )
-
     def to_dict(self) -> dict[str, Any]:
         """Serialize for the ``SourceFiles`` table without ``None`` values."""
         data: dict[str, Any] = {

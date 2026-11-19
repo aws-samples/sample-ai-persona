@@ -198,10 +198,14 @@ def _is_out_of_memory(error: BaseException) -> bool:
 
 
 def download(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Fetch ``url`` into ``sources/<source_id>``. Returns ``{ok, bytes, http_status}``."""
+    """Fetch ``url`` into ``sources/<source_id>``. Returns ``{ok, bytes, http_status}``.
+
+    Only ``https://`` is taken: the URL is a presigned S3 GET, and anything
+    else (plain http, ``file://``) is refused before anything is opened.
+    """
     source_id = _checked_id(args.get("source_id"), "source_id")
     url = args.get("url")
-    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+    if not isinstance(url, str) or not url.startswith("https://"):
         raise AnalysisError("INVALID_ARGUMENT", {"field": "url"})
     timeout = float(args.get("timeout_seconds", _DOWNLOAD_TIMEOUT_SECONDS))
     dest = _source_path(workdir, source_id)

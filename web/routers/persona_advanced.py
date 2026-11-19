@@ -423,11 +423,16 @@ async def start_generation(
 
 
 def _frame(event: str, data: str, event_id: Optional[int] = None) -> str:
-    """One SSE frame; multi-line data becomes several ``data:`` lines."""
+    """One SSE frame; multi-line data becomes several ``data:`` lines.
+
+    SSE ends a line at ``\\r\\n``, ``\\r`` or ``\\n``, so every break is made
+    ``\\n`` first; a bare ``\\r`` would otherwise start a line without ``data:``.
+    """
     lines = [f"event: {event}"]
     if event_id is not None:
         lines.append(f"id: {event_id}")
-    lines.extend(f"data: {line}" for line in (data.split("\n") if data else [""]))
+    text = data.replace("\r\n", "\n").replace("\r", "\n")
+    lines.extend(f"data: {line}" for line in (text.split("\n") if text else [""]))
     return "\n".join(lines) + "\n\n"
 
 
@@ -578,6 +583,8 @@ async def _expired_frames(payload: dict[str, str]) -> AsyncIterator[str]:
 @router.get("/advanced/generations/{generation_id}/events")
 async def generation_events(request: Request, generation_id: str) -> Any:
     """進み具合の SSE（C3、BR7.2）。読むだけで、生成を始めない。持ち主だけ。"""
+    # セッションは接続時だけ確かめる（最長 60 分）。接続中は確かめ直さない。
+    # 受け身の要求なので、つなぐだけでは最終操作の時刻を延ばさない（PASSIVE_REQUESTS）
     principal = _principal(request)
     manager = get_advanced_generation_manager()
     # ブラウザの自動のつなぎ直しはヘッダー、画面が自分でつなぎ直すときはクエリで届く

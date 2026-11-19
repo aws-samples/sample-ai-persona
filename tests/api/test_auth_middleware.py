@@ -217,6 +217,13 @@ class TestSignedInRequests:
             ("GET", "/interview/abc-123/status", True),
             ("GET", "/survey/persona-data/nemotron-status", True),
             ("GET", "/api/jobs/job-1", True),
+            # 高度な生成: 進み具合の SSE と、検査中の行の 2 秒ごとの読み直し
+            ("GET", "/persona/advanced/generations/gen-1/events", True),
+            ("GET", "/persona/advanced/uploads/src-1", True),
+            # 行の削除・生成の開始・記録のダイアログは利用者の操作
+            ("DELETE", "/persona/advanced/uploads/src-1", False),
+            ("POST", "/persona/advanced/generations", False),
+            ("GET", "/persona/advanced/generations/gen-1/record", False),
             ("POST", "/interview/abc-123/message/stream", False),
             ("GET", "/interview/abc-123", False),
             ("GET", "/persona/management", False),
