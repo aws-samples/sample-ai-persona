@@ -308,7 +308,7 @@ function handleSendFailure(data, unsentMessage, sentBubble) {
 const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const SUPPORTED_DOCUMENT_TYPES = ['application/pdf', 'text/plain', 'text/csv', 'text/html', 'text/markdown'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB（Claude(Bedrock)モデルの画像1枚あたり上限。src/config.py MAX_IMAGE_SIZE と一致させること）
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB（アップロードできる画像1枚あたりの上限。src/config.py MAX_IMAGE_SIZE と一致させること）
 
 // 参加者リストとペルソナ色マッピング
 const sessionParticipants = {{ session.persona_ids | tojson | safe }};

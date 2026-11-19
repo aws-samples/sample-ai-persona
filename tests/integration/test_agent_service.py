@@ -9,6 +9,7 @@ from datetime import datetime
 from src.models.errors import ErrorCode
 from src.services.agent_service import (
     AgentService,
+    AgentCommunicationError,
     AgentConfigurationError,
     AgentInitializationError,
     AgentServiceError,
@@ -17,6 +18,7 @@ from src.services.agent_service import (
     PersonaAgent,
     FacilitatorAgent,
     _documents_with_mantle_filenames,
+    _is_input_rejected,
 )
 from src.models.persona import Persona
 from src.models.message import Message
@@ -658,8 +660,8 @@ class TestPersonaAgentMultimodal:
         call_args = self.mock_agent.call_args[0][0]
         assert isinstance(call_args, list)
         assert len(call_args) == 2  # テキスト + 画像
-        assert "text" in call_args[0]
-        assert "image" in call_args[1]
+        assert "image" in call_args[0]  # 画像は文章の前に置く
+        assert "text" in call_args[1]
 
         # ドキュメントコンテンツがクリアされていることを確認（1回のみ渡す）
         assert len(self.persona_agent._document_contents) == 0
@@ -1288,3 +1290,274 @@ class TestColumnMappingStructuredOutput:
         result = AgentService().suggest_column_mapping_with_llm("prompt")
 
         assert result["mapping"] == {"age": "年齢"}
+
+
+def _bedrock_rejection():
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": "messages.0.content.1.image.source.base64: image exceeds 5 MB maximum",
+            }
+        },
+        "ConverseStream",
+    )
+
+
+def _mantle_rejection():
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://bedrock-mantle.example/v1/responses")
+    return openai.BadRequestError(
+        "invalid image",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+
+
+def _bedrock_throttled():
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "ServiceUnavailableException", "Message": "busy"}},
+        "ConverseStream",
+    )
+
+
+def _wrapped_rejection():
+    try:
+        try:
+            raise _bedrock_rejection()
+        except Exception as e:
+            raise RuntimeError("event loop failed") from e
+    except RuntimeError as wrapped:
+        return wrapped
+
+
+def _bedrock_stream_rejection():
+    """Errors raised mid-stream use a lowercase code (``validationException``)."""
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "validationException", "Message": "invalid image"}},
+        "ConverseStream",
+    )
+
+
+REJECTIONS = {
+    "bedrock_validation": _bedrock_rejection,
+    "bedrock_stream_validation": _bedrock_stream_rejection,
+    "mantle_400": _mantle_rejection,
+    "wrapped_validation": _wrapped_rejection,
+}
+
+
+def _context_overflow():
+    from strands.types.exceptions import ContextWindowOverflowException
+
+    try:
+        try:
+            raise _validation_error("Input is too long for requested model.")
+        except Exception as e:
+            raise ContextWindowOverflowException(str(e)) from e
+    except ContextWindowOverflowException as overflow:
+        return overflow
+
+
+def _unrelated_validation_in_context():
+    """A ValidationException that was only being handled (``__context__``)."""
+    try:
+        try:
+            raise _bedrock_rejection()
+        except Exception:
+            raise TimeoutError("read timed out")
+    except TimeoutError as timeout:
+        return timeout
+
+
+def _validation_error(message):
+    from botocore.exceptions import ClientError
+
+    return ClientError(
+        {"Error": {"Code": "ValidationException", "Message": message}},
+        "ConverseStream",
+    )
+
+
+TRANSIENT_FAILURES = {
+    "timeout": lambda: TimeoutError("read timed out"),
+    "bedrock_unavailable": _bedrock_throttled,
+    "context_overflow": _context_overflow,
+    "validation_only_in_context": _unrelated_validation_in_context,
+}
+
+
+class TestIsInputRejected:
+    """Which failures mean "the model refused this input" (Issue #217)."""
+
+    @pytest.mark.parametrize(
+        "make_error", list(REJECTIONS.values()), ids=list(REJECTIONS)
+    )
+    def test_rejections(self, make_error):
+        assert _is_input_rejected(make_error()) is True
+
+    @pytest.mark.parametrize(
+        "make_error", list(TRANSIENT_FAILURES.values()), ids=list(TRANSIENT_FAILURES)
+    )
+    def test_transient_failures(self, make_error):
+        assert _is_input_rejected(make_error()) is False
+
+
+class _FailingStrandsAgent:
+    """Strands Agent stand-in: appends the prompt, then fails like Bedrock does."""
+
+    def __init__(self, error=None):
+        self.messages: list = [
+            {"role": "user", "content": [{"text": "前の質問"}]},
+            {"role": "assistant", "content": [{"text": "前の答え"}]},
+        ]
+        self.callback_handler = None
+        self.error = error
+        self.calls: list = []
+
+    def __call__(self, prompt):
+        self.calls.append(prompt)
+        content = prompt if isinstance(prompt, list) else [{"text": prompt}]
+        self.messages.append({"role": "user", "content": content})
+        if self.error is not None:
+            raise self.error
+        self.messages.append({"role": "assistant", "content": [{"text": "答え"}]})
+        if self.callback_handler:
+            self.callback_handler(data="答え")
+        return "答え"
+
+
+def _images(messages):
+    return [
+        block
+        for message in messages
+        for block in message["content"]
+        if "image" in block
+    ]
+
+
+class TestPersonaAgentFailureRecovery:
+    """呼び出しが失敗しても、次の発言に失敗を持ち越さない（Issue #217）
+
+    入力が拒否されたら添付を捨てる（送り直すと拒否され続ける）。一時的な失敗なら
+    添付を戻し、次の発言で 1 回だけ渡す（ペルソナが画像を見ないまま答えないように）。
+    """
+
+    IMAGE = {"image": {"format": "png", "source": {"bytes": b"rejected"}}}
+
+    def _agent(self, strands_agent):
+        persona = Persona(
+            id="p1",
+            name="田中太郎",
+            age=35,
+            occupation="会社員",
+            background="IT企業",
+            values=["効率性"],
+            pain_points=["時間不足"],
+            goals=["キャリアアップ"],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        return PersonaAgent(persona, "prompt", strands_agent)
+
+    def _fail_then_succeed(self, error, streaming):
+        strands_agent = _FailingStrandsAgent(error)
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+
+        with pytest.raises(AgentCommunicationError):
+            if streaming:
+                list(agent.respond_streaming("この画像は？"))
+            else:
+                agent.respond("この画像は？")
+
+        strands_agent.error = None
+        if streaming:
+            assert "".join(agent.respond_streaming("次の質問")) == "答え"
+        else:
+            assert agent.respond("次の質問") == "答え"
+        return strands_agent
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_failed_turn_is_removed_from_history(self, streaming):
+        strands_agent = _FailingStrandsAgent(_bedrock_rejection())
+        before = list(strands_agent.messages)
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+
+        with pytest.raises(AgentCommunicationError):
+            if streaming:
+                list(agent.respond_streaming("この画像は？"))
+            else:
+                agent.respond("この画像は？")
+
+        assert strands_agent.messages == before
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_rejected_documents_are_not_attached_again(self, streaming):
+        strands_agent = self._fail_then_succeed(_bedrock_rejection(), streaming)
+
+        assert strands_agent.calls[-1] == "次の質問"
+        assert _images(strands_agent.messages) == []
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_documents_are_attached_once_after_transient_failure(self, streaming):
+        strands_agent = self._fail_then_succeed(
+            TimeoutError("read timed out"), streaming
+        )
+
+        assert strands_agent.calls[-1] == [self.IMAGE, {"text": "次の質問"}]
+        assert _images(strands_agent.messages) == [self.IMAGE]
+
+    def test_added_documents_keep_the_returned_ones(self):
+        strands_agent = _FailingStrandsAgent(TimeoutError("read timed out"))
+        agent = self._agent(strands_agent)
+        pdf = {"document": {"name": "a", "format": "pdf", "source": {"bytes": b"%PDF"}}}
+        agent.set_document_contents([pdf])
+        with pytest.raises(AgentCommunicationError):
+            agent.respond("この資料は？")
+
+        strands_agent.error = None
+        agent.add_document_contents([self.IMAGE])
+        agent.respond("この画像は？")
+
+        # 画像は文章の前、資料は文章の後（Claude は画像が先のほうが精度が高い）
+        assert strands_agent.calls[-1] == [self.IMAGE, {"text": "この画像は？"}, pdf]
+
+    def test_concurrent_call_does_not_rewind_history(self):
+        """``ConcurrencyException``: this call added nothing, the other one did."""
+        from strands.types.exceptions import ConcurrencyException
+
+        strands_agent = _FailingStrandsAgent()
+        agent = self._agent(strands_agent)
+        agent.set_document_contents([self.IMAGE])
+        in_flight = {"role": "user", "content": [{"text": "先に送った質問"}]}
+
+        def busy(prompt):
+            strands_agent.messages.append(in_flight)
+            raise ConcurrencyException("another invocation is in progress")
+
+        strands_agent.__class__ = type(
+            "_Busy", (_FailingStrandsAgent,), {"__call__": lambda self, p: busy(p)}
+        )
+        with pytest.raises(AgentCommunicationError):
+            agent.respond("この画像は？")
+
+        assert strands_agent.messages[-1] == in_flight
+        assert agent._document_contents == [self.IMAGE]
+
+    def test_successful_turn_keeps_history(self):
+        strands_agent = _FailingStrandsAgent()
+        agent = self._agent(strands_agent)
+
+        agent.respond("質問")
+
+        assert len(strands_agent.messages) == 4

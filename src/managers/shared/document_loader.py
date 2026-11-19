@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from ...models.uploaded_file import UploadedFile
+from .file_utils import fit_image_for_model
 
 if TYPE_CHECKING:
     from ...services.s3_service import S3Service
@@ -170,6 +171,13 @@ def build_content_block(
         image_format = mime_type.split("/")[-1]
         if image_format not in ("png", "jpeg", "gif", "webp"):
             image_format = "png"
+        fitted = fit_image_for_model(file_bytes, image_format)
+        if fitted is None:
+            logger.warning(
+                f"画像をモデルの上限に収められないため除外しました: {filename}"
+            )
+            return None
+        file_bytes, image_format = fitted
         logger.info(f"画像を追加しました: {filename} ({image_format})")
         return {
             "image": {

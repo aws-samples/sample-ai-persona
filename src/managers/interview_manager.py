@@ -632,7 +632,7 @@ class InterviewManager:
         local.known_seq = session.last_seq
         if new_contents:
             for agent in local.agents:
-                agent.set_document_contents(list(new_contents))
+                agent.add_document_contents(list(new_contents))
 
         held = True
         replied = 0

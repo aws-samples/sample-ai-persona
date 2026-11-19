@@ -49,7 +49,7 @@ class Config:
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
     MAX_IMAGE_SIZE: int = (
         5 * 1024 * 1024
-    )  # 5MB (Claude(Bedrock)モデルの画像1枚あたり上限。超過時Converseが ValidationException を返す)
+    )  # 5MB (アップロードできる画像1枚あたりの上限。モデルの上限 3.75MB・長辺2000px には送信前に縮めて収める。Issue #217)
     MAX_REQUEST_PAYLOAD_SIZE: int = (
         32 * 1024 * 1024
     )  # 32MB (Claude(Bedrock)のリクエストペイロード全体上限。議論ドキュメント合計に適用)
