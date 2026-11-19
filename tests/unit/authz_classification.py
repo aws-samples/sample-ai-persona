@@ -120,6 +120,20 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
     "ParticipantReader": frozenset(
         {"ensure_all_readable", "read_for_use", "can_read_all", "statuses"}
     ),
+    # 高度な生成 U1: ensure_available は ai:execute（AccessPolicy.require）と公開の
+    # 判定（BR1.1）。is_available は同じ判定を真偽で返す（タブとページの出し分け）。
+    # SourceFileCatalog の各メソッドは owner_sub を条件にした読み書きで、
+    # 他人のものとないものを同じ NOT_FOUND にする（NFR3.9）。
+    "AdvancedGenerationPolicy": frozenset({"ensure_available", "is_available"}),
+    "SourceFileCatalog": frozenset(
+        {
+            "get_owned",
+            "ready_table",
+            "record_url_refresh",
+            "begin_inspection",
+            "cancel_upload",
+        }
+    ),
 }
 
 #: ``pending_unit`` count per Unit. Lower it when a Unit adds its decisions.
@@ -134,6 +148,19 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
 PENDING_BASELINE: dict[str, int] = {}
 
 CLASSIFICATION: dict[str, Entry] = {
+    # advanced_generation/manager.py — 高度な生成 U1（開始は公開の判定、読み出しは
+    # 持ち主だけ。他人のものとないものは同じ GENERATION_NOT_FOUND、NFR3.9）
+    "AdvancedPersonaGenerationManager.is_available": CHECKS,  # is_available（BR1.1）
+    "AdvancedPersonaGenerationManager.start_generation": CHECKS,  # ensure_available
+    # 受け付けた開始の取り消しと、その実行（プールのスレッド）。利用者の要求を受けず、
+    # 何も返さない。開始の判定を通った生成を進める・閉じるだけ（SurveyRunManager と同じ）
+    "AdvancedPersonaGenerationManager.abort_start": NO_USER_DATA,
+    "AdvancedPersonaGenerationManager.run": NO_USER_DATA,
+    "AdvancedPersonaGenerationManager.running_generation_id": CHECKS,  # is_owner
+    "AdvancedPersonaGenerationManager.elapsed_clock": CHECKS,  # _owned → is_owner
+    "AdvancedPersonaGenerationManager.stream_events": CHECKS,  # _owned → is_owner
+    "AdvancedPersonaGenerationManager.get_result": CHECKS,  # _owned → is_owner
+    "AdvancedPersonaGenerationManager.get_record": CHECKS,  # _owned → is_owner（BR9.3）
     # agent_discussion_manager.py — U6（security-design.md §1。エージェントの組み立て・
     # 開始・保存・解放は非公開にし、Router が呼ぶ 2 つだけを残した）
     "AgentDiscussionManager.run_agent_discussion_streaming": CHECKS,  # ai:execute（BR2.8）
@@ -208,6 +235,8 @@ CLASSIFICATION: dict[str, Entry] = {
     # U6: get_persona_unchecked をなくし、議論・インタビューは get_personas_for_use で読む
     "PersonaManager.save_persona": CHECKS,  # resource:create（BR6.1）
     "PersonaManager.get_persona": CHECKS,  # ensure_readable（BR4.5）
+    # 高度な生成 U1: 保存したペルソナの分析の記録（ensure_readable のあと、BR9.4）
+    "PersonaManager.get_analysis_record": CHECKS,
     "PersonaManager.get_personas_for_use": CHECKS,  # ParticipantReader（U6 BR2.8）
     "PersonaManager.save_generated_personas": CHECKS,  # resource:create（BR1.4）
     "PersonaManager.preview_binding_data": CHECKS,  # ensure_readable + can_use_asset
@@ -257,6 +286,12 @@ CLASSIFICATION: dict[str, Entry] = {
     "SharingManager.save": CHECKS,
     "SharingManager.bulk_save": CHECKS,
     # settings_manager.py — U7（設定は settings:manage、なければ 404。security-design.md 1.4）
+    # source_upload_manager.py — 高度な生成 U1（公開の判定 + 持ち主だけ。NFR3.9）
+    "SourceUploadManager.start_upload": CHECKS,  # ensure_available（BR1.1）
+    "SourceUploadManager.refresh_part_urls": CHECKS,  # ensure_available + 持ち主
+    "SourceUploadManager.complete_upload": CHECKS,  # ensure_available + 持ち主
+    "SourceUploadManager.get_upload": CHECKS,  # SourceFileCatalog.get_owned
+    "SourceUploadManager.cancel_upload": CHECKS,  # SourceFileCatalog.get_owned
     "SettingsManager.get_all_knowledge_bases": CHECKS,
     "SettingsManager.create_knowledge_base": CHECKS,
     "SettingsManager.delete_knowledge_base": CHECKS,

@@ -1,0 +1,23 @@
+{#
+  高度な生成（ベータ）の表示の言葉（U1）。区画 A・D、分析の記録、詳細画面のバッジが共有する。
+  値は画面の言葉にする（作り手側の言い回しを避ける。project.md の Corrections）。
+#}
+{% macro method_label(method) -%}
+{{ {"filter": "絞り込み", "compare": "群どうしの比較", "cluster": "クラスタ分析"}.get(method, method) }}
+{%- endmacro %}
+
+{% macro encoding_label(encoding) -%}
+{{ {"utf-8": "UTF-8", "utf-8-sig": "UTF-8", "cp932": "CP932", "euc-jp": "EUC-JP", "undetermined": "英数字だけ（前準備で確定）"}.get(encoding, encoding) }}
+{%- endmacro %}
+
+{% macro type_label(inferred_type) -%}
+{{ {"integer": "整数", "number": "数値", "date": "日付", "boolean": "真偽値", "string": "文字列"}.get(inferred_type, inferred_type) }}
+{%- endmacro %}
+
+{% macro share_text(share) -%}
+{{ "%.0f" | format(share * 100) }}%
+{%- endmacro %}
+
+{% macro code_kind_label(kind) -%}
+{{ "AI による詳細分析" if kind == "ai_written" else "決まった関数" }}
+{%- endmacro %}

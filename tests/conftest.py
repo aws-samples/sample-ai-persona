@@ -26,6 +26,14 @@ os.environ["ENABLE_LONG_TERM_MEMORY"] = "false"
 # S3 のバケット名も CI と同じく持たせない。シェルにあると、モックを渡していない
 # テストが本物の S3 へ書き込みに行く。
 os.environ.pop("S3_BUCKET_NAME", None)
+# 高度な生成（ベータ）も CI と同じ値にする。Code Interpreter の ID を空にして、
+# モックを渡していないテストが本物のセッションを開かないようにする。テーブルの名前と
+# ENABLE_ADVANCED_GENERATION は CI に値がないので外し、既定（接頭辞からの名前、true）にする。
+os.environ["CODE_INTERPRETER_ID"] = ""
+os.environ.pop("ENABLE_ADVANCED_GENERATION", None)
+os.environ.pop("SOURCE_FILES_TABLE_NAME", None)
+os.environ.pop("ADVANCED_GENERATIONS_TABLE_NAME", None)
+os.environ.pop("APP_SETTINGS_TABLE_NAME", None)
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -439,6 +447,14 @@ def reset_singletons():
         interview._persona_manager = None
         interview._interview_manager = None
         interview._file_manager = None
+    except (ImportError, AttributeError):
+        pass
+    try:
+        # 高度な生成（ベータ、U1）の 2 つの Manager
+        from web.routers import persona_advanced
+
+        persona_advanced._source_upload_manager = None
+        persona_advanced._advanced_generation_manager = None
     except (ImportError, AttributeError):
         pass
     try:

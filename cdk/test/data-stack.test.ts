@@ -36,6 +36,10 @@ const EXPECTED_GSIS: Record<string, string[]> = {
   DiscussionReports: [],
   InterviewSessions: [],
   InterviewMessages: [],
+  // 高度な生成（ベータ、U1）: 本人のファイルと生成の一覧（射影 ALL）
+  SourceFiles: ['owner_sub-created_at'],
+  AdvancedGenerations: ['owner_sub-created_at'],
+  AppSettings: [],
 };
 
 const ENV = { account: '123456789012', region: 'ap-northeast-1' };
@@ -345,8 +349,8 @@ describe('DataStack: アップロード用バケットのライフサイクル�
     return bucket.Properties.LifecycleConfiguration?.Rules ?? [];
   }
 
-  test('ルールは 4 つで、どれも有効', () => {
-    expect(rules()).toHaveLength(4);
+  test('ルールは 6 つで、どれも有効', () => {
+    expect(rules()).toHaveLength(6);
     for (const rule of rules()) {
       expect(rule.Status).toBe('Enabled');
     }
@@ -388,12 +392,122 @@ describe('DataStack: アップロード用バケットのライフサイクル�
       VersioningConfiguration: { Status: 'Enabled' },
     });
   });
+
+  // 高度な生成（ベータ、U1、NFR3.2、NFR5.5）
+  test('sources/ は未完了のマルチパートを 1 日で中止し、古いバージョンを 1 日で消す（今の版は失効させない）', () => {
+    const rule = rules().find((r) => r.Id === 'AbortIncompleteSourceUploads');
+    expect(rule).toMatchObject({
+      Prefix: 'sources/',
+      AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
+      NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+    });
+    expect(rule.ExpirationInDays).toBeUndefined();
+    expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('analysis-records/ は古いバージョンを 1 日で消す（保存前の記録は既存の pending=true の規則で消える）', () => {
+    const rule = rules().find((r) => r.Id === 'ExpireNoncurrentAnalysisRecords');
+    expect(rule).toMatchObject({
+      Prefix: 'analysis-records/',
+      NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+    });
+    expect(rule.ExpirationInDays).toBeUndefined();
+    expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('バケットの暗号化は S3_MANAGED（SSE-S3）のままで、KMS の鍵を指さない（NFR3.2）', () => {
+    const bucket = Object.values(template.findResources('AWS::S3::Bucket'))[0];
+    expect(bucket.Properties.BucketEncryption).toEqual({
+      ServerSideEncryptionConfiguration: [
+        { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+      ],
+    });
+    expect(bucket.Properties.CorsConfiguration).toBeUndefined();
+  });
+});
+
+describe('DataStack: 高度な生成の 3 つのテーブル（ベータ、U1、契約 C4・C5、NFR3.1、NFR5.24）', () => {
+  const resources = () => template.findResources('AWS::DynamoDB::GlobalTable');
+  const OWNER_KEYS = [
+    { AttributeName: 'owner_sub', KeyType: 'HASH' },
+    { AttributeName: 'created_at', KeyType: 'RANGE' },
+  ];
+
+  /** On-demand, AWS managed key, PITR and RETAIN (shared by the three tables). */
+  function expectCommon(table: any): void {
+    expect(table.DeletionPolicy).toBe('Retain');
+    expect(table.UpdateReplacePolicy).toBe('Retain');
+    expect(table.Properties.TableName).toBeUndefined();
+    expect(table.Properties.BillingMode).toBe('PAY_PER_REQUEST');
+    // AWS 管理キー（カスタマー管理の KMS キーを作らない、NFR3.1）
+    expect(table.Properties.SSESpecification).toEqual({ SSEEnabled: true, SSEType: 'KMS' });
+    const replica = table.Properties.Replicas[0];
+    expect(replica.SSESpecification).toBeUndefined();
+    expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
+  }
+
+  test('SourceFiles は PK source_file_id、GSI owner_sub-created_at（射影 ALL）、削除保護、TTL なし', () => {
+    const table = resources()[logicalIdOf('SourceFiles')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'source_file_id', KeyType: 'HASH' }]);
+    const [index] = table.Properties.GlobalSecondaryIndexes;
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(1);
+    expect(index.IndexName).toBe('owner_sub-created_at');
+    expect(index.KeySchema).toEqual(OWNER_KEYS);
+    expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('AdvancedGenerations は PK pk・SK sk、GSI owner_sub-created_at（射影 ALL）、TTL expires_at、削除保護', () => {
+    const table = resources()[logicalIdOf('AdvancedGenerations')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([
+      { AttributeName: 'pk', KeyType: 'HASH' },
+      { AttributeName: 'sk', KeyType: 'RANGE' },
+    ]);
+    const [index] = table.Properties.GlobalSecondaryIndexes;
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(1);
+    expect(index.IndexName).toBe('owner_sub-created_at');
+    expect(index.KeySchema).toEqual(OWNER_KEYS);
+    expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
+    expect(table.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'expires_at', Enabled: true });
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBe(true);
+  });
+
+  test('AppSettings は PK setting_key、GSI なし、TTL なし、PITR と RETAIN（設計どおり削除保護は付けない）', () => {
+    const table = resources()[logicalIdOf('AppSettings')];
+    expect(table).toBeDefined();
+    expectCommon(table);
+    expect(table.Properties.KeySchema).toEqual([{ AttributeName: 'setting_key', KeyType: 'HASH' }]);
+    expect(table.Properties.GlobalSecondaryIndexes).toBeUndefined();
+    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBeUndefined();
+  });
+
+  test('3 つのテーブルはアプリのテーブル（環境変数の名前は src/config.py と同じ）に入る', () => {
+    const tables = dataStack.database.applicationTables;
+    expect(tables.SOURCE_FILES_TABLE_NAME).toBe(dataStack.database.sourceFilesTable);
+    expect(tables.ADVANCED_GENERATIONS_TABLE_NAME).toBe(dataStack.database.advancedGenerationsTable);
+    expect(tables.APP_SETTINGS_TABLE_NAME).toBe(dataStack.database.appSettingsTable);
+  });
+
+  test('GSI は名前で付けるインデックス（queriedIndexArns）に入り、AppSettings には付かない', () => {
+    const { database } = dataStack;
+    const stack = cdk.Stack.of(database);
+    const indexArns = (table: any) => stack.resolve(database.queriedIndexArns(table));
+    expect(JSON.stringify(indexArns(database.sourceFilesTable))).toContain('/index/owner_sub-created_at');
+    expect(JSON.stringify(indexArns(database.advancedGenerationsTable))).toContain('/index/owner_sub-created_at');
+    expect(indexArns(database.appSettingsTable)).toEqual([]);
+  });
 });
 
 describe('DataStack: 既存の 10 テーブル', () => {
-  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つ・担当者の記録を含めて 18 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
+  test('Sessions・ResourceShares・U5 の 2 つ・U6 の 4 つ・U7 の 1 つ・担当者の記録・高度な生成の 3 つを含めて 21 テーブル（U9 で古い紐付けの 2 つを外した）。物理名はなく、すべて RETAIN', () => {
     const tables = template.findResources('AWS::DynamoDB::GlobalTable');
-    expect(Object.keys(tables)).toHaveLength(18);
+    expect(Object.keys(tables)).toHaveLength(21);
     for (const table of Object.values(tables)) {
       expect(table.DeletionPolicy).toBe('Retain');
       expect(table.Properties.TableName).toBeUndefined();

@@ -197,6 +197,51 @@ class Config:
     PASSWORD_REQUIRE_DIGITS: Optional[str] = None
     PASSWORD_REQUIRE_SYMBOLS: Optional[str] = None
 
+    # --- 高度な生成（ベータ）U1（BR1.1、BR1.3、NFR2.2、NFR5.3〜NFR5.13、NFR8.1） ---
+    # 環境で許可するか。既定は true、閉域の Stage は CDK が false を渡す（BR1.4）
+    ENABLE_ADVANCED_GENERATION: bool = True
+    # 分析の実行先（AgentCore Code Interpreter の ID）。空なら使えない（BR1.1）
+    CODE_INTERPRETER_ID: str = ""
+    # 3 つのテーブルの物理名（CDK が渡す。未設定なら接頭辞から組み立てる）
+    SOURCE_FILES_TABLE_NAME: str = ""
+    ADVANCED_GENERATIONS_TABLE_NAME: str = ""
+    APP_SETTINGS_TABLE_NAME: str = ""
+    # 計画・分析・合成のエージェントのモデル（既定は BEDROCK_MODEL_ID。NFR-Q5）
+    ADVANCED_GENERATION_MODEL_ID: str = ""
+    # 1 つのタスクで同時に動かす生成の数（NFR2.2）
+    ADVANCED_GENERATION_MAX_CONCURRENT: int = 3
+    # アップロード（BR2.1〜BR2.4、NFR5.3〜NFR5.5、NFR5.19）
+    ADVANCED_UPLOAD_MAX_BYTES: int = 1_000_000_000
+    ADVANCED_UPLOAD_MAX_FILES: int = 10
+    ADVANCED_UPLOAD_PART_SIZE_BYTES: int = 16 * 1024 * 1024
+    ADVANCED_UPLOAD_URL_EXPIRATION_SECONDS: int = 3600
+    ADVANCED_UPLOAD_URL_REFRESH_MAX: int = 24
+    ADVANCED_UPLOAD_PENDING_MAX_SECONDS: int = 24 * 3600
+    ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS: int = 15 * 60
+    # 確定のときに読む先頭の大きさ（BR3.1）
+    ADVANCED_INSPECT_BYTES: int = 4 * 1024 * 1024
+    # 生成（NFR5.6、NFR5.7、NFR5.11〜NFR5.13、BR7.3）
+    ADVANCED_GENERATION_TIMEOUT_SECONDS: int = 60 * 60
+    ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS: int = 20 * 60
+    # 前準備の進み具合のファイルを読む間隔（NFR1.8。5 秒以内ごと）
+    ADVANCED_GENERATION_PREPARE_POLL_SECONDS: int = 5
+    ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS: int = 10 * 60
+    ADVANCED_GENERATION_LOCK_SECONDS: int = 75 * 60
+    ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS: int = 3900
+    ADVANCED_GENERATION_HEARTBEAT_SECONDS: int = 30
+    ADVANCED_GENERATION_RESULT_READABLE_SECONDS: int = 24 * 3600
+    ADVANCED_GENERATION_ITEM_TTL_SECONDS: int = 48 * 3600
+    # セッションへの持ち込みの署名付き GET の期限（BR6.2）
+    ADVANCED_GENERATION_DOWNLOAD_URL_SECONDS: int = 900
+    # 結果の大きさ（NFR5.1、契約 C5）
+    ADVANCED_GENERATION_ITEM_MAX_BYTES: int = 64 * 1024
+    ADVANCED_GENERATION_PART_MAX_BYTES: int = 100 * 1024
+    ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES: int = 2 * 1024 * 1024
+    # 分析のツール（NFR5.8〜NFR5.10）
+    ADVANCED_TOOL_MAX_CALLS: int = 30
+    ADVANCED_TOOL_MAX_TOTAL_SECONDS: int = 20 * 60
+    ADVANCED_TOOL_MAX_OUTPUT_CHARS: int = 20_000
+
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
         # 環境変数から設定を上書き
@@ -283,6 +328,7 @@ class Config:
         self._load_closed_feature_settings()
         self._load_asset_delivery_setting()
         self._load_auth_settings()
+        self._load_advanced_generation_settings()
 
         # ディレクトリの存在確認と作成
         self._ensure_directories()
@@ -473,6 +519,56 @@ class Config:
                     f"AUTH_TIMING_SAMPLE_RATE must be between 0 and 1, got {rate}"
                 )
             self.AUTH_TIMING_SAMPLE_RATE = rate
+
+    def _load_advanced_generation_settings(self) -> None:
+        """Read the advanced generation (beta) settings (U1, BR1.1, BR1.3, NFR8.1).
+
+        Must run after the inference scope (``BEDROCK_MODEL_ID``) and
+        ``DYNAMODB_TABLE_PREFIX`` are read.
+
+        Raises:
+            ValueError: ``ENABLE_ADVANCED_GENERATION`` is not a boolean word, or
+                ``ADVANCED_GENERATION_MAX_CONCURRENT`` is not an integer >= 1.
+        """
+        enable = os.getenv("ENABLE_ADVANCED_GENERATION", "").strip().lower()
+        if enable:
+            if enable in ("true", "1", "yes"):
+                self.ENABLE_ADVANCED_GENERATION = True
+            elif enable in ("false", "0", "no"):
+                self.ENABLE_ADVANCED_GENERATION = False
+            else:
+                raise ValueError(
+                    "ENABLE_ADVANCED_GENERATION must be 'true' or 'false', "
+                    f"got {enable!r}"
+                )
+        self.CODE_INTERPRETER_ID = os.getenv("CODE_INTERPRETER_ID", "").strip()
+        for setting, kind in (
+            ("SOURCE_FILES_TABLE_NAME", "SourceFiles"),
+            ("ADVANCED_GENERATIONS_TABLE_NAME", "AdvancedGenerations"),
+            ("APP_SETTINGS_TABLE_NAME", "AppSettings"),
+        ):
+            setattr(
+                self,
+                setting,
+                os.getenv(setting) or f"{self.DYNAMODB_TABLE_PREFIX}_{kind}",
+            )
+        self.ADVANCED_GENERATION_MODEL_ID = (
+            os.getenv("ADVANCED_GENERATION_MODEL_ID") or self.BEDROCK_MODEL_ID
+        )
+        max_concurrent = os.getenv("ADVANCED_GENERATION_MAX_CONCURRENT", "").strip()
+        if max_concurrent:
+            try:
+                value = int(max_concurrent)
+            except ValueError as e:
+                raise ValueError(
+                    "ADVANCED_GENERATION_MAX_CONCURRENT must be an integer, "
+                    f"got {max_concurrent!r}"
+                ) from e
+            if value < 1:
+                raise ValueError(
+                    f"ADVANCED_GENERATION_MAX_CONCURRENT must be >= 1, got {value}"
+                )
+            self.ADVANCED_GENERATION_MAX_CONCURRENT = value
 
     def table_name(self, kind: str) -> str:
         """Physical DynamoDB name of one table kind (FR9.2, contract C10).

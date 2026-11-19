@@ -1,0 +1,37 @@
+{% from "persona/partials/advanced_labels.html" import method_label, code_kind_label %}
+{#
+  分析の記録のダイアログの中身（S9、BR9.1）。生成のページでは dialog() の content_url で読み込み、
+  保存したペルソナの詳細画面では中に直接描く。コードは <pre><code> で文字として出す（自動エスケープ）。
+  引数:
+    record ... AnalysisRecord。ないとき（none）は「分析の記録は残っていません」
+#}
+<div data-testid="advanced-record">
+    {% if record %}
+    {% set plan = record.plan %}
+    <dl class="text-sm text-gray-800 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 mb-4">
+        <dt class="text-gray-600">計画</dt><dd>{{ method_label(plan.get("method", "")) }} / 理由: {{ plan.get("rationale", "") }}</dd>
+        <dt class="text-gray-600">解釈した目的</dt><dd>{{ plan.get("interpreted_purpose", "") }}</dd>
+        <dt class="text-gray-600">前準備の版</dt><dd>{{ record.prepare_version }}</dd>
+        <dt class="text-gray-600">乱数のシード</dt><dd>{{ record.seed }}</dd>
+        <dt class="text-gray-600">ファイル</dt>
+        <dd>{% for checksum in record.source_checksums %}<span class="block">チェックサム <code>{{ checksum }}</code></span>{% endfor %}</dd>
+    </dl>
+    <h3 class="font-medium text-gray-900 mb-2">実行したコード（{{ record.code_blocks | length }}）</h3>
+    <ol class="space-y-2">
+        {% for block in record.code_blocks %}
+        <li>
+            <details data-testid="advanced-record-code">
+                <summary class="cursor-pointer text-sm">{{ loop.index }}. {{ code_kind_label(block.get("kind")) }}</summary>
+                <pre class="mt-1 bg-gray-50 border border-gray-200 rounded p-2 text-xs font-mono overflow-x-auto max-h-64" tabindex="0"><code>{{ block.get("code", "") }}</code></pre>
+                <p class="text-xs text-gray-600 mt-1">ハッシュ <code>{{ block.get("sha256", "") }}</code></p>
+            </details>
+        </li>
+        {% endfor %}
+    </ol>
+    {% else %}
+    <p class="text-sm text-gray-700" data-testid="advanced-record-missing">分析の記録は残っていません</p>
+    {% endif %}
+    <div class="mt-4 text-right">
+        <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">閉じる</button>
+    </div>
+</div>

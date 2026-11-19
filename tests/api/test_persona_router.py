@@ -74,6 +74,154 @@ class TestPersonaGenerationPage:
         assert 'data-testid="generation-data-type-dwh"' in html
 
 
+def _advanced_available(available: bool):
+    """Patch the tab strip's availability check (U1 BR1.1)."""
+    manager = Mock()
+    manager.is_available.return_value = available
+    return patch(
+        "web.routers.persona_advanced.get_advanced_generation_manager",
+        return_value=manager,
+    )
+
+
+class TestGenerationTabs:
+    """通常の生成のページのタブの帯（高度な生成 U1、BR10.1、BR10.2）。"""
+
+    def test_available_user_sees_both_tabs_with_the_current_one_marked(self, client):
+        import re
+
+        with _advanced_available(True):
+            html = client.get("/persona/generation").text
+
+        assert 'data-testid="generation-tabs"' in html
+        standard = re.search(
+            r'<a\b[^>]*data-testid="generation-tab-standard"[^>]*>', html
+        )
+        advanced = re.search(
+            r'<a\b[^>]*data-testid="generation-tab-advanced"[^>]*>', html
+        )
+        assert standard and 'aria-current="page"' in standard.group(0)
+        assert advanced and "aria-current" not in advanced.group(0)
+        assert "ベータ" in html
+        # 通常の生成のフォームはそのまま
+        assert 'id="generate-form"' in html
+
+    def test_unavailable_user_sees_no_tab_strip(self, client):
+        with _advanced_available(False):
+            html = client.get("/persona/generation").text
+
+        assert 'data-testid="generation-tabs"' not in html
+        assert "/persona/generation/advanced" not in html
+        assert 'id="generate-form"' in html
+
+    def test_back_from_the_advanced_page_shows_the_notice_toast(self, client):
+        with _advanced_available(False):
+            html = client.get("/persona/generation?notice=advanced_unavailable").text
+
+        message = user_message_for_code(ErrorCode.ADVANCED_GENERATION_UNAVAILABLE.value)
+        assert "showFlashMessage" in html
+        assert json.dumps(message) in html
+
+    def test_unknown_notice_shows_nothing(self, client):
+        with _advanced_available(False):
+            html = client.get("/persona/generation?notice=<b>x</b>").text
+
+        assert "showFlashMessage(" not in html
+        assert "<b>x</b>" not in html
+
+    def test_availability_failure_keeps_the_ordinary_page(self, client):
+        manager = Mock()
+        manager.is_available.side_effect = RuntimeError("settings down")
+        with patch(
+            "web.routers.persona_advanced.get_advanced_generation_manager",
+            return_value=manager,
+        ):
+            response = client.get("/persona/generation")
+
+        assert response.status_code == 200
+        assert 'data-testid="generation-tabs"' not in response.text
+        assert "settings down" not in response.text
+
+
+class TestAdvancedPersonaDetail:
+    """高度な生成で作ったペルソナの詳細画面のバッジと分析の要約（U1、US10.3、S13）。"""
+
+    def _persona(self, sample_persona, segment_id="S1", unverified=()):
+        from tests.advanced_screen_samples import advanced_context
+
+        return replace(
+            sample_persona,
+            generation_context=advanced_context(segment_id, unverified=unverified),
+        )
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_badge_summary_and_record_are_shown(
+        self, mock_get_manager, client, sample_persona
+    ):
+        from tests.advanced_screen_samples import SCRIPT_TEXT, record
+
+        persona = self._persona(sample_persona)
+        manager = mock_get_manager.return_value
+        manager.get_persona_detail.return_value = _detail(persona)
+        manager.get_analysis_record.return_value = record()
+
+        response = client.get(f"/persona/{persona.id}")
+
+        assert response.status_code == 200
+        html_text = response.text
+        assert 'data-testid="persona-advanced-badge"' in html_text
+        assert "高度な生成（ベータ）で作成" in html_text
+        assert "クラスタ分析" in html_text
+        assert "全体の 50%" in html_text
+        assert 'data-testid="advanced-record"' in html_text
+        assert SCRIPT_TEXT not in html_text
+        assert manager.get_analysis_record.call_args.args[1] == persona.id
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_unverified_segment_share_is_not_shown(
+        self, mock_get_manager, client, sample_persona
+    ):
+        persona = self._persona(sample_persona, segment_id="S2", unverified=("S2",))
+        manager = mock_get_manager.return_value
+        manager.get_persona_detail.return_value = _detail(persona)
+        manager.get_analysis_record.return_value = None
+
+        html_text = client.get(f"/persona/{persona.id}").text
+
+        assert "全体の 50%" not in html_text
+        assert "分析の記録は残っていません" in html_text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_unreadable_record_still_shows_the_detail(
+        self, mock_get_manager, client, sample_persona
+    ):
+        persona = self._persona(sample_persona)
+        manager = mock_get_manager.return_value
+        manager.get_persona_detail.return_value = _detail(persona)
+        manager.get_analysis_record.side_effect = PersonaManagerError(
+            "s3 read failed", code=ErrorCode.GENERATION_OPERATION_FAILED
+        )
+
+        response = client.get(f"/persona/{persona.id}")
+
+        assert response.status_code == 200
+        assert 'data-testid="persona-advanced-badge"' in response.text
+        assert "分析の記録は残っていません" in response.text
+        assert "s3 read failed" not in response.text
+
+    @patch("web.routers.persona.get_persona_manager")
+    def test_ordinary_persona_has_no_badge_and_no_record_read(
+        self, mock_get_manager, client, sample_persona
+    ):
+        manager = mock_get_manager.return_value
+        manager.get_persona_detail.return_value = _detail(sample_persona)
+
+        html_text = client.get(f"/persona/{sample_persona.id}").text
+
+        assert 'data-testid="persona-advanced-badge"' not in html_text
+        manager.get_analysis_record.assert_not_called()
+
+
 class TestPersonaManagementPage:
     """ペルソナ管理ページのテスト"""
 

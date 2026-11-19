@@ -1,0 +1,38 @@
+{#
+  区画 C の進み具合（S6、S10、契約 C3）と、結果を入れる区画 D の入れ物。
+  advanced-upload.js が data-events-url の SSE（EventSource）につなぎ、段階・ログ・失敗を描く。
+  引数:
+    generation_id ... 生成の ID
+    elapsed ... ElapsedClock（始まりからの秒と、まだ進むか）。None なら経過時間を出さない
+#}
+<section id="advanced-progress" data-testid="advanced-progress" data-generation-id="{{ generation_id }}"
+         data-events-url="/persona/advanced/generations/{{ generation_id | urlencode }}/events"
+         aria-labelledby="advanced-progress-title" class="bg-white rounded-lg shadow-md p-6 mb-6">
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+        <h2 id="advanced-progress-title" tabindex="-1" class="text-lg font-semibold text-gray-900">C. 進み具合</h2>
+        {% if elapsed %}
+        {# 経過時間は 1 秒ごとに書き換えるが、aria-live の外に置いて読み上げない（アクセシビリティの 10） #}
+        <p data-testid="advanced-elapsed" data-elapsed-seconds="{{ elapsed.seconds }}"
+           data-running="{{ 'true' if elapsed.running else 'false' }}"
+           class="text-sm text-gray-700 tabular-nums">経過 <span data-role="clock">{{ '%02d:%02d' | format(elapsed.seconds // 60, elapsed.seconds % 60) }}</span></p>
+        {% endif %}
+    </div>
+    <ol data-testid="advanced-stages" class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-700 mb-4">
+        {% for key, label in [("preparing", "前準備"), ("planning", "計画"), ("running", "実行"), ("synthesizing", "合成"), ("verifying", "検証")] %}
+        <li data-stage="{{ key }}" data-state="pending" data-testid="advanced-stage-{{ key }}"><span data-role="mark">（未）</span> {{ label }}</li>
+        {% endfor %}
+    </ol>
+    <p data-testid="advanced-reconnecting" hidden class="text-sm text-amber-900 mb-2">接続し直しています</p>
+    <div data-testid="advanced-disconnected" hidden class="bg-amber-50 border border-amber-300 rounded-md p-3 mb-2">
+        <p class="text-sm text-amber-900">進み具合を受け取れません。ページを読み直してください</p>
+        <button type="button" data-testid="advanced-reload-button" data-action="reload"
+                class="mt-2 text-sm underline text-amber-900">読み直す</button>
+    </div>
+    <ul data-testid="advanced-log" aria-live="polite" class="text-sm text-gray-800 space-y-1 bg-gray-50 rounded-md p-3 min-h-[3rem]"></ul>
+    <div data-testid="advanced-failure" hidden class="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+        <h3 tabindex="-1" data-role="title" class="font-semibold text-red-900">生成できませんでした</h3>
+        <p data-role="message" class="text-sm text-red-800 mt-1"></p>
+        <a href="/persona/generation/advanced" class="inline-block mt-3 text-sm text-red-800 underline">データと指示に戻る</a>
+    </div>
+</section>
+<div id="advanced-result" data-testid="advanced-result-area"></div>

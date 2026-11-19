@@ -557,6 +557,34 @@ class TestServiceFactoryAuthzServices:
         assert store.client.meta.region_name == "ap-northeast-1"
 
     @patch("src.services.service_factory.config")
+    def test_advanced_generation_stores_use_their_tables(
+        self, mock_config, monkeypatch
+    ):
+        """高度な生成 U1 の 3 つのストア（SourceFiles・AdvancedGenerations・AppSettings）。"""
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.DYNAMODB_REGION = "ap-northeast-1"
+        mock_config.SOURCE_FILES_TABLE_NAME = "Sources-physical"
+        mock_config.ADVANCED_GENERATIONS_TABLE_NAME = "Generations-physical"
+        mock_config.APP_SETTINGS_TABLE_NAME = "Settings-physical"
+
+        factory = ServiceFactory()
+        sources = factory.get_source_file_store()
+        generations = factory.get_advanced_generation_store()
+        settings = factory.get_app_settings_store()
+
+        assert sources is factory.get_source_file_store()
+        assert generations is factory.get_advanced_generation_store()
+        assert settings is factory.get_app_settings_store()
+        assert sources.table_name == "Sources-physical"
+        assert generations.table_name == "Generations-physical"
+        assert generations.source_files_table_name == "Sources-physical"
+        assert settings.table_name == "Settings-physical"
+        assert generations.client.meta.region_name == "ap-northeast-1"
+
+    @patch("src.services.service_factory.config")
     def test_user_directory_service_needs_a_user_pool(self, mock_config):
         from src.models.errors import CodedError, ErrorCode
         from src.services.service_factory import ServiceFactory
@@ -686,3 +714,72 @@ class TestServiceFactoryAuthzServices:
         with pytest.raises(CodedError) as info:
             ServiceFactory().get_user_source()
         assert info.value.code is ErrorCode.AUTH_CONFIG_INVALID
+
+    @patch("src.services.service_factory.config")
+    def test_sandbox_service_uses_the_code_interpreter(self, mock_config, monkeypatch):
+        """高度な生成 U1: Code Interpreter 版の SandboxService（C10）。"""
+        from src.services.sandbox_service import CodeInterpreterSandbox
+        from src.services.service_factory import ServiceFactory
+
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        mock_config.CODE_INTERPRETER_ID = "persona_ci-abc"
+        mock_config.AWS_REGION = "ap-northeast-1"
+        mock_config.ADVANCED_TOOL_MAX_OUTPUT_CHARS = 1234
+
+        factory = ServiceFactory()
+        sandbox = factory.get_sandbox_service()
+
+        assert sandbox is factory.get_sandbox_service()
+        assert isinstance(sandbox, CodeInterpreterSandbox)
+        assert sandbox.code_interpreter_id == "persona_ci-abc"
+        assert sandbox.max_output_chars == 1234
+        assert sandbox.client.meta.region_name == "ap-northeast-1"
+        assert sandbox.library_path.endswith("sandbox/persona_analysis.py")
+
+    @patch("src.services.service_factory.config")
+    def test_sandbox_service_needs_a_code_interpreter(self, mock_config):
+        from src.models.errors import CodedError, ErrorCode
+        from src.services.service_factory import ServiceFactory
+
+        mock_config.CODE_INTERPRETER_ID = ""
+        with pytest.raises(CodedError) as info:
+            ServiceFactory().get_sandbox_service()
+        assert info.value.code is ErrorCode.ADVANCED_GENERATION_UNAVAILABLE
+
+    def test_analysis_tools_are_made_per_generation(self):
+        """生成ごとに組み立て、シングルトンにしない（ADR-012）。"""
+        from src.models.analysis import AnalysisToolPolicy, U1_ANALYSIS_TOOLS
+        from src.services.dataset_analysis.analysis_tool_service import (
+            AnalysisToolService,
+        )
+        from src.services.service_factory import ServiceFactory
+
+        sandbox = Mock()
+        policy = AnalysisToolPolicy(tools=U1_ANALYSIS_TOOLS, limits={"max_calls": 5})
+        factory = ServiceFactory()
+
+        first = factory.create_analysis_tools(
+            "session",
+            policy,
+            source_id="f1",
+            columns=["age"],
+            persona_count=2,
+            sandbox=sandbox,
+        )
+        second = factory.create_analysis_tools(
+            "session",
+            policy,
+            source_id="f1",
+            columns=["age"],
+            persona_count=2,
+            sandbox=sandbox,
+        )
+
+        assert isinstance(first, AnalysisToolService)
+        assert first is not second
+        assert [t.tool_name for t in first.tools()] == [
+            "profile_dataset",
+            "analyze_dataset",
+            "cluster_segments",
+        ]

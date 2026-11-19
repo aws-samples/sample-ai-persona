@@ -248,12 +248,14 @@ describe('mergeClosedStageContext: コンテキストを閉域の既定に重ね
 describe('resolveDeploymentProfile: 閉域で使えない機能（U3 BR5.1〜BR5.5）', () => {
   const DEFAULT_KEY = 'persona-dataset/nemotron-personas-japan.parquet';
 
-  test('閉域のタスクに足す環境変数 3 つ（キーは既定）と U4 の配信の方式（BR5.1）', () => {
+  test('閉域のタスクに足す環境変数 3 つ（キーは既定）と U4 の配信の方式（BR5.1）、高度な生成を止める値（BR1.4）', () => {
     expect(resolveClosed().closedFeatureEnvironment).toEqual({
       NEMOTRON_SOURCE: 's3',
       NEMOTRON_DATASET_KEY: DEFAULT_KEY,
       DATA_AGENT_ALLOWED: 'false',
       ASSET_DELIVERY: 'proxy',
+      // 高度な生成（ベータ、U1、FR2.5）: 閉域では Code Interpreter を作らない
+      ENABLE_ADVANCED_GENERATION: 'false',
     });
   });
 

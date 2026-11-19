@@ -1,0 +1,639 @@
+/**
+ * 高度な生成（ベータ）のページの動き（U1、S2〜S10）。
+ *
+ * - 区画 A: 表を 16MB（サーバーが決めた大きさ）ずつ、署名付き URL へ同時に最大 4 本で PUT する。
+ *   失敗したパートは 1・2・4 秒あけて 3 回まで送り直し、尽きたら取り消す（BR2.5、C2）。
+ *   URL の期限の 5 分前に、まだ送っていないパートの URL を取り直す（BR2.4）。
+ *   ファイルの中身はアプリに送らない（BR2.6）。URL は画面にもログにも出さない。
+ * - 区画 B: 準備OK の表を選ぶまで「ペルソナを生成」を押せない。理由は文字で出す。
+ * - 区画 C: 進み具合は EventSource で読む（C3）。切れたら自動でつなぎ直し（Last-Event-ID）、
+ *   2 分つながらなければ読み直しを案内する。done を受けたら閉じる。
+ * - 区画 D: 結果の HTML はサーバーが描いたもの（自動エスケープ済み）。候補を選ぶまで保存できない。
+ *
+ * htmx のイベントには登録しない（htmx のハンドラは app.js に集める。frontend.md）。
+ * 待ち時間は window.ADVANCED_UPLOAD_TIMING で上書きできる（部品のテスト用）。
+ */
+(function () {
+    'use strict';
+
+    var page = document.getElementById('advanced-generation');
+    if (!page) return;
+
+    var TIMING = Object.assign({
+        retryDelaysMs: [1000, 2000, 4000],
+        refreshLeadMs: 5 * 60 * 1000,
+        reconnectDelaysMs: [3000, 6000, 12000, 24000, 30000],
+        disconnectAfterMs: 2 * 60 * 1000
+    }, window.ADVANCED_UPLOAD_TIMING || {});
+
+    var MAX_REFRESHES = 24;
+    var MAX_TIMER_MS = 2147483647;
+    var STAGES = ['preparing', 'planning', 'running', 'synthesizing', 'verifying'];
+    var MARKS = { pending: '（未）', current: '（中）', done: '（済）', failed: '（×）' };
+    var METHOD_LABELS = { filter: '絞り込み', compare: '群どうしの比較', cluster: 'クラスタ分析' };
+    var FAILURE_TITLES = {
+        generation_timeout: '生成が止まりました',
+        generation_sandbox_unavailable: '今は高度な生成を使えません',
+        generation_expired: 'この生成の結果は残っていません'
+    };
+
+    var rows = document.getElementById('advanced-upload-rows');
+    var rowTemplate = document.getElementById('advanced-upload-row-template');
+    var emptyNote = page.querySelector('[data-testid="advanced-upload-empty"]');
+    var announcer = document.getElementById('advanced-upload-announcer');
+    var inputs = document.getElementById('advanced-inputs');
+    var form = document.getElementById('advanced-generation-form');
+    var generateButton = page.querySelector('[data-testid="advanced-generate-button"]');
+    var generateReason = page.querySelector('[data-testid="advanced-generate-reason"]');
+    var progressArea = document.getElementById('advanced-progress-area');
+
+    var running = false;
+    var submitting = false;
+
+    // --- 共通 ------------------------------------------------------------
+
+    function toast(message) {
+        if (typeof window.showFlashMessage === 'function') window.showFlashMessage(message, 'error');
+    }
+
+    function sleep(ms) {
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    function announce(text) {
+        if (announcer) announcer.textContent = text;
+    }
+
+    function sizeLabel(bytes) {
+        return '（' + (bytes / 1000000).toFixed(1) + 'MB）';
+    }
+
+    function postForm(url, values) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body: new URLSearchParams(values),
+            credentials: 'same-origin'
+        });
+    }
+
+    function postJson(url, body) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            credentials: 'same-origin'
+        });
+    }
+
+    function readJson(response) {
+        return response.json().catch(function () { return {}; });
+    }
+
+    function parseHtml(html) {
+        var holder = document.createElement('template');
+        holder.innerHTML = html.trim();
+        return holder.content.firstElementChild;
+    }
+
+    function updateEmptyNote() {
+        if (emptyNote) emptyNote.hidden = rows.querySelector('[data-testid="advanced-upload-row"]') !== null;
+    }
+
+    // --- 区画 B: 生成のボタン --------------------------------------------
+
+    function updateGenerateState() {
+        if (!generateButton) return;
+        var chosen = document.querySelector('[name="source_file_ids"]:checked');
+        var reason = '';
+        if (submitting) {
+            reason = '開始しています';
+        } else if (running) {
+            reason = '実行中の生成があります。終わるか中止してから始めてください';
+        } else if (!chosen) {
+            reason = '準備OK のファイルを選んでください';
+        }
+        generateButton.disabled = submitting || running || !chosen;
+        generateReason.textContent = reason;
+    }
+
+    if (form) {
+        form.addEventListener('submit', function () {
+            submitting = true;
+            // htmx が値を集めたあとで押せなくする
+            setTimeout(updateGenerateState, 0);
+        });
+        // 送信が断られた（フォームの中の誤り、トースト）ら押せる状態に戻す
+        var formError = form.querySelector('.advanced-form-error');
+        var toasts = document.getElementById('toast-alert');
+        var release = function () {
+            if (!submitting) return;
+            submitting = false;
+            updateGenerateState();
+        };
+        if (formError) new MutationObserver(release).observe(formError, { childList: true });
+        if (toasts) new MutationObserver(release).observe(toasts, { childList: true });
+    }
+
+    document.addEventListener('change', function (evt) {
+        var target = evt.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (target.name === 'source_file_ids') updateGenerateState();
+        if (target.matches('[data-testid="advanced-candidate-check"]')) updateSaveState(target.form);
+    });
+
+    // --- 区画 A: アップロード ---------------------------------------------
+
+    function refusal(file, count) {
+        var name = file.name.toLowerCase();
+        var maxBytes = Number(page.dataset.maxBytes);
+        var maxFiles = Number(page.dataset.maxFiles);
+        if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+            return '上げられません: Excel のファイルは使えません。CSV で保存し直して上げてください';
+        }
+        if (!(name.endsWith('.csv') || name.endsWith('.tsv'))) {
+            return '上げられません: CSV か TSV の表を選んでください';
+        }
+        if (file.size > maxBytes) {
+            return '上げられません: 1 ファイル ' + page.dataset.maxSizeMb + 'MB までです。分けて上げてください';
+        }
+        if (count >= maxFiles) {
+            return '上げられません: 1 回の生成で使えるのは ' + maxFiles + ' ファイルまでです';
+        }
+        return null;
+    }
+
+    function onFiles(fileList) {
+        Array.prototype.forEach.call(fileList, function (file) {
+            var count = rows.querySelectorAll('[data-testid="advanced-upload-row"]').length;
+            var refused = refusal(file, count);
+            if (refused) {
+                toast(refused);
+                return;
+            }
+            startUpload(file);
+        });
+    }
+
+    function newRow(file) {
+        var row = rowTemplate.content.firstElementChild.cloneNode(true);
+        row.querySelector('[data-role="name"]').textContent = file.name;
+        row.querySelector('[data-role="size"]').textContent = sizeLabel(file.size);
+        rows.prepend(row);
+        updateEmptyNote();
+        return row;
+    }
+
+    function setStatus(upload, text) {
+        var status = upload.row.querySelector('[data-role="status"]');
+        if (status) status.textContent = text;
+    }
+
+    function startUpload(file) {
+        var row = newRow(file);
+        postForm('/persona/advanced/uploads', {
+            filename: file.name,
+            size_bytes: String(file.size),
+            content_type: file.type || ''
+        }).then(function (response) {
+            return readJson(response).then(function (body) {
+                if (!response.ok) {
+                    toast(body.detail || 'アップロードを始められませんでした');
+                    row.remove();
+                    updateEmptyNote();
+                    return;
+                }
+                sendParts(file, row, body);
+            });
+        }).catch(function () {
+            toast('アップロードを始められませんでした。通信を確かめてください');
+            row.remove();
+            updateEmptyNote();
+        });
+    }
+
+    function sendParts(file, row, session) {
+        var upload = {
+            id: session.source_file_id,
+            file: file,
+            row: row,
+            partSize: session.part_size_bytes,
+            partCount: session.part_count,
+            urls: new Map(),
+            expiresAt: session.expires_at,
+            etags: new Map(),
+            sentBytes: 0,
+            controller: new AbortController(),
+            refreshing: null,
+            refreshTimer: null,
+            refreshes: 0,
+            finished: false
+        };
+        session.part_urls.forEach(function (p) { upload.urls.set(p.part_number, p.url); });
+        row.dataset.sourceFileId = upload.id;
+        var cancel = row.querySelector('[data-action="cancel"]');
+        if (cancel) cancel.addEventListener('click', function () { cancelUpload(upload); });
+        scheduleRefresh(upload);
+
+        var queue = [];
+        for (var n = 1; n <= upload.partCount; n += 1) queue.push(n);
+        var workers = [];
+        var concurrency = Number(page.dataset.concurrency) || 4;
+        for (var i = 0; i < concurrency; i += 1) workers.push(worker(upload, queue));
+        Promise.all(workers).then(function () {
+            finishParts(upload);
+            completeUpload(upload);
+        }).catch(function (failure) {
+            finishParts(upload);
+            if (upload.controller.signal.aborted && failure && failure.cancelled) return;
+            failUpload(upload, failure && failure.status);
+        });
+    }
+
+    function worker(upload, queue) {
+        var next = function () {
+            if (queue.length === 0) return Promise.resolve();
+            var number = queue.shift();
+            return Promise.resolve(upload.refreshing)
+                .then(function () { return sendPart(upload, number); })
+                .then(next);
+        };
+        return next();
+    }
+
+    function sendPart(upload, number) {
+        var start = (number - 1) * upload.partSize;
+        var blob = upload.file.slice(start, start + upload.partSize);
+        var lastStatus = 0;
+        var attempt = function (index) {
+            if (upload.controller.signal.aborted) return Promise.reject({ cancelled: true });
+            return fetch(upload.urls.get(number), {
+                method: 'PUT',
+                body: blob,
+                signal: upload.controller.signal
+            }).then(function (response) {
+                var etag = response.headers.get('ETag');
+                if (response.ok && etag) {
+                    upload.etags.set(number, etag);
+                    upload.sentBytes += blob.size;
+                    var percent = Math.floor((upload.sentBytes / upload.file.size) * 100);
+                    setStatus(upload, 'アップロード中 ' + percent + '%');
+                    return undefined;
+                }
+                lastStatus = response.status;
+                return retry(index);
+            }, function () {
+                if (upload.controller.signal.aborted) return Promise.reject({ cancelled: true });
+                return retry(index);
+            });
+        };
+        var retry = function (index) {
+            if (index >= TIMING.retryDelaysMs.length) return Promise.reject({ status: lastStatus });
+            return sleep(TIMING.retryDelaysMs[index]).then(function () { return attempt(index + 1); });
+        };
+        return attempt(0);
+    }
+
+    function finishParts(upload) {
+        upload.finished = true;
+        if (upload.refreshTimer) clearTimeout(upload.refreshTimer);
+    }
+
+    function scheduleRefresh(upload) {
+        if (upload.finished || upload.refreshes >= MAX_REFRESHES) return;
+        var delay = Math.max(0, Date.parse(upload.expiresAt) - TIMING.refreshLeadMs - Date.now());
+        if (delay > MAX_TIMER_MS) {
+            // setTimeout は 2^31-1 ミリ秒を超えるとすぐに動くので、刻んで待つ
+            upload.refreshTimer = setTimeout(function () { scheduleRefresh(upload); }, MAX_TIMER_MS);
+            return;
+        }
+        upload.refreshTimer = setTimeout(function () { refreshUrls(upload); }, delay);
+    }
+
+    function refreshUrls(upload) {
+        if (upload.finished) return;
+        var numbers = [];
+        for (var n = 1; n <= upload.partCount; n += 1) {
+            if (!upload.etags.has(n)) numbers.push(n);
+        }
+        if (numbers.length === 0) return;
+        upload.refreshes += 1;
+        var previous = upload.expiresAt;
+        upload.refreshing = postJson('/persona/advanced/uploads/' + encodeURIComponent(upload.id) + '/part-urls', {
+            part_numbers: numbers
+        }).then(function (response) {
+            return readJson(response).then(function (body) {
+                if (!response.ok) return; // 取り直せないときは、期限切れの送信が送り直しの扱いになる
+                body.part_urls.forEach(function (p) { upload.urls.set(p.part_number, p.url); });
+                upload.expiresAt = body.expires_at;
+                if (Date.parse(body.expires_at) > Date.parse(previous)) scheduleRefresh(upload);
+            });
+        }).catch(function () { return undefined; }).then(function () {
+            upload.refreshing = null;
+        });
+    }
+
+    function cancelUpload(upload) {
+        upload.controller.abort();
+        finishParts(upload);
+        fetch('/persona/advanced/uploads/' + encodeURIComponent(upload.id), {
+            method: 'DELETE',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        }).catch(function () { return undefined; });
+        upload.row.remove();
+        updateEmptyNote();
+        announce(upload.file.name + ' のアップロードを取り消しました');
+    }
+
+    function failUpload(upload, status) {
+        upload.controller.abort();
+        fetch('/persona/advanced/uploads/' + encodeURIComponent(upload.id), {
+            method: 'DELETE',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        }).catch(function () { return undefined; });
+        var message = status === 403
+            ? '上げられませんでした: 時間がたったため止まりました。もう一度上げてください'
+            : '上げられませんでした。通信を確かめて、もう一度上げてください';
+        upload.row.dataset.state = 'error';
+        setStatus(upload, message);
+        var cancel = upload.row.querySelector('[data-action="cancel"]');
+        if (cancel) cancel.remove();
+        announce(upload.file.name + ': ' + message);
+    }
+
+    function completeUpload(upload) {
+        upload.row.dataset.state = 'inspecting';
+        setStatus(upload, '検査中');
+        var cancel = upload.row.querySelector('[data-action="cancel"]');
+        if (cancel) cancel.remove();
+        var parts = Array.from(upload.etags.entries())
+            .sort(function (a, b) { return a[0] - b[0]; })
+            .map(function (entry) { return { part_number: entry[0], etag: entry[1] }; });
+        postJson('/persona/advanced/uploads/' + encodeURIComponent(upload.id) + '/complete', { parts: parts })
+            .then(function (response) {
+                return readJson(response).then(function (body) {
+                    // 入力を直せば解決する誤りは、行の断片がエラーの文で出す
+                    if (!response.ok && body.kind !== 'validation' && body.kind !== 'capacity') {
+                        toast(body.detail || '確定できませんでした。時間をおいて再度お試しください');
+                    }
+                });
+            })
+            .catch(function () { toast('確定できませんでした。通信を確かめてください'); })
+            .then(function () { return replaceRow(upload); });
+    }
+
+    function replaceRow(upload) {
+        return fetch('/persona/advanced/uploads/' + encodeURIComponent(upload.id), {
+            headers: { 'HX-Request': 'true' },
+            credentials: 'same-origin'
+        }).then(function (response) {
+            if (!response.ok) return undefined; // 行はそのまま残す（失敗はトーストで出した）
+            return response.text().then(function (html) {
+                var fresh = parseHtml(html);
+                if (!fresh) return;
+                upload.row.replaceWith(fresh);
+                upload.row = fresh;
+                if (window.htmx) window.htmx.process(fresh);
+                var status = fresh.querySelector('[data-testid="advanced-upload-status"]');
+                announce(upload.file.name + ': ' + (status ? status.textContent.trim().replace(/\s+/g, ' ') : ''));
+                updateGenerateState();
+            });
+        }).catch(function () { return undefined; });
+    }
+
+    var fileInput = document.getElementById('advanced-file-input');
+    if (fileInput) {
+        fileInput.addEventListener('change', function () {
+            onFiles(fileInput.files);
+            fileInput.value = '';
+        });
+    }
+    var dropZone = page.querySelector('[data-testid="advanced-drop-zone"]');
+    if (dropZone) {
+        ['dragenter', 'dragover'].forEach(function (name) {
+            dropZone.addEventListener(name, function (evt) { evt.preventDefault(); });
+        });
+        dropZone.addEventListener('drop', function (evt) {
+            evt.preventDefault();
+            if (evt.dataTransfer) onFiles(evt.dataTransfer.files);
+        });
+    }
+
+    // --- 区画 C: 進み具合 ---------------------------------------------------
+
+    function setStages(panel, current, failed) {
+        var index = STAGES.indexOf(current);
+        panel.querySelectorAll('[data-stage]').forEach(function (item) {
+            var position = STAGES.indexOf(item.dataset.stage);
+            var state = 'pending';
+            if (current === 'done' || position < index) state = 'done';
+            else if (position === index) state = failed ? 'failed' : 'current';
+            item.dataset.state = state;
+            item.querySelector('[data-role="mark"]').textContent = MARKS[state];
+        });
+    }
+
+    function addLog(panel, text) {
+        var item = document.createElement('li');
+        item.textContent = text;
+        panel.querySelector('[data-testid="advanced-log"]').appendChild(item);
+    }
+
+    function parseData(evt) {
+        try {
+            var value = JSON.parse(evt.data || '{}');
+            return value && typeof value === 'object' ? value : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function clockText(seconds) {
+        var minutes = Math.floor(seconds / 60);
+        var rest = seconds % 60;
+        return (minutes < 10 ? '0' : '') + minutes + ':' + (rest < 10 ? '0' : '') + rest;
+    }
+
+    // 経過時間（AC9.1.1）: サーバーが描いた秒から 1 秒ごとに進める。終わった生成は進めない。
+    // 表示は aria-live の外にあり、毎秒の書き換えは読み上げない。止める関数を返す
+    function startClock(panel) {
+        var element = panel.querySelector('[data-testid="advanced-elapsed"]');
+        if (!element || element.dataset.running !== 'true') return function () {};
+        var clock = element.querySelector('[data-role="clock"]');
+        var base = Number(element.dataset.elapsedSeconds) || 0;
+        var startedAt = Date.now();
+        var timer = setInterval(function () {
+            clock.textContent = clockText(base + Math.floor((Date.now() - startedAt) / 1000));
+        }, 1000);
+        return function () {
+            clearInterval(timer);
+            element.dataset.running = 'false';
+        };
+    }
+
+    function connect(panel) {
+        if (panel.dataset.connected) return;
+        panel.dataset.connected = 'true';
+        var url = panel.dataset.eventsUrl;
+        var state = { lastId: 0, current: null, finished: false, failures: 0, firstFailureAt: null, source: null };
+        var reconnecting = panel.querySelector('[data-testid="advanced-reconnecting"]');
+        var disconnected = panel.querySelector('[data-testid="advanced-disconnected"]');
+        rememberGeneration(panel.dataset.generationId);
+
+        // 同じ接続の続き（id のないフレーム）は受け、手動でつなぎ直したときの送り直しは捨てる
+        var fresh = function (evt, connection) {
+            var raw = evt.lastEventId || '';
+            if (raw === connection.previous) return true;
+            connection.previous = raw;
+            var number = Number(raw);
+            if (!raw || isNaN(number)) return true;
+            if (number <= state.lastId) return false;
+            state.lastId = number;
+            return true;
+        };
+
+        var stopClock = startClock(panel);
+
+        var finish = function () {
+            state.finished = true;
+            stopClock();
+            running = false;
+            reconnecting.hidden = true;
+            if (state.source) state.source.close();
+            updateGenerateState();
+        };
+
+        var handlers = {
+            stage: function (data) {
+                state.current = data.status;
+                setStages(panel, data.status, false);
+                running = true;
+                if (inputs) inputs.open = false;
+                updateGenerateState();
+            },
+            progress: function (data) {
+                if (data.message) addLog(panel, String(data.message));
+            },
+            plan: function (data) {
+                var text = '計画: ' + (METHOD_LABELS[data.method] || '分析');
+                if (data.interpreted_purpose) text += '（' + String(data.interpreted_purpose) + '）';
+                addLog(panel, text);
+            },
+            result: function (data, evt) {
+                setStages(panel, 'done', false);
+                var area = document.getElementById('advanced-result');
+                area.innerHTML = evt.data; // サーバーが描いた区画 D（自動エスケープ済み）
+                if (window.htmx) window.htmx.process(area);
+                finish();
+                if (inputs) inputs.open = false;
+                var title = document.getElementById('advanced-result-title');
+                if (title) title.focus();
+            },
+            error: function (data) {
+                setStages(panel, state.current || 'preparing', true);
+                var failure = panel.querySelector('[data-testid="advanced-failure"]');
+                var title = failure.querySelector('[data-role="title"]');
+                title.textContent = FAILURE_TITLES[data.error_code] || '生成できませんでした';
+                failure.querySelector('[data-role="message"]').textContent = String(data.message || '');
+                failure.hidden = false;
+                finish();
+                if (inputs) inputs.open = true;
+                title.focus();
+            },
+            done: function () {
+                finish();
+            }
+        };
+
+        var open = function () {
+            var connection = { previous: '' };
+            // 自分でつなぎ直すときは、受け取った最後の番号をクエリで伝える（ヘッダーは付けられない）
+            var target = state.lastId > 0
+                ? url + (url.indexOf('?') === -1 ? '?' : '&') + 'last_event_id=' + state.lastId
+                : url;
+            var source = new EventSource(target);
+            state.source = source;
+            Object.keys(handlers).forEach(function (name) {
+                source.addEventListener(name, function (evt) {
+                    // 接続が切れたときの EventSource 自身の error（MessageEvent でない）は onerror が扱う
+                    if (!(evt instanceof MessageEvent)) return;
+                    if (state.finished && name !== 'done') return;
+                    if (!fresh(evt, connection)) return;
+                    handlers[name](parseData(evt), evt);
+                });
+            });
+            source.onopen = function () {
+                state.failures = 0;
+                state.firstFailureAt = null;
+                reconnecting.hidden = true;
+            };
+            source.onerror = function () {
+                if (state.finished) {
+                    source.close();
+                    return;
+                }
+                var now = Date.now();
+                if (state.firstFailureAt === null) state.firstFailureAt = now;
+                if (now - state.firstFailureAt >= TIMING.disconnectAfterMs) {
+                    source.close();
+                    reconnecting.hidden = true;
+                    disconnected.hidden = false;
+                    return;
+                }
+                // ブラウザ任せにせず自分でつなぎ直す（3・6・12…最大 30 秒あける。interaction-spec）。
+                // 続きの番号はクエリで渡すので、つなぎ直しの仕組みによらず続きから届く
+                source.close();
+                reconnecting.hidden = false;
+                var delays = TIMING.reconnectDelaysMs;
+                var delay = delays[Math.min(state.failures, delays.length - 1)];
+                state.failures += 1;
+                setTimeout(open, delay);
+            };
+        };
+
+        var reload = panel.querySelector('[data-action="reload"]');
+        if (reload) reload.addEventListener('click', function () { window.location.reload(); });
+        open();
+    }
+
+    function rememberGeneration(generationId) {
+        // 読み直しても同じ生成を開けるよう、URL に生成の ID を残す（W1-5）
+        if (!generationId || !window.history || !window.history.replaceState) return;
+        var current = new URL(window.location.href);
+        if (current.searchParams.get('generation') === generationId) return;
+        current.searchParams.set('generation', generationId);
+        window.history.replaceState(null, '', current.pathname + current.search);
+    }
+
+    function connectNewPanel() {
+        var panel = document.getElementById('advanced-progress');
+        if (!panel || panel.dataset.connected) return;
+        submitting = false;
+        connect(panel);
+        var title = document.getElementById('advanced-progress-title');
+        if (title) title.focus();
+    }
+
+    if (progressArea) {
+        new MutationObserver(connectNewPanel).observe(progressArea, { childList: true });
+        var existing = document.getElementById('advanced-progress');
+        if (existing) connect(existing);
+    }
+
+    // --- 区画 D: 保存 ------------------------------------------------------
+
+    function updateSaveState(saveForm) {
+        if (!saveForm) return;
+        var ids = Array.from(saveForm.querySelectorAll('[data-testid="advanced-candidate-check"]:checked'))
+            .map(function (box) { return box.value; });
+        saveForm.querySelector('[data-role="persona-ids"]').value = ids.join(',');
+        saveForm.querySelector('[data-testid="advanced-save-button"]').disabled = ids.length === 0;
+        saveForm.querySelector('[data-testid="advanced-save-hint"]').textContent =
+            ids.length === 0 ? '保存するペルソナを選んでください' : '';
+    }
+
+    updateEmptyNote();
+    updateGenerateState();
+})();

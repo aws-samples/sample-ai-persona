@@ -73,6 +73,7 @@ from src.services import country_service  # noqa: E402
 from src.models.demographics import gender_label, GENDER_LABELS  # noqa: E402
 from ._asset_response import asset_response  # noqa: E402
 from ._persona_avatar import persona_avatar_url  # noqa: E402
+from . import persona_advanced  # noqa: E402
 
 templates.env.globals["country_name"] = country_service.country_name
 templates.env.globals["country_choices"] = country_service.country_choices
@@ -157,9 +158,32 @@ def get_persona_generation_manager() -> PersonaGenerationManager:
     return _persona_generation_manager
 
 
+async def _advanced_tab_shown(principal: Principal) -> bool:
+    """Whether the advanced generation tab is shown (U1 BR1.1).
+
+    A failed check hides the tab and leaves the ordinary page as it was
+    (BR10.1).
+    """
+    try:
+        shown: bool = await _run(
+            persona_advanced.get_advanced_generation_manager().is_available, principal
+        )
+    except Exception:
+        logger.warning("advanced generation availability unknown", exc_info=True)
+        return False
+    return shown
+
+
 @router.get("/generation", response_class=HTMLResponse)
-async def persona_generation_page(request: Request) -> Any:
+async def persona_generation_page(
+    request: Request, notice: Optional[str] = None
+) -> Any:
     """ペルソナ生成ページ"""
+    notice_message = (
+        user_message_for_code(ErrorCode.ADVANCED_GENERATION_UNAVAILABLE.value)
+        if notice == persona_advanced.UNAVAILABLE_NOTICE
+        else None
+    )
     return templates.TemplateResponse(
         request,
         "persona/generation.html",
@@ -171,6 +195,10 @@ async def persona_generation_page(request: Request) -> Any:
             "max_source_chars": config.PERSONA_SOURCE_MAX_CHARS,
             # 閉域対応 U3 BR3.5: 権限を問わない判定（Router は閉域かどうかを判断しない）
             "data_agent_allowed": SettingsManager.is_data_agent_allowed(),
+            # 高度な生成（ベータ）U1: タブの帯（BR10.2）と、戻されたときの案内
+            "show_advanced_tab": await _advanced_tab_shown(_principal(request)),
+            "active_tab": "standard",
+            "notice_message": notice_message,
         },
     )
 
@@ -782,6 +810,27 @@ async def _render_edit_form_with_error(
     )
 
 
+async def _analysis_record_context(
+    principal: Principal, persona: Persona
+) -> dict[str, Any]:
+    """The analysis record of a persona made by the advanced generation (U1 S13).
+
+    Ordinary personas read nothing. A record that cannot be read shows as
+    "分析の記録は残っていません" and never stops the detail page.
+    """
+    context = persona.generation_context or {}
+    if context.get("mode") != "advanced":
+        return {}
+    try:
+        record = await _run(
+            get_persona_manager().get_analysis_record, principal, persona.id
+        )
+    except Exception:
+        logger.warning("analysis record not readable", exc_info=True)
+        record = None
+    return {"analysis_record": record, "analysis_record_checked": True}
+
+
 def _detail_context(detail: PersonaDetail) -> dict[str, Any]:
     """The header values the detail page, its reload and the edit swap share (R-07)."""
     return {
@@ -835,12 +884,16 @@ async def update_persona(
         detail = await _run(
             persona_manager.describe_persona, _principal(request), updated_persona
         )
+        record_context = await _analysis_record_context(
+            _principal(request), detail.persona
+        )
         return templates.TemplateResponse(
             request,
             "persona/partials/detail_swap.html",
             {
                 "request": request,
                 **_detail_context(detail),
+                **record_context,
                 "message": "ペルソナを更新しました",
             },
         )
@@ -897,6 +950,9 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
             _principal(request),
             persona_id,
         )
+        record_context = await _analysis_record_context(
+            _principal(request), detail.persona
+        )
         return templates.TemplateResponse(
             request,
             "persona/detail.html",
@@ -904,6 +960,7 @@ async def get_persona_detail(request: Request, persona_id: str) -> Any:
                 "request": request,
                 "title": f"ペルソナ: {detail.persona.name}",
                 **_detail_context(detail),
+                **record_context,
             },
         )
     except (HTTPException, CodedError):

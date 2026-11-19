@@ -185,6 +185,60 @@ class TestNoMessageLeakage:
         assert "srv-secret-0001" not in user_message_for(exc)
 
 
+class TestJsonErrorResponse:
+    """JSON を読む画面のスクリプト向けのエラーの本文（高度な生成 U1、契約 C1）。"""
+
+    def test_body_has_the_wording_code_and_kind_only(self):
+        secret = "arn:aws:s3:::bucket/sources/owner/file failed"
+        exc = CodedError(
+            secret,
+            code=ErrorCode.UPLOAD_TOO_LARGE,
+            context={"max_size_mb": 1000, "max_bytes": 10},
+        )
+
+        response = error_messages.json_error_response(exc)
+
+        body = json.loads(response.body)
+        assert set(body) == {"detail", "error_code", "kind"}
+        assert body["error_code"] == ErrorCode.UPLOAD_TOO_LARGE.value
+        assert body["kind"] == ErrorKind.CAPACITY.value
+        assert secret not in response.body.decode()
+        assert response.status_code == 413
+        assert response.headers["Cache-Control"] == "no-store"
+
+    def test_payload_names_code_kind_and_wording(self):
+        secret = "generation expired at 2026-11-20 for owner-1"
+        exc = CodedError(secret, code=ErrorCode.GENERATION_EXPIRED)
+
+        payload = error_messages.error_payload(exc)
+
+        assert payload == {
+            "error_code": ErrorCode.GENERATION_EXPIRED.value,
+            "kind": ErrorKind.NOT_FOUND.value,
+            "message": user_message_for(exc),
+        }
+        assert secret not in json.dumps(payload, ensure_ascii=False)
+
+    def test_status_can_be_given(self):
+        exc = CodedError(code=ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING)
+
+        assert (
+            error_messages.json_error_response(exc, status_code=409).status_code == 409
+        )
+
+    def test_uncoded_exception_is_transient_with_the_fallback(self):
+        secret = "botocore: connect timeout on https://example"
+
+        response = error_messages.json_error_response(Exception(secret))
+
+        body = json.loads(response.body)
+        assert body["error_code"] == ErrorCode.UNKNOWN.value
+        assert body["kind"] == ErrorKind.TRANSIENT.value
+        assert body["detail"] == FALLBACK_MESSAGE
+        assert response.status_code == 500
+        assert secret not in response.body.decode()
+
+
 class TestActionableWordingPreserved:
     """対処方法を含む文言が総称文言に劣化していないことの回帰テスト。
 
@@ -276,6 +330,10 @@ _RESOURCE_NOT_FOUND = {
     # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
     ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
     ErrorCode.SETTINGS_NOT_FOUND,
+    # 高度な生成 U1: 他人のアップロード・ファイル・生成（functional-spec.md §5）
+    ErrorCode.UPLOAD_NOT_FOUND,
+    ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+    ErrorCode.GENERATION_NOT_FOUND,
 }
 
 

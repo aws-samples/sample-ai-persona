@@ -124,6 +124,19 @@ export interface DeploymentProfileInput {
   surveyModelId?: string;
 }
 
+/**
+ * 高度な生成（ベータ、U1、NFR3.4）の Code Interpreter の実行ロール。
+ * - `none`: 実行ロールを付けない（executionRoleArn を省く）。セッションの中のコードは AWS の
+ *   認証情報を持たない。持ち込みは署名付き URL なので認証情報は要らない
+ * - `empty`: 許可のポリシーを持たない実行ロール（信頼は bedrock-agentcore.amazonaws.com、
+ *   aws:SourceAccount の条件つき）。`none` でセッションが開かないときの切り替え先
+ *   （infrastructure-specification.md「決めたこと」）
+ */
+export type CodeInterpreterExecutionRole = 'none' | 'empty';
+
+/** 公開の Stage の Code Interpreter の実行ロール（既定は付けない）。切り替えるときはここを変える。 */
+export const CODE_INTERPRETER_EXECUTION_ROLE: CodeInterpreterExecutionRole = 'none';
+
 /** The Nemotron key the app has always used (src/models/nemotron_dataset.py). */
 export const DEFAULT_NEMOTRON_DATASET_KEY = 'persona-dataset/nemotron-personas-japan.parquet';
 /** Places of other files in the bucket (custom persona data, import temp files). */
@@ -267,6 +280,8 @@ function resolveClosedFeatures(
     DATA_AGENT_ALLOWED: 'false',
     // 閉域対応 U4（BR5.1）: 5 か所のファイルをアプリ経由で流す。閉域で presigned を選ぶ入力は作らない
     ASSET_DELIVERY: 'proxy',
+    // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域では Code Interpreter・CORS を作らないため止める
+    ENABLE_ADVANCED_GENERATION: 'false',
   });
 }
 

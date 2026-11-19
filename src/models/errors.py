@@ -208,6 +208,58 @@ class ErrorCode(StrEnum):
         ErrorKind.TRANSIENT,
     )
 
+    # --- Advanced generation (beta) U1 (functional-spec.md §5) ---
+    # GENERATION_RESULT_TOO_LARGE (above) is reused for the result size limits.
+    # The user does not meet the release conditions (environment, sandbox,
+    # audience); only an operator or administrator can change that (BR1.1).
+    ADVANCED_GENERATION_UNAVAILABLE = (
+        "advanced_generation_unavailable",
+        ErrorKind.CONFIG,
+    )
+    # Every generation slot of this task is taken (NFR2.2); retry later.
+    ADVANCED_GENERATION_BUSY = ("advanced_generation_busy", ErrorKind.TRANSIENT)
+    # The user already has a running generation (BR7.5).
+    ADVANCED_GENERATION_ALREADY_RUNNING = (
+        "advanced_generation_already_running",
+        ErrorKind.TRANSIENT,
+    )
+    # Wrong format, undecidable encoding, two tables chosen, a part number out
+    # of range, or too many URL refreshes (BR2.1, BR2.4, BR3.2, BR5.8).
+    UPLOAD_SOURCE_INVALID = ("upload_source_invalid", ErrorKind.VALIDATION)
+    UPLOAD_TOO_LARGE = ("upload_too_large", ErrorKind.CAPACITY)
+    UPLOAD_TOO_MANY_FILES = ("upload_too_many_files", ErrorKind.CAPACITY)
+    # Someone else's, missing or already completed upload (not told apart).
+    UPLOAD_NOT_FOUND = ("upload_not_found", ErrorKind.NOT_FOUND)
+    # The chosen file is not the user's ready table (BR6.2).
+    GENERATION_SOURCE_NOT_FOUND = ("generation_source_not_found", ErrorKind.NOT_FOUND)
+    # Someone else's or missing generation (events, record, save).
+    GENERATION_NOT_FOUND = ("generation_not_found", ErrorKind.NOT_FOUND)
+    # More than 24 hours since it finished (BR7.4); the user generates again.
+    GENERATION_EXPIRED = ("generation_expired", ErrorKind.NOT_FOUND)
+    # The preparation could not read the table (BR4.3).
+    GENERATION_SOURCE_UNREADABLE = (
+        "generation_source_unreadable",
+        ErrorKind.VALIDATION,
+    )
+    # The preparation ran out of memory or disk (BR4.2).
+    GENERATION_CAPACITY = ("generation_capacity", ErrorKind.CAPACITY)
+    # No segment, or clustering failed twice (BR5.3, BR7.1).
+    GENERATION_ANALYSIS_FAILED = ("generation_analysis_failed", ErrorKind.VALIDATION)
+    # The result did not pass the verification (BR8.2, BR8.3).
+    GENERATION_VERIFICATION_FAILED = (
+        "generation_verification_failed",
+        ErrorKind.VALIDATION,
+    )
+    # The whole generation took more than 60 minutes (NFR5.6).
+    GENERATION_TIMEOUT = ("generation_timeout", ErrorKind.TRANSIENT)
+    # Code Interpreter or the model failed after retries (NFR5.16, NFR5.17).
+    GENERATION_SANDBOX_UNAVAILABLE = (
+        "generation_sandbox_unavailable",
+        ErrorKind.TRANSIENT,
+    )
+    # The instruction is longer than PURPOSE_MAX_CHARS (contract C1, entities.md).
+    GENERATION_PURPOSE_TOO_LONG = ("generation_purpose_too_long", ErrorKind.VALIDATION)
+
     # --- Files ---
     FILE_TOO_LARGE = ("file_too_large", ErrorKind.CAPACITY)
     FILE_FORMAT_NOT_ALLOWED = ("file_format_not_allowed", ErrorKind.VALIDATION)

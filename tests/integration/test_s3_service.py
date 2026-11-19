@@ -12,7 +12,11 @@ mock_aws = moto.mock_aws
 import boto3  # noqa: E402
 
 from src.models.errors import ErrorCode  # noqa: E402
-from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
+from src.services.s3_service import (  # noqa: E402
+    S3ObjectExistsError,
+    S3Service,
+    S3ServiceError,
+)
 from tests.error_helpers import raises_code  # noqa: E402
 
 
@@ -498,3 +502,254 @@ def test_upload_failures_carry_the_failure_class(
     with pytest.raises(S3ServiceError) as info:
         s3_service.upload_file(b"x", "survey-results/s-1/results.csv")
     assert info.value.failure is FailureClass[failure_name]
+
+
+# --- 高度な生成（ベータ）U1: 分割アップロードと先頭の読み取り ---------------------------
+# US2.1、US3.1、BR2.3、BR2.4、BR2.7、BR3.1、NFR3.5、NFR3.12（security-design.md §3）
+
+SOURCE_KEY = "sources/sub-a/11111111-2222-3333-4444-555555555555"
+MIB = 1024 * 1024
+
+
+def _query(url: str) -> dict[str, str]:
+    from urllib.parse import parse_qsl, urlsplit
+
+    return dict(parse_qsl(urlsplit(url).query))
+
+
+def _upload_parts(s3_service, upload_id: str, sizes: list[int]) -> list[dict]:
+    parts = []
+    for number, size in enumerate(sizes, start=1):
+        response = s3_service.s3_client.upload_part(
+            Bucket=s3_service.bucket_name,
+            Key=SOURCE_KEY,
+            UploadId=upload_id,
+            PartNumber=number,
+            Body=b"a" * size,
+        )
+        parts.append({"part_number": number, "etag": response["ETag"]})
+    return parts
+
+
+class TestClientSigning:
+    def test_client_signs_with_sigv4_virtual_hosted_and_regional(self, s3_service):
+        client = s3_service.s3_client
+
+        assert client.meta.config.signature_version == "s3v4"
+        assert client.meta.config.s3["addressing_style"] == "virtual"
+        assert client.meta.endpoint_url == "https://s3.us-east-1.amazonaws.com"
+
+    def test_get_url_is_sigv4_on_the_regional_virtual_host(
+        self, s3_service, s3_bucket_name
+    ):
+        from urllib.parse import urlsplit
+
+        url = s3_service.generate_presigned_url(f"s3://{s3_bucket_name}/a/b.png", 900)
+
+        assert urlsplit(url).netloc == f"{s3_bucket_name}.s3.us-east-1.amazonaws.com"
+        query = _query(url)
+        assert query["X-Amz-Algorithm"] == "AWS4-HMAC-SHA256"
+        assert query["X-Amz-Expires"] == "900"
+
+
+class TestMultipartUpload:
+    def test_create_returns_an_upload_id(self, s3_service):
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+
+        assert upload_id
+        listed = s3_service.s3_client.list_multipart_uploads(
+            Bucket=s3_service.bucket_name
+        )
+        assert [u["Key"] for u in listed["Uploads"]] == [SOURCE_KEY]
+
+    def test_part_urls_sign_only_bucket_key_upload_id_and_part_number(
+        self, s3_service, s3_bucket_name
+    ):
+        from urllib.parse import urlsplit
+
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+
+        urls = s3_service.generate_upload_part_urls(
+            f"s3://{s3_bucket_name}/{SOURCE_KEY}", upload_id, [1, 3]
+        )
+
+        assert [u.part_number for u in urls] == [1, 3]
+        for part in urls:
+            parts = urlsplit(part.url)
+            assert parts.netloc == f"{s3_bucket_name}.s3.us-east-1.amazonaws.com"
+            assert parts.path == f"/{SOURCE_KEY}"
+            query = _query(part.url)
+            assert query["partNumber"] == str(part.part_number)
+            assert query["uploadId"] == upload_id
+            assert query["X-Amz-Expires"] == "3600"
+            # Only the host header is signed: no Content-MD5 / checksum headers.
+            assert query["X-Amz-SignedHeaders"] == "host"
+            assert not any("checksum" in k.lower() for k in query)
+
+    def test_part_urls_take_a_custom_expiration(self, s3_service, s3_bucket_name):
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+
+        (part,) = s3_service.generate_upload_part_urls(
+            f"s3://{s3_bucket_name}/{SOURCE_KEY}", upload_id, [2], expiration=60
+        )
+
+        assert _query(part.url)["X-Amz-Expires"] == "60"
+
+    def test_list_parts_reports_sizes_and_etags(self, s3_service):
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+        sent = _upload_parts(s3_service, upload_id, [5 * MIB, 10])
+
+        parts = s3_service.list_parts(SOURCE_KEY, upload_id)
+
+        assert [(p.part_number, p.size_bytes, p.etag) for p in parts] == [
+            (1, 5 * MIB, sent[0]["etag"]),
+            (2, 10, sent[1]["etag"]),
+        ]
+
+    def test_complete_joins_the_parts(self, s3_service):
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+        sent = _upload_parts(s3_service, upload_id, [5 * MIB, 10])
+
+        s3_service.complete_multipart_upload(
+            SOURCE_KEY, upload_id, [(p["part_number"], p["etag"]) for p in sent]
+        )
+
+        head = s3_service.s3_client.head_object(
+            Bucket=s3_service.bucket_name, Key=SOURCE_KEY
+        )
+        assert head["ContentLength"] == 5 * MIB + 10
+
+    def test_abort_drops_the_parts_and_is_idempotent(self, s3_service):
+        upload_id = s3_service.create_multipart_upload(SOURCE_KEY, "text/csv")
+        _upload_parts(s3_service, upload_id, [10])
+
+        assert s3_service.abort_multipart_upload(SOURCE_KEY, upload_id) is True
+        assert s3_service.abort_multipart_upload(SOURCE_KEY, upload_id) is False
+        listed = s3_service.s3_client.list_multipart_uploads(
+            Bucket=s3_service.bucket_name
+        )
+        assert not listed.get("Uploads")
+
+    def test_list_parts_of_an_unknown_upload_is_not_found(self, s3_service):
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.list_parts(SOURCE_KEY, "no-such-upload")
+
+    def test_complete_of_an_unknown_upload_is_not_found(self, s3_service, monkeypatch):
+        # moto raises KeyError here; S3 answers NoSuchUpload.
+        _failing_client(
+            monkeypatch, s3_service, "complete_multipart_upload", "NoSuchUpload"
+        )
+
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.complete_multipart_upload(SOURCE_KEY, "no-such-upload", [])
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "create_multipart_upload",
+            "list_parts",
+            "complete_multipart_upload",
+            "abort_multipart_upload",
+        ],
+    )
+    def test_failures_become_s3_service_errors(
+        self, s3_service, monkeypatch, operation
+    ):
+        _failing_client(monkeypatch, s3_service, operation, "InternalError")
+        calls = {
+            "create_multipart_upload": lambda: s3_service.create_multipart_upload(
+                SOURCE_KEY, "text/csv"
+            ),
+            "list_parts": lambda: s3_service.list_parts(SOURCE_KEY, "u"),
+            "complete_multipart_upload": lambda: (
+                s3_service.complete_multipart_upload(SOURCE_KEY, "u", [(1, "e")])
+            ),
+            "abort_multipart_upload": lambda: s3_service.abort_multipart_upload(
+                SOURCE_KEY, "u"
+            ),
+        }
+
+        with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+            calls[operation]()
+
+
+class TestHeadReads:
+    def test_read_range_reads_only_the_head(self, s3_service):
+        s3_service.upload_file(b"0123456789", SOURCE_KEY)
+
+        assert s3_service.read_range(SOURCE_KEY, 4) == b"0123"
+        assert s3_service.read_range(SOURCE_KEY, 100) == b"0123456789"
+
+    def test_read_range_sends_a_range_header(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.get_object.return_value = {"Body": Mock(read=Mock(return_value=b"ab"))}
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        s3_service.read_range(SOURCE_KEY, 4 * MIB)
+
+        assert client.get_object.call_args.kwargs["Range"] == f"bytes=0-{4 * MIB - 1}"
+
+    def test_read_range_of_a_missing_key_is_not_found(self, s3_service):
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.read_range(SOURCE_KEY, 4)
+
+    def test_checksum_reads_crc64nvme_with_checksum_mode(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.head_object.return_value = {
+            "ContentLength": 3,
+            "ChecksumCRC64NVME": "AAAAAAAAAAA=",
+            "ChecksumType": "FULL_OBJECT",
+        }
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        assert s3_service.get_checksum(SOURCE_KEY) == "AAAAAAAAAAA="
+        assert client.head_object.call_args.kwargs["ChecksumMode"] == "ENABLED"
+
+    def test_checksum_is_none_when_s3_has_none(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.head_object.return_value = {"ContentLength": 3}
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        assert s3_service.get_checksum(SOURCE_KEY) is None
+
+    def test_checksum_of_a_missing_key_is_not_found(self, s3_service):
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.get_checksum(SOURCE_KEY)
+
+
+class TestConditionalPut:
+    RECORD_KEY = "analysis-records/sub-a/gen-1.json"
+
+    def test_put_new_object_writes_the_pending_tag(self, s3_service):
+        s3_service.put_new_object(
+            self.RECORD_KEY, b"{}", "application/json", tags={"pending": "true"}
+        )
+
+        assert s3_service.get_object_tags(self.RECORD_KEY) == {"pending": "true"}
+
+    def test_put_new_object_refuses_to_overwrite(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        from botocore.exceptions import ClientError
+
+        client = Mock()
+        client.put_object.side_effect = ClientError(
+            {"Error": {"Code": "PreconditionFailed", "Message": "m"}}, "PutObject"
+        )
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        with pytest.raises(S3ObjectExistsError):
+            s3_service.put_new_object(self.RECORD_KEY, b"{}", "application/json")
+        assert client.put_object.call_args.kwargs["IfNoneMatch"] == "*"
+
+    def test_put_new_object_other_failures(self, s3_service, monkeypatch):
+        _failing_client(monkeypatch, s3_service, "put_object", "InternalError")
+
+        with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+            s3_service.put_new_object(self.RECORD_KEY, b"{}", "application/json")

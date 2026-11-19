@@ -20,6 +20,7 @@ import logging
 from typing import TypeVar
 
 from fastapi import Response
+from fastapi.responses import JSONResponse
 
 from src.models.errors import CodedError, ErrorCode, ErrorKind
 from src.models.password_policy import (
@@ -129,6 +130,54 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.GENERATION_OPERATION_FAILED: (
         "ペルソナ生成の処理中にエラーが発生しました。時間をおいて再度お試しください。"
+    ),
+    # --- 高度な生成（ベータ）U1（functional-spec.md §5、refined-mockups） ---
+    ErrorCode.ADVANCED_GENERATION_UNAVAILABLE: "高度な生成（ベータ）は今は使えません",
+    ErrorCode.ADVANCED_GENERATION_BUSY: (
+        "高度な生成が混み合っています。しばらく待ってから再度お試しください"
+    ),
+    ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING: (
+        "実行中の高度な生成があります。終わってから次の生成を始めてください"
+    ),
+    ErrorCode.UPLOAD_SOURCE_INVALID: (
+        "このファイルは使えません。CSV か TSV の表を、UTF-8 で保存し直して上げてください"
+    ),
+    ErrorCode.UPLOAD_TOO_LARGE: (
+        "上げられません: 1 ファイル {max_size_mb}MB までです。分けて上げてください"
+    ),
+    ErrorCode.UPLOAD_TOO_MANY_FILES: (
+        "上げられません: 上げたまま持てるのは {max_files} ファイルまでです"
+    ),
+    ErrorCode.UPLOAD_NOT_FOUND: (
+        "アップロードが見つかりません。もう一度ファイルを上げてください"
+    ),
+    ErrorCode.GENERATION_SOURCE_NOT_FOUND: (
+        "選んだファイルが見つからないか、まだ準備OK になっていません"
+    ),
+    ErrorCode.GENERATION_NOT_FOUND: "生成が見つかりません",
+    ErrorCode.GENERATION_EXPIRED: (
+        "生成の結果は完了から 24 時間で見られなくなりました。もう一度生成してください"
+    ),
+    ErrorCode.GENERATION_SOURCE_UNREADABLE: (
+        "ファイルを読み込めませんでした。中身と文字コードを確かめて上げ直してください"
+    ),
+    ErrorCode.GENERATION_CAPACITY: (
+        "ファイルが大きすぎて準備しきれませんでした。ファイルを小さくして再度お試しください"
+    ),
+    ErrorCode.GENERATION_ANALYSIS_FAILED: (
+        "データから層を見つけられませんでした。指示を変えるか、ペルソナの数を減らしてください"
+    ),
+    ErrorCode.GENERATION_VERIFICATION_FAILED: (
+        "分析の結果を確かめられませんでした。指示を変えてもう一度生成してください"
+    ),
+    ErrorCode.GENERATION_TIMEOUT: (
+        "生成に時間がかかりすぎたため止めました。時間をおいて再度お試しください"
+    ),
+    ErrorCode.GENERATION_SANDBOX_UNAVAILABLE: (
+        "分析の処理に一時的に失敗しました。時間をおいて再度お試しください"
+    ),
+    ErrorCode.GENERATION_PURPOSE_TOO_LONG: (
+        "指示は {max_chars} 文字までです。短くしてください"
     ),
     ErrorCode.FILE_TOO_LARGE: (
         "ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
@@ -557,6 +606,10 @@ UNIFIED_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         # U7: 利用範囲の外のカスタムペルソナデータと、admin だけの設定（NFR1.79）
         ErrorCode.CUSTOM_PERSONA_DATA_NOT_FOUND,
         ErrorCode.SETTINGS_NOT_FOUND,
+        # 高度な生成 U1: 他人のものとないものを区別しない（functional-spec.md §5）
+        ErrorCode.UPLOAD_NOT_FOUND,
+        ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+        ErrorCode.GENERATION_NOT_FOUND,
     }
 )
 
@@ -575,6 +628,8 @@ DISTINCT_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
         ErrorCode.INTERVIEW_SESSION_AGENTS_MISSING,
         ErrorCode.S3_OBJECT_NOT_FOUND,
         ErrorCode.HTTP_ERROR,
+        # 高度な生成 U1: 期限切れは生成し直すしかない（BR7.4）
+        ErrorCode.GENERATION_EXPIRED,
     }
 )
 
@@ -729,6 +784,50 @@ def toast_response(
             )
         },
     )
+
+
+def json_error_response(
+    exc: BaseException | None, *, status_code: int | None = None
+) -> JSONResponse:
+    """A JSON error body for page scripts that read JSON (advanced generation, C1).
+
+    The body is ``{detail, error_code, kind}``: the catalog wording, the code
+    value and the presentation kind. The exception's own message and context
+    never go in. Uncoded exceptions answer ``UNKNOWN`` (TRANSIENT, 500).
+
+    Args:
+        exc: The caught exception. Only its code/context are used.
+        status_code: HTTP status; by default the one of the code's kind.
+    """
+    payload = error_payload(exc)
+    code = ErrorCode.parse(payload["error_code"]) or ErrorCode.UNKNOWN
+    response = JSONResponse(
+        status_code=status_code or http_status_for(code),
+        content={
+            "detail": payload["message"],
+            "error_code": payload["error_code"],
+            "kind": payload["kind"],
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def error_payload(exc: BaseException | None) -> dict[str, str]:
+    """``{error_code, kind, message}`` of an exception (the SSE ``error`` of C3).
+
+    Only the code value, the presentation kind and the catalog wording; the
+    exception's message and context values never go in. Uncoded exceptions
+    read as ``UNKNOWN``.
+    """
+    code = getattr(exc, "code", None)
+    if not isinstance(code, ErrorCode):
+        code = ErrorCode.UNKNOWN
+    return {
+        "error_code": code.value,
+        "kind": error_kind_of(exc).value,
+        "message": user_message_for(exc),
+    }
 
 
 def is_transient(exc: BaseException | None) -> bool:
