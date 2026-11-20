@@ -9,7 +9,7 @@
          data-events-url="/persona/advanced/generations/{{ generation_id | urlencode }}/events"
          aria-labelledby="advanced-progress-title" class="bg-white rounded-lg shadow-md p-6 mb-6">
     <div class="flex items-baseline justify-between gap-4 mb-4">
-        <h2 id="advanced-progress-title" tabindex="-1" class="text-lg font-semibold text-gray-900">C. 進み具合</h2>
+        <h2 id="advanced-progress-title" tabindex="-1" class="text-lg font-semibold text-gray-900">進み具合</h2>
         {% if elapsed %}
         {# 経過時間は 1 秒ごとに書き換えるが、aria-live の外に置いて読み上げない（アクセシビリティの 10） #}
         <p data-testid="advanced-elapsed" data-elapsed-seconds="{{ elapsed.seconds }}"

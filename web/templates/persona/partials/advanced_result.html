@@ -14,7 +14,7 @@
 {% set unverified = result.unverified_segment_ids %}
 {% set plan = result.generation.plan %}
 <section data-testid="advanced-result" aria-labelledby="advanced-result-title" class="bg-white rounded-lg shadow-md p-6 mb-6">
-    <h2 id="advanced-result-title" tabindex="-1" class="text-lg font-semibold text-gray-900 mb-2">D. 結果</h2>
+    <h2 id="advanced-result-title" tabindex="-1" class="text-lg font-semibold text-gray-900 mb-2">結果</h2>
     {% if readable_until %}
     <p class="text-sm text-gray-700 mb-4">保存していない候補は <time datetime="{{ iso_datetime(readable_until) }}">{{ readable_until.strftime('%Y-%m-%d %H:%M') }}</time> まで見られます</p>
     {% endif %}
