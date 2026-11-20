@@ -13,6 +13,10 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ...models.analysis import AnalysisMethod, AnalysisPlan
+from ...prompts.persona_generation_prompts import (
+    PERSONA_FIELDS_GUIDE,
+    PERSONA_PURPOSE_AND_PRINCIPLES,
+)
 
 PLANNING_INSTRUCTIONS = (
     "あなたは表データの分析の計画を立てる担当です。利用者の指示（purpose）と、"
@@ -34,10 +38,24 @@ ANALYSIS_INSTRUCTIONS = (
 )
 
 SYNTHESIS_INSTRUCTIONS = (
-    "あなたは分析の結果からペルソナを書く担当です。渡された層（segments）と"
-    "根拠（evidence）と前準備の要約だけを使い、表の行の値を作らないでください。"
-    "各ペルソナには、代表する層の id を segment_id に、使った根拠の id を "
-    "evidence_ids に書いてください。"
+    "あなたは表データの分析の結果から、リアルで具体的なペルソナを書く担当です。"
+    "渡された層（segments）と根拠（evidence）と前準備の要約を土台にし、"
+    "各層の特徴（features の value と baseline の差）が、その人のどんな行動・"
+    "生活・考え方の表れなのかを読み解いて、一人の人間として書いてください。\n\n"
+    "# 事実と想像の分け方\n"
+    "- 件数・割合・平均などの数値は、根拠に出てくる値だけを使い、新しい数値を"
+    "作らないでください。表の個々の行の値も作らないでください\n"
+    "- 名前・年齢・職業・居住地・家族構成・生活の様子・エピソード・口調は、"
+    "根拠と矛盾しない範囲で具体的に想像して書いてください。データにないことを"
+    "書くのはこの担当の仕事です\n"
+    "- background を層の集計値の言い換え（「平均価格は○円で 3 群の中で最も低い」"
+    "など）にしないでください。集計値は、その人の具体的な買い方や暮らしぶりに"
+    "置き換えて書いてください\n"
+    "- 「データにない部分を想像で補った」のような断り書きは書かないでください"
+    "（どの記述がどの根拠に基づくかは evidence_ids で示します）\n"
+    "- 各ペルソナには、代表する層の id を segment_id に、使った根拠の id を "
+    "evidence_ids に書いてください\n\n"
+    f"{PERSONA_PURPOSE_AND_PRINCIPLES}{PERSONA_FIELDS_GUIDE}"
 )
 
 _METHOD_GUIDE = {
@@ -100,10 +118,23 @@ class AdvancedPersonaOutput(BaseModel):
     country: Optional[str] = Field(default=None, description="ISO 3166-1 alpha-2")
     city: Optional[str] = Field(default=None, description="居住都市名")
     occupation: str = Field(description="職業")
-    background: str = Field(description="背景・経歴")
-    values: list[str] = Field(description="価値観")
-    pain_points: list[str] = Field(description="課題・悩み")
-    goals: list[str] = Field(description="目標・願望")
+    background: str = Field(
+        description=(
+            "背景・経歴。経歴と現在の生活状況（家族構成、居住地、生活リズム）、"
+            "人格形成に影響した経験やエピソード、購買行動の特徴、情報収集と"
+            "意思決定の癖、意思決定の条件分岐、コミュニケーションスタイルを含む"
+            "具体的な記述。層の集計値の言い換えや断り書きにしない"
+        )
+    )
+    values: list[str] = Field(
+        description="その人の行動を説明する価値観（1〜5 個。層の特徴から導けるもの）"
+    )
+    pain_points: list[str] = Field(
+        description="課題・悩み（1〜5 個。不満・迷い・懐疑も含め、層の特徴から導けるもの）"
+    )
+    goals: list[str] = Field(
+        description="目標・願望（1〜5 個。層の特徴から読み取れる関心や望み）"
+    )
     segment_id: str = Field(description="代表する層の id")
     evidence_ids: list[str] = Field(default_factory=list, description="使った根拠")
 
