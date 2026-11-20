@@ -112,7 +112,7 @@ def _write_progress(workdir: str, progress_id: Optional[str], **fields: Any) -> 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(fields, f, ensure_ascii=False)
+        json.dump(fields, f, ensure_ascii=True)
     os.replace(tmp, path)
 
 
@@ -770,7 +770,8 @@ def main(argv: List[str]) -> int:
         result = dispatch(function, args, workdir)
     except Exception:  # noqa: BLE001 - never echo the arguments
         result = _failure("INVALID_ARGUMENT", {"field": "command"})
-    sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
+    # ASCII only: Code Interpreter breaks multibyte characters in a long stdout.
+    sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
     return 0
 
 

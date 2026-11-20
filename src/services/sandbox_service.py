@@ -172,7 +172,8 @@ def limit_output(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
 
 def _parse_result(stdout: str) -> dict[str, Any]:
     """The last JSON line the library printed; anything else is dropped."""
-    for line in reversed(stdout.strip().splitlines()):
+    # split("\n"), not splitlines(): a stray U+0085 is not a line break here.
+    for line in reversed(stdout.strip().split("\n")):
         line = line.strip()
         if not line.startswith("{"):
             continue

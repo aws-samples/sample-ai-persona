@@ -284,6 +284,25 @@ class TestCodeInterpreterCall:
         assert 0 < len(result["value"]["rows"]) < 500
         assert len(json.dumps(result, ensure_ascii=False)) <= 2_000
 
+    def test_a_stray_unicode_line_separator_does_not_break_the_result(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        """dev の Code Interpreter が長い出力に U+0085 を混ぜた（splitlines が行を割る）。"""
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stream(
+                {
+                    "stdout": 'warming up\r\n{"ok": true, "value": {"v": "a\x85b"}}\r\n',
+                    "exitCode": 0,
+                }
+            ),
+            _invoke_params("executeCommand"),
+        )
+
+        result = sandbox.call(_session(), "profile_dataset", {"source_id": "f1"})
+
+        assert result == {"ok": True, "value": {"v": "a\x85b"}}
+
     def test_output_that_is_not_json_is_a_failure(
         self, sandbox: CodeInterpreterSandbox, stub: Any
     ) -> None:

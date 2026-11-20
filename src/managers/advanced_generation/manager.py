@@ -628,6 +628,12 @@ class AdvancedPersonaGenerationManager:
         code = _LIBRARY_CODES.get(str(error.get("code")))
         if code is not None:
             raise _fail(code, "preparation refused the table")
+        raw = str(error.get("code"))
+        # Library codes are fixed upper-case names; anything else is not logged.
+        logger.warning(
+            "sandbox function failed: library_code=%s",
+            raw if raw.replace("_", "").isalpha() and raw.isupper() else "other",
+        )
         raise _fail(
             ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
             "sandbox function failed",

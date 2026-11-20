@@ -481,6 +481,34 @@ class TestDownload:
         assert result["value"] == {"ok": False, "bytes": 0, "http_status": None}
 
 
+class TestCommandLineOutput:
+    def test_the_result_line_is_ascii_only(self, tmp_path: Path) -> None:
+        """Code Interpreter の stdout は長い出力の多バイト文字を壊すので、結果は ASCII だけで出す。"""
+        (tmp_path / "sources").mkdir()
+        (tmp_path / "sources" / "src1").write_text(
+            "地域,メモ\n" + "".join(f"東京都,{'…' * 30}{i}\n" for i in range(40)),
+            encoding="utf-8",
+        )
+        args = base64.b64encode(
+            json.dumps(
+                {"source_id": "src1", "metadata": {"encoding": "utf-8"}}
+            ).encode()
+        ).decode()
+
+        done = subprocess.run(
+            [sys.executable, "-I", str(_LIBRARY_PATH), "--workdir", str(tmp_path)]
+            + ["prepare", args],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+
+        assert done.stdout.isascii()
+        result = json.loads(done.stdout.decode("ascii").strip())
+        assert result["ok"] is True
+        assert result["value"]["columns"][0]["name"] == "地域"
+
+
 class TestDispatch:
     def test_unknown_function(self, lib: ModuleType, tmp_path: Path) -> None:
         result = _call(lib, tmp_path, "run_code", code="print(1)")
