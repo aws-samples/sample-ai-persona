@@ -142,6 +142,24 @@ def _completion_body(ui: UiHarness) -> dict[str, Any]:
     return json.loads(info.value.post_data or "{}")
 
 
+class TestFilePicker:
+    def test_file_input_is_reachable_by_keyboard_with_a_name(
+        self, ui: UiHarness
+    ) -> None:
+        """見た目を隠したファイルの選択も、キーボードで届き名前を持つ（a11y 3・27）。"""
+        _open(ui)
+        page = ui.page
+
+        page.focus("[data-testid='advanced-file-input']")
+        focused = page.evaluate("document.activeElement.dataset.testid")
+        name = page.get_by_label("クリックしてファイルを選択").get_attribute(
+            "data-testid"
+        )
+
+        assert focused == "advanced-file-input"
+        assert name == "advanced-file-input"
+
+
 class TestTabs:
     def test_tabs_are_links_reachable_by_keyboard_and_mark_the_page(
         self, ui: UiHarness
