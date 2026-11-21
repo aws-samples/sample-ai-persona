@@ -37,7 +37,12 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.models.errors import CodedError, ErrorCode
-from src.models.source_file import SourceFile, SourceFileStatus, SourceMetadata
+from src.models.source_file import (
+    DocumentMetadata,
+    SourceFile,
+    SourceFileStatus,
+    SourceMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +214,7 @@ class SourceFileStore:
     def mark_ready(
         self,
         source_file_id: str,
-        metadata: SourceMetadata,
+        metadata: SourceMetadata | DocumentMetadata,
         checksum: str,
         *,
         now: datetime,

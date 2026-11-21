@@ -36,9 +36,10 @@ SAMPLE_CELL_MAX_CHARS = 200
 
 
 class SourceKind(StrEnum):
-    """What a source file holds. U1 handles tables only (documents are U4)."""
+    """What a source file holds: a table (U1) or a document (U4)."""
 
     TABLE = "table"
+    DOCUMENT = "document"
 
 
 class SourceFileStatus(StrEnum):
@@ -52,14 +53,42 @@ class SourceFileStatus(StrEnum):
 
 
 class SourceFormat(StrEnum):
-    """Table formats accepted in U1 (BR2.1)."""
+    """Accepted formats: tables (U1, BR2.1) and documents (U4, BR21.1)."""
 
     CSV = "csv"
     TSV = "tsv"
+    PDF = "pdf"
+    DOCX = "docx"
+    TXT = "txt"
+    MD = "md"
 
     @property
     def delimiter(self) -> str:
         return "\t" if self is SourceFormat.TSV else ","
+
+    @property
+    def kind(self) -> "SourceKind":
+        """``table`` for CSV / TSV, ``document`` for the rest."""
+        if self in (SourceFormat.CSV, SourceFormat.TSV):
+            return SourceKind.TABLE
+        return SourceKind.DOCUMENT
+
+    @property
+    def is_text(self) -> bool:
+        """Plain text read with an encoding (txt, md)."""
+        return self in (SourceFormat.TXT, SourceFormat.MD)
+
+
+def format_of_filename(filename: str) -> SourceFormat | None:
+    """The format named by the extension of ``filename``, or ``None`` (BR21.1)."""
+    name = filename.strip().lower()
+    dot = name.rfind(".")
+    if dot < 0:
+        return None
+    try:
+        return SourceFormat(name[dot + 1 :])
+    except ValueError:
+        return None
 
 
 class SourceEncoding(StrEnum):
@@ -144,6 +173,8 @@ class SourceMetadata:
     def __post_init__(self) -> None:
         object.__setattr__(self, "format", SourceFormat(self.format))
         object.__setattr__(self, "encoding", SourceEncoding(self.encoding))
+        if self.format.kind is not SourceKind.TABLE:
+            raise ValueError("table metadata needs a table format")
         if self.delimiter != self.format.delimiter:
             raise ValueError("delimiter does not match the format")
         if self.estimated_rows < 0 or self.inspected_bytes < 0:
@@ -209,6 +240,67 @@ class SourceMetadata:
 
 
 @dataclass(frozen=True)
+class DocumentMetadata:
+    """What the inspection of a document found (U4 BR22.3, contract C4).
+
+    Pages and the exact character count are known only after the
+    preparation in the sandbox (the screen says so).
+
+    Attributes:
+        format: ``pdf``, ``docx``, ``txt`` or ``md``.
+        estimated_chars: Rough character count; a guide only, never a refusal.
+        inspected_bytes: Bytes read from the head and the tail together.
+        inspected_at: When the inspection ran.
+        encoding: For ``txt`` / ``md`` only (the same judgement as a table).
+    """
+
+    format: SourceFormat
+    estimated_chars: int
+    inspected_bytes: int
+    inspected_at: datetime
+    encoding: SourceEncoding | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "format", SourceFormat(self.format))
+        if self.format.kind is not SourceKind.DOCUMENT:
+            raise ValueError("document metadata needs a document format")
+        if self.encoding is not None:
+            object.__setattr__(self, "encoding", SourceEncoding(self.encoding))
+        if self.estimated_chars < 0 or self.inspected_bytes < 0:
+            raise ValueError("counts must not be negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return drop_none(
+            {
+                "format": self.format.value,
+                "encoding": self.encoding.value if self.encoding else None,
+                "estimated_chars": int(self.estimated_chars),
+                "inspected_bytes": int(self.inspected_bytes),
+                "inspected_at": iso(self.inspected_at),
+            }
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DocumentMetadata":
+        encoding = data.get("encoding")
+        return cls(
+            format=SourceFormat(str(data["format"])),
+            estimated_chars=int(data.get("estimated_chars", 0)),
+            inspected_bytes=int(data.get("inspected_bytes", 0)),
+            inspected_at=parse_dt(data["inspected_at"]),
+            encoding=SourceEncoding(str(encoding)) if encoding else None,
+        )
+
+
+def _metadata_from_dict(
+    kind: SourceKind, data: Mapping[str, Any]
+) -> SourceMetadata | DocumentMetadata:
+    if kind is SourceKind.DOCUMENT:
+        return DocumentMetadata.from_dict(data)
+    return SourceMetadata.from_dict(data)
+
+
+@dataclass(frozen=True)
 class SourceFile:
     """One uploaded source file (entities.md SourceFile, contract C4).
 
@@ -250,7 +342,7 @@ class SourceFile:
     status: SourceFileStatus
     created_at: datetime
     multipart_upload_id: str | None = None
-    metadata: SourceMetadata | None = None
+    metadata: SourceMetadata | DocumentMetadata | None = None
     checksum: str | None = None
     error_code: str | None = None
     in_use_by: str | None = None
@@ -286,8 +378,12 @@ class SourceFile:
         source_file_id: str | None = None,
         display_seq: int = 1,
         expires_at: datetime | None = None,
+        kind: SourceKind | str = SourceKind.TABLE,
     ) -> "SourceFile":
-        """A new upload in ``uploading`` under the owner's key (BR2.3, BR11.3)."""
+        """A new upload in ``uploading`` under the owner's key (BR2.3, BR11.3).
+
+        ``kind`` is decided from the extension at the start (U4 BR21.1).
+        """
         new_id = source_file_id or str(uuid.uuid4())
         return cls(
             display_seq=int(display_seq),
@@ -295,7 +391,7 @@ class SourceFile:
             source_file_id=new_id,
             owner_sub=owner_sub,
             filename=_clean_filename(filename),
-            kind=SourceKind.TABLE,
+            kind=SourceKind(kind),
             size_bytes=int(size_bytes),
             s3_key=source_key(owner_sub, new_id),
             part_count=int(part_count),
@@ -315,6 +411,21 @@ class SourceFile:
         if self.display_seq <= 1:
             return self.filename
         return f"{self.filename} ({self.display_seq})"
+
+    @property
+    def source_format(self) -> SourceFormat | None:
+        """The format named by the file name's extension (BR2.1, BR21.1)."""
+        return format_of_filename(self.filename)
+
+    @property
+    def table_metadata(self) -> SourceMetadata | None:
+        """The table inspection result, or ``None`` (a document or not ready)."""
+        return self.metadata if isinstance(self.metadata, SourceMetadata) else None
+
+    @property
+    def document_metadata(self) -> DocumentMetadata | None:
+        """The document inspection result, or ``None`` (a table or not ready)."""
+        return self.metadata if isinstance(self.metadata, DocumentMetadata) else None
 
     def effective_expires_at(self, retention_days: int) -> datetime:
         """The stored expiry, or (last use or creation) + retention (BR13.2).
@@ -377,18 +488,19 @@ class SourceFile:
     def from_dict(cls, data: Mapping[str, Any]) -> "SourceFile":
         """Read an item written by :meth:`to_dict` (unknown fields are ignored)."""
         metadata = data.get("source_metadata")
+        kind = SourceKind(str(data.get("kind", SourceKind.TABLE.value)))
         return cls(
             source_file_id=str(data["source_file_id"]),
             owner_sub=str(data["owner_sub"]),
             filename=str(data.get("filename", "")),
-            kind=SourceKind(str(data.get("kind", SourceKind.TABLE.value))),
+            kind=kind,
             size_bytes=int(data["size_bytes"]),
             s3_key=str(data["s3_key"]),
             part_count=int(data["part_count"]),
             status=SourceFileStatus(str(data["status"])),
             created_at=parse_dt(data["created_at"]),
             multipart_upload_id=data.get("multipart_upload_id"),
-            metadata=SourceMetadata.from_dict(metadata) if metadata else None,
+            metadata=_metadata_from_dict(kind, metadata) if metadata else None,
             checksum=data.get("checksum"),
             error_code=data.get("error_code"),
             in_use_by=data.get("in_use_by"),

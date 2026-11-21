@@ -83,6 +83,71 @@ def _csv(rows: int = 300) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+#: Labels the fake extraction and synthesis read evidence from (U4).
+_LABELS = {"価値": "value", "不満": "pain", "目標": "goal", "行動": "behavior"}
+
+
+def _interview(lines: int = 4, *, prefix: str = "") -> str:
+    """An interview record whose lines carry a value, a pain and a goal."""
+    body = [
+        f"{prefix}価値: 家族と過ごす時間を何よりも大切にしていると話した{i}。"
+        f"\n{prefix}不満: 平日の夜は受付が混んでいて待ち時間が長すぎると感じる{i}。"
+        f"\n{prefix}目標: 来年までに週末の家事を半分に減らしたいと考えている{i}。"
+        for i in range(lines)
+    ]
+    return "# 面談の記録\n" + "\n\n".join(body) + "\n"
+
+
+def _labelled_items(text: str) -> list[dict[str, Any]]:
+    items = []
+    for line in text.split("\n"):
+        for label, kind in _LABELS.items():
+            mark = f"{label}: "
+            if mark in line:
+                quote = line.split(mark, 1)[1].strip()
+                if len(quote) >= 10:
+                    items.append(
+                        {
+                            "kind": kind,
+                            "claim": f"{label}についての発言",
+                            "quote": quote,
+                            "speaker_attributes": [{"name": "年代", "value": "30代"}],
+                        }
+                    )
+    return items
+
+
+def _full_text_evidence(documents, mode: str) -> list[dict[str, Any]]:
+    evidence = []
+    for index, text in enumerate(documents):
+        for n, item in enumerate(_labelled_items(text)[:6]):
+            if mode == "no_goal" and item["kind"] == "goal":
+                continue
+            evidence.append(
+                {
+                    "id": f"m{index}-{n}",
+                    "document_index": index,
+                    "kind": item["kind"],
+                    "claim": item["claim"],
+                    "quote": item["quote"],
+                    "speaker_attributes": item["speaker_attributes"],
+                    "segment_id": "seg-0" if n == 0 else None,
+                    "assignment_reason": "30代の発言" if n == 0 else None,
+                }
+            )
+    if mode == "fabricate":
+        evidence.append(
+            {
+                "id": "m-fake",
+                "document_index": 0,
+                "kind": "pain",
+                "claim": "作り話",
+                "quote": "この文書のどこにも書かれていない作り話の一文です",
+            }
+        )
+    return evidence
+
+
 class _Clock:
     def __init__(self) -> None:
         self.now = START
@@ -111,9 +176,29 @@ class _Sandbox(InProcessSandbox):
         #: When set, the preparation ends at once with this C9 result.
         self.fake_prepare_result: Optional[dict[str, Any]] = None
         self.cancelled: list[str] = []
+        # U4: what was started and called, and fake document preparations
+        self.functions: dict[str, str] = {}
+        self.started: list[tuple[str, dict[str, Any]]] = []
+        self.called: list[tuple[str, dict[str, Any]]] = []
+        self.fake_document_result: Optional[dict[str, Any]] = None
+        self.truncate_chunks = False
+
+    def start_command(self, session, function, args):
+        command_id = super().start_command(session, function, args)
+        self.functions[command_id] = function
+        self.started.append((function, dict(args)))
+        return command_id
 
     def poll_command(self, session, command_id):
-        if self.fake_prepare_result is not None:
+        function = self.functions.get(command_id)
+        if function == "prepare_document" and self.fake_document_result is not None:
+            return {
+                "done": True,
+                "status": "completed",
+                "progress": None,
+                "result": self.fake_document_result,
+            }
+        if function == "prepare" and self.fake_prepare_result is not None:
             return {
                 "done": True,
                 "status": "completed",
@@ -155,7 +240,11 @@ class _Sandbox(InProcessSandbox):
     def call(self, session, function, args):
         if function == "profile_dataset" and self.on_profile is not None:
             self.on_profile()
-        return super().call(session, function, args)
+        self.called.append((function, dict(args)))
+        result = super().call(session, function, args)
+        if function == "document_chunk" and self.truncate_chunks and result.get("ok"):
+            result = {**result, "value": {**result["value"], "truncated": True}}
+        return result
 
     def stop_session(self, session: SandboxSession) -> None:
         self.stopped.append(session.session_id)
@@ -181,6 +270,17 @@ class _Agents:
         self.calls: list[str] = []
         self.data_seen: list[Mapping[str, str]] = []
         self._segments: list[dict[str, Any]] = []
+        import threading
+
+        self.lock = threading.Lock()
+        self.running = 0
+        self.max_running = 0
+        self.extracted_count = 0
+        #: The ``may_retry`` each extraction call was given (BR26.2)
+        self.may_retry: list[Any] = []
+        self.instructions_seen = []
+        self.documents_seen = []
+        self.assignments = {}
 
     def create_advanced_planning_agent(self, instructions: str) -> str:
         return "planner"
@@ -190,11 +290,76 @@ class _Agents:
         return "analyst"
 
     def create_advanced_synthesis_agent(self, instructions: str) -> str:
+        self.instructions_seen.append(instructions)
         return "synthesizer"
 
-    def run_advanced_planning(self, agent, prompt, data):
+    # --- U4: documents ---------------------------------------------------------
+
+    instructions_seen: list[str]
+    documents_seen: list[list[str]]
+    #: "ok", "fabricate" (one quote not in the text), "fail_at:<n>", "none"
+    extraction_mode = "ok"
+    #: Model answers for the assignment step ({evidence_id: segment_id}).
+    assignments: dict[str, Optional[str]]
+    #: Full text synthesis: "ok", "no_goal" (no goal evidence), "fabricate"
+    full_text_mode = "ok"
+
+    def create_advanced_evidence_agent(self, instructions: str) -> str:
+        return "extractor"
+
+    def run_evidence_extraction(
+        self,
+        agent,
+        prompt,
+        chunk_text,
+        output_schema,
+        *,
+        document_index,
+        chunk_index,
+        may_retry=None,
+    ):
+        import threading
+
+        with self.lock:
+            self.may_retry.append(may_retry)
+            self.calls.append("extraction")
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+            number = self.extracted_count = self.extracted_count + 1
+        try:
+            time.sleep(0.02)
+            if self.extraction_mode.startswith("fail_at:") and number == int(
+                self.extraction_mode.split(":")[1]
+            ):
+                raise AgentServiceError(
+                    "advanced evidence agent failed (ThrottlingException)",
+                    code=ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                    context={"cause": "model"},
+                )
+            if self.extraction_mode == "none":
+                return None, {"input_tokens": 0, "output_tokens": 0}
+            items = _labelled_items(chunk_text)
+            if self.extraction_mode == "fabricate" and chunk_index == 0:
+                items.append(
+                    {
+                        "kind": "pain",
+                        "claim": "作り話",
+                        "quote": "この文書のどこにも書かれていない作り話の一文です",
+                    }
+                )
+            assert threading.current_thread() is not None
+            return (
+                output_schema(items=items),
+                {"input_tokens": 100, "output_tokens": 10},
+            )
+        finally:
+            with self.lock:
+                self.running -= 1
+
+    def run_advanced_planning(self, agent, prompt, data, documents=()):
         self.calls.append("planning")
         self.data_seen.append(data)
+        self.documents_seen.append(list(documents))
         if self.fail_planning:
             raise AgentServiceError(
                 "advanced planning agent failed (ThrottlingException)",
@@ -240,11 +405,36 @@ class _Agents:
         self._segments = segments
         return {"segments": segments, "evidence": evidence}
 
-    def run_advanced_synthesis(self, agent, prompt, data, output_schema):
+    def run_advanced_synthesis(self, agent, prompt, data, output_schema, documents=()):
+        if "assignments" in output_schema.model_fields:
+            self.calls.append("assignment")
+            self.data_seen.append(data)
+            evidence = json.loads(data["document_evidence"])
+            return output_schema(
+                assignments=[
+                    {
+                        "evidence_id": e["id"],
+                        "segment_id": self.assignments.get(e["id"]),
+                        "reason": "30代の発言" if self.assignments.get(e["id"]) else "",
+                    }
+                    for e in evidence
+                ]
+                + [{"evidence_id": "ev-unknown", "segment_id": "seg-0", "reason": "x"}]
+            )
         self.calls.append("synthesis")
         self.data_seen.append(data)
+        self.documents_seen.append(list(documents))
+        document_evidence: list[dict[str, Any]] = []
+        if documents:
+            document_evidence = _full_text_evidence(documents, self.full_text_mode)
+        given = [e for e in json.loads(data.get("evidence", "[]")) if e.get("quote")]
+        doc_ids = [e["id"] for e in document_evidence] + [e["id"] for e in given]
+        wanted = re.search(r"ちょうど (\d+) 人", prompt)
+        segments = self._segments or [{"id": None, "evidence_ids": []}] * int(
+            wanted.group(1) if wanted else 2
+        )
         personas = []
-        for i, segment in enumerate(self._segments):
+        for i, segment in enumerate(segments):
             segment_id = segment["id"]
             if self.synthesis_mode == "orphan" and i == 0:
                 segment_id = "seg-missing"
@@ -258,10 +448,12 @@ class _Agents:
                     "pain_points": ["悩み"],
                     "goals": ["目標"],
                     "segment_id": segment_id,
-                    "evidence_ids": list(segment["evidence_ids"]),
+                    "evidence_ids": list(segment["evidence_ids"])
+                    + doc_ids
+                    + ["ev-made-up"],
                 }
             )
-        return output_schema(personas=personas)
+        return output_schema(personas=personas, document_evidence=document_evidence)
 
 
 @pytest.fixture(autouse=True)
@@ -357,6 +549,63 @@ class _Env:
         )
         self.files.put_new(ready)
         return ready
+
+    def ready_document(
+        self,
+        data: bytes | str,
+        *,
+        filename: str = "面談.md",
+        owner: str = ADMIN.sub,
+        inspect: bool = True,
+    ) -> SourceFile:
+        """A ready document (U4) inspected like an upload (or not, ``inspect``)."""
+        from src.managers.shared.source_inspector import inspect_document
+        from src.models.source_file import (
+            DocumentMetadata,
+            SourceKind,
+            format_of_filename,
+        )
+
+        raw = data.encode("utf-8") if isinstance(data, str) else data
+        fmt = format_of_filename(filename)
+        assert fmt is not None
+        draft = SourceFile.create_new(
+            owner_sub=owner,
+            filename=filename,
+            size_bytes=len(raw),
+            part_count=1,
+            now=START - timedelta(hours=1),
+            kind=SourceKind.DOCUMENT,
+        )
+        self.s3_client.put_object(Bucket=BUCKET, Key=draft.s3_key, Body=raw)
+        metadata = (
+            inspect_document(
+                raw,
+                raw,
+                source_format=fmt,
+                total_size=len(raw),
+                now=START,
+                chars_per_mb=20_000,
+            )
+            if inspect
+            else DocumentMetadata(
+                format=fmt, estimated_chars=1, inspected_bytes=1, inspected_at=START
+            )
+        )
+        ready = draft.update(
+            status=SourceFileStatus.READY, metadata=metadata, checksum="crc=="
+        )
+        self.files.put_new(ready)
+        return ready
+
+
+def _start_with(manager, *files: SourceFile, count: int = 2, purpose: str = "") -> str:
+    return manager.start_generation(
+        ADMIN,
+        source_file_ids=[f.source_file_id for f in files],
+        purpose=purpose,
+        persona_count=count,
+    )
 
 
 def _start(manager, file: SourceFile, *, count: int = 2, principal=ADMIN) -> str:
@@ -1518,3 +1767,616 @@ class TestPreparedLog:
         (prepared,) = logs.events("advanced_generation.prepared")
         assert prepared["status"] == "failed"
         assert "rows_read" not in prepared and "rows_excluded" not in prepared
+
+
+# ---------------------------------------------------------------------------
+# U4: documents (BR23〜BR28)
+# ---------------------------------------------------------------------------
+
+
+def _progress(env: _Env, generation_id: str) -> list[str]:
+    return [
+        str(s.get("message", ""))
+        for kind, s in _events(env, generation_id)
+        if kind == "progress"
+    ]
+
+
+def _ended_cleanly_all(env: _Env, *files: SourceFile) -> None:
+    assert env.generations.get_lock(ADMIN.sub) is None
+    for file in files:
+        released = env.files.get(file.source_file_id)
+        assert released is not None and released.in_use_by is None
+    assert len(env.sandbox.stopped) == 1
+
+
+@pytest.fixture
+def small_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chunks of 300 characters with 50 of overlap, handed over 120 at a time."""
+    monkeypatch.setattr(config, "ADVANCED_DOCUMENT_CHUNK_CHARS", 300)
+    monkeypatch.setattr(config, "ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS", 50)
+    monkeypatch.setattr(config, "ADVANCED_DOCUMENT_TRANSFER_CHARS", 120)
+
+
+@pytest.fixture
+def extraction(monkeypatch: pytest.MonkeyPatch, small_chunks: None) -> None:
+    """Every document goes to the evidence extraction (BR25.2)."""
+    monkeypatch.setattr(config, "PERSONA_SOURCE_MAX_CHARS", 10)
+
+
+class TestDocumentPreparation:
+    """Step 17: BR24.4〜BR24.6, BR25.1, BR25.4, NFR1.19, NFR1.22, NFR3.22, NFR3.24."""
+
+    def test_every_document_is_refreshed_brought_in_and_prepared(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        refreshed: list[str] = []
+        original = env.s3.refresh_object
+
+        def spy(key: str) -> Any:
+            refreshed.append(key)
+            return original(key)
+
+        monkeypatch.setattr(env.s3, "refresh_object", spy)
+        a = env.ready_document(_interview(2), filename="a.md")
+        b = env.ready_document(_interview(3), filename="b.txt")
+        manager = env.manager()
+        generation_id = _start_with(manager, a, b)
+
+        manager.run(generation_id)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        assert refreshed == [a.s3_key, b.s3_key]
+        assert len(env.sandbox.download_urls) == 2
+        prepared = [
+            args for fn, args in env.sandbox.started if fn == "prepare_document"
+        ]
+        assert [p["source_index"] for p in prepared] == [0, 1]
+        assert [p["format"] for p in prepared] == ["md", "txt"]
+        assert prepared[0]["chunk_chars"] == config.ADVANCED_DOCUMENT_CHUNK_CHARS
+        assert (
+            prepared[0]["overlap_chars"] == config.ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS
+        )
+        messages = _progress(env, generation_id)
+        assert any("1 件目の文書" in m and "分割 1 個" in m for m in messages)
+        assert any("2 件目の文書" in m for m in messages)
+        _ended_cleanly_all(env, a, b)
+
+    def test_pages_and_pages_without_text_are_told(self, env: _Env) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        pages = [
+            "Value: family time matters most to me every single day.",
+            "",
+            "Pain: waiting at the counter for thirty minutes is too long.",
+        ]
+        doc = env.ready_document(pdf_bytes(pages), filename="a.pdf")
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        messages = _progress(env, generation_id)
+        assert any("3 ページ" in m for m in messages)
+        assert any("文字がないため除外" in m and "2" in m for m in messages)
+
+    def test_the_table_is_prepared_before_the_documents(self, env: _Env) -> None:
+        table = env.ready_file()
+        doc = env.ready_document(_interview(2))
+        manager = env.manager()
+        generation_id = _start_with(manager, table, doc)
+
+        manager.run(generation_id)
+
+        assert [fn for fn, _ in env.sandbox.started] == ["prepare", "prepare_document"]
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+
+    def test_a_document_without_text_stops_before_any_model(self, env: _Env) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        table = env.ready_file()
+        doc = env.ready_document(pdf_bytes(["", ""]), filename="blank.pdf")
+        manager = env.manager()
+        generation_id = _start_with(manager, table, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.DOCUMENT_NO_TEXT.value
+        assert failed.error_context == {"source_index": 1}
+        assert env.agents.calls == []
+        _ended_cleanly_all(env, table, doc)
+
+    def test_an_encrypted_document_stops(self, env: _Env) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        data = pdf_bytes(["secret"], encrypted=True)
+        # passed the upload check (say, the trailer was outside the tail read)
+        doc = env.ready_document(data, filename="locked.pdf", inspect=False)
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.DOCUMENT_ENCRYPTED.value
+        assert failed.error_context == {"source_index": 0}
+        _ended_cleanly_all(env, doc)
+
+    def test_over_the_total_limit_stops_before_any_model(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_DOCUMENT_MAX_TOTAL_CHARS", 100)
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_SOURCE_TOO_LARGE.value
+        assert failed.error_context["max_chars"] == 100
+        assert failed.error_context["total_chars"] > 100
+        assert env.agents.calls == []
+
+    def test_only_integers_of_a_failure_are_kept(self, env: _Env) -> None:
+        env.sandbox.fake_document_result = {
+            "ok": False,
+            "error": {
+                "code": "DOCUMENT_NO_TEXT",
+                "context": {"source_index": "本文の一部", "detail": "secret"},
+            },
+        }
+        doc = env.ready_document(_interview(1))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.DOCUMENT_NO_TEXT.value
+        assert not failed.error_context
+
+    def test_the_twenty_minutes_count_the_table_and_the_documents(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        table = env.ready_file()
+        doc = env.ready_document(_interview(1))
+        env.sandbox.on_profile = lambda: env.clock.advance(minutes=15)
+        polls = []
+        original = env.sandbox.poll_command
+
+        def held(session, command_id):
+            if env.sandbox.functions.get(command_id) == "prepare_document":
+                polls.append(command_id)
+                return {"done": False, "status": "running", "progress": None}
+            return original(session, command_id)
+
+        monkeypatch.setattr(env.sandbox, "poll_command", held)
+        manager = env.manager(sleep=lambda s: env.clock.advance(minutes=2))
+        generation_id = _start_with(manager, table, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_TIMEOUT.value
+        assert failed.error_context["limit"] == "prepare_minutes"
+        # about 5 minutes were left after the table, not a fresh 20
+        assert len(polls) <= 4
+
+
+class TestDocumentMode:
+    """Step 19: BR25.2, BR25.3, BR26.4, AC6.1.1, NFR4.3."""
+
+    def _chars(self, env: _Env, text: str) -> int:
+        doc = env.ready_document(text)
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+        manager.run(generation_id)
+        return int(
+            env.generations.read_result_parts(
+                generation_id, ResultPartName.DOCUMENT_REPORTS
+            )[0]["chars"]
+        )
+
+    def test_exactly_the_limit_uses_the_full_text(
+        self, env: _Env, monkeypatch, small_chunks
+    ) -> None:
+        text = _interview(3)
+        chars = self._chars(env, text)
+        monkeypatch.setattr(config, "PERSONA_SOURCE_MAX_CHARS", chars)
+        env.agents.calls.clear()
+        env.agents.documents_seen.clear()
+        env.agents.data_seen.clear()
+        doc = env.ready_document(text)
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation.document_mode.value == "full_text"
+        assert "extraction" not in env.agents.calls
+        # the planning may be asked twice (the guide is filter for documents)
+        planning_docs, synthesis_docs = (
+            env.agents.documents_seen[0],
+            env.agents.documents_seen[-1],
+        )
+        assert len(planning_docs) == 1 and planning_docs == synthesis_docs
+        # the chunks are joined without the overlap: each line once
+        assert planning_docs[0].count("価値: ") == 3
+        assert len(planning_docs[0]) == chars
+        assert any("全文を使います" in m for m in _progress(env, generation_id))
+
+    def test_one_character_over_extracts_evidence(
+        self, env: _Env, monkeypatch, small_chunks
+    ) -> None:
+        text = _interview(3)
+        chars = self._chars(env, text)
+        monkeypatch.setattr(config, "PERSONA_SOURCE_MAX_CHARS", chars - 1)
+        env.agents.calls.clear()
+        env.agents.documents_seen.clear()
+        env.agents.data_seen.clear()
+        doc = env.ready_document(text)
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation.document_mode.value == "extraction"
+        assert "extraction" in env.agents.calls
+        # BR26.3: planning and synthesis get the evidence list, not the text
+        assert env.agents.documents_seen
+        assert all(docs == [] for docs in env.agents.documents_seen)
+        assert "document_evidence" in env.agents.data_seen[0]
+        assert any("根拠を取り出します" in m for m in _progress(env, generation_id))
+
+    def test_a_cut_transfer_fails_the_generation(self, env: _Env, small_chunks) -> None:
+        env.sandbox.truncate_chunks = True
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_OPERATION_FAILED.value
+
+
+class TestEvidenceExtraction:
+    """Step 20: BR26.1〜BR26.3, BR26.5, NFR1.16〜NFR1.18, NFR2.7, NFR7.3."""
+
+    def _run(self, env: _Env, *docs: SourceFile, count: int = 2) -> str:
+        manager = env.manager()
+        generation_id = _start_with(manager, *docs, count=count)
+        manager.run(generation_id)
+        return generation_id
+
+    def _chunks(self, env: _Env, generation_id: str) -> int:
+        return sum(
+            r["chunks"]
+            for r in env.generations.read_result_parts(
+                generation_id, ResultPartName.DOCUMENT_REPORTS
+            )
+        )
+
+    def test_one_call_per_chunk_and_never_more_than_the_limit_at_once(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_MAX_CONCURRENT", 2)
+        doc = env.ready_document(_interview(8))
+
+        generation_id = self._run(env, doc)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        chunks = self._chunks(env, generation_id)
+        assert chunks >= 4
+        assert env.agents.calls.count("extraction") == chunks
+        assert env.agents.max_running <= 2
+
+    def test_progress_says_n_of_m_up_to_the_end(self, env: _Env, extraction) -> None:
+        doc = env.ready_document(_interview(8))
+
+        generation_id = self._run(env, doc)
+
+        chunks = self._chunks(env, generation_id)
+        counts = [m for m in _progress(env, generation_id) if "根拠の抽出" in m]
+        assert counts[-1].endswith(f"{chunks} / {chunks}")
+        assert len(counts) <= 11
+
+    def test_items_and_quotes_are_cut_to_the_limits(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_PER_CHUNK_MAX", 3)
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_QUOTE_MAX_CHARS", 12)
+        doc = env.ready_document(_interview(6))
+
+        generation_id = self._run(env, doc, count=1)
+
+        evidence = env.generations.read_result_parts(
+            generation_id, ResultPartName.EVIDENCE
+        )
+        by_chunk: dict[str, int] = {}
+        for item in evidence:
+            assert len(item["quote"]) <= 12
+            chunk = item["id"].rsplit("-", 1)[0]
+            by_chunk[chunk] = by_chunk.get(chunk, 0) + 1
+        assert by_chunk and max(by_chunk.values()) <= 3
+
+    def test_ids_are_renumbered_and_the_source_comes_from_the_chunk(
+        self, env: _Env, extraction
+    ) -> None:
+        table_free = env.ready_document(_interview(2), filename="a.md")
+        other = env.ready_document(_interview(2, prefix="B"), filename="b.md")
+
+        generation_id = self._run(env, table_free, other)
+
+        evidence = env.generations.read_result_parts(
+            generation_id, ResultPartName.EVIDENCE
+        )
+        assert evidence
+        for item in evidence:
+            assert re.fullmatch(r"ev-d[01]-\d+-\d+", item["id"])
+            expected = table_free if item["id"].startswith("ev-d0") else other
+            assert item["source_id"] == expected.source_file_id
+            assert item["location"]
+        assert len({e["id"] for e in evidence}) == len(evidence)
+
+    def test_a_failure_stops_the_rest_and_fails_the_generation(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_MAX_CONCURRENT", 1)
+        env.agents.extraction_mode = "fail_at:3"
+        doc = env.ready_document(_interview(8))
+
+        generation_id = self._run(env, doc)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
+        assert failed.error_context == {"cause": "model"}
+        assert env.agents.calls.count("extraction") == 3
+        assert "planning" not in env.agents.calls
+        _ended_cleanly_all(env, doc)
+
+    def test_a_running_call_may_retry_until_another_one_fails(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_MAX_CONCURRENT", 1)
+        doc = env.ready_document(_interview(4))
+
+        self._run(env, doc)
+
+        assert env.agents.may_retry and all(callable(f) for f in env.agents.may_retry)
+        # The run ended well: nothing stopped the retries of later calls
+        assert all(f() for f in env.agents.may_retry)
+
+    def test_after_a_failure_no_call_retries_or_starts(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_MAX_CONCURRENT", 2)
+        env.agents.extraction_mode = "fail_at:1"
+        doc = env.ready_document(_interview(8))
+
+        generation_id = self._run(env, doc)
+
+        assert _failed(env, generation_id).error_code == (
+            ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
+        )
+        # Only the two calls already running when the first one failed
+        assert env.agents.calls.count("extraction") <= 2
+        assert not any(f() for f in env.agents.may_retry)
+
+    def test_the_time_left_is_checked_before_each_call(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(
+            config, "ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS", 3601
+        )
+        doc = env.ready_document(_interview(4))
+
+        generation_id = self._run(env, doc)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_TIMEOUT.value
+        assert "extraction" not in env.agents.calls
+
+    def test_an_answer_out_of_shape_gives_no_evidence(
+        self, env: _Env, extraction
+    ) -> None:
+        env.agents.extraction_mode = "none"
+        doc = env.ready_document(_interview(3))
+
+        generation_id = self._run(env, doc)
+
+        # nothing to rest the personas on: the verification fails (BR27.2)
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
+
+
+class TestQuoteVerification:
+    """Step 21: BR27.1, BR27.3, NFR1.21, NFR5.38, AC6.2.2."""
+
+    def test_extracted_quotes_not_in_the_text_are_dropped_and_counted(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_VERIFY_BATCH", 2)
+        env.agents.extraction_mode = "fabricate"
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation.status is GenerationStatus.DONE
+        stats = generation.evidence_stats
+        assert stats["discarded_unverified"] == 1
+        evidence = env.generations.read_result_parts(
+            generation_id, ResultPartName.EVIDENCE
+        )
+        assert stats["extracted"] == len(evidence) + 1
+        assert all("作り話" not in e["quote"] for e in evidence)
+        batches = [a["quotes"] for fn, a in env.sandbox.called if fn == "verify_quotes"]
+        assert batches and max(len(b) for b in batches) <= 2
+
+    def test_full_text_quotes_are_checked_after_the_synthesis(self, env: _Env) -> None:
+        env.agents.full_text_mode = "fabricate"
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation.document_mode.value == "full_text"
+        assert generation.evidence_stats["discarded_unverified"] == 1
+        evidence = env.generations.read_result_parts(
+            generation_id, ResultPartName.EVIDENCE
+        )
+        assert all(re.fullmatch(r"ev-d0-0-\d+", e["id"]) for e in evidence)
+        assert all("作り話" not in e["quote"] for e in evidence)
+
+
+class TestDocumentVerificationAndResult:
+    """Steps 22〜23: BR27.2, BR28.1, BR28.2, AC6.1.3, AC7.1.1, AC7.1.2, NFR4.4."""
+
+    def test_a_persona_without_goal_evidence_fails_the_verification(
+        self, env: _Env
+    ) -> None:
+        env.agents.full_text_mode = "no_goal"
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        failed = _failed(env, generation_id)
+        assert failed.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
+
+    def test_unknown_evidence_ids_are_dropped_from_the_personas(
+        self, env: _Env
+    ) -> None:
+        doc = env.ready_document(_interview(3))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation.status is GenerationStatus.DONE
+        known = {
+            e["id"]
+            for e in env.generations.read_result_parts(
+                generation_id, ResultPartName.EVIDENCE
+            )
+        }
+        for candidate_id in generation.candidate_ids or ():
+            context = env.candidates.get(candidate_id).generation_context
+            assert context["segment_id"] is None
+            assert context["evidence_ids"]
+            assert set(context["evidence_ids"]) <= known
+
+    def test_extraction_assigns_evidence_to_segments_before_the_synthesis(
+        self, env: _Env, extraction
+    ) -> None:
+        table = env.ready_file()
+        doc = env.ready_document(_interview(4))
+        manager = env.manager()
+        generation_id = _start_with(manager, table, doc)
+        env.agents.assignments = {"ev-d1-0-0": "seg-0", "ev-d1-0-1": "seg-nope"}
+
+        manager.run(generation_id)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        calls = env.agents.calls
+        assert calls.index("assignment") < calls.index("synthesis")
+        evidence = {
+            e["id"]: e
+            for e in env.generations.read_result_parts(
+                generation_id, ResultPartName.EVIDENCE
+            )
+        }
+        assert evidence["ev-d1-0-0"]["segment_id"] == "seg-0"
+        assert evidence["ev-d1-0-0"]["assignment_reason"] == "30代の発言"
+        assert "segment_id" not in evidence["ev-d1-0-1"]  # unknown segment
+        assert "ev-unknown" not in evidence
+        # BR28.2: the evidence without a segment goes to every persona
+        synthesis = env.agents.data_seen[-1]
+        given = {e["id"] for e in json.loads(synthesis["evidence"])}
+        assert {"ev-d1-0-0", "ev-d1-0-1"} <= given
+
+    def test_full_text_synthesis_returns_the_segments_itself(self, env: _Env) -> None:
+        table = env.ready_file()
+        doc = env.ready_document(_interview(2))
+        manager = env.manager()
+        generation_id = _start_with(manager, table, doc)
+
+        manager.run(generation_id)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        assert "assignment" not in env.agents.calls
+        evidence = [
+            e
+            for e in env.generations.read_result_parts(
+                generation_id, ResultPartName.EVIDENCE
+            )
+            if e.get("quote")
+        ]
+        assert any(e.get("segment_id") == "seg-0" for e in evidence)
+        assert any("segment_id" not in e for e in evidence)
+
+    def test_the_result_lists_the_documents_used(self, env: _Env) -> None:
+        doc = env.ready_document(_interview(2), filename="面談A.md")
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+        manager.run(generation_id)
+
+        result = manager.get_result(ADMIN, generation_id)
+
+        (report,) = result.document_reports
+        assert report.source_id == doc.source_file_id
+        assert result.source_names[doc.source_file_id] == "面談A.md"
+        assert any(e.quote for e in result.evidence)
+
+    def test_the_failure_names_the_users_file(self, env: _Env) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        doc = env.ready_document(pdf_bytes([""]), filename="白紙.pdf")
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+        manager.run(generation_id)
+
+        progress = manager.stream_events(ADMIN, generation_id)
+
+        assert progress.failure_context == {"source_index": 0, "filename": "白紙.pdf"}
+
+
+class TestDocumentLogs:
+    """Step 24: NFR6.13〜NFR6.15, NFR7.3 (counts, time and tokens only)."""
+
+    def test_preparation_mode_and_extraction_are_logged_without_text(
+        self, env: _Env, capsys, extraction
+    ) -> None:
+        logs = LogCapture(capsys)
+        doc = env.ready_document(_interview(4), filename="秘密の面談.md")
+        manager = env.manager()
+        generation_id = _start_with(manager, doc)
+
+        manager.run(generation_id)
+
+        (prepared,) = logs.events("advanced_generation.document_prepared")
+        assert prepared["document_index"] == 0 and prepared["format"] == "md"
+        assert prepared["chars"] > 0 and prepared["chunks"] >= 2
+        assert prepared["no_text_pages"] == 0
+        assert isinstance(prepared["elapsed_ms"], int)
+        (mode,) = logs.events("advanced_generation.document_mode")
+        assert mode["mode"] == "extraction" and mode["chunks"] == prepared["chunks"]
+        (extracted,) = logs.events("advanced_generation.evidence_extracted")
+        assert extracted["chunks"] == prepared["chunks"]
+        assert extracted["evidence_input_tokens"] == 100 * prepared["chunks"]
+        assert extracted["evidence_output_tokens"] == 10 * prepared["chunks"]
+        assert extracted["discarded_unverified"] == 0
+        assert_not_leaked("秘密", logs.records())
+        assert_not_leaked("家族と過ごす", logs.records())
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE

@@ -695,6 +695,33 @@ class TestHeadReads:
         with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
             s3_service.read_range(SOURCE_KEY, 4)
 
+    # U4 NFR3.25: the tail of a document (the PDF trailer, the ZIP directory)
+
+    def test_read_tail_reads_only_the_end(self, s3_service):
+        s3_service.upload_file(b"0123456789", SOURCE_KEY)
+
+        assert s3_service.read_tail(SOURCE_KEY, 3) == b"789"
+
+    def test_read_tail_of_a_short_object_is_the_whole(self, s3_service):
+        s3_service.upload_file(b"0123456789", SOURCE_KEY)
+
+        assert s3_service.read_tail(SOURCE_KEY, 100) == b"0123456789"
+
+    def test_read_tail_sends_a_suffix_range(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.get_object.return_value = {"Body": Mock(read=Mock(return_value=b"ab"))}
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        s3_service.read_tail(SOURCE_KEY, MIB)
+
+        assert client.get_object.call_args.kwargs["Range"] == f"bytes=-{MIB}"
+
+    def test_read_tail_of_a_missing_key_is_not_found(self, s3_service):
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.read_tail(SOURCE_KEY, 4)
+
     def test_checksum_reads_crc64nvme_with_checksum_mode(self, s3_service, monkeypatch):
         from unittest.mock import Mock
 

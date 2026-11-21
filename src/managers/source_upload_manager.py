@@ -37,10 +37,13 @@ from ..config import config
 from ..models.authz import Principal
 from ..models.errors import CodedError, ErrorCode, ErrorKind
 from ..models.source_file import (
+    DocumentMetadata,
     SourceFile,
     SourceFileListItem,
     SourceFileStatus,
     SourceFormat,
+    SourceKind,
+    SourceMetadata,
     UploadSession,
     part_count_for,
 )
@@ -49,7 +52,11 @@ from ..services.service_factory import service_factory
 from .components.advanced_generation_policy import AdvancedGenerationPolicy
 from .components.source_file_catalog import SourceFileCatalog
 from .shared.advanced_generation_log import log_advanced_event
-from .shared.source_inspector import SourceInspectionError, inspect_table_head
+from .shared.source_inspector import (
+    SourceInspectionError,
+    inspect_document,
+    inspect_table_head,
+)
 
 if TYPE_CHECKING:
     from ..services.s3_service import S3Service
@@ -60,9 +67,21 @@ logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-#: Extensions accepted for a table (BR2.1). Excel files are saved as CSV first.
-_EXTENSIONS = {".csv": SourceFormat.CSV, ".tsv": SourceFormat.TSV}
-#: Content types browsers send for CSV / TSV files (empty when unknown).
+#: Extensions accepted: tables (BR2.1) and documents (U4 BR21.1). Excel files
+#: are saved as CSV first; an old Word file as .docx (BR21.2).
+_EXTENSIONS = {
+    f".{fmt.value}": fmt
+    for fmt in (
+        SourceFormat.CSV,
+        SourceFormat.TSV,
+        SourceFormat.PDF,
+        SourceFormat.DOCX,
+        SourceFormat.TXT,
+        SourceFormat.MD,
+    )
+}
+_LEGACY_WORD = ".doc"
+#: Content types browsers send for these files (empty when unknown).
 _CONTENT_TYPES = frozenset(
     {
         "",
@@ -72,6 +91,11 @@ _CONTENT_TYPES = frozenset(
         "application/csv",
         "application/vnd.ms-excel",
         "application/octet-stream",
+        # U4: documents
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/markdown",
+        "text/x-markdown",
     }
 )
 
@@ -93,12 +117,20 @@ def _format_of(filename: str) -> SourceFormat:
     extension = os.path.splitext(filename.strip().lower())[1]
     found = _EXTENSIONS.get(extension)
     if found is None:
+        reason = "legacy_word" if extension == _LEGACY_WORD else "format"
         raise SourceUploadError(
-            "not a csv or tsv file",
+            "not an accepted file format",
             code=ErrorCode.UPLOAD_SOURCE_INVALID,
-            context={"reason": "format"},
+            context={"reason": reason},
         )
     return found
+
+
+def _limit_for(source_format: SourceFormat, table_limit: int) -> int:
+    """1GB for a table (BR2.2), 100MB for a document (BR21.1)."""
+    if source_format.kind is SourceKind.DOCUMENT:
+        return int(config.ADVANCED_DOCUMENT_MAX_BYTES)
+    return table_limit
 
 
 class SourceUploadManager:
@@ -149,15 +181,16 @@ class SourceUploadManager:
                 ``max_bytes``), ``UPLOAD_TOO_MANY_FILES`` or an S3 / store code.
         """
         self._advanced_generation_policy.ensure_available(principal, SourceUploadError)
-        _format_of(filename)
+        source_format = _format_of(filename)
         if content_type.strip().lower() not in _CONTENT_TYPES:
             raise SourceUploadError(
                 "unexpected content type",
                 code=ErrorCode.UPLOAD_SOURCE_INVALID,
                 context={"reason": "format"},
             )
-        self._check_size(int(size_bytes))
+        self._check_size(int(size_bytes), source_format)
         now = self._clock()
+        # BR21.3: tables and documents count together
         self._source_file_catalog.ensure_room(principal.sub, now=now)
         part_size = int(config.ADVANCED_UPLOAD_PART_SIZE_BYTES)
         draft = SourceFile.create_new(
@@ -166,6 +199,7 @@ class SourceUploadManager:
             size_bytes=int(size_bytes),
             part_count=part_count_for(int(size_bytes), part_size),
             now=now,
+            kind=source_format.kind,
         )
         # BR11.3, BR13.2: the number is fixed now and the 7 days start now
         draft = draft.update(
@@ -303,7 +337,10 @@ class SourceUploadManager:
                 return  # completed by an earlier attempt that did not finish
             raise SourceUploadError("list parts failed", code=e.code) from e
         total = sum(p.size_bytes for p in held)
-        limit = self._advanced_generation_policy.upload_limit_bytes()
+        limit = _limit_for(
+            _format_of(source_file.filename),
+            self._advanced_generation_policy.upload_limit_bytes(),
+        )
         refusal: Optional[ErrorCode] = None
         if total > limit:
             refusal = ErrorCode.UPLOAD_TOO_LARGE
@@ -331,13 +368,18 @@ class SourceUploadManager:
                 source_file.s3_key, int(config.ADVANCED_INSPECT_BYTES)
             )
         )
+        source_format = _format_of(source_file.filename)
+        metadata: SourceMetadata | DocumentMetadata
         try:
-            metadata = inspect_table_head(
-                head,
-                source_format=_format_of(source_file.filename),
-                total_size=source_file.size_bytes,
-                now=now,
-            )
+            if source_format.kind is SourceKind.DOCUMENT:
+                metadata = self._inspect_document(source_file, source_format, head, now)
+            else:
+                metadata = inspect_table_head(
+                    head,
+                    source_format=source_format,
+                    total_size=source_file.size_bytes,
+                    now=now,
+                )
         except SourceInspectionError as e:
             raise SourceUploadError(
                 "inspection failed", code=e.code, context=dict(e.context)
@@ -345,6 +387,38 @@ class SourceUploadManager:
         checksum = self._s3_call(lambda: self._s3.get_checksum(source_file.s3_key))
         return self._source_file_catalog.mark_ready(
             source_file.source_file_id, metadata, checksum or "", now=now
+        )
+
+    def _inspect_document(
+        self,
+        source_file: SourceFile,
+        source_format: SourceFormat,
+        head: bytes,
+        now: datetime,
+    ) -> DocumentMetadata:
+        """Head and tail of a document (U4 BR22.1〜BR22.3, NFR3.25)."""
+        size = source_file.size_bytes
+        tail = (
+            head
+            if len(head) >= size
+            else self._s3_call(
+                lambda: self._s3.read_tail(
+                    source_file.s3_key, int(config.ADVANCED_INSPECT_TAIL_BYTES)
+                )
+            )
+        )
+        chars_per_mb = (
+            config.ADVANCED_DOCUMENT_CHARS_PER_MB_PDF
+            if source_format is SourceFormat.PDF
+            else config.ADVANCED_DOCUMENT_CHARS_PER_MB_DOCX
+        )
+        return inspect_document(
+            head,
+            tail,
+            source_format=source_format,
+            total_size=size,
+            now=now,
+            chars_per_mb=int(chars_per_mb),
         )
 
     # --- read and cancel --------------------------------------------------------
@@ -440,8 +514,10 @@ class SourceUploadManager:
 
     # --- helpers ----------------------------------------------------------------
 
-    def _check_size(self, size_bytes: int) -> None:
-        limit = self._advanced_generation_policy.upload_limit_bytes()
+    def _check_size(self, size_bytes: int, source_format: SourceFormat) -> None:
+        limit = _limit_for(
+            source_format, self._advanced_generation_policy.upload_limit_bytes()
+        )
         if size_bytes < 1:
             raise SourceUploadError(
                 "empty file",
@@ -509,13 +585,17 @@ class SourceUploadManager:
     def _log_completed(
         source_file: SourceFile, error_code: Optional[ErrorCode]
     ) -> None:
-        metadata = source_file.metadata
+        table = source_file.table_metadata
+        document = source_file.document_metadata
+        encoding = table.encoding if table else document.encoding if document else None
         log_advanced_event(
             "advanced_generation.upload_completed",
             source_file_id=source_file.source_file_id,
+            kind=source_file.kind.value,
             size_bytes=source_file.size_bytes,
             status="error" if error_code else source_file.status.value,
             error_code=error_code.value if error_code else None,
-            encoding=metadata.encoding.value if metadata else None,
-            estimated_rows=metadata.estimated_rows if metadata else None,
+            encoding=encoding.value if encoding else None,
+            estimated_rows=table.estimated_rows if table else None,
+            estimated_chars=document.estimated_chars if document else None,
         )

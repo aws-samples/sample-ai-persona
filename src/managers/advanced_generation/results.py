@@ -8,22 +8,24 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 from ...config import config
 from ...models.advanced_generation import AdvancedGeneration
 from ...models.analysis import (
     DEFAULT_SEED,
+    DOCUMENT_PREPARE_VERSION,
     AnalysisPlan,
     AnalysisRecord,
     AnalysisRun,
+    DocumentMode,
     PrepareReport,
     Segment,
 )
 from ...models.demographics import VALID_GENDERS
 from ...models.persona import Persona
 from ...models.persona_candidate import PersonaCandidate
-from ...models.source_file import SourceFile
+from ...models.source_file import SourceFile, SourceKind
 from .prompts import AdvancedPersonaOutput
 
 #: ``generation_context.mode`` of an advanced generation's persona (C7).
@@ -36,24 +38,34 @@ def build_analysis_run(
     *,
     generation: AdvancedGeneration,
     plan: AnalysisPlan,
-    report: PrepareReport,
-    source: SourceFile,
+    report: Optional[PrepareReport],
+    sources: Sequence[SourceFile],
     tool_call_ids: Sequence[str],
     library_sha256: str,
     unverified_segment_ids: Sequence[str],
+    document_mode: Optional[DocumentMode] = None,
 ) -> AnalysisRun:
-    """The summary kept on the generation and each candidate (contract C8)."""
+    """The summary kept on the generation and each candidate (contract C8).
+
+    U4: ``report`` is ``None`` for documents alone; every source's checksum is
+    kept in ``source_file_ids`` order, and the document mode is a parameter.
+    """
+    params: dict[str, Any] = {
+        "persona_count": generation.persona_count,
+        "split_axis": plan.split_axis,
+        "unverified_segment_ids": list(unverified_segment_ids),
+    }
+    if document_mode is not None:
+        params["document_mode"] = document_mode.value
     return AnalysisRun(
         method=plan.method.value,
         plan_ref=generation.generation_id,
         code_sha256=(library_sha256,),
-        params={
-            "persona_count": generation.persona_count,
-            "split_axis": plan.split_axis,
-            "unverified_segment_ids": list(unverified_segment_ids),
-        },
-        source_checksums=(source.checksum or "",),
-        prepare_version=report.prepare_version,
+        params=params,
+        source_checksums=tuple(s.checksum or "" for s in sources),
+        prepare_version=(
+            report.prepare_version if report else DOCUMENT_PREPARE_VERSION
+        ),
         tool_call_ids=tuple(tool_call_ids),
         seed=DEFAULT_SEED,
     )
@@ -63,31 +75,54 @@ def build_record(
     *,
     generation: AdvancedGeneration,
     plan: AnalysisPlan,
-    report: PrepareReport,
-    source: SourceFile,
+    report: Optional[PrepareReport],
+    sources: Sequence[SourceFile],
     calls: Sequence[Any],
     library_sha256: str,
     now: datetime,
+    document_mode: Optional[DocumentMode] = None,
 ) -> AnalysisRecord:
     """The analysis record: the fixed functions that ran and their hash (BR9.1).
 
     ``calls`` are the tool calls (``tool_call_id``, ``tool``, ``ok``,
-    ``error_code``); their outputs are not kept. No URL goes in.
+    ``error_code``); their outputs are not kept. No URL goes in. U4: one
+    ``prepare_document`` block per document, then the quote check.
     """
-    metadata = source.metadata
-    prepare_args = (
-        {"encoding": metadata.encoding.value, "delimiter": metadata.delimiter}
-        if metadata
-        else {}
-    )
-    blocks = [
-        {
-            "kind": "fixed",
-            "code": f"prepare({json.dumps(prepare_args, ensure_ascii=False)})",
-            "sha256": library_sha256,
-        },
-        {"kind": "fixed", "code": "profile_dataset()", "sha256": library_sha256},
-    ]
+    blocks: list[dict[str, Any]] = []
+    table = next((s for s in sources if s.kind is SourceKind.TABLE), None)
+    metadata = table.table_metadata if table else None
+    if table is not None:
+        prepare_args = (
+            {"encoding": metadata.encoding.value, "delimiter": metadata.delimiter}
+            if metadata
+            else {}
+        )
+        blocks += [
+            {
+                "kind": "fixed",
+                "code": f"prepare({json.dumps(prepare_args, ensure_ascii=False)})",
+                "sha256": library_sha256,
+            },
+            {"kind": "fixed", "code": "profile_dataset()", "sha256": library_sha256},
+        ]
+    for source in sources:
+        if source.kind is SourceKind.DOCUMENT:
+            fmt = source.source_format.value if source.source_format else ""
+            blocks.append(
+                {
+                    "kind": "fixed",
+                    "code": f'prepare_document({{"format": "{fmt}"}})',
+                    "sha256": library_sha256,
+                }
+            )
+    if document_mode is not None:
+        blocks.append(
+            {
+                "kind": "fixed",
+                "code": f"verify_quotes()  # {document_mode.value}",
+                "sha256": library_sha256,
+            }
+        )
     blocks += [
         {
             "kind": "fixed",
@@ -103,12 +138,12 @@ def build_record(
         plan=plan.to_dict(),
         code_blocks=blocks,
         seed=DEFAULT_SEED,
-        prepare_version=report.prepare_version,
-        source_checksums=[source.checksum or ""],
+        prepare_version=report.prepare_version if report else DOCUMENT_PREPARE_VERSION,
+        source_checksums=[s.checksum or "" for s in sources],
         now=now,
-        # U2 BR14.3: name the file even after it is deleted
-        source_file_ids=[source.source_file_id],
-        source_display_names=[source.display_name],
+        # U2 BR14.3: name the files even after they are deleted
+        source_file_ids=[s.source_file_id for s in sources],
+        source_display_names=[s.display_name for s in sources],
         tool_calls=[
             {
                 "tool_call_id": c.tool_call_id,

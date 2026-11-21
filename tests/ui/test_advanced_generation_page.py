@@ -709,3 +709,65 @@ class TestInspectingRow:
         page = ui.page.locator("#advanced-generation")
         assert page.get_attribute("data-inspect-poll-seconds") == "2"
         assert page.get_attribute("data-inspect-stop-seconds") == "900"
+
+
+class TestDocuments:
+    """U4 Step 26: AC2.2.2, AC3.3.3, AC6.2.4, NFR10.3 (rows, estimate, result)."""
+
+    SELECT = "[data-testid='advanced-upload-select']"
+
+    def _open_with_both(self, ui: UiHarness) -> None:
+        _open(
+            ui,
+            upload_rows=_listed(
+                (s.ready_file(expires_at=WEEK), None),
+                (s.ready_document(expires_at=WEEK), None),
+            ),
+        )
+
+    def test_a_document_row_is_written_in_words_and_its_estimate_adds_up(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with_both(ui)
+        estimate = "[data-testid='advanced-document-estimate']"
+        assert ui.page.is_hidden(estimate)
+
+        ui.page.check(f"tr[data-kind='document'] {self.SELECT}")
+
+        assert "PDF / 約 160 万字の見込み" in ui.page.inner_text(
+            "tr[data-kind='document']"
+        )
+        assert "約 160 万字の見込み" in ui.page.inner_text(estimate)
+        assert ui.page.is_enabled("[data-testid='advanced-generate-button']")
+        ui.page.check(f"tr[data-kind='table'] {self.SELECT}")
+        assert ui.page.is_enabled("[data-testid='advanced-generate-button']")
+        ui.check_a11y()
+
+    def test_an_old_word_file_is_refused_with_advice(self, ui: UiHarness) -> None:
+        _open(ui)
+
+        _choose_file(ui, data=b"\xd0\xcf\x11\xe0", name="old.doc")
+        ui.page.wait_for_selector("#toast-alert [data-toast]", state="attached")
+
+        assert ui.requests == []
+        assert ".docx" in ui.page.inner_text("#toast-alert")
+
+    def test_the_result_lists_the_documents_and_the_overall_evidence(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.document_result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-documents']")
+
+        documents = ui.page.inner_text("[data-testid='advanced-documents']")
+        assert "120 ページ" in documents and "812,345 字" in documents
+        assert s.SCRIPT_TEXT in documents  # the file name is shown as text
+        overall = ui.page.inner_text("[data-testid='advanced-overall-evidence']")
+        assert "週末は家族と過ごす時間を何より大切にしている" in overall
+        ui.check_a11y()

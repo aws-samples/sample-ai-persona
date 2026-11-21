@@ -31,6 +31,8 @@ from src.models.analysis import (
     AnalysisRun,
     AnalysisTool,
     AnalysisToolPolicy,
+    DocumentMode,
+    DocumentReport,
     Evidence,
     EvidenceKind,
     PrepareReport,
@@ -42,6 +44,7 @@ from src.models.source_file import (
     SAMPLE_CELL_MAX_CHARS,
     SAMPLE_COLUMNS_MAX,
     SAMPLE_ROWS_MAX,
+    DocumentMetadata,
     PartUrl,
     SourceAvailability,
     SourceAvailabilityState,
@@ -54,6 +57,7 @@ from src.models.source_file import (
     SourceKind,
     SourceMetadata,
     UploadSession,
+    format_of_filename,
     part_count_for,
     source_key,
 )
@@ -707,3 +711,217 @@ class TestSourceErrorCodesU2:
     )
     def test_kind(self, code, kind):
         assert code.kind is kind
+
+
+# --- U4: documents (entities.md, BR21.1, BR22.3, BR24, BR28) -------------------
+
+
+def _document_metadata(**overrides) -> DocumentMetadata:
+    values = dict(
+        format=SourceFormat.PDF,
+        estimated_chars=120_000,
+        inspected_bytes=5 * 1024 * 1024,
+        inspected_at=NOW,
+    )
+    values.update(overrides)
+    return DocumentMetadata(**values)
+
+
+class TestSourceKindAndFormatU4:
+    @pytest.mark.parametrize(
+        ("fmt", "kind"),
+        [
+            (SourceFormat.CSV, SourceKind.TABLE),
+            (SourceFormat.TSV, SourceKind.TABLE),
+            (SourceFormat.PDF, SourceKind.DOCUMENT),
+            (SourceFormat.DOCX, SourceKind.DOCUMENT),
+            (SourceFormat.TXT, SourceKind.DOCUMENT),
+            (SourceFormat.MD, SourceKind.DOCUMENT),
+        ],
+    )
+    def test_each_format_has_its_kind(self, fmt, kind):
+        assert fmt.kind is kind
+
+    @pytest.mark.parametrize(
+        ("name", "fmt"),
+        [
+            ("a.CSV", SourceFormat.CSV),
+            ("b.tsv", SourceFormat.TSV),
+            ("report.PDF", SourceFormat.PDF),
+            ("memo.docx", SourceFormat.DOCX),
+            ("note.txt", SourceFormat.TXT),
+            ("readme.md", SourceFormat.MD),
+            ("old.doc", None),
+            ("sheet.xlsx", None),
+            ("noext", None),
+        ],
+    )
+    def test_format_of_a_file_name(self, name, fmt):
+        assert format_of_filename(name) is fmt
+
+    def test_a_document_upload_is_a_document(self):
+        sf = _source_file(filename="interview.pdf", kind=SourceKind.DOCUMENT)
+
+        assert sf.kind is SourceKind.DOCUMENT
+        assert sf.source_format is SourceFormat.PDF
+
+    def test_a_table_upload_stays_a_table_by_default(self):
+        assert _source_file().kind is SourceKind.TABLE
+
+
+class TestDocumentMetadata:
+    def test_round_trip_without_none(self):
+        meta = _document_metadata()
+        data = meta.to_dict()
+
+        assert "encoding" not in data and "pages" not in data
+        assert data["format"] == "pdf"
+        assert DocumentMetadata.from_dict(data) == meta
+
+    def test_text_keeps_its_encoding(self):
+        meta = _document_metadata(
+            format=SourceFormat.TXT, encoding=SourceEncoding.CP932
+        )
+
+        again = DocumentMetadata.from_dict(meta.to_dict())
+        assert again.encoding is SourceEncoding.CP932
+
+    def test_a_table_format_is_refused(self):
+        with pytest.raises(ValueError):
+            _document_metadata(format=SourceFormat.CSV)
+
+    def test_negative_counts_are_refused(self):
+        with pytest.raises(ValueError):
+            _document_metadata(estimated_chars=-1)
+
+    def test_a_source_file_reads_the_document_shape_back(self):
+        sf = _source_file(filename="a.docx", kind=SourceKind.DOCUMENT).update(
+            status=SourceFileStatus.READY,
+            metadata=_document_metadata(format=SourceFormat.DOCX),
+        )
+
+        again = SourceFile.from_dict(sf.to_dict())
+        assert isinstance(again.metadata, DocumentMetadata)
+        assert again.metadata.format is SourceFormat.DOCX
+
+    def test_a_u1_table_row_still_reads(self):
+        sf = _source_file().update(status=SourceFileStatus.READY, metadata=_metadata())
+        data = sf.to_dict()
+        data.pop("kind")
+
+        again = SourceFile.from_dict(data)
+        assert again.kind is SourceKind.TABLE
+        assert isinstance(again.metadata, SourceMetadata)
+
+
+class TestDocumentReport:
+    def _report(self, **overrides) -> DocumentReport:
+        values = dict(
+            source_id="sf-1",
+            chars=42_000,
+            chunks=3,
+            headings=5,
+            no_text_pages=(2,),
+            pages=3,
+        )
+        values.update(overrides)
+        return DocumentReport(**values)
+
+    def test_round_trip(self):
+        report = self._report()
+
+        assert DocumentReport.from_dict(report.to_dict()) == report
+
+    def test_a_report_without_pages_leaves_them_out(self):
+        report = self._report(pages=None, no_text_pages=())
+        data = report.to_dict()
+
+        assert "pages" not in data
+        assert data["no_text_pages"] == []
+
+    def test_every_page_without_text_is_refused(self):
+        with pytest.raises(ValueError):
+            self._report(pages=2, no_text_pages=(1, 2))
+
+    def test_page_numbers_are_within_the_document(self):
+        with pytest.raises(ValueError):
+            self._report(pages=3, no_text_pages=(4,))
+
+    def test_negative_counts_are_refused(self):
+        with pytest.raises(ValueError):
+            self._report(chars=-1)
+
+
+class TestDocumentEvidence:
+    def test_document_evidence_keeps_quote_speaker_and_segment(self):
+        ev = Evidence.for_document(
+            id="ev-d0-1-1",
+            source_id="sf-1",
+            location="p.3",
+            kind=EvidenceKind.PAIN,
+            claim="待ち時間が長いと感じている",
+            quote="受付で30分も待たされた",
+            speaker_attributes={"年代": "30代"},
+            segment_id="seg-1",
+            assignment_reason="30代の層",
+        )
+
+        again = Evidence.from_dict(ev.to_dict())
+        assert again == ev
+        assert again.speaker_attributes == {"年代": "30代"}
+        assert again.is_document
+
+    @pytest.mark.parametrize("quote", ["", "   "])
+    def test_document_evidence_needs_a_quote(self, quote):
+        with pytest.raises(ValueError):
+            Evidence.for_document(
+                id="ev-1",
+                source_id="sf-1",
+                location="p.1",
+                kind=EvidenceKind.VALUE,
+                claim="c",
+                quote=quote,
+            )
+
+    def test_table_evidence_reads_as_before(self):
+        ev = _evidence()
+        data = ev.to_dict()
+
+        assert "speaker_attributes" not in data and "segment_id" not in data
+        assert Evidence.from_dict(data) == ev
+        assert not ev.is_document
+
+
+class TestAdvancedGenerationU4:
+    def _new(self) -> AdvancedGeneration:
+        return AdvancedGeneration.create_new(
+            owner_sub="user-1",
+            source_file_ids=["sf-1", "sf-2"],
+            purpose="",
+            persona_count=2,
+            now=NOW,
+            ttl_seconds=3600,
+        )
+
+    def test_document_mode_and_stats_round_trip(self):
+        gen = self._new().update(
+            document_mode=DocumentMode.EXTRACTION,
+            evidence_stats={"extracted": 12, "discarded_unverified": 3},
+        )
+
+        again = AdvancedGeneration.from_dict(gen.to_dict())
+        assert again.document_mode is DocumentMode.EXTRACTION
+        assert again.evidence_stats == {"extracted": 12, "discarded_unverified": 3}
+
+    def test_a_table_generation_leaves_them_out(self):
+        data = self._new().to_dict()
+
+        assert "document_mode" not in data and "evidence_stats" not in data
+        assert AdvancedGeneration.from_dict(data).document_mode is None
+
+    def test_document_reports_have_their_own_result_part(self):
+        assert ResultPartName.DOCUMENT_REPORTS.value == "document_reports"
+
+    @pytest.mark.parametrize("mode", ["full_text", "extraction"])
+    def test_modes(self, mode):
+        assert DocumentMode(mode).value == mode

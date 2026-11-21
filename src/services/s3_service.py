@@ -517,6 +517,19 @@ class S3Service:
         )
         return bytes(response["Body"].read())
 
+    def read_tail(self, s3_key: str, length: int) -> bytes:
+        """The last ``length`` bytes of an object (the whole object if shorter).
+
+        U4 NFR3.25: a PDF's trailer and a docx's ZIP directory are at the end.
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
+        """
+        response = self._object_call(
+            "get_object", s3_key, Range=f"bytes=-{int(length)}"
+        )
+        return bytes(response["Body"].read())
+
     def get_checksum(self, s3_key: str) -> str | None:
         """The whole-object ``ChecksumCRC64NVME`` of an object (BR3.3, contract C4).
 

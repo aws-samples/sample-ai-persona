@@ -75,6 +75,17 @@ class EvidenceKind(StrEnum):
     UTTERANCE = "utterance"
 
 
+class DocumentMode(StrEnum):
+    """How a generation uses its documents (U4 BR25.2)."""
+
+    FULL_TEXT = "full_text"
+    EXTRACTION = "extraction"
+
+
+#: Version of the fixed document preparation (recorded in the analysis run).
+DOCUMENT_PREPARE_VERSION = "doc-1"
+
+
 class AnalysisTool(StrEnum):
     """Fixed tools an analysis agent may use (BR5.2; ``run_code`` is U6)."""
 
@@ -174,6 +185,68 @@ class PrepareReport:
             prepare_version=str(data["prepare_version"]),
             encoding_retried=bool(data.get("encoding_retried", False)),
             excluded_reasons=dict(reasons) if reasons is not None else None,
+        )
+
+
+@dataclass(frozen=True)
+class DocumentReport:
+    """Result of the preparation of one document in the sandbox (U4 BR24, C8).
+
+    Attributes:
+        source_id: The source file.
+        chars: Settled characters of the body (pages without text left out).
+        chunks: How many chunks the body was split into.
+        headings: Headings found (the preferred split points).
+        no_text_pages: 1-based numbers of PDF pages without text.
+        pages: Pages of a PDF; none for docx, txt and md.
+    """
+
+    source_id: str
+    chars: int
+    chunks: int
+    headings: int
+    no_text_pages: tuple[int, ...] = ()
+    pages: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "no_text_pages", tuple(int(n) for n in self.no_text_pages)
+        )
+        if min(self.chars, self.chunks, self.headings) < 0:
+            raise ValueError("counts must not be negative")
+        if self.pages is None:
+            if self.no_text_pages:
+                raise ValueError("pages without text need a page count")
+            return
+        if self.pages < 1:
+            raise ValueError("a document with pages has at least one")
+        if len(self.no_text_pages) >= self.pages:
+            raise ValueError("a document with no text is refused (BR24.4)")
+        if any(not 1 <= n <= self.pages for n in self.no_text_pages):
+            raise ValueError("page numbers are within the document")
+
+    def to_dict(self) -> dict[str, Any]:
+        return drop_none(
+            {
+                "source_id": self.source_id,
+                "chars": int(self.chars),
+                "chunks": int(self.chunks),
+                "headings": int(self.headings),
+                "no_text_pages": list(self.no_text_pages),
+                "pages": int(self.pages) if self.pages is not None else None,
+            }
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DocumentReport":
+        pages = data.get("pages")
+        return cls(
+            source_id=str(data["source_id"]),
+            chars=int(data["chars"]),
+            chunks=int(data.get("chunks", 0)),
+            headings=int(data.get("headings", 0)),
+            no_text_pages=tuple(int(n) for n in data.get("no_text_pages") or ()),
+            pages=int(pages) if pages is not None else None,
         )
 
 
@@ -301,16 +374,21 @@ class Segment:
 
 @dataclass(frozen=True)
 class Evidence:
-    """A piece of evidence (contract C8). U1 has table aggregates only.
+    """A piece of evidence (contract C8): a table aggregate or a document quote.
 
     Attributes:
-        id: Evidence ID.
+        id: Evidence ID (the Manager renumbers document evidence, U4 NFR4.4).
         source_id: The source file.
-        location: For a table, the ``tool_call_id`` of the aggregate.
+        location: For a table, the ``tool_call_id`` of the aggregate; for a
+            document, the page and the heading path (``p.12 / 第3章``).
         kind: One of :class:`EvidenceKind`.
         claim: What it shows.
         statistic: The aggregate's values (value, population) for display.
-        quote: Documents only (U4).
+        quote: The quoted text of a document (required there, BR27.1).
+        speaker_attributes: What the document says of the speaker (BR28.1).
+        segment_id: The table segment the quote was assigned to (BR28.1);
+            none means it stands for the whole (BR28.2).
+        assignment_reason: Why it was assigned to that segment.
     """
 
     id: str
@@ -320,9 +398,54 @@ class Evidence:
     claim: str
     statistic: dict[str, Any] | None = None
     quote: str | None = None
+    speaker_attributes: dict[str, str] | None = None
+    segment_id: str | None = None
+    assignment_reason: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", EvidenceKind(self.kind))
+
+    @classmethod
+    def for_document(
+        cls,
+        *,
+        id: str,
+        source_id: str,
+        location: str,
+        kind: EvidenceKind | str,
+        claim: str,
+        quote: str,
+        speaker_attributes: Mapping[str, str] | None = None,
+        segment_id: str | None = None,
+        assignment_reason: str | None = None,
+    ) -> "Evidence":
+        """Evidence quoted from a document; the quote is required (BR27.1).
+
+        Raises:
+            ValueError: The quote is empty.
+        """
+        if not quote or not quote.strip():
+            raise ValueError("document evidence needs a quote")
+        return cls(
+            id=id,
+            source_id=source_id,
+            location=location,
+            kind=EvidenceKind(kind),
+            claim=claim,
+            quote=quote,
+            speaker_attributes=(
+                {str(k): str(v) for k, v in speaker_attributes.items()}
+                if speaker_attributes
+                else None
+            ),
+            segment_id=segment_id,
+            assignment_reason=assignment_reason,
+        )
+
+    @property
+    def is_document(self) -> bool:
+        """Quoted from a document rather than aggregated from a table."""
+        return self.quote is not None
 
     def update(self, **changes: Any) -> "Evidence":
         return replace(self, **changes)
@@ -337,12 +460,18 @@ class Evidence:
                 "claim": self.claim,
                 "statistic": dict(self.statistic) if self.statistic else None,
                 "quote": self.quote,
+                "speaker_attributes": (
+                    dict(self.speaker_attributes) if self.speaker_attributes else None
+                ),
+                "segment_id": self.segment_id,
+                "assignment_reason": self.assignment_reason,
             }
         )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Evidence":
         statistic = data.get("statistic")
+        speaker = data.get("speaker_attributes")
         return cls(
             id=str(data["id"]),
             source_id=str(data["source_id"]),
@@ -351,6 +480,11 @@ class Evidence:
             claim=str(data.get("claim", "")),
             statistic=dict(statistic) if statistic else None,
             quote=data.get("quote"),
+            speaker_attributes=(
+                {str(k): str(v) for k, v in dict(speaker).items()} if speaker else None
+            ),
+            segment_id=data.get("segment_id"),
+            assignment_reason=data.get("assignment_reason"),
         )
 
 
