@@ -189,7 +189,10 @@ def _delete_row(page: Page, source_file_id: str) -> None:
         f'[data-testid="advanced-upload-row"][data-source-file-id="{source_file_id}"]'
     )
     row.get_by_test_id("advanced-source-delete-open").click()
-    page.get_by_test_id("advanced-source-delete-confirm").click()
+    # Every row owns a dialog, so the confirm button is looked up inside this file's one
+    page.get_by_test_id(f"advanced-delete-{source_file_id}").get_by_test_id(
+        "advanced-source-delete-confirm"
+    ).click()
     expect(row).to_have_count(0)
 
 
