@@ -335,9 +335,9 @@ describe('AppStack: ログとメトリクス', () => {
   });
 
   test('認証のメトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
-    // 高度な生成の 3 つ（AIPersona/AdvancedGeneration）は下の節で確かめる
+    // 高度な生成の 5 つ（AIPersona/AdvancedGeneration。U2 で 2 つ足した）は下の節で確かめる
     const all = Object.values(template.findResources('AWS::Logs::MetricFilter'));
-    expect(all).toHaveLength(10);
+    expect(all).toHaveLength(12);
     const filters = all.filter(
       (f) => f.Properties.MetricTransformations[0].MetricNamespace === 'AIPersona/Auth',
     );
@@ -540,22 +540,54 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     expect(JSON.stringify(statements)).not.toContain('/index/*');
   });
 
-  test('S3 の方針に古いバージョンの操作がない', () => {
-    const actions = actionsOf(taskStatements(template));
+  // 高度な生成 U2（BR14.1、NFR3.15）: 利用者の削除で sources/ のキーの全版を消すため、版の操作は
+  // s3:DeleteObjectVersion（sources/* だけ）と s3:ListBucketVersions（prefix を sources/ に限る条件付き）
+  // の 2 つだけを許す。それ以外の版の操作と、ほかのプレフィックス・条件なしの付与は引き続き禁止する
+  test('S3 の版の操作は sources/ の削除の 2 つだけ', () => {
+    const statements = taskStatements(template);
+    const actions = actionsOf(statements);
     for (const forbidden of [
       's3:GetObjectVersion',
       's3:GetObjectVersionTagging',
-      's3:ListBucketVersions',
-      's3:DeleteObjectVersion',
       's3:PutObjectVersionTagging',
+      's3:DeleteObjectVersionTagging',
     ]) {
       expect(actions.has(forbidden)).toBe(false);
     }
+    const versioned = [...actions].filter((a) => /^s3:.*Version/.test(a)).sort();
+    expect(versioned).toEqual(['s3:DeleteObjectVersion', 's3:ListBucketVersions']);
     for (const action of actions) {
-      expect(action).not.toMatch(/^s3:.*Version/);
       expect(action).not.toBe('s3:*');
       expect(action).not.toMatch(/^s3:(GetObject|DeleteObject)\*$/);
     }
+
+    const deleteVersion = statements.filter((s) =>
+      [s.Action].flat().includes('s3:DeleteObjectVersion'),
+    );
+    expect(deleteVersion).toHaveLength(1);
+    expect([deleteVersion[0].Action].flat()).toEqual(['s3:DeleteObjectVersion']);
+    expect(deleteVersion[0].Condition).toBeUndefined();
+    const deleteResources = [deleteVersion[0].Resource].flat();
+    expect(deleteResources).toHaveLength(1);
+    expect(JSON.stringify(deleteResources[0])).toMatch(/UploadBucket.*"\/sources\/\*"/);
+
+    const listVersions = statements.filter((s) =>
+      [s.Action].flat().includes('s3:ListBucketVersions'),
+    );
+    expect(listVersions).toHaveLength(1);
+    expect([listVersions[0].Action].flat()).toEqual(['s3:ListBucketVersions']);
+    expect(listVersions[0].Condition).toEqual({ StringLike: { 's3:prefix': 'sources/*' } });
+    expect(JSON.stringify(listVersions[0].Resource)).toMatch(/UploadBucket/);
+    expect(JSON.stringify(listVersions[0].Resource)).not.toContain('/*');
+  });
+
+  test('版の操作はタスクロール以外のロールに付かない', () => {
+    const others = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((p) => !JSON.stringify(p.Properties.Roles).includes('TaskRole'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
+    const actions = actionsOf(others);
+    expect(actions.has('s3:DeleteObjectVersion')).toBe(false);
+    expect(actions.has('s3:ListBucketVersions')).toBe(false);
   });
 
   test('今のコードが使う S3 の操作はある（足りないことを見落とさない）', () => {
@@ -707,11 +739,22 @@ test('出力に CloudFront の URL とサービスの名前がある（deploy.sh
   expect(stack.region).toBe('ap-northeast-1');
 });
 
-/** Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`. */
+/**
+ * Statements of the IAM policies whose roles' logical IDs start with `rolePrefix`.
+ *
+ * U2: the task role's statements no longer fit in its default policy, so CDK moves
+ * the last ones to an overflow managed policy attached to the same role
+ * (`minimizePolicies`); both are read here.
+ */
 function statementsOfRole(t: Template, rolePrefix: string): any[] {
-  return Object.values(t.findResources('AWS::IAM::Policy'))
+  return [
+    ...Object.values(t.findResources('AWS::IAM::Policy')),
+    ...Object.values(t.findResources('AWS::IAM::ManagedPolicy')),
+  ]
     .filter((p) =>
-      (p.Properties.Roles as { Ref: string }[]).some((r) => String(r.Ref).startsWith(rolePrefix)),
+      ((p.Properties.Roles ?? []) as { Ref: string }[]).some((r) =>
+        String(r.Ref).startsWith(rolePrefix),
+      ),
     )
     .flatMap((p) => p.Properties.PolicyDocument.Statement as any[]);
 }
@@ -1202,12 +1245,30 @@ describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、N
     expect(joinedText(statements[0].Resource)).toMatch(/^IMPORT\(.*UploadBucket/);
   });
 
-  test('メトリクスフィルタ 3 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
+  test('メトリクスフィルタ 5 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
     const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'))
       .map((f) => f.Properties)
       .filter((p) => p.MetricTransformations[0].MetricNamespace === 'AIPersona/AdvancedGeneration');
     const byName = Object.fromEntries(filters.map((p) => [p.MetricTransformations[0].MetricName, p]));
-    expect(Object.keys(byName).sort()).toEqual(['GenerationCompleted', 'GenerationFailed', 'UploadFailed']);
+    expect(Object.keys(byName).sort()).toEqual([
+      'GenerationCompleted',
+      'GenerationFailed',
+      'SourceDeleteFailed',
+      'SourceRefreshFailed',
+      'UploadFailed',
+    ]);
+    // U2（NFR6.10）: 削除とコピーの失敗。アプリのログの event と status の値
+    expect(byName.SourceDeleteFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.source_deleted") && ($.status = "failed") }',
+    );
+    expect(byName.SourceRefreshFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.source_refreshed") && ($.status = "failed") }',
+    );
+    for (const name of ['SourceDeleteFailed', 'SourceRefreshFailed']) {
+      expect(byName[name].MetricTransformations[0].Dimensions).toEqual([
+        { Key: 'error_code', Value: '$.error_code' },
+      ]);
+    }
     for (const props of filters) {
       expect(props.MetricTransformations[0].MetricValue).toBe('1');
       expect(props.MetricTransformations[0].DefaultValue).toBeUndefined();

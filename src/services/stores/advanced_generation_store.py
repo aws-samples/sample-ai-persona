@@ -270,12 +270,16 @@ class AdvancedGenerationStore:
         lock_until: datetime,
         in_use_until: datetime,
         now: datetime,
+        source_expires_at: datetime | None = None,
     ) -> None:
         """Write the lock, the generation and the in-use marks at once (BR7.5, BR6.4).
 
         Nothing is written when any condition fails: a lock that has not
         expired, an existing generation, or a source file that is not the
-        owner's ``ready`` table with a free mark.
+        owner's unexpired ``ready`` table with a free mark. The same update
+        stamps ``last_used_at`` and, when ``source_expires_at`` is given, the
+        new ``expires_at`` of each file (U2 BR13.3). A file without
+        ``expires_at`` (U1) passes the expiry part; the Manager checks it.
 
         Raises:
             GenerationLockHeld: The owner's lock is still held.
@@ -316,28 +320,35 @@ class AdvancedGenerationStore:
                 }
             },
         ]
+        mark_values: dict[str, Any] = {
+            ":generation": {"S": generation.generation_id},
+            ":until": {"S": _stamp(in_use_until)},
+            ":now": {"S": now_text},
+            ":epoch": {"N": str(_epoch(now))},
+            ":owner": {"S": generation.owner_sub},
+            ":ready": {"S": SourceFileStatus.READY.value},
+        }
+        mark_update = (
+            "SET in_use_by = :generation, in_use_until = :until, last_used_at = :now"
+        )
+        if source_expires_at is not None:
+            mark_update += ", expires_at = :expires"
+            mark_values[":expires"] = {"N": str(_epoch(source_expires_at))}
         for source_file_id in generation.source_file_ids:
             transact.append(
                 {
                     "Update": {
                         "TableName": self.source_files_table_name,
                         "Key": {"source_file_id": {"S": source_file_id}},
-                        "UpdateExpression": (
-                            "SET in_use_by = :generation, in_use_until = :until, "
-                            "last_used_at = :now"
-                        ),
+                        "UpdateExpression": mark_update,
                         "ConditionExpression": (
                             "owner_sub = :owner AND #status = :ready AND "
+                            "(attribute_not_exists(expires_at) OR "
+                            "expires_at > :epoch) AND "
                             "(attribute_not_exists(in_use_by) OR in_use_until < :now)"
                         ),
                         "ExpressionAttributeNames": {"#status": "status"},
-                        "ExpressionAttributeValues": {
-                            ":generation": {"S": generation.generation_id},
-                            ":until": {"S": _stamp(in_use_until)},
-                            ":now": {"S": now_text},
-                            ":owner": {"S": generation.owner_sub},
-                            ":ready": {"S": SourceFileStatus.READY.value},
-                        },
+                        "ExpressionAttributeValues": mark_values,
                     }
                 }
             )
@@ -623,7 +634,7 @@ class AdvancedGenerationStore:
         marks = [
             self._try(
                 "release an in-use mark",
-                partial(self._release_mark, source_file_id, generation_id, now),
+                partial(self._release_mark, source_file_id, generation_id),
             )
             for source_file_id in source_file_ids
         ]
@@ -646,19 +657,15 @@ class AdvancedGenerationStore:
             ExpressionAttributeValues={":generation": {"S": generation_id}},
         )
 
-    def _release_mark(
-        self, source_file_id: str, generation_id: str, now: datetime
-    ) -> bool:
+    def _release_mark(self, source_file_id: str, generation_id: str) -> bool:
         return self._conditional(
             "update_item",
             TableName=self.source_files_table_name,
             Key={"source_file_id": {"S": source_file_id}},
-            UpdateExpression="SET last_used_at = :now REMOVE in_use_by, in_use_until",
+            # U2 BR13.3: the last use was stamped at the start; only the mark goes
+            UpdateExpression="REMOVE in_use_by, in_use_until",
             ConditionExpression="in_use_by = :generation",
-            ExpressionAttributeValues={
-                ":now": {"S": _stamp(now)},
-                ":generation": {"S": generation_id},
-            },
+            ExpressionAttributeValues={":generation": {"S": generation_id}},
         )
 
     def _write_end(self, generation_id: str, now: datetime, expires_at: int) -> bool:

@@ -753,3 +753,174 @@ class TestConditionalPut:
 
         with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
             s3_service.put_new_object(self.RECORD_KEY, b"{}", "application/json")
+
+
+# --- 高度な生成 U2: 全版の削除とコピーし直し（BR13.4、BR14.1、NFR3.14、NFR3.19） ---
+
+
+def _versioned(s3_bucket_name: str) -> None:
+    client = boto3.client("s3", region_name="us-east-1")
+    client.put_bucket_versioning(
+        Bucket=s3_bucket_name, VersioningConfiguration={"Status": "Enabled"}
+    )
+
+
+def _versions(s3_bucket_name: str) -> list[tuple[str, str]]:
+    client = boto3.client("s3", region_name="us-east-1")
+    listed = client.list_object_versions(Bucket=s3_bucket_name, Prefix="sources/")
+    return sorted(
+        (v["Key"], v["VersionId"])
+        for v in listed.get("Versions", []) + listed.get("DeleteMarkers", [])
+    )
+
+
+class TestDeleteAllVersions:
+    def test_deletes_every_version_and_marker_of_the_key_only(
+        self, s3_service, s3_bucket_name
+    ):
+        _versioned(s3_bucket_name)
+        s3_service.upload_file(b"v1", SOURCE_KEY)
+        s3_service.upload_file(b"v2", SOURCE_KEY)
+        s3_service.delete_file(s3_service.path_of(SOURCE_KEY))  # a delete marker
+        s3_service.upload_file(b"other", SOURCE_KEY + "-x")
+
+        removed = s3_service.delete_all_versions(SOURCE_KEY)
+
+        assert removed == 3
+        remaining = _versions(s3_bucket_name)
+        assert [k for k, _ in remaining] == [SOURCE_KEY + "-x"]
+
+    def test_no_version_is_zero(self, s3_service, s3_bucket_name):
+        _versioned(s3_bucket_name)
+
+        assert s3_service.delete_all_versions(SOURCE_KEY) == 0
+
+    def test_more_than_1000_versions_are_deleted_in_batches(
+        self, s3_service, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        client = Mock()
+        page_one = {
+            "Versions": [{"Key": SOURCE_KEY, "VersionId": f"v{i}"} for i in range(900)],
+            "DeleteMarkers": [
+                {"Key": SOURCE_KEY, "VersionId": f"m{i}"} for i in range(200)
+            ],
+            "IsTruncated": True,
+            "NextKeyMarker": SOURCE_KEY,
+            "NextVersionIdMarker": "m199",
+        }
+        page_two = {
+            "Versions": [{"Key": SOURCE_KEY, "VersionId": f"w{i}"} for i in range(5)]
+            + [{"Key": SOURCE_KEY + "-x", "VersionId": "keep"}],
+            "IsTruncated": False,
+        }
+        client.list_object_versions.side_effect = [page_one, page_two]
+        client.delete_objects.return_value = {"Deleted": []}
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        removed = s3_service.delete_all_versions(SOURCE_KEY)
+
+        assert removed == 1105
+        second = client.list_object_versions.call_args_list[1].kwargs
+        assert second["KeyMarker"] == SOURCE_KEY
+        assert second["VersionIdMarker"] == "m199"
+        batches = [
+            c.kwargs["Delete"]["Objects"] for c in client.delete_objects.call_args_list
+        ]
+        assert [len(b) for b in batches] == [1000, 105]
+        assert all(o["Key"] == SOURCE_KEY for b in batches for o in b)
+        assert all(
+            c.kwargs["Delete"]["Quiet"] is True
+            for c in client.delete_objects.call_args_list
+        )
+
+    def test_errors_in_the_response_are_a_failure(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.list_object_versions.return_value = {
+            "Versions": [{"Key": SOURCE_KEY, "VersionId": "v1"}],
+            "IsTruncated": False,
+        }
+        client.delete_objects.return_value = {
+            "Errors": [{"Key": SOURCE_KEY, "VersionId": "v1", "Code": "AccessDenied"}]
+        }
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+            s3_service.delete_all_versions(SOURCE_KEY)
+
+    def test_a_failed_listing_is_a_failure(self, s3_service, monkeypatch):
+        _failing_client(monkeypatch, s3_service, "list_object_versions", "AccessDenied")
+
+        with raises_code(S3ServiceError, ErrorCode.S3_OPERATION_FAILED):
+            s3_service.delete_all_versions(SOURCE_KEY)
+
+
+class TestRefreshObject:
+    def test_copies_onto_the_same_key_and_returns_the_checksum(
+        self, s3_service, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.head_object.return_value = {"ContentType": "text/csv"}
+        client.copy_object.return_value = {
+            "CopyObjectResult": {"ChecksumCRC64NVME": "AAAAAAAAAAA="}
+        }
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        assert s3_service.refresh_object(SOURCE_KEY) == "AAAAAAAAAAA="
+
+        kwargs = client.copy_object.call_args.kwargs
+        assert kwargs["Key"] == SOURCE_KEY
+        assert kwargs["CopySource"] == {
+            "Bucket": s3_service.bucket_name,
+            "Key": SOURCE_KEY,
+        }
+        assert kwargs["MetadataDirective"] == "REPLACE"
+        assert kwargs["ContentType"] == "text/csv"
+        assert kwargs["ServerSideEncryption"] == "AES256"
+        assert kwargs["ChecksumAlgorithm"] == "CRC64NVME"
+        assert kwargs["TaggingDirective"] == "REPLACE"
+
+    def test_no_checksum_in_the_answer_is_none(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        client.head_object.return_value = {}
+        client.copy_object.return_value = {"CopyObjectResult": {}}
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        assert s3_service.refresh_object(SOURCE_KEY) is None
+        assert (
+            client.copy_object.call_args.kwargs["ContentType"]
+            == "application/octet-stream"
+        )
+
+    def test_the_object_stays_readable(self, s3_service):
+        s3_service.upload_file(b"id,age\n1,30\n", SOURCE_KEY, content_type="text/csv")
+
+        s3_service.refresh_object(SOURCE_KEY)
+
+        assert s3_service.read_range(SOURCE_KEY, 100) == b"id,age\n1,30\n"
+
+    def test_a_missing_object_is_not_found(self, s3_service):
+        with raises_code(S3ServiceError, ErrorCode.S3_OBJECT_NOT_FOUND):
+            s3_service.refresh_object(SOURCE_KEY)
+
+    def test_copy_object_keeps_its_arguments(self, s3_service, monkeypatch):
+        from unittest.mock import Mock
+
+        client = Mock()
+        monkeypatch.setattr(s3_service, "s3_client", client)
+
+        s3_service.copy_object("candidates/a.csv", "persona_datasets/p/d.csv")
+
+        assert set(client.copy_object.call_args.kwargs) == {
+            "Bucket",
+            "Key",
+            "CopySource",
+            "TaggingDirective",
+        }

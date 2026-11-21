@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 _NOT_FOUND_CODES = frozenset({"NoSuchKey", "NoSuchUpload", "404", "NotFound"})
 #: ``ListParts`` returns at most this many parts per page.
 _LIST_PARTS_PAGE = 1000
+#: ``DeleteObjects`` takes at most this many keys per request.
+_DELETE_BATCH = 1000
 
 
 def _s3_client(region_name: str) -> Any:
@@ -527,6 +529,100 @@ class S3Service:
         response = self._object_call("head_object", s3_key, ChecksumMode="ENABLED")
         checksum = response.get("ChecksumCRC64NVME")
         return str(checksum) if checksum else None
+
+    # --- Advanced generation U2: deletion of every version and refresh ------------
+
+    def delete_all_versions(self, s3_key: str) -> int:
+        """Delete every version and delete marker of exactly ``s3_key`` (BR14.1).
+
+        The listing is by prefix, so only entries whose key equals ``s3_key``
+        are deleted (``<key>-x`` stays). Deletions go 1,000 per request.
+
+        Returns:
+            How many versions and markers were deleted (0 when none).
+
+        Raises:
+            S3ServiceError: ``S3_OPERATION_FAILED`` when the listing failed or
+                the answer reports any ``Errors``.
+        """
+        targets: list[dict[str, str]] = []
+        markers: dict[str, str] = {}
+        while True:
+            response = self._bucket_call(
+                "list_object_versions", Prefix=s3_key, **markers
+            )
+            for entry in response.get("Versions", []) + response.get(
+                "DeleteMarkers", []
+            ):
+                if entry.get("Key") == s3_key:
+                    targets.append(
+                        {"Key": s3_key, "VersionId": str(entry["VersionId"])}
+                    )
+            if not response.get("IsTruncated"):
+                break
+            markers = {
+                "KeyMarker": str(response.get("NextKeyMarker", "")),
+                "VersionIdMarker": str(response.get("NextVersionIdMarker", "")),
+            }
+        for start in range(0, len(targets), _DELETE_BATCH):
+            batch = targets[start : start + _DELETE_BATCH]
+            answer = self._bucket_call(
+                "delete_objects", Delete={"Objects": batch, "Quiet": True}
+            )
+            if answer.get("Errors"):
+                codes = sorted({str(e.get("Code", "")) for e in answer["Errors"]})
+                logger.warning("S3 delete_objects reported errors: %s", codes)
+                raise S3ServiceError(
+                    "s3 delete_objects reported errors",
+                    code=ErrorCode.S3_OPERATION_FAILED,
+                )
+        return len(targets)
+
+    def refresh_object(self, s3_key: str) -> str | None:
+        """Copy an object onto its own key so its creation date is new (BR13.4).
+
+        The copy replaces the metadata (keeping the content type), keeps
+        SSE-S3, asks S3 for a new ``CRC64NVME`` checksum and writes no tags
+        (no tagging permission is needed, NFR3.19). The bytes never pass
+        through the application.
+
+        Returns:
+            The checksum of the copy, or ``None`` when S3 returned none.
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
+        """
+        head = self._object_call("head_object", s3_key)
+        response = self._object_call(
+            "copy_object",
+            s3_key,
+            CopySource={"Bucket": self.bucket_name, "Key": s3_key},
+            MetadataDirective="REPLACE",
+            ContentType=str(head.get("ContentType") or "application/octet-stream"),
+            ServerSideEncryption="AES256",
+            ChecksumAlgorithm="CRC64NVME",
+            TaggingDirective="REPLACE",
+        )
+        checksum = (response.get("CopyObjectResult") or {}).get("ChecksumCRC64NVME")
+        return str(checksum) if checksum else None
+
+    def _bucket_call(self, operation: str, **kwargs: Any) -> Any:
+        """A bucket-level call; failures are ``S3_OPERATION_FAILED``."""
+        try:
+            return getattr(self.s3_client, operation)(Bucket=self.bucket_name, **kwargs)
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            logger.warning("S3 %s failed: %s", operation, error_code)
+            raise S3ServiceError(
+                f"s3 {operation} failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
+        except BotoCoreError as e:
+            logger.warning("S3 %s unreachable: %s", operation, type(e).__name__)
+            raise S3ServiceError(
+                f"s3 {operation} unreachable ({type(e).__name__})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
 
     def put_new_object(
         self,

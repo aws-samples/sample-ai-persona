@@ -15,9 +15,15 @@ part URL refresh, completion, status and cancel requests:
   aborted and the file goes to ``error``. Then the first bytes only are read
   and inspected, the checksum is read and the file becomes ``ready``.
 - Cancel (W2-6): drops the parts and the record of an uploading file.
+- U2: a number for files of the same name and a 7-day expiry at the start
+  (BR11.3, BR13.2); a second completion returns the current row (BR11.4);
+  one error code per fix of the table (BR12.1); the list of the owner's live
+  files with the repair of old records (W2-1, NFR3.16); and the deletion of
+  every S3 version and the record (W2-6, BR14.1, BR14.2).
 
-Only the owner sees an upload; someone else's and a missing one are the same
-``UPLOAD_NOT_FOUND`` (NFR3.9). URLs are returned, never logged or stored.
+Only the owner sees an upload; someone else's, a missing and an expired one
+are the same ``UPLOAD_NOT_FOUND`` (NFR3.9, BR15.1). URLs are returned, never
+logged or stored; logs carry IDs, states, codes and counts only (BR15.3).
 """
 
 from __future__ import annotations
@@ -29,9 +35,10 @@ from typing import TYPE_CHECKING, Callable, Iterable, Optional, Sequence, TypeVa
 
 from ..config import config
 from ..models.authz import Principal
-from ..models.errors import CodedError, ErrorCode
+from ..models.errors import CodedError, ErrorCode, ErrorKind
 from ..models.source_file import (
     SourceFile,
+    SourceFileListItem,
     SourceFileStatus,
     SourceFormat,
     UploadSession,
@@ -114,12 +121,14 @@ class SourceUploadManager:
         self._advanced_generation_policy = AdvancedGenerationPolicy(
             settings_store or service_factory.get_app_settings_store()
         )
-        self._source_file_catalog = SourceFileCatalog(
-            source_file_store or service_factory.get_source_file_store(),
-            error_type=SourceUploadError,
-        )
         self._s3 = s3_service or service_factory.get_s3_service()
         self._clock = clock or _utc_now
+        self._source_file_catalog = SourceFileCatalog(
+            source_file_store or service_factory.get_source_file_store(),
+            s3=self._s3,
+            error_type=SourceUploadError,
+            clock=self._clock,
+        )
 
     # --- start and part URLs ----------------------------------------------------
 
@@ -157,6 +166,13 @@ class SourceUploadManager:
             size_bytes=int(size_bytes),
             part_count=part_count_for(int(size_bytes), part_size),
             now=now,
+        )
+        # BR11.3, BR13.2: the number is fixed now and the 7 days start now
+        draft = draft.update(
+            display_seq=self._source_file_catalog.next_display_seq(
+                principal.sub, draft.filename
+            ),
+            expires_at=self._source_file_catalog.new_expiry(now),
         )
         upload_id = self._s3_call(
             lambda: self._s3.create_multipart_upload(
@@ -223,29 +239,55 @@ class SourceUploadManager:
             parts: ``(part_number, etag)`` pairs the browser collected.
 
         Returns:
-            The ready file with its metadata.
+            The ready file with its metadata. A second completion (another
+            tab, U2 BR11.4) gets the row as it is now, without inspecting
+            again: ``inspecting`` (the first one is still at it), ``ready``
+            or ``error``.
 
         Raises:
             SourceUploadError: ``UPLOAD_NOT_FOUND`` (someone else's, missing,
-                already completed), ``UPLOAD_SOURCE_INVALID`` /
-                ``UPLOAD_TOO_LARGE`` (the file went to ``error``), or an S3 /
-                store code (the file stays inspecting and may be retried).
+                expired, still uploading after 24 hours), a VALIDATION /
+                CAPACITY code such as ``UPLOAD_SOURCE_INVALID``,
+                ``UPLOAD_TOO_LARGE`` or a ``SOURCE_*`` inspection code (the
+                file went to ``error``), or an S3 / store code (the file stays
+                inspecting and may be retried after 15 minutes).
         """
         self._advanced_generation_policy.ensure_available(principal, SourceUploadError)
         now = self._clock()
-        inspecting = self._source_file_catalog.begin_inspection(
-            principal.sub, source_file_id, now=now
-        )
+        try:
+            inspecting = self._source_file_catalog.begin_inspection(
+                principal.sub, source_file_id, now=now
+            )
+        except SourceUploadError as e:
+            if e.code is not ErrorCode.UPLOAD_NOT_FOUND:
+                raise
+            return self._completed_before(principal, source_file_id, now)
         try:
             self._finish_parts(inspecting, list(parts))
             ready = self._inspect(inspecting, now)
         except SourceUploadError as e:
-            if e.code in (ErrorCode.UPLOAD_SOURCE_INVALID, ErrorCode.UPLOAD_TOO_LARGE):
+            if e.code.kind in (ErrorKind.VALIDATION, ErrorKind.CAPACITY):
                 self._source_file_catalog.mark_error(source_file_id, e.code, now=now)
                 self._log_completed(inspecting, e.code)
             raise
         self._log_completed(ready, None)
         return ready
+
+    def _completed_before(
+        self, principal: Principal, source_file_id: str, now: datetime
+    ) -> SourceFile:
+        """The row of an upload another request completed (BR11.4, NFR5.31)."""
+        found = self._source_file_catalog.get_owned(
+            principal.sub, source_file_id, not_found_code=ErrorCode.UPLOAD_NOT_FOUND
+        )
+        if found.status in (
+            SourceFileStatus.READY,
+            SourceFileStatus.ERROR,
+        ) or self._source_file_catalog.inspection_in_progress(found, now):
+            return found
+        raise SourceUploadError(
+            "upload not completable", code=ErrorCode.UPLOAD_NOT_FOUND
+        )
 
     def _finish_parts(
         self, source_file: SourceFile, parts: list[tuple[int, str]]
@@ -308,9 +350,75 @@ class SourceUploadManager:
     # --- read and cancel --------------------------------------------------------
 
     def get_upload(self, principal: Principal, source_file_id: str) -> SourceFile:
-        """The owner's upload in any state (the row of the upload list)."""
+        """The owner's unexpired upload in any state (the row of the upload list)."""
         return self._source_file_catalog.get_owned(
             principal.sub, source_file_id, not_found_code=ErrorCode.UPLOAD_NOT_FOUND
+        )
+
+    def list_uploads(self, principal: Principal) -> list[SourceFile]:
+        """The owner's files for the list, newest first (W2-1, BR13.1, BR15.1).
+
+        Expired files and uploads abandoned for 24 hours are left out;
+        ``deleting`` ones stay (their deletion can be retried). Old U1
+        records are given their expiry, or deleted once past it, a few at a
+        time (NFR3.16); that never stops the list.
+
+        Raises:
+            SourceUploadError: ``ADVANCED_GENERATION_UNAVAILABLE`` or a store
+                code.
+        """
+        self._advanced_generation_policy.ensure_available(principal, SourceUploadError)
+        return self._source_file_catalog.list_owned(principal.sub, reconcile=True)
+
+    def list_item(self, source_file: SourceFile) -> SourceFileListItem:
+        """The list row of ``source_file`` now (in use, selectable, expiry date)."""
+        return SourceFileListItem.of(
+            source_file,
+            now=self._clock(),
+            retention_days=int(config.ADVANCED_SOURCE_RETENTION_DAYS),
+        )
+
+    def inspection_stuck(self, source_file: SourceFile) -> bool:
+        """An ``inspecting`` file untouched for 15 minutes (it may be deleted, BR14.1)."""
+        return (
+            source_file.status is SourceFileStatus.INSPECTING
+            and not self._source_file_catalog.inspection_in_progress(
+                source_file, self._clock()
+            )
+        )
+
+    def delete_source(self, principal: Principal, source_file_id: str) -> None:
+        """Delete the owner's file: every S3 version and the record (W2-6, BR14.1).
+
+        Deleting stays possible when the feature is closed meanwhile, so the
+        user can always remove their data. A failed S3 deletion leaves the
+        row "削除できませんでした"; deleting again continues.
+
+        Raises:
+            SourceUploadError: ``UPLOAD_NOT_FOUND`` (someone else's, missing,
+                expired, uploading or inspecting), ``SOURCE_FILE_IN_USE``
+                (BR14.2) or an S3 / store code.
+        """
+        try:
+            versions = self._source_file_catalog.delete_owned(
+                principal.sub, source_file_id
+            )
+        except SourceUploadError as e:
+            if e.code is not ErrorCode.UPLOAD_NOT_FOUND:
+                log_advanced_event(
+                    "advanced_generation.source_deleted",
+                    source_file_id=source_file_id,
+                    status="in_use"
+                    if e.code is ErrorCode.SOURCE_FILE_IN_USE
+                    else "failed",
+                    error_code=e.code.value,
+                )
+            raise
+        log_advanced_event(
+            "advanced_generation.source_deleted",
+            source_file_id=source_file_id,
+            status="deleted",
+            versions=versions,
         )
 
     def cancel_upload(self, principal: Principal, source_file_id: str) -> None:

@@ -54,9 +54,10 @@ from ...models.analysis import (
     Segment,
 )
 from ...models.authz import Principal
-from ...models.errors import CodedError, ErrorCode
+from ...models.errors import CodedError, ErrorCode, ErrorKind
 from ...models.persona_candidate import MAX_CANDIDATE_ITEM_BYTES, PersonaCandidate
 from ...models.source_file import SourceFile
+from ...services.s3_service import S3ServiceError
 from ...services.service_factory import service_factory
 from ...services.stores.advanced_generation_store import (
     AdvancedGenerationStore,
@@ -97,6 +98,8 @@ _SAFE_CONTEXT_KEYS = frozenset({"cause", "http_status", "max_chars", "limit", "v
 _LIMIT_GENERATION = "generation_minutes"
 _LIMIT_PREPARE = "prepare_minutes"
 _EVENT_TEXT_MAX = 150
+#: Wait before the one re-send of a failed copy of the source (NFR5.30).
+_REFRESH_RETRY_SECONDS = 1.0
 
 
 class AdvancedGenerationError(CodedError):
@@ -249,7 +252,9 @@ class AdvancedPersonaGenerationManager:
         if self._source_file_store is None:
             self._source_file_store = service_factory.get_source_file_store()
         return SourceFileCatalog(
-            self._source_file_store, error_type=AdvancedGenerationError
+            self._source_file_store,
+            error_type=AdvancedGenerationError,
+            clock=self._clock,
         )
 
     @property
@@ -358,8 +363,13 @@ class AdvancedPersonaGenerationManager:
         )
         lock_until = now + timedelta(seconds=config.ADVANCED_GENERATION_LOCK_SECONDS)
         try:
+            # U2 BR13.3: "used" is the start; the same write moves the expiry
             self._store.create_with_lock(
-                generation, lock_until=lock_until, in_use_until=lock_until, now=now
+                generation,
+                lock_until=lock_until,
+                in_use_until=lock_until,
+                now=now,
+                source_expires_at=self._catalog.new_expiry(now),
             )
         except AdvancedGenerationStoreError as e:
             raise AdvancedGenerationError("start refused", code=e.code) from e
@@ -515,6 +525,7 @@ class AdvancedPersonaGenerationManager:
             generation.source_file_ids[0],
             not_found_code=ErrorCode.GENERATION_SOURCE_NOT_FOUND,
         )
+        source = self._refresh_source(state, source)
         state.source = source
         sandbox = self._sandbox
         state.session = sandbox.start_session(
@@ -526,6 +537,61 @@ class AdvancedPersonaGenerationManager:
             state.session, "profile_dataset", {"source_id": source.source_file_id}
         )
         state.profile = dict(self._library_value(profile))
+
+    def _refresh_source(self, state: _Run, source: SourceFile) -> SourceFile:
+        """Copy the object onto its key so S3 keeps it 9 more days (BR13.4).
+
+        Runs before the session starts. A transient S3 failure is sent again
+        once after 1 second (NFR5.30); an object gone from S3 or a checksum
+        that differs from the record is ``GENERATION_SOURCE_UNREADABLE``. A
+        record without a checksum gets the copy's (security-design.md §5).
+
+        Returns:
+            The file, with the filled checksum when there was none.
+        """
+        started = time.monotonic()
+        checksum: Optional[str] = None
+        for attempt in range(2):
+            try:
+                checksum = self._s3.refresh_object(source.s3_key)
+                break
+            except S3ServiceError as e:
+                if attempt == 0 and e.code.kind is ErrorKind.TRANSIENT:
+                    self._sleep(_REFRESH_RETRY_SECONDS)
+                    continue
+                code = (
+                    ErrorCode.GENERATION_SOURCE_UNREADABLE
+                    if e.code is ErrorCode.S3_OBJECT_NOT_FOUND
+                    else e.code
+                )
+                self._log_refresh(state, source, started, code)
+                raise _fail(code, "source object not refreshed") from e
+        if checksum and source.checksum and checksum != source.checksum:
+            code = ErrorCode.GENERATION_SOURCE_UNREADABLE
+            self._log_refresh(state, source, started, code)
+            raise _fail(code, "source checksum changed")
+        if checksum and not source.checksum:
+            self._catalog.fill_checksum(source.source_file_id, checksum)
+            source = source.update(checksum=checksum)
+        self._log_refresh(state, source, started, None)
+        return source
+
+    @staticmethod
+    def _log_refresh(
+        state: _Run,
+        source: SourceFile,
+        started: float,
+        error_code: Optional[ErrorCode],
+    ) -> None:
+        log_advanced_event(
+            "advanced_generation.source_refreshed",
+            generation_id=state.generation.generation_id,
+            source_file_id=source.source_file_id,
+            status="failed" if error_code else "done",
+            size_bytes=source.size_bytes,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_code=error_code.value if error_code else None,
+        )
 
     def _bring_in(self, state: _Run, source: SourceFile) -> None:
         """Hand the file in with a fresh presigned GET; one new URL on refusal."""

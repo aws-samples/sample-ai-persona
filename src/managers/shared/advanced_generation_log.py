@@ -44,6 +44,24 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "estimated_rows",
         }
     ),
+    # U2 (observability-design.md §1): IDs, states, codes, counts, sizes and
+    # milliseconds only. No owner, file name, column name or row value.
+    "advanced_generation.source_deleted": frozenset(
+        {"source_file_id", "status", "versions", "error_code"}
+    ),
+    "advanced_generation.source_refreshed": frozenset(
+        {
+            "generation_id",
+            "source_file_id",
+            "status",
+            "size_bytes",
+            "duration_ms",
+            "error_code",
+        }
+    ),
+    "advanced_generation.sources_reconciled": frozenset(
+        {"filled", "deleted", "remaining", "status", "error_code"}
+    ),
 }
 
 

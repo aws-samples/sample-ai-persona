@@ -4,6 +4,14 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
 
 /**
+ * 高度な生成の上げたファイルを使える日数（U2、BR13.2）。アプリの src/config.py の
+ * ADVANCED_SOURCE_RETENTION_DAYS と同じ値にする（tests/infra/test_source_retention.py が確かめる）。
+ */
+export const SOURCE_RETENTION_DAYS = 7;
+/** DynamoDB の TTL の遅れ（最大 2 日ほど）に合わせた、S3 の今の版を消すまでの余裕（BR13.6）。 */
+export const SOURCE_LIFECYCLE_MARGIN_DAYS = 2;
+
+/**
  * アップロードファイル用の S3 バケット（v1.0.0、Data スタック）。
  *
  * 物理名は自動生成にし（v0 のバケットと並べて置けるように）、RETAIN にする。
@@ -15,6 +23,7 @@ import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
  * - 古いバージョンは 7 日で削除、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日で中止
  * - `survey-runs/` のアンケートの実行の入出力は 7 日で失効、古いバージョンは 1 日（NFR5.14）
  * - 高度な生成（ベータ、U1）: `sources/` の未完了のマルチパートは 1 日で中止、古いバージョンは 1 日。
+ *   U2 で今の版を 9 日で失効させる（BR13.6）。
  *   `analysis-records/` の古いバージョンは 1 日。暗号化（SSE-S3）は変えない（NFR3.2）
  *
  * CORS はここに書かない: 許すオリジンは App スタックの CloudFront のドメインのため、App スタックの
@@ -59,12 +68,15 @@ export class UploadBucket extends Construct {
           noncurrentVersionExpiration: Duration.days(1),
         },
         // 高度な生成（ベータ、U1、NFR5.5）: ブラウザからの分割アップロード。途中で止まったパートを
-        // 1 日で中止し、消したファイルの古いバージョンを 1 日で消す。今の版はアプリが消す
+        // 1 日で中止し、消したファイルの古いバージョンを 1 日で消す。
+        // U2（BR13.6、NFR5.25）: 今の版を作成から 9 日（保存の 7 日 + 余裕 2 日）で消す。生成で使うたびに
+        // アプリが同じキーへコピーし直して作成日を新しくする（BR13.4）。規則の ID は変えない
         {
           id: 'AbortIncompleteSourceUploads',
           prefix: 'sources/',
           abortIncompleteMultipartUploadAfter: Duration.days(1),
           noncurrentVersionExpiration: Duration.days(1),
+          expiration: Duration.days(SOURCE_RETENTION_DAYS + SOURCE_LIFECYCLE_MARGIN_DAYS),
         },
         // 分析の記録の古いバージョンを 1 日で消す。保存前の記録（タグ pending=true）は上の
         // ExpireUnattachedUploads で消える（infrastructure-specification.md「決めたこと」）

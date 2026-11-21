@@ -13,7 +13,14 @@ conditional writes, so that nothing is compared after reading:
   uploading file up to the limit (BR2.4).
 - ``clear_in_use``: only when the mark belongs to the same generation (BR6.4).
   The mark itself is set inside the start transaction of
-  ``AdvancedGenerationStore``.
+  ``AdvancedGenerationStore``, which also stamps the last use (U2 BR13.3).
+- U2 ``begin_delete`` / ``delete_record``: ``deleting`` first, the record
+  last, so a failed S3 deletion leaves a ``deleting`` row to retry (BR14.1).
+- U2 ``fill_expires_at`` / ``set_checksum_if_empty``: write a value only when
+  the record has none (old U1 records, NFR3.16, NFR3.19).
+
+``expires_at`` is the table's TTL attribute, so it is the one time written as
+a Number of epoch seconds (``_expiry_number``); every other time is ISO text.
 
 A failed condition raises :class:`SourceFileUnavailable` (or returns
 ``False``) whatever the reason: someone else's, missing, or the wrong state.
@@ -55,6 +62,18 @@ def _stamp(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _epoch(value: datetime) -> int:
+    """Epoch seconds of ``value`` (the TTL attribute ``expires_at``)."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.timestamp())
+
+
+def _expiry_number(value: datetime) -> dict[str, str]:
+    """``expires_at`` as the DynamoDB Number the TTL reads (BR13.6)."""
+    return {"N": str(_epoch(value))}
 
 
 def _to_dynamo(value: Any) -> Any:
@@ -102,7 +121,14 @@ class SourceFileStore:
         return result
 
     def _item(self, source_file: SourceFile) -> dict[str, Any]:
-        return {k: self._serialize(v) for k, v in source_file.to_dict().items()}
+        item = {
+            k: self._serialize(v)
+            for k, v in source_file.to_dict().items()
+            if k != "expires_at"
+        }
+        if source_file.expires_at is not None:
+            item["expires_at"] = _expiry_number(source_file.expires_at)
+        return item
 
     def _source_file(self, item: Mapping[str, Any]) -> SourceFile:
         plain = {
@@ -304,10 +330,10 @@ class SourceFileStore:
             },
         )
 
-    def clear_in_use(
-        self, source_file_id: str, generation_id: str, *, now: datetime
-    ) -> bool:
-        """Remove the in-use mark of ``generation_id`` and stamp the last use.
+    def clear_in_use(self, source_file_id: str, generation_id: str) -> bool:
+        """Remove the in-use mark of ``generation_id``.
+
+        The last use is written at the start (U2 BR13.3), not here.
 
         Returns:
             ``False`` when the mark belongs to another generation or is gone.
@@ -316,13 +342,158 @@ class SourceFileStore:
             "update_item",
             TableName=self.table_name,
             Key=self._key(source_file_id),
-            UpdateExpression="SET last_used_at = :now REMOVE in_use_by, in_use_until",
+            UpdateExpression="REMOVE in_use_by, in_use_until",
             ConditionExpression="in_use_by = :generation",
+            ExpressionAttributeValues={":generation": {"S": generation_id}},
+        )
+
+    # --- U2: deletion, expiry and checksum (BR13.2, BR13.4, BR14.1) ---------------
+
+    def begin_delete(
+        self,
+        source_file_id: str,
+        owner_sub: str,
+        *,
+        now: datetime,
+        stale_before: datetime,
+    ) -> SourceFile:
+        """Move the owner's file to ``deleting`` (BR14.1, BR14.2, NFR5.27).
+
+        Passes for ``ready``, ``error``, ``deleting`` (a retry after a failed
+        S3 deletion) and an ``inspecting`` file stuck since ``stale_before``,
+        when the file has not expired and no generation holds a valid mark.
+        A record without ``expires_at`` (U1) passes the expiry part; the
+        caller checks its computed expiry first.
+
+        Raises:
+            SourceFileUnavailable: Someone else's, missing, expired, in use,
+                uploading or inspecting recently.
+            SourceFileStoreError: DynamoDB failed.
+        """
+        response = self._call(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(source_file_id),
+            UpdateExpression="SET #status = :deleting, updated_at = :now",
+            ConditionExpression=(
+                "owner_sub = :owner AND "
+                "(attribute_not_exists(expires_at) OR expires_at > :epoch) AND "
+                "(#status IN (:ready, :error, :deleting) OR "
+                "(#status = :inspecting AND updated_at < :stale)) AND "
+                "(attribute_not_exists(in_use_by) OR in_use_until < :now)"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues={
+                ":deleting": {"S": SourceFileStatus.DELETING.value},
+                ":ready": {"S": SourceFileStatus.READY.value},
+                ":error": {"S": SourceFileStatus.ERROR.value},
+                ":inspecting": {"S": SourceFileStatus.INSPECTING.value},
+                ":owner": {"S": owner_sub},
                 ":now": {"S": _stamp(now)},
-                ":generation": {"S": generation_id},
+                ":epoch": _expiry_number(now),
+                ":stale": {"S": _stamp(stale_before)},
+            },
+            ReturnValues="ALL_NEW",
+            unavailable=True,
+        )
+        return self._source_file(response["Attributes"])
+
+    def delete_record(self, source_file_id: str, owner_sub: str) -> bool:
+        """Delete the owner's record once it is ``deleting`` (BR14.1).
+
+        Returns:
+            ``False`` when it is someone else's, missing or in another state.
+        """
+        return self._conditional(
+            "delete_item",
+            TableName=self.table_name,
+            Key=self._key(source_file_id),
+            ConditionExpression="owner_sub = :owner AND #status = :deleting",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":owner": {"S": owner_sub},
+                ":deleting": {"S": SourceFileStatus.DELETING.value},
             },
         )
+
+    def fill_expires_at(
+        self, source_file_id: str, owner_sub: str, expires_at: datetime
+    ) -> bool:
+        """Write ``expires_at`` on the owner's record that has none (NFR3.16).
+
+        Returns:
+            ``False`` when it already has one, or is someone else's or missing.
+        """
+        return self._conditional(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(source_file_id),
+            UpdateExpression="SET expires_at = :expires",
+            ConditionExpression=(
+                "owner_sub = :owner AND attribute_not_exists(expires_at)"
+            ),
+            ExpressionAttributeValues={
+                ":owner": {"S": owner_sub},
+                ":expires": _expiry_number(expires_at),
+            },
+        )
+
+    def set_checksum_if_empty(self, source_file_id: str, checksum: str) -> bool:
+        """Write the checksum when the record holds none or an empty one (NFR3.19).
+
+        Returns:
+            ``False`` when a checksum is already there or the file is missing.
+        """
+        return self._conditional(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(source_file_id),
+            UpdateExpression="SET checksum = :checksum",
+            ConditionExpression=(
+                "attribute_exists(source_file_id) AND "
+                "(attribute_not_exists(checksum) OR checksum = :empty)"
+            ),
+            ExpressionAttributeValues={
+                ":checksum": {"S": checksum},
+                ":empty": {"S": ""},
+            },
+        )
+
+    def max_display_seq(self, owner_sub: str, filename: str, *, now: datetime) -> int:
+        """Highest ``display_seq`` of the owner's unexpired files of ``filename``.
+
+        A record without ``display_seq`` (U1) counts as 1; one without
+        ``expires_at`` is counted (its computed expiry is the Catalog's).
+
+        Returns:
+            0 when there is none (BR11.3).
+        """
+        highest = 0
+        start_key: dict[str, Any] | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "TableName": self.table_name,
+                "IndexName": OWNER_INDEX,
+                "KeyConditionExpression": "owner_sub = :owner",
+                "FilterExpression": (
+                    "filename = :filename AND "
+                    "(attribute_not_exists(expires_at) OR expires_at > :epoch)"
+                ),
+                "ExpressionAttributeValues": {
+                    ":owner": {"S": owner_sub},
+                    ":filename": {"S": filename},
+                    ":epoch": _expiry_number(now),
+                },
+            }
+            if start_key:
+                kwargs["ExclusiveStartKey"] = start_key
+            response = self._call("query", **kwargs)
+            for item in response.get("Items", []):
+                seq = item.get("display_seq", {}).get("N")
+                highest = max(highest, int(seq) if seq else 1)
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                return highest
 
     # --- reads ----------------------------------------------------------------------
 

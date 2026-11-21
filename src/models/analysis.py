@@ -471,6 +471,10 @@ class AnalysisRecord:
         source_checksums: Checksums of the source files.
         created_at: When the record was written.
         tool_calls: ``[{tool_call_id, tool, ok, error_code}]`` (no output).
+        source_file_ids: The files used, in ``source_checksums`` order (U2,
+            BR14.3). Empty in U1 records.
+        source_display_names: Their display names, kept so the record can
+            name a deleted file (U2, BR14.3). Empty in U1 records.
     """
 
     record_id: str
@@ -483,9 +487,17 @@ class AnalysisRecord:
     source_checksums: tuple[str, ...]
     created_at: datetime
     tool_calls: tuple[dict[str, Any], ...] = field(default=())
+    source_file_ids: tuple[str, ...] = field(default=())
+    source_display_names: tuple[str, ...] = field(default=())
 
     def __post_init__(self) -> None:
-        for name in ("code_blocks", "source_checksums", "tool_calls"):
+        for name in (
+            "code_blocks",
+            "source_checksums",
+            "tool_calls",
+            "source_file_ids",
+            "source_display_names",
+        ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
 
     @classmethod
@@ -502,8 +514,10 @@ class AnalysisRecord:
         source_checksums: Sequence[str],
         now: datetime,
         tool_calls: Sequence[Mapping[str, Any]] = (),
+        source_file_ids: Sequence[str] = (),
+        source_display_names: Sequence[str] = (),
     ) -> "AnalysisRecord":
-        """A new record written at the end of a generation (BR9.1)."""
+        """A new record written at the end of a generation (BR9.1, BR14.3)."""
         return cls(
             record_id=record_id,
             owner_sub=owner_sub,
@@ -515,6 +529,8 @@ class AnalysisRecord:
             source_checksums=tuple(source_checksums),
             created_at=now,
             tool_calls=tuple(dict(c) for c in tool_calls),
+            source_file_ids=tuple(source_file_ids),
+            source_display_names=tuple(source_display_names),
         )
 
     def update(self, **changes: Any) -> "AnalysisRecord":
@@ -535,6 +551,10 @@ class AnalysisRecord:
         }
         if self.tool_calls:
             data["tool_calls"] = [dict(c) for c in self.tool_calls]
+        if self.source_file_ids:
+            data["source_file_ids"] = list(self.source_file_ids)
+        if self.source_display_names:
+            data["source_display_names"] = list(self.source_display_names)
         return data
 
     @classmethod
@@ -550,4 +570,8 @@ class AnalysisRecord:
             source_checksums=tuple(str(c) for c in data.get("source_checksums", [])),
             created_at=parse_dt(data["created_at"]),
             tool_calls=tuple(dict(c) for c in data.get("tool_calls", [])),
+            source_file_ids=tuple(str(i) for i in data.get("source_file_ids", [])),
+            source_display_names=tuple(
+                str(n) for n in data.get("source_display_names", [])
+            ),
         )

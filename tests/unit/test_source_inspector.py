@@ -118,20 +118,42 @@ class TestEncoding:
 
 
 class TestNotATable:
+    """U2 BR12.1: one code per way of fixing the file."""
+
     @pytest.mark.parametrize(
         "head",
         [
             b"",
             b"\n\n",
             b"\x89PNG\r\n\x1a\n\x00\x00\x00",
-            b"a,,c\n1,2,3\n",  # an empty header name
-            b"a,a\n1,2\n",  # a duplicated header name
         ],
     )
-    def test_is_upload_source_invalid(self, head: bytes) -> None:
-        with raises_code(SourceInspectionError, ErrorCode.UPLOAD_SOURCE_INVALID):
+    def test_binary_or_empty_is_not_a_table(self, head: bytes) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_NOT_A_TABLE):
             _inspect(head)
 
-    def test_undecodable_bytes_are_invalid(self) -> None:
-        with raises_code(SourceInspectionError, ErrorCode.UPLOAD_SOURCE_INVALID):
+    def test_a_line_longer_than_the_head_is_not_a_table(self) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_NOT_A_TABLE):
+            _inspect(b"id,age,1,2,3", total=10_000)
+
+    def test_an_empty_column_name(self) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_EMPTY_COLUMN_NAME):
+            _inspect(b"a,,c\n1,2,3\n")
+
+    def test_a_duplicated_column_name(self) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME):
+            _inspect(b"a,a\n1,2\n")
+
+    def test_undecodable_bytes_are_an_unknown_encoding(self) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_ENCODING_UNKNOWN):
             _inspect(b"a,b\n\xff\xfe\xfd\xfc,\x80\x80\n")
+
+    def test_a_broken_bom_file_is_an_unknown_encoding(self) -> None:
+        with raises_code(SourceInspectionError, ErrorCode.SOURCE_ENCODING_UNKNOWN):
+            _inspect(b"\xef\xbb\xbfa,b\n\xff\xfe,1\n")
+
+    def test_the_context_holds_no_file_content(self) -> None:
+        with pytest.raises(SourceInspectionError) as exc:
+            _inspect(b"secret,secret\n1,2\n")
+
+        assert "secret" not in str(dict(exc.value.context))

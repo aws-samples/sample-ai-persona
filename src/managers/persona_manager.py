@@ -48,8 +48,10 @@ from ..services.stores.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
 from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
 from ..models.analysis import AnalysisRecord
+from ..models.source_file import SourceAvailability
 from .components.access_policy import AccessPolicy
 from .components.analysis_record_archive import AnalysisRecordArchive
+from .components.source_file_catalog import SourceFileCatalog
 from .components.asset_delivery import AssetDelivery
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
 from .components.participant_reader import ParticipantReader
@@ -225,6 +227,7 @@ class PersonaManager:
         participants: Optional[ParticipantReader] = None,
         asset_delivery: Optional[AssetDelivery] = None,
         analysis_records: Optional[AnalysisRecordArchive] = None,
+        source_files: Optional[SourceFileCatalog] = None,
     ):
         """
         Args:
@@ -258,6 +261,9 @@ class PersonaManager:
             analysis_records: The analysis records of advanced generation
                 candidates (BR9.4; built from this Manager's S3 service when
                 omitted, unused for ordinary candidates)
+            source_files: Whether the source files of an analysis record are
+                still there (advanced generation U2, BR14.3; built on first
+                use)
         """
         self.logger = logging.getLogger(__name__)
         self._personas = persona_store or service_factory.get_persona_store()
@@ -281,6 +287,18 @@ class PersonaManager:
         self._reader = participants
         self._delivery = asset_delivery
         self._records = analysis_records
+        self._source_files = source_files
+
+    @property
+    def _source_file_catalog(self) -> SourceFileCatalog:
+        """The source file component (read only here; never deletes)."""
+        if self._source_files is None:
+            self._source_files = SourceFileCatalog(
+                service_factory.get_source_file_store(),
+                error_type=PersonaManagerError,
+                clock=self._clock,
+            )
+        return self._source_files
 
     @property
     def _analysis_records(self) -> Optional[AnalysisRecordArchive]:
@@ -1886,12 +1904,18 @@ class PersonaManager:
 
     def get_analysis_record(
         self, principal: Principal, persona_id: str
-    ) -> Optional[AnalysisRecord]:
+    ) -> Optional[tuple[AnalysisRecord, tuple[SourceAvailability, ...]]]:
         """The analysis record of a persona the user may read (BR9.4, ADR-010).
 
+        Each source file of the record is judged too (U2 BR14.3): the record
+        owner's live file with the recorded checksum is ``available``,
+        anything else ``deleted``; a U1 record without file IDs is
+        ``unknown``. The plan and the segments are shown either way.
+
         Returns:
-            The record, or ``None`` for an ordinary persona and when the record
-            is gone ("分析の記録は残っていません").
+            The record and the judgement of its files, or ``None`` for an
+            ordinary persona and when the record is gone
+            ("分析の記録は残っていません").
 
         Raises:
             CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing.
@@ -1907,7 +1931,11 @@ class PersonaManager:
         archive = self._analysis_records
         if record_id is None or archive is None or not persona.owner_sub:
             return None
-        return archive.read_committed(persona.owner_sub, record_id)
+        record = archive.read_committed(persona.owner_sub, record_id)
+        if record is None:
+            return None
+        sources = self._source_file_catalog.availability(persona.owner_sub, record)
+        return record, sources
 
     def _confirm_hold(self, claim: CandidateClaim, candidate: PersonaCandidate) -> None:
         """Check that ``claim`` still holds the candidate, right before its save.

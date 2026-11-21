@@ -118,6 +118,19 @@ const ADVANCED_GENERATION_METRICS: {
     status: 'error',
     dimensions: { error_code: '$.error_code' },
   },
+  // U2（NFR6.10）: 消したはずのファイルが S3 に残った数と、使い回しのコピーで止まった数
+  {
+    name: 'SourceDeleteFailed',
+    event: 'advanced_generation.source_deleted',
+    status: 'failed',
+    dimensions: { error_code: '$.error_code' },
+  },
+  {
+    name: 'SourceRefreshFailed',
+    event: 'advanced_generation.source_refreshed',
+    status: 'failed',
+    dimensions: { error_code: '$.error_code' },
+  },
 ];
 
 /** dev の Stage のバケットの CORS に足すローカルのアプリのオリジン（security-design.md §5）。 */
@@ -595,7 +608,7 @@ export class AppStack extends Stack {
     acknowledgeAll(taskPolicy, ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
     acknowledgeAll(
       taskPolicy,
-      bucketObjects('/*', '/uploads/*', '/candidates/*', '/analysis-records/*'),
+      bucketObjects('/*', '/uploads/*', '/candidates/*', '/analysis-records/*', '/sources/*'),
       NAG_REASONS.bucketObjects,
     );
     acknowledgeAll(taskPolicy, inference, NAG_REASONS.bedrockInference);
@@ -798,9 +811,12 @@ export class AppStack extends Stack {
   /**
    * アップロード用バケットの権限（U5、NFR1.33、infrastructure-specification.md）。
    *
-   * grantReadWrite を明示的な文に置き換え、古いバージョンの操作（GetObjectVersion*・
-   * ListBucketVersions・DeleteObjectVersion）を付けない。消したものは古いバージョンとして
-   * 7 日残るが、アプリからは読めない。タグの操作は紐付けの印を付け外しする
+   * grantReadWrite を明示的な文に置き換え、古いバージョンの読み出し（GetObjectVersion*）は
+   * 付けない。消したものは古いバージョンとして 7 日残るが、アプリからは読めない。
+   * 高度な生成 U2（BR14.1、NFR3.15）: 利用者がファイルを消したら中身をすぐになくすため、
+   * sources/* の s3:DeleteObjectVersion と、prefix を sources/ に限る条件付きの
+   * s3:ListBucketVersions だけを足す（ほかの接頭辞の版には触れない）。生成の開始で同じキーへ
+   * コピーし直す CopyObject（BR13.4）は s3:GetObject・s3:PutObject で足りる。タグの操作は紐付けの印を付け外しする
    * uploads/* と candidates/* と、高度な生成の保存前の分析の記録（タグ pending=true を付けて書き、
    * 保存でタグなしに写す、BR9.1・BR9.4）の analysis-records/* だけ。分割アップロード
    * （CreateMultipartUpload・UploadPart・CompleteMultipartUpload）は s3:PutObject、ListParts は
@@ -828,6 +844,16 @@ export class AppStack extends Stack {
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['s3:ListBucket', 's3:ListBucketMultipartUploads'],
       resources: [bucket.bucketArn],
+    }));
+    // U2: 上げたファイルの全版の削除（S3Service.delete_all_versions）
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:DeleteObjectVersion'],
+      resources: [bucket.arnForObjects('sources/*')],
+    }));
+    taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ['s3:ListBucketVersions'],
+      resources: [bucket.bucketArn],
+      conditions: { StringLike: { 's3:prefix': 'sources/*' } },
     }));
   }
 

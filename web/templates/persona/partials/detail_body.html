@@ -21,7 +21,7 @@
     {% if analysis_record_checked %}
     {{ dialog_open_button("persona-analysis-record", "分析の記録", "mt-2 text-sm text-blue-700 underline hover:text-blue-900") }}
     {% call dialog("persona-analysis-record", "分析の記録", panel_class="max-w-3xl") %}
-    {% with record = analysis_record %}{% include "persona/partials/advanced_record_dialog.html" %}{% endwith %}
+    {% with record = analysis_record, sources = analysis_sources %}{% include "persona/partials/advanced_record_dialog.html" %}{% endwith %}
     {% endcall %}
     {% endif %}
 </div>

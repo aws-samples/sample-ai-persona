@@ -56,7 +56,8 @@ export const NAG_REASONS = {
     'Mantle の CallWithBearerToken）。一覧は test/iam-wildcards.test.ts で固定する',
   /** IAM5: アップロード用バケットのオブジェクト。 */
   bucketObjects:
-    'Data スタックのアップロード用バケットの中のオブジェクト（全体か、用途ごとの接頭辞）だけを許す',
+    'Data スタックのアップロード用バケットの中のオブジェクト（全体か、用途ごとの接頭辞）だけを許す。' +
+    '版の削除（s3:DeleteObjectVersion）は高度な生成の上げたファイルの sources/* だけ（利用者の削除で全版を消す）',
   /** IAM5: Bedrock の推論の ARN。 */
   bedrockInference:
     '推論で呼ぶモデルはパラメータで変わるため、基盤モデル・このアカウントの推論プロファイルの ' +

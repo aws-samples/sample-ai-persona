@@ -163,7 +163,7 @@ class TestAdvancedPersonaDetail:
         persona = self._persona(sample_persona)
         manager = mock_get_manager.return_value
         manager.get_persona_detail.return_value = _detail(persona)
-        manager.get_analysis_record.return_value = record()
+        manager.get_analysis_record.return_value = (record(), ())
 
         response = client.get(f"/persona/{persona.id}")
 
@@ -176,6 +176,50 @@ class TestAdvancedPersonaDetail:
         assert 'data-testid="advanced-record"' in html_text
         assert SCRIPT_TEXT not in html_text
         assert manager.get_analysis_record.call_args.args[1] == persona.id
+
+    @pytest.mark.parametrize(
+        ("state", "shown", "hidden"),
+        [
+            ("deleted", "元のファイルは消えています", "元のファイルの記録はありません"),
+            ("unknown", "元のファイルの記録はありません", "元のファイルは消えています"),
+            ("available", "people.csv", "元のファイルは消えています"),
+        ],
+    )
+    @patch("web.routers.persona.get_persona_manager")
+    def test_record_says_whether_the_source_file_is_still_there(
+        self, mock_get_manager, client, sample_persona, state, shown, hidden
+    ):
+        """U2 BR14.3, AC4.2.3: the plan stays, the file's fate is told in words."""
+        from src.models.source_file import (
+            SourceAvailability,
+            SourceAvailabilityState,
+        )
+        from tests.advanced_screen_samples import record
+
+        persona = self._persona(sample_persona)
+        manager = mock_get_manager.return_value
+        manager.get_persona_detail.return_value = _detail(persona)
+        known = state != "unknown"
+        found = record().update(
+            source_file_ids=("file-1",) if known else (),
+            source_display_names=("people.csv",) if known else (),
+        )
+        manager.get_analysis_record.return_value = (
+            found,
+            (
+                SourceAvailability(
+                    "file-1" if known else "",
+                    "people.csv" if known else "",
+                    SourceAvailabilityState(state),
+                ),
+            ),
+        )
+
+        html_text = client.get(f"/persona/{persona.id}").text
+
+        assert shown in html_text
+        assert hidden not in html_text
+        assert "クラスタ分析" in html_text  # the plan is shown either way
 
     @patch("web.routers.persona.get_persona_manager")
     def test_unverified_segment_share_is_not_shown(

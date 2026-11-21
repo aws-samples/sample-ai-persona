@@ -132,6 +132,9 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
             "record_url_refresh",
             "begin_inspection",
             "cancel_upload",
+            # U2: 本人のファイルだけを読む・消す（BR15.1）
+            "list_owned",
+            "delete_owned",
         }
     ),
 }
@@ -292,6 +295,12 @@ CLASSIFICATION: dict[str, Entry] = {
     "SourceUploadManager.complete_upload": CHECKS,  # ensure_available + 持ち主
     "SourceUploadManager.get_upload": CHECKS,  # SourceFileCatalog.get_owned
     "SourceUploadManager.cancel_upload": CHECKS,  # SourceFileCatalog.get_owned
+    # 高度な生成 U2（BR15.1）
+    "SourceUploadManager.list_uploads": CHECKS,  # ensure_available + owner_sub の GSI
+    "SourceUploadManager.delete_source": CHECKS,  # SourceFileCatalog.get_owned + 条件式
+    # 読み出し済みの本人のファイルを一覧の行の値に変えるだけ（読み出しをしない）
+    "SourceUploadManager.list_item": NO_USER_DATA,
+    "SourceUploadManager.inspection_stuck": NO_USER_DATA,
     "SettingsManager.get_all_knowledge_bases": CHECKS,
     "SettingsManager.create_knowledge_base": CHECKS,
     "SettingsManager.delete_knowledge_base": CHECKS,

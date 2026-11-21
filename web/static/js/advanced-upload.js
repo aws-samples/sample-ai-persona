@@ -23,7 +23,10 @@
         retryDelaysMs: [1000, 2000, 4000],
         refreshLeadMs: 5 * 60 * 1000,
         reconnectDelaysMs: [3000, 6000, 12000, 24000, 30000],
-        disconnectAfterMs: 2 * 60 * 1000
+        disconnectAfterMs: 2 * 60 * 1000,
+        // U2 NFR1.11: 検査中の行の取り直し（間隔と打ち切りはページの data-* が config の値を持つ）
+        inspectPollMs: (Number(page.dataset.inspectPollSeconds) || 2) * 1000,
+        inspectStopMs: (Number(page.dataset.inspectStopSeconds) || 900) * 1000
     }, window.ADVANCED_UPLOAD_TIMING || {});
 
     var MAX_REFRESHES = 24;
@@ -385,23 +388,144 @@
     }
 
     function replaceRow(upload) {
-        return fetch('/persona/advanced/uploads/' + encodeURIComponent(upload.id), {
+        return fetchRow(upload.id).then(function (fresh) {
+            if (!fresh) return; // 行はそのまま残す（失敗はトーストで出した）
+            upload.row.replaceWith(fresh);
+            upload.row = fresh;
+            announceRow(fresh);
+            watchInspecting(fresh);
+        });
+    }
+
+    // --- 区画 A: 上げたファイルの一覧（U2 の W2-1・W2-3・W2-6） ---------------
+
+    function rowStatusText(row) {
+        var status = row.querySelector('[data-testid="advanced-upload-status"]');
+        return status ? status.textContent.trim().replace(/\s+/g, ' ') : '';
+    }
+
+    function announceRow(row) {
+        announce((row.dataset.displayName || '') + ': ' + rowStatusText(row));
+    }
+
+    // 行の断片を読み直す。読めなければ null（他人・ない・期限切れはトーストを出さない）
+    function fetchRow(id) {
+        return fetch('/persona/advanced/uploads/' + encodeURIComponent(id), {
             headers: { 'HX-Request': 'true' },
             credentials: 'same-origin'
         }).then(function (response) {
-            if (!response.ok) return undefined; // 行はそのまま残す（失敗はトーストで出した）
+            if (!response.ok) return null;
             return response.text().then(function (html) {
                 var fresh = parseHtml(html);
-                if (!fresh) return;
-                upload.row.replaceWith(fresh);
-                upload.row = fresh;
-                if (window.htmx) window.htmx.process(fresh);
-                var status = fresh.querySelector('[data-testid="advanced-upload-status"]');
-                announce(upload.file.name + ': ' + (status ? status.textContent.trim().replace(/\s+/g, ' ') : ''));
+                if (fresh && window.htmx) window.htmx.process(fresh);
+                return fresh;
+            });
+        }).catch(function () { return null; });
+    }
+
+    function currentRow(id) {
+        return rows.querySelector('[data-testid="advanced-upload-row"][data-source-file-id="' + CSS.escape(id) + '"]');
+    }
+
+    // 検査中の行を間隔ごとに読み直し、打ち切りの時間がたったら止めて「確定し直す」を出す（NFR1.11）。
+    // 2 つ目のタブの確定（BR11.4）や開き直したページの検査中の行も、ここで検査の終わりを待つ
+    var watching = {};
+
+    function watchInspecting(row) {
+        if (!row || row.dataset.state !== 'inspecting') return;
+        var id = row.dataset.sourceFileId;
+        if (!id || watching[id]) return;
+        if (row.querySelector('[data-action="recomplete"]')) return; // サーバーが止まったと判断した
+        watching[id] = { startedAt: Date.now() };
+        var tick = function () {
+            var state = watching[id];
+            if (!state) return;
+            if (Date.now() - state.startedAt >= TIMING.inspectStopMs) {
+                delete watching[id];
+                stopWatching(currentRow(id));
+                return;
+            }
+            fetchRow(id).then(function (fresh) {
+                var row = currentRow(id);
+                if (!row) {
+                    delete watching[id];
+                    return;
+                }
+                if (fresh) {
+                    row.replaceWith(fresh);
+                    if (fresh.dataset.state !== 'inspecting') {
+                        delete watching[id];
+                        announceRow(fresh);
+                        updateGenerateState();
+                        return;
+                    }
+                }
+                setTimeout(tick, TIMING.inspectPollMs);
+            });
+        };
+        setTimeout(tick, TIMING.inspectPollMs);
+    }
+
+    function stopWatching(row) {
+        if (!row || row.dataset.state !== 'inspecting') return;
+        var status = row.querySelector('[data-testid="advanced-upload-status"]');
+        if (status) status.textContent = '検査が止まりました。確定し直してください';
+        if (!row.querySelector('[data-action="recomplete"]')) {
+            var cell = row.lastElementChild;
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.action = 'recomplete';
+            button.dataset.testid = 'advanced-upload-recomplete';
+            button.className = 'text-sm text-blue-700 underline hover:text-blue-900';
+            button.textContent = '確定し直す';
+            if (cell) cell.appendChild(button);
+        }
+        announceRow(row);
+    }
+
+    // 止まった検査を確定し直す（パートはもう S3 で 1 つになっているので、空の一覧で送る）
+    function recomplete(row) {
+        var id = row.dataset.sourceFileId;
+        postJson('/persona/advanced/uploads/' + encodeURIComponent(id) + '/complete', { parts: [] })
+            .then(function (response) {
+                return readJson(response).then(function (body) {
+                    if (!response.ok && body.kind !== 'validation' && body.kind !== 'capacity') {
+                        toast(body.detail || '確定できませんでした。時間をおいて再度お試しください');
+                    }
+                });
+            })
+            .catch(function () { toast('確定できませんでした。通信を確かめてください'); })
+            .then(function () { return fetchRow(id); })
+            .then(function (fresh) {
+                var current = currentRow(id);
+                if (!fresh || !current) return;
+                current.replaceWith(fresh);
+                announceRow(fresh);
+                watchInspecting(fresh);
                 updateGenerateState();
             });
-        }).catch(function () { return undefined; });
     }
+
+    rows.addEventListener('click', function (evt) {
+        var target = evt.target instanceof Element ? evt.target.closest('[data-action="recomplete"]') : null;
+        if (!target) return;
+        var row = target.closest('[data-testid="advanced-upload-row"]');
+        if (row) recomplete(row);
+    });
+
+    // 削除の成功（HX-Trigger: advancedSourceDeleted）。押したボタンの行はこのあと htmx が消す
+    document.addEventListener('advancedSourceDeleted', function (evt) {
+        var row = evt.target instanceof Element ? evt.target.closest('[data-testid="advanced-upload-row"]') : null;
+        if (row) announce((row.dataset.displayName || '') + ' を削除しました');
+    });
+
+    // 行が増えた・消えた（削除、検査の終わり）ら、空の案内と生成のボタンを合わせる
+    new MutationObserver(function () {
+        updateEmptyNote();
+        updateGenerateState();
+    }).observe(rows, { childList: true });
+
+    Array.prototype.forEach.call(rows.querySelectorAll('[data-testid="advanced-upload-row"]'), watchInspecting);
 
     var fileInput = document.getElementById('advanced-file-input');
     if (fileInput) {

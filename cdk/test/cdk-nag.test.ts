@@ -95,8 +95,9 @@ function commonSuppressions(stage: string): Suppression[] {
     ...on(
       taskPolicy(stage),
       'IAM5[Resource::*]',
-      // 高度な生成の保存前の分析の記録のタグ（analysis-records/*、BR9.1）
-      ...['/*', '/uploads/*', '/candidates/*', '/analysis-records/*'].map(bucket),
+      // 高度な生成の保存前の分析の記録のタグ（analysis-records/*、BR9.1）と、
+      // U2 の上げたファイルの版の削除（sources/*、BR14.1）
+      ...['/*', '/uploads/*', '/candidates/*', '/analysis-records/*', '/sources/*'].map(bucket),
       ...INFERENCE,
       `IAM5[Resource::arn:aws:bedrock:ap-northeast-1:${ACCOUNT}:knowledge-base/*]`,
       fromData('Memory/Default', 'MemoryArn', '/*'),

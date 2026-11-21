@@ -136,6 +136,10 @@ def screen_limits() -> dict[str, object]:
         "concurrency": UPLOAD_CONCURRENCY,
         "persona_count_max": PERSONA_COUNT_MAX,
         "purpose_max_chars": PURPOSE_MAX_CHARS,
+        # U2 NFR1.11: 検査中の行を取り直す間隔と、打ち切るまでの秒
+        "inspect_poll_seconds": int(config.ADVANCED_UPLOAD_INSPECT_POLL_SECONDS),
+        "inspect_stop_seconds": int(config.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS),
+        "retention_days": int(config.ADVANCED_SOURCE_RETENTION_DAYS),
     }
 
 
@@ -175,6 +179,16 @@ async def advanced_generation_page(
         except CodedError:
             # 読めない生成は経過時間を出さない（理由は SSE の error が伝える）
             logger.info("advanced generation elapsed time not readable")
+    # U2 W2-1: 本人のファイルの一覧（古い記録の補正で S3 を呼びうるのでスレッドへ、NFR2.6）
+    uploads = get_source_upload_manager()
+    rows: list[dict[str, Any]] = []
+    list_failed = False
+    try:
+        files = await run_in_threadpool(uploads.list_uploads, principal)
+        rows = [_row_context(uploads, f) for f in files]
+    except Exception:
+        logger.warning("advanced upload list not readable", exc_info=True)
+        list_failed = True
     return templates.TemplateResponse(
         request,
         "persona/advanced_generation.html",
@@ -186,6 +200,8 @@ async def advanced_generation_page(
             "elapsed": elapsed,
             "show_advanced_tab": True,
             "active_tab": "advanced",
+            "upload_rows": rows,
+            "upload_list_failed": list_failed,
         },
     )
 
@@ -299,17 +315,36 @@ async def complete_upload(
     return _no_store(_completed(source_file))
 
 
-def render_upload_row(request: Request, source_file: SourceFile) -> HTMLResponse:
-    """The row of one file in section A (S3)."""
+def _row_context(
+    manager: SourceUploadManager, source_file: SourceFile
+) -> dict[str, Any]:
+    """What one row of section A needs: the file, its list item and the wording."""
     error = (
         user_message_for_code(source_file.error_code, screen_limits())
         if source_file.error_code
         else None
     )
+    return {
+        "source_file": source_file,
+        "item": manager.list_item(source_file),
+        "row_error": error,
+        "stuck": manager.inspection_stuck(source_file),
+    }
+
+
+def render_upload_row(
+    request: Request,
+    source_file: SourceFile,
+    *,
+    headers: Optional[dict[str, str]] = None,
+) -> HTMLResponse:
+    """The row of one file in section A (S3)."""
+    context = _row_context(get_source_upload_manager(), source_file)
     return templates.TemplateResponse(
         request,
         "persona/partials/advanced_upload_row.html",
-        {"request": request, "source_file": source_file, "row_error": error},
+        {"request": request, **context},
+        headers=headers,
     )
 
 
@@ -344,6 +379,65 @@ async def cancel_upload(request: Request, source_file_id: str) -> Any:
             e, default="アップロードを取り消せませんでした", status_code=500
         )
     return Response(status_code=200)
+
+
+def _delete_dialog_id(source_file_id: str) -> str:
+    return f"advanced-delete-{source_file_id}"
+
+
+@router.delete("/advanced/sources/{source_file_id}")
+async def delete_source(request: Request, source_file_id: str) -> Any:
+    """上げたファイルを消す（W2-6、BR14.1、BR14.2）。成功なら行を消し、ダイアログを閉じる。
+
+    使用中・他人・ないはトースト。S3 で消せなかったときは「削除できませんでした」の行に
+    差し替え、トーストで知らせる（もう一度押すと続きから消す）。
+    """
+    principal = _principal(request)
+    manager = get_source_upload_manager()
+    close = {"dialogClose": {"id": _delete_dialog_id(source_file_id)}}
+    try:
+        await run_in_threadpool(manager.delete_source, principal, source_file_id)
+    except CodedError as e:
+        logger.info("advanced source not deleted")
+        code = error_payload(e)["error_code"]
+        toast = toast_response(e, status_code=_status_of(code))
+        if code in (
+            ErrorCode.UPLOAD_NOT_FOUND.value,
+            ErrorCode.SOURCE_FILE_IN_USE.value,
+        ):
+            return toast
+        return await _deleting_row(request, principal, source_file_id, toast, close)
+    except Exception as e:
+        logger.error("advanced source delete failed", exc_info=True)
+        return toast_response(
+            e, default="ファイルを削除できませんでした", status_code=500
+        )
+    return Response(
+        status_code=200,
+        headers={
+            "HX-Trigger": json.dumps({**close, "advancedSourceDeleted": {}}),
+        },
+    )
+
+
+async def _deleting_row(
+    request: Request,
+    principal: Principal,
+    source_file_id: str,
+    toast: Response,
+    close: dict[str, Any],
+) -> Response:
+    """The row that says the deletion failed, with the toast of the failure."""
+    triggers = {**json.loads(toast.headers.get("HX-Trigger", "{}")), **close}
+    headers = {"HX-Trigger": json.dumps(triggers)}
+    try:
+        source_file = await run_in_threadpool(
+            get_source_upload_manager().get_upload, principal, source_file_id
+        )
+    except CodedError:
+        logger.info("advanced source row not readable after a failed delete")
+        return Response(status_code=toast.status_code, headers=headers)
+    return render_upload_row(request, source_file, headers=headers)
 
 
 # --- generation (W4) ---------------------------------------------------------

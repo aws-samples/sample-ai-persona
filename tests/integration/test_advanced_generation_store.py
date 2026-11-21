@@ -200,6 +200,78 @@ class TestCreateWithLock:
             )
         assert _count_items(client) == 0
 
+    # --- U2: 使った日と期限の延長（BR13.3、NFR5.28） ---
+
+    def test_the_start_writes_the_last_use_and_the_new_expiry(self, store, client):
+        source_id = _put_source(client)
+        source_expires = NOW + timedelta(days=7)
+
+        store.create_with_lock(
+            _generation(source_id),
+            lock_until=LOCK,
+            in_use_until=LOCK,
+            now=NOW,
+            source_expires_at=source_expires,
+        )
+
+        mark = _source_item(client, source_id)
+        assert mark["last_used_at"]["S"] == NOW.isoformat(timespec="microseconds")
+        assert mark["expires_at"] == {"N": str(int(source_expires.timestamp()))}
+
+    @pytest.mark.parametrize("status", ["deleting", "error"])
+    def test_a_file_that_is_not_ready_cannot_start(self, store, client, status):
+        source_id = _put_source(client, status=status)
+
+        with pytest.raises(GenerationSourceUnavailable):
+            store.create_with_lock(
+                _generation(source_id),
+                lock_until=LOCK,
+                in_use_until=LOCK,
+                now=NOW,
+                source_expires_at=NOW + timedelta(days=7),
+            )
+        assert "in_use_by" not in _source_item(client, source_id)
+
+    def test_an_expired_file_cannot_start(self, store, client):
+        source_id = _put_source(client)
+        client.update_item(
+            TableName=SOURCES,
+            Key={"source_file_id": {"S": source_id}},
+            UpdateExpression="SET expires_at = :e",
+            ExpressionAttributeValues={":e": {"N": str(int(NOW.timestamp()))}},
+        )
+
+        with pytest.raises(GenerationSourceUnavailable):
+            store.create_with_lock(
+                _generation(source_id),
+                lock_until=LOCK,
+                in_use_until=LOCK,
+                now=NOW,
+                source_expires_at=NOW + timedelta(days=7),
+            )
+        assert _count_items(client) == 0
+
+    def test_a_file_within_its_expiry_can_start(self, store, client):
+        source_id = _put_source(client)
+        client.update_item(
+            TableName=SOURCES,
+            Key={"source_file_id": {"S": source_id}},
+            UpdateExpression="SET expires_at = :e",
+            ExpressionAttributeValues={
+                ":e": {"N": str(int((NOW + timedelta(seconds=5)).timestamp()))}
+            },
+        )
+
+        store.create_with_lock(
+            _generation(source_id),
+            lock_until=LOCK,
+            in_use_until=LOCK,
+            now=NOW,
+            source_expires_at=NOW + timedelta(days=7),
+        )
+
+        assert _source_item(client, source_id)["in_use_by"]["S"]
+
 
 class TestTransitions:
     def test_transition_is_conditioned_on_the_current_state(self, store, client):
@@ -371,7 +443,8 @@ class TestFinish:
         assert store.get_lock("sub-a") is None
         mark = _source_item(client, gen.source_file_ids[0])
         assert "in_use_by" not in mark and "in_use_until" not in mark
-        assert mark["last_used_at"]["S"] == end.isoformat(timespec="microseconds")
+        # U2 BR13.3: the end only removes the mark; the last use is the start.
+        assert mark["last_used_at"]["S"] == NOW.isoformat(timespec="microseconds")
         finished = store.get(gen.generation_id)
         assert finished is not None
         assert finished.finished_at == end and finished.expires_at == expires
