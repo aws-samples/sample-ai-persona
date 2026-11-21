@@ -253,6 +253,11 @@ class ErrorCode(StrEnum):
     )
     # The preparation ran out of memory or disk (BR4.2).
     GENERATION_CAPACITY = ("generation_capacity", ErrorKind.CAPACITY)
+    # Fewer rows than persona count x 10 after the preparation (U3, BR18.1).
+    GENERATION_INSUFFICIENT_DATA = (
+        "generation_insufficient_data",
+        ErrorKind.VALIDATION,
+    )
     # No segment, or clustering failed twice (BR5.3, BR7.1).
     GENERATION_ANALYSIS_FAILED = ("generation_analysis_failed", ErrorKind.VALIDATION)
     # The result did not pass the verification (BR8.2, BR8.3).

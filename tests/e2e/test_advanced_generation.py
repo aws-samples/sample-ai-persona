@@ -277,3 +277,114 @@ def test_completing_twice_gives_both_tabs_the_same_result(
     assert response.json()["status"] == "ready"
     _delete_row(page, source_file_id)
     page.close()
+
+
+# --- U3: 隔離と 1GB（BR19.3、BR20.1、BR20.2） ---------------------------------------
+# Real AWS only. Run with ``-k "isolation or large"``.
+
+
+def _sandbox_from_env() -> "tuple[object, str]":
+    code_interpreter_id = os.environ.get("E2E_CODE_INTERPRETER_ID", "").strip()
+    region = os.environ.get("AWS_REGION", "").strip()
+    if not code_interpreter_id or not region:
+        pytest.skip("set E2E_CODE_INTERPRETER_ID and AWS_REGION to run this check")
+
+    from src.services.sandbox_service import CodeInterpreterSandbox
+
+    return (
+        CodeInterpreterSandbox(
+            code_interpreter_id=code_interpreter_id,
+            region_name=region,
+            library_path=str(LIBRARY_PATH),
+        ),
+        region,
+    )
+
+
+def _shell(sandbox: object, session: object, command: str) -> str:
+    content = sandbox._invoke(session, "executeCommand", {"command": command})  # type: ignore[attr-defined]
+    return str(content.get("stdout", ""))
+
+
+def test_isolation_s3_is_not_readable_from_the_session_and_nothing_carries_over() -> (
+    None
+):
+    """No direct S3 read from inside a session; a new session starts empty.
+
+    BR19.1, BR19.3 (AC5.6.1, AC5.6.2, AC5.6.3): the session has no execution
+    role, so a direct S3 read is refused, and a file left in one generation's
+    session is not in the next generation's session.
+    """
+    bucket = os.environ.get("E2E_S3_BUCKET", "").strip()
+    if not bucket:
+        pytest.skip("set E2E_S3_BUCKET (the dev bucket) to run the isolation check")
+    sandbox, _ = _sandbox_from_env()
+    from src.config import config
+
+    lifetime = config.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS
+    marker = f"isolation-{uuid.uuid4().hex[:8]}"
+    first = sandbox.start_session(f"e2e-iso-a-{uuid.uuid4().hex[:8]}", lifetime)  # type: ignore[attr-defined]
+    try:
+        direct_read = (
+            'python3 -c "import boto3,sys\n'
+            "try:\n"
+            f"    boto3.client('s3').list_objects_v2(Bucket='{bucket}', MaxKeys=1)\n"
+            "    print('READ')\n"
+            "except Exception as e:\n"
+            "    print('DENIED', type(e).__name__)\n"
+            '"'
+        )
+        out = _shell(sandbox, first, direct_read)
+        assert "READ" not in out.split(), f"S3 was readable from the session: {out}"
+        assert "DENIED" in out
+        _shell(sandbox, first, f"echo left-behind > ./{marker}.txt")
+        assert marker in _shell(sandbox, first, "ls")
+    finally:
+        sandbox.stop_session(first)  # type: ignore[attr-defined]
+
+    second = sandbox.start_session(f"e2e-iso-b-{uuid.uuid4().hex[:8]}", lifetime)  # type: ignore[attr-defined]
+    try:
+        assert marker not in _shell(sandbox, second, "ls")
+    finally:
+        sandbox.stop_session(second)  # type: ignore[attr-defined]
+
+
+def test_large_csv_generates_without_running_out_of_memory(
+    session_context: BrowserContext, created: CreatedRecords, run_tag: str
+) -> None:
+    """A Shift_JIS CSV of about 1GB goes through to a result (US5.7, BR20.1).
+
+    Make the file first::
+
+        uv run python scripts/make_large_sample_csv.py --size-mb 1000 \\
+            --columns 30 --out /path/large.csv
+
+    and point ``E2E_LARGE_CSV`` at it. The time from the start to the result is
+    printed (about 30 minutes is the aim; a slower run does not fail). The
+    preparation time is in the ``advanced_generation.prepared`` log line
+    (``duration_ms``) of the same generation.
+    """
+    path = os.environ.get("E2E_LARGE_CSV", "").strip()
+    if not path:
+        pytest.skip("set E2E_LARGE_CSV to the file made by make_large_sample_csv.py")
+    large = Path(path)
+    assert large.is_file(), f"E2E_LARGE_CSV is not a file: {path}"
+
+    before = _persona_ids(session_context)
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    page.get_by_test_id("advanced-file-input").set_input_files(large)
+    row = page.get_by_test_id("advanced-upload-row").filter(has_text=large.name).first
+    # A 1GB upload and its inspection take longer than the sample's
+    expect(row).to_have_attribute("data-state", "ready", timeout=60 * 60 * 1000)
+    row.get_by_test_id("advanced-upload-select").check()
+
+    started = time.monotonic()
+    _generate(page, run_tag)
+    elapsed = time.monotonic() - started
+    print(f"large csv: start to result {elapsed / 60:.1f} minutes")  # noqa: T201
+
+    result = page.get_by_test_id("advanced-result")
+    expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
+    created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()

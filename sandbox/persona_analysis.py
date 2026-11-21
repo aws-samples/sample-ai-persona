@@ -45,6 +45,10 @@ _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _DOWNLOAD_TIMEOUT_SECONDS = 600
 _DUCKDB_MEMORY_LIMIT = "4GB"
 _DEFAULT_SEED = 42
+#: Line-number examples kept for a failure notice (BR16.2): per reason / in total.
+_EXAMPLES_PER_REASON = 3
+_EXAMPLES_TOTAL = 5
+_DEFAULT_MAX_EXCLUDED_PERCENT = 1
 _DEFAULT_SAMPLE_MAX_ROWS = 1_000_000
 _ASSIGN_BATCH_ROWS = 100_000
 _MAX_CATEGORIES = 20
@@ -239,20 +243,35 @@ class _RetryAsCp932(Exception):
 
 
 def _decode_block(
-    block: bytes, encoding: str, strict: bool, counts: Dict[str, int]
+    block: bytes,
+    encoding: str,
+    strict: bool,
+    counts: Dict[str, int],
+    first_line: int = 1,
+    bad_lines: Optional[List[int]] = None,
 ) -> str:
-    """Decode whole lines; a line that does not decode is dropped and counted."""
+    """Decode whole lines; a line that does not decode becomes an empty line.
+
+    The empty line keeps every later row at its place in the original file, so
+    line numbers given to the user stay true (BR16.2). An empty line is skipped
+    when the table is read, so it never counts as a row. ``first_line`` is the
+    1-based number of the block's first line; the numbers of the first few
+    undecodable lines are added to ``bad_lines``.
+    """
     try:
         return block.decode(encoding)
     except UnicodeDecodeError:
         if strict:
             raise _RetryAsCp932() from None
     kept: List[str] = []
-    for line in block.split(b"\n"):
+    for offset, line in enumerate(block.split(b"\n")):
         try:
             kept.append(line.decode(encoding))
         except UnicodeDecodeError:
+            kept.append("")
             counts["decode_error"] = counts.get("decode_error", 0) + 1
+            if bad_lines is not None and len(bad_lines) < _EXAMPLES_PER_REASON:
+                bad_lines.append(first_line + offset)
     return "\n".join(kept)
 
 
@@ -263,9 +282,14 @@ def _transcode(
     *,
     strict: bool,
     on_progress: Callable[[int, int], None],
-) -> Tuple[int, Dict[str, int]]:
-    """Write ``src`` as UTF-8 to ``dst`` 16MB at a time. Returns (lines, drops)."""
+) -> Tuple[int, Dict[str, int], List[int]]:
+    """Write ``src`` as UTF-8 to ``dst`` 16MB at a time.
+
+    Returns ``(lines, drops, bad_lines)``: the line count, the undecodable
+    lines per reason, and the original numbers of the first few of them.
+    """
     counts: Dict[str, int] = {}
+    bad_lines: List[int] = []
     lines = 0
     done = 0
     rest = b""
@@ -283,13 +307,17 @@ def _transcode(
                 rest = data
                 continue
             block, rest = data[: cut + 1], data[cut + 1 :]
-            fout.write(_decode_block(block, encoding, strict, counts))
+            fout.write(
+                _decode_block(block, encoding, strict, counts, lines + 1, bad_lines)
+            )
             lines += block.count(b"\n")
             on_progress(lines, done)
         if rest:
-            fout.write(_decode_block(rest, encoding, strict, counts))
+            fout.write(
+                _decode_block(rest, encoding, strict, counts, lines + 1, bad_lines)
+            )
             lines += 1
-    return lines, counts
+    return lines, counts, bad_lines
 
 
 def _read_encoding(metadata: Dict[str, Any]) -> str:
@@ -303,7 +331,7 @@ def _read_encoding(metadata: Dict[str, Any]) -> str:
 
 def _to_parquet(
     workdir: str, utf8_path: str, out: str, delimiter: str
-) -> Tuple[int, Dict[str, int], List[Dict[str, str]]]:
+) -> Tuple[int, Dict[str, int], List[Dict[str, str]], Dict[str, List[int]]]:
     import duckdb
 
     con = _connect(workdir)
@@ -323,6 +351,17 @@ def _to_parquet(
             "SELECT lower(CAST(error_type AS VARCHAR)), count(DISTINCT line) "
             "FROM reject_errors GROUP BY 1 ORDER BY 1"
         ).fetchall()
+        reject_lines: Dict[str, List[int]] = {}
+        for reason, _n in rejects:
+            reject_lines[str(reason)] = [
+                int(r[0])
+                for r in con.execute(
+                    "SELECT DISTINCT line FROM reject_errors "
+                    "WHERE lower(CAST(error_type AS VARCHAR)) = ? "
+                    f"ORDER BY line LIMIT {_EXAMPLES_PER_REASON}",
+                    [reason],
+                ).fetchall()
+            ]
         columns = [
             {"name": str(r[0]), "type": str(r[1])}
             for r in con.execute(
@@ -335,7 +374,39 @@ def _to_parquet(
         raise AnalysisError("SOURCE_UNREADABLE") from None
     finally:
         con.close()
-    return rows, {str(k): int(v) for k, v in rejects}, columns
+    return rows, {str(k): int(v) for k, v in rejects}, columns, reject_lines
+
+
+def _header_columns(path: str, delimiter: str) -> Optional[int]:
+    """Number of columns in the header line of a UTF-8 file, when it can be read."""
+    import csv
+
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            header = next(csv.reader(f, delimiter=delimiter), None)
+    except (OSError, UnicodeDecodeError, csv.Error, ValueError):
+        return None
+    return len(header) if header else None
+
+
+def _pick_examples(per_reason: Dict[str, List[int]]) -> Dict[str, List[int]]:
+    """At most 3 line numbers per reason and 5 in all, smallest first (BR16.2)."""
+    picked: Dict[str, List[int]] = {}
+    total = 0
+    for reason in sorted(per_reason):
+        numbers = sorted(set(per_reason[reason]))[:_EXAMPLES_PER_REASON]
+        numbers = numbers[: max(_EXAMPLES_TOTAL - total, 0)]
+        if numbers:
+            picked[reason] = numbers
+            total += len(numbers)
+    return picked
+
+
+def _max_percent(args: Dict[str, Any]) -> int:
+    value = args.get("max_excluded_percent", _DEFAULT_MAX_EXCLUDED_PERCENT)
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "max_excluded_percent"})
+    return value
 
 
 def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
@@ -346,6 +417,7 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     Returns a PrepareReport (contract C8).
     """
     source_id = _checked_id(args.get("source_id"), "source_id")
+    max_percent = _max_percent(args)
     progress_id = args.get("progress_id")
     if progress_id is not None:
         progress_id = _checked_id(progress_id, "progress_id")
@@ -364,8 +436,10 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     out = _parquet_path(workdir, source_id)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     utf8_path = out + ".utf8.csv"
+    seen = {"lines": 0}
 
     def on_progress(lines: int, done: int) -> None:
+        seen["lines"] = lines
         _write_progress(
             workdir,
             progress_id,
@@ -375,11 +449,22 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
             bytes_total=total,
         )
 
+    def memory_context() -> Dict[str, Any]:
+        """What is known when memory runs out (BR17.1): rows so far, columns."""
+        context: Dict[str, Any] = {}
+        if seen["lines"] > 1:
+            context["rows_read"] = seen["lines"] - 1
+        columns_count = _header_columns(utf8_path, delimiter)
+        if columns_count:
+            context["columns_count"] = columns_count
+        return context
+
     retried = False
     try:
         try:
             first = "utf-8" if encoding == "undetermined" else encoding
-            _, drops = _transcode(
+            seen["lines"] = 0
+            _, drops, bad_lines = _transcode(
                 src,
                 utf8_path,
                 first,
@@ -390,13 +475,20 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         except _RetryAsCp932:
             retried = True
             settled = "cp932"
-            _, drops = _transcode(
+            seen["lines"] = 0
+            _, drops, bad_lines = _transcode(
                 src, utf8_path, settled, strict=False, on_progress=on_progress
             )
         _write_progress(workdir, progress_id, phase="parquet", bytes_total=total)
-        rows, rejects, columns = _to_parquet(workdir, utf8_path, out, delimiter)
+        rows, rejects, columns, reject_lines = _to_parquet(
+            workdir, utf8_path, out, delimiter
+        )
     except MemoryError:
-        raise AnalysisError("OUT_OF_MEMORY") from None
+        raise AnalysisError("OUT_OF_MEMORY", memory_context()) from None
+    except AnalysisError as e:
+        if e.code == "OUT_OF_MEMORY" and not e.context:
+            e.context.update(memory_context())
+        raise
     finally:
         if os.path.exists(utf8_path):
             os.remove(utf8_path)
@@ -405,12 +497,19 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     for reason, n in rejects.items():
         counts[reason] = counts.get(reason, 0) + n
     excluded = sum(counts.values())
+    per_reason = dict(reject_lines)
+    if bad_lines:
+        per_reason["decode_error"] = list(bad_lines)
+    examples = _pick_examples(per_reason)
     if rows == 0:
         raise AnalysisError("SOURCE_UNREADABLE", {"rows_excluded": excluded})
-    if excluded > rows:
-        raise AnalysisError(
-            "TOO_MANY_BAD_ROWS", {"rows_read": rows, "rows_excluded": excluded}
-        )
+    # Integers only: more than max_percent % of the rows seen (BR16.1, NFR1.14).
+    if excluded * 100 > (rows + excluded) * max_percent:
+        context: Dict[str, Any] = {"rows_read": rows, "rows_excluded": excluded}
+        row_examples = sorted({n for v in examples.values() for n in v})
+        if row_examples:
+            context["row_examples"] = row_examples
+        raise AnalysisError("TOO_MANY_BAD_ROWS", context)
     reported = metadata.get("encoding")
     if reported == "utf-8-sig":
         settled = "utf-8-sig"
@@ -422,9 +521,12 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         "encoding": settled,
         "encoding_retried": retried,
         "prepare_version": PREPARE_VERSION,
+        "memory_limit": _DUCKDB_MEMORY_LIMIT,
     }
     if counts:
         report["excluded_reasons"] = {"counts": counts}
+        if examples:
+            report["excluded_reasons"]["examples"] = examples
     _write_progress(
         workdir, progress_id, phase="finished", rows=rows, rows_excluded=excluded
     )

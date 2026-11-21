@@ -147,11 +147,13 @@ def _size(result: Mapping[str, Any]) -> int:
 
 
 def limit_output(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
-    """Cut a C9 result to ``max_chars`` characters and say so (NFR5.10).
+    """Cut a C9 result to ``max_chars`` characters and say so (NFR5.10, NFR5.36).
 
     The longest list in the value (rows, columns, clusters) is halved until the
-    result fits; ``truncated`` is set on the result and on the value. A result
-    that cannot be cut becomes ``OUTPUT_TOO_LARGE``.
+    result fits. When the value has no list left to halve, its longest string
+    is cut instead (an output made of one long text goes on, cut). ``truncated``
+    is set on the result and on the value. A result that cannot be cut (numbers
+    alone over the limit) becomes ``OUTPUT_TOO_LARGE``.
     """
     if _size(result) <= max_chars:
         return result
@@ -167,7 +169,30 @@ def limit_output(result: dict[str, Any], max_chars: int) -> dict[str, Any]:
             if _size(candidate) <= max_chars:
                 return candidate
             lists = [k for k, v in cut.items() if isinstance(v, list) and v]
+        shortened = _cut_strings(cut, max_chars)
+        if shortened is not None:
+            return shortened
     return _failure("OUTPUT_TOO_LARGE", limit=max_chars)
+
+
+def _cut_strings(cut: dict[str, Any], max_chars: int) -> dict[str, Any] | None:
+    """Shorten the longest string of ``cut`` until the result fits, or ``None``."""
+    cut = dict(cut)
+    cut["truncated"] = True
+    step = 1
+    while True:
+        candidate = {"ok": True, "value": cut, "truncated": True}
+        overflow = _size(candidate) - max_chars
+        if overflow <= 0:
+            return candidate
+        strings = [k for k, v in cut.items() if isinstance(v, str) and v]
+        if not strings:
+            return None
+        longest = max(strings, key=lambda k: len(cut[k]))
+        # Escapes (quotes, newlines) make the text longer on the wire than in
+        # memory, so a cut by the overflow may fall short: cut harder each round.
+        cut[longest] = cut[longest][: max(len(cut[longest]) - overflow * step, 0)]
+        step *= 2
 
 
 def _parse_result(stdout: str) -> dict[str, Any]:

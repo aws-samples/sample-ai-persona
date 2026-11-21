@@ -17,7 +17,7 @@ of a body swap, so that the user's input survives a retryable failure
 
 import json
 import logging
-from typing import TypeVar
+from typing import Any, Callable, TypeVar
 
 from fastapi import Response
 from fastapi.responses import JSONResponse
@@ -179,6 +179,11 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.GENERATION_CAPACITY: (
         "ファイルが大きすぎて準備しきれませんでした。ファイルを小さくして再度お試しください"
+    ),
+    ErrorCode.GENERATION_INSUFFICIENT_DATA: (
+        "データの行数が少なく、ペルソナを分けられません。"
+        "指示で対象を絞る、人数を減らす、行数の多いファイルを使う、"
+        "のどれかを試してください"
     ),
     ErrorCode.GENERATION_ANALYSIS_FAILED: (
         "データから層を見つけられませんでした。指示を変えるか、ペルソナの数を減らしてください"
@@ -650,6 +655,75 @@ DISTINCT_NOT_FOUND_TOAST_CODES: frozenset[ErrorCode] = frozenset(
 )
 
 
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _unreadable_detail(base: str, context: dict[str, Any]) -> str:
+    """Line numbers of the bad rows (BR16.2); the plain wording without them."""
+    examples = context.get("row_examples")
+    if (
+        not isinstance(examples, list)
+        or not 1 <= len(examples) <= 5
+        or any(_positive_int(n) is None for n in examples)
+    ):
+        return base
+    lines = "、".join(str(n) for n in examples)
+    message = f"{lines} 行目などに問題があります。ファイルを直して上げ直してください"
+    read, excluded = (
+        _positive_int(context.get("rows_read")),
+        _positive_int(context.get("rows_excluded")),
+    )
+    if read is not None and excluded is not None:
+        message += f"（読み込めた行 {read:,}、除外した行 {excluded:,}）"
+    return message
+
+
+def _capacity_detail(base: str, context: dict[str, Any]) -> str:
+    """The size reached when memory ran out (BR17.1); only what is known."""
+    rows = _positive_int(context.get("rows_read"))
+    columns = _positive_int(context.get("columns_count"))
+    if rows is None and columns is None:
+        return base
+    if rows is not None and columns is not None:
+        size = f"おおよそ {rows:,} 行・{columns:,} 列"
+    elif rows is not None:
+        size = f"おおよそ {rows:,} 行"
+    else:
+        size = f"{columns:,} 列"
+    return f"ファイルが大きすぎて準備しきれませんでした（{size}）。ファイルを小さくして再度お試しください"
+
+
+def _insufficient_detail(base: str, context: dict[str, Any]) -> str:
+    """How many personas cannot be split from the rows read (BR18.1)."""
+    count = _positive_int(context.get("persona_count"))
+    if count is None:
+        return base
+    message = (
+        f"データの行数が少なく、{count} 人には分けられません。"
+        "指示で対象を絞る、人数を減らす、行数の多いファイルを使う、"
+        "のどれかを試してください"
+    )
+    read, required = (
+        _positive_int(context.get("rows_read")),
+        _positive_int(context.get("required_rows")),
+    )
+    if read is not None and required is not None:
+        message += f"（読めた行 {read:,}、必要な行 {required:,}）"
+    return message
+
+
+#: Codes whose wording takes numbers from the stored context (values are shown
+#: only when they are usable integers; otherwise the plain catalog wording).
+_DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
+    ErrorCode.GENERATION_SOURCE_UNREADABLE: _unreadable_detail,
+    ErrorCode.GENERATION_CAPACITY: _capacity_detail,
+    ErrorCode.GENERATION_INSUFFICIENT_DATA: _insufficient_detail,
+}
+
+
 def user_message_for(exc: BaseException | None, *, default: str | None = None) -> str:
     """Resolve user-facing wording from an exception's error code.
 
@@ -682,6 +756,9 @@ def user_message_for(exc: BaseException | None, *, default: str | None = None) -
     if "field" in context:
         # Managers pass a stable field key; the display label lives here.
         context = {**context, "field": _FIELD_LABELS.get(context["field"], "入力値")}
+    detail = _DETAIL_WORDING.get(code) if isinstance(code, ErrorCode) else None
+    if detail is not None:
+        return detail(template, context)
     try:
         return template.format(**context)
     except (KeyError, IndexError, ValueError, TypeError):

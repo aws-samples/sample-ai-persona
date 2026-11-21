@@ -842,6 +842,13 @@ class TestAdvancedGenerationSettings:
         cfg = self._config()
         assert cfg.ADVANCED_GENERATION_PREPARE_POLL_SECONDS == 5
 
+    def test_table_analysis_depth_constants(self):
+        # U3: 1% bad-row limit (BR16.1), 10 rows per persona (BR18.1), 60 s notice
+        cfg = self._config()
+        assert cfg.ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT == 1
+        assert cfg.ADVANCED_MIN_ROWS_PER_PERSONA == 10
+        assert cfg.ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS == 60
+
     @pytest.mark.parametrize(
         ("value", "expected"),
         [("true", True), ("FALSE", False), ("1", True), ("0", False), ("", True)],
