@@ -537,3 +537,73 @@ class TestSurveyOnDemandWording:
         for value in ("survey_batch_job_failed", "survey_batch_job_timed_out"):
             message = error_messages.user_message_for_code(value, None)
             assert message != error_messages.FALLBACK_MESSAGE
+
+
+class TestTableAnalysisDepthWording:
+    """U3 (BR16.2, BR17.1, BR18.1): row numbers, sizes and the new code."""
+
+    @staticmethod
+    def _message(code: ErrorCode, **context: object) -> str:
+        return user_message_for(CodedError("diag", code=code, context=context))
+
+    def test_insufficient_data_is_validation_and_names_the_ways_out(self):
+        assert ErrorCode.GENERATION_INSUFFICIENT_DATA.kind is ErrorKind.VALIDATION
+
+        message = self._message(
+            ErrorCode.GENERATION_INSUFFICIENT_DATA,
+            rows_read=10,
+            required_rows=50,
+            persona_count=5,
+        )
+
+        assert "5 人" in message
+        assert "指示で対象を絞る" in message
+        assert "人数を減らす" in message
+        assert "行数の多いファイル" in message
+
+    def test_insufficient_data_without_numbers_still_reads(self):
+        message = self._message(ErrorCode.GENERATION_INSUFFICIENT_DATA)
+
+        assert "人数を減らす" in message
+        assert "None" not in message
+
+    def test_unreadable_names_the_lines(self):
+        message = self._message(
+            ErrorCode.GENERATION_SOURCE_UNREADABLE,
+            row_examples=[3, 21, 90],
+            rows_read=900,
+            rows_excluded=40,
+        )
+
+        assert "3、21、90 行目などに問題があります" in message
+        assert "ファイルを直して上げ直してください" in message
+        assert "900" in message and "40" in message
+
+    def test_unreadable_without_lines_keeps_the_plain_wording(self):
+        plain = self._message(ErrorCode.GENERATION_SOURCE_UNREADABLE)
+
+        assert plain == error_messages._CATALOG[ErrorCode.GENERATION_SOURCE_UNREADABLE]
+        assert "行目" not in plain
+
+    @pytest.mark.parametrize("bad", ["3", [3, "x"], [True], [0], [1, 2, 3, 4, 5, 6]])
+    def test_unusable_line_values_are_not_shown(self, bad):
+        message = self._message(
+            ErrorCode.GENERATION_SOURCE_UNREADABLE, row_examples=bad
+        )
+
+        assert "行目" not in message
+
+    def test_capacity_shows_rows_and_columns(self):
+        message = self._message(
+            ErrorCode.GENERATION_CAPACITY, rows_read=1_200_000, columns_count=80
+        )
+
+        assert "1,200,000 行" in message
+        assert "80 列" in message
+
+    def test_capacity_shows_only_what_is_known(self):
+        only_columns = self._message(ErrorCode.GENERATION_CAPACITY, columns_count=80)
+        nothing = self._message(ErrorCode.GENERATION_CAPACITY)
+
+        assert "80 列" in only_columns and "行・" not in only_columns
+        assert nothing == error_messages._CATALOG[ErrorCode.GENERATION_CAPACITY]

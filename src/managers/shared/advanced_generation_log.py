@@ -34,6 +34,20 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "tool_calls",
         }
     ),
+    # U3 (observability-design.md): counts, codes and time of the preparation.
+    # No line number, column name or value.
+    "advanced_generation.prepared": frozenset(
+        {
+            "generation_id",
+            "status",
+            "error_code",
+            "rows_read",
+            "rows_excluded",
+            "excluded_reasons",
+            "duration_ms",
+            "memory_limit",
+        }
+    ),
     "advanced_generation.upload_completed": frozenset(
         {
             "source_file_id",

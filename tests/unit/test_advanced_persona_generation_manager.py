@@ -108,9 +108,18 @@ class _Sandbox(InProcessSandbox):
         self.on_profile = None
         #: When set, the preparation never finishes (it reports these rows).
         self.hold_prepare_rows: Optional[int] = None
+        #: When set, the preparation ends at once with this C9 result.
+        self.fake_prepare_result: Optional[dict[str, Any]] = None
         self.cancelled: list[str] = []
 
     def poll_command(self, session, command_id):
+        if self.fake_prepare_result is not None:
+            return {
+                "done": True,
+                "status": "completed",
+                "progress": None,
+                "result": self.fake_prepare_result,
+            }
         if self.hold_prepare_rows is not None:
             return {
                 "done": False,
@@ -1142,3 +1151,370 @@ class TestRefreshBeforePreparing:
         record = manager.get_record(ADMIN, generation_id)
         assert record.source_file_ids == (file.source_file_id,)
         assert record.source_display_names == ("people.csv (2)",)
+
+
+def _bad_column_csv(rows: int, bad_every: int) -> bytes:
+    lines = ["id,age,income,job"]
+    for i in range(rows):
+        extra = ",x" if bad_every and i % bad_every == 0 else ""
+        lines.append(f"{i},{30 + i % 7},{300 + i},学生{extra}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _failed(env: _Env, generation_id: str) -> Any:
+    generation = env.generations.get(generation_id)
+    assert generation is not None
+    assert generation.status is GenerationStatus.FAILED
+    return generation
+
+
+def _ended_cleanly(env: _Env, file: SourceFile) -> None:
+    assert env.generations.get_lock(ADMIN.sub) is None
+    released = env.files.get(file.source_file_id)
+    assert released is not None and released.in_use_by is None
+    assert len(env.sandbox.stopped) == 1
+
+
+class TestPrepareFailureContext:
+    """BR16.2, BR17.1, NFR3.20: counts and line numbers reach error_context."""
+
+    def test_too_many_bad_rows_carries_counts_and_line_numbers(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file(data=_bad_column_csv(200, 5))  # 40 bad rows
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        generation = _failed(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+        context = generation.error_context or {}
+        assert context["rows_read"] == 160
+        assert context["rows_excluded"] == 40
+        assert context["row_examples"] == [2, 7, 12]
+        assert env.agents.calls == []
+        _ended_cleanly(env, file)
+
+    def test_one_percent_or_less_goes_on(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file(data=_bad_column_csv(300, 0) + b"1,2,3,4,5\n")
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+
+    def test_out_of_memory_carries_rows_and_columns(self, env: _Env) -> None:
+        env.sandbox.fake_prepare_result = {
+            "ok": False,
+            "error": {
+                "code": "OUT_OF_MEMORY",
+                "context": {"rows_read": 1_200_000, "columns_count": 80},
+            },
+        }
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        generation = _failed(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_CAPACITY.value
+        assert generation.error_context == {
+            "rows_read": 1_200_000,
+            "columns_count": 80,
+        }
+
+    def test_unsafe_values_are_dropped(self, env: _Env) -> None:
+        env.sandbox.fake_prepare_result = {
+            "ok": False,
+            "error": {
+                "code": "TOO_MANY_BAD_ROWS",
+                "context": {
+                    "rows_read": "12",
+                    "rows_excluded": 5,
+                    "columns_count": True,
+                    "row_examples": [1, 2, 3, 4, 5, 6],
+                    "secret": 7,
+                },
+            },
+        }
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        context = _failed(env, generation_id).error_context or {}
+        assert context.get("rows_excluded") == 5
+        assert "rows_read" not in context
+        assert "row_examples" not in context
+        assert "secret" not in context
+
+    def test_a_list_with_a_non_integer_is_dropped(self, env: _Env) -> None:
+        env.sandbox.fake_prepare_result = {
+            "ok": False,
+            "error": {
+                "code": "TOO_MANY_BAD_ROWS",
+                "context": {"row_examples": [3, "a row value"]},
+            },
+        }
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = _failed(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+        assert not generation.error_context
+
+    def test_an_error_without_context_is_as_before(self, env: _Env) -> None:
+        env.sandbox.fake_prepare_result = {
+            "ok": False,
+            "error": {"code": "SOURCE_UNREADABLE"},
+        }
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = _failed(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+        assert not generation.error_context
+
+    def test_the_manager_passes_the_limit_to_the_preparation(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT", 50)
+        manager = env.manager()
+        generation_id = _start(
+            manager, env.ready_file(data=_bad_column_csv(200, 5))
+        )  # 20% bad
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+
+
+class TestInsufficientData:
+    """BR18.1, BR18.2: fewer rows than persona count x 10 stop before planning."""
+
+    def test_ten_rows_for_five_personas_stop(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file(data=_csv(10))
+        generation_id = _start(manager, file, count=5)
+
+        manager.run(generation_id)
+
+        generation = _failed(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_INSUFFICIENT_DATA.value
+        assert generation.error_context == {
+            "rows_read": 10,
+            "required_rows": 50,
+            "persona_count": 5,
+        }
+        assert env.agents.calls == []
+        _ended_cleanly(env, file)
+
+    def test_fifty_rows_for_five_personas_go_on(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file(data=_csv(50)), count=5)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert (
+            generation is not None and generation.status is not GenerationStatus.FAILED
+        )
+        assert "planning" in env.agents.calls
+
+    def test_forty_nine_rows_for_five_personas_stop(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file(data=_csv(49)), count=5)
+
+        manager.run(generation_id)
+
+        code = _failed(env, generation_id).error_code
+        assert code == ErrorCode.GENERATION_INSUFFICIENT_DATA.value
+
+    def test_the_bad_row_stop_comes_first(self, env: _Env) -> None:
+        # 10 rows, 1 bad (about 9%): both limits are hit, the 1% one is reported
+        manager = env.manager()
+        data = _bad_column_csv(11, 11)
+        generation_id = _start(manager, env.ready_file(data=data), count=5)
+
+        manager.run(generation_id)
+
+        code = _failed(env, generation_id).error_code
+        assert code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+
+    def test_the_multiplier_comes_from_config(self, env: _Env, monkeypatch) -> None:
+        monkeypatch.setattr(config, "ADVANCED_MIN_ROWS_PER_PERSONA", 100)
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file(data=_csv(150)), count=2)
+
+        manager.run(generation_id)
+
+        context = _failed(env, generation_id).error_context or {}
+        assert context["required_rows"] == 200
+
+
+class TestPrepareNotice:
+    """BR17.2, NFR1.13: a notice every 60 seconds while the rows stand still."""
+
+    @staticmethod
+    def _messages(env: _Env, generation_id: str) -> list[str]:
+        return [
+            str(summary.get("message", ""))
+            for kind, summary in _events(env, generation_id)
+            if kind == "progress"
+        ]
+
+    def test_a_notice_every_sixty_seconds_without_new_rows(self, env: _Env) -> None:
+        env.sandbox.hold_prepare_rows = 10
+        sleeps: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            if len(sleeps) <= 3:
+                env.clock.advance(seconds=60)
+            else:
+                env.sandbox.hold_prepare_rows = None
+                time.sleep(0.01)
+
+        manager = env.manager(sleep=sleep)
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        notices = [
+            m for m in self._messages(env, generation_id) if "前準備を続けています" in m
+        ]
+        assert notices == [
+            "前準備を続けています（1 分経過）",
+            "前準備を続けています（2 分経過）",
+            "前準備を続けています（3 分経過）",
+        ]
+
+    def test_no_notice_inside_the_sixty_seconds(self, env: _Env) -> None:
+        env.sandbox.hold_prepare_rows = 10
+        count = {"n": 0}
+
+        def sleep(seconds: float) -> None:
+            count["n"] += 1
+            if count["n"] <= 5:
+                env.clock.advance(seconds=10)
+            else:
+                env.sandbox.hold_prepare_rows = None
+                time.sleep(0.01)
+
+        manager = env.manager(sleep=sleep)
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        notices = [
+            m for m in self._messages(env, generation_id) if "前準備を続けています" in m
+        ]
+        assert notices == []
+
+    def test_changing_rows_do_not_add_notices(self, env: _Env) -> None:
+        env.sandbox.hold_prepare_rows = 10
+        count = {"n": 0}
+
+        def sleep(seconds: float) -> None:
+            count["n"] += 1
+            if count["n"] <= 3:
+                env.clock.advance(seconds=60)
+                env.sandbox.hold_prepare_rows = 10 + count["n"] * 100
+            else:
+                env.sandbox.hold_prepare_rows = None
+                time.sleep(0.01)
+
+        manager = env.manager(sleep=sleep)
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        notices = [
+            m for m in self._messages(env, generation_id) if "前準備を続けています" in m
+        ]
+        assert notices == []
+
+    def test_the_interval_comes_from_config(self, env: _Env, monkeypatch) -> None:
+        monkeypatch.setattr(config, "ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS", 120)
+        env.sandbox.hold_prepare_rows = 10
+        count = {"n": 0}
+
+        def sleep(seconds: float) -> None:
+            count["n"] += 1
+            if count["n"] <= 2:
+                env.clock.advance(seconds=60)
+            else:
+                env.sandbox.hold_prepare_rows = None
+                time.sleep(0.01)
+
+        manager = env.manager(sleep=sleep)
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        notices = [
+            m for m in self._messages(env, generation_id) if "前準備を続けています" in m
+        ]
+        assert notices == ["前準備を続けています（2 分経過）"]
+
+
+class TestPreparedLog:
+    """NFR6.11, NFR1.12: counts and time of the preparation, no values."""
+
+    def test_a_done_preparation_logs_counts_reasons_time_and_memory(
+        self, env: _Env, capsys
+    ) -> None:
+        logs = LogCapture(capsys)
+        manager = env.manager()
+        data = _bad_column_csv(300, 0) + b"1,2,3,4,5\n"
+        generation_id = _start(manager, env.ready_file(data=data))
+
+        manager.run(generation_id)
+
+        (prepared,) = logs.events("advanced_generation.prepared")
+        assert prepared["generation_id"] == generation_id
+        assert prepared["status"] == "done"
+        assert prepared["rows_read"] == 300
+        assert prepared["rows_excluded"] == 1
+        assert sum(prepared["excluded_reasons"].values()) == 1
+        assert isinstance(prepared["duration_ms"], int)
+        assert prepared["memory_limit"] == "4GB"
+        assert "row_examples" not in prepared
+
+    def test_a_stopped_preparation_logs_counts_from_the_context(
+        self, env: _Env, capsys
+    ) -> None:
+        logs = LogCapture(capsys)
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file(data=_bad_column_csv(200, 5)))
+
+        manager.run(generation_id)
+
+        (prepared,) = logs.events("advanced_generation.prepared")
+        assert prepared["status"] == "failed"
+        assert prepared["error_code"] == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+        assert prepared["rows_read"] == 160 and prepared["rows_excluded"] == 40
+        assert "row_examples" not in prepared
+        assert "memory_limit" not in prepared
+
+    def test_missing_counts_are_left_out(self, env: _Env, capsys) -> None:
+        logs = LogCapture(capsys)
+        env.sandbox.fake_prepare_result = {
+            "ok": False,
+            "error": {"code": "OUT_OF_MEMORY"},
+        }
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        (prepared,) = logs.events("advanced_generation.prepared")
+        assert prepared["status"] == "failed"
+        assert "rows_read" not in prepared and "rows_excluded" not in prepared

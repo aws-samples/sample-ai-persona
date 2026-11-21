@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -93,7 +94,27 @@ _LIBRARY_CODES = {
 }
 _RESELECT_CODES = frozenset({"TOO_FEW_COLUMNS", "EMPTY_CLUSTER"})
 #: Values of ``error_context`` that may be kept and shown (never text).
-_SAFE_CONTEXT_KEYS = frozenset({"cause", "http_status", "max_chars", "limit", "value"})
+_SAFE_CONTEXT_KEYS = frozenset(
+    {
+        "cause",
+        "http_status",
+        "max_chars",
+        "limit",
+        "value",
+        # U3: counts and line numbers, integers only (NFR3.20)
+        "rows_read",
+        "rows_excluded",
+        "columns_count",
+        "row_examples",
+        "required_rows",
+        "persona_count",
+    }
+)
+_COUNT_KEYS = frozenset(
+    {"rows_read", "rows_excluded", "columns_count", "required_rows", "persona_count"}
+)
+#: At most this many line numbers are kept in ``row_examples`` (BR16.2).
+_ROW_EXAMPLES_MAX = 5
 #: The two time limits, told apart in ``error_context`` (NFR1.6, NFR5.6, NFR5.7).
 _LIMIT_GENERATION = "generation_minutes"
 _LIMIT_PREPARE = "prepare_minutes"
@@ -127,6 +148,22 @@ def _safe_context(context: Mapping[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key, value in context.items():
         if key not in _SAFE_CONTEXT_KEYS:
+            continue
+        if key == "row_examples":
+            # A short list of line numbers: positive integers only.
+            if (
+                isinstance(value, list)
+                and 0 < len(value) <= _ROW_EXAMPLES_MAX
+                and all(
+                    isinstance(n, int) and not isinstance(n, bool) and n >= 1
+                    for n in value
+                )
+            ):
+                safe[key] = list(value)
+            continue
+        if key in _COUNT_KEYS:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                safe[key] = value
             continue
         if isinstance(value, (bool, int)) or (
             isinstance(value, str) and len(value) <= 40
@@ -178,6 +215,8 @@ class _Run:
     durations_ms: dict[str, int] = field(default_factory=dict)
     error_code: Optional[ErrorCode] = None
     cause: Optional[str] = None
+    #: DuckDB's memory limit the preparation reported (for the log only).
+    memory_limit: Optional[str] = None
 
     @property
     def deadline(self) -> datetime:
@@ -532,11 +571,73 @@ class AdvancedPersonaGenerationManager:
             generation.generation_id, config.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS
         )
         self._bring_in(state, source)
-        state.report = self._run_prepare(state, source)
+        started = time.monotonic()
+        try:
+            state.report = self._run_prepare(state, source)
+        except CodedError as e:
+            self._log_prepared(state, started, e.code, e.context)
+            raise
+        self._log_prepared(state, started, None, {})
+        self._check_enough_rows(state)
         profile = sandbox.call(
             state.session, "profile_dataset", {"source_id": source.source_file_id}
         )
         state.profile = dict(self._library_value(profile))
+
+    def _check_enough_rows(self, state: _Run) -> None:
+        """Stop when the table has fewer rows than persona count x 10 (BR18.1).
+
+        Runs after the bad-row check (which raised already if it applied) and
+        before any model call. The count is the rows read, before any narrowing
+        by the user's instruction.
+        """
+        assert state.report is not None
+        persona_count = state.generation.persona_count
+        required = persona_count * config.ADVANCED_MIN_ROWS_PER_PERSONA
+        if state.report.rows_read < required:
+            raise _fail(
+                ErrorCode.GENERATION_INSUFFICIENT_DATA,
+                "too few rows for the persona count",
+                rows_read=state.report.rows_read,
+                required_rows=required,
+                persona_count=persona_count,
+            )
+
+    def _log_prepared(
+        self,
+        state: _Run,
+        started: float,
+        error_code: Optional[ErrorCode],
+        context: Mapping[str, Any],
+    ) -> None:
+        """One line at the end of the preparation: counts and time only (NFR6.11)."""
+        fields: dict[str, Any] = {
+            "generation_id": state.generation.generation_id,
+            "status": "failed" if error_code else "done",
+            "error_code": error_code.value if error_code else None,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+        report = state.report
+        if report is not None:
+            fields["rows_read"] = report.rows_read
+            fields["rows_excluded"] = report.rows_excluded
+            counts = (report.excluded_reasons or {}).get("counts")
+            if isinstance(counts, Mapping):
+                fields["excluded_reasons"] = {
+                    str(k): v
+                    for k, v in counts.items()
+                    if isinstance(v, int) and not isinstance(v, bool)
+                }
+            fields["memory_limit"] = state.memory_limit
+        else:
+            safe = _safe_context(context)
+            for key in ("rows_read", "rows_excluded"):
+                if key in safe:
+                    fields[key] = safe[key]
+        try:
+            log_advanced_event("advanced_generation.prepared", **fields)
+        except Exception as e:  # noqa: BLE001 - a log line never fails a run
+            logger.error("preparation not logged (%s)", type(e).__name__)
 
     def _refresh_source(self, state: _Run, source: SourceFile) -> SourceFile:
         """Copy the object onto its key so S3 keeps it 9 more days (BR13.4).
@@ -632,16 +733,20 @@ class AdvancedPersonaGenerationManager:
                 "encoding": source.metadata.encoding.value,
                 "delimiter": source.metadata.delimiter,
             },
+            "max_excluded_percent": config.ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT,
         }
         command_id = sandbox.start_command(state.session, "prepare", args)
         started = self._clock()
         limit = timedelta(seconds=config.ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS)
+        notice = timedelta(seconds=config.ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS)
         last_rows: Optional[int] = None
+        last_event_at = started
         while True:
             status = sandbox.poll_command(state.session, command_id)
             rows = (status.get("progress") or {}).get("rows")
             if isinstance(rows, int) and rows != last_rows:
                 last_rows = rows
+                last_event_at = self._clock()
                 self._event(
                     state,
                     EventType.PROGRESS,
@@ -651,6 +756,17 @@ class AdvancedPersonaGenerationManager:
             if status.get("done"):
                 break
             now = self._clock()
+            if now - last_event_at >= notice:
+                # The rows stand still while the table is written (BR17.2): say
+                # that it goes on, so the screen hears from us within 5 minutes.
+                last_event_at = now
+                minutes = max(int((now - started).total_seconds() // 60), 1)
+                self._event(
+                    state,
+                    EventType.PROGRESS,
+                    message=f"前準備を続けています（{minutes} 分経過）",
+                    detail={"minutes": minutes},
+                )
             if now > state.deadline:
                 self._cancel_quietly(state, command_id)
                 raise self._generation_timeout("generation over 60 minutes")
@@ -667,6 +783,9 @@ class AdvancedPersonaGenerationManager:
                 else config.ADVANCED_GENERATION_PREPARE_POLL_SECONDS
             )
         value = self._library_value(status.get("result") or {"ok": False})
+        limit_text = value.get("memory_limit")
+        if isinstance(limit_text, str) and re.fullmatch(r"\d{1,6}[KMGT]?B", limit_text):
+            state.memory_limit = limit_text
         try:
             report = PrepareReport.from_dict(value)
         except (KeyError, TypeError, ValueError):
@@ -693,7 +812,12 @@ class AdvancedPersonaGenerationManager:
         error = result.get("error") or {}
         code = _LIBRARY_CODES.get(str(error.get("code")))
         if code is not None:
-            raise _fail(code, "preparation refused the table")
+            context = error.get("context")
+            raise _fail(
+                code,
+                "preparation refused the table",
+                **(_safe_context(context) if isinstance(context, Mapping) else {}),
+            )
         raw = str(error.get("code"))
         # Library codes are fixed upper-case names; anything else is not logged.
         logger.warning(

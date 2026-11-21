@@ -615,6 +615,52 @@ class TestEvents:
             == ErrorCode.ADVANCED_GENERATION_BUSY.value
         )
 
+    @pytest.mark.parametrize(
+        ("code", "context", "expected"),
+        [
+            (
+                ErrorCode.GENERATION_SOURCE_UNREADABLE,
+                {"row_examples": [3, 21], "rows_read": 900, "rows_excluded": 40},
+                ["3、21 行目などに問題があります", "900", "40"],
+            ),
+            (
+                ErrorCode.GENERATION_CAPACITY,
+                {"rows_read": 1_200_000, "columns_count": 80},
+                ["1,200,000 行", "80 列"],
+            ),
+            (
+                ErrorCode.GENERATION_INSUFFICIENT_DATA,
+                {"rows_read": 10, "required_rows": 50, "persona_count": 5},
+                ["5 人", "必要な行 50", "人数を減らす"],
+            ),
+        ],
+    )
+    def test_a_failed_generation_shows_numbers_from_the_stored_context(
+        self,
+        client: TestClient,
+        adv: Adv,
+        code: ErrorCode,
+        context: dict,
+        expected: list[str],
+    ) -> None:
+        # AC5.2.2, AC5.2.3, AC5.5.1: wording comes from the code and integers
+        failed = GenerationProgress(
+            generation=s.generation(
+                GenerationStatus.FAILED,
+                error_code=code.value,
+                error_context=context,
+            ),
+            events=(),
+        )
+        adv.generations.stream_events.return_value = failed
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        payload = json.loads(blocks[0]["data"])
+        assert payload["error_code"] == code.value
+        for part in expected:
+            assert part in payload["message"]
+
     def test_keepalive_comment_while_nothing_happens(
         self, client: TestClient, adv: Adv, monkeypatch: pytest.MonkeyPatch
     ) -> None:

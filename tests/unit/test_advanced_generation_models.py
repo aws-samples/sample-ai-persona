@@ -521,6 +521,7 @@ class TestAdvancedGenerationErrorCodes:
             (ErrorCode.GENERATION_EXPIRED, ErrorKind.NOT_FOUND),
             (ErrorCode.GENERATION_SOURCE_UNREADABLE, ErrorKind.VALIDATION),
             (ErrorCode.GENERATION_CAPACITY, ErrorKind.CAPACITY),
+            (ErrorCode.GENERATION_INSUFFICIENT_DATA, ErrorKind.VALIDATION),
             (ErrorCode.GENERATION_ANALYSIS_FAILED, ErrorKind.VALIDATION),
             (ErrorCode.GENERATION_VERIFICATION_FAILED, ErrorKind.VALIDATION),
             (ErrorCode.GENERATION_RESULT_TOO_LARGE, ErrorKind.CAPACITY),

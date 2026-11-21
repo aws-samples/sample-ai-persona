@@ -27,6 +27,7 @@ from src.services.sandbox_service import (
     SandboxCapacityError,
     SandboxSession,
     SandboxUnavailableError,
+    limit_output,
 )
 
 _LIBRARY = (
@@ -398,6 +399,80 @@ class TestCodeInterpreterCommand:
             sandbox.poll_command(_session(), "nope")
 
 
+class TestPrepareBoundArgument:
+    """BR16.1: the bad-row limit travels as an argument of ``prepare``."""
+
+    def test_code_interpreter_command_carries_the_limit(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        capture = _CommandCapture()
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stream({"taskId": "task-1", "taskStatus": "submitted"}),
+            _invoke_params("startCommandExecution", capture),
+        )
+
+        sandbox.start_command(
+            _session(), "prepare", {"source_id": "f1", "max_excluded_percent": 5}
+        )
+
+        assert _decoded_args(capture.commands[0])["max_excluded_percent"] == 5
+
+
+class TestLimitOutput:
+    """BR17.3, NFR5.36: an output over the limit is cut and goes on."""
+
+    def test_a_long_string_alone_is_cut_and_marked(self) -> None:
+        result = {"ok": True, "value": {"summary": "あ" * 5_000, "n": 3}}
+
+        cut = limit_output(result, 1_000)
+
+        assert cut["ok"] is True
+        assert cut["truncated"] is True
+        assert cut["value"]["truncated"] is True
+        assert cut["value"]["n"] == 3
+        assert 0 < len(cut["value"]["summary"]) < 1_000
+        assert len(json.dumps(cut, ensure_ascii=False)) <= 1_000
+
+    def test_the_longest_string_is_the_one_cut(self) -> None:
+        result = {"ok": True, "value": {"short": "keep me", "long": "x" * 3_000}}
+
+        cut = limit_output(result, 500)
+
+        assert cut["value"]["short"] == "keep me"
+        assert len(cut["value"]["long"]) < 500
+
+    def test_escaped_characters_still_fit(self) -> None:
+        result = {"ok": True, "value": {"text": '"\n' * 3_000}}
+
+        cut = limit_output(result, 800)
+
+        assert len(json.dumps(cut, ensure_ascii=False)) <= 800
+        assert cut["truncated"] is True
+
+    def test_numbers_only_over_the_limit_is_too_large(self) -> None:
+        result = {"ok": True, "value": {f"k{i}": i for i in range(2_000)}}
+
+        cut = limit_output(result, 500)
+
+        assert cut["ok"] is False
+        assert cut["error"]["code"] == "OUTPUT_TOO_LARGE"
+
+    def test_a_list_is_halved_as_before(self) -> None:
+        result = {"ok": True, "value": {"rows": [[i, "y" * 20] for i in range(500)]}}
+
+        cut = limit_output(result, 2_000)
+
+        assert cut["truncated"] is True
+        assert 0 < len(cut["value"]["rows"]) < 500
+        assert len(json.dumps(cut, ensure_ascii=False)) <= 2_000
+
+    def test_a_result_that_fits_is_returned_as_is(self) -> None:
+        result = {"ok": True, "value": {"a": 1}}
+
+        assert limit_output(result, 1_000) is result
+
+
 class TestCodeInterpreterRetries:
     def test_two_throttles_then_success(
         self, sandbox: CodeInterpreterSandbox, stub: Any, sleeps: list[float]
@@ -551,6 +626,25 @@ class TestInProcessSandbox:
         assert state["result"]["value"]["rows_read"] == 4
         assert state["progress"]["phase"] == "finished"
         assert profile["value"]["rows"] == 4
+
+    def test_prepare_takes_the_bad_row_limit(self, tmp_path: Path) -> None:
+        rows = "".join(f"{i},30\n" for i in range(3, 103))
+        data = ("id,age\n1,30\n2,40,extra\n" + rows).encode()
+        sandbox = InProcessSandbox(
+            library_path=str(_LIBRARY),
+            root_dir=str(tmp_path),
+            read_object={"k": data}.__getitem__,
+            max_output_chars=20_000,
+        )
+        session = sandbox.start_session("gen1", lifetime_seconds=60)
+        sandbox.put_files(session, [{"source_file_id": "f1", "s3_key": "k"}])
+        args = {"source_id": "f1", "metadata": {}}
+
+        strict = sandbox.call(session, "prepare", {**args, "max_excluded_percent": 0})
+        relaxed = sandbox.call(session, "prepare", {**args, "max_excluded_percent": 2})
+
+        assert strict["error"]["code"] == "TOO_MANY_BAD_ROWS"
+        assert relaxed["ok"] is True
 
     def test_long_output_is_cut(self, local: InProcessSandbox) -> None:
         many = "id,v\n" + "".join(f"{i},{'x' * 40}\n" for i in range(500))

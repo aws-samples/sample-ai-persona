@@ -68,6 +68,7 @@ def _prepare(
     source_id: str = "src1",
     encoding: str = "utf-8",
     delimiter: str = ",",
+    **extra: Any,
 ) -> dict[str, Any]:
     _put_source(workdir, source_id, data)
     return _call(
@@ -77,6 +78,7 @@ def _prepare(
         source_id=source_id,
         metadata=_metadata(encoding, delimiter),
         progress_id="p1",
+        **extra,
     )
 
 
@@ -134,24 +136,26 @@ class TestPrepare:
     def test_lines_that_do_not_decode_are_excluded(
         self, lib: ModuleType, tmp_path: Path
     ) -> None:
-        data = "id,name\n1,佐藤\n".encode("cp932") + b"2,\x81\n" + b"3,abc\n"
+        good = "".join(f"{i},abc\n" for i in range(3, 203)).encode("ascii")
+        data = "id,name\n1,佐藤\n".encode("cp932") + b"2,\x81\n" + good
 
         result = _prepare(lib, tmp_path, data, encoding="cp932")
 
         report = result["value"]
-        assert report["rows_read"] == 2
+        assert report["rows_read"] == 201
         assert report["rows_excluded"] == 1
         assert report["excluded_reasons"]["counts"] == {"decode_error": 1}
 
     def test_rows_with_a_wrong_column_count_are_excluded(
         self, lib: ModuleType, tmp_path: Path
     ) -> None:
-        data = b"id,age\n1,30\n2,40,extra\n3,50\n"
+        good = "".join(f"{i},30\n" for i in range(3, 203)).encode("ascii")
+        data = b"id,age\n1,30\n2,40,extra\n" + good
 
         result = _prepare(lib, tmp_path, data)
 
         report = result["value"]
-        assert report["rows_read"] == 2
+        assert report["rows_read"] == 201
         assert report["rows_excluded"] == 1
         assert sum(report["excluded_reasons"]["counts"].values()) == 1
 
@@ -183,6 +187,159 @@ class TestPrepare:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+
+def _csv_with_bad_lines(total: int, bad_lines: set[int], bad: bytes) -> bytes:
+    """A file of ``total`` data rows; the given 1-based file lines are ``bad``."""
+    out = [b"id,age"]
+    for line in range(2, total + 2):
+        out.append(bad if line in bad_lines else f"{line},30".encode("ascii"))
+    return b"\n".join(out) + b"\n"
+
+
+class TestPrepareBadRowBoundary:
+    """BR16.1 and BR16.2: stop above 1% of the rows seen, with line numbers."""
+
+    def test_three_bad_rows_in_a_hundred_thousand_go_on(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = _csv_with_bad_lines(100_000, {10, 5000, 90000}, b"1,2,3")
+
+        result = _prepare(lib, tmp_path, data)
+
+        report = result["value"]
+        assert report["rows_read"] == 99_997
+        assert report["rows_excluded"] == 3
+        assert report["excluded_reasons"]["examples"]
+
+    def test_exactly_one_percent_goes_on(self, lib: ModuleType, tmp_path: Path) -> None:
+        bad = set(range(2, 202, 2))  # 100 lines
+        data = _csv_with_bad_lines(10_000, bad, b"9,\x81")
+
+        result = _prepare(lib, tmp_path, data, encoding="cp932")
+
+        assert result["ok"] is True
+        assert result["value"]["rows_read"] == 9_900
+        assert result["value"]["rows_excluded"] == 100
+
+    def test_one_more_than_one_percent_stops(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        bad = set(range(2, 204, 2))  # 101 lines
+        data = _csv_with_bad_lines(10_000, bad, b"9,\x81")
+
+        result = _prepare(lib, tmp_path, data, encoding="cp932")
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "TOO_MANY_BAD_ROWS"
+        context = result["error"]["context"]
+        assert context["rows_read"] == 9_899
+        assert context["rows_excluded"] == 101
+
+    def test_the_limit_is_an_argument(self, lib: ModuleType, tmp_path: Path) -> None:
+        bad = set(range(2, 1002, 2))  # 500 of 1000 rows
+        data = _csv_with_bad_lines(1000, bad, b"1,2,3")
+
+        stopped = _prepare(lib, tmp_path / "a", data, max_excluded_percent=49)
+        passed = _prepare(lib, tmp_path / "b", data, max_excluded_percent=50)
+
+        assert stopped["error"]["code"] == "TOO_MANY_BAD_ROWS"
+        assert passed["ok"] is True
+
+    def test_a_bad_limit_argument_is_refused(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        result = _prepare(lib, tmp_path, _SMALL_CSV, max_excluded_percent="1")
+
+        assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_line_numbers_are_the_original_file_lines(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        # Undecodable lines are blanked, not dropped: numbers after them hold.
+        data = _csv_with_bad_lines(40, {3, 7}, b"9,\x81")
+        lines = data.split(b"\n")
+        lines[20] = b"1,2,3"  # file line 21: wrong column count
+        lines[30] = b"1,2,3"  # file line 31
+
+        result = _prepare(
+            lib, tmp_path, b"\n".join(lines), encoding="cp932", max_excluded_percent=50
+        )
+
+        examples = result["value"]["excluded_reasons"]["examples"]
+        assert examples["decode_error"] == [3, 7]
+        other = [v for k, v in examples.items() if k != "decode_error"]
+        assert other == [[21, 31]]
+
+    def test_examples_are_capped_by_reason_and_in_total(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = _csv_with_bad_lines(200, {2, 4, 6, 8, 10, 12}, b"9,\x81")
+        lines = data.split(b"\n")
+        for n in (21, 23, 25, 27):
+            lines[n - 1] = b"1,2,3"
+
+        result = _prepare(
+            lib, tmp_path, b"\n".join(lines), encoding="cp932", max_excluded_percent=50
+        )
+
+        examples = result["value"]["excluded_reasons"]["examples"]
+        assert all(len(v) <= 3 for v in examples.values())
+        flat = [n for v in examples.values() for n in v]
+        assert len(flat) == 5
+        assert all(isinstance(n, int) and not isinstance(n, bool) for n in flat)
+
+    def test_a_stop_carries_row_examples_as_integers_only(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = _csv_with_bad_lines(100, set(range(2, 22)), b"1,2,3")
+
+        result = _prepare(lib, tmp_path, data)
+
+        context = result["error"]["context"]
+        assert context["row_examples"] == [2, 3, 4]
+        assert set(context) <= {"rows_read", "rows_excluded", "row_examples"}
+
+
+class TestPrepareOutOfMemoryContext:
+    """BR17.1: the failure says how far it got and how many columns there are."""
+
+    def test_out_of_memory_in_the_parquet_step_has_rows_and_columns(
+        self, lib: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_: Any, **__: Any) -> Any:
+            raise lib.AnalysisError("OUT_OF_MEMORY")
+
+        monkeypatch.setattr(lib, "_to_parquet", boom)
+        data = b"id,age,city\n" + b"1,30,x\n" * 50
+
+        result = _prepare(lib, tmp_path, data)
+
+        assert result["error"]["code"] == "OUT_OF_MEMORY"
+        assert result["error"]["context"] == {"rows_read": 50, "columns_count": 3}
+
+    def test_a_memory_error_while_converting_has_the_rows_so_far(
+        self, lib: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = lib._decode_block
+        calls = {"n": 0}
+
+        def flaky(*args: Any, **kwargs: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise MemoryError
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(lib, "_CHUNK_BYTES", 64)
+        monkeypatch.setattr(lib, "_decode_block", flaky)
+        data = b"id,age\n" + b"".join(f"{i},30\n".encode() for i in range(100))
+
+        result = _prepare(lib, tmp_path, data)
+
+        assert result["error"]["code"] == "OUT_OF_MEMORY"
+        context = result["error"]["context"]
+        assert context["columns_count"] == 2
+        assert 0 < context["rows_read"] < 100
 
 
 def _people_csv(rows: int = 300) -> bytes:
