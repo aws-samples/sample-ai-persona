@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from src.managers.advanced_generation.manager import ElapsedClock
+from src.models.source_file import SourceFileListItem, SourceFileStatus
 from tests import advanced_screen_samples as s
 from tests.ui.conftest import UiHarness, render_page
 from web.routers.persona_advanced import render_result, screen_limits
@@ -45,8 +46,29 @@ def _open(
         elapsed=context.get("elapsed"),
         show_advanced_tab=True,
         active_tab="advanced",
+        upload_rows=context.get("upload_rows", []),
+        upload_list_failed=False,
     )
     ui.settle()
+
+
+def _row_context(
+    source_file: Any, row_error: str | None = None, stuck: bool = False
+) -> dict[str, Any]:
+    """What the router gives one row (U2: the list item and the stuck flag)."""
+    return {
+        "source_file": source_file,
+        "item": SourceFileListItem.of(source_file, now=s.NOW, retention_days=7),
+        "row_error": row_error,
+        "stuck": stuck,
+    }
+
+
+def _row(source_file: Any, row_error: str | None = None, stuck: bool = False) -> str:
+    return render_page(
+        "persona/partials/advanced_upload_row.html",
+        **_row_context(source_file, row_error, stuck),
+    )
 
 
 class S3Fake:
@@ -108,11 +130,7 @@ def _json(ui: UiHarness, url: str, body: dict[str, Any], status: int = 200) -> N
 
 
 def _ready_row() -> str:
-    return render_page(
-        "persona/partials/advanced_upload_row.html",
-        source_file=s.ready_file(),
-        row_error=None,
-    )
+    return _row(s.ready_file())
 
 
 def _choose_file(ui: UiHarness, data: bytes = CSV, name: str = "members.csv") -> None:
@@ -497,11 +515,7 @@ def test_row_states_are_written_in_words(ui: UiHarness, state: str) -> None:
         if state == "inspecting"
         else s.error_file()
     )
-    html = render_page(
-        "persona/partials/advanced_upload_row.html",
-        source_file=row,
-        row_error="このファイルは使えません" if state == "error" else None,
-    )
+    html = _row(row, "このファイルは使えません" if state == "error" else None)
     ui.respond(f"/persona/advanced/uploads/{s.FILE_ID}", body=html)
     _open(ui)
     ui.page.evaluate(
@@ -513,3 +527,185 @@ def test_row_states_are_written_in_words(ui: UiHarness, state: str) -> None:
     text = ui.page.inner_text("[data-testid='advanced-upload-status']")
     assert ("検査中" if state == "inspecting" else "エラー:") in text
     assert ui.page.locator("[data-testid='advanced-upload-select']").count() == 0
+
+
+# --- U2: 一覧・削除・取り直し（US2.4、US3.2、US4.1、US4.2、NFR1.11、NFR10.2） --------
+
+ROWS = "[data-testid='advanced-upload-row']"
+WEEK = s.NOW.replace(hour=12) + __import__("datetime").timedelta(days=7)
+
+
+def _listed(*files: tuple[Any, str | None]) -> list[dict[str, Any]]:
+    return [_row_context(f, error) for f, error in files]
+
+
+def _second_ready(**changes: Any) -> Any:
+    return s.ready_file(display_seq=2, expires_at=WEEK, **changes)
+
+
+class TestFileList:
+    def test_rows_show_the_name_the_expiry_and_the_state_in_words(
+        self, ui: UiHarness
+    ) -> None:
+        _open(
+            ui,
+            upload_rows=_listed(
+                (_second_ready(), None),
+                (
+                    s.error_file("source_empty_column_name").update(
+                        source_file_id="file-2", expires_at=WEEK
+                    ),
+                    "1 行目に空の列名があります。列名を入れて保存し直してください",
+                ),
+            ),
+        )
+
+        rows = ui.page.locator(ROWS)
+        assert rows.count() == 2
+        first, second = rows.nth(0).inner_text(), rows.nth(1).inner_text()
+        assert "members.csv (2)" in first and "準備OK" in first
+        assert re.search(r"2026/11/2[67]", first)  # the day it goes away (local)
+        assert "エラー:" in second and "列名を入れて保存し直してください" in second
+        assert ui.page.locator("[data-testid='advanced-upload-empty']").is_hidden()
+
+    def test_the_delete_button_names_the_file(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_listed((_second_ready(), None)))
+
+        button = ui.page.get_by_role("button", name="members.csv (2) を削除")
+
+        assert button.count() == 1
+
+    def test_a_failed_deletion_stays_with_its_words_and_a_button(
+        self, ui: UiHarness
+    ) -> None:
+        _open(
+            ui,
+            upload_rows=_listed(
+                (_second_ready(status=SourceFileStatus.DELETING), None)
+            ),
+        )
+
+        text = ui.page.locator(ROWS).inner_text()
+        assert "削除できませんでした" in text
+        assert ui.page.get_by_role("button", name="members.csv (2) を削除").count() == 1
+
+    def test_a_file_in_use_cannot_be_deleted_and_says_why(self, ui: UiHarness) -> None:
+        busy = _second_ready(in_use_by="gen-1", in_use_until=WEEK)
+        _open(ui, upload_rows=_listed((busy, None)))
+
+        button = ui.page.get_by_role("button", name="members.csv (2) を削除")
+        assert button.get_attribute("aria-disabled") == "true"
+        reason = button.get_attribute("aria-describedby")
+        assert ui.page.inner_text(f"#{reason}") == "生成中のため削除できません"
+        button.dispatch_event("click")  # aria-disabled: Playwright would not click it
+        assert ui.page.locator("[role='dialog']:visible").count() == 0
+        assert ui.page.locator("[data-testid='advanced-upload-select']").count() == 0
+
+    def test_the_list_has_no_axe_violations(self, ui: UiHarness) -> None:
+        _open(
+            ui,
+            upload_rows=_listed(
+                (_second_ready(), None),
+                (
+                    _second_ready(
+                        source_file_id="file-3",
+                        in_use_by="gen-1",
+                        in_use_until=WEEK,
+                    ),
+                    None,
+                ),
+                (
+                    _second_ready(
+                        source_file_id="file-4", status=SourceFileStatus.DELETING
+                    ),
+                    None,
+                ),
+                (
+                    s.error_file("source_not_a_table").update(
+                        source_file_id="file-2", expires_at=WEEK
+                    ),
+                    "表として読めませんでした",
+                ),
+            ),
+        )
+
+        ui.check_a11y()
+
+
+class TestDeleteFlow:
+    def test_keyboard_only_confirm_removes_the_row_and_announces_it(
+        self, ui: UiHarness
+    ) -> None:
+        ui.respond(
+            f"/persona/advanced/sources/{s.FILE_ID}",
+            body="",
+            headers={
+                "HX-Trigger": json.dumps(
+                    {
+                        "dialogClose": {"id": f"advanced-delete-{s.FILE_ID}"},
+                        "advancedSourceDeleted": {},
+                    }
+                )
+            },
+        )
+        _open(ui, upload_rows=_listed((_second_ready(), None)))
+
+        ui.page.get_by_role("button", name="members.csv (2) を削除").focus()
+        ui.page.keyboard.press("Enter")
+        dialog = ui.page.get_by_role("dialog")
+        dialog.wait_for()
+        assert "members.csv (2)" in dialog.inner_text()
+        ui.page.get_by_role("button", name="削除する").focus()
+        ui.page.keyboard.press("Enter")
+
+        ui.page.locator(ROWS).wait_for(state="detached")
+        assert "members.csv (2) を削除しました" in ui.page.inner_text(
+            "#advanced-upload-announcer"
+        )
+        assert ui.requests.count(f"/persona/advanced/sources/{s.FILE_ID}") == 1
+        assert ui.page.locator("[data-testid='advanced-upload-empty']").is_visible()
+
+    def test_cancel_keeps_the_row(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_listed((_second_ready(), None)))
+
+        ui.page.get_by_role("button", name="members.csv (2) を削除").click()
+        ui.page.get_by_role("button", name="やめる").click()
+
+        assert ui.page.locator(ROWS).count() == 1
+        ui.verify_requests()
+
+
+class TestInspectingRow:
+    TIMING = {"inspectPollMs": 50, "inspectStopMs": 400}
+
+    def test_an_inspecting_row_is_read_again_until_it_is_ready(
+        self, ui: UiHarness
+    ) -> None:
+        inspecting = s.ready_file(status=SourceFileStatus.INSPECTING, metadata=None)
+        ui.respond(f"/persona/advanced/uploads/{s.FILE_ID}", body=_ready_row())
+        _open(ui, timing=self.TIMING, upload_rows=_listed((inspecting, None)))
+
+        ui.page.locator(f"{ROWS}[data-state='ready']").wait_for()
+
+        assert "準備OK" in ui.page.locator(ROWS).inner_text()
+
+    def test_the_rereading_stops_after_the_limit_with_a_retry_button(
+        self, ui: UiHarness
+    ) -> None:
+        inspecting = s.ready_file(status=SourceFileStatus.INSPECTING, metadata=None)
+        ui.respond(f"/persona/advanced/uploads/{s.FILE_ID}", body=_row(inspecting))
+        _open(ui, timing=self.TIMING, upload_rows=_listed((inspecting, None)))
+
+        ui.page.get_by_role("button", name="確定し直す").wait_for()
+        reads = ui.requests.count(f"/persona/advanced/uploads/{s.FILE_ID}")
+        ui.page.wait_for_timeout(300)
+
+        assert 2 <= reads <= 12
+        assert ui.requests.count(f"/persona/advanced/uploads/{s.FILE_ID}") == reads
+
+    def test_the_poll_interval_comes_from_the_page(self, ui: UiHarness) -> None:
+        _open(ui)
+
+        page = ui.page.locator("#advanced-generation")
+        assert page.get_attribute("data-inspect-poll-seconds") == "2"
+        assert page.get_attribute("data-inspect-stop-seconds") == "900"

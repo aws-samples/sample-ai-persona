@@ -39,7 +39,7 @@ from src.models.authz import Principal, Role  # noqa: E402
 from src.models.errors import ErrorCode  # noqa: E402
 from src.models.source_file import SourceFile, SourceFileStatus, SourceFormat  # noqa: E402
 from src.services.agent_service import AgentServiceError  # noqa: E402
-from src.services.s3_service import S3Service  # noqa: E402
+from src.services.s3_service import S3Service, S3ServiceError  # noqa: E402
 from src.services.sandbox_service import InProcessSandbox, SandboxSession  # noqa: E402
 from src.services.service_factory import service_factory  # noqa: E402
 from src.services.stores.advanced_generation_store import (  # noqa: E402
@@ -935,3 +935,210 @@ class TestReads:
 
         assert manager.is_available(ADMIN) is True
         assert manager.is_available(MEMBER) is False
+
+
+# --- U2: 使い回しと期限（BR13.3、BR13.4、BR13.5、BR14.3、NFR5.30、NFR6.9） -----------
+
+DAYS = config.ADVANCED_SOURCE_RETENTION_DAYS
+REFRESH_FIELDS = {
+    "event",
+    "ts",
+    "generation_id",
+    "source_file_id",
+    "status",
+    "size_bytes",
+    "duration_ms",
+    "error_code",
+}
+
+
+def _refresh(env: _Env, monkeypatch, *results: Any) -> Mock:
+    mock = Mock(side_effect=list(results))
+    monkeypatch.setattr(env.s3, "refresh_object", mock)
+    return mock
+
+
+def _transient() -> S3ServiceError:
+    return S3ServiceError("down", code=ErrorCode.S3_OPERATION_FAILED)
+
+
+class TestReuseAndExpiry:
+    def test_the_start_stamps_the_last_use_and_moves_the_expiry(
+        self, env: _Env
+    ) -> None:
+        file = env.ready_file()
+        env.clock.advance(days=2)
+
+        _start(env.manager(), file)
+
+        found = env.files.get(file.source_file_id)
+        assert found is not None
+        assert found.last_used_at == env.clock.now
+        assert found.expires_at == env.clock.now + timedelta(days=DAYS)
+
+    def test_an_expired_file_cannot_start(self, env: _Env) -> None:
+        file = env.ready_file()  # an U1-style record: no expires_at
+        env.clock.advance(days=DAYS)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_SOURCE_NOT_FOUND
+        ):
+            _start(env.manager(), file)
+        found = env.files.get(file.source_file_id)
+        assert found is not None and found.in_use_by is None
+
+    def test_the_end_does_not_stamp_the_last_use(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.clock.advance(minutes=5)
+
+        manager.run(generation_id)
+
+        found = env.files.get(file.source_file_id)
+        assert found is not None and found.last_used_at == START
+
+
+class TestRefreshBeforePreparing:
+    def test_copies_the_object_before_the_preparation(
+        self, env: _Env, monkeypatch, capsys
+    ) -> None:
+        logs = LogCapture(capsys)
+        manager = env.manager()
+        file = env.ready_file()
+        order: list[str] = []
+        refresh = Mock(side_effect=lambda key: order.append("refresh") or "crc==")
+        monkeypatch.setattr(env.s3, "refresh_object", refresh)
+        real_start = env.sandbox.start_session
+        monkeypatch.setattr(
+            env.sandbox,
+            "start_session",
+            lambda *a, **k: order.append("session") or real_start(*a, **k),
+        )
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        assert order[:2] == ["refresh", "session"]
+        refresh.assert_called_once_with(file.s3_key)
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+        (event,) = logs.events("advanced_generation.source_refreshed")
+        assert set(event) <= REFRESH_FIELDS
+        assert event["status"] == "done" and event["size_bytes"] == file.size_bytes
+        assert isinstance(event["duration_ms"], int)
+
+    def test_one_transient_failure_is_sent_again(self, env: _Env, monkeypatch) -> None:
+        refresh = _refresh(env, monkeypatch, _transient(), "crc==")
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        assert refresh.call_count == 2
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+
+    def test_two_failures_fail_the_generation_and_release_the_mark(
+        self, env: _Env, monkeypatch, capsys
+    ) -> None:
+        logs = LogCapture(capsys)
+        _refresh(env, monkeypatch, _transient(), _transient())
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.S3_OPERATION_FAILED.value
+        assert env.sandbox.download_urls == []
+        found = env.files.get(file.source_file_id)
+        assert found is not None and found.in_use_by is None
+        assert found.checksum == "crc=="
+        (event,) = logs.events("advanced_generation.source_refreshed")
+        assert event["status"] == "failed"
+        assert event["error_code"] == ErrorCode.S3_OPERATION_FAILED.value
+
+    def test_an_object_gone_from_s3_is_unreadable(self, env: _Env, monkeypatch) -> None:
+        refresh = _refresh(
+            env,
+            monkeypatch,
+            S3ServiceError("gone", code=ErrorCode.S3_OBJECT_NOT_FOUND),
+        )
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        assert refresh.call_count == 1
+        generation = env.generations.get(generation_id)
+        assert generation is not None
+        assert generation.error_code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+
+    def test_a_different_checksum_is_unreadable_without_a_retry(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        refresh = _refresh(env, monkeypatch, "changed==")
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        assert refresh.call_count == 1
+        generation = env.generations.get(generation_id)
+        assert generation is not None
+        assert generation.error_code == ErrorCode.GENERATION_SOURCE_UNREADABLE.value
+        assert env.sandbox.download_urls == []
+
+    def test_an_empty_checksum_is_filled_and_used_for_the_record(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        _refresh(env, monkeypatch, "new==")
+        file = env.ready_file()
+        env.files.client.update_item(
+            TableName=SOURCE_FILES_TABLE,
+            Key={"source_file_id": {"S": file.source_file_id}},
+            UpdateExpression="SET checksum = :e",
+            ExpressionAttributeValues={":e": {"S": ""}},
+        )
+        manager = env.manager()
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        found = env.files.get(file.source_file_id)
+        assert found is not None and found.checksum == "new=="
+        record = manager.get_record(ADMIN, generation_id)
+        assert record.source_checksums == ("new==",)
+
+    def test_no_checksum_from_s3_is_not_compared(self, env: _Env, monkeypatch) -> None:
+        _refresh(env, monkeypatch, None)
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+
+    def test_the_record_keeps_the_file_ids_and_display_names(
+        self, env: _Env, monkeypatch
+    ) -> None:
+        _refresh(env, monkeypatch, "crc==")
+        file = env.ready_file()
+        env.files.client.update_item(
+            TableName=SOURCE_FILES_TABLE,
+            Key={"source_file_id": {"S": file.source_file_id}},
+            UpdateExpression="SET display_seq = :n",
+            ExpressionAttributeValues={":n": {"N": "2"}},
+        )
+        manager = env.manager()
+        generation_id = _start(manager, file)
+
+        manager.run(generation_id)
+
+        record = manager.get_record(ADMIN, generation_id)
+        assert record.source_file_ids == (file.source_file_id,)
+        assert record.source_display_names == ("people.csv (2)",)

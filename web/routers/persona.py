@@ -822,13 +822,19 @@ async def _analysis_record_context(
     if context.get("mode") != "advanced":
         return {}
     try:
-        record = await _run(
+        found = await _run(
             get_persona_manager().get_analysis_record, principal, persona.id
         )
     except Exception:
         logger.warning("analysis record not readable", exc_info=True)
-        record = None
-    return {"analysis_record": record, "analysis_record_checked": True}
+        found = None
+    record, sources = found if found else (None, ())
+    # U2 BR14.3: 元のファイルが残っているかの判定（Manager が済ませた値を渡すだけ）
+    return {
+        "analysis_record": record,
+        "analysis_sources": sources,
+        "analysis_record_checked": True,
+    }
 
 
 def _detail_context(detail: PersonaDetail) -> dict[str, Any]:

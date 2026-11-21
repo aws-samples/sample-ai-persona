@@ -218,6 +218,14 @@ class Config:
     ADVANCED_UPLOAD_URL_REFRESH_MAX: int = 24
     ADVANCED_UPLOAD_PENDING_MAX_SECONDS: int = 24 * 3600
     ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS: int = 15 * 60
+    # U2: 検査中の行を取り直す間隔（NFR1.11。打ち切りは INSPECT_RETRY_SECONDS）
+    ADVANCED_UPLOAD_INSPECT_POLL_SECONDS: int = 2
+    # U2: 上げたファイルの保存の期間（BR13.2、NFR5.25）。CDK の
+    # cdk/lib/constructs/upload-bucket.ts の SOURCE_RETENTION_DAYS と同じ値にする
+    ADVANCED_SOURCE_RETENTION_DAYS: int = 7
+    # U2: 古い記録の補正で 1 回に消す件数と、かける時間の上限（NFR3.16）
+    ADVANCED_SOURCE_RECONCILE_MAX_DELETES: int = 10
+    ADVANCED_SOURCE_RECONCILE_MAX_SECONDS: int = 5
     # 確定のときに読む先頭の大きさ（BR3.1）
     ADVANCED_INSPECT_BYTES: int = 4 * 1024 * 1024
     # 生成（NFR5.6、NFR5.7、NFR5.11〜NFR5.13、BR7.3）

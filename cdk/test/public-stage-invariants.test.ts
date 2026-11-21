@@ -118,8 +118,12 @@ function taskRoleStatements(template: Template): unknown[] {
     id.startsWith('AppTaskDefinitionTaskRole'),
   );
   expect(roles).toHaveLength(1);
-  const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
-    (policy.Properties.Roles as any[]).some((r) => r.Ref === roles[0]),
+  // 高度な生成 U2: 文が既定の方針に収まらず、CDK が同じロールの溢れの管理ポリシーへ移した分も読む
+  const policies = [
+    ...Object.values(template.findResources('AWS::IAM::Policy')),
+    ...Object.values(template.findResources('AWS::IAM::ManagedPolicy')),
+  ].filter((policy) =>
+    ((policy.Properties.Roles ?? []) as any[]).some((r) => r.Ref === roles[0]),
   );
   expect(policies.length).toBeGreaterThan(0);
   return policies.flatMap((policy) => simplify(policy.Properties.PolicyDocument.Statement) as unknown[]);

@@ -11,9 +11,12 @@ Encoding (BR3.2): a UTF-8 BOM means ``utf-8-sig``; a head of ASCII only is
 UTF-8, CP932 and EUC-JP that decodes the head strictly. Strict Shift_JIS is
 not tried (CP932 covers it).
 
-A head that is not a table (binary, empty, an empty or duplicated column
-name, nothing decodes) raises :class:`SourceInspectionError` with
-``UPLOAD_SOURCE_INVALID``; ``context["reason"]`` names the reason with a fixed
+A head that is not a table raises :class:`SourceInspectionError` with one
+code per way of fixing it (U2 BR12.1): an empty column name
+(``SOURCE_EMPTY_COLUMN_NAME``), a duplicated one
+(``SOURCE_DUPLICATE_COLUMN_NAME``), nothing decodes
+(``SOURCE_ENCODING_UNKNOWN``), binary / empty / a line longer than the head
+(``SOURCE_NOT_A_TABLE``). ``context["reason"]`` names the reason with a fixed
 word (never file content).
 """
 
@@ -46,15 +49,26 @@ _BOOLEAN = frozenset({"true", "false"})
 
 
 class SourceInspectionError(CodedError):
-    """The head is not a table this feature can read (``UPLOAD_SOURCE_INVALID``)."""
+    """The head is not a table this feature can read (one code per fix, BR12.1)."""
 
-    code = ErrorCode.UPLOAD_SOURCE_INVALID
+    code = ErrorCode.SOURCE_NOT_A_TABLE
+
+
+#: Reason word -> the code that tells the user how to fix it (U2 BR12.1).
+_REASON_CODES = {
+    "empty_column_name": ErrorCode.SOURCE_EMPTY_COLUMN_NAME,
+    "duplicate_column_name": ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME,
+    "encoding": ErrorCode.SOURCE_ENCODING_UNKNOWN,
+    "binary": ErrorCode.SOURCE_NOT_A_TABLE,
+    "empty": ErrorCode.SOURCE_NOT_A_TABLE,
+    "line_too_long": ErrorCode.SOURCE_NOT_A_TABLE,
+}
 
 
 def _invalid(reason: str) -> SourceInspectionError:
     return SourceInspectionError(
         f"not a table: {reason}",
-        code=ErrorCode.UPLOAD_SOURCE_INVALID,
+        code=_REASON_CODES.get(reason, ErrorCode.SOURCE_NOT_A_TABLE),
         context={"reason": reason},
     )
 
@@ -141,7 +155,7 @@ def inspect_table_head(
         The metadata; ``sample_rows`` is cut to the display limits.
 
     Raises:
-        SourceInspectionError: ``UPLOAD_SOURCE_INVALID`` when the head is not
+        SourceInspectionError: A ``SOURCE_*`` code (BR12.1) when the head is not
             a table.
     """
     if b"\x00" in head:

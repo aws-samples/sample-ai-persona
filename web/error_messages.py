@@ -154,6 +154,22 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.GENERATION_SOURCE_NOT_FOUND: (
         "選んだファイルが見つからないか、まだ準備OK になっていません"
     ),
+    # --- 高度な生成（ベータ）U2（rules.md BR12.1、BR14.2） ---
+    ErrorCode.SOURCE_FILE_IN_USE: (
+        "このファイルは生成に使われています。生成が終わってから消してください"
+    ),
+    ErrorCode.SOURCE_EMPTY_COLUMN_NAME: (
+        "1 行目に空の列名があります。列名を入れて保存し直してください"
+    ),
+    ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME: (
+        "1 行目に同じ列名が 2 つ以上あります。列名を別々にして保存し直してください"
+    ),
+    ErrorCode.SOURCE_ENCODING_UNKNOWN: (
+        "文字コードを判定できませんでした。UTF-8 で保存し直してください"
+    ),
+    ErrorCode.SOURCE_NOT_A_TABLE: (
+        "表として読めませんでした。CSV か TSV の表（1 行目が列名）を上げてください"
+    ),
     ErrorCode.GENERATION_NOT_FOUND: "生成が見つかりません",
     ErrorCode.GENERATION_EXPIRED: (
         "生成の結果は完了から 24 時間で見られなくなりました。もう一度生成してください"

@@ -10,16 +10,24 @@ saved as before.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
 from src.managers.components.analysis_record_archive import AnalysisRecordArchive
+from src.managers.components.source_file_catalog import SourceFileCatalog
 from src.managers.persona_manager import PersonaManagerError
 from src.models.analysis import AnalysisRecord
 from src.models.errors import CodedError, ErrorCode
 from src.models.persona_candidate import CandidateClaim, PersonaCandidate
+from src.models.source_file import (
+    SourceAvailabilityState,
+    SourceFile,
+    SourceFileStatus,
+)
+from src.services.stores.source_file_store import SourceFileStore
 from tests.error_helpers import raises_code
 from tests.log_helpers import LogCapture
 from tests.unit.persona_u5_world import NOW, A, B, World, make_persona
@@ -158,14 +166,16 @@ class TestDeleteAndRead:
 
     def test_reads_the_record_after_the_read_check(self, world, archive) -> None:
         persona = self._saved(world)
-        record = Mock(spec=AnalysisRecord)
+        record = _record()
         archive.read_committed.return_value = record
+        catalog = Mock(spec=SourceFileCatalog)
+        catalog.availability.return_value = ()
 
-        found = world.manager(analysis_records=archive).get_analysis_record(
-            A, persona.id
-        )
+        found = world.manager(
+            analysis_records=archive, source_files=catalog
+        ).get_analysis_record(A, persona.id)
 
-        assert found is record
+        assert found is not None and found[0] is record
         archive.read_committed.assert_called_once_with(A.sub, "p-rec")
 
     def test_unreadable_persona_is_not_found(self, world, archive) -> None:
@@ -183,3 +193,78 @@ class TestDeleteAndRead:
             is None
         )
         archive.read_committed.assert_not_called()
+
+    # --- U2 BR14.3: 元のファイルが残っているか（SourceAvailability） ---
+
+    def _sources(self, world, archive, record, files) -> tuple:
+        """Open the record with a real catalog over a fake store of ``files``."""
+        persona = self._saved(world)
+        archive.read_committed.return_value = record
+        store = Mock(spec=SourceFileStore)
+        store.get_for_owner.side_effect = lambda sid, owner: next(
+            (f for f in files if f.source_file_id == sid and f.owner_sub == owner),
+            None,
+        )
+        catalog = SourceFileCatalog(store, clock=lambda: NOW)
+        found = world.manager(
+            analysis_records=archive, source_files=catalog
+        ).get_analysis_record(A, persona.id)
+        assert found is not None
+        return found[1]
+
+    def test_a_file_still_there_is_available(self, world, archive) -> None:
+        file = _source(A.sub)
+        record = _record([file.source_file_id], ["people.csv"])
+
+        (judged,) = self._sources(world, archive, record, [file])
+
+        assert judged.state is SourceAvailabilityState.AVAILABLE
+        assert judged.display_name == "people.csv"
+
+    def test_a_deleted_file_is_deleted(self, world, archive) -> None:
+        record = _record(["gone"], ["people.csv"])
+
+        (judged,) = self._sources(world, archive, record, [])
+
+        assert judged.state is SourceAvailabilityState.DELETED
+        assert judged.display_name == "people.csv"
+
+    def test_someone_elses_file_counts_as_deleted(self, world, archive) -> None:
+        theirs = _source(B.sub)
+        record = _record([theirs.source_file_id], ["people.csv"])
+
+        (judged,) = self._sources(world, archive, record, [theirs])
+
+        assert judged.state is SourceAvailabilityState.DELETED
+
+    def test_an_u1_record_without_ids_is_unknown(self, world, archive) -> None:
+        (judged,) = self._sources(world, archive, _record(), [])
+
+        assert judged.state is SourceAvailabilityState.UNKNOWN
+
+
+def _record(ids=(), names=()) -> AnalysisRecord:
+    return AnalysisRecord.create_new(
+        record_id="p-rec",
+        owner_sub=A.sub,
+        generation_id="gen-1",
+        plan={"method": "cluster"},
+        code_blocks=[],
+        seed=42,
+        prepare_version="v1",
+        source_checksums=["crc=="],
+        now=NOW,
+        source_file_ids=list(ids),
+        source_display_names=list(names),
+    )
+
+
+def _source(owner: str) -> SourceFile:
+    return SourceFile.create_new(
+        owner_sub=owner,
+        filename="people.csv",
+        size_bytes=10,
+        part_count=1,
+        now=NOW,
+        expires_at=NOW + timedelta(days=7),
+    ).update(status=SourceFileStatus.READY, checksum="crc==")

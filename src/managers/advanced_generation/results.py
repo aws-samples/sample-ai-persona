@@ -106,6 +106,9 @@ def build_record(
         prepare_version=report.prepare_version,
         source_checksums=[source.checksum or ""],
         now=now,
+        # U2 BR14.3: name the file even after it is deleted
+        source_file_ids=[source.source_file_id],
+        source_display_names=[source.display_name],
         tool_calls=[
             {
                 "tool_call_id": c.tool_call_id,

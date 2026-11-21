@@ -27,6 +27,7 @@ from src.models.analysis import (
     U1_ANALYSIS_TOOLS,
     AnalysisMethod,
     AnalysisPlan,
+    AnalysisRecord,
     AnalysisRun,
     AnalysisTool,
     AnalysisToolPolicy,
@@ -42,9 +43,12 @@ from src.models.source_file import (
     SAMPLE_COLUMNS_MAX,
     SAMPLE_ROWS_MAX,
     PartUrl,
+    SourceAvailability,
+    SourceAvailabilityState,
     SourceColumn,
     SourceEncoding,
     SourceFile,
+    SourceFileListItem,
     SourceFileStatus,
     SourceFormat,
     SourceKind,
@@ -522,6 +526,182 @@ class TestAdvancedGenerationErrorCodes:
             (ErrorCode.GENERATION_RESULT_TOO_LARGE, ErrorKind.CAPACITY),
             (ErrorCode.GENERATION_TIMEOUT, ErrorKind.TRANSIENT),
             (ErrorCode.GENERATION_SANDBOX_UNAVAILABLE, ErrorKind.TRANSIENT),
+        ],
+    )
+    def test_kind(self, code, kind):
+        assert code.kind is kind
+
+
+# --- U2: 同じ名前の番号・期限・元のファイルの判定（BR11.3、BR13.2、BR14.3、BR12.1） ---
+
+
+class TestSourceFileU2:
+    def test_display_seq_defaults_to_1(self):
+        assert _source_file().display_seq == 1
+
+    def test_display_seq_is_1_when_an_u1_record_has_none(self):
+        data = _source_file().to_dict()
+        data.pop("display_seq", None)
+
+        assert SourceFile.from_dict(data).display_seq == 1
+
+    def test_display_seq_must_be_positive(self):
+        with pytest.raises(ValueError):
+            _source_file(display_seq=0)
+
+    @pytest.mark.parametrize(
+        ("seq", "name"),
+        [(1, "sales.csv"), (2, "sales.csv (2)"), (11, "sales.csv (11)")],
+    )
+    def test_display_name(self, seq, name):
+        assert _source_file(display_seq=seq).display_name == name
+
+    def test_expires_at_round_trips(self):
+        sf = _source_file(display_seq=3, expires_at=NOW + timedelta(days=7))
+
+        again = SourceFile.from_dict(sf.to_dict())
+
+        assert again == sf
+        assert again.expires_at == NOW + timedelta(days=7)
+
+    def test_expires_at_may_be_read_from_epoch_seconds(self):
+        data = _source_file().to_dict()
+        data["expires_at"] = int((NOW + timedelta(days=7)).timestamp())
+
+        assert SourceFile.from_dict(data).expires_at == NOW + timedelta(days=7)
+
+    def test_effective_expiry_of_an_u1_record_counts_from_the_creation(self):
+        sf = _source_file()
+
+        assert sf.expires_at is None
+        assert sf.effective_expires_at(7) == NOW + timedelta(days=7)
+
+    def test_effective_expiry_of_an_u1_record_counts_from_the_last_use(self):
+        sf = _source_file().update(last_used_at=NOW + timedelta(days=2))
+
+        assert sf.effective_expires_at(7) == NOW + timedelta(days=9)
+
+    def test_stored_expiry_wins(self):
+        sf = _source_file(expires_at=NOW + timedelta(days=1)).update(
+            last_used_at=NOW + timedelta(days=2)
+        )
+
+        assert sf.effective_expires_at(7) == NOW + timedelta(days=1)
+
+    def test_is_live_until_the_expiry_and_never_while_deleting(self):
+        sf = _source_file(expires_at=NOW + timedelta(days=7))
+
+        assert sf.is_live(NOW + timedelta(days=6), 7)
+        assert not sf.is_live(NOW + timedelta(days=7), 7)
+        assert not sf.update(status=SourceFileStatus.DELETING).is_live(NOW, 7)
+
+    def test_in_use_while_the_mark_is_valid(self):
+        sf = _source_file().update(
+            in_use_by="gen-1", in_use_until=NOW + timedelta(hours=1)
+        )
+
+        assert sf.is_in_use(NOW)
+        assert not sf.is_in_use(NOW + timedelta(hours=1))
+        assert not _source_file().is_in_use(NOW)
+
+
+class TestSourceFileListItem:
+    def _ready(self, **changes) -> SourceFile:
+        return _source_file(expires_at=NOW + timedelta(days=7)).update(
+            status=SourceFileStatus.READY, metadata=_metadata(), **changes
+        )
+
+    def test_ready_file_is_selectable_with_an_expiry_date(self):
+        item = SourceFileListItem.of(self._ready(), now=NOW, retention_days=7)
+
+        assert item.display_name == "sales.csv"
+        assert item.status is SourceFileStatus.READY
+        assert item.selectable and not item.in_use
+        assert item.expires_on == (NOW + timedelta(days=7)).date()
+
+    def test_in_use_file_is_not_selectable(self):
+        busy = self._ready(in_use_by="g", in_use_until=NOW + timedelta(hours=1))
+
+        item = SourceFileListItem.of(busy, now=NOW, retention_days=7)
+
+        assert item.in_use and not item.selectable
+
+    def test_uploading_file_has_no_expiry_date(self):
+        item = SourceFileListItem.of(_source_file(), now=NOW, retention_days=7)
+
+        assert item.expires_on is None and not item.selectable
+
+    def test_error_file_keeps_its_code(self):
+        failed = _source_file().update(
+            status=SourceFileStatus.ERROR, error_code="source_not_a_table"
+        )
+
+        item = SourceFileListItem.of(failed, now=NOW, retention_days=7)
+
+        assert item.error_code == "source_not_a_table"
+        assert item.expires_on is not None
+
+
+class TestSourceAvailability:
+    def test_states(self):
+        assert [s.value for s in SourceAvailabilityState] == [
+            "available",
+            "deleted",
+            "unknown",
+        ]
+
+    def test_value(self):
+        found = SourceAvailability(
+            source_file_id="sf-1",
+            display_name="sales.csv (2)",
+            state=SourceAvailabilityState.DELETED,
+        )
+
+        assert found.state is SourceAvailabilityState.DELETED
+
+
+class TestAnalysisRecordU2:
+    def _record(self, **extra) -> AnalysisRecord:
+        return AnalysisRecord.create_new(
+            record_id="gen-1",
+            owner_sub="user-1",
+            generation_id="gen-1",
+            plan=_plan().to_dict(),
+            code_blocks=[],
+            seed=42,
+            prepare_version="p1",
+            source_checksums=["crc=="],
+            now=NOW,
+            **extra,
+        )
+
+    def test_keeps_the_ids_and_display_names(self):
+        record = self._record(
+            source_file_ids=["sf-1"], source_display_names=["sales.csv (2)"]
+        )
+
+        again = AnalysisRecord.from_dict(record.to_dict())
+
+        assert again.source_file_ids == ("sf-1",)
+        assert again.source_display_names == ("sales.csv (2)",)
+
+    def test_an_u1_record_has_neither(self):
+        data = self._record().to_dict()
+
+        assert "source_file_ids" not in data
+        again = AnalysisRecord.from_dict(data)
+        assert again.source_file_ids == () and again.source_display_names == ()
+
+
+class TestSourceErrorCodesU2:
+    @pytest.mark.parametrize(
+        ("code", "kind"),
+        [
+            (ErrorCode.SOURCE_FILE_IN_USE, ErrorKind.TRANSIENT),
+            (ErrorCode.SOURCE_EMPTY_COLUMN_NAME, ErrorKind.VALIDATION),
+            (ErrorCode.SOURCE_DUPLICATE_COLUMN_NAME, ErrorKind.VALIDATION),
+            (ErrorCode.SOURCE_ENCODING_UNKNOWN, ErrorKind.VALIDATION),
+            (ErrorCode.SOURCE_NOT_A_TABLE, ErrorKind.VALIDATION),
         ],
     )
     def test_kind(self, code, kind):

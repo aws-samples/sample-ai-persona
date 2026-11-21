@@ -13,20 +13,24 @@ import pytest
 
 from src.config import config
 from src.managers.components.source_file_catalog import SourceFileCatalog
+from src.models.analysis import AnalysisRecord
 from src.models.errors import CodedError, ErrorCode
 from src.models.source_file import (
+    SourceAvailabilityState,
     SourceColumn,
     SourceFile,
     SourceFileStatus,
     SourceFormat,
     SourceMetadata,
 )
+from src.services.s3_service import S3Service, S3ServiceError
 from src.services.stores.source_file_store import (
     SourceFileStore,
     SourceFileStoreError,
     SourceFileUnavailable,
 )
 from tests.error_helpers import raises_code
+from tests.log_helpers import LogCapture
 
 pytestmark = pytest.mark.unit
 
@@ -63,7 +67,8 @@ def _file(status: SourceFileStatus = SourceFileStatus.READY, **changes) -> Sourc
 
 def _catalog() -> tuple[SourceFileCatalog, Mock]:
     store = Mock(spec=SourceFileStore)
-    return SourceFileCatalog(store, error_type=_CallerError), store
+    # The clock is fixed so the expiry checks (U2) do not depend on today.
+    return SourceFileCatalog(store, error_type=_CallerError, clock=lambda: NOW), store
 
 
 class TestOwnership:
@@ -204,7 +209,8 @@ class TestMarksAndCancel:
         store.clear_in_use.return_value = True
 
         assert catalog.release("x", "gen-1", now=NOW) is True
-        store.clear_in_use.assert_called_once_with("x", "gen-1", now=NOW)
+        # U2 BR13.3: the end does not stamp the last use any more.
+        store.clear_in_use.assert_called_once_with("x", "gen-1")
 
     def test_release_failure_is_reported_not_raised(self) -> None:
         catalog, store = _catalog()
@@ -218,3 +224,389 @@ class TestMarksAndCancel:
 
         assert catalog.cancel_upload(OWNER, "x") is False
         store.delete_uploading.assert_called_once_with("x", OWNER)
+
+
+# --- U2: 番号・期限・一覧・削除・古い記録の補正 -------------------------------------
+# BR11.3, BR13.1, BR13.5, BR14.1, BR14.2, BR14.3, BR15.1, NFR3.16, NFR5.29
+
+DAYS = config.ADVANCED_SOURCE_RETENTION_DAYS
+
+
+def _catalog_u2(now: datetime = NOW) -> tuple[SourceFileCatalog, Mock, Mock]:
+    store = Mock(spec=SourceFileStore)
+    s3 = Mock(spec=S3Service)
+    catalog = SourceFileCatalog(
+        store, s3=s3, error_type=_CallerError, clock=lambda: now
+    )
+    return catalog, store, s3
+
+
+def _live(status: SourceFileStatus = SourceFileStatus.READY, **changes) -> SourceFile:
+    changes.setdefault("expires_at", NOW + timedelta(days=3))
+    return _file(status, **changes)
+
+
+class TestNumberAndExpiryRules:
+    def test_next_display_seq_is_the_highest_plus_one(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.max_display_seq.return_value = 2
+
+        assert catalog.next_display_seq(OWNER, "a.csv") == 3
+        store.max_display_seq.assert_called_once_with(OWNER, "a.csv", now=NOW)
+
+    def test_first_of_a_name_is_1(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.max_display_seq.return_value = 0
+
+        assert catalog.next_display_seq(OWNER, "a.csv") == 1
+
+    def test_new_expiry_is_now_plus_the_retention(self) -> None:
+        catalog, *_ = _catalog_u2()
+
+        assert catalog.new_expiry() == NOW + timedelta(days=DAYS)
+
+    def test_get_owned_hides_an_expired_file(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = _file(expires_at=NOW)
+
+        with raises_code(_CallerError, ErrorCode.UPLOAD_NOT_FOUND):
+            catalog.get_owned(OWNER, "x", not_found_code=ErrorCode.UPLOAD_NOT_FOUND)
+
+    def test_get_owned_judges_an_u1_record_by_its_computed_expiry(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        old = _file(created_at=NOW - timedelta(days=DAYS, seconds=1))
+        recent = _file(created_at=NOW - timedelta(days=DAYS - 1))
+
+        store.get_for_owner.return_value = old
+        with raises_code(_CallerError, ErrorCode.UPLOAD_NOT_FOUND):
+            catalog.get_owned(OWNER, "x", not_found_code=ErrorCode.UPLOAD_NOT_FOUND)
+        store.get_for_owner.return_value = recent
+        assert (
+            catalog.get_owned(OWNER, "x", not_found_code=ErrorCode.UPLOAD_NOT_FOUND)
+            is recent
+        )
+
+    def test_get_owned_still_shows_a_deleting_row(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        deleting = _live(SourceFileStatus.DELETING)
+        store.get_for_owner.return_value = deleting
+
+        assert (
+            catalog.get_owned(OWNER, "x", not_found_code=ErrorCode.UPLOAD_NOT_FOUND)
+            is deleting
+        )
+
+    @pytest.mark.parametrize(
+        "found",
+        [
+            _file(SourceFileStatus.DELETING, expires_at=NOW + timedelta(days=1)),
+            _file(expires_at=NOW - timedelta(seconds=1)),
+        ],
+    )
+    def test_ready_table_refuses_deleting_and_expired(self, found) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = found
+
+        with raises_code(_CallerError, ErrorCode.GENERATION_SOURCE_NOT_FOUND):
+            catalog.ready_table(OWNER, "x")
+
+    def test_expired_files_are_not_counted(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.list_for_owner.return_value = [
+            _live(),
+            _file(expires_at=NOW - timedelta(seconds=1)),
+            _live(SourceFileStatus.ERROR),
+        ]
+
+        assert catalog.held_count(OWNER, now=NOW) == 1
+
+
+class TestList:
+    def test_lists_live_and_deleting_files_newest_first(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        older = _live(created_at=NOW - timedelta(hours=3))
+        newer = _live(SourceFileStatus.ERROR, created_at=NOW - timedelta(hours=1))
+        deleting = _live(SourceFileStatus.DELETING, created_at=NOW - timedelta(hours=2))
+        expired = _file(expires_at=NOW - timedelta(seconds=1))
+        abandoned = _live(
+            SourceFileStatus.UPLOADING,
+            created_at=NOW
+            - timedelta(seconds=config.ADVANCED_UPLOAD_PENDING_MAX_SECONDS + 1),
+        )
+        store.list_for_owner.return_value = [older, expired, abandoned, deleting, newer]
+
+        listed = catalog.list_owned(OWNER)
+
+        assert listed == [newer, deleting, older]
+        store.list_for_owner.assert_called_once_with(OWNER)
+
+
+class TestDeleteRules:
+    def test_delete_goes_deleting_then_every_version_then_the_record(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        found = _live()
+        store.get_for_owner.return_value = found
+        store.begin_delete.return_value = found.update(status=SourceFileStatus.DELETING)
+        s3.delete_all_versions.return_value = 2
+        store.delete_record.return_value = True
+
+        assert catalog.delete_owned(OWNER, found.source_file_id) == 2
+
+        kwargs = store.begin_delete.call_args.kwargs
+        assert kwargs["now"] == NOW
+        assert kwargs["stale_before"] == NOW - timedelta(
+            seconds=config.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS
+        )
+        s3.delete_all_versions.assert_called_once_with(found.s3_key)
+        store.delete_record.assert_called_once_with(found.source_file_id, OWNER)
+
+    def test_an_in_use_file_is_source_file_in_use(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        busy = _live(in_use_by="g", in_use_until=NOW + timedelta(hours=1))
+        store.get_for_owner.return_value = busy
+        store.begin_delete.side_effect = SourceFileUnavailable("cond")
+
+        with raises_code(_CallerError, ErrorCode.SOURCE_FILE_IN_USE):
+            catalog.delete_owned(OWNER, busy.source_file_id)
+        s3.delete_all_versions.assert_not_called()
+
+    def test_other_refusals_are_upload_not_found(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        uploading = _live(SourceFileStatus.UPLOADING)
+        store.get_for_owner.return_value = uploading
+        store.begin_delete.side_effect = SourceFileUnavailable("cond")
+
+        with raises_code(_CallerError, ErrorCode.UPLOAD_NOT_FOUND):
+            catalog.delete_owned(OWNER, uploading.source_file_id)
+        s3.delete_all_versions.assert_not_called()
+
+    def test_someone_elses_or_missing_is_upload_not_found_without_a_write(
+        self,
+    ) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = None
+
+        with raises_code(_CallerError, ErrorCode.UPLOAD_NOT_FOUND):
+            catalog.delete_owned(OWNER, "x")
+        store.begin_delete.assert_not_called()
+
+    def test_an_expired_u1_record_is_checked_before_the_write(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = _file(
+            created_at=NOW - timedelta(days=DAYS + 1)
+        )
+
+        with raises_code(_CallerError, ErrorCode.UPLOAD_NOT_FOUND):
+            catalog.delete_owned(OWNER, "x")
+        store.begin_delete.assert_not_called()
+
+    def test_an_s3_failure_leaves_the_record_deleting(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        found = _live()
+        store.get_for_owner.return_value = found
+        store.begin_delete.return_value = found.update(status=SourceFileStatus.DELETING)
+        s3.delete_all_versions.side_effect = S3ServiceError(
+            "down", code=ErrorCode.S3_OPERATION_FAILED
+        )
+
+        with raises_code(_CallerError, ErrorCode.S3_OPERATION_FAILED):
+            catalog.delete_owned(OWNER, found.source_file_id)
+        store.delete_record.assert_not_called()
+
+    def test_a_record_already_gone_counts_as_deleted(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        found = _live(SourceFileStatus.DELETING)
+        store.get_for_owner.return_value = found
+        store.begin_delete.return_value = found
+        s3.delete_all_versions.return_value = 0
+        store.delete_record.return_value = False
+
+        assert catalog.delete_owned(OWNER, found.source_file_id) == 0
+
+
+class TestReconcileLegacy:
+    def _legacy(self, age_days: float, **changes) -> SourceFile:
+        return _file(created_at=NOW - timedelta(days=age_days), **changes)
+
+    def test_fills_the_expiry_of_a_live_u1_record_without_s3(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        legacy = self._legacy(2)
+
+        outcome = catalog.reconcile_legacy(OWNER, [legacy, _live()])
+
+        store.fill_expires_at.assert_called_once_with(
+            legacy.source_file_id, OWNER, legacy.created_at + timedelta(days=DAYS)
+        )
+        s3.delete_all_versions.assert_not_called()
+        assert (outcome.filled, outcome.deleted, outcome.remaining) == (1, 0, 0)
+
+    def test_deletes_an_expired_u1_record_that_is_not_in_use(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        legacy = self._legacy(DAYS + 1)
+        store.begin_delete.return_value = legacy.update(
+            status=SourceFileStatus.DELETING
+        )
+        store.delete_record.return_value = True
+        s3.delete_all_versions.return_value = 1
+
+        outcome = catalog.reconcile_legacy(OWNER, [legacy])
+
+        s3.delete_all_versions.assert_called_once_with(legacy.s3_key)
+        store.delete_record.assert_called_once_with(legacy.source_file_id, OWNER)
+        assert outcome.deleted == 1
+
+    def test_an_expired_record_in_use_only_gets_its_expiry(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        legacy = self._legacy(
+            DAYS + 1, in_use_by="g", in_use_until=NOW + timedelta(hours=1)
+        )
+
+        outcome = catalog.reconcile_legacy(OWNER, [legacy])
+
+        store.begin_delete.assert_not_called()
+        store.fill_expires_at.assert_called_once()
+        assert (outcome.filled, outcome.deleted) == (1, 0)
+
+    def test_stops_after_the_delete_limit(self, monkeypatch) -> None:
+        monkeypatch.setattr(config, "ADVANCED_SOURCE_RECONCILE_MAX_DELETES", 2)
+        catalog, store, s3 = _catalog_u2()
+        legacy = [self._legacy(DAYS + 1) for _ in range(4)]
+        store.begin_delete.side_effect = lambda sid, *a, **k: next(
+            f.update(status=SourceFileStatus.DELETING)
+            for f in legacy
+            if f.source_file_id == sid
+        )
+        store.delete_record.return_value = True
+        s3.delete_all_versions.return_value = 1
+
+        outcome = catalog.reconcile_legacy(OWNER, legacy)
+
+        assert (outcome.deleted, outcome.remaining) == (2, 2)
+        assert s3.delete_all_versions.call_count == 2
+
+    def test_stops_when_the_time_is_up(self, monkeypatch) -> None:
+        monkeypatch.setattr(config, "ADVANCED_SOURCE_RECONCILE_MAX_SECONDS", 0)
+        catalog, store, s3 = _catalog_u2()
+
+        outcome = catalog.reconcile_legacy(
+            OWNER, [self._legacy(1), self._legacy(DAYS + 1)]
+        )
+
+        store.fill_expires_at.assert_not_called()
+        assert outcome.remaining == 2
+
+    def test_never_touches_someone_elses_record(self) -> None:
+        catalog, store, s3 = _catalog_u2()
+        theirs = SourceFile.create_new(
+            owner_sub="owner-2",
+            filename="b.csv",
+            size_bytes=1,
+            part_count=1,
+            now=NOW - timedelta(days=DAYS + 1),
+        ).update(status=SourceFileStatus.READY)
+
+        outcome = catalog.reconcile_legacy(OWNER, [theirs])
+
+        store.fill_expires_at.assert_not_called()
+        store.begin_delete.assert_not_called()
+        assert (outcome.filled, outcome.deleted, outcome.remaining) == (0, 0, 0)
+
+    def test_failures_are_logged_not_raised(self, capsys) -> None:
+        catalog, store, s3 = _catalog_u2()
+        logs = LogCapture(capsys)
+        store.fill_expires_at.side_effect = SourceFileStoreError("down")
+        legacy = self._legacy(DAYS + 1)
+        store.begin_delete.return_value = legacy.update(
+            status=SourceFileStatus.DELETING
+        )
+        s3.delete_all_versions.side_effect = S3ServiceError(
+            "down", code=ErrorCode.S3_OPERATION_FAILED
+        )
+
+        outcome = catalog.reconcile_legacy(OWNER, [self._legacy(1), legacy])
+
+        assert outcome.status == "failed"
+        (event,) = logs.events("advanced_generation.sources_reconciled")
+        assert event["status"] == "failed"
+        assert event["error_code"] == ErrorCode.S3_OPERATION_FAILED.value
+        assert set(event) <= {
+            "event",
+            "ts",
+            "filled",
+            "deleted",
+            "remaining",
+            "status",
+            "error_code",
+        }
+
+    def test_nothing_to_do_writes_no_log(self, capsys) -> None:
+        catalog, *_ = _catalog_u2()
+        logs = LogCapture(capsys)
+
+        catalog.reconcile_legacy(OWNER, [_live()])
+
+        assert logs.events("advanced_generation.sources_reconciled") == []
+
+
+class TestAvailability:
+    def _record(self, ids=(), names=(), checksums=("crc==",)) -> AnalysisRecord:
+        return AnalysisRecord.create_new(
+            record_id="p-1",
+            owner_sub=OWNER,
+            generation_id="g-1",
+            plan={},
+            code_blocks=[],
+            seed=42,
+            prepare_version="v1",
+            source_checksums=list(checksums),
+            now=NOW,
+            source_file_ids=list(ids),
+            source_display_names=list(names),
+        )
+
+    def test_a_file_still_there_with_the_same_checksum_is_available(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = _live(checksum="crc==")
+
+        (found,) = catalog.availability(OWNER, self._record(["sf-1"], ["a.csv (2)"]))
+
+        assert found.state is SourceAvailabilityState.AVAILABLE
+        assert found.display_name == "a.csv (2)"
+        store.get_for_owner.assert_called_once_with("sf-1", OWNER)
+
+    @pytest.mark.parametrize(
+        "found",
+        [
+            None,
+            _file(expires_at=NOW - timedelta(seconds=1), checksum="crc=="),
+            _file(expires_at=NOW + timedelta(days=1), checksum="other=="),
+            _file(
+                SourceFileStatus.DELETING,
+                expires_at=NOW + timedelta(days=1),
+                checksum="crc==",
+            ),
+        ],
+    )
+    def test_missing_expired_changed_or_deleting_is_deleted(self, found) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.return_value = found
+
+        (judged,) = catalog.availability(OWNER, self._record(["sf-1"], ["a.csv"]))
+
+        assert judged.state is SourceAvailabilityState.DELETED
+
+    def test_a_record_without_ids_is_unknown(self) -> None:
+        catalog, store, _ = _catalog_u2()
+
+        (judged,) = catalog.availability(OWNER, self._record())
+
+        assert judged.state is SourceAvailabilityState.UNKNOWN
+        store.get_for_owner.assert_not_called()
+
+    def test_a_read_failure_is_unknown_not_raised(self) -> None:
+        catalog, store, _ = _catalog_u2()
+        store.get_for_owner.side_effect = SourceFileStoreError("down")
+
+        (judged,) = catalog.availability(OWNER, self._record(["sf-1"], ["a.csv"]))
+
+        assert judged.state is SourceAvailabilityState.UNKNOWN

@@ -11,7 +11,9 @@
      data-max-bytes="{{ limits.max_bytes }}"
      data-max-files="{{ limits.max_files }}"
      data-max-size-mb="{{ limits.max_size_mb }}"
-     data-concurrency="{{ limits.concurrency }}">
+     data-concurrency="{{ limits.concurrency }}"
+     data-inspect-poll-seconds="{{ limits.inspect_poll_seconds }}"
+     data-inspect-stop-seconds="{{ limits.inspect_stop_seconds }}">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     {% include "persona/partials/generation_tabs.html" %}
     <p class="text-gray-600 mb-4">表のデータをアップロードし、AI が分析した結果からペルソナを生成します。</p>
@@ -56,12 +58,21 @@
                             <th scope="col" class="py-2 pr-2 font-medium">使う</th>
                             <th scope="col" class="py-2 pr-2 font-medium">ファイル</th>
                             <th scope="col" class="py-2 pr-2 font-medium">状態</th>
+                            <th scope="col" class="py-2 pr-2 font-medium">消える予定の日</th>
                             <th scope="col" class="py-2"><span class="sr-only">操作</span></th>
                         </tr>
                     </thead>
-                    <tbody id="advanced-upload-rows" data-testid="advanced-upload-rows"></tbody>
+                    <tbody id="advanced-upload-rows" data-testid="advanced-upload-rows">
+                        {% for row in upload_rows %}
+                        {% with source_file = row.source_file, item = row.item, row_error = row.row_error, stuck = row.stuck %}{% include "persona/partials/advanced_upload_row.html" %}{% endwith %}
+                        {% endfor %}
+                    </tbody>
                 </table>
-                <p data-testid="advanced-upload-empty" class="mt-2 text-xs text-gray-500">まだファイルはありません</p>
+                <p data-testid="advanced-upload-empty" class="mt-2 text-xs text-gray-500"{% if upload_rows %} hidden{% endif %}>まだファイルはありません</p>
+                {% if upload_list_failed %}
+                <p data-testid="advanced-upload-list-error" class="mt-2 text-xs text-red-800">前に上げたファイルの一覧を読み込めませんでした。時間をおいてページを開き直してください</p>
+                {% endif %}
+                <p class="mt-2 text-xs text-gray-500">上げたファイルは、最後に生成に使ってから {{ limits.retention_days }} 日で自動で消えます</p>
             </div>
             <div id="advanced-upload-announcer" class="sr-only" aria-live="polite"></div>
 
@@ -70,6 +81,7 @@
                     <td class="py-2 pr-2"><span class="sr-only">まだ選べません</span></td>
                     <td class="py-2 pr-2"><span data-role="name"></span> <span data-role="size" class="text-gray-500"></span></td>
                     <td class="py-2 pr-2" data-testid="advanced-upload-status"><span data-role="status">アップロード中 0%</span></td>
+                    <td class="py-2 pr-2"><span class="sr-only">まだ決まっていません</span></td>
                     <td class="py-2">
                         <button type="button" data-testid="advanced-upload-cancel" data-action="cancel"
                                 class="text-sm text-gray-600 hover:text-gray-900 underline">取消</button>

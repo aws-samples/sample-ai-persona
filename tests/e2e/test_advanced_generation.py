@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import BrowserContext, Page, expect
+from playwright.sync_api import BrowserContext, Locator, Page, expect
 
 from tests.e2e.conftest import DATA_DIR, CreatedRecords
 
@@ -59,13 +59,20 @@ def _open_advanced_page(page: Page) -> None:
     expect(page.get_by_test_id("advanced-generation-page")).to_be_visible()
 
 
-def _upload_sample(page: Page) -> None:
+def _upload_sample(page: Page) -> Locator:
     page.get_by_test_id("advanced-file-input").set_input_files(SAMPLE_CSV)
-    row = page.get_by_test_id("advanced-upload-row").filter(has_text=SAMPLE_CSV.name)
+    # U2: earlier uploads of the same name stay listed ("(2)", "(3)"); the new
+    # row is put first
+    row = (
+        page.get_by_test_id("advanced-upload-row")
+        .filter(has_text=SAMPLE_CSV.name)
+        .first
+    )
     # The parts are PUT straight to S3 (CORS, ETag), then completed and inspected
     expect(row).to_have_attribute("data-state", "ready", timeout=INSPECT_TIMEOUT_MS)
     expect(row.get_by_test_id("advanced-upload-status")).to_contain_text("準備OK")
     row.get_by_test_id("advanced-upload-select").check()
+    return row
 
 
 def _generate(page: Page, run_tag: str) -> None:
@@ -164,3 +171,109 @@ def test_code_interpreter_session_outlives_15_minutes() -> None:
         assert "error" in result
     finally:
         sandbox.stop_session(session)
+
+
+# --- U2: 使い回し・削除・二重の確定（cicd-pipeline.md §3） -----------------------
+# Real S3 only: the copy onto the same key before the preparation (BR13.4), the
+# deletion of every version (BR14.1) and the completion of one upload twice.
+
+
+def _source_id(row: Locator) -> str:
+    value = row.get_attribute("data-source-file-id")
+    assert value, "the row has no source file ID"
+    return value
+
+
+def _delete_row(page: Page, source_file_id: str) -> None:
+    row = page.locator(
+        f'[data-testid="advanced-upload-row"][data-source-file-id="{source_file_id}"]'
+    )
+    row.get_by_test_id("advanced-source-delete-open").click()
+    # Every row owns a dialog, so the confirm button is looked up inside this file's one
+    page.get_by_test_id(f"advanced-delete-{source_file_id}").get_by_test_id(
+        "advanced-source-delete-confirm"
+    ).click()
+    expect(row).to_have_count(0)
+
+
+def test_a_file_is_used_again_without_uploading_it_again(
+    session_context: BrowserContext, run_tag: str
+) -> None:
+    """US4.1: the same file runs two generations; its expiry is shown and kept."""
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    source_file_id = _source_id(_upload_sample(page))
+    _generate(page, run_tag)
+
+    # Opened again: the file is still listed, ready, with the day it goes away
+    _open_advanced_page(page)
+    row = page.locator(
+        f'[data-testid="advanced-upload-row"][data-source-file-id="{source_file_id}"]'
+    )
+    expect(row).to_have_attribute("data-state", "ready")
+    expect(row.get_by_test_id("advanced-upload-expiry")).to_contain_text("/")
+    row.get_by_test_id("advanced-upload-select").check()
+    _generate(page, f"{run_tag} 2 回目")
+
+    _open_advanced_page(page)
+    _delete_row(page, source_file_id)
+    page.close()
+
+
+def test_a_file_in_use_cannot_be_deleted_and_a_free_one_is_gone(
+    session_context: BrowserContext, run_tag: str
+) -> None:
+    """US4.2: no deletion while a generation runs; afterwards the row goes away."""
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    source_file_id = _source_id(_upload_sample(page))
+    page.get_by_test_id("advanced-purpose").fill(f"{run_tag} 削除の確認")
+    page.get_by_test_id("advanced-generate-button").click()
+    expect(page.get_by_test_id("advanced-progress")).to_be_visible()
+
+    # While it runs, the reopened list shows the button as unusable with a reason
+    other = session_context.new_page()
+    _open_advanced_page(other)
+    busy = other.locator(
+        f'[data-testid="advanced-upload-row"][data-source-file-id="{source_file_id}"]'
+    )
+    expect(busy.get_by_test_id("advanced-source-delete-open")).to_have_attribute(
+        "aria-disabled", "true"
+    )
+    expect(busy).to_contain_text("生成中のため削除できません")
+    response = other.request.delete(
+        f"/persona/advanced/sources/{source_file_id}",
+        headers={"X-Requested-With": "XMLHttpRequest", "HX-Request": "true"},
+    )
+    assert response.status == 503
+    other.close()
+
+    page.locator(
+        '[data-testid="advanced-result"], [data-testid="advanced-failure"]:not([hidden])'
+    ).first.wait_for(timeout=GENERATION_TIMEOUT_MS)
+    _open_advanced_page(page)
+    _delete_row(page, source_file_id)
+    _open_advanced_page(page)
+    expect(page.locator(f'[data-source-file-id="{source_file_id}"]')).to_have_count(0)
+    page.close()
+
+
+def test_completing_twice_gives_both_tabs_the_same_result(
+    session_context: BrowserContext,
+) -> None:
+    """US2.4 (AC2.4.2): a second completion answers 200 with the same row."""
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    row = _upload_sample(page)
+    source_file_id = _source_id(row)
+
+    response = page.request.post(
+        f"/persona/advanced/uploads/{source_file_id}/complete",
+        data={"parts": []},
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status == 200
+    assert response.json()["status"] == "ready"
+    _delete_row(page, source_file_id)
+    page.close()

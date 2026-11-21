@@ -394,15 +394,21 @@ describe('DataStack: アップロード用バケットのライフサイクル�
   });
 
   // 高度な生成（ベータ、U1、NFR3.2、NFR5.5）
-  test('sources/ は未完了のマルチパートを 1 日で中止し、古いバージョンを 1 日で消す（今の版は失効させない）', () => {
+  // U2（BR13.6、NFR5.25）: 今の版を作成から 9 日（保存の 7 日 + 余裕 2 日）で消す。規則の ID は変えない
+  test('sources/ は未完了のマルチパートを 1 日で中止し、古いバージョンを 1 日、今の版を 9 日で消す', () => {
     const rule = rules().find((r) => r.Id === 'AbortIncompleteSourceUploads');
     expect(rule).toMatchObject({
       Prefix: 'sources/',
       AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
       NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+      ExpirationInDays: 9,
     });
-    expect(rule.ExpirationInDays).toBeUndefined();
     expect(rule.TagFilters).toBeUndefined();
+  });
+
+  test('sources/ 以外の規則に今の版の 9 日を足さない', () => {
+    const others = rules().filter((r) => r.Id !== 'AbortIncompleteSourceUploads');
+    expect(others.map((r) => r.ExpirationInDays).filter((d) => d === 9)).toEqual([]);
   });
 
   test('analysis-records/ は古いバージョンを 1 日で消す（保存前の記録は既存の pending=true の規則で消える）', () => {
@@ -446,7 +452,7 @@ describe('DataStack: 高度な生成の 3 つのテーブル（ベータ、U1、
     expect(replica.PointInTimeRecoverySpecification).toEqual({ PointInTimeRecoveryEnabled: true });
   }
 
-  test('SourceFiles は PK source_file_id、GSI owner_sub-created_at（射影 ALL）、削除保護、TTL なし', () => {
+  test('SourceFiles は PK source_file_id、GSI owner_sub-created_at（射影 ALL）、削除保護、TTL は expires_at（U2 BR13.6）', () => {
     const table = resources()[logicalIdOf('SourceFiles')];
     expect(table).toBeDefined();
     expectCommon(table);
@@ -456,7 +462,10 @@ describe('DataStack: 高度な生成の 3 つのテーブル（ベータ、U1、
     expect(index.IndexName).toBe('owner_sub-created_at');
     expect(index.KeySchema).toEqual(OWNER_KEYS);
     expect(index.Projection).toEqual({ ProjectionType: 'ALL' });
-    expect(table.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(table.Properties.TimeToLiveSpecification).toEqual({
+      AttributeName: 'expires_at',
+      Enabled: true,
+    });
     expect(table.Properties.Replicas[0].DeletionProtectionEnabled).toBe(true);
   });
 

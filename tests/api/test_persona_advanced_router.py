@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 from typing import Any, Iterator
 from unittest.mock import Mock
 
@@ -24,6 +25,7 @@ from src.managers.advanced_generation.manager import (
 from src.managers.source_upload_manager import SourceUploadError, SourceUploadManager
 from src.models.advanced_generation import EventType, GenerationStatus
 from src.models.errors import AccessDeniedError, ErrorCode
+from src.models.source_file import SourceFileListItem, SourceFileStatus
 from tests import advanced_screen_samples as s
 from tests.conftest import login_as
 
@@ -37,6 +39,12 @@ class Adv:
 
     def __init__(self) -> None:
         self.uploads = Mock(spec=SourceUploadManager)
+        # U2: the page lists the user's files; each row is a real list item
+        self.uploads.list_uploads.return_value = []
+        self.uploads.list_item.side_effect = lambda f: SourceFileListItem.of(
+            f, now=s.NOW, retention_days=7
+        )
+        self.uploads.inspection_stuck.return_value = False
         self.generations = Mock(spec=AdvancedPersonaGenerationManager)
         self.generations.is_available.return_value = True
         self.generations.running_generation_id.return_value = None
@@ -688,3 +696,234 @@ class TestRecord:
         assert response.status_code == 404
         assert response.headers["X-Render-Response"] == "true"
         assert "no analysis record" not in response.text
+
+
+# --- U2: 一覧・削除・二重の確定・他人からの隔離（W2-1、W2-3、W2-6、W2-8） ----------
+
+
+def _triggers(response: Any) -> dict[str, Any]:
+    return json.loads(response.headers.get("HX-Trigger", "{}"))
+
+
+class TestSourceList:
+    def test_page_lists_the_users_files_through_the_manager(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.list_uploads.return_value = [
+            s.ready_file(display_seq=2, expires_at=s.NOW + timedelta(days=7)),
+            s.error_file("source_duplicate_column_name"),
+        ]
+
+        response = client.get("/persona/generation/advanced")
+
+        assert response.status_code == 200
+        html = response.text
+        assert html.count('data-testid="advanced-upload-row"') >= 2
+        assert "members.csv (2)" in html
+        assert "11/27" in html  # the day it goes away
+        assert "1 行目に同じ列名が 2 つ以上あります" in html
+        principal = adv.uploads.list_uploads.call_args.args[0]
+        assert principal.sub == s.OWNER
+
+    def test_page_passes_the_poll_interval(self, client: TestClient, adv: Adv) -> None:
+        html = client.get("/persona/generation/advanced").text
+
+        assert 'data-inspect-poll-seconds="2"' in html
+        assert 'data-inspect-stop-seconds="900"' in html
+
+    def test_a_deleting_row_says_the_deletion_failed(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.list_uploads.return_value = [
+            s.ready_file(status=SourceFileStatus.DELETING)
+        ]
+
+        html = client.get("/persona/generation/advanced").text
+
+        assert "削除できませんでした" in html
+        assert 'data-testid="advanced-source-delete-open"' in html
+
+    def test_an_unreadable_list_still_shows_the_page(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.list_uploads.side_effect = SourceUploadError(
+            "store down /secret/path", code=ErrorCode.DATABASE_OPERATION_FAILED
+        )
+
+        response = client.get("/persona/generation/advanced")
+
+        assert response.status_code == 200
+        assert "/secret/path" not in response.text
+        assert 'data-testid="advanced-upload-list-error"' in response.text
+
+
+class TestDeleteSource:
+    URL = f"/persona/advanced/sources/{s.FILE_ID}"
+
+    def test_delete_removes_the_row_and_closes_the_dialog(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        response = client.delete(self.URL)
+
+        assert response.status_code == 200
+        assert response.text == ""
+        assert adv.uploads.delete_source.call_args.args[1] == s.FILE_ID
+        assert _triggers(response)["dialogClose"] == {
+            "id": f"advanced-delete-{s.FILE_ID}"
+        }
+
+    def test_a_file_in_use_is_a_toast(self, client: TestClient, adv: Adv) -> None:
+        adv.uploads.delete_source.side_effect = SourceUploadError(
+            "in use", code=ErrorCode.SOURCE_FILE_IN_USE
+        )
+
+        response = client.delete(self.URL)
+
+        assert response.status_code == 503
+        assert "showToast" in _triggers(response)
+        assert (
+            "生成が終わってから消してください"
+            in json.loads(json.dumps(_triggers(response)))["showToast"]["message"]
+        )
+        assert "in use" not in response.text
+
+    def test_a_failed_s3_deletion_shows_the_deleting_row_and_a_toast(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.delete_source.side_effect = SourceUploadError(
+            "s3 failed arn:aws:s3:::bucket", code=ErrorCode.S3_OPERATION_FAILED
+        )
+        adv.uploads.get_upload.return_value = s.ready_file(
+            status=SourceFileStatus.DELETING
+        )
+
+        response = client.delete(self.URL)
+
+        assert response.status_code == 200
+        assert "削除できませんでした" in response.text
+        triggers = _triggers(response)
+        assert "showToast" in triggers and "dialogClose" in triggers
+        assert "arn:aws" not in response.text + response.headers["HX-Trigger"]
+
+    def test_delete_without_the_custom_header_is_refused_by_csrf(
+        self, test_app: Any, adv: Adv
+    ) -> None:
+        with TestClient(test_app) as bare:
+            login_as(bare)
+            response = bare.delete(self.URL)
+
+        assert response.status_code == 403
+        adv.uploads.delete_source.assert_not_called()
+
+
+class TestDoubleCompletionRoute:
+    def test_a_second_completion_is_200_with_the_current_row(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.complete_upload.return_value = s.uploading_file(
+            status=SourceFileStatus.INSPECTING
+        )
+
+        response = client.post(
+            f"/persona/advanced/uploads/{s.FILE_ID}/complete",
+            json={"parts": [{"part_number": 1, "etag": "e"}]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "inspecting"
+
+
+def _isolation_routes() -> list[tuple[str, str, str, str, dict[str, Any]]]:
+    """(name, manager, method, url, kwargs) of every route that names a file or run."""
+    upload = f"/persona/advanced/uploads/{s.FILE_ID}"
+    run = f"/persona/advanced/generations/{s.GENERATION_ID}"
+    parts = {"json": {"parts": [{"part_number": 1, "etag": "e"}]}}
+    return [
+        ("get_upload", "uploads", "GET", upload, {}),
+        ("complete_upload", "uploads", "POST", f"{upload}/complete", parts),
+        (
+            "refresh_part_urls",
+            "uploads",
+            "POST",
+            f"{upload}/part-urls",
+            {"json": {"part_numbers": [1]}},
+        ),
+        ("cancel_upload", "uploads", "DELETE", upload, {}),
+        (
+            "delete_source",
+            "uploads",
+            "DELETE",
+            f"/persona/advanced/sources/{s.FILE_ID}",
+            {},
+        ),
+        (
+            "start_generation",
+            "generations",
+            "POST",
+            "/persona/advanced/generations",
+            {"data": {"source_file_ids": s.FILE_ID, "persona_count": "2"}},
+        ),
+        ("stream_events", "generations", "GET", f"{run}/events", {}),
+        ("get_record", "generations", "GET", f"{run}/record", {}),
+    ]
+
+
+class TestSomeoneElsesLooksMissing:
+    """BR15.1, BR15.2: the same status, code and body for someone else's and none."""
+
+    @pytest.mark.parametrize(
+        ("name", "manager", "method", "url", "kwargs"), _isolation_routes()
+    )
+    def test_same_answer(
+        self,
+        client: TestClient,
+        adv: Adv,
+        name: str,
+        manager: str,
+        method: str,
+        url: str,
+        kwargs: dict[str, Any],
+    ) -> None:
+        code = (
+            ErrorCode.UPLOAD_NOT_FOUND
+            if manager == "uploads"
+            else (
+                ErrorCode.GENERATION_SOURCE_NOT_FOUND
+                if name == "start_generation"
+                else ErrorCode.GENERATION_NOT_FOUND
+            )
+        )
+        error_type = (
+            SourceUploadError if manager == "uploads" else AdvancedGenerationError
+        )
+        target = getattr(getattr(adv, manager), name)
+        answers = []
+        for message in ("owner differs: someone-else", "no such item"):
+            target.side_effect = error_type(message, code=code)
+            response = client.request(method, url, **kwargs)
+            answers.append(
+                (
+                    response.status_code,
+                    response.text,
+                    response.headers.get("HX-Trigger"),
+                )
+            )
+
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 404
+        assert "someone-else" not in "".join(str(a) for a in answers[0])
+
+
+class TestAnalysisRecordSources:
+    def test_the_generation_record_names_its_file(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.generations.get_record.return_value = s.record().update(
+            source_file_ids=("file-1",), source_display_names=("members.csv (2)",)
+        )
+
+        html = client.get(
+            f"/persona/advanced/generations/{s.GENERATION_ID}/record"
+        ).text
+
+        assert "members.csv (2)" in html

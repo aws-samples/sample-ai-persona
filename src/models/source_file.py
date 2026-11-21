@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
@@ -232,6 +232,12 @@ class SourceFile:
         updated_at: Last state change (the 15-minute retry of a stuck
             inspection compares against it, reliability-design.md §4).
         url_refresh_count: Part URL refreshes so far (24 at most, BR2.4).
+        display_seq: Number that tells files of the same name apart, fixed
+            at the start (U2 BR11.3). U1 records have none and read as 1.
+        expires_at: When the file stops being usable (U2 BR13.2). The store
+            writes it as epoch seconds (the TTL attribute). U1 records have
+            none; :meth:`effective_expires_at` then counts from the last use
+            or the creation.
     """
 
     source_file_id: str
@@ -252,12 +258,16 @@ class SourceFile:
     last_used_at: datetime | None = None
     updated_at: datetime | None = field(default=None)
     url_refresh_count: int = 0
+    display_seq: int = 1
+    expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", SourceKind(self.kind))
         object.__setattr__(self, "status", SourceFileStatus(self.status))
         if self.url_refresh_count < 0:
             raise ValueError("url_refresh_count must not be negative")
+        if self.display_seq < 1:
+            raise ValueError("display_seq must be positive")
         if self.size_bytes < 1:
             raise ValueError("size_bytes must be positive")
         if not 1 <= self.part_count <= 10000:
@@ -274,10 +284,14 @@ class SourceFile:
         now: datetime,
         multipart_upload_id: str | None = None,
         source_file_id: str | None = None,
+        display_seq: int = 1,
+        expires_at: datetime | None = None,
     ) -> "SourceFile":
-        """A new upload in ``uploading`` under the owner's key (BR2.3)."""
+        """A new upload in ``uploading`` under the owner's key (BR2.3, BR11.3)."""
         new_id = source_file_id or str(uuid.uuid4())
         return cls(
+            display_seq=int(display_seq),
+            expires_at=expires_at,
             source_file_id=new_id,
             owner_sub=owner_sub,
             filename=_clean_filename(filename),
@@ -295,8 +309,42 @@ class SourceFile:
         """A copy with ``changes`` applied (the instance itself never changes)."""
         return replace(self, **changes)
 
+    @property
+    def display_name(self) -> str:
+        """``filename`` for the first of a name, ``"filename (n)"`` after (BR11.3)."""
+        if self.display_seq <= 1:
+            return self.filename
+        return f"{self.filename} ({self.display_seq})"
+
+    def effective_expires_at(self, retention_days: int) -> datetime:
+        """The stored expiry, or (last use or creation) + retention (BR13.2).
+
+        The fallback covers U1 records written before ``expires_at`` existed.
+        """
+        if self.expires_at is not None:
+            return self.expires_at
+        base = self.last_used_at or self.created_at
+        return base + timedelta(days=int(retention_days))
+
+    def is_live(self, now: datetime, retention_days: int) -> bool:
+        """Not being deleted and not past its expiry (BR13.5)."""
+        return (
+            self.status is not SourceFileStatus.DELETING
+            and self.effective_expires_at(retention_days) > now
+        )
+
+    def is_in_use(self, now: datetime) -> bool:
+        """A generation holds a mark that has not lapsed (BR14.2)."""
+        return bool(
+            self.in_use_by and self.in_use_until is not None and self.in_use_until > now
+        )
+
     def to_dict(self) -> dict[str, Any]:
-        """Serialize for the ``SourceFiles`` table without ``None`` values."""
+        """Serialize for the ``SourceFiles`` table without ``None`` values.
+
+        ``expires_at`` is ISO text here like the other times; the store turns
+        it into epoch seconds for the TTL.
+        """
         data: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "source_file_id": self.source_file_id,
@@ -308,8 +356,10 @@ class SourceFile:
             "part_count": int(self.part_count),
             "status": self.status.value,
             "created_at": iso(self.created_at),
+            "display_seq": int(self.display_seq),
         }
         optional: dict[str, Any] = {
+            "expires_at": iso(self.expires_at) if self.expires_at else None,
             "multipart_upload_id": self.multipart_upload_id,
             "source_metadata": self.metadata.to_dict() if self.metadata else None,
             "checksum": self.checksum,
@@ -346,6 +396,95 @@ class SourceFile:
             last_used_at=parse_optional_dt(data.get("last_used_at")),
             updated_at=parse_optional_dt(data.get("updated_at")),
             url_refresh_count=int(data.get("url_refresh_count", 0)),
+            display_seq=int(data.get("display_seq") or 1),
+            expires_at=_read_expiry(data.get("expires_at")),
+        )
+
+
+def _read_expiry(value: Any) -> datetime | None:
+    """``expires_at`` as ISO text or epoch seconds (the TTL attribute)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return parse_dt(value)
+
+
+class SourceAvailabilityState(StrEnum):
+    """Whether the file an analysis record used is still there (BR14.3)."""
+
+    AVAILABLE = "available"
+    DELETED = "deleted"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SourceAvailability:
+    """The source file of an analysis record, judged when the record opens.
+
+    Never stored (entities.md SourceAvailability).
+
+    Attributes:
+        source_file_id: The file ID kept in the record (empty for U1 records).
+        display_name: The name kept in the record (shown even after deletion).
+        state: ``available``, ``deleted`` or ``unknown`` (U1 record, no ID).
+    """
+
+    source_file_id: str
+    display_name: str
+    state: SourceAvailabilityState
+
+
+@dataclass(frozen=True)
+class SourceFileListItem:
+    """One row of the uploaded-file list (entities.md SourceFileListItem).
+
+    A read-only value built from a :class:`SourceFile`; never stored.
+
+    Attributes:
+        source_file_id: The file.
+        display_name: ``filename`` or ``"filename (n)"`` (escape on display).
+        status: The file's state.
+        size_bytes: Declared size.
+        expires_on: The day the file goes away; none while uploading or
+            inspecting.
+        error_code: The ``ErrorCode`` value of an ``error`` file.
+        in_use: A running generation holds the file (delete is refused).
+        selectable: ``ready`` and not in use.
+    """
+
+    source_file_id: str
+    display_name: str
+    status: SourceFileStatus
+    size_bytes: int
+    expires_on: date | None
+    error_code: str | None
+    in_use: bool
+    selectable: bool
+
+    @classmethod
+    def of(
+        cls, source_file: SourceFile, *, now: datetime, retention_days: int
+    ) -> "SourceFileListItem":
+        """The row of ``source_file`` at ``now``."""
+        in_use = source_file.is_in_use(now)
+        pending = source_file.status in (
+            SourceFileStatus.UPLOADING,
+            SourceFileStatus.INSPECTING,
+        )
+        return cls(
+            source_file_id=source_file.source_file_id,
+            display_name=source_file.display_name,
+            status=source_file.status,
+            size_bytes=source_file.size_bytes,
+            expires_on=(
+                None
+                if pending
+                else source_file.effective_expires_at(retention_days).date()
+            ),
+            error_code=source_file.error_code,
+            in_use=in_use,
+            selectable=source_file.status is SourceFileStatus.READY and not in_use,
         )
 
 

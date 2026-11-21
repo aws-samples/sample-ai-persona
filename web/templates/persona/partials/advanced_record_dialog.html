@@ -3,8 +3,12 @@
   分析の記録のダイアログの中身（S9、BR9.1）。生成のページでは dialog() の content_url で読み込み、
   保存したペルソナの詳細画面では中に直接描く。コードは <pre><code> で文字として出す（自動エスケープ）。
   引数:
-    record ... AnalysisRecord。ないとき（none）は「分析の記録は残っていません」
+    record  ... AnalysisRecord。ないとき（none）は「分析の記録は残っていません」
+    sources ... SourceAvailability の並び（保存したペルソナの詳細だけ、U2 BR14.3）。
+                元のファイルが消えていれば「元のファイルは消えています」、U1 の記録で
+                ファイルの ID がなければ「元のファイルの記録はありません」と出す
 #}
+{% set judged = sources | default(none) %}
 <div data-testid="advanced-record">
     {% if record %}
     {% set plan = record.plan %}
@@ -14,7 +18,14 @@
         <dt class="text-gray-600">前準備の版</dt><dd>{{ record.prepare_version }}</dd>
         <dt class="text-gray-600">乱数のシード</dt><dd>{{ record.seed }}</dd>
         <dt class="text-gray-600">ファイル</dt>
-        <dd>{% for checksum in record.source_checksums %}<span class="block">チェックサム <code>{{ checksum }}</code></span>{% endfor %}</dd>
+        <dd data-testid="advanced-record-sources">{% for checksum in record.source_checksums %}
+            {% set name = record.source_display_names[loop.index0] if loop.index0 < record.source_display_names | length else "" %}
+            {% set found = judged[loop.index0] if judged and loop.index0 < judged | length else none %}
+            <span class="block">{% if name %}{{ name }} / {% endif %}チェックサム <code>{{ checksum }}</code>
+            {%- if found and found.state.value == "deleted" %} <span class="text-gray-700" data-testid="advanced-record-source-deleted">（元のファイルは消えています）</span>
+            {%- elif found and found.state.value == "unknown" %} <span class="text-gray-700" data-testid="advanced-record-source-unknown">（元のファイルの記録はありません）</span>
+            {%- endif %}</span>
+        {% endfor %}</dd>
     </dl>
     <h3 class="font-medium text-gray-900 mb-2">実行したコード（{{ record.code_blocks | length }}）</h3>
     <ol class="space-y-2">

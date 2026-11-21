@@ -230,6 +230,16 @@ class ErrorCode(StrEnum):
     UPLOAD_TOO_MANY_FILES = ("upload_too_many_files", ErrorKind.CAPACITY)
     # Someone else's, missing or already completed upload (not told apart).
     UPLOAD_NOT_FOUND = ("upload_not_found", ErrorKind.NOT_FOUND)
+    # U2: a running generation uses the file; wait until it ends (BR14.2).
+    SOURCE_FILE_IN_USE = ("source_file_in_use", ErrorKind.TRANSIENT)
+    # U2: what the inspection of the head found, one code per fix (BR12.1).
+    SOURCE_EMPTY_COLUMN_NAME = ("source_empty_column_name", ErrorKind.VALIDATION)
+    SOURCE_DUPLICATE_COLUMN_NAME = (
+        "source_duplicate_column_name",
+        ErrorKind.VALIDATION,
+    )
+    SOURCE_ENCODING_UNKNOWN = ("source_encoding_unknown", ErrorKind.VALIDATION)
+    SOURCE_NOT_A_TABLE = ("source_not_a_table", ErrorKind.VALIDATION)
     # The chosen file is not the user's ready table (BR6.2).
     GENERATION_SOURCE_NOT_FOUND = ("generation_source_not_found", ErrorKind.NOT_FOUND)
     # Someone else's or missing generation (events, record, save).

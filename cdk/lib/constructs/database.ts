@@ -257,9 +257,12 @@ export class Database extends Construct {
     // PITR・RETAIN（自前の KMS キーは作らない、NFR3.1）。新しいテーブルの追加で、既存の
     // テーブルは置き換えない
     const ownerIndexes = [gsi(OWNER_CREATED_AT_INDEX, 'owner_sub', 'created_at')];
+    // U2（BR13.6）: 期限を過ぎた記録を TTL で消す（属性 expires_at、エポック秒）。TTL の追加は
+    // テーブルの更新で済み、置き換えにならない（論理 ID は test/data-stack-logical-ids.test.ts が固定）
     this.sourceFilesTable = this.advancedTable('SourceFiles', {
       partitionKey: { name: 'source_file_id', type: dynamodb.AttributeType.STRING },
       globalSecondaryIndexes: ownerIndexes,
+      timeToLiveAttribute: 'expires_at',
     });
     this.advancedGenerationsTable = this.advancedTable('AdvancedGenerations', {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
