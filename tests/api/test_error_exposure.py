@@ -53,6 +53,10 @@ _ALLOWED_CALLS = frozenset(
         # U8: PASSWORD_POLICY_NOT_MET の context["rules"] の既知の条件キーだけを返す
         # （tests/unit/test_error_messages.py TestPasswordRuleLabels で検証）
         "missed_password_rules",
+        # 高度な生成 U1: 文言・コード・区分だけを JSON にする（例外の文は載せない。
+        # tests/unit/test_error_messages.py TestJsonErrorResponse で直接検証している）
+        "json_error_response",
+        "error_payload",
         "isinstance",
         "type",
         # web/routers/interview.py 限定のローカルヘルパー。isinstance と

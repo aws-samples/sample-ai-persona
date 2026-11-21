@@ -781,3 +781,131 @@ class TestPasswordPolicySettings:
         with patch.dict(os.environ, {**env, "AUTH_MODE": "admin_api"}, clear=True):
             cfg = Config()
         assert cfg.PASSWORD_MIN_LENGTH is None
+
+
+class TestAdvancedGenerationSettings:
+    """高度な生成（ベータ）U1 の設定（BR1.1、BR1.3、NFR2.2、NFR5.3〜NFR5.13、NFR8.1）。"""
+
+    _NAMES = (
+        "ENABLE_ADVANCED_GENERATION",
+        "CODE_INTERPRETER_ID",
+        "ADVANCED_GENERATION_MODEL_ID",
+        "ADVANCED_GENERATION_MAX_CONCURRENT",
+        "SOURCE_FILES_TABLE_NAME",
+        "ADVANCED_GENERATIONS_TABLE_NAME",
+        "APP_SETTINGS_TABLE_NAME",
+        "BEDROCK_MODEL_ID",
+    )
+
+    def _config(self, **env: str):
+        from src.config import Config
+
+        base = {k: v for k, v in os.environ.items() if k not in self._NAMES}
+        with patch.dict(os.environ, {**base, **env}, clear=True):
+            return Config()
+
+    def test_defaults(self):
+        cfg = self._config()
+        assert cfg.ENABLE_ADVANCED_GENERATION is True
+        assert cfg.CODE_INTERPRETER_ID == ""
+        assert cfg.ADVANCED_GENERATION_MAX_CONCURRENT == 3
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == cfg.BEDROCK_MODEL_ID
+
+    def test_limits_match_the_reliability_requirements(self):
+        cfg = self._config()
+        assert cfg.ADVANCED_UPLOAD_MAX_BYTES == 1_000_000_000
+        assert cfg.ADVANCED_UPLOAD_MAX_FILES == 10
+        assert cfg.ADVANCED_UPLOAD_PART_SIZE_BYTES == 16 * 1024 * 1024
+        assert cfg.ADVANCED_UPLOAD_URL_EXPIRATION_SECONDS == 3600
+        assert cfg.ADVANCED_UPLOAD_URL_REFRESH_MAX == 24
+        assert cfg.ADVANCED_UPLOAD_PENDING_MAX_SECONDS == 24 * 3600
+        assert cfg.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS == 15 * 60
+        assert cfg.ADVANCED_INSPECT_BYTES == 4 * 1024 * 1024
+        assert cfg.ADVANCED_GENERATION_TIMEOUT_SECONDS == 60 * 60
+        assert cfg.ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS == 20 * 60
+        assert cfg.ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS == 10 * 60
+        assert cfg.ADVANCED_GENERATION_LOCK_SECONDS == 75 * 60
+        assert cfg.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS == 3900
+        assert cfg.ADVANCED_GENERATION_HEARTBEAT_SECONDS == 30
+        assert cfg.ADVANCED_GENERATION_RESULT_READABLE_SECONDS == 24 * 3600
+        assert cfg.ADVANCED_GENERATION_ITEM_TTL_SECONDS == 48 * 3600
+        assert cfg.ADVANCED_GENERATION_DOWNLOAD_URL_SECONDS == 900
+        assert cfg.ADVANCED_GENERATION_ITEM_MAX_BYTES == 64 * 1024
+        assert cfg.ADVANCED_GENERATION_PART_MAX_BYTES == 100 * 1024
+        assert cfg.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES == 2 * 1024 * 1024
+        assert cfg.ADVANCED_TOOL_MAX_CALLS == 30
+        assert cfg.ADVANCED_TOOL_MAX_TOTAL_SECONDS == 20 * 60
+        assert cfg.ADVANCED_TOOL_MAX_OUTPUT_CHARS == 20_000
+
+    def test_prepare_progress_is_read_every_five_seconds(self):
+        # NFR1.8: the preparation's progress file is read at most 5 s apart
+        cfg = self._config()
+        assert cfg.ADVANCED_GENERATION_PREPARE_POLL_SECONDS == 5
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("true", True), ("FALSE", False), ("1", True), ("0", False), ("", True)],
+    )
+    def test_enable_is_read(self, value, expected):
+        assert (
+            self._config(ENABLE_ADVANCED_GENERATION=value).ENABLE_ADVANCED_GENERATION
+            is expected
+        )
+
+    def test_unknown_enable_value_stops_the_start(self):
+        with pytest.raises(ValueError, match="ENABLE_ADVANCED_GENERATION"):
+            self._config(ENABLE_ADVANCED_GENERATION="maybe")
+
+    def test_code_interpreter_id_is_read_and_stripped(self):
+        cfg = self._config(CODE_INTERPRETER_ID="  ci-abc123  ")
+        assert cfg.CODE_INTERPRETER_ID == "ci-abc123"
+
+    def test_model_id_overrides_the_default(self):
+        cfg = self._config(ADVANCED_GENERATION_MODEL_ID="model-x")
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == "model-x"
+
+    def test_model_id_follows_bedrock_model_id(self):
+        cfg = self._config(BEDROCK_MODEL_ID="base-model")
+        assert cfg.ADVANCED_GENERATION_MODEL_ID == "base-model"
+
+    def test_max_concurrent_from_env(self):
+        assert (
+            self._config(
+                ADVANCED_GENERATION_MAX_CONCURRENT="5"
+            ).ADVANCED_GENERATION_MAX_CONCURRENT
+            == 5
+        )
+
+    @pytest.mark.parametrize("value", ["0", "-1", "x"])
+    def test_bad_max_concurrent_stops_the_start(self, value):
+        with pytest.raises(ValueError, match="ADVANCED_GENERATION_MAX_CONCURRENT"):
+            self._config(ADVANCED_GENERATION_MAX_CONCURRENT=value)
+
+    @pytest.mark.parametrize(
+        ("setting", "suffix"),
+        [
+            ("SOURCE_FILES_TABLE_NAME", "SourceFiles"),
+            ("ADVANCED_GENERATIONS_TABLE_NAME", "AdvancedGenerations"),
+            ("APP_SETTINGS_TABLE_NAME", "AppSettings"),
+        ],
+    )
+    def test_table_falls_back_to_the_prefix(self, setting, suffix):
+        cfg = self._config(DYNAMODB_TABLE_PREFIX="Local")
+        assert getattr(cfg, setting) == f"Local_{suffix}"
+
+    @pytest.mark.parametrize(
+        "setting",
+        [
+            "SOURCE_FILES_TABLE_NAME",
+            "ADVANCED_GENERATIONS_TABLE_NAME",
+            "APP_SETTINGS_TABLE_NAME",
+        ],
+    )
+    def test_table_reads_the_cdk_name(self, setting):
+        assert getattr(self._config(**{setting: "Data-T1"}), setting) == "Data-T1"
+
+    def test_new_tables_are_not_bulk_granted(self):
+        from src.config import TABLE_NAME_SETTINGS
+
+        for kind in ("SourceFiles", "AdvancedGenerations", "AppSettings"):
+            assert kind not in TABLE_NAME_SETTINGS

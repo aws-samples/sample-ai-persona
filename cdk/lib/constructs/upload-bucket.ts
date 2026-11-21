@@ -14,6 +14,11 @@ import { acknowledgeAll, NAG_REASONS } from '../nag-reasons';
  * - タグ `pending=true`（紐付く前のアップロード）は 1 日で失効（使えるのは 24 時間）
  * - 古いバージョンは 7 日で削除、期限切れの削除マーカーを掃除、未完了のマルチパートは 7 日で中止
  * - `survey-runs/` のアンケートの実行の入出力は 7 日で失効、古いバージョンは 1 日（NFR5.14）
+ * - 高度な生成（ベータ、U1）: `sources/` の未完了のマルチパートは 1 日で中止、古いバージョンは 1 日。
+ *   `analysis-records/` の古いバージョンは 1 日。暗号化（SSE-S3）は変えない（NFR3.2）
+ *
+ * CORS はここに書かない: 許すオリジンは App スタックの CloudFront のドメインのため、App スタックの
+ * カスタムリソースが PutBucketCors で設定する（Data → App の参照を作らない、NFR3.10）。
  */
 export class UploadBucket extends Construct {
   public readonly bucket: s3.Bucket;
@@ -51,6 +56,21 @@ export class UploadBucket extends Construct {
           id: 'ExpireSurveyRuns',
           prefix: 'survey-runs/',
           expiration: Duration.days(7),
+          noncurrentVersionExpiration: Duration.days(1),
+        },
+        // 高度な生成（ベータ、U1、NFR5.5）: ブラウザからの分割アップロード。途中で止まったパートを
+        // 1 日で中止し、消したファイルの古いバージョンを 1 日で消す。今の版はアプリが消す
+        {
+          id: 'AbortIncompleteSourceUploads',
+          prefix: 'sources/',
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+          noncurrentVersionExpiration: Duration.days(1),
+        },
+        // 分析の記録の古いバージョンを 1 日で消す。保存前の記録（タグ pending=true）は上の
+        // ExpireUnattachedUploads で消える（infrastructure-specification.md「決めたこと」）
+        {
+          id: 'ExpireNoncurrentAnalysisRecords',
+          prefix: 'analysis-records/',
           noncurrentVersionExpiration: Duration.days(1),
         },
       ],

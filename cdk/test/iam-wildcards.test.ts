@@ -68,6 +68,9 @@ function queriedIndexArns(data: string): string[] {
     `${tableArn('Surveys')}/index/OwnerIndex`,
     // 進行役が待ちと実行中を読む疎な索引（src/services/stores/survey_store.py）
     `${tableArn('Surveys')}/index/RunQueueIndex`,
+    // 高度な生成（ベータ、U1）: 本人のファイルと生成（source_file_store.py・advanced_generation_store.py）
+    `${tableArn('SourceFiles')}/index/owner_sub-created_at`,
+    `${tableArn('AdvancedGenerations')}/index/owner_sub-created_at`,
   ];
 }
 
@@ -299,6 +302,32 @@ describe.each(VARIANTS)('IAM（$name）', ({ data: DATA, build, expectedWildcard
     // 秘密を読む文はほかにない（ワイルドカードでも読ませない）
     const all = withAction(docs, 'secretsmanager:GetSecretValue');
     expect(all.flatMap(resourcesOf)).not.toContain('*');
+  });
+});
+
+describe('IAM: 高度な生成の Code Interpreter（ベータ、U1、NFR3.4）', () => {
+  const all = templates({});
+  const docs = policyDocs(all);
+  const CODE_INTERPRETER_ACTIONS = [
+    'bedrock-agentcore:InvokeCodeInterpreter',
+    'bedrock-agentcore:StartCodeInterpreterSession',
+    'bedrock-agentcore:StopCodeInterpreterSession',
+  ];
+
+  test('3 つの操作はタスクロールの 1 つの文で、この Stage の Code Interpreter の ARN だけ（* なし）', () => {
+    const statements = statementsOf(docs).filter((s) => actionsOf(s).some((a) => /CodeInterpreter/.test(a)));
+    expect(statements).toHaveLength(1);
+    expect(actionsOf(statements[0]).sort()).toEqual(CODE_INTERPRETER_ACTIONS);
+    const resources = resourcesOf(statements[0]);
+    expect(resources).toHaveLength(1);
+    expect(resources[0]['Fn::GetAtt'][1]).toBe('CodeInterpreterArn');
+    const holders = docs.filter((d) => d.document.Statement.includes(statements[0]));
+    expect(holders.flatMap((d) => d.roles).every((r) => r.startsWith('AppTaskDefinitionTaskRole'))).toBe(true);
+  });
+
+  test('閉域の Stage のロールには Code Interpreter の操作がない', () => {
+    const closed = policyDocs(Object.values(synthClosed().templates));
+    expect(statementsOf(closed).flatMap(actionsOf).filter((a) => /CodeInterpreter/.test(a))).toEqual([]);
   });
 });
 

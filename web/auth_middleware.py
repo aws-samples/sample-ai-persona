@@ -86,6 +86,12 @@ PASSIVE_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("GET", re.compile(r"/survey/persona-data/nemotron-status")),
     # web/routers/api.py get_job (job status polling)
     ("GET", re.compile(r"/api/jobs/[^/]+")),
+    # web/routers/persona_advanced.py generation_events (SSE; checked on connect
+    # only, up to 60 minutes)
+    ("GET", re.compile(r"/persona/advanced/generations/[^/]+/events")),
+    # web/routers/persona_advanced.py get_upload_row (an inspecting row re-reads
+    # itself, hx-trigger="every 2s")
+    ("GET", re.compile(r"/persona/advanced/uploads/[^/]+")),
 )
 
 NO_STORE = "no-store"

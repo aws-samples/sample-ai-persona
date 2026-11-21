@@ -488,8 +488,10 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
     const passwordKeys = Object.keys(closedEnv).filter((k) => k.startsWith('PASSWORD_'));
     // U3 の閉域だけの値（NEMOTRON_SOURCE など）は下の別のテストで確かめる
     const closedOnly = [...passwordKeys, ...CLOSED_FEATURE_KEYS];
+    // 公開だけの値: Managed Login のドメインと、高度な生成の Code Interpreter（閉域では作らない、BR1.4）
+    const publicOnly = ['COGNITO_DOMAIN', 'CODE_INTERPRETER_ID'];
     expect(Object.keys(closedEnv).filter((k) => !closedOnly.includes(k)).sort()).toEqual(
-      Object.keys(publicEnv).filter((k) => k !== 'COGNITO_DOMAIN').sort(),
+      Object.keys(publicEnv).filter((k) => !publicOnly.includes(k)).sort(),
     );
     expect(authKeys.filter((k) => k in publicEnv)).toEqual(authKeys);
   });
@@ -516,6 +518,35 @@ describe('閉域の Stage AIPersonaDevClosed（検証用 EC2 あり・許可 CID
   test('閉域のタスクに ASSET_DELIVERY=proxy。公開のタスクにはない（閉域対応 U4 BR5.1、BR5.2）', () => {
     expect(environmentOf(appStack).ASSET_DELIVERY).toBe('proxy');
     expect(environmentOf(synthPublic().templates.App)).not.toHaveProperty('ASSET_DELIVERY');
+  });
+
+  // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域では出さない
+  test('高度な生成: ENABLE_ADVANCED_GENERATION=false で、CODE_INTERPRETER_ID を渡さない。公開は true', () => {
+    const env = environmentOf(appStack);
+    expect(env.ENABLE_ADVANCED_GENERATION).toBe('false');
+    expect(env).not.toHaveProperty('CODE_INTERPRETER_ID');
+    expect(environmentOf(synthPublic().templates.App).ENABLE_ADVANCED_GENERATION).toBe('true');
+  });
+
+  test('高度な生成: Code Interpreter・CORS のカスタムリソース・高度な生成のメトリクスフィルタを作らない', () => {
+    appStack.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 0);
+    appStack.resourceCountIs('Custom::UploadBucketCors', 0);
+    const namespaces = Object.values(appStack.findResources('AWS::Logs::MetricFilter')).map(
+      (f) => f.Properties.MetricTransformations[0].MetricNamespace,
+    );
+    expect(namespaces).toHaveLength(7);
+    expect(namespaces).not.toContain('AIPersona/AdvancedGeneration');
+    const policies = JSON.stringify(appStack.findResources('AWS::IAM::Policy'));
+    expect(policies).not.toContain('CodeInterpreter');
+    expect(policies).not.toContain('s3:PutBucketCORS');
+  });
+
+  test('高度な生成: 3 つのテーブルは Data スタックの共通の部分として作られ、タスクロールの文に入る', () => {
+    data.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 0);
+    const tables = Object.values(data.findResources('AWS::DynamoDB::GlobalTable')).map(pathOf);
+    for (const id of ['SourceFiles', 'AdvancedGenerations', 'AppSettings']) {
+      expect(tables).toContain(`${CLOSED}/Data/Database/${id}/Resource`);
+    }
   });
 
   test('App クライアントは管理 API のログインだけ（OAuth なし・シークレットあり・失効あり・有効期間は公開と同じ、BR3.3）', () => {
@@ -924,6 +955,16 @@ describe('閉域のエンドポイントのポリシー（閉域対応 U2 BR1.1�
 
   test('DynamoDB のエンドポイントのポリシーに担当者の記録のテーブルが入る（NFR6.3）', () => {
     expect(JSON.stringify(statementsOfEndpoint(endpoints.dynamodb))).toContain('SurveyRunLease');
+  });
+
+  test('高度な生成: DynamoDB のポリシーは taskTables() の 3 つのテーブルを含み、AgentCore のポリシーに Code Interpreter はない', () => {
+    const dynamodb = JSON.stringify(statementsOfEndpoint(endpoints.dynamodb));
+    for (const id of ['DatabaseSourceFiles', 'DatabaseAdvancedGenerations', 'DatabaseAppSettings']) {
+      expect(dynamodb).toContain(id);
+    }
+    for (const service of ['bedrock-agentcore', 'bedrock-agentcore-control']) {
+      expect(JSON.stringify(statementsOfEndpoint(endpoints[service]))).not.toMatch(/CodeInterpreter|code-interpreter/);
+    }
   });
 
   test('bedrock のエンドポイントはない（FR8.4）', () => {

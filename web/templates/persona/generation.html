@@ -4,6 +4,7 @@
 {% block content %}
 <div class="max-w-4xl mx-auto" x-data="{ dataType: 'interview', showDescription: false, autoLinkBehavior: false }">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
+    {% include "persona/partials/generation_tabs.html" %}
     <p class="text-gray-600 mb-8">データをアップロードし、作成したいペルソナの指示を入力してAIペルソナを生成します。</p>
 
     <form id="generate-form">

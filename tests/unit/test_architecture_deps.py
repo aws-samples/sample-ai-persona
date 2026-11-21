@@ -402,6 +402,33 @@ def test_routers_do_not_import_access_target() -> None:
     assert _modules_importing(_ROUTERS_DIR, "AccessTarget") == []
 
 
+#: Code that runs only inside the analysis sandbox (contract C9, NFR8.2).
+_SANDBOX_PACKAGE = "sandbox"
+
+
+def _modules_importing_sandbox(*directories: Path) -> list[str]:
+    """Files under ``directories`` that import the sandbox code by any form."""
+    found: list[str] = []
+    for directory in directories:
+        for path in _py_files(directory, recursive=True):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                    names = [node.module or ""]
+                if any(n.split(".")[0] == _SANDBOX_PACKAGE for n in names):
+                    found.append(path.name)
+                    break
+    return found
+
+
+def test_app_does_not_import_sandbox_code() -> None:
+    """`sandbox/` のコードはセッションの中だけで動き、アプリから import しない（NFR8.2）。"""
+    assert _modules_importing_sandbox(_SRC, _WEB) == []
+
+
 class TestCheckerItself:
     """検査ロジック自体が空振りしていないことの検証（error-catalog.md の要求）。"""
 
@@ -547,6 +574,18 @@ class TestCheckerItself:
             "from ...models.authz import Principal\n",
         )
         assert _component_cycles(tmp_path / "src/managers/components") == []
+
+    def test_importing_sandbox_is_flagged(self, tmp_path: Path) -> None:
+        self._write(
+            tmp_path,
+            "src/services/foo.py",
+            "from sandbox.persona_analysis import prepare\n",
+        )
+        self._write(tmp_path, "web/routers/bar.py", "import sandbox.persona_analysis\n")
+        self._write(tmp_path, "src/models/baz.py", "from .sandbox_like import X\n")
+        assert sorted(
+            _modules_importing_sandbox(tmp_path / "src", tmp_path / "web")
+        ) == ["bar.py", "foo.py"]
 
     def test_router_importing_access_target_is_flagged(self, tmp_path: Path) -> None:
         self._write(

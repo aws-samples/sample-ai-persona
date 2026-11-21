@@ -102,6 +102,10 @@ export interface AppParameter {
   // 無効化するとペルソナに analyze_dataset ツールが登録されずプロンプトも付与されない。
   enableDatasetAnalysis?: boolean;
 
+  // 高度な生成（ベータ）の kill switch（既定: 有効）。false で再デプロイすると、Code Interpreter・
+  // テーブル・CORS は残したまま、アプリが高度な生成のタブを出さなくなる。閉域の Stage は常に無効
+  enableAdvancedGeneration?: boolean;
+
   // データ分析エージェント連携設定
   dataAgentRuntimeArn?: string;
   dataAgentRegion?: string;

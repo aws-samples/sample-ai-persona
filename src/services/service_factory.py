@@ -4,6 +4,7 @@ Service Factory
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 from threading import Lock
 
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
     from .cognito_groups_service import CognitoGroupsService
     from .cognito.cognito_auth_service import CognitoAuthService
     from .cognito.oidc_service import OidcService
+    from .stores.advanced_generation_store import AdvancedGenerationStore
+    from .stores.app_settings_store import AppSettingsStore
+    from .stores.source_file_store import SourceFileStore
     from .stores.custom_persona_data_store import CustomPersonaDataStore
     from .stores.dataset_store import DatasetStore
     from .stores.job_store import JobStore
@@ -39,6 +43,15 @@ if TYPE_CHECKING:
     from .s3_service import S3Service
     from .survey_batch_service import SurveyBatchService
     from .survey_runner_service import SurveyRunnerService
+    from .sandbox_service import SandboxService
+    from .dataset_analysis.analysis_tool_service import AnalysisToolService
+    from ..models.analysis import AnalysisToolPolicy
+
+#: The fixed library written into each analysis session (read as a file, never
+#: imported; contract C9).
+_SANDBOX_LIBRARY_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "sandbox" / "persona_analysis.py"
+)
 
 
 class ServiceFactory:
@@ -92,6 +105,10 @@ class ServiceFactory:
         self._discussion_store: Optional["DiscussionStore"] = None
         self._interview_session_store: Optional["InterviewSessionStore"] = None
         self._custom_persona_data_store: Optional["CustomPersonaDataStore"] = None
+        self._source_file_store: Optional["SourceFileStore"] = None
+        self._advanced_generation_store: Optional["AdvancedGenerationStore"] = None
+        self._app_settings_store: Optional["AppSettingsStore"] = None
+        self._sandbox_service: Optional["SandboxService"] = None
         self._initialized = True
 
         self.logger.info("ServiceFactory initialized")
@@ -471,6 +488,103 @@ class ServiceFactory:
                         table_name=config.PERSONA_CANDIDATES_TABLE_NAME,
                     )
         return self._persona_candidate_store
+
+    def get_source_file_store(self) -> "SourceFileStore":
+        """Return the store of uploaded source files (advanced generation U1, C4)."""
+        if self._source_file_store is None:
+            with self._lock:
+                if self._source_file_store is None:
+                    from .stores.source_file_store import SourceFileStore
+
+                    self.logger.info("Creating new SourceFileStore instance")
+                    self._source_file_store = SourceFileStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.SOURCE_FILES_TABLE_NAME,
+                    )
+        return self._source_file_store
+
+    def get_advanced_generation_store(self) -> "AdvancedGenerationStore":
+        """Return the store of advanced generations (advanced generation U1, C5)."""
+        if self._advanced_generation_store is None:
+            with self._lock:
+                if self._advanced_generation_store is None:
+                    from .stores.advanced_generation_store import (
+                        AdvancedGenerationStore,
+                    )
+
+                    self.logger.info("Creating new AdvancedGenerationStore instance")
+                    self._advanced_generation_store = AdvancedGenerationStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.ADVANCED_GENERATIONS_TABLE_NAME,
+                        source_files_table_name=config.SOURCE_FILES_TABLE_NAME,
+                    )
+        return self._advanced_generation_store
+
+    def get_app_settings_store(self) -> "AppSettingsStore":
+        """Return the reader of application settings (advanced generation U1, C6)."""
+        if self._app_settings_store is None:
+            with self._lock:
+                if self._app_settings_store is None:
+                    from .stores.app_settings_store import AppSettingsStore
+
+                    self.logger.info("Creating new AppSettingsStore instance")
+                    self._app_settings_store = AppSettingsStore(
+                        region=config.DYNAMODB_REGION,
+                        table_name=config.APP_SETTINGS_TABLE_NAME,
+                    )
+        return self._app_settings_store
+
+    def get_sandbox_service(self) -> "SandboxService":
+        """Return the analysis sandbox on Code Interpreter (advanced generation, C10).
+
+        Raises:
+            CodedError: ``ADVANCED_GENERATION_UNAVAILABLE`` when no Code
+                Interpreter is configured (BR1.1).
+        """
+        if not config.CODE_INTERPRETER_ID:
+            raise CodedError(
+                "CODE_INTERPRETER_ID is not set",
+                code=ErrorCode.ADVANCED_GENERATION_UNAVAILABLE,
+            )
+        if self._sandbox_service is None:
+            with self._lock:
+                if self._sandbox_service is None:
+                    from .sandbox_service import CodeInterpreterSandbox
+
+                    self.logger.info("Creating new CodeInterpreterSandbox instance")
+                    self._sandbox_service = CodeInterpreterSandbox(
+                        code_interpreter_id=config.CODE_INTERPRETER_ID,
+                        region_name=config.AWS_REGION,
+                        library_path=str(_SANDBOX_LIBRARY_PATH),
+                        max_output_chars=config.ADVANCED_TOOL_MAX_OUTPUT_CHARS,
+                    )
+        return self._sandbox_service
+
+    def create_analysis_tools(
+        self,
+        session: Any,
+        policy: "AnalysisToolPolicy",
+        *,
+        source_id: str,
+        columns: list[str],
+        persona_count: int,
+        sandbox: Optional["SandboxService"] = None,
+    ) -> "AnalysisToolService":
+        """Build the tools of one generation's analysis (never cached; ADR-012).
+
+        ``sandbox`` defaults to :meth:`get_sandbox_service`; pass the one the
+        session was opened on when it is another (the in-process version).
+        """
+        from .dataset_analysis.analysis_tool_service import AnalysisToolService
+
+        return AnalysisToolService(
+            sandbox if sandbox is not None else self.get_sandbox_service(),
+            session,
+            policy,
+            source_id=source_id,
+            columns=columns,
+            persona_count=persona_count,
+        )
 
     def get_persona_binding_store(self) -> "PersonaBindingStore":
         """Return the store of persona bindings (U5, ADR-007)."""

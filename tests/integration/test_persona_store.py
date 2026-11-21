@@ -96,6 +96,35 @@ class TestPutAndGet:
         assert read == persona
         assert isinstance(read.age, int)
 
+    def test_advanced_generation_context_with_floats_reads_back(self, store):
+        """高度な生成の generation_context は構成比などの小数を持つ（BR9.4、C7）。"""
+        context = {
+            "mode": "advanced",
+            "segments": [{"id": "s1", "share": 0.375, "size": 3, "overlaps": False}],
+            "analysis_run": {"seed": 42, "params": {"sample_ratio": 0.5, "k": 2}},
+        }
+        persona = Persona.from_dict(
+            {**_persona().to_dict(), "generation_context": context}
+        )
+
+        store.put_new(persona)
+
+        read = store.get(persona.id, consistent=True)
+        assert read.generation_context == context
+        share = read.generation_context["segments"][0]["share"]
+        assert isinstance(share, float)
+        assert isinstance(read.generation_context["analysis_run"]["seed"], int)
+
+    def test_float_is_stored_as_a_dynamodb_number(self, store, client):
+        persona = Persona.from_dict(
+            {**_persona().to_dict(), "generation_context": {"share": 0.25}}
+        )
+
+        store.put_new(persona)
+
+        item = _raw(client, persona.id)
+        assert item["generation_context"] == {"M": {"share": {"N": "0.25"}}}
+
     def test_optional_fields_left_out_read_back_empty(self, store, client):
         persona = _persona()
         store.put_new(persona)

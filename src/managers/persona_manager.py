@@ -47,7 +47,9 @@ from ..services import country_service
 from ..services.stores.persona_store import PersonaStore, PersonaStoreError
 from ..services.service_factory import service_factory
 from ..models.asset_delivery import AssetHandle, DeliveryResult, SizeLimit
+from ..models.analysis import AnalysisRecord
 from .components.access_policy import AccessPolicy
+from .components.analysis_record_archive import AnalysisRecordArchive
 from .components.asset_delivery import AssetDelivery
 from .components.owner_directory import OWNER_UNKNOWN, OwnerDirectory
 from .components.participant_reader import ParticipantReader
@@ -222,6 +224,7 @@ class PersonaManager:
         clock: Callable[[], datetime] = _utc_now,
         participants: Optional[ParticipantReader] = None,
         asset_delivery: Optional[AssetDelivery] = None,
+        analysis_records: Optional[AnalysisRecordArchive] = None,
     ):
         """
         Args:
@@ -252,6 +255,9 @@ class PersonaManager:
             asset_delivery: Serves the avatar (closed network U4; built from
                 this Manager's S3 service and ``Config.ASSET_DELIVERY`` when
                 omitted)
+            analysis_records: The analysis records of advanced generation
+                candidates (BR9.4; built from this Manager's S3 service when
+                omitted, unused for ordinary candidates)
         """
         self.logger = logging.getLogger(__name__)
         self._personas = persona_store or service_factory.get_persona_store()
@@ -274,6 +280,16 @@ class PersonaManager:
         self._clock = clock
         self._reader = participants
         self._delivery = asset_delivery
+        self._records = analysis_records
+
+    @property
+    def _analysis_records(self) -> Optional[AnalysisRecordArchive]:
+        """The record archive, or ``None`` without S3 (an advanced save then fails)."""
+        if self._records is None and self.s3_service is not None:
+            self._records = AnalysisRecordArchive(
+                self.s3_service, error_type=PersonaManagerError
+            )
+        return self._records
 
     @property
     def _asset_delivery(self) -> AssetDelivery:
@@ -788,7 +804,8 @@ class PersonaManager:
         """Remove what belonged to a deleted persona (BR3.1〜BR3.3).
 
         Bindings (after noting the dedicated datasets), long-term memory, the
-        dedicated datasets and the avatar, in that order. Every step runs even
+        dedicated datasets, the avatar and the analysis record copy of an
+        advanced generation's persona (BR9.4), in that order. Every step runs even
         when an earlier one failed; failures are ``persona.cleanup_failed``
         lines, never errors to the user.
         """
@@ -843,6 +860,12 @@ class PersonaManager:
                 self._delete_avatar_or_raise(str(avatar_path))
             except Exception as e:
                 self._cleanup_failed(persona_id, "avatar", e)
+
+        context = deleted.get("generation_context")
+        record_id = _advanced_record_id(context if isinstance(context, dict) else None)
+        if record_id is not None:
+            # Only this persona's copy (BR9.4); other personas keep theirs.
+            self._discard_record_copy(deleted.get("owner_sub"), record_id)
 
     def _dedicated_datasets(
         self, persona_id: str, bindings: List[PersonaBinding]
@@ -1784,7 +1807,7 @@ class PersonaManager:
                 persona = base
             try:
                 self._confirm_hold(claim, candidate)
-                persona_id = self.save_persona(principal, persona)
+                persona_id = self._save_candidate_persona(principal, candidate, persona)
             except (PersonaManagerError, AccessDeniedError):
                 if edited is not None:
                     raise
@@ -1809,6 +1832,82 @@ class PersonaManager:
             failed_names=tuple(failed_names),
             failed_datasets=tuple(failed_datasets),
         )
+
+    def _save_candidate_persona(
+        self, principal: Principal, candidate: PersonaCandidate, persona: Persona
+    ) -> str:
+        """Save one candidate's persona; an advanced one with its record copy (BR9.4).
+
+        The record is copied to the new persona's ID first and the persona then
+        points at that copy. When the persona cannot be saved the copy is
+        removed (a removal failure is ``persona.cleanup_failed``; the orphan
+        copy never shows in any list).
+
+        Raises:
+            PersonaManagerError: ``GENERATION_OPERATION_FAILED`` when the copy
+                failed, or the save's own error.
+            AccessDeniedError: The user may not create resources.
+        """
+        record_id = _advanced_record_id(persona.generation_context)
+        if record_id is None:
+            return self.save_persona(principal, persona)
+        archive = self._analysis_records
+        try:
+            if archive is None:
+                raise PersonaManagerError("no storage for the analysis record")
+            archive.commit_copy(candidate.owner_sub, record_id, persona.id)
+        except CodedError as e:
+            raise PersonaManagerError(
+                f"analysis record copy failed ({type(e).__name__})",
+                code=ErrorCode.GENERATION_OPERATION_FAILED,
+            ) from e
+        linked = replace(
+            persona,
+            generation_context={
+                **(persona.generation_context or {}),
+                "analysis_record_id": persona.id,
+            },
+        )
+        try:
+            return self.save_persona(principal, linked)
+        except (PersonaManagerError, AccessDeniedError):
+            self._discard_record_copy(candidate.owner_sub, persona.id)
+            raise
+
+    def _discard_record_copy(self, owner_sub: Optional[str], persona_id: str) -> None:
+        """Remove one persona's record copy; a failure is only logged (BR9.4)."""
+        archive = self._analysis_records
+        if archive is None or not owner_sub:
+            return
+        try:
+            archive.discard_copy(owner_sub, persona_id)
+        except Exception as e:
+            self._cleanup_failed(persona_id, "analysis_record", e)
+
+    def get_analysis_record(
+        self, principal: Principal, persona_id: str
+    ) -> Optional[AnalysisRecord]:
+        """The analysis record of a persona the user may read (BR9.4, ADR-010).
+
+        Returns:
+            The record, or ``None`` for an ordinary persona and when the record
+            is gone ("分析の記録は残っていません").
+
+        Raises:
+            CodedError: ``PERSONA_NOT_FOUND`` when unreadable or missing.
+            PersonaManagerError: The record could not be read.
+        """
+        found = self._read_consistent(persona_id)
+        AccessPolicy.ensure_readable(
+            principal, self._target_of(found, persona_id), ErrorCode.PERSONA_NOT_FOUND
+        )
+        assert found is not None
+        persona = found
+        record_id = _advanced_record_id(persona.generation_context)
+        archive = self._analysis_records
+        if record_id is None or archive is None or not persona.owner_sub:
+            return None
+        return archive.read_committed(persona.owner_sub, record_id)
 
     def _confirm_hold(self, claim: CandidateClaim, candidate: PersonaCandidate) -> None:
         """Check that ``claim`` still holds the candidate, right before its save.
@@ -1924,6 +2023,14 @@ class PersonaManager:
             filename=export_filename(persona.name),
             body=render_persona_markdown(persona),
         )
+
+
+def _advanced_record_id(context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The analysis record of an advanced generation's persona, if any (C7)."""
+    if not context or context.get("mode") != "advanced":
+        return None
+    record_id = context.get("analysis_record_id")
+    return str(record_id) if record_id else None
 
 
 def _matches(persona: Persona, query: str) -> bool:

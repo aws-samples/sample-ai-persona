@@ -10,10 +10,20 @@ export const TARGET_INDEX = 'TargetIndex';
 /** アンケートの待ちと実行中の疎な索引（src/services/stores/survey_store.py が Query する）。 */
 export const RUN_QUEUE_INDEX = 'RunQueueIndex';
 /**
+ * 高度な生成（ベータ、U1）の本人の一覧の GSI（src/services/stores/source_file_store.py・
+ * advanced_generation_store.py の OWNER_INDEX）。OwnerIndex とは別の名前で、射影は ALL。
+ */
+export const OWNER_CREATED_AT_INDEX = 'owner_sub-created_at';
+/**
  * アプリが IndexName で Query する GSI。App スタックはこの名前の GSI だけをタスクロールに
  * 付ける（`<テーブルの ARN>/index/<名前>`、U9）。
  */
-const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([OWNER_INDEX, TARGET_INDEX, RUN_QUEUE_INDEX]);
+const APP_QUERIED_INDEXES: ReadonlySet<string> = new Set([
+  OWNER_INDEX,
+  TARGET_INDEX,
+  RUN_QUEUE_INDEX,
+  OWNER_CREATED_AT_INDEX,
+]);
 
 /**
  * v1.0.0 の DynamoDB テーブル（Data スタック）。
@@ -82,6 +92,18 @@ export class Database extends Construct {
    * App スタックが GetItem・PutItem・UpdateItem・DeleteItem の 4 つだけを付ける（NFR5.8）。
    */
   public readonly surveyRunLeaseTable: dynamodb.TableV2;
+  /**
+   * 高度な生成（ベータ、U1、契約 C4）: 上げたファイルの記録。PK source_file_id、GSI
+   * owner_sub-created_at。applicationTables に入れる（App スタックが一括の操作を付ける）。
+   */
+  public readonly sourceFilesTable: dynamodb.TableV2;
+  /**
+   * 高度な生成（契約 C5）: 生成・イベント・結果の分割・ロック。PK pk・SK sk、GSI
+   * owner_sub-created_at、TTL expires_at。
+   */
+  public readonly advancedGenerationsTable: dynamodb.TableV2;
+  /** 管理者の設定（U1 は読むだけ）。PK setting_key。個人情報を持たない。 */
+  public readonly appSettingsTable: dynamodb.TableV2;
 
   /** The GSI names defined on each table (recorded where the table is created). */
   private readonly indexNames = new Map<dynamodb.TableV2, string[]>();
@@ -230,6 +252,51 @@ export class Database extends Construct {
       timeToLiveAttribute: 'expires_at',
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // 高度な生成（ベータ、U1、infrastructure-specification.md）。オンデマンド・AWS 管理キー・
+    // PITR・RETAIN（自前の KMS キーは作らない、NFR3.1）。新しいテーブルの追加で、既存の
+    // テーブルは置き換えない
+    const ownerIndexes = [gsi(OWNER_CREATED_AT_INDEX, 'owner_sub', 'created_at')];
+    this.sourceFilesTable = this.advancedTable('SourceFiles', {
+      partitionKey: { name: 'source_file_id', type: dynamodb.AttributeType.STRING },
+      globalSecondaryIndexes: ownerIndexes,
+    });
+    this.advancedGenerationsTable = this.advancedTable('AdvancedGenerations', {
+      partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+      globalSecondaryIndexes: ownerIndexes,
+      timeToLiveAttribute: 'expires_at',
+    });
+    // 管理者の設定は PITR と RETAIN だけ（設計どおり削除保護は付けない。U1 は読むだけ）
+    this.appSettingsTable = this.advancedTable('AppSettings', {
+      partitionKey: { name: 'setting_key', type: dynamodb.AttributeType.STRING },
+      deletionProtection: false,
+    });
+  }
+
+  /** An advanced generation table: on-demand, AWS managed key, PITR and RETAIN. */
+  private advancedTable(
+    id: string,
+    options: {
+      partitionKey: dynamodb.Attribute;
+      sortKey?: dynamodb.Attribute;
+      globalSecondaryIndexes?: dynamodb.GlobalSecondaryIndexPropsV2[];
+      timeToLiveAttribute?: string;
+      deletionProtection?: boolean;
+    },
+  ): dynamodb.TableV2 {
+    const { deletionProtection = true, globalSecondaryIndexes, ...keys } = options;
+    const table = new dynamodb.TableV2(this, id, {
+      ...keys,
+      billing: dynamodb.Billing.onDemand(),
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      globalSecondaryIndexes,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      ...(deletionProtection ? { deletionProtection: true } : {}),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.recordIndexes(table, globalSecondaryIndexes ?? []);
+    return table;
   }
 
   /** A table keyed by its parent's ID and a sort key, with PITR and deletion protection. */
@@ -304,9 +371,10 @@ export class Database extends Construct {
   }
 
   /**
-   * App スタックがタスクロールに権限を与え、環境変数に名前を渡す 8 テーブル。
+   * App スタックがタスクロールに権限を与え、環境変数に名前を渡す 11 テーブル。
    * U5: 古い紐付けの 2 テーブル（PersonaDatasetBindings・PersonaKBBindings）は外した
    * （U9 でテーブルの定義も外した。RETAIN のため AWS には残る）。
+   * 高度な生成（ベータ、U1）の 3 テーブルを足した（キーは src/config.py の *_TABLE_NAME）。
    */
   public get applicationTables(): Record<string, dynamodb.TableV2> {
     return {
@@ -318,6 +386,9 @@ export class Database extends Construct {
       SURVEYS_TABLE_NAME: this.surveysTable,
       KNOWLEDGE_BASES_TABLE_NAME: this.knowledgeBasesTable,
       JOBS_TABLE_NAME: this.jobsTable,
+      SOURCE_FILES_TABLE_NAME: this.sourceFilesTable,
+      ADVANCED_GENERATIONS_TABLE_NAME: this.advancedGenerationsTable,
+      APP_SETTINGS_TABLE_NAME: this.appSettingsTable,
     };
   }
 }

@@ -39,6 +39,7 @@ from web.error_messages import (
 from web.middleware import CSRFMiddleware
 from web.routers import (
     persona,
+    persona_advanced,
     discussion,
     interview,
     api,
@@ -124,12 +125,26 @@ templates.env.filters["markdown"] = render_markdown
 templates.env.globals["app_version"] = __version__
 templates.env.globals["user_badge"] = user_badge
 templates.env.globals["static_url"] = static_url
-for _mod in [persona, discussion, interview, settings, survey, auth, sharing]:
+for _mod in [
+    persona,
+    persona_advanced,
+    discussion,
+    interview,
+    settings,
+    survey,
+    auth,
+    sharing,
+]:
     _mod.templates.env.globals["app_version"] = __version__
     _mod.templates.env.globals["user_badge"] = user_badge
     _mod.templates.env.globals["static_url"] = static_url
 
 # ルーターの登録
+# 高度な生成（ベータ、U1）。AuthMiddleware と CSRF の対象のまま。/persona/{persona_id}/...
+# のルートより先に照らすため、persona より前に登録する
+app.include_router(
+    persona_advanced.router, prefix="/persona", tags=["persona-advanced"]
+)
 app.include_router(persona.router, prefix="/persona", tags=["persona"])
 app.include_router(discussion.router, prefix="/discussion", tags=["discussion"])
 app.include_router(interview.router, prefix="/interview", tags=["interview"])

@@ -1,7 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { AppStack } from '../lib/app-stack';
+import { AnalysisCodeInterpreter } from '../lib/constructs/code-interpreter';
 import { DataStack } from '../lib/data-stack';
+import { CODE_INTERPRETER_EXECUTION_ROLE } from '../lib/deployment-profile';
 import { EdgeStack } from '../lib/edge-stack';
 import { AppParameter, devParameter } from '../parameters';
 
@@ -218,7 +220,7 @@ describe('AppStack: Fargate', () => {
       'Personas', 'Discussions', 'UploadedFiles', 'Datasets', 'SurveyTemplates', 'Surveys',
       'KnowledgeBases', 'Jobs', 'Sessions', 'ResourceShares', 'PersonaCandidates',
       'PersonaBindings', 'DiscussionMessages', 'DiscussionReports', 'InterviewSessions',
-      'InterviewMessages',
+      'InterviewMessages', 'SourceFiles', 'AdvancedGenerations', 'AppSettings',
     ]) {
       expect(resources).toMatch(new RegExp(`Database${table}[0-9A-F]{8}Arn`));
     }
@@ -332,8 +334,13 @@ describe('AppStack: ログとメトリクス', () => {
     });
   });
 
-  test('メトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
-    const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+  test('認証のメトリクスフィルタ 7 つ（名前空間 AIPersona/Auth、RefreshFailed は reason の次元）', () => {
+    // 高度な生成の 3 つ（AIPersona/AdvancedGeneration）は下の節で確かめる
+    const all = Object.values(template.findResources('AWS::Logs::MetricFilter'));
+    expect(all).toHaveLength(10);
+    const filters = all.filter(
+      (f) => f.Properties.MetricTransformations[0].MetricNamespace === 'AIPersona/Auth',
+    );
     expect(filters).toHaveLength(7);
     const byName = Object.fromEntries(
       filters.map((f) => [f.Properties.MetricTransformations[0].MetricName, f.Properties]),
@@ -564,7 +571,7 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     }
   });
 
-  test('タグの 3 操作は uploads/* と candidates/* だけが対象', () => {
+  test('タグの 3 操作は uploads/*・candidates/*・analysis-records/*（高度な生成の保存前の記録、BR9.1）だけが対象', () => {
     const tagging = taskStatements(template).filter((s) =>
       [s.Action].flat().some((a: string) => a.endsWith('ObjectTagging')),
     );
@@ -577,7 +584,9 @@ describe('AppStack: ペルソナに付随するもの（U5、NFR1.33、NFR1.40�
     const resources = JSON.stringify(tagging[0].Resource);
     expect(resources).toContain('/uploads/*');
     expect(resources).toContain('/candidates/*');
-    expect([tagging[0].Resource].flat()).toHaveLength(2);
+    expect(resources).toContain('/analysis-records/*');
+    expect(resources).not.toContain('/sources/*');
+    expect([tagging[0].Resource].flat()).toHaveLength(3);
   });
 });
 
@@ -1045,5 +1054,223 @@ describe('AppStack: アンケートのステートマシン', () => {
         'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.claude-haiku-5-5',
       ].sort(),
     );
+  });
+});
+
+/**
+ * A CloudFormation value as text: `Fn::Join` is joined and a reference becomes a marker without
+ * quotes (so a JSON string built with tokens stays parseable).
+ */
+function joinedText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  const node = value as Record<string, any>;
+  if (Array.isArray(node['Fn::Join'])) {
+    const [delimiter, items] = node['Fn::Join'] as [string, unknown[]];
+    return items.map(joinedText).join(delimiter);
+  }
+  if (node['Fn::ImportValue'] !== undefined) {
+    return `IMPORT(${joinedText(node['Fn::ImportValue'])})`;
+  }
+  if (Array.isArray(node['Fn::GetAtt'])) {
+    return `GETATT(${(node['Fn::GetAtt'] as string[]).join('.')})`;
+  }
+  if (typeof node.Ref === 'string') {
+    return `REF(${node.Ref})`;
+  }
+  return JSON.stringify(node);
+}
+
+describe('AppStack: 高度な生成（ベータ、U1、BR1.4、BR2.8、BR9.1、NFR3.4、NFR3.10、NFR6.6〜NFR6.8）', () => {
+  const taskStatements = (t: Template) => statementsOfRole(t, 'AppTaskDefinitionTaskRole');
+  const codeInterpreters = (t: Template) =>
+    Object.entries(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+
+  test('Code Interpreter は 1 つで、SANDBOX、実行ロールを付けない（既定、NFR3.4）', () => {
+    expect(CODE_INTERPRETER_EXECUTION_ROLE).toBe('none');
+    const found = codeInterpreters(template);
+    expect(found).toHaveLength(1);
+    const [, resource] = found[0];
+    expect(resource.Properties.NetworkConfiguration).toEqual({ NetworkMode: 'SANDBOX' });
+    expect(resource.Properties.ExecutionRoleArn).toBeUndefined();
+    // 名前は英数字と _ だけ（AgentCore の名前の決まり）。Stage の環境の名前を含む
+    expect(resource.Properties.Name).toMatch(/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/);
+    expect(resource.Properties.Name).toContain('dev');
+  });
+
+  test('アプリに CODE_INTERPRETER_ID（この Code Interpreter の ID の属性）と ENABLE_ADVANCED_GENERATION=true を渡す', () => {
+    const [logicalId] = codeInterpreters(template)[0];
+    const env = envOf(template);
+    expect(env.CODE_INTERPRETER_ID).toEqual({ 'Fn::GetAtt': [logicalId, 'CodeInterpreterId'] });
+    expect(env.ENABLE_ADVANCED_GENERATION).toBe('true');
+  });
+
+  test.each([
+    [true, 'true'],
+    [false, 'false'],
+  ])('enableAdvancedGeneration=%s → ENABLE_ADVANCED_GENERATION=%s（資源はそのまま）', (value, expected) => {
+    const { template: t } = build({
+      context: { imageTag: 'abc1234' },
+      parameter: { enableAdvancedGeneration: value },
+    });
+    expect(envOf(t).ENABLE_ADVANCED_GENERATION).toBe(expected);
+    expect(codeInterpreters(t)).toHaveLength(1);
+  });
+
+  test('3 つのテーブルの名前をテーブルの参照で渡す（src/config.py の *_TABLE_NAME）', () => {
+    const env = envOf(template);
+    const expected: Record<string, string> = {
+      SOURCE_FILES_TABLE_NAME: 'DatabaseSourceFiles',
+      ADVANCED_GENERATIONS_TABLE_NAME: 'DatabaseAdvancedGenerations',
+      APP_SETTINGS_TABLE_NAME: 'DatabaseAppSettings',
+    };
+    for (const [name, logicalId] of Object.entries(expected)) {
+      expect(JSON.stringify(env[name])).toContain(logicalId);
+    }
+  });
+
+  test('タスクロールは 3 つのテーブルと、2 つの GSI を名前で読み書きできる（index/* なし）', () => {
+    const statements = taskStatements(template).filter((s) =>
+      /DatabaseSourceFiles|DatabaseAdvancedGenerations|DatabaseAppSettings/.test(resourcesText(s)),
+    );
+    expect(statements.length).toBeGreaterThan(0);
+    const actions = new Set(actionsIn(statements));
+    for (const action of ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query']) {
+      expect(actions.has(action)).toBe(true);
+    }
+    const text = JSON.stringify(statements);
+    // `<テーブルの ARN>/index/<名前>` は Fn::Join の [{Fn::ImportValue: <テーブルの ARN>}, "/index/<名前>"]
+    expect(text).toMatch(/DatabaseSourceFiles[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
+    expect(text).toMatch(/DatabaseAdvancedGenerations[0-9A-F]{8}Arn[^"]*"\},"\/index\/owner_sub-created_at"/);
+    expect(text).not.toContain('/index/*');
+  });
+
+  test('Code Interpreter の 3 つの操作は、この Code Interpreter の ARN だけ', () => {
+    const [logicalId] = codeInterpreters(template)[0];
+    const statements = taskStatements(template).filter((s) =>
+      actionsIn([s]).some((a) => /CodeInterpreter/.test(a)),
+    );
+    expect(statements).toHaveLength(1);
+    expect([statements[0].Action].flat().sort()).toEqual([
+      'bedrock-agentcore:InvokeCodeInterpreter',
+      'bedrock-agentcore:StartCodeInterpreterSession',
+      'bedrock-agentcore:StopCodeInterpreterSession',
+    ]);
+    expect([statements[0].Resource].flat()).toEqual([
+      { 'Fn::GetAtt': [logicalId, 'CodeInterpreterArn'] },
+    ]);
+  });
+
+  test('バケットの CORS はカスタムリソースで PUT だけ、オリジンは appBaseUrl と localhost:8000（dev）、ETag を読める', () => {
+    const resources = Object.values(template.findResources('Custom::UploadBucketCors'));
+    expect(resources).toHaveLength(1);
+    const props = resources[0].Properties;
+    const create = JSON.parse(joinedText(props.Create));
+    const update = JSON.parse(joinedText(props.Update));
+    const remove = JSON.parse(joinedText(props.Delete));
+    expect(create.service).toBe('S3');
+    expect(create.action).toBe('putBucketCors');
+    expect(update).toEqual(create);
+    expect(create.parameters.Bucket).toMatch(/^IMPORT\(.*UploadBucket/);
+    expect(create.parameters.CORSConfiguration).toEqual({
+      CORSRules: [
+        {
+          AllowedMethods: ['PUT'],
+          AllowedOrigins: [expect.stringMatching(/^https:\/\/GETATT\(CloudFront.*DomainName\)$/), 'http://localhost:8000'],
+          AllowedHeaders: ['content-type'],
+          ExposeHeaders: ['ETag'],
+          MaxAgeSeconds: 3000,
+        },
+      ],
+    });
+    // 消すときは CORS の設定だけを外す（バケットは消さない）
+    expect(remove).toMatchObject({ service: 'S3', action: 'deleteBucketCors' });
+    expect(remove.parameters).toEqual({ Bucket: create.parameters.Bucket });
+    // オリジンは APP_BASE_URL と同じ値
+    expect(JSON.stringify(envOf(template).APP_BASE_URL)).toContain('CloudFront');
+  });
+
+  test('CORS のカスタムリソースのポリシーは s3:PutBucketCORS をこのバケットだけ', () => {
+    const policies = Object.entries(template.findResources('AWS::IAM::Policy')).filter(([id]) =>
+      id.startsWith('UploadBucketCorsCustomResourcePolicy'),
+    );
+    expect(policies).toHaveLength(1);
+    const statements = policies[0][1].Properties.PolicyDocument.Statement as any[];
+    expect(statements).toHaveLength(1);
+    expect(statements[0].Action).toBe('s3:PutBucketCORS');
+    expect(joinedText(statements[0].Resource)).toMatch(/^IMPORT\(.*UploadBucket/);
+  });
+
+  test('メトリクスフィルタ 3 つ（AIPersona/AdvancedGeneration。値は 1、既定値なし、アラームなし）', () => {
+    const filters = Object.values(template.findResources('AWS::Logs::MetricFilter'))
+      .map((f) => f.Properties)
+      .filter((p) => p.MetricTransformations[0].MetricNamespace === 'AIPersona/AdvancedGeneration');
+    const byName = Object.fromEntries(filters.map((p) => [p.MetricTransformations[0].MetricName, p]));
+    expect(Object.keys(byName).sort()).toEqual(['GenerationCompleted', 'GenerationFailed', 'UploadFailed']);
+    for (const props of filters) {
+      expect(props.MetricTransformations[0].MetricValue).toBe('1');
+      expect(props.MetricTransformations[0].DefaultValue).toBeUndefined();
+    }
+    // アプリのログ（src/managers/shared/advanced_generation_log.py）の event と status の値
+    expect(byName.GenerationCompleted.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.finished") && ($.status = "done") }',
+    );
+    expect(byName.GenerationCompleted.MetricTransformations[0].Dimensions).toBeUndefined();
+    expect(byName.GenerationFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.finished") && ($.status = "failed") }',
+    );
+    expect(byName.GenerationFailed.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'stage', Value: '$.stage' },
+      { Key: 'error_code', Value: '$.error_code' },
+    ]);
+    expect(byName.UploadFailed.FilterPattern).toBe(
+      '{ ($.event = "advanced_generation.upload_completed") && ($.status = "error") }',
+    );
+    expect(byName.UploadFailed.MetricTransformations[0].Dimensions).toEqual([
+      { Key: 'error_code', Value: '$.error_code' },
+    ]);
+    template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+  });
+
+  test('既存の資源の暗号化に触れない: KMS の鍵を App スタックに作らない', () => {
+    template.resourceCountIs('AWS::KMS::Key', 0);
+  });
+});
+
+describe('AnalysisCodeInterpreter（実行ロールの切り替え先、NFR3.4）', () => {
+  function synth(executionRole: 'none' | 'empty'): Template {
+    const app = new cdk.App({ context: { ...FEATURE_FLAGS } });
+    const s = new cdk.Stack(app, 'Test', { env: TOKYO });
+    new AnalysisCodeInterpreter(s, 'AnalysisCodeInterpreter', { envName: 'dev', executionRole });
+    return Template.fromStack(s);
+  }
+
+  test('none: ロールを作らず、ExecutionRoleArn を省く', () => {
+    const t = synth('none');
+    t.resourceCountIs('AWS::IAM::Role', 0);
+    const [resource] = Object.values(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+    expect(resource.Properties.ExecutionRoleArn).toBeUndefined();
+  });
+
+  test('empty: 許可のポリシーのないロール（信頼は bedrock-agentcore.amazonaws.com、aws:SourceAccount の条件）', () => {
+    const t = synth('empty');
+    const roles = Object.entries(t.findResources('AWS::IAM::Role'));
+    expect(roles).toHaveLength(1);
+    const [roleId, role] = roles[0];
+    expect(role.Properties.AssumeRolePolicyDocument.Statement).toEqual([
+      {
+        Action: 'sts:AssumeRole',
+        Effect: 'Allow',
+        Principal: { Service: 'bedrock-agentcore.amazonaws.com' },
+        Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' } },
+      },
+    ]);
+    expect(role.Properties.Policies).toBeUndefined();
+    expect(role.Properties.ManagedPolicyArns).toBeUndefined();
+    t.resourceCountIs('AWS::IAM::Policy', 0);
+    const [resource] = Object.values(t.findResources('AWS::BedrockAgentCore::CodeInterpreterCustom'));
+    expect(resource.Properties.ExecutionRoleArn).toEqual({ 'Fn::GetAtt': [roleId, 'Arn'] });
+    expect(resource.Properties.NetworkConfiguration).toEqual({ NetworkMode: 'SANDBOX' });
   });
 });

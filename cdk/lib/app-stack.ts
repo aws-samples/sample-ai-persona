@@ -10,18 +10,29 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import { AwsCustomResource } from 'aws-cdk-lib/custom-resources';
+import {
+  AwsCustomResource,
+  AwsCustomResourcePolicy,
+  AwsSdkCall,
+  PhysicalResourceId,
+} from 'aws-cdk-lib/custom-resources';
 import { AppParameter } from '../parameters';
 import { bedrockInferenceArns, surveyModelArns } from './bedrock-arns';
 import { allowIngressFromCidrs, ClosedNetwork } from './constructs/closed-network';
 import { CloudFrontDistribution } from './constructs/cloudfront';
+import { AnalysisCodeInterpreter } from './constructs/code-interpreter';
 import { PASSWORD_POLICY } from './constructs/cognito';
 import { FargateAppService } from './constructs/fargate-service';
 import { SurveyRunStateMachine } from './constructs/survey-run-state-machine';
 import { ValidationEnvironment } from './constructs/validation-environment';
 import { Vpc } from './constructs/vpc';
 import { DataStack } from './data-stack';
-import { AuthMode, ResolvedProfile, resolveDeploymentProfile } from './deployment-profile';
+import {
+  AuthMode,
+  CODE_INTERPRETER_EXECUTION_ROLE,
+  ResolvedProfile,
+  resolveDeploymentProfile,
+} from './deployment-profile';
 import { ecrLayerBucketArn, EndpointAccessScope, TASK_LIST_ACTIONS } from './endpoint-policies';
 import { acknowledgeAll, iam5ExportedResourceId, iam5ResourceId, NAG_REASONS } from './nag-reasons';
 import { resolveSurveyRunSettings, SurveyRunSettings } from './survey-run';
@@ -82,6 +93,35 @@ const AUTH_METRICS: { name: string; event: string; dimensions?: Record<string, s
   // U2: 認可で拒否した件数（not_found / denied / hidden / role_required）。アラームは作らない
   { name: 'AuthzDenied', event: 'authz.denied', dimensions: { reason: '$.reason' } },
 ];
+
+/**
+ * 高度な生成（ベータ、U1）の件数のメトリクス（monitoring-design.md、NFR6.6〜NFR6.8）。event と
+ * status の値はアプリのログ（src/managers/shared/advanced_generation_log.py の 2 つの出来事）と同じ。
+ * 次元の値は列挙の値（段階の名前とエラーコード）だけ。アラームは作らない（公開の Stage だけ）。
+ */
+const ADVANCED_GENERATION_METRICS: {
+  name: string;
+  event: string;
+  status: string;
+  dimensions?: Record<string, string>;
+}[] = [
+  { name: 'GenerationCompleted', event: 'advanced_generation.finished', status: 'done' },
+  {
+    name: 'GenerationFailed',
+    event: 'advanced_generation.finished',
+    status: 'failed',
+    dimensions: { stage: '$.stage', error_code: '$.error_code' },
+  },
+  {
+    name: 'UploadFailed',
+    event: 'advanced_generation.upload_completed',
+    status: 'error',
+    dimensions: { error_code: '$.error_code' },
+  },
+];
+
+/** dev の Stage のバケットの CORS に足すローカルのアプリのオリジン（security-design.md §5）。 */
+const LOCAL_APP_ORIGIN = 'http://localhost:8000';
 
 const HTTPS = ec2.Port.tcp(443);
 
@@ -254,6 +294,11 @@ export class AppStack extends Stack {
     app.container.addSecret('COGNITO_CLIENT_SECRET', ecs.Secret.fromSecretsManager(clientSecret));
 
     this.grantTaskRole(app.taskDefinition.taskRole, parameter, data, surveyRun, profile, inferenceArns);
+    // 高度な生成（ベータ、U1、FR2.5、BR1.4）: 閉域の Stage では作らない（アプリは
+    // closedFeatureEnvironment の ENABLE_ADVANCED_GENERATION=false で止まる）
+    if (!network) {
+      this.addAdvancedGeneration(app, logGroup, data, parameter, appBaseUrl);
+    }
     // 閉域対応 U2（BR1.1、BR1.3）: アクセス先の資源（ロググループ・秘密）ができてから、タスクロールと
     // 同じ参照でエンドポイントのポリシーを付ける
     if (network) {
@@ -280,6 +325,101 @@ export class AppStack extends Stack {
       // 閉域対応 U2（BR3.5）: IP は aws route53resolver list-resolver-endpoint-ip-addresses で調べる
       new CfnOutput(this, 'ResolverEndpointId', { value: network.resolverEndpoint.attrResolverEndpointId });
     }
+  }
+
+  /**
+   * 高度な生成（ベータ、U1、infrastructure-specification.md）の公開の Stage だけの資源:
+   * Code Interpreter とタスクロールの 3 つの操作・アプリの CODE_INTERPRETER_ID、バケットの CORS、
+   * メトリクスフィルタ。3 つのテーブル・ライフサイクルの規則・タグの権限は両方の Stage に共通。
+   */
+  private addAdvancedGeneration(
+    app: FargateAppService,
+    logGroup: logs.ILogGroup,
+    data: DataStack,
+    parameter: AppParameter,
+    appBaseUrl: string,
+  ): void {
+    const codeInterpreter = new AnalysisCodeInterpreter(this, 'AnalysisCodeInterpreter', {
+      envName: parameter.envName,
+      executionRole: CODE_INTERPRETER_EXECUTION_ROLE,
+    });
+    app.container.addEnvironment('CODE_INTERPRETER_ID', codeInterpreter.codeInterpreterId);
+    // セッションの開始・呼び出し・停止は、この Code Interpreter だけ（NFR3.4）
+    app.taskDefinition.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: [
+        'bedrock-agentcore:StartCodeInterpreterSession',
+        'bedrock-agentcore:InvokeCodeInterpreter',
+        'bedrock-agentcore:StopCodeInterpreterSession',
+      ],
+      resources: [codeInterpreter.codeInterpreterArn],
+    }));
+
+    this.addUploadBucketCors(data.uploadBucket.bucket, [
+      appBaseUrl,
+      ...(parameter.envName === 'dev' ? [LOCAL_APP_ORIGIN] : []),
+    ]);
+
+    for (const metric of ADVANCED_GENERATION_METRICS) {
+      new logs.MetricFilter(this, `${metric.name}Filter`, {
+        logGroup,
+        metricNamespace: 'AIPersona/AdvancedGeneration',
+        metricName: metric.name,
+        filterPattern: logs.FilterPattern.all(
+          logs.FilterPattern.stringValue('$.event', '=', metric.event),
+          logs.FilterPattern.stringValue('$.status', '=', metric.status),
+        ),
+        metricValue: '1',
+        dimensions: metric.dimensions,
+      });
+    }
+  }
+
+  /**
+   * ブラウザからのパートの PUT の CORS（NFR3.10、BR2.8、security-design.md §5）。
+   *
+   * バケットは Data スタックにあり、オリジン（CloudFront のドメイン）は App スタックで決まるため、
+   * App スタックのカスタムリソースが PutBucketCors で設定する（Data → App の参照を作らない）。
+   * PUT だけを許し、パートの ETag を画面が読めるようにする。CORS は認可ではない（書き込みを守るのは
+   * 署名付き URL）。消すときは CORS の設定だけを外す。カスタムリソースの Lambda はスタックに 1 つの
+   * シングルトン（アプリクライアントの秘密の取得と同じ）で、このリソースの権限は
+   * s3:PutBucketCORS をこのバケットにだけ（DeleteBucketCors の IAM の操作も s3:PutBucketCORS）。
+   */
+  private addUploadBucketCors(bucket: s3.IBucket, origins: string[]): void {
+    const physicalResourceId = PhysicalResourceId.of('UploadBucketCors');
+    const putCors: AwsSdkCall = {
+      service: 'S3',
+      action: 'putBucketCors',
+      parameters: {
+        Bucket: bucket.bucketName,
+        CORSConfiguration: {
+          CORSRules: [
+            {
+              AllowedMethods: ['PUT'],
+              AllowedOrigins: origins,
+              AllowedHeaders: ['content-type'],
+              ExposeHeaders: ['ETag'],
+              MaxAgeSeconds: 3000,
+            },
+          ],
+        },
+      },
+      physicalResourceId,
+    };
+    new AwsCustomResource(this, 'UploadBucketCors', {
+      resourceType: 'Custom::UploadBucketCors',
+      onCreate: putCors,
+      onUpdate: putCors,
+      onDelete: {
+        service: 'S3',
+        action: 'deleteBucketCors',
+        parameters: { Bucket: bucket.bucketName },
+        physicalResourceId,
+      },
+      policy: AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({ actions: ['s3:PutBucketCORS'], resources: [bucket.bucketArn] }),
+      ]),
+      installLatestAwsSdk: false,
+    });
   }
 
   /**
@@ -453,7 +593,11 @@ export class AppStack extends Stack {
 
     const taskPolicy = defaultPolicyOf(app.taskDefinition.taskRole);
     acknowledgeAll(taskPolicy, ['IAM5[Resource::*]'], NAG_REASONS.wildcardListApis);
-    acknowledgeAll(taskPolicy, bucketObjects('/*', '/uploads/*', '/candidates/*'), NAG_REASONS.bucketObjects);
+    acknowledgeAll(
+      taskPolicy,
+      bucketObjects('/*', '/uploads/*', '/candidates/*', '/analysis-records/*'),
+      NAG_REASONS.bucketObjects,
+    );
     acknowledgeAll(taskPolicy, inference, NAG_REASONS.bedrockInference);
     acknowledgeAll(
       taskPolicy,
@@ -587,6 +731,8 @@ export class AppStack extends Stack {
       ENABLE_ADDITIONAL_PERSONA_MODELS: String(parameter.enableAdditionalPersonaModels ?? false),
       // optional のため未指定時は既定 true。String(undefined) で "undefined" が渡るのを防ぐ
       ENABLE_DATASET_ANALYSIS: String(parameter.enableDatasetAnalysis ?? true),
+      // 高度な生成（ベータ、U1）の kill switch。閉域の Stage は closedFeatureEnvironment の false で上書きする
+      ENABLE_ADVANCED_GENERATION: String(parameter.enableAdvancedGeneration ?? true),
       SURVEY_S3_PREFIX: parameter.surveyS3Prefix ?? 'survey-results/',
       // アンケートの実行基盤（基盤設計 4 章、src/config.py の SURVEY_*）。打ち切り時間はステートマシンと同じ値
       SURVEY_STATE_MACHINE_ARN: survey.stateMachine.stateMachine.stateMachineArn,
@@ -655,7 +801,10 @@ export class AppStack extends Stack {
    * grantReadWrite を明示的な文に置き換え、古いバージョンの操作（GetObjectVersion*・
    * ListBucketVersions・DeleteObjectVersion）を付けない。消したものは古いバージョンとして
    * 7 日残るが、アプリからは読めない。タグの操作は紐付けの印を付け外しする
-   * uploads/* と candidates/* だけ。
+   * uploads/* と candidates/* と、高度な生成の保存前の分析の記録（タグ pending=true を付けて書き、
+   * 保存でタグなしに写す、BR9.1・BR9.4）の analysis-records/* だけ。分割アップロード
+   * （CreateMultipartUpload・UploadPart・CompleteMultipartUpload）は s3:PutObject、ListParts は
+   * s3:ListMultipartUploadParts で、今の文のまま足りる。
    */
   private grantUploadBucket(taskRole: iam.IRole, bucket: s3.IBucket): void {
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
@@ -670,7 +819,11 @@ export class AppStack extends Stack {
     }));
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['s3:GetObjectTagging', 's3:PutObjectTagging', 's3:DeleteObjectTagging'],
-      resources: [bucket.arnForObjects('uploads/*'), bucket.arnForObjects('candidates/*')],
+      resources: [
+        bucket.arnForObjects('uploads/*'),
+        bucket.arnForObjects('candidates/*'),
+        bucket.arnForObjects('analysis-records/*'),
+      ],
     }));
     taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['s3:ListBucket', 's3:ListBucketMultipartUploads'],

@@ -5,17 +5,50 @@ Amazon S3へのファイルアップロード・ダウンロード・削除を�
 
 import logging
 from collections.abc import Callable, Iterator
-from typing import Any, Mapping
+from dataclasses import dataclass
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlencode
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 from ..models.asset_delivery import AssetStream
 from ..models.errors import CodedError, ErrorCode
 from ..models.external_failure import FailureClass, classify_aws_error
+from ..models.source_file import PartUrl
 
 logger = logging.getLogger(__name__)
+
+#: S3 error codes that mean "the object or the multipart upload is not there".
+_NOT_FOUND_CODES = frozenset({"NoSuchKey", "NoSuchUpload", "404", "NotFound"})
+#: ``ListParts`` returns at most this many parts per page.
+_LIST_PARTS_PAGE = 1000
+
+
+def _s3_client(region_name: str) -> Any:
+    """An S3 client that signs with SigV4 on the regional virtual host.
+
+    Presigned URLs (the existing GET and the part PUT of advanced generation)
+    then look like ``https://<bucket>.s3.<region>.amazonaws.com/<key>?X-Amz-...``
+    (security-design.md §3, NFR3.12): SigV4 only, and no redirect from the
+    global endpoint that a browser PUT could not follow.
+    """
+    return boto3.client(
+        "s3",
+        region_name=region_name,
+        endpoint_url=f"https://s3.{region_name}.amazonaws.com",
+        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+    )
+
+
+@dataclass(frozen=True)
+class UploadedPart:
+    """One part S3 holds for a multipart upload (``ListParts``)."""
+
+    part_number: int
+    size_bytes: int
+    etag: str
 
 
 class S3ServiceError(CodedError):
@@ -34,6 +67,13 @@ class S3ServiceError(CodedError):
     ) -> None:
         super().__init__(message, code=code)
         self.failure = failure
+
+
+class S3ObjectExistsError(S3ServiceError):
+    """A conditional put found an object already at the key (``IfNoneMatch``)."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, code=ErrorCode.S3_OPERATION_FAILED)
 
 
 #: Size of one streamed read (closed network U4, BR2.2).
@@ -86,7 +126,7 @@ class S3Service:
         """
         self.bucket_name = bucket_name
         self.region_name = region_name
-        self.s3_client = boto3.client("s3", region_name=region_name)
+        self.s3_client = _s3_client(region_name)
         logger.info(f"S3Service initialized with bucket: {bucket_name}")
 
     def upload_file(
@@ -341,6 +381,195 @@ class S3Service:
         )
         return self.path_of(dest_key)
 
+    # --- Advanced generation U1: multipart uploads and head reads ------------------
+
+    def create_multipart_upload(self, s3_key: str, content_type: str) -> str:
+        """Start a multipart upload at ``s3_key`` (BR2.3).
+
+        Returns:
+            The upload ID.
+
+        Raises:
+            S3ServiceError: ``S3_OPERATION_FAILED``.
+        """
+        response = self._object_call(
+            "create_multipart_upload", s3_key, ContentType=content_type
+        )
+        return str(response["UploadId"])
+
+    def generate_upload_part_urls(
+        self,
+        s3_path: str,
+        upload_id: str,
+        part_numbers: Sequence[int],
+        expiration: int = 3600,
+    ) -> list[PartUrl]:
+        """Presigned ``UploadPart`` URLs for the given part numbers (BR2.3, BR2.4).
+
+        Only ``Bucket``, ``Key``, ``UploadId`` and ``PartNumber`` are signed;
+        no Content-MD5 or checksum header is part of the signature, because the
+        browser sends none (PoC Q6). A URL writes to this one key only.
+
+        Raises:
+            S3ServiceError: ``S3_OPERATION_FAILED``.
+        """
+        s3_key = self._extract_key_from_path(s3_path)
+        urls: list[PartUrl] = []
+        try:
+            for number in part_numbers:
+                url = self.s3_client.generate_presigned_url(
+                    "upload_part",
+                    Params={
+                        "Bucket": self.bucket_name,
+                        "Key": s3_key,
+                        "UploadId": upload_id,
+                        "PartNumber": int(number),
+                    },
+                    ExpiresIn=expiration,
+                )
+                urls.append(PartUrl(part_number=int(number), url=str(url)))
+        except (ClientError, BotoCoreError) as e:
+            logger.warning("S3 part URL signing failed: %s", type(e).__name__)
+            raise S3ServiceError(
+                "part url generation failed", code=ErrorCode.S3_OPERATION_FAILED
+            ) from e
+        # The URLs themselves are never logged (security-design.md §3).
+        logger.info("Generated %d part URLs", len(urls))
+        return urls
+
+    def list_parts(self, s3_key: str, upload_id: str) -> list[UploadedPart]:
+        """Every part S3 holds for the upload, in part-number order (BR2.7).
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` (no such upload) or
+                ``S3_OPERATION_FAILED``.
+        """
+        parts: list[UploadedPart] = []
+        marker = 0
+        while True:
+            response = self._object_call(
+                "list_parts",
+                s3_key,
+                UploadId=upload_id,
+                MaxParts=_LIST_PARTS_PAGE,
+                PartNumberMarker=marker,
+            )
+            for part in response.get("Parts", []):
+                parts.append(
+                    UploadedPart(
+                        part_number=int(part["PartNumber"]),
+                        size_bytes=int(part["Size"]),
+                        etag=str(part["ETag"]),
+                    )
+                )
+            if not response.get("IsTruncated"):
+                return parts
+            marker = int(response["NextPartNumberMarker"])
+
+    def complete_multipart_upload(
+        self, s3_key: str, upload_id: str, parts: Sequence[tuple[int, str]]
+    ) -> None:
+        """Join the parts ``[(part_number, etag)]`` into the object.
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` (no such upload) or
+                ``S3_OPERATION_FAILED`` (including a wrong part list).
+        """
+        self._object_call(
+            "complete_multipart_upload",
+            s3_key,
+            UploadId=upload_id,
+            MultipartUpload={
+                "Parts": [
+                    {"PartNumber": int(number), "ETag": etag}
+                    for number, etag in sorted(parts)
+                ]
+            },
+        )
+
+    def abort_multipart_upload(self, s3_key: str, upload_id: str) -> bool:
+        """Drop an upload and its parts (BR2.5, BR2.7). Idempotent.
+
+        Returns:
+            ``False`` when the upload was already gone.
+
+        Raises:
+            S3ServiceError: ``S3_OPERATION_FAILED``.
+        """
+        try:
+            self._object_call("abort_multipart_upload", s3_key, UploadId=upload_id)
+        except S3ServiceError as e:
+            if e.code is ErrorCode.S3_OBJECT_NOT_FOUND:
+                return False
+            raise
+        return True
+
+    def read_range(self, s3_key: str, length: int) -> bytes:
+        """The first ``length`` bytes of an object (the whole object if shorter, BR3.1).
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
+        """
+        response = self._object_call(
+            "get_object", s3_key, Range=f"bytes=0-{int(length) - 1}"
+        )
+        return bytes(response["Body"].read())
+
+    def get_checksum(self, s3_key: str) -> str | None:
+        """The whole-object ``ChecksumCRC64NVME`` of an object (BR3.3, contract C4).
+
+        Returns:
+            The checksum, or ``None`` when S3 holds none for the object.
+
+        Raises:
+            S3ServiceError: ``S3_OBJECT_NOT_FOUND`` or ``S3_OPERATION_FAILED``.
+        """
+        response = self._object_call("head_object", s3_key, ChecksumMode="ENABLED")
+        checksum = response.get("ChecksumCRC64NVME")
+        return str(checksum) if checksum else None
+
+    def put_new_object(
+        self,
+        s3_key: str,
+        body: bytes,
+        content_type: str,
+        tags: Mapping[str, str] | None = None,
+    ) -> None:
+        """Write an object only when nothing is at the key (``IfNoneMatch: *``).
+
+        Used for the analysis record, written with ``pending=true`` until a
+        persona is saved (BR9.1).
+
+        Raises:
+            S3ObjectExistsError: An object is already at the key.
+            S3ServiceError: ``S3_OPERATION_FAILED``.
+        """
+        kwargs: dict[str, Any] = {
+            "Body": body,
+            "ContentType": content_type,
+            "IfNoneMatch": "*",
+        }
+        if tags:
+            kwargs["Tagging"] = urlencode(dict(tags))
+        try:
+            self.s3_client.put_object(Bucket=self.bucket_name, Key=s3_key, **kwargs)
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            if error_code in ("PreconditionFailed", "412"):
+                raise S3ObjectExistsError("object already exists") from e
+            logger.warning("S3 put_object (new) failed: %s", error_code)
+            raise S3ServiceError(
+                f"s3 put_object failed ({error_code})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+                failure=classify_aws_error(error_code),
+            ) from e
+        except BotoCoreError as e:
+            logger.warning("S3 put_object (new) unreachable: %s", type(e).__name__)
+            raise S3ServiceError(
+                f"s3 put_object unreachable ({type(e).__name__})",
+                code=ErrorCode.S3_OPERATION_FAILED,
+            ) from e
+
     def _object_call(self, operation: str, s3_key: str, **kwargs: Any) -> Any:
         try:
             return getattr(self.s3_client, operation)(
@@ -349,6 +578,11 @@ class S3Service:
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.warning("S3 %s failed: %s", operation, error_code)
+            if error_code in _NOT_FOUND_CODES:
+                raise S3ServiceError(
+                    f"s3 {operation}: not found ({error_code})",
+                    code=ErrorCode.S3_OBJECT_NOT_FOUND,
+                ) from e
             raise S3ServiceError(
                 f"s3 {operation} failed ({error_code})",
                 code=ErrorCode.S3_OPERATION_FAILED,

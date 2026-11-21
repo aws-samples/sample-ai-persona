@@ -28,6 +28,10 @@ function expectedPaths(data: string): Record<string, string[]> {
   const table = (id: string) => `${data}/Database/${id}/Resource`;
   return {
     'AWS::DynamoDB::GlobalTable': [
+      // 高度な生成（ベータ、U1、契約 C4・C5）
+      'AdvancedGenerations',
+      'AppSettings',
+      'SourceFiles',
       'CustomPersonaData',
       'Datasets',
       'DiscussionMessages',
@@ -71,6 +75,8 @@ function tablesWithoutDeletionProtection(data: string): string[] {
     table('InterviewMessages'), // 実行中のインタビューの発言（U6、最長 8 日）
     table('InterviewSessions'), // 実行中のインタビュー（U6、最長 7 日）
     table('PersonaCandidates'), // 生成候補（U5、8 時間）
+    // 管理者の設定（高度な生成 U1、infrastructure-specification.md: PITR と RETAIN。個人情報を持たない）
+    table('AppSettings'),
   ];
 }
 
@@ -163,7 +169,7 @@ describe.each(VARIANTS)('$name の Data スタック', ({ name, build }) => {
     }
   });
 
-  test('GlobalTable の Replicas の削除保護: 一時データの 3 テーブルを除く全件で true（NFR7.18）', () => {
+  test('GlobalTable の Replicas の削除保護: 一時データの 3 テーブルと AppSettings を除く全件で true（NFR7.18）', () => {
     const tables = byPath('AWS::DynamoDB::GlobalTable');
     const unprotected = [...tables]
       .filter(([, { resource }]) =>

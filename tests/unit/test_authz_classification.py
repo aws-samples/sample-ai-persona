@@ -1,6 +1,7 @@
 """判定を通らない取得経路の機械検査（BR2.15、NFR1.2、NFR1.8、NFR Design R-05）。
 
-``src/managers/*_manager.py`` の Manager の公開メソッドを ``ast`` で列挙し、
+``src/managers/*_manager.py`` と Manager のパッケージの ``src/managers/<package>/manager.py``
+（例: ``advanced_generation/manager.py``）の Manager の公開メソッドを ``ast`` で列挙し、
 ``tests/unit/authz_classification.py`` の分類の一覧と突き合わせる。
 
 - 一覧にないメソッド、一覧にあるがもうないメソッドがあれば失敗（ラチェット）
@@ -52,9 +53,14 @@ _POLICY_RECEIVERS = ("accesspolicy", "access_policy", "policy")
 # =============================================================================
 
 
+def _manager_files(directory: Path) -> list[Path]:
+    """``*_manager.py`` and each Manager package's ``<package>/manager.py``."""
+    return sorted([*directory.glob("*_manager.py"), *directory.glob("*/manager.py")])
+
+
 def _manager_classes(directory: Path) -> list[ast.ClassDef]:
     classes: list[ast.ClassDef] = []
-    for path in sorted(directory.glob("*_manager.py")):
+    for path in _manager_files(directory):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         classes += [
             node
@@ -299,6 +305,23 @@ class TestCheckerItself:
             "        return self._job_manager.get(principal, job_id)\n",
         )
         assert not check_problems(directory, {"FakeManager.result": Entry(Kind.CHECKS)})
+
+    def test_a_manager_package_is_scanned(self, tmp_path):
+        directory = self._write(tmp_path, "")
+        package = directory / "fake_package"
+        package.mkdir()
+        (package / "manager.py").write_text(
+            "class PackagedManager:\n"
+            "    def get(self, principal, item_id):\n"
+            "        return self._db.get(item_id)\n",
+            encoding="utf-8",
+        )
+        (package / "helpers.py").write_text(
+            "class HelperManager:\n    def ignored(self):\n        return 1\n",
+            encoding="utf-8",
+        )
+        problems = check_problems(directory, {})
+        assert problems == ["PackagedManager.get: 分類の一覧にない"]
 
     def test_unclassified_and_stale_entries_fail(self, tmp_path):
         directory = self._write(

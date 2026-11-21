@@ -1,0 +1,70 @@
+{% from "components/dialog.html" import dialog, dialog_open_button %}
+{% from "components/icons.html" import icon_check_circle, icon_x_circle %}
+{% from "persona/partials/advanced_labels.html" import encoding_label, type_label %}
+{#
+  区画 A のファイルの 1 行（S3、S4、W3）。列名・値・ファイル名はデータとして自動エスケープで
+  出す（BR3.4。|safe を使わない）。検査中の行は 2 秒ごとに自分を読み直す。
+  引数:
+    source_file ... SourceFile
+    row_error   ... error のときの文言（エラーコードから解決済み）
+#}
+{% set f = source_file %}
+{% set state = f.status.value %}
+{% set m = f.metadata %}
+<tr data-testid="advanced-upload-row" data-source-file-id="{{ f.source_file_id }}" data-state="{{ state }}" class="border-b align-top"
+    {%- if state == "inspecting" %} hx-get="/persona/advanced/uploads/{{ f.source_file_id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+    <td class="py-2 pr-2">
+        {% if state == "ready" %}
+        <input type="radio" name="source_file_ids" value="{{ f.source_file_id }}" id="advanced-use-{{ f.source_file_id }}"
+               data-testid="advanced-upload-select" class="w-4 h-4">
+        <label for="advanced-use-{{ f.source_file_id }}" class="sr-only">{{ f.filename }}を今回の生成に使う</label>
+        {% else %}
+        <span class="sr-only">選べません</span>
+        {% endif %}
+    </td>
+    <td class="py-2 pr-2"><span data-role="name">{{ f.filename }}</span> <span class="text-gray-500">（{{ "%.1f" | format(f.size_bytes / 1000000) }}MB）</span></td>
+    <td class="py-2 pr-2" data-testid="advanced-upload-status">
+        {% if state == "ready" and m %}
+        <span class="inline-flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
+        <span class="text-gray-700">{{ m.columns | length }} 列 / 約 {{ "{:,}".format(m.estimated_rows) }} 行 / {{ encoding_label(m.encoding.value) }}</span>
+        {% elif state == "error" %}
+        <span class="inline-flex items-start gap-1 text-red-800">{{ icon_x_circle("w-4 h-4") }} エラー: {{ row_error }}</span>
+        {% elif state == "inspecting" %}
+        <span>検査中</span>
+        {% else %}
+        <span>アップロード中</span>
+        {% endif %}
+    </td>
+    <td class="py-2">
+        {% if state == "ready" and m %}
+        {{ dialog_open_button("advanced-columns-" ~ f.source_file_id, "列を見る", "text-sm text-blue-700 underline hover:text-blue-900") }}
+        {% call dialog("advanced-columns-" ~ f.source_file_id, f.filename ~ " の列", panel_class="max-w-3xl") %}
+        <p class="text-sm text-gray-700 mb-3">文字コード {{ encoding_label(m.encoding.value) }} / 区切り {{ "タブ" if m.delimiter == "\t" else "カンマ" }} / 約 {{ "{:,}".format(m.estimated_rows) }} 行（見込み）</p>
+        <table class="w-full text-sm mb-4" data-testid="advanced-columns-table">
+            <caption class="sr-only">列名と推定した型</caption>
+            <thead><tr class="text-left border-b"><th scope="col" class="py-1 pr-2">列名</th><th scope="col" class="py-1">推定した型</th></tr></thead>
+            <tbody>
+                {% for column in m.columns %}
+                <tr class="border-b"><td class="py-1 pr-2">{{ column.name }}</td><td class="py-1">{{ type_label(column.inferred_type) }}</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="overflow-x-auto" tabindex="0" role="region" aria-label="先頭 {{ m.sample_rows | length }} 行">
+            <table class="text-sm" data-testid="advanced-sample-table">
+                <caption class="text-left font-medium mb-1">先頭 {{ m.sample_rows | length }} 行</caption>
+                <thead><tr class="text-left border-b">{% for column in m.columns[:50] %}<th scope="col" class="py-1 pr-3 whitespace-nowrap">{{ column.name }}</th>{% endfor %}</tr></thead>
+                <tbody>
+                    {% for row in m.sample_rows %}
+                    <tr class="border-b">{% for cell in row %}<td class="py-1 pr-3 whitespace-nowrap">{{ cell }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="text-xs text-gray-600 mt-3">行数は先頭の行から見積もった値です。前準備で確定します。</p>
+        <div class="mt-4 text-right">
+            <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">閉じる</button>
+        </div>
+        {% endcall %}
+        {% endif %}
+    </td>
+</tr>

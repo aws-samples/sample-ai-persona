@@ -19,6 +19,7 @@ Who may save, read or edit a persona is decided by ``PersonaManager``.
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Mapping, Optional, Sequence
 
 import boto3
@@ -34,6 +35,28 @@ logger = logging.getLogger(__name__)
 BATCH_LIMIT = 100
 #: Re-reads of ``UnprocessedKeys`` before giving up.
 UNPROCESSED_REREADS = 3
+
+
+def _to_dynamo(value: Any) -> Any:
+    """Floats become ``Decimal`` (``TypeSerializer`` refuses floats)."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, Mapping):
+        return {k: _to_dynamo(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_dynamo(v) for v in value]
+    return value
+
+
+def _from_dynamo(value: Any) -> Any:
+    """``Decimal`` back to ``int`` / ``float``."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {k: _from_dynamo(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_from_dynamo(v) for v in value]
+    return value
 
 
 class PersonaStoreError(CodedError):
@@ -248,7 +271,7 @@ class PersonaStore:
         raise PersonaStoreError("personas left unprocessed after three re-reads")
 
     def _item(self, values: Mapping[str, Any]) -> dict[str, Any]:
-        return {k: self._serializer.serialize(v) for k, v in values.items()}
+        return {k: self._serializer.serialize(_to_dynamo(v)) for k, v in values.items()}
 
     def _persona(self, item: Mapping[str, Any]) -> Persona:
         data = {k: self._deserializer.deserialize(v) for k, v in item.items()}
@@ -269,7 +292,7 @@ class PersonaStore:
             city=data.get("city"),
             tags=data.get("tags", []),
             generation_log=data.get("generation_log"),
-            generation_context=data.get("generation_context"),
+            generation_context=_from_dynamo(data.get("generation_context")),
             avatar_path=data.get("avatar_path"),
             owner_sub=data.get("owner_sub") or None,
             shared_group_ids=frozenset(data.get("shared_group_ids") or ()),
