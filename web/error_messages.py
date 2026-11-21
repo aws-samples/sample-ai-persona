@@ -140,7 +140,8 @@ _CATALOG: dict[ErrorCode, str] = {
         "実行中の高度な生成があります。終わってから次の生成を始めてください"
     ),
     ErrorCode.UPLOAD_SOURCE_INVALID: (
-        "このファイルは使えません。CSV か TSV の表を、UTF-8 で保存し直して上げてください"
+        "このファイルは使えません。CSV・TSV の表か、PDF・Word（.docx）・テキスト"
+        "（.txt・.md）の文書を上げてください"
     ),
     ErrorCode.UPLOAD_TOO_LARGE: (
         "上げられません: 1 ファイル {max_size_mb}MB までです。分けて上げてください"
@@ -169,6 +170,21 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.SOURCE_NOT_A_TABLE: (
         "表として読めませんでした。CSV か TSV の表（1 行目が列名）を上げてください"
+    ),
+    # --- 高度な生成（ベータ）U4（rules.md BR21〜BR25） ---
+    ErrorCode.SOURCE_NOT_A_DOCUMENT: (
+        "ファイルの中身が拡張子と合いません。PDF・Word（.docx）・テキストとして"
+        "保存し直して上げてください"
+    ),
+    ErrorCode.DOCUMENT_ENCRYPTED: (
+        "パスワード付きのファイルか、古い Word の形式のため読めません。"
+        "パスワードを外すか、.docx で保存し直して上げてください"
+    ),
+    ErrorCode.DOCUMENT_NO_TEXT: (
+        "文字を取り出せない文書がありました。そのファイルを外して生成し直してください"
+    ),
+    ErrorCode.GENERATION_SOURCE_TOO_LARGE: (
+        "文書の文字数が上限を超えたため止めました。文書を減らして生成し直してください"
     ),
     ErrorCode.GENERATION_NOT_FOUND: "生成が見つかりません",
     ErrorCode.GENERATION_EXPIRED: (
@@ -715,12 +731,72 @@ def _insufficient_detail(base: str, context: dict[str, Any]) -> str:
     return message
 
 
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _filename(context: dict[str, Any]) -> str | None:
+    """The user's own file name the router looked up (U4 BR24.4), if any."""
+    name = context.get("filename")
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _source_invalid_detail(base: str, context: dict[str, Any]) -> str:
+    """An old Word file is told to be saved as .docx (U4 BR21.2)."""
+    if context.get("reason") == "legacy_word":
+        return (
+            "古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください"
+        )
+    if context.get("reason") == "tables":
+        return "1 回の生成に使える表は 1 つまでです。文書はいくつでも一緒に選べます"
+    return base
+
+
+def _no_text_detail(base: str, context: dict[str, Any]) -> str:
+    """Names the file without text (BR24.4); the plain wording without it."""
+    name = _filename(context)
+    if name is None:
+        return base
+    return (
+        f"{name} から文字を取り出せませんでした。"
+        "このファイルを外して生成し直してください"
+    )
+
+
+def _encrypted_detail(base: str, context: dict[str, Any]) -> str:
+    """Names the protected file when the router knows it (BR24.6)."""
+    name = _filename(context)
+    if name is None:
+        return base
+    return (
+        f"{name} はパスワード付きのため読めません。パスワードを外して上げ直してください"
+    )
+
+
+def _too_large_detail(base: str, context: dict[str, Any]) -> str:
+    """The settled characters and the limit (BR25.1), integers only."""
+    total = _non_negative_int(context.get("total_chars"))
+    limit = _positive_int(context.get("max_chars"))
+    if total is None or limit is None:
+        return base
+    return (
+        f"文書の文字数が上限を超えたため止めました（文書の合計 {total:,} 字、"
+        f"上限 {limit:,} 字）。文書を減らして生成し直してください"
+    )
+
+
 #: Codes whose wording takes numbers from the stored context (values are shown
 #: only when they are usable integers; otherwise the plain catalog wording).
 _DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
     ErrorCode.GENERATION_SOURCE_UNREADABLE: _unreadable_detail,
     ErrorCode.GENERATION_CAPACITY: _capacity_detail,
     ErrorCode.GENERATION_INSUFFICIENT_DATA: _insufficient_detail,
+    ErrorCode.UPLOAD_SOURCE_INVALID: _source_invalid_detail,
+    ErrorCode.DOCUMENT_NO_TEXT: _no_text_detail,
+    ErrorCode.DOCUMENT_ENCRYPTED: _encrypted_detail,
+    ErrorCode.GENERATION_SOURCE_TOO_LARGE: _too_large_detail,
 }
 
 

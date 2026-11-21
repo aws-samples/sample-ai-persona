@@ -146,7 +146,8 @@ class TestStart:
             _start(manager, size=PART + 1)
         assert _multipart_uploads(s3_client) == []
 
-    @pytest.mark.parametrize("name", ["book.xlsx", "notes.txt", "noext"])
+    # U4 BR21.1: ".txt" is now a document, so it left this list
+    @pytest.mark.parametrize("name", ["book.xlsx", "image.png", "noext"])
     def test_not_csv_or_tsv_is_invalid(self, env, name: str) -> None:
         manager, _, s3_client, _ = env
 
@@ -256,6 +257,7 @@ class TestComplete:
             "error_code",
             "encoding",
             "estimated_rows",
+            "kind",  # U4: table or document
         }
         assert event["status"] == "ready" and event["estimated_rows"] == 3
 
@@ -709,3 +711,181 @@ class TestDelete:
         assert manager.inspection_stuck(found)
         manager.delete_source(ADMIN, session.source_file_id)
         assert store.get(session.source_file_id) is None
+
+
+# --- U4: documents (BR21.1〜BR21.3, BR22.1〜BR22.3, AC2.2.1〜AC3.3.3) ---------
+
+
+def _start_document(
+    manager: SourceUploadManager,
+    name: str,
+    size: int,
+    content_type: str = "application/octet-stream",
+):
+    return manager.start_upload(
+        ADMIN, filename=name, size_bytes=size, content_type=content_type
+    )
+
+
+def _upload_document(env: Any, name: str, data: bytes):
+    manager, store, s3_client, _ = env
+    session = _start_document(manager, name, len(data))
+    parts = _send_parts(s3_client, store, session.source_file_id, data)
+    return session.source_file_id, parts
+
+
+class TestDocumentStart:
+    @pytest.mark.parametrize(
+        ("name", "content_type"),
+        [
+            ("interview.pdf", "application/pdf"),
+            (
+                "memo.DOCX",
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document",
+            ),
+            ("note.txt", "text/plain"),
+            ("readme.md", "text/markdown"),
+        ],
+    )
+    def test_documents_start_as_documents(self, env, name, content_type) -> None:
+        from src.models.source_file import SourceKind
+
+        manager, store, *_ = env
+
+        session = _start_document(manager, name, 1000, content_type)
+
+        found = store.get(session.source_file_id)
+        assert found is not None and found.kind is SourceKind.DOCUMENT
+
+    def test_a_table_still_starts_as_a_table(self, env) -> None:
+        from src.models.source_file import SourceKind
+
+        manager, store, *_ = env
+
+        session = _start(manager)
+
+        found = store.get(session.source_file_id)
+        assert found is not None and found.kind is SourceKind.TABLE
+
+    def test_exactly_100mb_is_accepted_and_one_byte_more_is_not(self, env) -> None:
+        manager, _, s3_client, _ = env
+
+        assert _start_document(manager, "a.pdf", 100_000_000).part_count >= 1
+        with raises_code(
+            SourceUploadError, ErrorCode.UPLOAD_TOO_LARGE, max_bytes=100_000_000
+        ):
+            _start_document(manager, "b.pdf", 100_000_001)
+
+    def test_an_old_word_file_is_told_to_save_as_docx(self, env) -> None:
+        manager, _, s3_client, _ = env
+
+        with raises_code(
+            SourceUploadError, ErrorCode.UPLOAD_SOURCE_INVALID, reason="legacy_word"
+        ):
+            _start_document(manager, "old.doc", 1000)
+        assert _multipart_uploads(s3_client) == []
+
+    def test_excel_is_a_wrong_format(self, env) -> None:
+        manager, *_ = env
+
+        with raises_code(
+            SourceUploadError, ErrorCode.UPLOAD_SOURCE_INVALID, reason="format"
+        ):
+            _start_document(manager, "book.xlsx", 1000)
+
+    def test_tables_and_documents_count_together(self, env, monkeypatch) -> None:
+        manager, *_ = env
+        monkeypatch.setattr(config, "ADVANCED_UPLOAD_MAX_FILES", 2)
+        _start(manager)
+        _start_document(manager, "a.pdf", 1000)
+
+        with raises_code(SourceUploadError, ErrorCode.UPLOAD_TOO_MANY_FILES):
+            _start_document(manager, "b.md", 1000)
+
+
+class TestDocumentComplete:
+    def test_a_pdf_is_inspected_from_its_head_and_tail(self, env, capsys) -> None:
+        from src.models.source_file import DocumentMetadata, SourceFormat
+        from tests.document_fixtures import pdf_bytes
+
+        manager, store, *_ = env
+        logs = LogCapture(capsys)
+        source_file_id, parts = _upload_document(env, "面談.pdf", pdf_bytes(["hi"]))
+
+        ready = manager.complete_upload(ADMIN, source_file_id, parts)
+
+        assert ready.status is SourceFileStatus.READY
+        assert isinstance(ready.metadata, DocumentMetadata)
+        assert ready.metadata.format is SourceFormat.PDF
+        stored = store.get(source_file_id)
+        assert stored is not None and isinstance(stored.metadata, DocumentMetadata)
+        (event,) = logs.events("advanced_generation.upload_completed")
+        assert event["status"] == "ready"
+        assert "estimated_chars" in event and "面談" not in str(event)
+
+    def test_an_encrypted_pdf_goes_to_error(self, env) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        manager, store, *_ = env
+        source_file_id, parts = _upload_document(
+            env, "a.pdf", pdf_bytes(["x"], encrypted=True)
+        )
+
+        with raises_code(SourceUploadError, ErrorCode.DOCUMENT_ENCRYPTED):
+            manager.complete_upload(ADMIN, source_file_id, parts)
+
+        found = store.get(source_file_id)
+        assert found is not None and found.status is SourceFileStatus.ERROR
+        assert found.error_code == ErrorCode.DOCUMENT_ENCRYPTED.value
+
+    def test_bytes_that_do_not_match_go_to_error(self, env) -> None:
+        manager, store, *_ = env
+        source_file_id, parts = _upload_document(env, "a.docx", b"plain text")
+
+        with raises_code(SourceUploadError, ErrorCode.SOURCE_NOT_A_DOCUMENT):
+            manager.complete_upload(ADMIN, source_file_id, parts)
+
+    def test_a_docx_is_ready(self, env) -> None:
+        from tests.document_fixtures import docx_bytes
+
+        manager, *_ = env
+        source_file_id, parts = _upload_document(
+            env, "a.docx", docx_bytes([(1, "見出し"), "本文"])
+        )
+
+        assert manager.complete_upload(ADMIN, source_file_id, parts).status is (
+            SourceFileStatus.READY
+        )
+
+    def test_text_keeps_its_encoding(self, env) -> None:
+        manager, *_ = env
+        source_file_id, parts = _upload_document(
+            env, "a.txt", "面談の記録\n".encode("cp932")
+        )
+
+        ready = manager.complete_upload(ADMIN, source_file_id, parts)
+
+        assert ready.metadata is not None
+        assert ready.metadata.encoding is SourceEncoding.CP932
+
+    def test_a_document_over_100mb_on_s3_is_refused(self, env, monkeypatch) -> None:
+        # The parts S3 holds are checked against the document limit (BR2.7)
+        manager, store, s3_client, _ = env
+        monkeypatch.setattr(config, "ADVANCED_DOCUMENT_MAX_BYTES", 10)
+        data = b"%PDF-1.4 " + b"x" * 20
+        session = _start_document(manager, "a.pdf", 5)
+        parts = _send_parts(s3_client, store, session.source_file_id, data)
+
+        with raises_code(SourceUploadError, ErrorCode.UPLOAD_TOO_LARGE):
+            manager.complete_upload(ADMIN, session.source_file_id, parts)
+
+    def test_a_table_is_inspected_as_before(self, env) -> None:
+        manager, store, s3_client, _ = env
+        session = _start(manager)
+        parts = _send_parts(s3_client, store, session.source_file_id, CSV)
+
+        ready = manager.complete_upload(ADMIN, session.source_file_id, parts)
+
+        assert ready.table_metadata is not None
+        assert [c.name for c in ready.table_metadata.columns] == ["id", "age", "area"]

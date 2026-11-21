@@ -164,3 +164,52 @@ class TestPersonaStoreGenerationLog:
         restored = store._persona(self._written(self._persona()))
         assert restored.generation_log is None
         assert restored.generation_context is None
+
+
+class TestAdvancedDocumentLogFields:
+    """U4 NFR6.13, NFR6.14, NFR7.3: the document events keep counts only."""
+
+    def test_document_events_drop_names_and_text(self, capsys) -> None:
+        from src.managers.shared.advanced_generation_log import log_advanced_event
+        from tests.log_helpers import LogCapture
+
+        logs = LogCapture(capsys)
+        log_advanced_event(
+            "advanced_generation.document_prepared",
+            generation_id="g",
+            document_index=0,
+            format="pdf",
+            pages=3,
+            chars=1200,
+            chunks=1,
+            no_text_pages=1,
+            elapsed_ms=5,
+            filename="面談.pdf",
+            heading="第1章",
+        )
+        log_advanced_event(
+            "advanced_generation.document_mode",
+            generation_id="g",
+            mode="extraction",
+            total_chars=300_000,
+            chunks=21,
+            body="本文",
+        )
+        log_advanced_event(
+            "advanced_generation.evidence_extracted",
+            generation_id="g",
+            chunks=21,
+            extracted=120,
+            discarded_unverified=4,
+            elapsed_ms=90_000,
+            evidence_input_tokens=210_000,
+            evidence_output_tokens=12_000,
+            quote="引用",
+        )
+
+        prepared, mode, extracted = logs.records()
+        assert "filename" not in prepared and "heading" not in prepared
+        assert prepared["pages"] == 3 and prepared["no_text_pages"] == 1
+        assert "body" not in mode and mode["total_chars"] == 300_000
+        assert "quote" not in extracted
+        assert extracted["evidence_input_tokens"] == 210_000

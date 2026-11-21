@@ -16,7 +16,7 @@ from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
 from ._advanced_common import drop_none, epoch, iso, parse_dt, parse_optional_dt
-from .analysis import AnalysisPlan, AnalysisRun
+from .analysis import AnalysisPlan, AnalysisRun, DocumentMode
 
 #: Version of the stored items (contract C5).
 SCHEMA_VERSION = 1
@@ -74,6 +74,8 @@ class ResultPartName(StrEnum):
     PREPARE_REPORTS = "prepare_reports"
     SEGMENTS = "segments"
     EVIDENCE = "evidence"
+    #: U4: one DocumentReport per document (C8)
+    DOCUMENT_REPORTS = "document_reports"
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,10 @@ class AdvancedGeneration:
         error_context: Values safe to show (limits); never row data or
             exception text.
         finished_at: When it ended.
+        document_mode: ``full_text`` or ``extraction`` when documents are used
+            (U4 BR25.2, decided right after the preparation).
+        evidence_stats: ``{extracted, discarded_unverified}`` of the document
+            evidence (U4 BR27.1).
     """
 
     generation_id: str
@@ -119,9 +125,13 @@ class AdvancedGeneration:
     error_code: str | None = None
     error_context: dict[str, Any] | None = None
     finished_at: datetime | None = None
+    document_mode: DocumentMode | None = None
+    evidence_stats: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", GenerationStatus(self.status))
+        if self.document_mode is not None:
+            object.__setattr__(self, "document_mode", DocumentMode(self.document_mode))
         object.__setattr__(self, "source_file_ids", tuple(self.source_file_ids))
         if self.candidate_ids is not None:
             object.__setattr__(self, "candidate_ids", tuple(self.candidate_ids))
@@ -201,6 +211,14 @@ class AdvancedGeneration:
                         else None
                     ),
                     "finished_at": iso(self.finished_at) if self.finished_at else None,
+                    "document_mode": (
+                        self.document_mode.value if self.document_mode else None
+                    ),
+                    "evidence_stats": (
+                        {k: int(v) for k, v in self.evidence_stats.items()}
+                        if self.evidence_stats is not None
+                        else None
+                    ),
                 }
             )
         )
@@ -214,6 +232,8 @@ class AdvancedGeneration:
         part_counts = data.get("part_counts")
         candidates = data.get("candidate_ids")
         error_context = data.get("error_context")
+        mode = data.get("document_mode")
+        stats = data.get("evidence_stats")
         return cls(
             generation_id=str(data["generation_id"]),
             owner_sub=str(data["owner_sub"]),
@@ -238,6 +258,12 @@ class AdvancedGeneration:
             error_code=data.get("error_code"),
             error_context=dict(error_context) if error_context is not None else None,
             finished_at=parse_optional_dt(data.get("finished_at")),
+            document_mode=DocumentMode(str(mode)) if mode else None,
+            evidence_stats=(
+                {str(k): int(v) for k, v in dict(stats).items()}
+                if stats is not None
+                else None
+            ),
         )
 
 

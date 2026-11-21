@@ -255,6 +255,29 @@ class Config:
     ADVANCED_TOOL_MAX_CALLS: int = 30
     ADVANCED_TOOL_MAX_TOTAL_SECONDS: int = 20 * 60
     ADVANCED_TOOL_MAX_OUTPUT_CHARS: int = 20_000
+    # U4: 文書（BR21.1、BR22.1、BR22.3、BR24.2、BR25.1、NFR5.37、NFR5.39）
+    ADVANCED_DOCUMENT_MAX_BYTES: int = 100_000_000
+    ADVANCED_INSPECT_TAIL_BYTES: int = 1024 * 1024
+    # 文字数の見込みの係数（1MB あたりの字数。目安で、これだけでは止めない。BR22.3）
+    ADVANCED_DOCUMENT_CHARS_PER_MB_PDF: int = 20_000
+    ADVANCED_DOCUMENT_CHARS_PER_MB_DOCX: int = 100_000
+    ADVANCED_DOCUMENT_CHUNK_CHARS: int = 15_000
+    ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS: int = 500
+    ADVANCED_DOCUMENT_MAX_TOTAL_CHARS: int = 2_000_000
+    # サンドボックスから 1 回に受け取る字数。Code Interpreter の標準出力は 400 万字まで
+    # そのまま返ったので（U4 の Step 1）、出力の切り詰め（20,000 字）より小さい値にする
+    ADVANCED_DOCUMENT_TRANSFER_CHARS: int = 10_000
+    # U4: 根拠の抽出（BR26.1、BR27.1。モデルの既定は SURVEY_MODEL_ID）
+    ADVANCED_EVIDENCE_MODEL_ID: str = ""
+    ADVANCED_EVIDENCE_MAX_CONCURRENT: int = 4
+    ADVANCED_EVIDENCE_PER_CHUNK_MAX: int = 20
+    ADVANCED_EVIDENCE_QUOTE_MAX_CHARS: int = 200
+    ADVANCED_EVIDENCE_QUOTE_MIN_CHARS: int = 10
+    ADVANCED_EVIDENCE_VERIFY_BATCH: int = 50
+    # 根拠の抽出で一時的な誤り（接続の切断・スロットリング）を再試行する回数と、
+    # 最初の待ち秒数（再試行ごとに 2 倍。U4 BR26.2）
+    ADVANCED_EVIDENCE_MAX_RETRIES: int = 2
+    ADVANCED_EVIDENCE_RETRY_BASE_SECONDS: int = 2
 
     def __post_init__(self) -> None:
         """設定の初期化後処理"""
@@ -568,6 +591,10 @@ class Config:
             )
         self.ADVANCED_GENERATION_MODEL_ID = (
             os.getenv("ADVANCED_GENERATION_MODEL_ID") or self.BEDROCK_MODEL_ID
+        )
+        # U4 BR26.1: the light model of the evidence extraction
+        self.ADVANCED_EVIDENCE_MODEL_ID = (
+            os.getenv("ADVANCED_EVIDENCE_MODEL_ID") or self.SURVEY_MODEL_ID
         )
         max_concurrent = os.getenv("ADVANCED_GENERATION_MAX_CONCURRENT", "").strip()
         if max_concurrent:

@@ -6,15 +6,32 @@ Strands Agent SDKを使用したエージェント管理サービス
 import queue
 import logging
 import threading
-from typing import List, Dict, Any, Literal, Mapping, Optional, Generator, cast
+import time
+from typing import (
+    List,
+    Dict,
+    Any,
+    Callable,
+    Literal,
+    Mapping,
+    Optional,
+    Generator,
+    Sequence,
+    cast,
+)
 
 try:
     from strands import Agent
     from strands.models import BedrockModel
+    from strands.types.exceptions import StructuredOutputException
 except ImportError:
     # Strands SDKがインストールされていない場合のフォールバック
     Agent = None  # type: ignore[assignment,misc]
     BedrockModel = None  # type: ignore[assignment,misc]
+
+    class StructuredOutputException(Exception):  # type: ignore[no-redef]
+        """Stand-in when the Strands SDK is not installed."""
+
 
 from pydantic import BaseModel, Field
 
@@ -271,6 +288,68 @@ def _is_input_rejected(error: BaseException) -> bool:
         elif _is_openai_bad_request(current):
             return True
         current = current.__cause__
+    return False
+
+
+#: Bedrock error codes that a later call may not hit (U4 BR26.2).
+_TRANSIENT_CODES = frozenset(
+    {
+        "throttlingexception",
+        "servicequotaexceededexception",
+        "serviceunavailableexception",
+        "internalserverexception",
+        "modelnotreadyexception",
+        "modelstreamerrorexception",
+    }
+)
+#: Connection failures seen under botocore / urllib3 / http.client, by name so
+#: that no transport library has to be imported here.
+_TRANSIENT_NAMES = frozenset(
+    {
+        "ProtocolError",
+        "IncompleteRead",
+        "RemoteDisconnected",
+        "ReadTimeoutError",
+        "ReadTimeout",
+        "ConnectTimeoutError",
+        "EndpointConnectionError",
+        "ConnectionClosedError",
+        "ModelThrottledException",
+    }
+)
+
+
+def _is_transient(error: BaseException) -> bool:
+    """Whether the same call may succeed if sent again (U4 BR26.2, NFR1.18).
+
+    A dropped stream, throttling and a busy service are transient. A rejected
+    input, a context overflow or a shape that does not fit are not. Both the
+    cause and the context chain are followed: Strands and botocore re-raise a
+    connection error while handling it.
+    """
+    from botocore.exceptions import ClientError
+    from strands.types.exceptions import ContextWindowOverflowException
+
+    if _is_input_rejected(error):
+        return False
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ContextWindowOverflowException):
+            return False
+        if isinstance(current, ClientError):
+            code = str(current.response.get("Error", {}).get("Code", ""))
+            if code.lower() in _TRANSIENT_CODES:
+                return True
+        elif isinstance(current, (ConnectionError, TimeoutError)):
+            return True
+        elif type(current).__name__ in _TRANSIENT_NAMES:
+            return True
+        pending.extend(e for e in (current.__cause__, current.__context__) if e)
     return False
 
 
@@ -1359,14 +1438,14 @@ class AgentService:
     # advanced generation model, puts the untrusted-data rule first, wraps the
     # data in markers and maps the structured output to the C8 shapes.
 
-    def _build_advanced_model(self) -> Any:
+    def _build_advanced_model(self, model_id: Optional[str] = None) -> Any:
         """BedrockModel on ``config.ADVANCED_GENERATION_MODEL_ID`` (NFR-Q5)."""
         credentials = config.get_aws_credentials()
         filtered_credentials = {
             k: v for k, v in credentials.items() if v is not None and k != "region_name"
         }
         return BedrockModel(
-            model_id=config.ADVANCED_GENERATION_MODEL_ID,
+            model_id=model_id or config.ADVANCED_GENERATION_MODEL_ID,
             region_name=config.AWS_REGION,
             max_tokens=config.AGENT_MAX_TOKENS,
             boto_client_config=self._build_boto_config(),
@@ -1374,7 +1453,11 @@ class AgentService:
         )
 
     def _create_advanced_agent(
-        self, name: str, instructions: str, tools: Optional[list[Any]] = None
+        self,
+        name: str,
+        instructions: str,
+        tools: Optional[list[Any]] = None,
+        model_id: Optional[str] = None,
     ) -> Any:
         if Agent is None or BedrockModel is None:
             raise AgentInitializationError(
@@ -1384,7 +1467,7 @@ class AgentService:
         try:
             agent = Agent(
                 name=name,
-                model=self._build_advanced_model(),
+                model=self._build_advanced_model(model_id),
                 system_prompt=f"{ADVANCED_DATA_RULES}\n\n{instructions}",
                 tools=list(tools) if tools else None,
                 # The default handler prints the model's output (row values)
@@ -1413,9 +1496,33 @@ class AgentService:
         """The agent that writes personas from segments and evidence (BR5.7)."""
         return self._create_advanced_agent("AdvancedSynthesizer", instructions)
 
+    def create_advanced_evidence_agent(self, instructions: str) -> Any:
+        """The agent that picks evidence out of one chunk (U4 BR26.1, BR26.4).
+
+        It runs on the light model (``ADVANCED_EVIDENCE_MODEL_ID``) with no
+        tools. Make one per call: one Strands agent is never used by two
+        threads at once.
+        """
+        return self._create_advanced_agent(
+            "AdvancedEvidenceExtractor",
+            instructions,
+            model_id=config.ADVANCED_EVIDENCE_MODEL_ID,
+        )
+
     @staticmethod
-    def _with_data(prompt: str, data: Mapping[str, str]) -> str:
+    def _with_data(
+        prompt: str, data: Mapping[str, str], documents: Sequence[str] = ()
+    ) -> str:
+        """The prompt and every value wrapped once as untrusted data.
+
+        U4 NFR4.3: each document is one block of ``source="document"`` with its
+        ``document_index``.
+        """
         blocks = [wrap_untrusted_data(text, source) for source, text in data.items()]
+        blocks += [
+            wrap_untrusted_data(text, "document", document_index=str(index))
+            for index, text in enumerate(documents)
+        ]
         return "\n\n".join([prompt, *blocks])
 
     def _advanced_structured(self, agent: Any, schema: Any, message: str) -> Any:
@@ -1449,10 +1556,17 @@ class AgentService:
             ) from None
 
     def run_advanced_planning(
-        self, agent: Any, prompt: str, data: Mapping[str, str]
+        self,
+        agent: Any,
+        prompt: str,
+        data: Mapping[str, str],
+        documents: Sequence[str] = (),
     ) -> dict[str, Any]:
-        """Run the planning agent; returns AnalysisPlan fields (no budget)."""
-        message = self._with_data(prompt, data)
+        """Run the planning agent; returns AnalysisPlan fields (no budget).
+
+        ``documents`` are whole document texts (U4 full text, BR25.3).
+        """
+        message = self._with_data(prompt, data, documents)
 
         def run() -> dict[str, Any]:
             plan = self._advanced_structured(agent, AdvancedPlanOutput, message)
@@ -1489,13 +1603,101 @@ class AgentService:
         prompt: str,
         data: Mapping[str, str],
         output_schema: Any,
+        documents: Sequence[str] = (),
     ) -> Any:
-        """Run the synthesis agent with the Manager's persona schema."""
-        message = self._with_data(prompt, data)
+        """Run the synthesis agent with the Manager's persona schema.
+
+        ``documents`` are whole document texts (U4 full text, BR25.3).
+        """
+        message = self._with_data(prompt, data, documents)
         return self._run_advanced(
             "synthesis",
             lambda: self._advanced_structured(agent, output_schema, message),
         )
+
+    def run_evidence_extraction(
+        self,
+        agent: Any,
+        prompt: str,
+        chunk_text: str,
+        output_schema: Any,
+        *,
+        document_index: int,
+        chunk_index: int,
+        may_retry: Optional[Callable[[], bool]] = None,
+    ) -> tuple[Any, dict[str, int]]:
+        """Pick evidence out of one chunk with the Manager's schema (U4 BR26.1).
+
+        ``agent(message, structured_output_model=...)`` is used rather than
+        ``structured_output()`` because only the former returns the token
+        usage (NFR7.3; checked in the U4 code generation, Step 1).
+
+        A transient failure (a dropped stream, throttling, a busy service) is
+        sent again up to ``ADVANCED_EVIDENCE_MAX_RETRIES`` times, waiting
+        ``ADVANCED_EVIDENCE_RETRY_BASE_SECONDS`` doubled each time; the failed
+        turn is taken out of the agent's history first (BR26.2, NFR1.18).
+        ``may_retry`` lets the caller stop the retries once the generation has
+        failed elsewhere.
+
+        Returns:
+            ``(output, {"input_tokens", "output_tokens"})``. ``output`` is
+            ``None`` when the model's answer did not fit the schema: that chunk
+            gives no evidence (BR26.4).
+
+        Raises:
+            AgentServiceError: The model call failed
+                (``GENERATION_SANDBOX_UNAVAILABLE``, cause ``model``).
+        """
+        message = "\n\n".join(
+            [
+                prompt,
+                wrap_untrusted_data(
+                    chunk_text,
+                    "document",
+                    document_index=str(document_index),
+                    chunk_index=str(chunk_index),
+                ),
+            ]
+        )
+
+        retries = max(0, int(config.ADVANCED_EVIDENCE_MAX_RETRIES))
+        wait = float(config.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS)
+
+        def call() -> Any:
+            attempt = 0
+            while True:
+                history = _history_snapshot(agent)
+                try:
+                    return agent(message, structured_output_model=output_schema)
+                except StructuredOutputException:
+                    raise
+                except Exception as e:
+                    _restore_history(agent, history)
+                    stopped = may_retry is not None and not may_retry()
+                    if attempt >= retries or stopped or not _is_transient(e):
+                        raise
+                    self.logger.warning(
+                        "advanced evidence call failed (%s); retry %d/%d",
+                        type(e).__name__,
+                        attempt + 1,
+                        retries,
+                    )
+                    time.sleep(wait * (2**attempt))
+                    attempt += 1
+
+        def run() -> tuple[Any, dict[str, int]]:
+            try:
+                result = call()
+            except StructuredOutputException:
+                self.logger.warning("advanced evidence output did not fit the schema")
+                return None, {"input_tokens": 0, "output_tokens": 0}
+            usage = dict(getattr(result.metrics, "accumulated_usage", None) or {})
+            return result.structured_output, {
+                "input_tokens": int(usage.get("inputTokens", 0) or 0),
+                "output_tokens": int(usage.get("outputTokens", 0) or 0),
+            }
+
+        return cast(tuple[Any, dict[str, int]], self._run_advanced("evidence", run))
 
     # =========================================================================
     # レポートエージェント（データドリブン分析）

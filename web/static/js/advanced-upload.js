@@ -105,19 +105,52 @@
 
     // --- 区画 B: 生成のボタン --------------------------------------------
 
+    // U4 BR23.2: 選んだ文書の文字数の見込みの合計（目安で、これだけでは止めない）
+    function updateDocumentEstimate(chosen) {
+        var note = page.querySelector('[data-testid="advanced-document-estimate"]');
+        if (!note) return;
+        var total = 0;
+        var documents = 0;
+        chosen.forEach(function (input) {
+            var row = input.closest('[data-testid="advanced-upload-row"]');
+            if (row && row.dataset.kind === 'document') {
+                documents += 1;
+                total += Number(row.dataset.estimatedChars) || 0;
+            }
+        });
+        if (!documents) {
+            note.hidden = true;
+            note.textContent = '';
+            return;
+        }
+        var man = Math.ceil(total / 10000);
+        var text = '選んだ文書の合計 約 ' + man + ' 万字の見込み';
+        if (man > Number(note.dataset.maxManChars)) {
+            text += '（前準備で上限の ' + note.dataset.maxManChars + ' 万字を超えると止まります）';
+        }
+        note.textContent = text;
+        note.hidden = false;
+    }
+
     function updateGenerateState() {
         if (!generateButton) return;
-        var chosen = document.querySelector('[name="source_file_ids"]:checked');
+        var chosen = Array.prototype.slice.call(
+            document.querySelectorAll('[name="source_file_ids"]:checked')
+        );
+        var tables = chosen.filter(function (input) { return input.dataset.kind !== 'document'; });
         var reason = '';
         if (submitting) {
             reason = '開始しています';
         } else if (running) {
             reason = '実行中の生成があります。終わるか中止してから始めてください';
-        } else if (!chosen) {
+        } else if (!chosen.length) {
             reason = '準備OK のファイルを選んでください';
+        } else if (tables.length > 1) {
+            reason = '表は 1 つだけ選んでください（文書はいくつでも一緒に選べます）';
         }
-        generateButton.disabled = submitting || running || !chosen;
+        generateButton.disabled = submitting || running || !chosen.length || tables.length > 1;
         generateReason.textContent = reason;
+        updateDocumentEstimate(chosen);
     }
 
     if (form) {
@@ -147,18 +180,33 @@
 
     // --- 区画 A: アップロード ---------------------------------------------
 
+    // U4 BR21.1, BR21.2: 表（.csv・.tsv）と文書（.pdf・.docx・.txt・.md）。.doc には案内を出す
+    var TABLE_EXTENSIONS = ['.csv', '.tsv'];
+    var DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md'];
+
+    function extensionOf(name) {
+        var dot = name.lastIndexOf('.');
+        return dot < 0 ? '' : name.slice(dot);
+    }
+
     function refusal(file, count) {
         var name = file.name.toLowerCase();
-        var maxBytes = Number(page.dataset.maxBytes);
+        var extension = extensionOf(name);
+        var isDocument = DOCUMENT_EXTENSIONS.indexOf(extension) !== -1;
+        var maxBytes = Number(isDocument ? page.dataset.maxDocumentBytes : page.dataset.maxBytes);
+        var maxSizeMb = isDocument ? page.dataset.maxDocumentSizeMb : page.dataset.maxSizeMb;
         var maxFiles = Number(page.dataset.maxFiles);
-        if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        if (extension === '.xlsx' || extension === '.xls') {
             return '上げられません: Excel のファイルは使えません。CSV で保存し直して上げてください';
         }
-        if (!(name.endsWith('.csv') || name.endsWith('.tsv'))) {
-            return '上げられません: CSV か TSV の表を選んでください';
+        if (extension === '.doc') {
+            return '上げられません: 古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください';
+        }
+        if (!isDocument && TABLE_EXTENSIONS.indexOf(extension) === -1) {
+            return '上げられません: CSV・TSV の表か、PDF・Word（.docx）・テキスト（.txt・.md）の文書を選んでください';
         }
         if (file.size > maxBytes) {
-            return '上げられません: 1 ファイル ' + page.dataset.maxSizeMb + 'MB までです。分けて上げてください';
+            return '上げられません: 1 ファイル ' + maxSizeMb + 'MB までです。分けて上げてください';
         }
         if (count >= maxFiles) {
             return '上げられません: 1 回の生成で使えるのは ' + maxFiles + ' ファイルまでです';

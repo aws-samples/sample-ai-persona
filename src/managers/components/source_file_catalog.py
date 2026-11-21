@@ -39,9 +39,11 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable, Optional, Sequence, TypeVar
 
 from ...config import config
+from ...models.advanced_generation import SOURCE_FILES_MAX
 from ...models.analysis import AnalysisRecord
 from ...models.errors import CodedError, ErrorCode
 from ...models.source_file import (
+    DocumentMetadata,
     SourceAvailability,
     SourceAvailabilityState,
     SourceFile,
@@ -162,6 +164,40 @@ class SourceFileCatalog:
             or found.metadata is None
         ):
             raise self._error_type("source file is not a ready table", code=code)
+        return found
+
+    def ready_sources(
+        self, owner_sub: str, source_file_ids: Sequence[str]
+    ) -> list[SourceFile]:
+        """The owner's live ready files for one generation (U4 BR23.1, NFR3.24).
+
+        Documents alone (1〜10), or one table with documents; more than one
+        table waits for U6.
+
+        Raises:
+            CodedError: ``UPLOAD_SOURCE_INVALID`` (nothing, more than ten, or
+                two tables or more: ``reason=tables``),
+                ``GENERATION_SOURCE_NOT_FOUND`` (any file someone else's,
+                missing, expired or not ready).
+        """
+        ids = list(dict.fromkeys(i for i in source_file_ids if i))
+        if not 1 <= len(ids) <= SOURCE_FILES_MAX:
+            raise self._error_type(
+                "a generation uses 1..10 files",
+                code=ErrorCode.UPLOAD_SOURCE_INVALID,
+                context={"reason": "count"},
+            )
+        code = ErrorCode.GENERATION_SOURCE_NOT_FOUND
+        found = [self.get_owned(owner_sub, i, not_found_code=code) for i in ids]
+        for source in found:
+            if source.status is not SourceFileStatus.READY or source.metadata is None:
+                raise self._error_type("source file is not ready", code=code)
+        if sum(1 for s in found if s.kind is SourceKind.TABLE) > 1:
+            raise self._error_type(
+                "one table per generation",
+                code=ErrorCode.UPLOAD_SOURCE_INVALID,
+                context={"reason": "tables"},
+            )
         return found
 
     def list_owned(
@@ -311,7 +347,7 @@ class SourceFileCatalog:
     def mark_ready(
         self,
         source_file_id: str,
-        metadata: SourceMetadata,
+        metadata: SourceMetadata | DocumentMetadata,
         checksum: str,
         *,
         now: datetime,

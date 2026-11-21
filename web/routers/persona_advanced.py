@@ -133,6 +133,11 @@ def screen_limits() -> dict[str, object]:
         "max_bytes": int(config.ADVANCED_UPLOAD_MAX_BYTES),
         "max_size_mb": int(config.ADVANCED_UPLOAD_MAX_BYTES) // 1_000_000,
         "max_files": int(config.ADVANCED_UPLOAD_MAX_FILES),
+        # U4 BR21.1: documents (PDF, Word, text) up to 100MB
+        "max_document_bytes": int(config.ADVANCED_DOCUMENT_MAX_BYTES),
+        "max_document_size_mb": int(config.ADVANCED_DOCUMENT_MAX_BYTES) // 1_000_000,
+        "max_document_man_chars": int(config.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS)
+        // 10_000,
         "concurrency": UPLOAD_CONCURRENCY,
         "persona_count_max": PERSONA_COUNT_MAX,
         "purpose_max_chars": PURPOSE_MAX_CHARS,
@@ -544,6 +549,11 @@ def _summary(event: GenerationEvent) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _failure_values(progress: GenerationProgress) -> dict[str, Any]:
+    """The values the failure wording may use (U4: with the owner's file name)."""
+    return dict(progress.failure_context or progress.generation.error_context or {})
+
+
 def _stored_error(code_value: Optional[str], context: Optional[dict[str, Any]]) -> str:
     """The C3 ``error`` payload of a failure stored as a code (never text)."""
     code = ErrorCode.parse(code_value) or ErrorCode.GENERATION_OPERATION_FAILED
@@ -614,9 +624,7 @@ async def _event_frames(
                 summary = _summary(event)
                 frame = _frame(
                     "error",
-                    _stored_error(
-                        summary.get("error_code"), progress.generation.error_context
-                    ),
+                    _stored_error(summary.get("error_code"), _failure_values(progress)),
                     event.sequence,
                 )
                 terminal_sent = True
@@ -635,7 +643,7 @@ async def _event_frames(
                 else:
                     yield _frame(
                         "error",
-                        _stored_error(generation.error_code, generation.error_context),
+                        _stored_error(generation.error_code, _failure_values(progress)),
                     )
             yield _frame("done", "")
             return

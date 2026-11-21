@@ -1,7 +1,7 @@
 {% from "components/dialog.html" import dialog, dialog_open_button %}
 {% from "components/datetime.html" import iso_datetime %}
 {% from "components/icons.html" import icon_check_circle, icon_x_circle %}
-{% from "persona/partials/advanced_labels.html" import encoding_label, type_label %}
+{% from "persona/partials/advanced_labels.html" import encoding_label, type_label, format_label, man_chars %}
 {#
   区画 A のファイルの 1 行（S3、S4、W3、U2 の W2-1・W2-4・W2-6）。列名・値・ファイル名はデータとして
   自動エスケープで出す（BR3.4。safe フィルタを使わない）。状態は色だけでなく文字で出す（NFR10.2）。
@@ -15,14 +15,18 @@
 {% set f = source_file %}
 {% set state = f.status.value %}
 {% set m = f.metadata %}
+{% set tm = f.table_metadata %}
+{% set dm = f.document_metadata %}
 {% set name = item.display_name %}
 {% set deletable = state in ("ready", "error", "deleting") or (state == "inspecting" and stuck) %}
 <tr data-testid="advanced-upload-row" data-source-file-id="{{ f.source_file_id }}" data-state="{{ state }}"
+    data-kind="{{ f.kind.value }}"{% if dm %} data-estimated-chars="{{ dm.estimated_chars }}"{% endif %}
     data-display-name="{{ name }}" class="border-b align-top">
     <td class="py-2 pr-2">
         {% if item.selectable and m %}
-        <input type="radio" name="source_file_ids" value="{{ f.source_file_id }}" id="advanced-use-{{ f.source_file_id }}"
-               data-testid="advanced-upload-select" class="w-4 h-4">
+        {# U4 BR23.1: 表 1 つと文書をいくつでも選べる（表 2 つはサーバーが断る） #}
+        <input type="checkbox" name="source_file_ids" value="{{ f.source_file_id }}" id="advanced-use-{{ f.source_file_id }}"
+               data-testid="advanced-upload-select" data-kind="{{ f.kind.value }}" class="w-4 h-4">
         <label for="advanced-use-{{ f.source_file_id }}" class="sr-only">{{ name }}を今回の生成に使う</label>
         {% else %}
         <span class="sr-only">選べません</span>
@@ -30,9 +34,15 @@
     </td>
     <td class="py-2 pr-2"><span data-role="name">{{ name }}</span> <span class="text-gray-500">（{{ "%.1f" | format(f.size_bytes / 1000000) }}MB）</span></td>
     <td class="py-2 pr-2" data-testid="advanced-upload-status">
-        {% if state == "ready" and m %}
+        {% if state == "ready" and tm %}
         <span class="inline-flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
-        <span class="text-gray-700">{{ m.columns | length }} 列 / 約 {{ "{:,}".format(m.estimated_rows) }} 行 / {{ encoding_label(m.encoding.value) }}</span>
+        <span class="text-gray-700">{{ tm.columns | length }} 列 / 約 {{ "{:,}".format(tm.estimated_rows) }} 行 / {{ encoding_label(tm.encoding.value) }}</span>
+        {% if item.in_use %}<span class="block text-gray-700" data-testid="advanced-upload-in-use">生成中</span>{% endif %}
+        {% elif state == "ready" and dm %}
+        {# U4 BR22.3: 形式と文字数の見込み。ページ数と文字数は前準備で確定する #}
+        <span class="inline-flex items-center gap-1 text-green-800">{{ icon_check_circle("w-4 h-4") }} 準備OK</span>
+        <span class="text-gray-700" data-testid="advanced-document-summary">{{ format_label(dm.format.value) }} / 約 {{ man_chars(dm.estimated_chars) }} 万字の見込み</span>
+        <span class="block text-xs text-gray-600">ページ数と文字数は前準備で確定します</span>
         {% if item.in_use %}<span class="block text-gray-700" data-testid="advanced-upload-in-use">生成中</span>{% endif %}
         {% elif state == "error" %}
         <span class="inline-flex items-start gap-1 text-red-800">{{ icon_x_circle("w-4 h-4") }} エラー: {{ row_error }}</span>
@@ -51,7 +61,7 @@
     </td>
     <td class="py-2">
         <div class="flex flex-wrap items-start gap-3">
-        {% if state == "ready" and m %}
+        {% if state == "ready" and tm %}
         {{ dialog_open_button("advanced-columns-" ~ f.source_file_id, "列を見る", "text-sm text-blue-700 underline hover:text-blue-900") }}
         {% call dialog("advanced-columns-" ~ f.source_file_id, name ~ " の列", panel_class="max-w-3xl") %}
         <p class="text-sm text-gray-700 mb-3">文字コード {{ encoding_label(m.encoding.value) }} / 区切り {{ "タブ" if m.delimiter == "\t" else "カンマ" }} / 約 {{ "{:,}".format(m.estimated_rows) }} 行（見込み）</p>

@@ -973,3 +973,137 @@ class TestAnalysisRecordSources:
         ).text
 
         assert "members.csv (2)" in html
+
+
+class TestDocumentScreen:
+    """U4 Step 26: US2.2, US3.3, AC2.2.2, AC3.3.3, AC6.2.4, AC6.3.1, NFR4.4."""
+
+    EVENTS = f"/persona/advanced/generations/{s.GENERATION_ID}/events"
+
+    def test_the_picker_takes_documents_and_names_the_old_word(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        html = client.get("/persona/generation/advanced").text
+
+        accept = re.search(r'id="advanced-file-input"[^>]*accept="([^"]*)"', html)
+        assert accept is not None
+        for ext in (".csv", ".tsv", ".pdf", ".docx", ".txt", ".md"):
+            assert ext in accept.group(1)
+        assert 'data-max-document-bytes="100000000"' in html
+        assert ".docx で保存し直して" in html
+        assert 'data-testid="advanced-document-estimate"' in html
+
+    def test_a_document_row_shows_its_format_size_and_estimate(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.get_upload.return_value = s.ready_document()
+
+        html = client.get(f"/persona/advanced/uploads/{s.DOCUMENT_ID}").text
+
+        assert 'data-kind="document"' in html
+        assert "PDF" in html and "80.0MB" in html
+        assert "約 160 万字の見込み" in html
+        assert "前準備で確定" in html
+        assert re.search(r'type="checkbox"[^>]*name="source_file_ids"', html)
+        assert 'data-estimated-chars="1600000"' in html
+        assert "列を見る" not in html
+
+    def test_a_table_row_is_chosen_with_the_same_checkbox(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.uploads.get_upload.return_value = s.ready_file()
+
+        html = client.get(f"/persona/advanced/uploads/{s.FILE_ID}").text
+
+        assert 'data-kind="table"' in html
+        assert re.search(r'type="checkbox"[^>]*name="source_file_ids"', html)
+        assert "列を見る" in html
+
+    def test_two_files_go_to_the_start_together(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.generations.start_generation.return_value = s.GENERATION_ID
+
+        response = client.post(
+            "/persona/advanced/generations",
+            data={
+                "source_file_ids": [s.FILE_ID, s.DOCUMENT_ID],
+                "purpose": "",
+                "persona_count": "2",
+            },
+        )
+
+        assert response.status_code == 200
+        assert adv.generations.start_generation.call_args.kwargs["source_file_ids"] == [
+            s.FILE_ID,
+            s.DOCUMENT_ID,
+        ]
+
+    def _result_html(self, client: TestClient, adv: Adv) -> str:
+        done = s.event(3, EventType.RESULT, json.dumps({"persona_count": 2}))
+        adv.generations.stream_events.return_value = _progress(
+            GenerationStatus.DONE, done
+        )
+        adv.generations.get_result.return_value = s.document_result()
+        (result,) = [
+            b for b in _sse(client.get(self.EVENTS).text) if b.get("event") == "result"
+        ]
+        return str(result["data"])
+
+    def test_the_result_lists_the_documents_and_their_quotes(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        html = self._result_html(client, adv)
+
+        assert 'data-testid="advanced-documents"' in html
+        assert "120 ページ" in html and "812,345 字" in html
+        assert "&lt;script&gt;" in html and s.SCRIPT_TEXT not in html
+        assert "p.12 / 第3章 &gt; 不満" in html
+        assert "30代の学生の発言" in html
+        assert "照合できない根拠 1 件" in html
+
+    def test_evidence_without_a_segment_is_shown_for_the_whole(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        html = self._result_html(client, adv)
+
+        whole = html.split('data-testid="advanced-overall-evidence"', 1)
+        assert len(whole) == 2
+        assert "全体に対する根拠" in html
+        assert "週末は家族と過ごす時間を何より大切にしている" in whole[1]
+
+    def _failure(self, client: TestClient, adv: Adv, code: ErrorCode, **ctx) -> str:
+        failed = GenerationProgress(
+            generation=s.generation(
+                GenerationStatus.FAILED,
+                error_code=code.value,
+                error_context={k: v for k, v in ctx.items() if k != "filename"},
+            ),
+            events=(),
+            failure_context=dict(ctx),
+        )
+        adv.generations.stream_events.return_value = failed
+        blocks = [b for b in _sse(client.get(self.EVENTS).text) if "event" in b]
+        return str(json.loads(blocks[0]["data"])["message"])
+
+    def test_a_document_without_text_is_named_from_the_users_files(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        message = self._failure(
+            client, adv, ErrorCode.DOCUMENT_NO_TEXT, source_index=1, filename="白紙.pdf"
+        )
+
+        assert "白紙.pdf" in message
+
+    def test_too_many_characters_shows_the_count_and_the_limit(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        message = self._failure(
+            client,
+            adv,
+            ErrorCode.GENERATION_SOURCE_TOO_LARGE,
+            total_chars=2_400_000,
+            max_chars=2_000_000,
+        )
+
+        assert "2,400,000" in message and "2,000,000" in message

@@ -388,3 +388,165 @@ def test_large_csv_generates_without_running_out_of_memory(
     expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
     created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
     page.close()
+
+
+# ---------------------------------------------------------------------------
+# U4: documents (NFR1.15, NFR2.7, NFR7.3, NFR9.8)
+# ---------------------------------------------------------------------------
+
+SAMPLE_INTERVIEW = DATA_DIR / "interview_sample.txt"
+
+
+def _document_files(run_tag: str) -> list[dict]:
+    """A small PDF (ASCII text) and a docx with headings, made here (no data)."""
+    from tests.document_fixtures import docx_bytes, pdf_bytes
+
+    pdf = pdf_bytes(
+        [
+            "Interview with customer A (30s, woman, office worker).\n"
+            "Value: spending the weekend with her family matters most to her.\n"
+            "Pain: waiting thirty minutes at the counter after work is too long.",
+            "",
+            "Goal: she wants to finish her shopping within twenty minutes.\n"
+            "Behavior: she checks reviews on her phone before deciding.",
+        ]
+    )
+    docx = docx_bytes(
+        [
+            (1, f"面談の記録 {run_tag}"),
+            "回答者B（40代・男性・自営業）: 価値: 地元の店を応援したいという気持ちが強い。",
+            "回答者B: 不満: 手続きの説明が分かりにくく何度も問い合わせることになる。",
+            (2, "これから"),
+            "回答者B: 目標: 仕事と家庭の時間の配分を見直したいと思っている。",
+        ]
+    )
+    return [
+        {
+            "name": f"{run_tag}-interview.pdf",
+            "mimeType": "application/pdf",
+            "buffer": pdf,
+        },
+        {
+            "name": f"{run_tag}-interview.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document",
+            "buffer": docx,
+        },
+    ]
+
+
+def _ready_row(page: Page, name: str, timeout: int = INSPECT_TIMEOUT_MS) -> Locator:
+    row = page.get_by_test_id("advanced-upload-row").filter(has_text=name).first
+    expect(row).to_have_attribute("data-state", "ready", timeout=timeout)
+    return row
+
+
+def test_documents_small_pdf_and_docx_use_the_full_text(
+    session_context: BrowserContext, created: CreatedRecords, run_tag: str
+) -> None:
+    """A PDF (one page without text) and a docx give personas from the full text.
+
+    BR24.3, BR25.2, BR27.1, BR27.2: the blank page is left out, the documents
+    are under 200,000 characters, and every persona rests on quoted evidence.
+    """
+    before = _persona_ids(session_context)
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    files = _document_files(run_tag)
+    page.get_by_test_id("advanced-file-input").set_input_files(files)
+    for file in files:
+        row = _ready_row(page, file["name"])
+        expect(row.get_by_test_id("advanced-upload-status")).to_contain_text(
+            "前準備で確定"
+        )
+        row.get_by_test_id("advanced-upload-select").check()
+    expect(page.get_by_test_id("advanced-document-estimate")).to_contain_text("万字")
+
+    _generate(page, run_tag)
+
+    log = page.get_by_test_id("advanced-log").inner_text()
+    assert "文字がないため除外" in log
+    assert "全文を使います" in log
+    result = page.get_by_test_id("advanced-result")
+    expect(result.get_by_test_id("advanced-documents")).to_contain_text("3 ページ")
+    expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
+    created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()
+
+
+def test_large_document_extracts_evidence(
+    session_context: BrowserContext, created: CreatedRecords, run_tag: str
+) -> None:
+    """About 800,000 characters go through the evidence extraction (NFR1.15).
+
+    Make the file first::
+
+        uv run python scripts/make_large_sample_document.py --chars 800000 \\
+            --format docx --headings 40 --out /path/large_interview.docx
+
+    and point ``E2E_LARGE_DOCUMENT`` at it. The time from the start to the
+    result, and the progress lines, are printed; the preparation and the
+    extraction times and the tokens are in the ``document_prepared`` and
+    ``evidence_extracted`` log lines of the app.
+    """
+    path = os.environ.get("E2E_LARGE_DOCUMENT", "").strip()
+    if not path:
+        pytest.skip("set E2E_LARGE_DOCUMENT to a file of make_large_sample_document.py")
+    large = Path(path)
+    assert large.is_file(), f"E2E_LARGE_DOCUMENT is not a file: {path}"
+
+    before = _persona_ids(session_context)
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    page.get_by_test_id("advanced-file-input").set_input_files(large)
+    _ready_row(page, large.name, timeout=30 * 60 * 1000).get_by_test_id(
+        "advanced-upload-select"
+    ).check()
+
+    started = time.monotonic()
+    _generate(page, run_tag)
+    elapsed = time.monotonic() - started
+    log = page.get_by_test_id("advanced-log").inner_text()
+    print(f"large document: start to result {elapsed / 60:.1f} minutes")  # noqa: T201
+    print(log)  # noqa: T201
+
+    assert "根拠を取り出します" in log
+    assert "根拠の抽出" in log
+    result = page.get_by_test_id("advanced-result")
+    expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
+    created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()
+
+
+def test_table_and_document_together(
+    session_context: BrowserContext, created: CreatedRecords, run_tag: str
+) -> None:
+    """One table and one document: segments from the table, quotes from the text.
+
+    BR23.1, BR28.1, BR28.2 (AC7.1.1, AC7.1.2): the result shows the segments,
+    the document used and its evidence (assigned to a segment or for the whole).
+    """
+    before = _persona_ids(session_context)
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    page.get_by_test_id("advanced-file-input").set_input_files(
+        [SAMPLE_CSV, SAMPLE_INTERVIEW]
+    )
+    for name in (SAMPLE_CSV.name, SAMPLE_INTERVIEW.name):
+        _ready_row(page, name).get_by_test_id("advanced-upload-select").check()
+
+    _generate(page, run_tag)
+
+    result = page.get_by_test_id("advanced-result")
+    expect(result.get_by_test_id("advanced-segment-row").first).to_be_visible()
+    expect(result.get_by_test_id("advanced-documents")).to_contain_text(
+        SAMPLE_INTERVIEW.name
+    )
+    expect(result.get_by_test_id("advanced-candidate")).to_have_count(PERSONA_COUNT)
+    # The quotes are on the personas that use them, or for the whole (BR28.2)
+    quotes = result.locator(
+        "[data-testid='advanced-evidence'] q, [data-testid='advanced-overall-evidence'] q"
+    )
+    assert quotes.count() > 0, "no document evidence reached the result"
+    created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()

@@ -9,6 +9,8 @@
 {% block content %}
 <div class="max-w-4xl mx-auto" id="advanced-generation" data-testid="advanced-generation-page"
      data-max-bytes="{{ limits.max_bytes }}"
+     data-max-document-bytes="{{ limits.max_document_bytes }}"
+     data-max-document-size-mb="{{ limits.max_document_size_mb }}"
      data-max-files="{{ limits.max_files }}"
      data-max-size-mb="{{ limits.max_size_mb }}"
      data-concurrency="{{ limits.concurrency }}"
@@ -16,7 +18,7 @@
      data-inspect-stop-seconds="{{ limits.inspect_stop_seconds }}">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     {% include "persona/partials/generation_tabs.html" %}
-    <p class="text-gray-600 mb-4">表のデータをアップロードし、AI が分析した結果からペルソナを生成します。</p>
+    <p class="text-gray-600 mb-4">表のデータやインタビューの記録などの文書をアップロードし、AI が分析した結果からペルソナを生成します。</p>
     <p data-testid="advanced-beta-notice" class="mb-6 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
         試験的な機能です。結果の形や仕様は予告なく変わることがあります
     </p>
@@ -29,18 +31,18 @@
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold" aria-hidden="true">1</span>
                 データファイルのアップロード
             </h2>
-            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる表のファイルを選択してください</p>
+            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる表や文書のファイルを選択してください。表は 1 つまで、文書は表と一緒にも文書だけでも使えます</p>
             <div class="mb-3 p-3 bg-gray-50 rounded-md ml-9">
                 <p id="advanced-file-limits" class="text-xs text-gray-500">
-                    <strong>対応形式:</strong> .csv, .tsv　｜　<strong>最大:</strong> {{ limits.max_size_mb }}MB/ファイル　｜　<strong>合計:</strong> {{ limits.max_files }} ファイルまで<br>
-                    Excel のファイルは CSV で保存し直してください
+                    <strong>表:</strong> .csv, .tsv（{{ limits.max_size_mb }}MB/ファイルまで）　｜　<strong>文書:</strong> .pdf, .docx, .txt, .md（{{ limits.max_document_size_mb }}MB/ファイルまで）　｜　<strong>合計:</strong> {{ limits.max_files }} ファイルまで<br>
+                    Excel のファイルは CSV で、古い Word（.doc）は .docx で保存し直して上げてください。パスワード付きのファイルと、文字のない画像だけの PDF は使えません
                 </p>
             </div>
 
             <div data-testid="advanced-drop-zone"
                  class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500 transition-colors ml-9">
                 <input type="file" id="advanced-file-input" data-testid="advanced-file-input"
-                       accept=".csv,.tsv,text/csv,text/tab-separated-values" multiple
+                       accept=".csv,.tsv,.pdf,.docx,.txt,.md,text/csv,text/tab-separated-values,application/pdf,text/plain,text/markdown" multiple
                        aria-describedby="advanced-file-limits"
                        class="sr-only">
                 <label for="advanced-file-input" class="cursor-pointer block">
@@ -69,6 +71,9 @@
                     </tbody>
                 </table>
                 <p data-testid="advanced-upload-empty" class="mt-2 text-xs text-gray-500"{% if upload_rows %} hidden{% endif %}>まだファイルはありません</p>
+                {# U4 BR23.2: 選んだ文書の見込みの合計（advanced-upload.js が書き換える） #}
+                <p data-testid="advanced-document-estimate" class="mt-2 text-sm text-gray-700" aria-live="polite"
+                   data-max-man-chars="{{ limits.max_document_man_chars }}" hidden></p>
                 {% if upload_list_failed %}
                 <p data-testid="advanced-upload-list-error" class="mt-2 text-xs text-red-800">前に上げたファイルの一覧を読み込めませんでした。時間をおいてページを開き直してください</p>
                 {% endif %}
