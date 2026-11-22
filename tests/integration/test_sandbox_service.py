@@ -191,6 +191,22 @@ class TestCodeInterpreterSession:
 
         sandbox.stop_session(_session())
 
+    def test_stop_session_by_id(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        # U5 NFR5.48: a reader stops a session it only knows by its ID
+        stub.add_response(
+            "stop_code_interpreter_session",
+            {
+                "codeInterpreterIdentifier": _CI_ID,
+                "sessionId": _SESSION_ID,
+                "lastUpdatedAt": "2026-11-19T00:00:00Z",
+            },
+            {"codeInterpreterIdentifier": _CI_ID, "sessionId": _SESSION_ID},
+        )
+
+        sandbox.stop_session_by_id(_SESSION_ID)
+
 
 class TestCodeInterpreterFiles:
     def test_put_files_downloads_with_the_url_and_never_logs_it(
@@ -733,6 +749,27 @@ class TestInProcessSandbox:
 
         assert result["truncated"] is True
         assert len(json.dumps(result, ensure_ascii=False)) <= 2_000
+
+    def test_stop_session_by_id_removes_the_workdir(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+        workdir = Path(local.workdir_of(session))
+
+        local.stop_session_by_id(session.session_id)
+
+        assert not workdir.exists()
+        with pytest.raises(SandboxUnavailableError):
+            local.workdir_of(session)
+
+    def test_stop_session_by_an_unknown_id_does_nothing(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+
+        local.stop_session_by_id("local-unknown")
+
+        assert Path(local.workdir_of(session)).is_dir()
 
     def test_stop_session_removes_the_workdir(self, local: InProcessSandbox) -> None:
         session = local.start_session("gen1", lifetime_seconds=60)

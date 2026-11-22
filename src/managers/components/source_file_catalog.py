@@ -65,6 +65,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+#: U5 BR30.3: files that will be ready later (an error file never will).
+_NOT_READY_YET = frozenset({SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING})
 _HELD_STATES = frozenset(
     {SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING, SourceFileStatus.READY}
 )
@@ -177,8 +179,9 @@ class SourceFileCatalog:
         Raises:
             CodedError: ``UPLOAD_SOURCE_INVALID`` (nothing, more than ten, or
                 two tables or more: ``reason=tables``),
-                ``GENERATION_SOURCE_NOT_FOUND`` (any file someone else's,
-                missing, expired or not ready).
+                ``GENERATION_SOURCE_NOT_READY`` (U5: a file still uploading or
+                being inspected), ``GENERATION_SOURCE_NOT_FOUND`` (any file
+                someone else's, missing, expired, failed or being deleted).
         """
         ids = list(dict.fromkeys(i for i in source_file_ids if i))
         if not 1 <= len(ids) <= SOURCE_FILES_MAX:
@@ -189,6 +192,12 @@ class SourceFileCatalog:
             )
         code = ErrorCode.GENERATION_SOURCE_NOT_FOUND
         found = [self.get_owned(owner_sub, i, not_found_code=code) for i in ids]
+        if any(s.status in _NOT_READY_YET for s in found):
+            # U5 BR30.3: still uploading or being inspected; the user waits
+            raise self._error_type(
+                "source file is not ready yet",
+                code=ErrorCode.GENERATION_SOURCE_NOT_READY,
+            )
         for source in found:
             if source.status is not SourceFileStatus.READY or source.metadata is None:
                 raise self._error_type("source file is not ready", code=code)

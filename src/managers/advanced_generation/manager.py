@@ -22,6 +22,23 @@ the stages in order and never raises (functional-spec.md §3)::
 
 Failures keep the error code and safe values only, never row data or
 exception text (NFR3.6); logs go through the allowed-field list (NFR6.1).
+
+U5 (the generation's controls, ADR-009): requests travel through the store,
+so whichever task receives them, the task running the generation takes them.
+
+- ``confirm_plan`` stops the run in ``awaiting_plan_approval`` after the plan;
+  approve, replan (no limit) or cancel; 15 minutes per card, 60 in total, and
+  the waits move the 60-minute deadline back (BR29).
+- A watch thread reads the generation every ``control_poll_seconds`` (and
+  writes the heartbeat); the run checks at its boundaries and stops on a
+  cancel, or quietly when someone else ended it (BR31.2, BR32.5). Right
+  before the results it reads once more, and ``done`` loses to a pending
+  cancel; a lost ``done`` removes the candidates and the record again.
+- Every end (done, failed, cancelled) releases the lock and the marks before
+  its event is written and before the session stops, so the same files can
+  start again at once; a start also frees a lock left by an ended generation.
+- Readers (the stream, the page, the start, the requests) end a generation
+  whose heartbeat is 5 minutes old, or whose plan wait ran out (BR32.1, BR32.2).
 """
 
 from __future__ import annotations
@@ -43,6 +60,8 @@ from ...models.advanced_generation import (
     PERSONA_COUNT_MIN,
     PURPOSE_MAX_CHARS,
     AdvancedGeneration,
+    ControlAction,
+    ControlRequest,
     EventType,
     GenerationEvent,
     GenerationStatus,
@@ -141,6 +160,15 @@ _ROW_EXAMPLES_MAX = 5
 #: The two time limits, told apart in ``error_context`` (NFR1.6, NFR5.6, NFR5.7).
 _LIMIT_GENERATION = "generation_minutes"
 _LIMIT_PREPARE = "prepare_minutes"
+#: U5: one plan card (BR29.5) and every card together (BR29.7).
+_LIMIT_PLAN_WAIT = "plan_wait_minutes"
+_LIMIT_PLAN_WAIT_TOTAL = "plan_wait_total_minutes"
+#: U5: attributes that mean nothing once the generation has ended.
+_ENDED_REMOVES = ("control_request", "awaiting_since")
+#: U5: the states a cancel may be written in (BR31.1).
+_RUNNING_STATES = tuple(s for s in GenerationStatus if not s.is_terminal)
+#: U5: the actions the plan card sends (a cancel has its own route).
+_PLAN_DECISIONS = frozenset({ControlAction.APPROVE.value, ControlAction.REPLAN.value})
 _EVENT_TEXT_MAX = 150
 #: Wait before the one re-send of a failed copy of the source (NFR5.30).
 _REFRESH_RETRY_SECONDS = 1.0
@@ -152,6 +180,10 @@ class AdvancedGenerationError(CodedError):
 
 class _StopRun(Exception):
     """Internal: the run cannot go on (a transition was lost); no failure write."""
+
+
+class _Cancelled(Exception):
+    """Internal: the user cancelled; the run moves to ``cancelled`` (U5 BR31.2)."""
 
 
 def _utc_now() -> datetime:
@@ -275,11 +307,29 @@ class _Run:
     cause: Optional[str] = None
     #: DuckDB's memory limit the preparation reported (for the log only).
     memory_limit: Optional[str] = None
+    #: U5: seconds already waited for plan approvals (BR29.6) and replans.
+    waited_seconds: int = 0
+    replan_count: int = 0
+    #: U5: when the current plan card was shown (``awaiting_plan_approval``).
+    awaiting_since: Optional[datetime] = None
+    #: U5: the watch saw a cancel request (BR31.2) ...
+    cancel_requested: threading.Event = field(default_factory=threading.Event)
+    cancel_request: Optional[ControlRequest] = None
+    #: ... or that a reader ended the generation (BR32.5).
+    ended_elsewhere: threading.Event = field(default_factory=threading.Event)
+    #: Set before the run writes its own end, so the watch ignores that end.
+    ending: threading.Event = field(default_factory=threading.Event)
+    #: Consecutive failures of the watch's read and of its heartbeat (NFR5.51).
+    read_failures: int = 0
+    beat_failures: int = 0
+    #: The end (lock, marks, ``finished_at``) is already written.
+    finished: bool = False
 
     @property
     def deadline(self) -> datetime:
+        """60 minutes from the start, moved back by the plan waits (BR29.6)."""
         return self.generation.created_at + timedelta(
-            seconds=config.ADVANCED_GENERATION_TIMEOUT_SECONDS
+            seconds=config.ADVANCED_GENERATION_TIMEOUT_SECONDS + self.waited_seconds
         )
 
 
@@ -310,6 +360,7 @@ class AdvancedPersonaGenerationManager:
         max_concurrent: Optional[int] = None,
         heartbeat_seconds: Optional[float] = None,
         poll_seconds: Optional[float] = None,
+        control_poll_seconds: Optional[float] = None,
     ) -> None:
         """Every Service is optional; omitted ones come from the factory on first use.
 
@@ -335,6 +386,12 @@ class AdvancedPersonaGenerationManager:
             heartbeat_seconds or config.ADVANCED_GENERATION_HEARTBEAT_SECONDS
         )
         self._poll_seconds = poll_seconds
+        #: U5: how often the watch and the plan wait read the generation
+        self._control_poll_seconds = float(
+            control_poll_seconds
+            if control_poll_seconds is not None
+            else config.ADVANCED_GENERATION_CONTROL_POLL_SECONDS
+        )
 
     # --- lazy dependencies (ADR-011) --------------------------------------------
 
@@ -395,8 +452,12 @@ class AdvancedPersonaGenerationManager:
         source_file_ids: Sequence[str],
         purpose: str,
         persona_count: int,
+        confirm_plan: bool = False,
     ) -> str:
         """Check the request and write the start transaction (W4, BR7.5, BR6.4).
+
+        U5: ``confirm_plan`` stops the run after the plan until the user
+        approves it (BR29.1).
 
         The order is: release conditions, input, the free slot, the lock
         (scalability-design.md §1). A refused transaction gives the slot back.
@@ -421,13 +482,46 @@ class AdvancedPersonaGenerationManager:
         self._check_input(purpose, persona_count)
         # U4 BR23.1: documents alone, or one table with documents
         self._catalog.ready_sources(principal.sub, ids)
+        self._judge_lock_holder(principal)  # U5 BR30.1: a stalled one lets go
         if not self._slots.acquire(blocking=False):
             raise _fail(ErrorCode.ADVANCED_GENERATION_BUSY, "no free generation slot")
         try:
-            return self._write_start(principal, ids, purpose, int(persona_count))
+            return self._write_start(
+                principal, ids, purpose, int(persona_count), bool(confirm_plan)
+            )
         except BaseException:
             self._release_slot()
             raise
+
+    def _judge_lock_holder(self, principal: Principal) -> None:
+        """Judge the generation the owner's lock points at (BR30.1, NFR5.47).
+
+        A stalled one is ended (which releases its lock and marks) so the new
+        start can take them; one already ended has its lock and marks released
+        (conditioned on its ID); a live one keeps them and the start is refused
+        by the transaction as before. Only an aid: a failed read lets the
+        transaction decide.
+        """
+        try:
+            lock = self._store.get_lock(principal.sub)
+            if lock is None or not lock.is_held(self._clock()):
+                return
+            generation = self._store.get(lock.generation_id)
+        except CodedError as e:
+            logger.warning("lock holder unreadable (%s)", e.code.value)
+            return
+        if generation is None or generation.owner_sub != principal.sub:
+            return
+        if generation.status.is_terminal:
+            # review fix: an ended generation whose holds were not released
+            # (yet) never blocks the next start; only its own holds go
+            self._store.release_holds(
+                generation.generation_id,
+                generation.owner_sub,
+                generation.source_file_ids,
+            )
+            return
+        self._judge_reader(generation)
 
     @staticmethod
     def _check_input(purpose: str, persona_count: int) -> None:
@@ -444,7 +538,12 @@ class AdvancedPersonaGenerationManager:
             )
 
     def _write_start(
-        self, principal: Principal, ids: list[str], purpose: str, persona_count: int
+        self,
+        principal: Principal,
+        ids: list[str],
+        purpose: str,
+        persona_count: int,
+        confirm_plan: bool,
     ) -> str:
         now = self._clock()
         generation = AdvancedGeneration.create_new(
@@ -454,6 +553,7 @@ class AdvancedPersonaGenerationManager:
             persona_count=persona_count,
             now=now,
             ttl_seconds=config.ADVANCED_GENERATION_ITEM_TTL_SECONDS,
+            confirm_plan=confirm_plan,
         )
         lock_until = now + timedelta(seconds=config.ADVANCED_GENERATION_LOCK_SECONDS)
         try:
@@ -507,11 +607,20 @@ class AdvancedPersonaGenerationManager:
         if generation is None or generation.status is not GenerationStatus.PREPARING:
             self._release_slot()
             return
-        state = _Run(generation=generation, started_monotonic=time.monotonic())
-        stop_heartbeat = self._start_heartbeat(generation_id)
+        state = _Run(
+            generation=generation,
+            started_monotonic=time.monotonic(),
+            waited_seconds=generation.waited_seconds,
+            replan_count=generation.replan_count,
+        )
+        stop_watch = self._start_watch(state)
         try:
             self._run_stages(state)
+        except _Cancelled:
+            self._record_cancel(state)
         except _StopRun:
+            # U5 BR32.5: a lost transition means someone else ended it
+            state.ended_elsewhere.set()
             logger.warning("advanced generation stopped: a transition was lost")
         except CodedError as e:
             self._record_failure(state, e.code, e.context)
@@ -521,9 +630,14 @@ class AdvancedPersonaGenerationManager:
         finally:
             # Each end step stands alone; the slot goes back last and once (§2).
             try:
-                stop_heartbeat.set()
+                stop_watch.set()
+                if not state.ended_elsewhere.is_set() and not state.finished:
+                    # NFR5.46: the side that ended it released the lock and marks
+                    self._finish(state.generation)
+                    state.finished = True
+                # review fix: the session (an external call) stops after the
+                # lock and the marks are gone, so a restart is never refused
                 self._stop_session(state)
-                self._finish(state.generation)
                 try:
                     self._log_finished(state)
                 except Exception as e:  # noqa: BLE001 - each end step stands alone
@@ -547,11 +661,15 @@ class AdvancedPersonaGenerationManager:
             },
         )
         self._plan(state)
-        self._enter(
-            state,
-            GenerationStatus.RUNNING,
-            updates={"plan": state.plan.to_dict() if state.plan else None},
-        )
+        if state.generation.confirm_plan:
+            # U5 BR29.1: wait for the user; ends in ``running`` (or raises)
+            self._await_plan_decision(state)
+        else:
+            self._enter(
+                state,
+                GenerationStatus.RUNNING,
+                updates={"plan": state.plan.to_dict() if state.plan else None},
+            )
         self._analyze(state)
         self._enter(state, GenerationStatus.SYNTHESIZING)
         personas = self._synthesize(state)
@@ -565,11 +683,16 @@ class AdvancedPersonaGenerationManager:
         stage: GenerationStatus,
         *,
         first: bool = False,
+        moved: bool = False,
         updates: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        """Move to ``stage`` (conditioned on the current one) and say so (BR7.1)."""
+        """Move to ``stage`` (conditioned on the current one) and say so (BR7.1).
+
+        ``moved``: the store already moved it (U5: the plan wait's own writes).
+        """
+        self._checkpoint(state)
         self._check_deadline(state)
-        if not first:
+        if not first and not moved:
             clean = {k: v for k, v in (updates or {}).items() if v is not None}
             if not self._store.transition(
                 state.generation.generation_id, state.status, stage, updates=clean
@@ -612,7 +735,8 @@ class AdvancedPersonaGenerationManager:
             raise self._generation_timeout("generation over 60 minutes")
 
     def _before_model(self, state: _Run) -> None:
-        """No model stage starts with under 10 minutes left (§2)."""
+        """No model stage starts with under 10 minutes left (§2), nor after a cancel."""
+        self._checkpoint(state)
         remaining = state.deadline - self._clock()
         if remaining < timedelta(
             seconds=config.ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS
@@ -645,6 +769,14 @@ class AdvancedPersonaGenerationManager:
         state.session = sandbox.start_session(
             generation.generation_id, config.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS
         )
+        # U5 BR32.4: a reader that ends the generation stops the session by its ID
+        if not self._store.transition(
+            generation.generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.PREPARING,
+            updates={"session_id": state.session.session_id},
+        ):
+            raise _StopRun()
         for source in state.sources:
             self._bring_in(state, source)
         prepare_started = self._clock()
@@ -898,6 +1030,10 @@ class AdvancedPersonaGenerationManager:
                 last_event_at = self._clock()
             if status.get("done"):
                 return status
+            if state.cancel_requested.is_set() or state.ended_elsewhere.is_set():
+                # U5 BR31.2: stop the command, then end the run
+                self._cancel_quietly(state, command_id)
+                self._checkpoint(state)
             now = self._clock()
             if now - last_event_at >= notice:
                 # The rows stand still while the table is written (BR17.2): say
@@ -1373,6 +1509,7 @@ class AdvancedPersonaGenerationManager:
                 data,
                 documents=self._full_texts(state),
             )
+            self._checkpoint(state)  # U5: a cancel during the call
             plan = AnalysisPolicy.settle_plan(
                 raw, guide=guide, attempt=attempt, columns=self._columns(state)
             )
@@ -1380,12 +1517,187 @@ class AdvancedPersonaGenerationManager:
                 break
         assert plan is not None
         state.plan = plan
+        if not generation.confirm_plan:
+            # U5: a plan to confirm is announced once its card can be shown
+            self._plan_event(state)
+
+    def _plan_event(self, state: _Run) -> None:
+        assert state.plan is not None
         self._event(
             state,
             EventType.PLAN,
-            method=plan.method.value,
-            interpreted_purpose=plan.interpreted_purpose[:_EVENT_TEXT_MAX],
+            method=state.plan.method.value,
+            interpreted_purpose=state.plan.interpreted_purpose[:_EVENT_TEXT_MAX],
         )
+
+    # --- U5: the plan confirmation (BR29) ---------------------------------------
+
+    def _await_plan_decision(self, state: _Run) -> None:
+        """Show the plan and wait for approve, replan or cancel (W5-1).
+
+        The thread keeps its slot and the lock while it waits (NFR5.41) and
+        reads the generation every ``control_poll_seconds`` (NFR1.24). A
+        replan makes the plan again with the new instruction and waits again,
+        with no limit on the count (BR29.4). One card waits 15 minutes and all
+        the cards 60 minutes together (BR29.5, BR29.7).
+
+        Raises:
+            _Cancelled: The user cancelled while the card was shown.
+            _StopRun: A reader ended the generation.
+            AdvancedGenerationError: ``GENERATION_TIMEOUT`` (a plan wait).
+        """
+        while True:
+            self._enter_awaiting(state)
+            request = self._wait_for_request(state)
+            if request.action is ControlAction.APPROVE:
+                if self._take_approve(state, request):
+                    return
+            elif request.action is ControlAction.REPLAN:
+                if self._take_replan(state, request):
+                    self._plan(state)
+            # a request taken by no one (a cancel wrote over it) is read again
+
+    def _enter_awaiting(self, state: _Run) -> None:
+        """``planning -> awaiting_plan_approval`` with the longer lock (NFR5.43)."""
+        if state.status is GenerationStatus.AWAITING_PLAN_APPROVAL:
+            return
+        assert state.plan is not None
+        generation = state.generation
+        now = self._clock()
+        # From the generation's own deadline, so it never shrinks (NFR5.43)
+        until = generation.created_at + timedelta(
+            seconds=config.ADVANCED_GENERATION_LOCK_SECONDS
+            + state.waited_seconds
+            + config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS
+        )
+        if not self._store.enter_awaiting(
+            generation.generation_id,
+            generation.owner_sub,
+            generation.source_file_ids,
+            now=now,
+            until=until,
+            updates={"plan": state.plan.to_dict()},
+        ):
+            raise _StopRun()
+        state.awaiting_since = now
+        self._enter(state, GenerationStatus.AWAITING_PLAN_APPROVAL, moved=True)
+        self._plan_event(state)
+
+    def _wait_for_request(self, state: _Run) -> ControlRequest:
+        """Read the generation until a request arrives or a wait runs out."""
+        generation_id = state.generation.generation_id
+        assert state.awaiting_since is not None
+        while True:
+            self._checkpoint(state)
+            try:
+                current = self._store.get(generation_id)
+            except CodedError as e:
+                logger.warning("plan wait read failed (%s)", e.code.value)
+                current = state.generation
+            if current is None or current.status is not state.status:
+                state.ended_elsewhere.set()
+                raise _StopRun()
+            request = current.control_request
+            if request is not None and request.action is ControlAction.CANCEL:
+                state.cancel_request = request
+                raise _Cancelled()
+            if request is not None:
+                return request
+            self._check_plan_wait(state, self._clock())
+            state.cancel_requested.wait(self._control_poll_seconds)
+
+    @staticmethod
+    def _plan_wait_limit(
+        awaiting_since: datetime, waited_seconds: int, now: datetime
+    ) -> tuple[Optional[tuple[str, int]], int]:
+        """The plan wait that ran out, if any, and all the seconds waited.
+
+        One card waits ``ADVANCED_GENERATION_PLAN_WAIT_SECONDS`` (BR29.5); all
+        the cards ``ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS`` (BR29.7).
+        """
+        card = int((now - awaiting_since).total_seconds())
+        total = waited_seconds + max(0, card)
+        if card > config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS:
+            return (
+                _LIMIT_PLAN_WAIT,
+                config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS,
+            ), total
+        if total > config.ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS:
+            return (
+                _LIMIT_PLAN_WAIT_TOTAL,
+                config.ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS,
+            ), total
+        return None, total
+
+    def _check_plan_wait(self, state: _Run, now: datetime) -> None:
+        assert state.awaiting_since is not None
+        limit, total = self._plan_wait_limit(
+            state.awaiting_since, state.waited_seconds, now
+        )
+        if limit is None:
+            return
+        self._log_plan_wait_expired(state.generation.generation_id, limit[0], total)
+        raise self._timeout("plan wait ran out", limit[0], limit[1])
+
+    def _waited_now(self, state: _Run) -> int:
+        """All the waits, the current card's included (BR29.6)."""
+        assert state.awaiting_since is not None
+        current = int((self._clock() - state.awaiting_since).total_seconds())
+        return state.waited_seconds + max(0, current)
+
+    def _take_approve(self, state: _Run, request: ControlRequest) -> bool:
+        waited = self._waited_now(state)
+        if not self._store.take_control_request(
+            state.generation.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.RUNNING,
+            request,
+            updates={"waited_seconds": waited},
+            removes=("awaiting_since",),
+        ):
+            return False
+        self._taken(state, request, waited)
+        self._enter(state, GenerationStatus.RUNNING, moved=True)
+        return True
+
+    def _take_replan(self, state: _Run, request: ControlRequest) -> bool:
+        """Put the new instruction in and go back to ``planning`` (BR29.4)."""
+        generation = state.generation
+        waited = self._waited_now(state)
+        purpose = request.revised_purpose or ""
+        original = (
+            generation.original_purpose
+            if generation.original_purpose is not None
+            else generation.purpose
+        )
+        replans = state.replan_count + 1
+        if not self._store.take_control_request(
+            generation.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.PLANNING,
+            request,
+            updates={
+                "waited_seconds": waited,
+                "purpose": purpose,
+                "original_purpose": original,
+                "replan_count": replans,
+            },
+            removes=("awaiting_since",),
+        ):
+            return False
+        state.generation = generation.update(
+            purpose=purpose, original_purpose=original, replan_count=replans
+        )
+        state.replan_count = replans
+        self._taken(state, request, waited)
+        self._enter(state, GenerationStatus.PLANNING, moved=True)
+        return True
+
+    def _taken(self, state: _Run, request: ControlRequest, waited: int) -> None:
+        state.waited_seconds = waited
+        state.awaiting_since = None
+        state.generation = state.generation.update(waited_seconds=waited)
+        self._log_control_taken(state, request)
 
     def _analyze(self, state: _Run) -> None:
         assert state.plan is not None
@@ -1416,6 +1728,7 @@ class AdvancedPersonaGenerationManager:
             },
             source_id=state.source.source_file_id,
         )
+        self._checkpoint(state)  # U5: a cancel during the call
         if tools.sandbox_error is not None:
             raise tools.sandbox_error
         self._check_cluster_calls(state)
@@ -1477,6 +1790,7 @@ class AdvancedPersonaGenerationManager:
             },
             prompts.EvidenceAssignmentOutput,
         )
+        self._checkpoint(state)  # U5: a cancel during the call
         state.document_evidence = documents.apply_assignments(
             state.document_evidence,
             list(output.assignments),
@@ -1527,6 +1841,7 @@ class AdvancedPersonaGenerationManager:
             prompts.AdvancedPersonaListOutput,
             documents=self._full_texts(state),
         )
+        self._checkpoint(state)  # U5: a cancel during the call
         personas = list(output.personas)
         if len(personas) != generation.persona_count:
             raise _fail(
@@ -1600,7 +1915,15 @@ class AdvancedPersonaGenerationManager:
         personas: Sequence[prompts.AdvancedPersonaOutput],
         verification: VerificationResult,
     ) -> None:
-        """Record, candidates and result parts first, then ``done`` (W5-6, W5-7)."""
+        """Record, candidates and result parts first, then ``done`` (W5-6, W5-7).
+
+        U5 BR31.2 (review fix): the generation is read once more right before
+        anything is written, and ``done`` is conditioned on no pending
+        request. When ``done`` still loses (a reader ended it, or a cancel
+        came in while writing), what was written is removed again and the run
+        ends as the store says: cancelled, or quietly.
+        """
+        self._checkpoint(state)  # U5 BR31.2: a cancelled run keeps nothing
         generation = state.generation
         assert state.plan is not None
         now = self._clock()
@@ -1616,17 +1939,15 @@ class AdvancedPersonaGenerationManager:
             unverified_segment_ids=unverified,
             document_mode=state.document_mode,
         )
-        self._archive.deposit(
-            build_record(
-                generation=generation,
-                plan=state.plan,
-                report=state.report,
-                sources=state.sources,
-                calls=state.tools.calls,
-                library_sha256=sha,
-                now=now,
-                document_mode=state.document_mode,
-            )
+        record = build_record(
+            generation=generation,
+            plan=state.plan,
+            report=state.report,
+            sources=state.sources,
+            calls=state.tools.calls,
+            library_sha256=sha,
+            now=now,
+            document_mode=state.document_mode,
         )
         candidates = build_candidates(
             generation=generation,
@@ -1667,6 +1988,8 @@ class AdvancedPersonaGenerationManager:
         parts[ResultPartName.EVIDENCE] = [
             e.to_dict() for e in self._trimmed_evidence(state, personas, parts)
         ]
+        self._judge_before_results(state)
+        self._archive.deposit(record)
         self._candidates.put_all(candidates)
         part_counts = self._store.put_result_parts(
             generation.generation_id,
@@ -1675,15 +1998,24 @@ class AdvancedPersonaGenerationManager:
             max_part_bytes=config.ADVANCED_GENERATION_PART_MAX_BYTES,
             max_total_bytes=config.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES,
         )
+        state.ending.set()
         if not self._store.transition(
             generation.generation_id,
             GenerationStatus.VERIFYING,
             GenerationStatus.DONE,
             updates={"part_counts": part_counts, **done_updates},
+            removes=_ENDED_REMOVES,
+            unless_requested=True,
         ):
-            raise _StopRun()
+            self._discard_results(state, candidates)
+            self._judge_before_results(state)
+            raise _StopRun()  # moved in a way the read cannot tell: end quietly
         self._close_stage(state)
         state.status = GenerationStatus.DONE
+        # review fix (as the cancel, AC9.3.2): the lock and the marks go
+        # before the result shows
+        self._finish(state.generation)
+        state.finished = True
         self._event(
             state,
             EventType.RESULT,
@@ -1737,6 +2069,60 @@ class AdvancedPersonaGenerationManager:
         ):
             raise _fail(ErrorCode.GENERATION_RESULT_TOO_LARGE, "generation too large")
 
+    def _judge_before_results(self, state: _Run) -> None:
+        """Read the generation once more; stop when it ended or a cancel waits.
+
+        The watch reads only every ``control_poll_seconds``, so a reader's end
+        or a cancel written after the last checkpoint is seen here (BR31.2).
+        A failed read lets the conditioned ``done`` decide.
+
+        Raises:
+            _StopRun: Someone else ended it (BR32.5).
+            _Cancelled: A cancel is pending.
+        """
+        try:
+            current = self._store.get(state.generation.generation_id)
+        except CodedError as e:
+            logger.warning("advanced generation unreadable (%s)", e.code.value)
+            return
+        if current is None or current.status.is_terminal:
+            state.ended_elsewhere.set()
+            raise _StopRun()
+        request = current.control_request
+        if request is not None and request.action is ControlAction.CANCEL:
+            state.cancel_request = request
+            state.cancel_requested.set()
+            raise _Cancelled()
+
+    def _discard_results(
+        self, state: _Run, candidates: Sequence[PersonaCandidate]
+    ) -> None:
+        """Remove the candidates and the pending record of a lost ``done``.
+
+        The existing paths remove them: a candidate is claimed and deleted
+        with the claim, the record as one persona's copy (its key is the
+        generation ID). Each step stands alone and a failure is logged; the
+        pending record's lifecycle and the candidates' TTL are the last net.
+        The result parts stay: nothing reads them unless the run is ``done``.
+        """
+        owner = state.generation.owner_sub
+        token = f"discard-{state.generation.generation_id}"
+        now = self._clock()
+        for candidate in candidates:
+            try:
+                self._candidates.claim(candidate.candidate_id, owner, token, now)
+                self._candidates.delete(candidate.candidate_id, token)
+            except Exception as e:  # noqa: BLE001 - each removal stands alone
+                logger.error(
+                    "advanced generation candidate not removed (%s)", type(e).__name__
+                )
+        try:
+            self._archive.discard_copy(owner, state.generation.generation_id)
+        except Exception as e:  # noqa: BLE001 - the lifecycle removes it later
+            logger.error(
+                "advanced generation record not removed (%s)", type(e).__name__
+            )
+
     # --- failure and the end ----------------------------------------------------
 
     def _record_failure(
@@ -1749,18 +2135,27 @@ class AdvancedPersonaGenerationManager:
         updates: dict[str, Any] = {"error_code": code.value}
         if safe:
             updates["error_context"] = safe
+        state.ending.set()
         try:
             moved = self._store.transition(
                 state.generation.generation_id,
                 state.status,
                 GenerationStatus.FAILED,
                 updates=updates,
+                removes=_ENDED_REMOVES,
             )
             if moved:
                 self._close_stage(state)
+                # review fix (as the cancel, AC9.3.2): the lock and the marks
+                # go before 失敗しました shows, so a restart is not refused
+                self._finish(state.generation)
+                state.finished = True
                 self._event(
                     state, EventType.ERROR, error_code=code.value, kind=code.kind.value
                 )
+            else:
+                # U5 BR32.5: a reader (or the requester) ended it first
+                state.ended_elsewhere.set()
         except CodedError as e:
             logger.error("advanced generation failure not written (%s)", e.code.value)
         logger.info(
@@ -1801,27 +2196,124 @@ class AdvancedPersonaGenerationManager:
         except ValueError:
             logger.error("advanced generation slot released twice")
 
-    def _start_heartbeat(self, generation_id: str) -> threading.Event:
+    def _start_watch(self, state: _Run) -> threading.Event:
+        """The heartbeat thread, widened to read the generation (U5 NFR1.23).
+
+        Every ``control_poll_seconds`` it reads the generation; every
+        ``heartbeat_seconds`` it writes the heartbeat. Each read and each
+        write is wrapped on its own: a failure is a warning with the count of
+        failures in a row, and the next round goes on (NFR5.51).
+        """
         stop = threading.Event()
+        generation_id = state.generation.generation_id
+        interval = min(self._control_poll_seconds, float(self._heartbeat_seconds))
 
-        def beat() -> None:
-            while not stop.wait(self._heartbeat_seconds):
-                try:
-                    self._store.heartbeat(generation_id, now=self._clock())
-                except Exception as e:  # noqa: BLE001 - a missed beat is logged
-                    logger.warning("heartbeat not written (%s)", type(e).__name__)
+        def watch() -> None:
+            last_beat = time.monotonic()
+            last_read = 0.0
+            while not stop.wait(interval):
+                if time.monotonic() - last_beat >= self._heartbeat_seconds:
+                    last_beat = time.monotonic()
+                    self._beat(state, generation_id)
+                if time.monotonic() - last_read >= self._control_poll_seconds:
+                    last_read = time.monotonic()
+                    self._read_controls(state, generation_id)
 
-        threading.Thread(target=beat, daemon=True).start()
+        threading.Thread(
+            target=watch, name="advanced-generation-watch", daemon=True
+        ).start()
         return stop
 
+    def _read_controls(self, state: _Run, generation_id: str) -> None:
+        """One read of the watch: a cancel, or an end written by someone else."""
+        try:
+            current = self._store.get(generation_id)
+            state.read_failures = 0
+        except Exception as e:  # noqa: BLE001 - the watch never dies (NFR5.51)
+            state.read_failures += 1
+            logger.warning(
+                "advanced generation watch read failed (%s): failures_in_a_row=%d",
+                type(e).__name__,
+                state.read_failures,
+            )
+            return
+        if current is None or current.status.is_terminal:
+            if not state.ending.is_set():
+                state.ended_elsewhere.set()  # BR32.5: a reader ended it
+            return
+        request = current.control_request
+        if request is not None and request.action is ControlAction.CANCEL:
+            state.cancel_request = request
+            state.cancel_requested.set()
+
+    def _beat(self, state: _Run, generation_id: str) -> None:
+        try:
+            self._store.heartbeat(generation_id, now=self._clock())
+            state.beat_failures = 0
+        except Exception as e:  # noqa: BLE001 - a missed beat is logged
+            state.beat_failures += 1
+            logger.warning(
+                "heartbeat not written (%s): failures_in_a_row=%d",
+                type(e).__name__,
+                state.beat_failures,
+            )
+
+    @staticmethod
+    def _checkpoint(state: _Run) -> None:
+        """Stop here when a reader ended the run or the user cancelled (BR31.2).
+
+        Called at the stage boundaries, before and after the model calls, in
+        the preparation's wait and before each extraction chunk.
+        """
+        if state.ended_elsewhere.is_set():
+            raise _StopRun()
+        if state.cancel_requested.is_set():
+            raise _Cancelled()
+
+    def _record_cancel(self, state: _Run) -> None:
+        """Move the current stage to ``cancelled`` and say so (BR31.2, BR32.4).
+
+        Nothing of the result is kept: the candidates and the record are only
+        written at the very end (``_write_results``), after the last check.
+        """
+        state.ending.set()
+        try:
+            moved = self._store.transition(
+                state.generation.generation_id,
+                state.status,
+                GenerationStatus.CANCELLED,
+                removes=_ENDED_REMOVES,
+            )
+        except CodedError as e:
+            logger.error("advanced generation cancel not written (%s)", e.code.value)
+            return
+        if not moved:
+            state.ended_elsewhere.set()
+            return
+        self._close_stage(state)
+        stage = state.status
+        state.status = GenerationStatus.CANCELLED
+        # AC9.3.2: the lock and the marks go before the screen hears of it, so
+        # the same files can start again as soon as 中止しました shows
+        self._finish(state.generation)
+        state.finished = True
+        self._event(state, EventType.CANCELLED)
+        if state.cancel_request is not None:
+            self._log_control_taken(state, state.cancel_request, stage=stage)
+
     def _event(self, state: _Run, event_type: EventType, **values: Any) -> None:
+        self._append_event(state.generation, event_type, **values)
+
+    def _append_event(
+        self, generation: AdvancedGeneration, event_type: EventType, **values: Any
+    ) -> None:
         try:
             self._store.append_event(
-                state.generation.generation_id,
+                generation.generation_id,
                 event_type,
                 summary=_summary(**values),
                 now=self._clock(),
-                expires_at=state.generation.expires_at,
+                expires_at=generation.expires_at,
             )
         except CodedError as e:
             logger.warning("progress event not written (%s)", e.code.value)
@@ -1842,6 +2334,46 @@ class AdvancedPersonaGenerationManager:
             durations_ms=dict(state.durations_ms),
             total_ms=int((time.monotonic() - state.started_monotonic) * 1000),
             tool_calls=len(state.tools.calls) if state.tools is not None else 0,
+            # U5 NFR6.17
+            replan_count=state.replan_count,
+            waited_seconds=state.waited_seconds,
+        )
+
+    # --- U5: control logs (observability-design.md NFR6.16) ---------------------
+
+    @staticmethod
+    def _log(event: str, **fields: Any) -> None:
+        try:
+            log_advanced_event(event, **fields)
+        except Exception as e:  # noqa: BLE001 - a log line never fails a run
+            logger.error("%s not logged (%s)", event, type(e).__name__)
+
+    def _log_control_taken(
+        self,
+        state: _Run,
+        request: ControlRequest,
+        *,
+        stage: Optional[GenerationStatus] = None,
+    ) -> None:
+        latency = (self._clock() - request.requested_at).total_seconds()
+        self._log(
+            "advanced_generation.control_taken",
+            generation_id=state.generation.generation_id,
+            action=request.action.value,
+            stage=(stage or state.status).value,
+            replan_count=state.replan_count,
+            waited_seconds=state.waited_seconds,
+            latency_ms=max(0, int(latency * 1000)),
+        )
+
+    def _log_plan_wait_expired(
+        self, generation_id: str, limit: str, waited_seconds: int
+    ) -> None:
+        self._log(
+            "advanced_generation.plan_wait_expired",
+            generation_id=generation_id,
+            limit=limit,
+            waited_seconds=waited_seconds,
         )
 
     # --- reads (owner only, no release check: BR1.1 exception) ------------------
@@ -1860,6 +2392,260 @@ class AdvancedPersonaGenerationManager:
             raise _fail(ErrorCode.GENERATION_EXPIRED, "generation expired")
         return generation
 
+    # --- U5: requests from the screen (BR29.3, BR29.4, BR31.1) -------------------
+
+    def request_control(
+        self,
+        principal: Principal,
+        generation_id: str,
+        action: str,
+        revised_purpose: Optional[str] = None,
+    ) -> None:
+        """Write a cancel, an approve or a replan for the owner's generation.
+
+        The request goes through the store, so the task running the
+        generation takes it whichever task received it (ADR-009).
+
+        Raises:
+            AdvancedGenerationError: ``GENERATION_NOT_FOUND`` (someone else's
+                or missing), ``GENERATION_EXPIRED``, ``GENERATION_PURPOSE_TOO_LONG``
+                (replan), ``GENERATION_NOT_AWAITING_PLAN`` (approve / replan
+                while not waiting, or with a request pending) or
+                ``GENERATION_ALREADY_FINISHED`` (cancel of an ended one).
+        """
+        request = self._control_request(action, revised_purpose)
+        self._write_control(self._owned(principal, generation_id), request)
+
+    def decide_plan(
+        self,
+        principal: Principal,
+        generation_id: str,
+        action: str,
+        revised_purpose: Optional[str] = None,
+    ) -> None:
+        """Approve the plan or replan it; nothing else (W5-1, BR29.3, BR29.4).
+
+        A cancel has its own request (``request_control`` with ``cancel``);
+        here it is refused like any other action, and nothing is written.
+
+        Raises:
+            AdvancedGenerationError: ``REQUEST_INVALID`` for any action but
+                ``approve`` and ``replan``; otherwise as ``request_control``.
+        """
+        if action not in _PLAN_DECISIONS:
+            raise _fail(ErrorCode.REQUEST_INVALID, "not a plan decision")
+        request = self._control_request(action, revised_purpose)
+        self._write_control(self._owned(principal, generation_id), request)
+
+    def _control_request(
+        self, action: str, revised_purpose: Optional[str]
+    ) -> ControlRequest:
+        """The request for ``action``, its instruction checked (BR29.4)."""
+        try:
+            kind = ControlAction(action)
+        except ValueError:
+            raise _fail(
+                ErrorCode.GENERATION_NOT_AWAITING_PLAN, "unknown control action"
+            ) from None
+        revised: Optional[str] = None
+        if kind is ControlAction.REPLAN:
+            revised = revised_purpose or ""
+            if len(revised) > PURPOSE_MAX_CHARS:
+                raise _fail(
+                    ErrorCode.GENERATION_PURPOSE_TOO_LONG,
+                    "revised purpose too long",
+                    max_chars=PURPOSE_MAX_CHARS,
+                )
+        return ControlRequest(
+            action=kind, requested_at=self._clock(), revised_purpose=revised
+        )
+
+    def _write_control(
+        self, generation: AdvancedGeneration, request: ControlRequest
+    ) -> None:
+        """Write ``request`` for the owner's ``generation`` and log it."""
+        if request.action is ControlAction.CANCEL:
+            self._request_cancel(generation, request)
+        else:
+            self._request_plan_decision(generation, request)
+        self._log(
+            "advanced_generation.control_requested",
+            generation_id=generation.generation_id,
+            action=request.action.value,
+        )
+
+    def _request_cancel(
+        self, generation: AdvancedGeneration, request: ControlRequest
+    ) -> None:
+        if not generation.status.is_terminal and self._is_stalled(generation):
+            # BR31.3: no thread runs it any more; the requester ends it
+            if self._end_by_reader(
+                generation,
+                GenerationStatus.CANCELLED,
+                field="heartbeat_at",
+                value=generation.heartbeat_at,
+            ):
+                return
+            # it moved since the read: a live thread takes the request instead
+            generation = self._store.get(generation.generation_id) or generation
+        else:
+            generation = self._judge_reader(generation)  # BR31.1: a plan wait out
+        if generation.status.is_terminal or not self._store.put_control_request(
+            generation.generation_id,
+            request,
+            allowed_statuses=_RUNNING_STATES,
+            require_empty=False,
+        ):
+            raise _fail(ErrorCode.GENERATION_ALREADY_FINISHED, "generation ended")
+
+    def _request_plan_decision(
+        self, generation: AdvancedGeneration, request: ControlRequest
+    ) -> None:
+        generation = self._judge_reader(generation)  # BR29.3: judged first
+        if (
+            generation.status is not GenerationStatus.AWAITING_PLAN_APPROVAL
+            or generation.control_request is not None
+            or not self._store.put_control_request(
+                generation.generation_id,
+                request,
+                allowed_statuses=(GenerationStatus.AWAITING_PLAN_APPROVAL,),
+                require_empty=True,
+            )
+        ):
+            raise _fail(
+                ErrorCode.GENERATION_NOT_AWAITING_PLAN, "generation is not waiting"
+            )
+
+    # --- U5: the reader's judgement (BR32, ADR-009) -----------------------------
+
+    def _judge_reader(self, generation: AdvancedGeneration) -> AdvancedGeneration:
+        """End a generation whose thread is gone or whose plan wait ran out.
+
+        Run on the SSE re-reads, the page, the start and the control requests
+        (NFR5.47). It only reads, unless one of these holds (BR32.1, BR32.2):
+
+        - no heartbeat for 5 minutes (the plan wait included):
+          ``GENERATION_STALLED``, conditioned on ``heartbeat_at``;
+        - the card waited 15 minutes, or all the cards 60:
+          ``GENERATION_TIMEOUT``, conditioned on ``awaiting_since``.
+
+        Returns:
+            The generation as it is after the judgement.
+        """
+        if generation.status.is_terminal:
+            return generation
+        now = self._clock()
+        ended = False
+        if self._is_stalled(generation):
+            ended = self._end_by_reader(
+                generation,
+                GenerationStatus.FAILED,
+                field="heartbeat_at",
+                value=generation.heartbeat_at,
+                code=ErrorCode.GENERATION_STALLED,
+            )
+        elif (
+            generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL
+            and generation.awaiting_since is not None
+        ):
+            limit, total = self._plan_wait_limit(
+                generation.awaiting_since, generation.waited_seconds, now
+            )
+            if limit is not None:
+                ended = self._end_by_reader(
+                    generation,
+                    GenerationStatus.FAILED,
+                    field="awaiting_since",
+                    value=generation.awaiting_since,
+                    code=ErrorCode.GENERATION_TIMEOUT,
+                    context={"limit": limit[0], "value": limit[1] // 60},
+                )
+                if ended:
+                    self._log_plan_wait_expired(
+                        generation.generation_id, limit[0], total
+                    )
+        if not ended:
+            return generation
+        try:
+            return self._store.get(generation.generation_id) or generation
+        except CodedError as e:
+            logger.warning("advanced generation unreadable (%s)", e.code.value)
+            return generation
+
+    def _is_stalled(self, generation: AdvancedGeneration) -> bool:
+        """No heartbeat for more than 5 minutes (BR32.1); the start counts as one."""
+        beat = generation.heartbeat_at or generation.created_at
+        return self._clock() - beat > timedelta(
+            seconds=config.ADVANCED_GENERATION_STALL_SECONDS
+        )
+
+    def _end_by_reader(
+        self,
+        generation: AdvancedGeneration,
+        status: GenerationStatus,
+        *,
+        field: str,
+        value: Optional[datetime],
+        code: Optional[ErrorCode] = None,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> bool:
+        """End a generation no thread looks after any more (BR32.4).
+
+        The move is conditioned on the state and ``field`` being what was read
+        (NFR5.44); only the side that moved it writes the event, releases the
+        lock and the marks, and stops the session by its ID. Each of those
+        steps stands alone (NFR5.45).
+
+        Returns:
+            Whether this reader ended it.
+        """
+        updates: dict[str, Any] = {}
+        if code is not None:
+            updates["error_code"] = code.value
+            safe = _safe_context(context or {})
+            if safe:
+                updates["error_context"] = safe
+        try:
+            moved = self._store.end_if_unchanged(
+                generation.generation_id,
+                generation.status,
+                status,
+                field=field,
+                value=value,
+                updates=updates,
+                removes=_ENDED_REMOVES,
+            )
+        except CodedError as e:
+            logger.warning("advanced generation reader end failed (%s)", e.code.value)
+            return False
+        if not moved:
+            return False
+        if code is not None:
+            self._append_event(
+                generation, EventType.ERROR, error_code=code.value, kind=code.kind.value
+            )
+        else:
+            self._append_event(generation, EventType.CANCELLED)
+        self._finish(generation)
+        if generation.session_id:
+            try:
+                self._sandbox.stop_session_by_id(generation.session_id)
+            except Exception as e:  # noqa: BLE001 - the session's lifetime ends it
+                logger.warning(
+                    "sandbox session not stopped (%s): session_id=%s",
+                    type(e).__name__,
+                    generation.session_id,
+                )
+        self._log(
+            "advanced_generation.ended_by_reader",
+            generation_id=generation.generation_id,
+            stage=generation.status.value,
+            error_code=code.value if code is not None else None,
+            status=status.value,
+            judged_by="reader",
+        )
+        return True
+
     def running_generation_id(self, principal: Principal) -> Optional[str]:
         """The owner's generation that still runs, to reopen its progress (W1-5).
 
@@ -1874,11 +2660,13 @@ class AdvancedPersonaGenerationManager:
         except CodedError as e:
             logger.warning("running generation unreadable (%s)", e.code.value)
             return None
-        if (
-            generation is None
-            or not AccessPolicy.is_owner(principal, generation.owner_sub)
-            or generation.status.is_terminal
+        if generation is None or not AccessPolicy.is_owner(
+            principal, generation.owner_sub
         ):
+            return None
+        # U5 NFR5.47: the page reopening a stalled generation ends it
+        generation = self._judge_reader(generation)
+        if generation.status.is_terminal:
             return None
         return generation.generation_id
 
@@ -1891,13 +2679,23 @@ class AdvancedPersonaGenerationManager:
         """
         generation = self._owned(principal, generation_id)
         finished = generation.status.is_terminal
-        end = (
-            generation.finished_at
-            if finished and generation.finished_at is not None
-            else self._clock()
+        # U5 W5-1.3: the plan waits are not counted; a shown card stops the clock
+        waiting = (
+            generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL
+            and generation.awaiting_since is not None
         )
-        seconds = max(0, int((end - generation.created_at).total_seconds()))
-        return ElapsedClock(seconds=seconds, running=not finished)
+        if finished and generation.finished_at is not None:
+            end = generation.finished_at
+        elif waiting and generation.awaiting_since is not None:
+            end = generation.awaiting_since
+        else:
+            end = self._clock()
+        seconds = max(
+            0,
+            int((end - generation.created_at).total_seconds())
+            - generation.waited_seconds,
+        )
+        return ElapsedClock(seconds=seconds, running=not finished and not waiting)
 
     def stream_events(
         self,
@@ -1912,7 +2710,8 @@ class AdvancedPersonaGenerationManager:
             AdvancedGenerationError: ``GENERATION_NOT_FOUND`` (someone else's
                 or missing), ``GENERATION_EXPIRED`` (24 hours after the end).
         """
-        generation = self._owned(principal, generation_id)
+        # U5 NFR5.47: every re-read of the stream also judges the generation
+        generation = self._judge_reader(self._owned(principal, generation_id))
         events = self._store.read_events(generation_id, after_sequence=after_sequence)
         return GenerationProgress(
             generation=generation,

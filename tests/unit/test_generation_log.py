@@ -213,3 +213,64 @@ class TestAdvancedDocumentLogFields:
         assert "body" not in mode and mode["total_chars"] == 300_000
         assert "quote" not in extracted
         assert extracted["evidence_input_tokens"] == 210_000
+
+
+class TestAdvancedControlLogFields:
+    """U5 NFR6.16〜NFR6.18, NFR3.29, NFR3.30: no instruction text, no session ID."""
+
+    def test_control_events_keep_their_fields_only(self, capsys) -> None:
+        from src.managers.shared.advanced_generation_log import log_advanced_event
+        from tests.log_helpers import LogCapture
+
+        logs = LogCapture(capsys)
+        secret = {"revised_purpose": "社外秘の指示", "session_id": "s-1"}
+        log_advanced_event(
+            "advanced_generation.control_requested",
+            generation_id="g",
+            action="replan",
+            **secret,
+        )
+        log_advanced_event(
+            "advanced_generation.control_taken",
+            generation_id="g",
+            action="cancel",
+            stage="running",
+            replan_count=2,
+            waited_seconds=120,
+            latency_ms=3400,
+            **secret,
+        )
+        log_advanced_event(
+            "advanced_generation.ended_by_reader",
+            generation_id="g",
+            stage="running",
+            error_code="generation_stalled",
+            status="failed",
+            judged_by="reader",
+            **secret,
+        )
+        log_advanced_event(
+            "advanced_generation.plan_wait_expired",
+            generation_id="g",
+            limit="plan_wait_minutes",
+            waited_seconds=901,
+            **secret,
+        )
+        log_advanced_event(
+            "advanced_generation.finished",
+            generation_id="g",
+            status="cancelled",
+            replan_count=1,
+            waited_seconds=60,
+            **secret,
+        )
+
+        requested, taken, reader, expired, finished = logs.records()
+        for record in (requested, taken, reader, expired, finished):
+            assert "revised_purpose" not in record and "session_id" not in record
+        assert requested["action"] == "replan"
+        assert taken["latency_ms"] == 3400 and taken["waited_seconds"] == 120
+        assert reader["judged_by"] == "reader"
+        assert reader["error_code"] == "generation_stalled"
+        assert expired["limit"] == "plan_wait_minutes"
+        assert finished["status"] == "cancelled" and finished["replan_count"] == 1

@@ -283,6 +283,19 @@ class ErrorCode(StrEnum):
     )
     # The instruction is longer than PURPOSE_MAX_CHARS (contract C1, entities.md).
     GENERATION_PURPOSE_TOO_LONG = ("generation_purpose_too_long", ErrorKind.VALIDATION)
+    # --- Advanced generation (beta) U5 (functional-spec.md §5) ---
+    # No heartbeat for 5 minutes: the task running it is gone (BR32.1); start again.
+    GENERATION_STALLED = ("generation_stalled", ErrorKind.TRANSIENT)
+    # An approve / replan for a generation not waiting for the plan, or with
+    # a cancel pending (BR29.3); the user looks at the progress again.
+    GENERATION_NOT_AWAITING_PLAN = (
+        "generation_not_awaiting_plan",
+        ErrorKind.TRANSIENT,
+    )
+    # A cancel for a generation that has already ended (BR31.1).
+    GENERATION_ALREADY_FINISHED = ("generation_already_finished", ErrorKind.TRANSIENT)
+    # A chosen file is still uploading or being inspected (BR30.3); wait.
+    GENERATION_SOURCE_NOT_READY = ("generation_source_not_ready", ErrorKind.TRANSIENT)
 
     # --- Files ---
     FILE_TOO_LARGE = ("file_too_large", ErrorKind.CAPACITY)

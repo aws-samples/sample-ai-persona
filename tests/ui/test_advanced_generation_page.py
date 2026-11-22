@@ -20,7 +20,11 @@ from src.managers.advanced_generation.manager import ElapsedClock
 from src.models.source_file import SourceFileListItem, SourceFileStatus
 from tests import advanced_screen_samples as s
 from tests.ui.conftest import UiHarness, render_page
-from web.routers.persona_advanced import render_result, screen_limits
+from web.routers.persona_advanced import (
+    render_plan_card,
+    render_result,
+    screen_limits,
+)
 
 ELAPSED = "[data-testid='advanced-elapsed']"
 PART_SIZE = 4
@@ -771,3 +775,146 @@ class TestDocuments:
         overall = ui.page.inner_text("[data-testid='advanced-overall-evidence']")
         assert "週末は家族と過ごす時間を何より大切にしている" in overall
         ui.check_a11y()
+
+
+# --- U5: the plan card and the cancel ------------------------------------------
+
+CANCEL_URL = f"/persona/advanced/generations/{s.GENERATION_ID}/cancel"
+PLAN_URL = f"/persona/advanced/generations/{s.GENERATION_ID}/plan"
+#: The stream ends after its body; the page waits long before it reconnects.
+HOLD = {"reconnectDelaysMs": [60000]}
+
+
+def _card_stream() -> str:
+    waiting = s.generation(
+        s.GenerationStatus.AWAITING_PLAN_APPROVAL,
+        options={"confirm_plan": True},
+        plan=s.PLAN.update(interpreted_purpose=s.SCRIPT_TEXT),
+        purpose="30 代",
+    )
+    return (
+        "retry: 60000\n\n"
+        + _frame("stage", json.dumps({"status": "planning"}), 1)
+        + _frame("stage", json.dumps({"status": "awaiting_plan_approval"}), 2)
+        + _frame("plan", render_plan_card(waiting), 3)
+    )
+
+
+class TestGenerationControls:
+    """Step 21: BR29.2, BR31.4, BR33.3, NFR3.28, NFR10.4, AC8.1.1, AC9.3.1."""
+
+    def test_the_plan_confirmation_is_off_by_default(self, ui: UiHarness) -> None:
+        _open(ui)
+
+        box = "[data-testid='advanced-confirm-plan']"
+        assert not ui.page.is_checked(box)
+        help_text = ui.page.inner_text("#advanced-confirm-plan-help")
+        assert f"{screen_limits()['plan_wait_minutes']} 分" in help_text
+
+    def test_the_plan_card_shows_the_plan_as_text_and_its_buttons(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(ui, [_card_stream()])
+
+        _open(ui, generation_id=s.GENERATION_ID, timing=HOLD)
+        ui.page.wait_for_selector("[data-testid='advanced-plan-card']")
+
+        purpose = ui.page.inner_text("[data-testid='advanced-plan-purpose']")
+        assert purpose == s.SCRIPT_TEXT  # NFR3.28: shown as text, never run
+        assert ui.page.evaluate("window.__xss === undefined")
+        stage = "[data-testid='advanced-stage-awaiting_plan_approval']"
+        assert ui.page.is_visible(stage)
+        assert ui.page.get_attribute(stage, "data-state") == "current"
+        assert ui.page.input_value("[data-testid='advanced-plan-revised']") == "30 代"
+        for name in ("approve", "replan", "cancel"):
+            ui.page.focus(f"[data-testid='advanced-plan-{name}']")
+            assert ui.active("document.activeElement.dataset.testid") == (
+                f"advanced-plan-{name}"
+            )
+        ui.check_a11y()
+
+    def test_approving_replaces_the_card_with_its_answer(self, ui: UiHarness) -> None:
+        SseFake(ui, [_card_stream()])
+        ui.respond(
+            PLAN_URL,
+            body=render_page(
+                "persona/partials/advanced_plan_card.html",
+                generation_id=s.GENERATION_ID,
+                plan=None,
+                purpose="",
+                awaiting=False,
+                accepted="approve",
+                limits=screen_limits(),
+            ),
+        )
+        _open(ui, generation_id=s.GENERATION_ID, timing=HOLD)
+        ui.page.wait_for_selector("[data-testid='advanced-plan-approve']")
+
+        ui.page.click("[data-testid='advanced-plan-approve']")
+        ui.page.wait_for_selector("[data-testid='advanced-plan-accepted']")
+
+        assert PLAN_URL in ui.requests
+        assert ui.page.locator("[data-testid='advanced-plan-approve']").count() == 0
+
+    def test_cancel_says_cancelling_then_cancelled_and_keeps_the_form(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                "retry: 50\n\n" + _frame("stage", json.dumps({"status": "running"}), 1),
+                _frame("cancelled", "", 2) + "event: done\ndata: \n\n",
+            ],
+        )
+        ui.respond(
+            CANCEL_URL,
+            body=render_page(
+                "persona/partials/advanced_cancel.html",
+                generation_id=s.GENERATION_ID,
+                cancelling=True,
+            ),
+        )
+        # the cancelled frame comes on the next connection, 1.5 s later
+        _open(ui, generation_id=s.GENERATION_ID, timing={"reconnectDelaysMs": [1500]})
+        # the inputs fold while a generation runs; the value is set directly
+        ui.page.evaluate(
+            "document.querySelector(\"[data-testid='advanced-purpose']\").value"
+            " = '首都圏の 30 代'"
+        )
+        ui.page.wait_for_selector(
+            "[data-testid='advanced-stage-running'][data-state='current']"
+        )
+
+        ui.page.click("[data-testid='advanced-cancel-button']")
+        ui.page.wait_for_selector("[data-testid='advanced-cancelled']:not([hidden])")
+
+        assert CANCEL_URL in ui.requests
+        assert ui.page.is_hidden("[data-testid='advanced-failure']")
+        assert ui.page.is_hidden("[data-testid='advanced-cancel-area']")
+        assert "中止しました" in ui.page.inner_text(
+            "[data-testid='advanced-cancelled']"
+        )
+        # BR33.3: the form stays as it was and no longer says a run is going on
+        assert ui.page.input_value("[data-testid='advanced-purpose']") == (
+            "首都圏の 30 代"
+        )
+        reason = ui.page.inner_text("[data-testid='advanced-generate-reason']")
+        assert "実行中" not in reason
+        ui.check_a11y()
+
+    def test_the_cancel_answer_disables_the_button(self, ui: UiHarness) -> None:
+        SseFake(ui, ["retry: 60000\n\n" + _frame("stage", '{"status": "running"}', 1)])
+        ui.respond(
+            CANCEL_URL,
+            body=render_page(
+                "persona/partials/advanced_cancel.html",
+                generation_id=s.GENERATION_ID,
+                cancelling=True,
+            ),
+        )
+        _open(ui, generation_id=s.GENERATION_ID, timing=HOLD)
+
+        ui.page.click("[data-testid='advanced-cancel-button']")
+        ui.page.wait_for_selector("[data-testid='advanced-cancelling']")
+
+        assert ui.page.is_disabled("[data-testid='advanced-cancel-button']")

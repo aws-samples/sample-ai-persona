@@ -35,6 +35,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from src.models.advanced_generation import (
     AdvancedGeneration,
+    ControlRequest,
     EventType,
     GenerationEvent,
     GenerationStatus,
@@ -388,6 +389,8 @@ class AdvancedGenerationStore:
         new_status: GenerationStatus,
         *,
         updates: Mapping[str, Any] | None = None,
+        removes: Sequence[str] = (),
+        unless_requested: bool = False,
     ) -> bool:
         """Move ``expected -> new_status`` and write ``updates`` with it (BR7.1).
 
@@ -396,27 +399,30 @@ class AdvancedGenerationStore:
             expected: The state the generation must be in.
             new_status: The state to move to.
             updates: Plain attribute values (``to_dict()`` shapes) to set.
+            removes: Attributes to remove with the move (U5: the request and
+                ``awaiting_since``).
+            unless_requested: Also require that no control request is pending
+                (U5 BR31.2: ``done`` never overwrites a cancel).
 
         Returns:
-            ``False`` when the generation is missing or not in ``expected``
-            (the write is dropped and logged, NFR5.18).
+            ``False`` when the generation is missing, not in ``expected`` or
+            (``unless_requested``) has a pending request (the write is dropped
+            and logged, NFR5.18).
         """
         names = {"#status": "status"}
         values: dict[str, Any] = {
             ":new": {"S": new_status.value},
             ":expected": {"S": expected.value},
         }
-        sets = ["#status = :new"]
-        for i, (name, value) in enumerate((updates or {}).items()):
-            names[f"#u{i}"] = name
-            values[f":u{i}"] = self._serialize(value)
-            sets.append(f"#u{i} = :u{i}")
+        condition = "#status = :expected"
+        if unless_requested:
+            condition += " AND attribute_not_exists(control_request)"
         written = self._conditional(
             "update_item",
             TableName=self.table_name,
             Key=self._key(generation_pk(generation_id), _GENERATION_SK),
-            UpdateExpression="SET " + ", ".join(sets),
-            ConditionExpression="#status = :expected",
+            UpdateExpression=self._move_expression(names, values, updates, removes),
+            ConditionExpression=condition,
             ExpressionAttributeNames=names,
             ExpressionAttributeValues=values,
         )
@@ -444,6 +450,249 @@ class AdvancedGenerationStore:
             ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues=values,
         )
+
+    def _move_expression(
+        self,
+        names: dict[str, str],
+        values: dict[str, Any],
+        updates: Mapping[str, Any] | None,
+        removes: Sequence[str],
+    ) -> str:
+        """``SET #status = :new, ... [REMOVE ...]``; fills ``names`` and ``values``."""
+        sets = ["#status = :new"]
+        for i, (name, value) in enumerate((updates or {}).items()):
+            names[f"#u{i}"] = name
+            values[f":u{i}"] = self._serialize(value)
+            sets.append(f"#u{i} = :u{i}")
+        expression = "SET " + ", ".join(sets)
+        dropped = [r for r in dict.fromkeys(removes) if r not in (updates or {})]
+        if dropped:
+            for i, name in enumerate(dropped):
+                names[f"#r{i}"] = name
+            expression += " REMOVE " + ", ".join(f"#r{i}" for i in range(len(dropped)))
+        return expression
+
+    # --- U5: control requests and the reader's end (reliability-design.md) ----------
+
+    def put_control_request(
+        self,
+        generation_id: str,
+        request: ControlRequest,
+        *,
+        allowed_statuses: Sequence[GenerationStatus],
+        require_empty: bool,
+    ) -> bool:
+        """Write the pending request while the state allows it (BR29.3, BR31.1).
+
+        Args:
+            generation_id: The generation.
+            request: The cancel / approve / replan.
+            allowed_statuses: The states the generation must be in.
+            require_empty: Only when no request is pending (approve, replan);
+                a cancel overwrites a pending one.
+
+        Returns:
+            ``False`` when the state or the pending request does not allow it.
+        """
+        values: dict[str, Any] = {":request": self._serialize(request.to_dict())}
+        placeholders = []
+        for i, status in enumerate(dict.fromkeys(allowed_statuses)):
+            values[f":s{i}"] = {"S": status.value}
+            placeholders.append(f":s{i}")
+        if not placeholders:
+            return False
+        condition = f"#status IN ({', '.join(placeholders)})"
+        if require_empty:
+            condition += " AND attribute_not_exists(control_request)"
+        return self._conditional(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(generation_pk(generation_id), _GENERATION_SK),
+            UpdateExpression="SET control_request = :request",
+            ConditionExpression=condition,
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues=values,
+        )
+
+    def take_control_request(
+        self,
+        generation_id: str,
+        expected: GenerationStatus,
+        new_status: GenerationStatus,
+        request: ControlRequest,
+        *,
+        updates: Mapping[str, Any] | None = None,
+        removes: Sequence[str] = (),
+    ) -> bool:
+        """The run takes ``request``: remove it and move ``expected -> new_status``.
+
+        The write is conditioned on the state and on the request being the one
+        read (its action and time), so a cancel written in between wins.
+        """
+        names = {"#status": "status"}
+        values: dict[str, Any] = {
+            ":new": {"S": new_status.value},
+            ":expected": {"S": expected.value},
+            ":action": {"S": request.action.value},
+            ":requested": {"S": _stamp(request.requested_at)},
+        }
+        expression = self._move_expression(
+            names, values, updates, ("control_request", *removes)
+        )
+        names.update(
+            {"#cr": "control_request", "#act": "action", "#req": "requested_at"}
+        )
+        written = self._conditional(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(generation_pk(generation_id), _GENERATION_SK),
+            UpdateExpression=expression,
+            ConditionExpression=(
+                # ``action`` is a DynamoDB reserved word: names stand for the path
+                "#status = :expected AND #cr.#act = :action AND #cr.#req = :requested"
+            ),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        if not written:
+            logger.info(
+                "advanced generation control request not taken: %s -> %s",
+                expected.value,
+                new_status.value,
+            )
+        return written
+
+    def end_if_unchanged(
+        self,
+        generation_id: str,
+        expected: GenerationStatus,
+        new_status: GenerationStatus,
+        *,
+        field: str,
+        value: datetime | None,
+        updates: Mapping[str, Any] | None = None,
+        removes: Sequence[str] = (),
+    ) -> bool:
+        """A reader ends a generation only if nothing moved since it read (BR32.1).
+
+        Args:
+            field: ``heartbeat_at`` (stalled, a cancel without a thread) or
+                ``awaiting_since`` (the plan wait ran out).
+            value: The value read; ``None`` means the attribute was missing.
+
+        Returns:
+            ``False`` when the state or ``field`` changed (the run is alive).
+        """
+        names = {"#status": "status", "#field": field}
+        values: dict[str, Any] = {
+            ":new": {"S": new_status.value},
+            ":expected": {"S": expected.value},
+        }
+        if value is None:
+            condition = "#status = :expected AND attribute_not_exists(#field)"
+        else:
+            values[":value"] = {"S": _stamp(value)}
+            condition = "#status = :expected AND #field = :value"
+        written = self._conditional(
+            "update_item",
+            TableName=self.table_name,
+            Key=self._key(generation_pk(generation_id), _GENERATION_SK),
+            UpdateExpression=self._move_expression(names, values, updates, removes),
+            ConditionExpression=condition,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        if not written:
+            logger.info("advanced generation reader end dropped: %s", expected.value)
+        return written
+
+    def enter_awaiting(
+        self,
+        generation_id: str,
+        owner_sub: str,
+        source_file_ids: Sequence[str],
+        *,
+        now: datetime,
+        until: datetime,
+        updates: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """``planning -> awaiting_plan_approval`` and the longer lock, at once.
+
+        One ``TransactWriteItems`` writes the move with ``awaiting_since`` and
+        ``updates``, the lock's ``lock_until`` and each file's ``in_use_until``
+        (NFR5.43). The lock and the marks are only touched while they belong
+        to ``generation_id``.
+
+        Returns:
+            ``False`` when any condition failed (nothing is written).
+
+        Raises:
+            AdvancedGenerationStoreError: DynamoDB failed.
+        """
+        until_text = _stamp(until)
+        names = {"#status": "status"}
+        values: dict[str, Any] = {
+            ":new": {"S": GenerationStatus.AWAITING_PLAN_APPROVAL.value},
+            ":expected": {"S": GenerationStatus.PLANNING.value},
+        }
+        moved = {**(updates or {}), "awaiting_since": _stamp(now)}
+        transact: list[dict[str, Any]] = [
+            {
+                "Update": {
+                    "TableName": self.table_name,
+                    "Key": self._key(generation_pk(generation_id), _GENERATION_SK),
+                    "UpdateExpression": self._move_expression(names, values, moved, ()),
+                    "ConditionExpression": "#status = :expected",
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": values,
+                }
+            },
+            {
+                "Update": {
+                    "TableName": self.table_name,
+                    "Key": self._key(lock_pk(owner_sub), _LOCK_SK),
+                    "UpdateExpression": (
+                        "SET lock_until = :until, expires_at = :expires"
+                    ),
+                    "ConditionExpression": "generation_id = :generation",
+                    "ExpressionAttributeValues": {
+                        ":until": {"S": until_text},
+                        ":expires": {"N": str(_epoch(until) + LOCK_TTL_GRACE_SECONDS)},
+                        ":generation": {"S": generation_id},
+                    },
+                }
+            },
+        ]
+        for source_file_id in source_file_ids:
+            transact.append(
+                {
+                    "Update": {
+                        "TableName": self.source_files_table_name,
+                        "Key": {"source_file_id": {"S": source_file_id}},
+                        "UpdateExpression": "SET in_use_until = :until",
+                        "ConditionExpression": "in_use_by = :generation",
+                        "ExpressionAttributeValues": {
+                            ":until": {"S": until_text},
+                            ":generation": {"S": generation_id},
+                        },
+                    }
+                }
+            )
+        try:
+            self.client.transact_write_items(TransactItems=transact)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "TransactionCanceledException":
+                logger.info("advanced generation wait not entered: a condition failed")
+                return False
+            logger.warning("plan wait transaction failed: %s", code)
+            raise AdvancedGenerationStoreError(f"plan wait failed: {code}") from e
+        except BotoCoreError as e:
+            logger.warning("plan wait transaction unreachable: %s", type(e).__name__)
+            raise AdvancedGenerationStoreError(
+                f"plan wait unreachable: {type(e).__name__}"
+            ) from e
+        return True
 
     # --- events ---------------------------------------------------------------------
 
@@ -628,6 +877,25 @@ class AdvancedGenerationStore:
         The lock and the marks are only removed while they still belong to
         ``generation_id``.
         """
+        lock_released, marks_released = self.release_holds(
+            generation_id, owner_sub, source_file_ids
+        )
+        finished_written = self._try(
+            "write the end", partial(self._write_end, generation_id, now, expires_at)
+        )
+        return FinishOutcome(lock_released, marks_released, finished_written)
+
+    def release_holds(
+        self, generation_id: str, owner_sub: str, source_file_ids: Sequence[str]
+    ) -> tuple[bool, bool]:
+        """Release the lock and the in-use marks only, not the end (U5 review fix).
+
+        Each step is tried on its own, and each only while it still belongs
+        to ``generation_id``.
+
+        Returns:
+            ``(lock released, every mark released)``.
+        """
         lock_released = self._try(
             "release the lock", partial(self.release_lock, owner_sub, generation_id)
         )
@@ -638,10 +906,7 @@ class AdvancedGenerationStore:
             )
             for source_file_id in source_file_ids
         ]
-        finished_written = self._try(
-            "write the end", partial(self._write_end, generation_id, now, expires_at)
-        )
-        return FinishOutcome(lock_released, all(marks), finished_written)
+        return lock_released, all(marks)
 
     def release_lock(self, owner_sub: str, generation_id: str) -> bool:
         """Delete the owner's lock while it belongs to ``generation_id`` (ADR-009).

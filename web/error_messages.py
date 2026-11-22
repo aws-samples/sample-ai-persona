@@ -136,8 +136,9 @@ _CATALOG: dict[ErrorCode, str] = {
     ErrorCode.ADVANCED_GENERATION_BUSY: (
         "高度な生成が混み合っています。しばらく待ってから再度お試しください"
     ),
+    # U5 BR30.2: the router shows the running generation's progress with it
     ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING: (
-        "実行中の高度な生成があります。終わってから次の生成を始めてください"
+        "実行中の生成があります。進み具合を表示しました"
     ),
     ErrorCode.UPLOAD_SOURCE_INVALID: (
         "このファイルは使えません。CSV・TSV の表か、PDF・Word（.docx）・テキスト"
@@ -215,6 +216,18 @@ _CATALOG: dict[ErrorCode, str] = {
     ),
     ErrorCode.GENERATION_PURPOSE_TOO_LONG: (
         "指示は {max_chars} 文字までです。短くしてください"
+    ),
+    # --- 高度な生成（ベータ）U5（functional-spec.md §5） ---
+    ErrorCode.GENERATION_STALLED: (
+        "生成の処理が途中で止まりました。もう一度始めてください"
+    ),
+    ErrorCode.GENERATION_NOT_AWAITING_PLAN: (
+        "計画の確認を待っていないか、中止の手続き中です。進み具合を確かめてください"
+    ),
+    ErrorCode.GENERATION_ALREADY_FINISHED: "生成はもう終わっています",
+    ErrorCode.GENERATION_SOURCE_NOT_READY: (
+        "検査が終わっていないファイルがあります。"
+        "準備OK になるまで待ってから始めてください"
     ),
     ErrorCode.FILE_TOO_LARGE: (
         "ファイルサイズが制限を超えています。最大サイズ: {max_size_mb:.1f}MB"
@@ -787,6 +800,19 @@ def _too_large_detail(base: str, context: dict[str, Any]) -> str:
     )
 
 
+def _timeout_detail(base: str, context: dict[str, Any]) -> str:
+    """Which limit ran out: one plan card, all the waits, or the 60 minutes (U5)."""
+    minutes = _positive_int(context.get("value"))
+    limit = context.get("limit")
+    if minutes is None:
+        return base
+    if limit == "plan_wait_minutes":
+        return f"計画の確認を {minutes} 分待ちましたが、承認がなかったため止めました"
+    if limit == "plan_wait_total_minutes":
+        return f"計画の確認を待てる時間（合計 {minutes} 分）を超えたため止めました"
+    return base
+
+
 #: Codes whose wording takes numbers from the stored context (values are shown
 #: only when they are usable integers; otherwise the plain catalog wording).
 _DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
@@ -797,6 +823,7 @@ _DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
     ErrorCode.DOCUMENT_NO_TEXT: _no_text_detail,
     ErrorCode.DOCUMENT_ENCRYPTED: _encrypted_detail,
     ErrorCode.GENERATION_SOURCE_TOO_LARGE: _too_large_detail,
+    ErrorCode.GENERATION_TIMEOUT: _timeout_detail,
 }
 
 

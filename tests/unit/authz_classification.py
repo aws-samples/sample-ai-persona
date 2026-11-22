@@ -166,6 +166,10 @@ CLASSIFICATION: dict[str, Entry] = {
     "AdvancedPersonaGenerationManager.stream_events": CHECKS,  # _owned → is_owner
     "AdvancedPersonaGenerationManager.get_result": CHECKS,  # _owned → is_owner
     "AdvancedPersonaGenerationManager.get_record": CHECKS,  # _owned → is_owner（BR9.3）
+    # U5: 中止・承認・計画し直しも持ち主だけ（NFR3.26）
+    "AdvancedPersonaGenerationManager.request_control": CHECKS,  # _owned → is_owner
+    # 計画の承認・計画し直しだけを受ける入口（中止は request_control）
+    "AdvancedPersonaGenerationManager.decide_plan": CHECKS,  # _owned → is_owner
     # agent_discussion_manager.py — U6（security-design.md §1。エージェントの組み立て・
     # 開始・保存・解放は非公開にし、Router が呼ぶ 2 つだけを残した）
     "AgentDiscussionManager.run_agent_discussion_streaming": CHECKS,  # ai:execute（BR2.8）

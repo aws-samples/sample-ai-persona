@@ -826,7 +826,8 @@ class TestAdvancedGenerationSettings:
         assert cfg.ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS == 20 * 60
         assert cfg.ADVANCED_GENERATION_MODEL_MIN_REMAINING_SECONDS == 10 * 60
         assert cfg.ADVANCED_GENERATION_LOCK_SECONDS == 75 * 60
-        assert cfg.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS == 3900
+        # U5 NFR5.50: 60 minutes of work + 60 minutes of plan waits + 10 spare
+        assert cfg.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS == 7800
         assert cfg.ADVANCED_GENERATION_HEARTBEAT_SECONDS == 30
         assert cfg.ADVANCED_GENERATION_RESULT_READABLE_SECONDS == 24 * 3600
         assert cfg.ADVANCED_GENERATION_ITEM_TTL_SECONDS == 48 * 3600
@@ -837,6 +838,15 @@ class TestAdvancedGenerationSettings:
         assert cfg.ADVANCED_TOOL_MAX_CALLS == 30
         assert cfg.ADVANCED_TOOL_MAX_TOTAL_SECONDS == 20 * 60
         assert cfg.ADVANCED_TOOL_MAX_OUTPUT_CHARS == 20_000
+
+    def test_generation_control_values(self):
+        # U5 NFR5.40: 15 minutes per plan card, 60 in total, stalled after
+        # 5 minutes without a heartbeat, requests read every 5 seconds
+        cfg = self._config()
+        assert cfg.ADVANCED_GENERATION_PLAN_WAIT_SECONDS == 900
+        assert cfg.ADVANCED_GENERATION_PLAN_WAIT_TOTAL_SECONDS == 3600
+        assert cfg.ADVANCED_GENERATION_STALL_SECONDS == 300
+        assert cfg.ADVANCED_GENERATION_CONTROL_POLL_SECONDS == 5
 
     def test_prepare_progress_is_read_every_five_seconds(self):
         # NFR1.8: the preparation's progress file is read at most 5 s apart

@@ -10,7 +10,7 @@ and conditional writes live in ``AdvancedGenerationStore``.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Mapping, Sequence
@@ -32,14 +32,16 @@ EVENT_SUMMARY_MAX_CHARS = 500
 
 
 class GenerationStatus(StrEnum):
-    """States of a generation (functional-spec.md §3).
+    """States of a generation (functional-spec.md §3, U5 functional-spec.md §1).
 
-    ``awaiting_plan_approval`` arrives with U5; ``cancelled`` is listed by the
-    contract but only U5 moves a generation there.
+    U5: ``awaiting_plan_approval`` sits between ``planning`` and ``running``
+    when the user asked to confirm the plan; every running state and the wait
+    may move to ``cancelled``.
     """
 
     PREPARING = "preparing"
     PLANNING = "planning"
+    AWAITING_PLAN_APPROVAL = "awaiting_plan_approval"
     RUNNING = "running"
     SYNTHESIZING = "synthesizing"
     VERIFYING = "verifying"
@@ -66,6 +68,61 @@ class EventType(StrEnum):
     PLAN = "plan"
     RESULT = "result"
     ERROR = "error"
+    #: U5 BR31.2: the generation was cancelled (no payload)
+    CANCELLED = "cancelled"
+
+
+class ControlAction(StrEnum):
+    """What a control request asks of a running generation (ADR-009)."""
+
+    CANCEL = "cancel"
+    APPROVE = "approve"
+    REPLAN = "replan"
+
+
+@dataclass(frozen=True)
+class ControlRequest:
+    """One pending request on a generation (``control_request``, entities.md).
+
+    Attributes:
+        action: One of :class:`ControlAction`.
+        requested_at: When the request was written.
+        revised_purpose: The new instruction of a ``replan`` (may be empty).
+    """
+
+    action: ControlAction
+    requested_at: datetime
+    revised_purpose: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "action", ControlAction(self.action))
+        if (
+            self.revised_purpose is not None
+            and len(self.revised_purpose) > PURPOSE_MAX_CHARS
+        ):
+            raise ValueError("revised purpose is too long")
+
+    def to_dict(self) -> dict[str, Any]:
+        return drop_none(
+            {
+                "action": self.action.value,
+                "requested_at": iso(self.requested_at),
+                "revised_purpose": self.revised_purpose,
+            }
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ControlRequest":
+        revised = data.get("revised_purpose")
+        return cls(
+            action=ControlAction(str(data["action"])),
+            requested_at=parse_dt(data["requested_at"]),
+            revised_purpose=str(revised) if revised is not None else None,
+        )
+
+
+def _default_options() -> dict[str, Any]:
+    return {"confirm_plan": False}
 
 
 class ResultPartName(StrEnum):
@@ -106,6 +163,17 @@ class AdvancedGeneration:
             (U4 BR25.2, decided right after the preparation).
         evidence_stats: ``{extracted, discarded_unverified}`` of the document
             evidence (U4 BR27.1).
+        options: ``{confirm_plan}`` chosen at the start (U5 BR29.1).
+        control_request: The pending cancel / approve / replan (U5 BR29.3,
+            BR31.1); removed once the run takes it.
+        awaiting_since: When the current plan card was shown (only while
+            ``awaiting_plan_approval``, U5 BR29.5).
+        waited_seconds: Seconds spent waiting for plan approvals; they move
+            the 60-minute deadline back (U5 BR29.6).
+        replan_count: How many times the plan was made again (U5 BR29.4).
+        original_purpose: The first instruction, kept at the first replan.
+        session_id: The sandbox session, so a reader can stop it (U5 BR32.4).
+            Never shown on the screen.
     """
 
     generation_id: str
@@ -127,9 +195,26 @@ class AdvancedGeneration:
     finished_at: datetime | None = None
     document_mode: DocumentMode | None = None
     evidence_stats: dict[str, int] | None = None
+    options: dict[str, Any] = field(default_factory=_default_options)
+    control_request: ControlRequest | None = None
+    awaiting_since: datetime | None = None
+    waited_seconds: int = 0
+    replan_count: int = 0
+    original_purpose: str | None = None
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", GenerationStatus(self.status))
+        object.__setattr__(
+            self, "options", {**_default_options(), **dict(self.options or {})}
+        )
+        if self.waited_seconds < 0 or self.replan_count < 0:
+            raise ValueError("waited_seconds and replan_count are not negative")
+        if (
+            self.original_purpose is not None
+            and len(self.original_purpose) > PURPOSE_MAX_CHARS
+        ):
+            raise ValueError("original purpose is too long")
         if self.document_mode is not None:
             object.__setattr__(self, "document_mode", DocumentMode(self.document_mode))
         object.__setattr__(self, "source_file_ids", tuple(self.source_file_ids))
@@ -153,9 +238,11 @@ class AdvancedGeneration:
         now: datetime,
         ttl_seconds: int,
         generation_id: str | None = None,
+        confirm_plan: bool = False,
     ) -> "AdvancedGeneration":
         """A new generation in ``preparing`` that expires ``ttl_seconds`` later."""
         return cls(
+            options={"confirm_plan": bool(confirm_plan)},
             generation_id=generation_id or str(uuid.uuid4()),
             owner_sub=owner_sub,
             status=GenerationStatus.PREPARING,
@@ -170,6 +257,11 @@ class AdvancedGeneration:
         """A copy with ``changes`` applied (the instance itself never changes)."""
         return replace(self, **changes)
 
+    @property
+    def confirm_plan(self) -> bool:
+        """Whether the run stops for the user's plan approval (U5 BR29.1)."""
+        return bool(self.options.get("confirm_plan"))
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the generation item without ``None`` values."""
         data: dict[str, Any] = {
@@ -182,6 +274,9 @@ class AdvancedGeneration:
             "persona_count": int(self.persona_count),
             "created_at": iso(self.created_at),
             "expires_at": int(self.expires_at),
+            "options": dict(self.options),
+            "waited_seconds": int(self.waited_seconds),
+            "replan_count": int(self.replan_count),
         }
         data.update(
             drop_none(
@@ -219,6 +314,14 @@ class AdvancedGeneration:
                         if self.evidence_stats is not None
                         else None
                     ),
+                    "control_request": (
+                        self.control_request.to_dict() if self.control_request else None
+                    ),
+                    "awaiting_since": (
+                        iso(self.awaiting_since) if self.awaiting_since else None
+                    ),
+                    "original_purpose": self.original_purpose,
+                    "session_id": self.session_id,
                 }
             )
         )
@@ -234,7 +337,22 @@ class AdvancedGeneration:
         error_context = data.get("error_context")
         mode = data.get("document_mode")
         stats = data.get("evidence_stats")
+        options = data.get("options")
+        request = data.get("control_request")
+        original = data.get("original_purpose")
+        session_id = data.get("session_id")
         return cls(
+            options=dict(options) if isinstance(options, Mapping) else {},
+            control_request=(
+                ControlRequest.from_dict(request)
+                if isinstance(request, Mapping)
+                else None
+            ),
+            awaiting_since=parse_optional_dt(data.get("awaiting_since")),
+            waited_seconds=int(data.get("waited_seconds") or 0),
+            replan_count=int(data.get("replan_count") or 0),
+            original_purpose=str(original) if original is not None else None,
+            session_id=str(session_id) if session_id is not None else None,
             generation_id=str(data["generation_id"]),
             owner_sub=str(data["owner_sub"]),
             status=GenerationStatus(str(data["status"])),

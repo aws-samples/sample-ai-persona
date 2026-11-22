@@ -31,7 +31,9 @@
 
     var MAX_REFRESHES = 24;
     var MAX_TIMER_MS = 2147483647;
-    var STAGES = ['preparing', 'planning', 'running', 'synthesizing', 'verifying'];
+    // U5: 計画の確認待ちは、計画を確かめる生成でだけ出す（その段に入ったら表示する）
+    var AWAITING = 'awaiting_plan_approval';
+    var STAGES = ['preparing', 'planning', AWAITING, 'running', 'synthesizing', 'verifying'];
     var MARKS = { pending: '（未）', current: '（中）', done: '（済）', failed: '（×）' };
     var METHOD_LABELS = { filter: '絞り込み', compare: '群どうしの比較', cluster: 'クラスタ分析' };
     var FAILURE_TITLES = {
@@ -597,6 +599,10 @@
 
     function setStages(panel, current, failed) {
         var index = STAGES.indexOf(current);
+        if (current === AWAITING) {
+            var awaiting = panel.querySelector('[data-stage="' + AWAITING + '"]');
+            if (awaiting) awaiting.hidden = false;
+        }
         panel.querySelectorAll('[data-stage]').forEach(function (item) {
             var position = STAGES.indexOf(item.dataset.stage);
             var state = 'pending';
@@ -629,19 +635,41 @@
     }
 
     // 経過時間（AC9.1.1）: サーバーが描いた秒から 1 秒ごとに進める。終わった生成は進めない。
-    // 表示は aria-live の外にあり、毎秒の書き換えは読み上げない。止める関数を返す
+    // 表示は aria-live の外にあり、毎秒の書き換えは読み上げない。
+    // U5 W5-1.3: 計画の確認を待っている間は止め（pause）、続きで進め直す（resume）。
     function startClock(panel) {
         var element = panel.querySelector('[data-testid="advanced-elapsed"]');
-        if (!element || element.dataset.running !== 'true') return function () {};
+        var none = { stop: function () {}, pause: function () {}, resume: function () {} };
+        if (!element) return none;
         var clock = element.querySelector('[data-role="clock"]');
         var base = Number(element.dataset.elapsedSeconds) || 0;
-        var startedAt = Date.now();
-        var timer = setInterval(function () {
-            clock.textContent = clockText(base + Math.floor((Date.now() - startedAt) / 1000));
-        }, 1000);
-        return function () {
+        var startedAt = 0;
+        var timer = null;
+        var stopped = false;
+        var pause = function () {
+            if (timer === null) return;
             clearInterval(timer);
+            timer = null;
+            base += Math.floor((Date.now() - startedAt) / 1000);
             element.dataset.running = 'false';
+        };
+        var resume = function () {
+            if (stopped || timer !== null) return;
+            startedAt = Date.now();
+            element.dataset.running = 'true';
+            timer = setInterval(function () {
+                clock.textContent = clockText(base + Math.floor((Date.now() - startedAt) / 1000));
+            }, 1000);
+        };
+        if (element.dataset.running === 'true') resume();
+        return {
+            stop: function () {
+                pause();
+                stopped = true;
+                element.dataset.running = 'false';
+            },
+            pause: pause,
+            resume: resume
         };
     }
 
@@ -666,13 +694,22 @@
             return true;
         };
 
-        var stopClock = startClock(panel);
+        var clock = startClock(panel);
+        var planArea = panel.querySelector('[data-testid="advanced-plan-area"]');
+        var cancelArea = panel.querySelector('[data-testid="advanced-cancel-area"]');
 
         var finish = function () {
             state.finished = true;
-            stopClock();
+            clock.stop();
             running = false;
             reconnecting.hidden = true;
+            // U5 BR31.1: 終わった生成には中止も計画のカードも出さない
+            if (cancelArea) {
+                // flex が hidden 属性より強いので、クラスでも隠す
+                cancelArea.hidden = true;
+                cancelArea.classList.add('hidden');
+            }
+            if (planArea) planArea.innerHTML = '';
             if (state.source) state.source.close();
             updateGenerateState();
         };
@@ -683,15 +720,40 @@
                 setStages(panel, data.status, false);
                 running = true;
                 if (inputs) inputs.open = false;
+                // U5 W5-1.3: 計画の確認を待つ間は経過時間を止める
+                if (data.status === AWAITING) {
+                    clock.pause();
+                } else {
+                    clock.resume();
+                    if (data.status !== 'planning' && planArea) planArea.innerHTML = '';
+                }
                 updateGenerateState();
             },
             progress: function (data) {
                 if (data.message) addLog(panel, String(data.message));
             },
-            plan: function (data) {
+            plan: function (data, evt) {
+                var raw = String(evt.data || '').trim();
+                if (raw.charAt(0) === '<' && planArea) {
+                    // U5 BR29.2: サーバーが描いた計画のカード（自動エスケープ済み）
+                    planArea.innerHTML = raw;
+                    if (window.htmx) window.htmx.process(planArea);
+                    var heading = planArea.querySelector('#advanced-plan-title');
+                    if (heading) heading.focus();
+                    return;
+                }
                 var text = '計画: ' + (METHOD_LABELS[data.method] || '分析');
                 if (data.interpreted_purpose) text += '（' + String(data.interpreted_purpose) + '）';
                 addLog(panel, text);
+            },
+            cancelled: function () {
+                // U5 BR31.4: 中止はエラーの見た目にしない。フォームはそのまま（BR33.3）
+                setStages(panel, state.current || 'preparing', true);
+                var cancelled = panel.querySelector('[data-testid="advanced-cancelled"]');
+                cancelled.hidden = false;
+                finish();
+                if (inputs) inputs.open = true;
+                cancelled.querySelector('[data-role="title"]').focus();
             },
             result: function (data, evt) {
                 setStages(panel, 'done', false);
@@ -780,9 +842,13 @@
     }
 
     function connectNewPanel() {
+        // U5 BR30.2: 実行中の生成の案内だけが届いたときも、開始中の表示を戻す
+        if (submitting) {
+            submitting = false;
+            updateGenerateState();
+        }
         var panel = document.getElementById('advanced-progress');
         if (!panel || panel.dataset.connected) return;
-        submitting = false;
         connect(panel);
         var title = document.getElementById('advanced-progress-title');
         if (title) title.focus();

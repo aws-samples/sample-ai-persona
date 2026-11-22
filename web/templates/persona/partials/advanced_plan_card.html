@@ -1,0 +1,76 @@
+{#
+  計画のカード（U5 S7、BR29.2）。SSE の plan（C3）と、計画の POST の応答（受け付けたあと）。
+  計画の文はモデルの出力なので、自動のエスケープに任せる（safe は使わない。NFR3.28）。
+  引数:
+    generation_id ... 生成の ID
+    plan ... AnalysisPlan（受け付けたあとの応答では None）
+    purpose ... 今の指示（計画し直しの入力欄に入れる）
+    awaiting ... 計画の確認を待っているか（ボタンを出す）
+    accepted ... None、"approve"（承認した）、"replan"（計画し直している）
+    limits ... screen_limits()（plan_wait_minutes、purpose_max_chars）
+#}
+{% from "persona/partials/advanced_labels.html" import method_label %}
+<section data-testid="advanced-plan-card" aria-labelledby="advanced-plan-title"
+         class="mt-4 border border-blue-200 bg-blue-50 rounded-md p-4">
+    <h3 id="advanced-plan-title" tabindex="-1" class="font-semibold text-gray-900">分析の計画</h3>
+    {% if accepted %}
+    <p data-testid="advanced-plan-accepted" role="status" class="text-sm text-gray-800 mt-2">
+        {% if accepted == "replan" %}指示を直して計画し直しています{% else %}承認しました。分析を始めます{% endif %}
+    </p>
+    {% else %}
+    <dl class="text-sm text-gray-800 mt-2 space-y-2">
+        <div>
+            <dt class="font-medium text-gray-700">解釈した目的</dt>
+            <dd data-testid="advanced-plan-purpose">{{ plan.interpreted_purpose }}</dd>
+        </div>
+        <div>
+            <dt class="font-medium text-gray-700">答える問い</dt>
+            <dd>
+                <ul class="list-disc ml-5" data-testid="advanced-plan-questions">
+                    {% for question in plan.questions %}<li>{{ question }}</li>{% endfor %}
+                </ul>
+            </dd>
+        </div>
+        <div>
+            <dt class="font-medium text-gray-700">手法と選んだ理由</dt>
+            <dd data-testid="advanced-plan-method">{{ method_label(plan.method.value) }}: {{ plan.rationale }}</dd>
+        </div>
+        {% if plan.deviation_reason %}
+        <div>
+            <dt class="font-medium text-gray-700">目安から外れた理由</dt>
+            <dd data-testid="advanced-plan-deviation">{{ plan.deviation_reason }}</dd>
+        </div>
+        {% endif %}
+        <div>
+            <dt class="font-medium text-gray-700">使う量の上限</dt>
+            <dd data-testid="advanced-plan-limits">
+                {% if plan.budget.max_tool_calls is defined %}分析の操作 {{ plan.budget.max_tool_calls }} 回まで{% endif %}
+                {% if plan.budget.max_tool_seconds is defined %}・{{ plan.budget.max_tool_seconds // 60 }} 分まで{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% if awaiting %}
+    <p class="text-xs text-gray-600 mt-3" data-testid="advanced-plan-deadline">{{ limits.plan_wait_minutes }} 分以内に選んでください</p>
+    <form class="mt-3" data-testid="advanced-plan-form"
+          hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/plan"
+          hx-target="closest [data-testid='advanced-plan-card']" hx-swap="outerHTML">
+        <div class="advanced-plan-error" aria-live="polite"></div>
+        <label for="advanced-plan-revised" class="block text-sm font-medium text-gray-700">指示（直して計画し直せます）</label>
+        <textarea id="advanced-plan-revised" name="revised_purpose" rows="2" maxlength="{{ limits.purpose_max_chars }}"
+                  data-testid="advanced-plan-revised" aria-describedby="advanced-plan-revised-help"
+                  class="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-y">{{ purpose }}</textarea>
+        <p id="advanced-plan-revised-help" class="text-xs text-gray-600">{{ limits.purpose_max_chars }} 文字まで</p>
+        <div class="flex flex-wrap gap-3 mt-3">
+            <button type="submit" name="action" value="approve" data-testid="advanced-plan-approve"
+                    class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">この計画で実行</button>
+            <button type="submit" name="action" value="replan" data-testid="advanced-plan-replan"
+                    class="border border-blue-600 text-blue-700 px-4 py-2 rounded-md text-sm hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500">指示を直して計画し直す</button>
+            <button type="button" data-testid="advanced-plan-cancel"
+                    hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/cancel"
+                    hx-target="#advanced-cancel-area" hx-swap="innerHTML"
+                    class="border border-gray-400 text-gray-800 px-4 py-2 rounded-md text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500">中止</button>
+        </div>
+    </form>
+    {% endif %}
+    {% endif %}
+</section>

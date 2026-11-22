@@ -674,3 +674,42 @@ class TestDocumentWording:
         assert (
             message == error_messages._CATALOG[ErrorCode["GENERATION_SOURCE_TOO_LARGE"]]
         )
+
+
+class TestGenerationControlWording:
+    """U5 (functional-spec.md §5, BR29.5, BR29.7, BR30.2, BR33.1)."""
+
+    @staticmethod
+    def _message(code: ErrorCode, **context: object) -> str:
+        return user_message_for(CodedError("diag", code=code, context=context))
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "GENERATION_STALLED",
+            "GENERATION_NOT_AWAITING_PLAN",
+            "GENERATION_ALREADY_FINISHED",
+            "GENERATION_SOURCE_NOT_READY",
+        ],
+    )
+    def test_the_new_codes_are_transient_and_worded(self, name):
+        code = ErrorCode[name]
+
+        assert code.kind is ErrorKind.TRANSIENT
+        assert self._message(code) != FALLBACK_MESSAGE
+
+    def test_the_timeout_tells_the_plan_waits_apart(self):
+        timeout = ErrorCode["GENERATION_TIMEOUT"]
+        card = self._message(timeout, limit="plan_wait_minutes", value=15)
+        total = self._message(timeout, limit="plan_wait_total_minutes", value=60)
+        whole = self._message(timeout, limit="generation_minutes", value=60)
+
+        assert len({card, total, whole}) == 3
+        assert "15" in card and "60" in total
+        assert whole == error_messages._CATALOG[timeout]
+
+    def test_a_plan_wait_without_a_usable_value_is_the_plain_wording(self):
+        timeout = ErrorCode["GENERATION_TIMEOUT"]
+        message = self._message(timeout, limit="plan_wait_minutes", value="x")
+
+        assert message == error_messages._CATALOG[timeout]
