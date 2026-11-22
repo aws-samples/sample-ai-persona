@@ -419,6 +419,73 @@ class TestPrepareBoundArgument:
         assert _decoded_args(capture.commands[0])["max_excluded_percent"] == 5
 
 
+class TestDocumentArguments:
+    """U4 NFR5.39: document functions get integers, strings and string lists."""
+
+    def test_prepare_document_carries_the_chunk_sizes(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        capture = _CommandCapture()
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stream({"taskId": "task-1", "taskStatus": "submitted"}),
+            _invoke_params("startCommandExecution", capture),
+        )
+
+        sandbox.start_command(
+            _session(),
+            "prepare_document",
+            {
+                "source_id": "f1",
+                "source_index": 2,
+                "format": "pdf",
+                "chunk_chars": 15_000,
+                "overlap_chars": 500,
+            },
+        )
+
+        args = _decoded_args(capture.commands[0])
+        assert args["source_index"] == 2
+        assert args["chunk_chars"] == 15_000 and args["overlap_chars"] == 500
+        assert "progress_id" in args
+
+    def test_verify_quotes_carries_japanese_quotes_whole(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        capture = _CommandCapture()
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stdout({"ok": True, "value": {"found": [True, False]}}),
+            _invoke_params("executeCommand", capture),
+        )
+        quotes = ["受付で30分も待たされた", 'a "quoted"\nline']
+
+        result = sandbox.call(
+            _session(),
+            "verify_quotes",
+            {"source_id": "f1", "quotes": quotes, "min_chars": 10},
+        )
+
+        args = _decoded_args(capture.commands[0])
+        assert args["quotes"] == quotes and args["min_chars"] == 10
+        assert result["value"]["found"] == [True, False]
+
+    def test_a_cut_chunk_is_marked_for_the_caller(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stdout({"ok": True, "value": {"text": "あ" * 5_000, "next_offset": None}}),
+            _invoke_params("executeCommand"),
+        )
+
+        result = sandbox.call(
+            _session(), "document_chunk", {"source_id": "f1", "index": 0, "offset": 0}
+        )
+
+        assert result["value"]["truncated"] is True
+
+
 class TestLimitOutput:
     """BR17.3, NFR5.36: an output over the limit is cut and goes on."""
 
@@ -686,3 +753,49 @@ class TestInProcessSandbox:
         put = local.put_files(session, [{"source_file_id": "f2", "s3_key": "nope"}])
 
         assert put[0]["ok"] is False
+
+    def test_a_document_is_prepared_then_read_and_its_quotes_checked(
+        self, tmp_path: Path
+    ) -> None:
+        # U4: the same contract runs prepare_document, document_chunk, verify_quotes
+        text = "# 第1章\n" + "受付で30分も待たされたのが不満です。\n" * 50
+        sandbox = InProcessSandbox(
+            library_path=str(_LIBRARY),
+            root_dir=str(tmp_path),
+            read_object={"k": text.encode("utf-8")}.__getitem__,
+            max_output_chars=20_000,
+        )
+        session = sandbox.start_session("gen1", lifetime_seconds=60)
+        sandbox.put_files(session, [{"source_file_id": "f1", "s3_key": "k"}])
+        command_id = sandbox.start_command(
+            session,
+            "prepare_document",
+            {
+                "source_id": "f1",
+                "source_index": 0,
+                "format": "md",
+                "encoding": "utf-8",
+                "chunk_chars": 15_000,
+                "overlap_chars": 500,
+            },
+        )
+
+        state = _poll_until_done(sandbox, session, command_id)
+        chunk = sandbox.call(
+            session,
+            "document_chunk",
+            {"source_id": "f1", "index": 0, "offset": 0, "max_chars": 10_000},
+        )
+        checked = sandbox.call(
+            session,
+            "verify_quotes",
+            {
+                "source_id": "f1",
+                "quotes": ["受付で30分も待たされた", "どこにも書いていない言葉です"],
+                "min_chars": 10,
+            },
+        )
+
+        assert state["result"]["value"]["chunks"] == 1
+        assert chunk["value"]["text"].startswith("# 第1章")
+        assert checked["value"]["found"] == [True, False]

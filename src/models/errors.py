@@ -240,6 +240,15 @@ class ErrorCode(StrEnum):
     )
     SOURCE_ENCODING_UNKNOWN = ("source_encoding_unknown", ErrorKind.VALIDATION)
     SOURCE_NOT_A_TABLE = ("source_not_a_table", ErrorKind.VALIDATION)
+    # U4: the bytes do not match the document's extension (BR22.1).
+    SOURCE_NOT_A_DOCUMENT = ("source_not_a_document", ErrorKind.VALIDATION)
+    # U4: a password-protected PDF, or an OLE file (an encrypted docx or an
+    # old .doc that cannot be told apart) (BR22.1, BR22.2, BR24.6).
+    DOCUMENT_ENCRYPTED = ("document_encrypted", ErrorKind.VALIDATION)
+    # U4: no page of a document holds text; the user removes the file (BR24.4).
+    DOCUMENT_NO_TEXT = ("document_no_text", ErrorKind.VALIDATION)
+    # U4: the documents' settled characters exceed the limit (BR25.1).
+    GENERATION_SOURCE_TOO_LARGE = ("generation_source_too_large", ErrorKind.CAPACITY)
     # The chosen file is not the user's ready table (BR6.2).
     GENERATION_SOURCE_NOT_FOUND = ("generation_source_not_found", ErrorKind.NOT_FOUND)
     # Someone else's or missing generation (events, record, save).

@@ -795,6 +795,7 @@ class TestAdvancedGenerationSettings:
         "ADVANCED_GENERATIONS_TABLE_NAME",
         "APP_SETTINGS_TABLE_NAME",
         "BEDROCK_MODEL_ID",
+        "ADVANCED_EVIDENCE_MODEL_ID",
     )
 
     def _config(self, **env: str):
@@ -848,6 +849,37 @@ class TestAdvancedGenerationSettings:
         assert cfg.ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT == 1
         assert cfg.ADVANCED_MIN_ROWS_PER_PERSONA == 10
         assert cfg.ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS == 60
+
+    def test_document_limits(self):
+        # U4 (NFR5.37): document and evidence limits; the sandbox gets them as args
+        cfg = self._config()
+        assert cfg.ADVANCED_DOCUMENT_MAX_BYTES == 100_000_000
+        assert cfg.ADVANCED_INSPECT_TAIL_BYTES == 1024 * 1024
+        assert cfg.ADVANCED_DOCUMENT_CHARS_PER_MB_PDF > 0
+        assert cfg.ADVANCED_DOCUMENT_CHARS_PER_MB_DOCX > 0
+        assert cfg.ADVANCED_DOCUMENT_CHUNK_CHARS == 15_000
+        assert cfg.ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS == 500
+        assert cfg.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS == 2_000_000
+        # Step 1: stdout of Code Interpreter returned 4,000,000 characters
+        # whole, so one transfer is 10,000 characters (under the 20,000 cut)
+        assert cfg.ADVANCED_DOCUMENT_TRANSFER_CHARS == 10_000
+        assert cfg.ADVANCED_EVIDENCE_MAX_CONCURRENT == 4
+        assert cfg.ADVANCED_EVIDENCE_PER_CHUNK_MAX == 20
+        assert cfg.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS == 200
+        assert cfg.ADVANCED_EVIDENCE_QUOTE_MIN_CHARS == 10
+        assert cfg.ADVANCED_EVIDENCE_VERIFY_BATCH == 50
+        assert cfg.ADVANCED_EVIDENCE_MAX_RETRIES == 2
+        assert cfg.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS == 2
+
+    def test_evidence_model_follows_the_survey_model(self):
+        cfg = self._config(SURVEY_MODEL_ID="light-model")
+        assert cfg.ADVANCED_EVIDENCE_MODEL_ID == "light-model"
+
+    def test_evidence_model_overrides_the_default(self):
+        cfg = self._config(
+            SURVEY_MODEL_ID="light-model", ADVANCED_EVIDENCE_MODEL_ID="model-e"
+        )
+        assert cfg.ADVANCED_EVIDENCE_MODEL_ID == "model-e"
 
     @pytest.mark.parametrize(
         ("value", "expected"),

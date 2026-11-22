@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Sequence
@@ -50,6 +52,8 @@ from ...models.analysis import (
     AnalysisMethod,
     AnalysisPlan,
     AnalysisRecord,
+    DocumentMode,
+    DocumentReport,
     Evidence,
     PrepareReport,
     Segment,
@@ -57,7 +61,7 @@ from ...models.analysis import (
 from ...models.authz import Principal
 from ...models.errors import CodedError, ErrorCode, ErrorKind
 from ...models.persona_candidate import MAX_CANDIDATE_ITEM_BYTES, PersonaCandidate
-from ...models.source_file import SourceFile
+from ...models.source_file import SourceFile, SourceKind
 from ...services.s3_service import S3ServiceError
 from ...services.service_factory import service_factory
 from ...services.stores.advanced_generation_store import (
@@ -70,7 +74,7 @@ from ..components.advanced_generation_policy import AdvancedGenerationPolicy
 from ..components.analysis_record_archive import AnalysisRecordArchive
 from ..components.source_file_catalog import SourceFileCatalog
 from ..shared.advanced_generation_log import log_advanced_event
-from . import prompts
+from . import documents, prompts
 from .analysis_policy import PLAN_ATTEMPTS, AnalysisPolicy
 from .analysis_verifier import AnalysisVerifier, VerificationResult
 from .results import build_analysis_run, build_candidates, build_record
@@ -91,6 +95,9 @@ _LIBRARY_CODES = {
     "SOURCE_UNREADABLE": ErrorCode.GENERATION_SOURCE_UNREADABLE,
     "TOO_MANY_BAD_ROWS": ErrorCode.GENERATION_SOURCE_UNREADABLE,
     "OUT_OF_MEMORY": ErrorCode.GENERATION_CAPACITY,
+    # U4 (BR24.4, BR24.6)
+    "DOCUMENT_NO_TEXT": ErrorCode.DOCUMENT_NO_TEXT,
+    "DOCUMENT_ENCRYPTED": ErrorCode.DOCUMENT_ENCRYPTED,
 }
 _RESELECT_CODES = frozenset({"TOO_FEW_COLUMNS", "EMPTY_CLUSTER"})
 #: Values of ``error_context`` that may be kept and shown (never text).
@@ -108,11 +115,27 @@ _SAFE_CONTEXT_KEYS = frozenset(
         "row_examples",
         "required_rows",
         "persona_count",
+        # U4: the document's place and the character counts (NFR3.22)
+        "source_index",
+        "total_chars",
     }
 )
 _COUNT_KEYS = frozenset(
-    {"rows_read", "rows_excluded", "columns_count", "required_rows", "persona_count"}
+    {
+        "rows_read",
+        "rows_excluded",
+        "columns_count",
+        "required_rows",
+        "persona_count",
+        "source_index",
+        "total_chars",
+        "max_chars",
+    }
 )
+#: Seconds between two "根拠の抽出 n / M" notices when 10% is not reached.
+_EXTRACTION_NOTICE_SECONDS = 30
+#: Room kept under the 2MB of the result parts for the item keys (NFR5.38).
+_PARTS_SLACK_BYTES = 16 * 1024
 #: At most this many line numbers are kept in ``row_examples`` (BR16.2).
 _ROW_EXAMPLES_MAX = 5
 #: The two time limits, told apart in ``error_context`` (NFR1.6, NFR5.6, NFR5.7).
@@ -178,6 +201,9 @@ class GenerationProgress:
 
     generation: AdvancedGeneration
     events: tuple[GenerationEvent, ...]
+    #: The stored failure values and, for a document's failure, the owner's
+    #: file name found again from ``source_index`` (U4 BR24.4, NFR3.22).
+    failure_context: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_finished(self) -> bool:
@@ -194,6 +220,24 @@ class AdvancedGenerationResult:
     evidence: tuple[Evidence, ...]
     candidates: tuple[PersonaCandidate, ...]
     unverified_segment_ids: tuple[str, ...]
+    #: U4: one report per document, and the display name of each source file.
+    document_reports: tuple[DocumentReport, ...] = ()
+    source_names: dict[str, str] = field(default_factory=dict)
+
+
+class _NoTools:
+    """Stands for the analysis tools when there is no table (documents only)."""
+
+    calls: tuple[Any, ...] = ()
+    sandbox_error: Optional[CodedError] = None
+
+    @staticmethod
+    def tool_call_ids() -> list[str]:
+        return []
+
+    @staticmethod
+    def output_of(_call_id: str) -> None:
+        return None
 
 
 @dataclass
@@ -204,8 +248,22 @@ class _Run:
     started_monotonic: float
     status: GenerationStatus = GenerationStatus.PREPARING
     session: Optional["SandboxSession"] = None
+    #: The table (none when the generation uses documents alone).
     source: Optional[SourceFile] = None
+    #: Every source file, in ``source_file_ids`` order (U4).
+    sources: list[SourceFile] = field(default_factory=list)
     report: Optional[PrepareReport] = None
+    #: U4: ``(source_index, file, report)`` of each prepared document.
+    documents: list[tuple[int, SourceFile, DocumentReport]] = field(
+        default_factory=list
+    )
+    document_mode: Optional[DocumentMode] = None
+    #: Full text of each document, in ``documents`` order (``full_text`` only).
+    document_texts: list[str] = field(default_factory=list)
+    #: Document evidence that passed the quote check (BR27.1).
+    document_evidence: list[Evidence] = field(default_factory=list)
+    evidence_stats: dict[str, int] = field(default_factory=dict)
+    evidence_tokens: dict[str, int] = field(default_factory=dict)
     profile: dict[str, Any] = field(default_factory=dict)
     plan: Optional[AnalysisPlan] = None
     tools: Any = None
@@ -360,8 +418,9 @@ class AdvancedPersonaGenerationManager:
             principal, AdvancedGenerationError
         )
         ids = list(dict.fromkeys(i for i in source_file_ids if i))
-        self._check_input(ids, purpose, persona_count)
-        self._catalog.ready_table(principal.sub, ids[0])
+        self._check_input(purpose, persona_count)
+        # U4 BR23.1: documents alone, or one table with documents
+        self._catalog.ready_sources(principal.sub, ids)
         if not self._slots.acquire(blocking=False):
             raise _fail(ErrorCode.ADVANCED_GENERATION_BUSY, "no free generation slot")
         try:
@@ -371,7 +430,7 @@ class AdvancedPersonaGenerationManager:
             raise
 
     @staticmethod
-    def _check_input(ids: list[str], purpose: str, persona_count: int) -> None:
+    def _check_input(purpose: str, persona_count: int) -> None:
         if not PERSONA_COUNT_MIN <= int(persona_count) <= PERSONA_COUNT_MAX:
             raise _fail(
                 ErrorCode.GENERATION_PERSONA_COUNT_INVALID,
@@ -382,10 +441,6 @@ class AdvancedPersonaGenerationManager:
                 ErrorCode.GENERATION_PURPOSE_TOO_LONG,
                 "purpose too long",
                 max_chars=PURPOSE_MAX_CHARS,
-            )
-        if len(ids) != 1:
-            raise _fail(
-                ErrorCode.UPLOAD_SOURCE_INVALID, "exactly one table", reason="tables"
             )
 
     def _write_start(
@@ -481,7 +536,16 @@ class AdvancedPersonaGenerationManager:
     def _run_stages(self, state: _Run) -> None:
         self._enter(state, GenerationStatus.PREPARING, first=True)
         self._prepare(state)
-        self._enter(state, GenerationStatus.PLANNING)
+        self._enter(
+            state,
+            GenerationStatus.PLANNING,
+            # U4 BR25.2: decided right after the preparation
+            updates={
+                "document_mode": (
+                    state.document_mode.value if state.document_mode else None
+                )
+            },
+        )
         self._plan(state)
         self._enter(
             state,
@@ -558,28 +622,60 @@ class AdvancedPersonaGenerationManager:
     # --- preparing --------------------------------------------------------------
 
     def _prepare(self, state: _Run) -> None:
+        """Bring every file in, prepare the table, then each document (BR25.4).
+
+        U4: every chosen file is refreshed and brought in (the U2 note that
+        only the first was refreshed is fixed here). The 20 minutes of the
+        preparation count the table and the documents together (NFR1.22).
+        """
         generation = state.generation
-        source = self._catalog.get_owned(
-            generation.owner_sub,
-            generation.source_file_ids[0],
-            not_found_code=ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+        sources = [
+            self._catalog.get_owned(
+                generation.owner_sub,
+                source_file_id,
+                not_found_code=ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+            )
+            for source_file_id in generation.source_file_ids
+        ]
+        state.sources = [self._refresh_source(state, s) for s in sources]
+        state.source = next(
+            (s for s in state.sources if s.kind is SourceKind.TABLE), None
         )
-        source = self._refresh_source(state, source)
-        state.source = source
         sandbox = self._sandbox
         state.session = sandbox.start_session(
             generation.generation_id, config.ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS
         )
-        self._bring_in(state, source)
+        for source in state.sources:
+            self._bring_in(state, source)
+        prepare_started = self._clock()
+        if state.source is not None:
+            self._prepare_table(state, state.source, prepare_started)
+        position = 0
+        for source_index, source in enumerate(state.sources):
+            if source.kind is not SourceKind.DOCUMENT:
+                continue
+            position += 1
+            report = self._prepare_document(
+                state, position, source_index, source, prepare_started
+            )
+            state.documents.append((source_index, source, report))
+        if state.documents:
+            self._decide_document_mode(state)
+
+    def _prepare_table(
+        self, state: _Run, source: SourceFile, prepare_started: datetime
+    ) -> None:
+        """The table's preparation and its checks (U1, U3: BR16, BR18)."""
+        assert state.session is not None
         started = time.monotonic()
         try:
-            state.report = self._run_prepare(state, source)
+            state.report = self._run_prepare(state, source, prepare_started)
         except CodedError as e:
             self._log_prepared(state, started, e.code, e.context)
             raise
         self._log_prepared(state, started, None, {})
         self._check_enough_rows(state)
-        profile = sandbox.call(
+        profile = self._sandbox.call(
             state.session, "profile_dataset", {"source_id": source.source_file_id}
         )
         state.profile = dict(self._library_value(profile))
@@ -724,37 +820,84 @@ class AdvancedPersonaGenerationManager:
             context=context,
         )
 
-    def _run_prepare(self, state: _Run, source: SourceFile) -> PrepareReport:
-        assert source.metadata is not None and state.session is not None
-        sandbox = self._sandbox
+    def _run_prepare(
+        self, state: _Run, source: SourceFile, prepare_started: datetime
+    ) -> PrepareReport:
+        metadata = source.table_metadata
+        assert metadata is not None and state.session is not None
         args = {
             "source_id": source.source_file_id,
             "metadata": {
-                "encoding": source.metadata.encoding.value,
-                "delimiter": source.metadata.delimiter,
+                "encoding": metadata.encoding.value,
+                "delimiter": metadata.delimiter,
             },
             "max_excluded_percent": config.ADVANCED_SOURCE_MAX_EXCLUDED_PERCENT,
         }
-        command_id = sandbox.start_command(state.session, "prepare", args)
-        started = self._clock()
+        command_id = self._sandbox.start_command(state.session, "prepare", args)
+        last: dict[str, Optional[int]] = {"rows": None}
+
+        def on_progress(progress: Mapping[str, Any]) -> bool:
+            rows = progress.get("rows")
+            if not isinstance(rows, int) or rows == last["rows"]:
+                return False
+            last["rows"] = rows
+            self._event(
+                state,
+                EventType.PROGRESS,
+                message=f"{rows} 行を読み込みました",
+                detail={"rows": rows},
+            )
+            return True
+
+        status = self._wait_command(state, command_id, prepare_started, on_progress)
+        value = self._library_value(status.get("result") or {"ok": False})
+        limit_text = value.get("memory_limit")
+        if isinstance(limit_text, str) and re.fullmatch(r"\d{1,6}[KMGT]?B", limit_text):
+            state.memory_limit = limit_text
+        try:
+            report = PrepareReport.from_dict(value)
+        except (KeyError, TypeError, ValueError):
+            raise _fail(
+                ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                "bad preparation report",
+                cause=_CAUSE_SANDBOX,
+            ) from None
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message=(
+                f"{report.rows_read} 行を読み込みました（{report.rows_excluded} 行を除外）"
+            ),
+            detail={"rows": report.rows_read, "rows_excluded": report.rows_excluded},
+        )
+        return report
+
+    def _wait_command(
+        self,
+        state: _Run,
+        command_id: str,
+        prepare_started: datetime,
+        on_progress: Callable[[Mapping[str, Any]], bool],
+    ) -> Mapping[str, Any]:
+        """Poll a started command until it ends, within the 20 and 60 minutes.
+
+        ``on_progress`` gets the progress file and says whether it wrote an
+        event; without one for 60 seconds a "still going" notice is written
+        (BR17.2). The 20 minutes count from ``prepare_started``, the start of
+        the whole preparation (table and documents, NFR1.22).
+        """
+        assert state.session is not None
+        sandbox = self._sandbox
         limit = timedelta(seconds=config.ADVANCED_GENERATION_PREPARE_TIMEOUT_SECONDS)
         notice = timedelta(seconds=config.ADVANCED_GENERATION_PREPARE_NOTICE_SECONDS)
-        last_rows: Optional[int] = None
-        last_event_at = started
+        started = prepare_started
+        last_event_at = self._clock()
         while True:
             status = sandbox.poll_command(state.session, command_id)
-            rows = (status.get("progress") or {}).get("rows")
-            if isinstance(rows, int) and rows != last_rows:
-                last_rows = rows
+            if on_progress(status.get("progress") or {}):
                 last_event_at = self._clock()
-                self._event(
-                    state,
-                    EventType.PROGRESS,
-                    message=f"{rows} 行を読み込みました",
-                    detail={"rows": rows},
-                )
             if status.get("done"):
-                break
+                return status
             now = self._clock()
             if now - last_event_at >= notice:
                 # The rows stand still while the table is written (BR17.2): say
@@ -782,40 +925,393 @@ class AdvancedPersonaGenerationManager:
                 if self._poll_seconds is not None
                 else config.ADVANCED_GENERATION_PREPARE_POLL_SECONDS
             )
-        value = self._library_value(status.get("result") or {"ok": False})
-        limit_text = value.get("memory_limit")
-        if isinstance(limit_text, str) and re.fullmatch(r"\d{1,6}[KMGT]?B", limit_text):
-            state.memory_limit = limit_text
+
+    # --- U4: documents (BR24, BR25, BR26, BR27.1) --------------------------------
+
+    def _prepare_document(
+        self,
+        state: _Run,
+        position: int,
+        source_index: int,
+        source: SourceFile,
+        prepare_started: datetime,
+    ) -> DocumentReport:
+        """Prepare one document in the sandbox and say what it holds (BR24.5)."""
+        assert state.session is not None
+        metadata = source.document_metadata
+        fmt = source.source_format
+        if metadata is None or fmt is None:
+            raise _fail(ErrorCode.GENERATION_SOURCE_NOT_FOUND, "not a ready document")
+        args: dict[str, Any] = {
+            "source_id": source.source_file_id,
+            "source_index": source_index,
+            "format": fmt.value,
+            "chunk_chars": int(config.ADVANCED_DOCUMENT_CHUNK_CHARS),
+            "overlap_chars": int(config.ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS),
+        }
+        if metadata.encoding is not None:
+            args["encoding"] = metadata.encoding.value
+        started = time.monotonic()
+        last: dict[str, Optional[int]] = {"pages": None}
+
+        def on_progress(progress: Mapping[str, Any]) -> bool:
+            pages = progress.get("pages")
+            if not isinstance(pages, int) or pages == last["pages"]:
+                return False
+            last["pages"] = pages
+            self._event(
+                state,
+                EventType.PROGRESS,
+                message=f"{position} 件目の文書: {pages} ページを読み込みました",
+                detail={"pages": pages},
+            )
+            return True
+
         try:
-            report = PrepareReport.from_dict(value)
-        except (KeyError, TypeError, ValueError):
-            raise _fail(
-                ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
-                "bad preparation report",
-                cause=_CAUSE_SANDBOX,
-            ) from None
+            command_id = self._sandbox.start_command(
+                state.session, "prepare_document", args
+            )
+            status = self._wait_command(state, command_id, prepare_started, on_progress)
+            value = self._library_value(status.get("result") or {"ok": False})
+            try:
+                report = DocumentReport.from_dict(value)
+            except (KeyError, TypeError, ValueError):
+                raise _fail(
+                    ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                    "bad document report",
+                    cause=_CAUSE_SANDBOX,
+                ) from None
+        except CodedError as e:
+            self._log_document(state, source_index, fmt.value, started, None, e.code)
+            raise
+        self._log_document(state, source_index, fmt.value, started, report, None)
         self._event(
             state,
             EventType.PROGRESS,
-            message=(
-                f"{report.rows_read} 行を読み込みました（{report.rows_excluded} 行を除外）"
-            ),
-            detail={"rows": report.rows_read, "rows_excluded": report.rows_excluded},
+            message=documents.prepared_message(position, report),
+            detail={
+                "document_index": source_index,
+                "pages": report.pages,
+                "chars": report.chars,
+                "chunks": report.chunks,
+                "no_text_pages": len(report.no_text_pages),
+            },
         )
         return report
 
     @staticmethod
-    def _library_value(result: Mapping[str, Any]) -> Mapping[str, Any]:
-        """The value of a C9 result, or the user-facing code of its error."""
+    def _log_document(
+        state: _Run,
+        source_index: int,
+        fmt: str,
+        started: float,
+        report: Optional[DocumentReport],
+        error_code: Optional[ErrorCode],
+    ) -> None:
+        """One line per document: counts and time only, never names (NFR6.13)."""
+        try:
+            log_advanced_event(
+                "advanced_generation.document_prepared",
+                generation_id=state.generation.generation_id,
+                status="failed" if error_code else "done",
+                error_code=error_code.value if error_code else None,
+                document_index=source_index,
+                format=fmt,
+                pages=report.pages if report else None,
+                chars=report.chars if report else None,
+                chunks=report.chunks if report else None,
+                no_text_pages=len(report.no_text_pages) if report else None,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+        except Exception as e:  # noqa: BLE001 - a log line never fails a run
+            logger.error("document preparation not logged (%s)", type(e).__name__)
+
+    def _decide_document_mode(self, state: _Run) -> None:
+        """The total limit, then full text or extraction (BR25.1, BR25.2)."""
+        total = sum(report.chars for _, _, report in state.documents)
+        chunks = sum(report.chunks for _, _, report in state.documents)
+        limit = int(config.ADVANCED_DOCUMENT_MAX_TOTAL_CHARS)
+        if total > limit:
+            raise _fail(
+                ErrorCode.GENERATION_SOURCE_TOO_LARGE,
+                "documents over the total limit",
+                total_chars=total,
+                max_chars=limit,
+            )
+        full_text = total <= int(config.PERSONA_SOURCE_MAX_CHARS)
+        state.document_mode = (
+            DocumentMode.FULL_TEXT if full_text else DocumentMode.EXTRACTION
+        )
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message=documents.mode_message(total, chunks, full_text),
+            detail={"mode": state.document_mode.value, "chunks": chunks},
+        )
+        try:
+            log_advanced_event(
+                "advanced_generation.document_mode",
+                generation_id=state.generation.generation_id,
+                mode=state.document_mode.value,
+                total_chars=total,
+                chunks=chunks,
+            )
+        except Exception as e:  # noqa: BLE001 - a log line never fails a run
+            logger.error("document mode not logged (%s)", type(e).__name__)
+        if full_text:
+            overlap = int(config.ADVANCED_DOCUMENT_CHUNK_OVERLAP_CHARS)
+            state.document_texts = [
+                documents.join_chunks(
+                    [
+                        self._read_chunk(state, source.source_file_id, i)[0]
+                        for i in range(report.chunks)
+                    ],
+                    overlap,
+                )
+                for _, source, report in state.documents
+            ]
+        else:
+            self._extract_evidence(state)
+
+    def _read_chunk(
+        self, state: _Run, source_id: str, index: int
+    ) -> tuple[str, Mapping[str, Any]]:
+        """One chunk, taken out of the session a piece at a time (NFR5.39)."""
+        assert state.session is not None
+        parts: list[str] = []
+        offset: Optional[int] = 0
+        info: Mapping[str, Any] = {}
+        while offset is not None:
+            value = self._library_value(
+                self._sandbox.call(
+                    state.session,
+                    "document_chunk",
+                    {
+                        "source_id": source_id,
+                        "index": index,
+                        "offset": offset,
+                        "max_chars": int(config.ADVANCED_DOCUMENT_TRANSFER_CHARS),
+                    },
+                ),
+                strict=True,
+            )
+            parts.append(str(value.get("text") or ""))
+            info = value
+            next_offset = value.get("next_offset")
+            offset = next_offset if isinstance(next_offset, int) else None
+        return "".join(parts), info
+
+    def _extract_evidence(self, state: _Run) -> None:
+        """Evidence out of every chunk, a few at once (BR26.1〜BR26.3, NFR1.16).
+
+        Each task takes one chunk out of the session, asks the light model and
+        returns its evidence; the chunk's text goes when the task ends. One
+        failure stops the rest without waiting for them (BR26.2, NFR1.18).
+        """
+        started = time.monotonic()
+        tasks = [
+            (source_index, source.source_file_id, chunk)
+            for source_index, source, report in state.documents
+            for chunk in range(report.chunks)
+        ]
+        total = len(tasks)
+        step = max(1, math.ceil(total / 10))
+        tokens = {"input_tokens": 0, "output_tokens": 0}
+        found: list[tuple[int, int, list[Evidence]]] = []
+        # Set by the first failure: later tasks do not start and running ones
+        # do not retry (BR26.2), so no call goes on after the run has failed.
+        stopped = threading.Event()
+        first_failure: list[BaseException] = []
+        executor = ThreadPoolExecutor(
+            max_workers=max(1, int(config.ADVANCED_EVIDENCE_MAX_CONCURRENT)),
+            thread_name_prefix="advanced-evidence",
+        )
+        try:
+            futures: list[Future[tuple[int, int, list[Evidence], dict[str, int]]]] = [
+                executor.submit(
+                    self._extract_chunk, state, stopped, first_failure, *task
+                )
+                for task in tasks
+            ]
+            done = 0
+            last_notice = self._clock()
+            for future in as_completed(futures):
+                source_index, chunk, evidence, usage = future.result()
+                found.append((source_index, chunk, evidence))
+                for key in tokens:
+                    tokens[key] += int(usage.get(key, 0))
+                done += 1
+                now = self._clock()
+                if (
+                    done % step == 0
+                    or done == total
+                    or (now - last_notice).total_seconds() >= _EXTRACTION_NOTICE_SECONDS
+                ):
+                    last_notice = now
+                    self._event(
+                        state,
+                        EventType.PROGRESS,
+                        message=f"根拠の抽出 {done} / {total}",
+                        detail={"done": done, "total": total},
+                    )
+        except BaseException as e:
+            stopped.set()
+            executor.shutdown(wait=False, cancel_futures=True)
+            # A task that gave up because of the stop may finish first; the
+            # failure that caused the stop is the one the run reports.
+            if first_failure and first_failure[0] is not e:
+                raise first_failure[0] from None
+            raise
+        executor.shutdown(wait=True)
+        extracted = [
+            e for _, _, evidence in sorted(found, key=lambda f: f[:2]) for e in evidence
+        ]
+        state.evidence_tokens = tokens
+        state.document_evidence = self._check_quotes(state, extracted)
+        stats = state.evidence_stats
+        try:
+            log_advanced_event(
+                "advanced_generation.evidence_extracted",
+                generation_id=state.generation.generation_id,
+                chunks=total,
+                extracted=stats.get("extracted", 0),
+                discarded_unverified=stats.get("discarded_unverified", 0),
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                evidence_input_tokens=tokens["input_tokens"],
+                evidence_output_tokens=tokens["output_tokens"],
+            )
+        except Exception as e:  # noqa: BLE001 - a log line never fails a run
+            logger.error("evidence extraction not logged (%s)", type(e).__name__)
+
+    def _extract_chunk(
+        self,
+        state: _Run,
+        stopped: threading.Event,
+        first_failure: list[BaseException],
+        source_index: int,
+        source_id: str,
+        chunk: int,
+    ) -> tuple[int, int, list[Evidence], dict[str, int]]:
+        """One task of the extraction: the time check, the chunk, the model.
+
+        A failure here sets ``stopped`` before it is raised, so the next task a
+        worker picks up gives up at once (BR26.2, NFR1.18).
+        """
+        if stopped.is_set():
+            raise _fail(
+                ErrorCode.GENERATION_OPERATION_FAILED, "extraction already stopped"
+            )
+        try:
+            self._before_model(state)  # BR26.5: before every call
+            text, info = self._read_chunk(state, source_id, chunk)
+            # One agent per call: a Strands agent is never shared by two threads.
+            agent = self._agents.create_advanced_evidence_agent(
+                prompts.EVIDENCE_INSTRUCTIONS
+            )
+            output, usage = self._agents.run_evidence_extraction(
+                agent,
+                prompts.evidence_prompt(
+                    state.generation.purpose,
+                    int(config.ADVANCED_EVIDENCE_PER_CHUNK_MAX),
+                    int(config.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS),
+                ),
+                text,
+                prompts.EvidenceExtraction,
+                document_index=source_index,
+                chunk_index=chunk,
+                may_retry=lambda: not stopped.is_set(),
+            )
+        except BaseException as e:
+            # list.append is atomic: the first item is the earliest failure.
+            if not stopped.is_set():
+                first_failure.append(e)
+            stopped.set()
+            raise
+        evidence = documents.evidence_from_extraction(
+            output if isinstance(output, prompts.EvidenceExtraction) else None,
+            source_index=source_index,
+            source_id=source_id,
+            chunk_index=chunk,
+            info=info,
+            max_items=int(config.ADVANCED_EVIDENCE_PER_CHUNK_MAX),
+            max_quote_chars=int(config.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS),
+        )
+        return source_index, chunk, evidence, usage
+
+    def _check_quotes(
+        self, state: _Run, evidence: Sequence[Evidence]
+    ) -> list[Evidence]:
+        """Keep the evidence whose quote is in its document (BR27.1).
+
+        Quotes go to the sandbox per document, ``ADVANCED_EVIDENCE_VERIFY_BATCH``
+        at a time. The dropped ones are counted in ``evidence_stats``.
+        """
+        assert state.session is not None
+        batch = max(1, int(config.ADVANCED_EVIDENCE_VERIFY_BATCH))
+        kept_ids: set[str] = set()
+        by_source: dict[str, list[Evidence]] = {}
+        for item in evidence:
+            by_source.setdefault(item.source_id, []).append(item)
+        for source_id, items in by_source.items():
+            for start in range(0, len(items), batch):
+                group = items[start : start + batch]
+                value = self._library_value(
+                    self._sandbox.call(
+                        state.session,
+                        "verify_quotes",
+                        {
+                            "source_id": source_id,
+                            "quotes": [e.quote or "" for e in group],
+                            "min_chars": int(config.ADVANCED_EVIDENCE_QUOTE_MIN_CHARS),
+                        },
+                    ),
+                    strict=True,
+                )
+                found = value.get("found")
+                if not isinstance(found, list) or len(found) != len(group):
+                    raise _fail(
+                        ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+                        "bad quote check",
+                        cause=_CAUSE_SANDBOX,
+                    )
+                kept_ids |= {e.id for e, ok in zip(group, found) if ok is True}
+        kept = [e for e in evidence if e.id in kept_ids]
+        discarded = len(evidence) - len(kept)
+        stats = state.evidence_stats
+        stats["extracted"] = stats.get("extracted", 0) + len(evidence)
+        stats["discarded_unverified"] = stats.get("discarded_unverified", 0) + discarded
+        if discarded:
+            self._event(
+                state,
+                EventType.PROGRESS,
+                message=f"文書と照合できない根拠 {discarded} 件を除きました",
+                detail={"discarded_unverified": discarded},
+            )
+        return kept
+
+    @staticmethod
+    def _library_value(
+        result: Mapping[str, Any], *, strict: bool = False
+    ) -> Mapping[str, Any]:
+        """The value of a C9 result, or the user-facing code of its error.
+
+        ``strict`` (U4 NFR5.39): a value the Service had to cut cannot be used
+        (a chunk's text, the quote check) and is ``GENERATION_OPERATION_FAILED``.
+        """
         if result.get("ok") and isinstance(result.get("value"), Mapping):
-            return result["value"]  # type: ignore[no-any-return]
+            value: Mapping[str, Any] = result["value"]
+            if strict and (result.get("truncated") or value.get("truncated")):
+                raise _fail(
+                    ErrorCode.GENERATION_OPERATION_FAILED, "sandbox output was cut"
+                )
+            return value
         error = result.get("error") or {}
         code = _LIBRARY_CODES.get(str(error.get("code")))
         if code is not None:
             context = error.get("context")
             raise _fail(
                 code,
-                "preparation refused the table",
+                "the sandbox refused the source",
                 **(_safe_context(context) if isinstance(context, Mapping) else {}),
             )
         raw = str(error.get("code"))
@@ -844,19 +1340,38 @@ class AdvancedPersonaGenerationManager:
     def _profile_text(self, state: _Run) -> str:
         return json.dumps(state.profile, ensure_ascii=False, default=str)
 
+    def _full_texts(self, state: _Run) -> list[str]:
+        """The whole document texts for the prompts (``full_text`` only, BR25.3)."""
+        return (
+            list(state.document_texts)
+            if state.document_mode is DocumentMode.FULL_TEXT
+            else []
+        )
+
+    def _document_evidence_text(self, state: _Run) -> str:
+        return json.dumps(
+            [e.to_dict() for e in state.document_evidence], ensure_ascii=False
+        )
+
     def _plan(self, state: _Run) -> None:
         generation = state.generation
         guide = AnalysisPolicy.guide_method(generation.purpose, state.profile)
-        agent = self._agents.create_advanced_planning_agent(
-            prompts.PLANNING_INSTRUCTIONS
+        instructions = prompts.PLANNING_INSTRUCTIONS + (
+            prompts.DOCUMENT_PLANNING_NOTE if state.documents else ""
         )
+        agent = self._agents.create_advanced_planning_agent(instructions)
+        data = {"purpose": generation.purpose, "profile": self._profile_text(state)}
+        if state.document_mode is DocumentMode.EXTRACTION:
+            # BR26.3: the checked evidence only, never the text
+            data["document_evidence"] = self._document_evidence_text(state)
         plan: Optional[AnalysisPlan] = None
         for attempt in range(1, PLAN_ATTEMPTS + 1):
             self._before_model(state)
             raw = self._agents.run_advanced_planning(
                 agent,
                 prompts.planning_prompt(generation.persona_count, attempt),
-                {"purpose": generation.purpose, "profile": self._profile_text(state)},
+                data,
+                documents=self._full_texts(state),
             )
             plan = AnalysisPolicy.settle_plan(
                 raw, guide=guide, attempt=attempt, columns=self._columns(state)
@@ -873,7 +1388,11 @@ class AdvancedPersonaGenerationManager:
         )
 
     def _analyze(self, state: _Run) -> None:
-        assert state.plan is not None and state.source is not None
+        assert state.plan is not None
+        if state.source is None:
+            # U4: documents alone have no table to analyse
+            state.tools = _NoTools()
+            return
         self._before_model(state)
         generation = state.generation
         tools = self._tool_factory(
@@ -927,49 +1446,138 @@ class AdvancedPersonaGenerationManager:
             ) from None
         return segments, evidence
 
-    def _synthesize(self, state: _Run) -> list[prompts.AdvancedPersonaOutput]:
-        assert state.report is not None
+    def _assign_to_segments(self, state: _Run) -> None:
+        """Extraction with a table: each evidence gets 0 or 1 segment (BR28.1)."""
+        if not state.document_evidence or not state.segments:
+            return
         self._before_model(state)
-        generation = state.generation
         agent = self._agents.create_advanced_synthesis_agent(
-            prompts.SYNTHESIS_INSTRUCTIONS
+            prompts.ASSIGNMENT_INSTRUCTIONS
         )
-        report = state.report
         output = self._agents.run_advanced_synthesis(
             agent,
-            prompts.synthesis_prompt(generation.persona_count),
+            prompts.assignment_prompt(),
             {
-                "purpose": generation.purpose,
                 "segments": json.dumps(
                     [s.to_dict() for s in state.segments], ensure_ascii=False
                 ),
-                "evidence": json.dumps(
-                    [e.to_dict() for e in state.evidence], ensure_ascii=False
-                ),
-                "prepare_report": json.dumps(
-                    {
-                        "rows_read": report.rows_read,
-                        "rows_excluded": report.rows_excluded,
-                        "columns": [c.to_dict() for c in report.columns],
-                    },
+                "document_evidence": json.dumps(
+                    [
+                        {
+                            "id": e.id,
+                            "kind": e.kind.value,
+                            "claim": e.claim,
+                            "quote": e.quote,
+                            "speaker_attributes": e.speaker_attributes or {},
+                        }
+                        for e in state.document_evidence
+                    ],
                     ensure_ascii=False,
                 ),
             },
+            prompts.EvidenceAssignmentOutput,
+        )
+        state.document_evidence = documents.apply_assignments(
+            state.document_evidence,
+            list(output.assignments),
+            segment_ids={s.id for s in state.segments},
+        )
+
+    def _synthesize(self, state: _Run) -> list[prompts.AdvancedPersonaOutput]:
+        generation = state.generation
+        has_documents = bool(state.documents)
+        full_text = state.document_mode is DocumentMode.FULL_TEXT
+        if state.document_mode is DocumentMode.EXTRACTION:
+            self._assign_to_segments(state)
+        self._before_model(state)
+        agent = self._agents.create_advanced_synthesis_agent(
+            prompts.SYNTHESIS_INSTRUCTIONS
+            + (prompts.DOCUMENT_SYNTHESIS_NOTE if has_documents else "")
+        )
+        data = {
+            "purpose": generation.purpose,
+            "segments": json.dumps(
+                [s.to_dict() for s in state.segments], ensure_ascii=False
+            ),
+            # BR28.2: evidence without a segment reaches every persona
+            "evidence": json.dumps(
+                [e.to_dict() for e in [*state.evidence, *state.document_evidence]],
+                ensure_ascii=False,
+            ),
+        }
+        report = state.report
+        if report is not None:
+            data["prepare_report"] = json.dumps(
+                {
+                    "rows_read": report.rows_read,
+                    "rows_excluded": report.rows_excluded,
+                    "columns": [c.to_dict() for c in report.columns],
+                },
+                ensure_ascii=False,
+            )
+        output = self._agents.run_advanced_synthesis(
+            agent,
+            prompts.synthesis_prompt(
+                generation.persona_count,
+                has_table=state.source is not None,
+                has_documents=has_documents,
+                full_text=full_text,
+            ),
+            data,
             prompts.AdvancedPersonaListOutput,
+            documents=self._full_texts(state),
         )
         personas = list(output.personas)
         if len(personas) != generation.persona_count:
             raise _fail(
                 ErrorCode.GENERATION_VERIFICATION_FAILED, "wrong number of personas"
             )
-        return personas
+        renamed: dict[str, str] = {}
+        if full_text:
+            evidence, renamed = documents.evidence_from_synthesis(
+                list(output.document_evidence),
+                documents=[(i, s.source_file_id) for i, s, _ in state.documents],
+                segment_ids={s.id for s in state.segments},
+                max_quote_chars=int(config.ADVANCED_EVIDENCE_QUOTE_MAX_CHARS),
+            )
+            state.document_evidence = self._check_quotes(state, evidence)
+        # NFR4.4: only the generation's own evidence IDs are kept
+        known = {e.id for e in [*state.evidence, *state.document_evidence]}
+        return [
+            p.model_copy(
+                update={
+                    "evidence_ids": list(
+                        dict.fromkeys(
+                            renamed.get(i, i)
+                            for i in p.evidence_ids
+                            if renamed.get(i, i) in known
+                        )
+                    )
+                }
+            )
+            for p in personas
+        ]
 
     # --- verifying and the result -----------------------------------------------
 
     def _verify(
         self, state: _Run, personas: Sequence[prompts.AdvancedPersonaOutput]
     ) -> VerificationResult:
-        assert state.plan is not None and state.report is not None
+        assert state.plan is not None
+        if state.report is None:
+            # U4 BR27.2: documents alone rest on their checked quotes
+            result = AnalysisVerifier.verify_documents(
+                persona_evidence_ids=[p.evidence_ids for p in personas],
+                evidence=state.document_evidence,
+            )
+            if not result.passed:
+                logger.info(
+                    "advanced generation verification failed: %s", result.reason
+                )
+                raise _fail(
+                    ErrorCode.GENERATION_VERIFICATION_FAILED, "verification failed"
+                )
+            return result
         outputs = {
             cid: state.tools.output_of(cid) for cid in state.tools.tool_call_ids()
         }
@@ -994,8 +1602,7 @@ class AdvancedPersonaGenerationManager:
     ) -> None:
         """Record, candidates and result parts first, then ``done`` (W5-6, W5-7)."""
         generation = state.generation
-        assert state.plan is not None and state.report is not None
-        assert state.source is not None
+        assert state.plan is not None
         now = self._clock()
         sha = self._sandbox.library_sha256
         unverified = verification.unverified_segment_ids
@@ -1003,20 +1610,22 @@ class AdvancedPersonaGenerationManager:
             generation=generation,
             plan=state.plan,
             report=state.report,
-            source=state.source,
+            sources=state.sources,
             tool_call_ids=state.tools.tool_call_ids(),
             library_sha256=sha,
             unverified_segment_ids=unverified,
+            document_mode=state.document_mode,
         )
         self._archive.deposit(
             build_record(
                 generation=generation,
                 plan=state.plan,
                 report=state.report,
-                source=state.source,
+                sources=state.sources,
                 calls=state.tools.calls,
                 library_sha256=sha,
                 now=now,
+                document_mode=state.document_mode,
             )
         )
         candidates = build_candidates(
@@ -1038,15 +1647,30 @@ class AdvancedPersonaGenerationManager:
             "analysis_record_id": generation.generation_id,
             "candidate_ids": [c.candidate_id for c in candidates],
         }
+        if state.documents:
+            done_updates["evidence_stats"] = {
+                "extracted": state.evidence_stats.get("extracted", 0),
+                "discarded_unverified": state.evidence_stats.get(
+                    "discarded_unverified", 0
+                ),
+            }
         self._check_item_size(state, done_updates)
+        parts: dict[ResultPartName, list[dict[str, Any]]] = {
+            ResultPartName.PREPARE_REPORTS: (
+                [state.report.to_dict()] if state.report else []
+            ),
+            ResultPartName.DOCUMENT_REPORTS: [
+                r.to_dict() for _, _, r in state.documents
+            ],
+            ResultPartName.SEGMENTS: [s.to_dict() for s in state.segments],
+        }
+        parts[ResultPartName.EVIDENCE] = [
+            e.to_dict() for e in self._trimmed_evidence(state, personas, parts)
+        ]
         self._candidates.put_all(candidates)
         part_counts = self._store.put_result_parts(
             generation.generation_id,
-            {
-                ResultPartName.PREPARE_REPORTS: [state.report.to_dict()],
-                ResultPartName.SEGMENTS: [s.to_dict() for s in state.segments],
-                ResultPartName.EVIDENCE: [e.to_dict() for e in state.evidence],
-            },
+            parts,
             expires_at=generation.expires_at,
             max_part_bytes=config.ADVANCED_GENERATION_PART_MAX_BYTES,
             max_total_bytes=config.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES,
@@ -1065,6 +1689,31 @@ class AdvancedPersonaGenerationManager:
             EventType.RESULT,
             persona_count=len(candidates),
             unverified=len(verification.unverified_segment_ids),
+        )
+
+    @staticmethod
+    def _trimmed_evidence(
+        state: _Run,
+        personas: Sequence[prompts.AdvancedPersonaOutput],
+        other_parts: Mapping[ResultPartName, Sequence[Mapping[str, Any]]],
+    ) -> list[Evidence]:
+        """All evidence, less what no persona cites when over 2MB (BR27.3, NFR5.38)."""
+
+        def size(items: Sequence[Mapping[str, Any]]) -> int:
+            return sum(
+                len(json.dumps(i, ensure_ascii=False).encode("utf-8")) for i in items
+            )
+
+        budget = (
+            int(config.ADVANCED_GENERATION_PARTS_TOTAL_MAX_BYTES)
+            - sum(size(items) for items in other_parts.values())
+            - _PARTS_SLACK_BYTES
+        )
+        return documents.trim_evidence(
+            [*state.evidence, *state.document_evidence],
+            cited={i for p in personas for i in p.evidence_ids},
+            budget=budget,
+            size_of=lambda item: size([item.to_dict()]),
         )
 
     @staticmethod
@@ -1265,7 +1914,50 @@ class AdvancedPersonaGenerationManager:
         """
         generation = self._owned(principal, generation_id)
         events = self._store.read_events(generation_id, after_sequence=after_sequence)
-        return GenerationProgress(generation=generation, events=tuple(events))
+        return GenerationProgress(
+            generation=generation,
+            events=tuple(events),
+            failure_context=self._failure_context(principal, generation),
+        )
+
+    def _failure_context(
+        self, principal: Principal, generation: AdvancedGeneration
+    ) -> dict[str, Any]:
+        """The stored values, plus the owner's file name for ``source_index``.
+
+        U4 BR24.4: the name is looked up again in the owner's own files; it is
+        never stored with the failure. A file gone since shows no name.
+        """
+        context = dict(generation.error_context or {})
+        index = context.get("source_index")
+        if (
+            generation.status is GenerationStatus.FAILED
+            and isinstance(index, int)
+            and not isinstance(index, bool)
+            and 0 <= index < len(generation.source_file_ids)
+        ):
+            names = self._display_names(principal, [generation.source_file_ids[index]])
+            name = names.get(generation.source_file_ids[index])
+            if name:
+                context["filename"] = name
+        return context
+
+    def _display_names(
+        self, principal: Principal, source_file_ids: Sequence[str]
+    ) -> dict[str, str]:
+        """Display names of the owner's files that are still there."""
+        names: dict[str, str] = {}
+        for source_file_id in source_file_ids:
+            try:
+                found = self._catalog.get_owned(
+                    principal.sub,
+                    source_file_id,
+                    not_found_code=ErrorCode.GENERATION_SOURCE_NOT_FOUND,
+                )
+            except CodedError:
+                continue
+            names[source_file_id] = found.display_name
+        return names
 
     def get_result(
         self, principal: Principal, generation_id: str
@@ -1303,6 +1995,11 @@ class AdvancedPersonaGenerationManager:
             ),
             candidates=tuple(candidates),
             unverified_segment_ids=tuple(params.get("unverified_segment_ids") or ()),
+            document_reports=tuple(
+                DocumentReport.from_dict(r)
+                for r in parts[ResultPartName.DOCUMENT_REPORTS]
+            ),
+            source_names=self._display_names(principal, generation.source_file_ids),
         )
 
     def get_record(self, principal: Principal, generation_id: str) -> AnalysisRecord:

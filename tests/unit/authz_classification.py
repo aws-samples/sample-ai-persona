@@ -129,6 +129,8 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
         {
             "get_owned",
             "ready_table",
+            # U4: the owner's ready files of one generation (NFR3.24)
+            "ready_sources",
             "record_url_refresh",
             "begin_inspection",
             "cancel_upload",

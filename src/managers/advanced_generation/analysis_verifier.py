@@ -18,10 +18,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
-from ...models.analysis import AnalysisMethod, Evidence, Segment
+from ...models.analysis import AnalysisMethod, Evidence, EvidenceKind, Segment
 from ...models.errors import ErrorCode
 
 _SHARE_DIGITS = 3
+#: The key items a document-only persona must rest on (U4 BR27.2).
+_KEY_KINDS = frozenset({EvidenceKind.VALUE, EvidenceKind.PAIN, EvidenceKind.GOAL})
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,29 @@ class AnalysisVerifier:
         if any(sid not in known for sid in persona_segment_ids):
             return _fail("persona_without_segment", unverified)
         return VerificationResult(passed=True, unverified_segment_ids=tuple(unverified))
+
+    @staticmethod
+    def verify_documents(
+        *,
+        persona_evidence_ids: Sequence[Sequence[str]],
+        evidence: Sequence[Evidence],
+    ) -> VerificationResult:
+        """Documents only: every persona rests on checked document evidence (BR27.2).
+
+        Each persona's ``evidence_ids`` must point at checked document evidence
+        of the kinds ``value``, ``pain`` and ``goal`` (one or more of each).
+        Missing IDs and dropped evidence do not count.
+
+        Args:
+            persona_evidence_ids: The ``evidence_ids`` of each persona.
+            evidence: The document evidence that passed the quote check.
+        """
+        by_id = {e.id: e for e in evidence if e.is_document}
+        for ids in persona_evidence_ids:
+            kinds = {by_id[i].kind for i in ids if i in by_id}
+            if not _KEY_KINDS <= kinds:
+                return _fail("document_evidence")
+        return VerificationResult(passed=True)
 
     @staticmethod
     def _is_backed(

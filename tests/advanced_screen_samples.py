@@ -22,6 +22,8 @@ from src.models.analysis import (
     AnalysisPlan,
     AnalysisRecord,
     AnalysisRun,
+    DocumentMode,
+    DocumentReport,
     Evidence,
     EvidenceKind,
     PrepareReport,
@@ -31,12 +33,14 @@ from src.models.analysis import (
 from src.models.persona import Persona
 from src.models.persona_candidate import PersonaCandidate
 from src.models.source_file import (
+    DocumentMetadata,
     PartUrl,
     SourceColumn,
     SourceEncoding,
     SourceFile,
     SourceFileStatus,
     SourceFormat,
+    SourceKind,
     SourceMetadata,
     UploadSession,
 )
@@ -273,6 +277,102 @@ def result() -> AdvancedGenerationResult:
             _candidate("cand-2", "田中 健", "S2"),
         ),
         unverified_segment_ids=("S2",),
+    )
+
+
+#: U4: a document and its quoted evidence (HTML in the quote on purpose).
+DOCUMENT_ID = "doc-1"
+
+
+def ready_document(**changes: Any) -> SourceFile:
+    """An inspected PDF of 80MB with its estimate (U4 BR22.3)."""
+    draft = SourceFile.create_new(
+        owner_sub=OWNER,
+        filename="面談記録.pdf",
+        size_bytes=80_000_000,
+        part_count=5,
+        now=NOW,
+        source_file_id=DOCUMENT_ID,
+        kind=SourceKind.DOCUMENT,
+    )
+    return draft.update(
+        status=SourceFileStatus.READY,
+        metadata=DocumentMetadata(
+            format=SourceFormat.PDF,
+            estimated_chars=1_600_000,
+            inspected_bytes=5 * 1024 * 1024,
+            inspected_at=NOW,
+        ),
+        checksum="crc2==",
+    ).update(**changes)
+
+
+DOCUMENT_EVIDENCE = (
+    Evidence.for_document(
+        id="ev-d1-0-0",
+        source_id=DOCUMENT_ID,
+        location="p.12 / 第3章 > 不満",
+        kind=EvidenceKind.PAIN,
+        claim="待ち時間が長いと感じている",
+        quote=f"受付で30分も待たされた {SCRIPT_TEXT}",
+        speaker_attributes={"年代": "30代"},
+        segment_id="S1",
+        assignment_reason="30代の学生の発言",
+    ),
+    Evidence.for_document(
+        id="ev-d1-0-1",
+        source_id=DOCUMENT_ID,
+        location="p.3",
+        kind=EvidenceKind.VALUE,
+        claim="家族との時間を大切にする",
+        quote="週末は家族と過ごす時間を何より大切にしている",
+    ),
+)
+
+
+def document_result() -> AdvancedGenerationResult:
+    """A finished result of a table and a document (U4 BR28.2)."""
+    base = result()
+    candidates = tuple(
+        PersonaCandidate(
+            candidate_id=c.candidate_id,
+            owner_sub=c.owner_sub,
+            generation_id=c.generation_id,
+            persona_payload=c.persona_payload,
+            created_at=c.created_at,
+            expires_at=c.expires_at,
+            generation_context={
+                **(c.generation_context or {}),
+                "evidence_ids": [
+                    *(c.generation_context or {}).get("evidence_ids", []),
+                    "ev-d1-0-0",
+                ],
+            },
+        )
+        for c in base.candidates
+    )
+    return AdvancedGenerationResult(
+        generation=base.generation.update(
+            source_file_ids=(FILE_ID, DOCUMENT_ID),
+            document_mode=DocumentMode.EXTRACTION,
+            evidence_stats={"extracted": 3, "discarded_unverified": 1},
+        ),
+        prepare_reports=base.prepare_reports,
+        segments=base.segments,
+        evidence=base.evidence + DOCUMENT_EVIDENCE,
+        candidates=candidates,
+        unverified_segment_ids=base.unverified_segment_ids,
+        document_reports=(
+            DocumentReport(
+                source_id=DOCUMENT_ID,
+                chars=812_345,
+                chunks=55,
+                headings=12,
+                no_text_pages=(4,),
+                pages=120,
+            ),
+        ),
+        source_names={FILE_ID: "members.csv", DOCUMENT_ID: f"面談{SCRIPT_TEXT}.pdf"},
     )
 
 

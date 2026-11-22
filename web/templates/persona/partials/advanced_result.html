@@ -10,6 +10,16 @@
     readable_until ... 保存していない候補を見られる期限（任意）
     record_url     ... 分析の記録のダイアログの中身の URL
 #}
+{#
+  U4: 文書の根拠 1 件（主張・引用・位置・発言者の属性・セグメントに対応づけた理由）。
+  引用・属性・理由は利用者の文書から来た値なので、自動エスケープのまま出す（NFR4.4。safe フィルタを使わない）。
+#}
+{% macro document_evidence(item) -%}
+<span class="block text-gray-900">{{ item.claim }}</span>
+<q class="block text-gray-700 border-l-2 border-gray-300 pl-2 my-1">{{ item.quote }}</q>
+<span class="block text-xs text-gray-600">{{ result.source_names.get(item.source_id, "文書") }} {{ item.location }}{% if item.speaker_attributes %} / 発言者: {% for k, v in item.speaker_attributes.items() %}{{ k }} {{ v }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}</span>
+{% if item.assignment_reason %}<span class="block text-xs text-gray-600">セグメントに対応づけた理由: {{ item.assignment_reason }}</span>{% endif %}
+{%- endmacro %}
 {% set report = result.prepare_reports[0] if result.prepare_reports else none %}
 {% set unverified = result.unverified_segment_ids %}
 {% set plan = result.generation.plan %}
@@ -23,6 +33,28 @@
     <p data-testid="advanced-result-summary" class="text-sm text-gray-800 mb-3">
         {% if report %}使った行数 {{ "{:,}".format(report.rows_read) }}（除外 {{ "{:,}".format(report.rows_excluded) }}） / {% endif %}手法 {{ method_label(plan.method.value) if plan else "—" }}
     </p>
+    {% set mode = result.generation.document_mode %}
+    {% set stats = result.generation.evidence_stats or {} %}
+    {% if result.document_reports %}
+    {# U4: 使った文書の一覧（ファイル名・ページ数・文字数）。ファイル名は利用者のデータとして自動エスケープで出す #}
+    <table class="w-full text-sm mb-2" data-testid="advanced-documents">
+        <caption class="text-left font-medium text-gray-900 mb-1">使った文書</caption>
+        <thead><tr class="text-left text-gray-600 border-b"><th scope="col" class="py-1 pr-2">ファイル</th><th scope="col" class="py-1 pr-2">ページ数</th><th scope="col" class="py-1">文字数</th></tr></thead>
+        <tbody>
+            {% for doc in result.document_reports %}
+            <tr class="border-b align-top" data-testid="advanced-document-row">
+                <td class="py-1 pr-2">{{ result.source_names.get(doc.source_id, "（削除したファイル）") }}</td>
+                <td class="py-1 pr-2">{% if doc.pages is not none %}{{ doc.pages }} ページ{% if doc.no_text_pages %}（{{ doc.no_text_pages | length }} ページは文字がないため除外）{% endif %}{% else %}—{% endif %}</td>
+                <td class="py-1">{{ "{:,}".format(doc.chars) }} 字</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-sm text-gray-700 mb-3" data-testid="advanced-document-mode">
+        {% if mode and mode.value == "full_text" %}文書の全文を使って作りました{% else %}文書から根拠を取り出して作りました{% endif %}{% if stats.get("discarded_unverified") %}。文書と照合できない根拠 {{ stats.get("discarded_unverified") }} 件を除きました{% endif %}
+    </p>
+    {% endif %}
+    {% if result.segments %}
     <table class="w-full text-sm mb-3" data-testid="advanced-segments">
         <caption class="text-left font-medium text-gray-900 mb-1">セグメント</caption>
         <thead><tr class="text-left text-gray-600 border-b"><th scope="col" class="py-1 pr-2">名前</th><th scope="col" class="py-1 pr-2">構成比</th><th scope="col" class="py-1">特徴</th></tr></thead>
@@ -45,6 +77,19 @@
             {% endfor %}
         </tbody>
     </table>
+    {% endif %}
+    {% set overall = result.evidence | selectattr("quote") | rejectattr("segment_id") | list %}
+    {% if overall %}
+    {# U4 BR28.2: どのセグメントにも合わない文書の根拠 #}
+    <section data-testid="advanced-overall-evidence" aria-labelledby="advanced-overall-title" class="mb-3">
+        <h3 id="advanced-overall-title" class="font-medium text-gray-900 mb-1">全体に対する根拠</h3>
+        <ul class="text-sm space-y-2">
+            {% for item in overall %}
+            <li>{{ document_evidence(item) }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
     {% if unverified %}
     <p data-testid="advanced-unverified-warning" class="text-sm text-amber-900 mb-3">(!) 検証で除外した値があります</p>
     {% endif %}
@@ -76,7 +121,11 @@
                     <summary class="cursor-pointer">根拠（{{ evidence | length }}）</summary>
                     <ul class="mt-1 space-y-1">
                         {% for item in evidence %}
+                        {% if item.quote %}
+                        <li>{{ document_evidence(item) }}</li>
+                        {% else %}
                         <li>{{ item.claim }}{% if item.statistic %} — 統計: 値 {{ item.statistic["value"] }}（対象 {{ item.statistic["population"] }} 行）{% endif %}</li>
+                        {% endif %}
                         {% endfor %}
                     </ul>
                 </details>

@@ -679,3 +679,376 @@ class TestDispatch:
 
         assert result["ok"] is False
         assert result["error"]["code"] == "SOURCE_UNREADABLE"
+
+
+# ---------------------------------------------------------------------------
+# U4: documents (BR24.1〜BR24.6, BR27.1, NFR1.20, NFR1.22, NFR5.39)
+# ---------------------------------------------------------------------------
+
+
+def _prepare_document(
+    lib: ModuleType,
+    workdir: Path,
+    data: bytes,
+    fmt: str,
+    *,
+    source_id: str = "doc1",
+    source_index: int = 0,
+    encoding: str | None = None,
+    chunk_chars: int = 15_000,
+    overlap_chars: int = 500,
+) -> dict[str, Any]:
+    _put_source(workdir, source_id, data)
+    args: dict[str, Any] = {
+        "source_id": source_id,
+        "source_index": source_index,
+        "format": fmt,
+        "chunk_chars": chunk_chars,
+        "overlap_chars": overlap_chars,
+        "progress_id": "p1",
+    }
+    if encoding:
+        args["encoding"] = encoding
+    return lib.dispatch("prepare_document", args, str(workdir))
+
+
+def _chunk(
+    lib: ModuleType,
+    workdir: Path,
+    index: int,
+    *,
+    source_id: str = "doc1",
+    offset: int = 0,
+    max_chars: int = 100_000,
+) -> dict[str, Any]:
+    return lib.dispatch(
+        "document_chunk",
+        {
+            "source_id": source_id,
+            "index": index,
+            "offset": offset,
+            "max_chars": max_chars,
+        },
+        str(workdir),
+    )
+
+
+def _all_chunks(lib: ModuleType, workdir: Path, count: int, **kw: Any) -> list[str]:
+    return [_chunk(lib, workdir, i, **kw)["value"]["text"] for i in range(count)]
+
+
+class TestPrepareDocument:
+    def test_a_blank_page_is_left_out_and_the_rest_goes_on(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        result = _prepare_document(
+            lib, tmp_path, pdf_bytes(["First page text", "", "Third page"]), "pdf"
+        )
+
+        value = result["value"]
+        assert value["pages"] == 3
+        assert value["no_text_pages"] == [2]
+        assert value["chunks"] == 1
+        assert value["chars"] > 0
+        text = _chunk(lib, tmp_path, 0)["value"]
+        assert "First page text" in text["text"] and "Third page" in text["text"]
+        assert (text["page_from"], text["page_to"]) == (1, 3)
+        progress = json.loads((tmp_path / "progress" / "p1.json").read_text())
+        assert progress["pages"] == 3
+
+    def test_every_page_blank_is_no_text(self, lib: ModuleType, tmp_path: Path) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        result = _prepare_document(
+            lib, tmp_path, pdf_bytes(["", ""]), "pdf", source_index=3
+        )
+
+        assert result["ok"] is False
+        assert result["error"] == {
+            "code": "DOCUMENT_NO_TEXT",
+            "context": {"source_index": 3},
+        }
+
+    def test_an_encrypted_pdf_is_refused(self, lib: ModuleType, tmp_path: Path) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        result = _prepare_document(
+            lib, tmp_path, pdf_bytes(["secret"], encrypted=True), "pdf", source_index=1
+        )
+
+        assert result["error"] == {
+            "code": "DOCUMENT_ENCRYPTED",
+            "context": {"source_index": 1},
+        }
+
+    def test_docx_chunks_are_cut_at_headings(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        from tests.document_fixtures import docx_bytes
+
+        body_a = "Alpha body sentence. " * 400  # about 8,400 characters
+        body_b = "Beta body sentence. " * 400
+        data = docx_bytes([(1, "Part A"), body_a, (2, "Part B"), body_b])
+
+        result = _prepare_document(lib, tmp_path, data, "docx")
+
+        value = result["value"]
+        assert value["headings"] == 2
+        assert value["chunks"] == 2
+        assert "pages" not in value and value["no_text_pages"] == []
+        first, second = _all_chunks(lib, tmp_path, 2)
+        assert first.startswith("# Part A")
+        assert "Part B" not in first
+        assert second[500:].startswith("## Part B")
+        assert second[:500] == first[-500:]
+        assert _chunk(lib, tmp_path, 1)["value"]["heading_path"] == ["Part A", "Part B"]
+
+    def test_headings_of_a_japanese_word_are_read(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        from tests.document_fixtures import docx_bytes
+
+        data = docx_bytes([(1, "第1章"), "本文です。"], japanese_style_ids=True)
+
+        result = _prepare_document(lib, tmp_path, data, "docx")
+
+        assert result["value"]["headings"] == 1
+        assert _chunk(lib, tmp_path, 0)["value"]["text"].startswith("# 第1章")
+
+    def test_a_long_body_without_breaks_is_cut_by_characters_with_overlap(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        text = "あ" * 20_000 + "い" * 20_000
+
+        result = _prepare_document(lib, tmp_path, text.encode("utf-8"), "txt")
+
+        chunks = _all_chunks(lib, tmp_path, result["value"]["chunks"])
+        assert result["value"]["chunks"] == 3
+        assert [len(c) for c in chunks] == [15_000, 15_000, 11_000]
+        assert chunks[1][:500] == chunks[0][-500:]
+        assert result["value"]["chars"] == 40_000
+
+    def test_paragraphs_are_preferred_to_a_character_cut(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        paragraphs = ["段落" + str(i) + "。" + "う" * 3_990 for i in range(6)]
+        text = "\n\n".join(paragraphs)
+
+        result = _prepare_document(lib, tmp_path, text.encode("utf-8"), "txt")
+
+        first = _all_chunks(lib, tmp_path, result["value"]["chunks"])[0]
+        assert first.rstrip().endswith("う")
+        assert first.count("段落") == 3
+
+    def test_pages_are_preferred_to_paragraphs(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        from tests.document_fixtures import pdf_bytes
+
+        page = "\n".join(["Line of the page number one."] * 120)  # about 3,500
+        pages = [page.replace("one", str(i)) for i in range(6)]
+
+        _prepare_document(lib, tmp_path, pdf_bytes(pages), "pdf", chunk_chars=8_000)
+
+        first = _chunk(lib, tmp_path, 0)["value"]
+        assert first["page_to"] == 2
+        assert first["text"].rstrip().endswith("number 1.")
+
+    @pytest.mark.parametrize(
+        ("encoding", "payload"),
+        [
+            ("utf-8", "面談の記録"),
+            ("cp932", "面談の記録"),
+            ("undetermined", "面談の記録"),
+        ],
+    )
+    def test_text_is_read_in_its_encoding(
+        self, lib: ModuleType, tmp_path: Path, encoding: str, payload: str
+    ) -> None:
+        raw_encoding = "cp932" if encoding in ("cp932", "undetermined") else "utf-8"
+        data = (payload + "\n本文です。").encode(raw_encoding)
+
+        result = _prepare_document(lib, tmp_path, data, "txt", encoding=encoding)
+
+        assert result["ok"] is True
+        assert payload in _chunk(lib, tmp_path, 0)["value"]["text"]
+
+    def test_markdown_headings_are_counted(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = "# 概要\n本文\n\n## 不満\n待ち時間が長い\n".encode("utf-8")
+
+        result = _prepare_document(lib, tmp_path, data, "md", encoding="utf-8")
+
+        assert result["value"]["headings"] == 2
+
+    def test_empty_text_is_no_text(self, lib: ModuleType, tmp_path: Path) -> None:
+        result = _prepare_document(lib, tmp_path, b"  \n\n \n", "txt", source_index=2)
+
+        assert result["error"]["code"] == "DOCUMENT_NO_TEXT"
+        assert result["error"]["context"] == {"source_index": 2}
+
+    def test_a_docx_that_is_not_a_zip_is_unreadable(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        result = _prepare_document(lib, tmp_path, b"not a zip", "docx", source_index=4)
+
+        assert result["error"]["code"] == "SOURCE_UNREADABLE"
+        assert result["error"]["context"] == {"source_index": 4}
+
+    def test_running_out_of_memory_is_reported(
+        self, lib: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise MemoryError()
+
+        monkeypatch.setattr(lib, "_document_blocks", boom)
+
+        result = _prepare_document(lib, tmp_path, b"text", "txt")
+
+        assert result["error"]["code"] == "OUT_OF_MEMORY"
+
+    def test_a_reader_failure_keeps_only_the_type_name(
+        self, lib: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def broken(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("secret body text")
+
+        monkeypatch.setattr(lib, "_document_blocks", broken)
+
+        result = _prepare_document(lib, tmp_path, b"text", "txt")
+
+        assert "secret" not in json.dumps(result)
+        assert result["ok"] is False
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"chunk_chars": 0},
+            {"overlap_chars": 15_000},
+            {"format": "csv"},
+            {"source_index": -1},
+        ],
+    )
+    def test_bad_arguments_are_refused(
+        self, lib: ModuleType, tmp_path: Path, bad: dict[str, Any]
+    ) -> None:
+        _put_source(tmp_path, "doc1", b"text")
+        args: dict[str, Any] = {
+            "source_id": "doc1",
+            "source_index": 0,
+            "format": "txt",
+            "chunk_chars": 15_000,
+            "overlap_chars": 500,
+            **bad,
+        }
+
+        result = lib.dispatch("prepare_document", args, str(tmp_path))
+
+        assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+
+class TestDocumentChunk:
+    def test_a_chunk_is_handed_over_in_pieces(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare_document(lib, tmp_path, ("え" * 7_000).encode("utf-8"), "txt")
+
+        first = _chunk(lib, tmp_path, 0, max_chars=3_000)["value"]
+        second = _chunk(lib, tmp_path, 0, offset=first["next_offset"], max_chars=3_000)[
+            "value"
+        ]
+        last = _chunk(lib, tmp_path, 0, offset=second["next_offset"], max_chars=3_000)[
+            "value"
+        ]
+
+        assert len(first["text"]) == 3_000 and first["next_offset"] == 3_000
+        assert second["next_offset"] == 6_000
+        assert len(last["text"]) == 1_000 and last["next_offset"] is None
+        assert first["chunks"] == 1
+
+    def test_an_index_out_of_range_is_refused(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare_document(lib, tmp_path, b"short text", "txt")
+
+        assert _chunk(lib, tmp_path, 5)["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_a_document_not_prepared_is_unreadable(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        assert _chunk(lib, tmp_path, 0)["error"]["code"] == "SOURCE_UNREADABLE"
+
+
+class TestVerifyQuotes:
+    def _verify(
+        self, lib: ModuleType, workdir: Path, quotes: list[str], **kw: Any
+    ) -> Any:
+        return lib.dispatch(
+            "verify_quotes",
+            {
+                "source_id": kw.get("source_id", "doc1"),
+                "quotes": quotes,
+                "min_chars": 10,
+            },
+            str(workdir),
+        )
+
+    def test_quotes_match_after_normalising(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        text = "受付で３０分も\n待たされたのが不満です。ソフト­ハイフン入りの文章です。"
+        _prepare_document(lib, tmp_path, text.encode("utf-8"), "txt")
+
+        result = self._verify(
+            lib,
+            tmp_path,
+            [
+                "受付で30分も待たされた",  # NFKC and the line break
+                "受付で 30 分も 待たされたのが",  # spaces
+                "ソフトハイフン入りの文章です",  # U+00AD removed
+                "<​data の中にない引用文です",  # not in the text
+                "待たされた",  # under 10 characters
+            ],
+        )
+
+        assert result["value"]["found"] == [True, True, True, False, False]
+
+    def test_a_quote_across_the_overlap_is_found(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        text = "お" * 14_990 + "境目をまたぐ引用の文章" + "か" * 10_000
+        _prepare_document(lib, tmp_path, text.encode("utf-8"), "txt")
+
+        assert self._verify(lib, tmp_path, ["お境目をまたぐ引用の文章か"])["value"][
+            "found"
+        ] == [True]
+
+    def test_a_quote_of_another_document_is_not_found(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare_document(
+            lib, tmp_path, "一つ目の文書にだけある文章です".encode(), "txt"
+        )
+        _prepare_document(
+            lib,
+            tmp_path,
+            "二つ目の文書にだけある文章です".encode(),
+            "txt",
+            source_id="doc2",
+        )
+
+        assert self._verify(
+            lib, tmp_path, ["一つ目の文書にだけある文章"], source_id="doc2"
+        )["value"]["found"] == [False]
+
+    def test_more_than_fifty_quotes_are_refused(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        _prepare_document(lib, tmp_path, b"text text text text", "txt")
+
+        result = self._verify(lib, tmp_path, ["x" * 10] * 51)
+
+        assert result["error"]["code"] == "INVALID_ARGUMENT"

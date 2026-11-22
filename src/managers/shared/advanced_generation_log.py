@@ -48,6 +48,36 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "memory_limit",
         }
     ),
+    # U4 (observability-design.md NFR6.13, NFR6.14, NFR7.3): counts, time and
+    # tokens only. No file name, heading, body or exception text.
+    "advanced_generation.document_prepared": frozenset(
+        {
+            "generation_id",
+            "status",
+            "error_code",
+            "document_index",
+            "format",
+            "pages",
+            "chars",
+            "chunks",
+            "no_text_pages",
+            "elapsed_ms",
+        }
+    ),
+    "advanced_generation.document_mode": frozenset(
+        {"generation_id", "mode", "total_chars", "chunks"}
+    ),
+    "advanced_generation.evidence_extracted": frozenset(
+        {
+            "generation_id",
+            "chunks",
+            "extracted",
+            "discarded_unverified",
+            "elapsed_ms",
+            "evidence_input_tokens",
+            "evidence_output_tokens",
+        }
+    ),
     "advanced_generation.upload_completed": frozenset(
         {
             "source_file_id",
@@ -56,6 +86,9 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "error_code",
             "encoding",
             "estimated_rows",
+            # U4: the kind and the estimate of a document (no file name)
+            "kind",
+            "estimated_chars",
         }
     ),
     # U2 (observability-design.md §1): IDs, states, codes, counts, sizes and

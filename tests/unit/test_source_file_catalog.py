@@ -16,11 +16,13 @@ from src.managers.components.source_file_catalog import SourceFileCatalog
 from src.models.analysis import AnalysisRecord
 from src.models.errors import CodedError, ErrorCode
 from src.models.source_file import (
+    DocumentMetadata,
     SourceAvailabilityState,
     SourceColumn,
     SourceFile,
     SourceFileStatus,
     SourceFormat,
+    SourceKind,
     SourceMetadata,
 )
 from src.services.s3_service import S3Service, S3ServiceError
@@ -119,6 +121,102 @@ class TestReadyTable:
 
         with raises_code(_CallerError, ErrorCode.GENERATION_SOURCE_NOT_FOUND):
             catalog.ready_table(OWNER, "x")
+
+
+def _document(**changes) -> SourceFile:
+    base = SourceFile.create_new(
+        owner_sub=OWNER,
+        filename=changes.pop("filename", "a.pdf"),
+        size_bytes=100,
+        part_count=1,
+        now=NOW - timedelta(hours=1),
+        kind=SourceKind.DOCUMENT,
+    )
+    status = changes.pop("status", SourceFileStatus.READY)
+    metadata = (
+        DocumentMetadata(
+            format=SourceFormat.PDF,
+            estimated_chars=1000,
+            inspected_bytes=100,
+            inspected_at=NOW,
+        )
+        if status is SourceFileStatus.READY
+        else None
+    )
+    return base.update(status=status, metadata=metadata, **changes)
+
+
+class TestReadySources:
+    """U4 BR23.1: documents only (1〜10), or one table with documents."""
+
+    def _catalog_of(self, *files: SourceFile) -> SourceFileCatalog:
+        catalog, store = _catalog()
+        by_id = {f.source_file_id: f for f in files}
+        store.get_for_owner.side_effect = lambda i, owner: (
+            by_id.get(i) if owner == OWNER else None
+        )
+        return catalog
+
+    def test_documents_only_are_used_in_order(self) -> None:
+        docs = [_document() for _ in range(3)]
+        catalog = self._catalog_of(*docs)
+
+        found = catalog.ready_sources(OWNER, [d.source_file_id for d in docs])
+
+        assert [f.source_file_id for f in found] == [d.source_file_id for d in docs]
+
+    def test_one_table_with_documents_is_used(self) -> None:
+        table, doc = _file(), _document()
+        catalog = self._catalog_of(table, doc)
+
+        found = catalog.ready_sources(OWNER, [doc.source_file_id, table.source_file_id])
+
+        assert len(found) == 2
+
+    def test_a_table_alone_is_used_as_before(self) -> None:
+        table = _file()
+        catalog = self._catalog_of(table)
+
+        assert catalog.ready_sources(OWNER, [table.source_file_id]) == [table]
+
+    def test_two_tables_are_refused_until_u6(self) -> None:
+        tables = [_file(), _file()]
+        catalog = self._catalog_of(*tables)
+
+        with raises_code(
+            _CallerError, ErrorCode.UPLOAD_SOURCE_INVALID, reason="tables"
+        ):
+            catalog.ready_sources(OWNER, [t.source_file_id for t in tables])
+
+    def test_nothing_chosen_is_refused(self) -> None:
+        with raises_code(_CallerError, ErrorCode.UPLOAD_SOURCE_INVALID):
+            self._catalog_of().ready_sources(OWNER, [])
+
+    def test_more_than_ten_is_refused(self) -> None:
+        docs = [_document() for _ in range(11)]
+        catalog = self._catalog_of(*docs)
+
+        with raises_code(_CallerError, ErrorCode.UPLOAD_SOURCE_INVALID):
+            catalog.ready_sources(OWNER, [d.source_file_id for d in docs])
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            lambda: _document(status=SourceFileStatus.INSPECTING),
+            lambda: _document(owner_sub="someone-else"),
+            lambda: _document(status=SourceFileStatus.ERROR),
+        ],
+    )
+    def test_one_unusable_file_refuses_all(self, bad) -> None:
+        good, other = _document(), bad()
+        catalog, store = _catalog()
+        by_id = {good.source_file_id: good, other.source_file_id: other}
+        store.get_for_owner.side_effect = lambda i, owner: (
+            by_id[i] if by_id[i].owner_sub == owner else None
+        )
+
+        with raises_code(_CallerError, ErrorCode.GENERATION_SOURCE_NOT_FOUND):
+            catalog.ready_sources(OWNER, [good.source_file_id, other.source_file_id])
 
 
 class TestInspectionWrites:

@@ -607,3 +607,70 @@ class TestTableAnalysisDepthWording:
 
         assert "80 列" in only_columns and "行・" not in only_columns
         assert nothing == error_messages._CATALOG[ErrorCode.GENERATION_CAPACITY]
+
+
+class TestDocumentWording:
+    """U4 (BR21.2, BR22, BR24.4, BR25.1): the four new codes and their values."""
+
+    @staticmethod
+    def _message(code: ErrorCode, **context: object) -> str:
+        return user_message_for(CodedError("diag", code=code, context=context))
+
+    @pytest.mark.parametrize(
+        ("name", "kind"),
+        [
+            ("SOURCE_NOT_A_DOCUMENT", ErrorKind.VALIDATION),
+            ("DOCUMENT_ENCRYPTED", ErrorKind.VALIDATION),
+            ("DOCUMENT_NO_TEXT", ErrorKind.VALIDATION),
+            ("GENERATION_SOURCE_TOO_LARGE", ErrorKind.CAPACITY),
+        ],
+    )
+    def test_kinds(self, name, kind):
+        assert ErrorCode[name].kind is kind
+
+    def test_a_legacy_word_file_is_told_to_be_saved_as_docx(self):
+        legacy = self._message(ErrorCode.UPLOAD_SOURCE_INVALID, reason="legacy_word")
+        other = self._message(ErrorCode.UPLOAD_SOURCE_INVALID, reason="format")
+
+        assert ".docx" in legacy
+        assert legacy != other
+
+    def test_no_text_names_the_users_file(self):
+        message = self._message(
+            ErrorCode["DOCUMENT_NO_TEXT"], source_index=1, filename="面談.pdf"
+        )
+
+        assert "面談.pdf" in message
+
+    def test_no_text_without_a_file_name_still_reads(self):
+        message = self._message(ErrorCode["DOCUMENT_NO_TEXT"], source_index=1)
+
+        assert message == error_messages._CATALOG[ErrorCode["DOCUMENT_NO_TEXT"]]
+
+    def test_encrypted_names_the_file_when_known(self):
+        named = self._message(ErrorCode["DOCUMENT_ENCRYPTED"], filename="a.pdf")
+        plain = self._message(ErrorCode["DOCUMENT_ENCRYPTED"])
+
+        assert "a.pdf" in named
+        assert plain == error_messages._CATALOG[ErrorCode["DOCUMENT_ENCRYPTED"]]
+
+    def test_too_large_shows_the_settled_and_the_limit(self):
+        message = self._message(
+            ErrorCode["GENERATION_SOURCE_TOO_LARGE"],
+            total_chars=2_500_000,
+            max_chars=2_000_000,
+        )
+
+        assert "2,500,000" in message and "2,000,000" in message
+
+    @pytest.mark.parametrize("bad", ["many", -1, True, None])
+    def test_too_large_ignores_unusable_numbers(self, bad):
+        message = self._message(
+            ErrorCode["GENERATION_SOURCE_TOO_LARGE"],
+            total_chars=bad,
+            max_chars=2_000_000,
+        )
+
+        assert (
+            message == error_messages._CATALOG[ErrorCode["GENERATION_SOURCE_TOO_LARGE"]]
+        )

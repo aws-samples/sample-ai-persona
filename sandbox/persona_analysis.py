@@ -24,17 +24,22 @@ the prepared table, ``progress/<progress_id>.json`` the progress of a command.
 from __future__ import annotations
 
 import base64
+import bisect
 import codecs
 import datetime as _dt
 import decimal
+import io
 import json
 import os
 import re
 import sys
 import threading
+import unicodedata
 import urllib.error
 import urllib.request
 import warnings
+import xml.etree.ElementTree as ET
+import zipfile
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: Version of the fixed preparation; recorded in PrepareReport (BR4.4).
@@ -828,6 +833,487 @@ def _fit(matrix: Any, k: int, seed: int) -> Callable[[Any], Any]:
 
 
 # ---------------------------------------------------------------------------
+# documents (U4: BR24.1〜BR24.6, BR27.1, NFR1.20, NFR1.22, NFR5.39)
+# ---------------------------------------------------------------------------
+#
+# Layout under ``documents/<source_id>/``: ``chunks/<index>.txt`` the text of
+# each chunk, ``index.json`` the chunk positions (pages, heading path) and the
+# settled character count, ``normalized.txt`` the whole text normalised for
+# the quote check. The limits (chunk size, overlap, the shortest quote) come
+# as arguments: this file never reads the app's settings (NFR8.6).
+#
+# PDF pages are read with pdfminer.six and a docx with the standard library
+# (zipfile + ElementTree). Both ship with Code Interpreter and with the app
+# (U4 Step 1: markitdown cannot read a docx in the session, and pypdf is not
+# in the app, so the same code runs in both places and is tested in process).
+
+_DOCUMENT_FORMATS = frozenset({"pdf", "docx", "txt", "md"})
+_MAX_QUOTES = 50
+_MD_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$")
+_STYLE_HEADING = re.compile(r"^heading\s*([1-9])$", re.IGNORECASE)
+_BLANK_LINES = re.compile(r"\n[ \t\r\f\v]*\n")
+#: Removed before quotes are compared (with every white space, BR27.1): the
+#: soft hyphen, the zero-width space (``wrap_untrusted_data`` puts one in
+#: ``<data``) and the zero-width no-break space.
+_NOT_COMPARED = frozenset({"­", "​", "﻿"})
+_WORD = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+class DocumentError(AnalysisError):
+    """A document the preparation refuses; the context holds ``source_index``."""
+
+
+class _Block:
+    """One piece of a document: a heading, a paragraph, or the start of a page."""
+
+    __slots__ = ("kind", "text", "level", "page")
+
+    def __init__(
+        self, kind: str, text: str = "", level: int = 0, page: int = 0
+    ) -> None:
+        self.kind = kind
+        self.text = text
+        self.level = level
+        self.page = page
+
+
+class _Document:
+    """The blocks of one document and, for a PDF, its page counts."""
+
+    def __init__(self) -> None:
+        self.blocks: List[_Block] = []
+        self.pages: Optional[int] = None
+        self.no_text_pages: List[int] = []
+
+
+def _int_arg(args: Dict[str, Any], name: str, low: int, high: int) -> int:
+    value = args.get(name)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not low <= value <= high
+    ):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": name})
+    return value
+
+
+def _document_dir(workdir: str, source_id: Any) -> str:
+    return _inside(workdir, "documents", _checked_id(source_id, "source_id"))
+
+
+def _paragraphs(text: str) -> List[str]:
+    return [p.strip() for p in _BLANK_LINES.split(text) if p.strip()]
+
+
+def _looks_encrypted(error: BaseException) -> bool:
+    name = type(error).__name__
+    return "Password" in name or "Encrypt" in name
+
+
+def _read_pdf(path: str, document: _Document, on_page: Callable[[int], None]) -> None:
+    """Page by page with pdfminer; pages without text are left out (BR24.3)."""
+    try:
+        from pdfminer.converter import TextConverter
+        from pdfminer.layout import LAParams
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
+        from pdfminer.pdfpage import PDFPage
+        from pdfminer.pdfparser import PDFParser
+    except ImportError:
+        raise AnalysisError("SOURCE_UNREADABLE") from None
+
+    with open(path, "rb") as f:
+        try:
+            pdf = PDFDocument(PDFParser(f))
+        except MemoryError:
+            raise
+        except Exception as e:  # noqa: BLE001 - the text may hold data
+            if _looks_encrypted(e):
+                raise AnalysisError("DOCUMENT_ENCRYPTED") from None
+            raise AnalysisError("SOURCE_UNREADABLE") from None
+        # BR24.6, NFR1.20: refused even when an empty password opens it
+        if getattr(pdf, "encryption", None):
+            raise AnalysisError("DOCUMENT_ENCRYPTED")
+        resources = PDFResourceManager()
+        pages = 0
+        for number, page in enumerate(PDFPage.create_pages(pdf), start=1):
+            out = io.StringIO()
+            device = TextConverter(resources, out, laparams=LAParams())
+            try:
+                PDFPageInterpreter(resources, device).process_page(page)
+            finally:
+                device.close()
+            pages = number
+            text = out.getvalue().replace("\x0c", "")
+            paragraphs = _paragraphs(text)
+            if not paragraphs:
+                document.no_text_pages.append(number)
+            else:
+                document.blocks.append(_Block("page", page=number))
+                document.blocks.extend(_Block("para", p) for p in paragraphs)
+            on_page(number)
+        document.pages = pages
+
+
+def _docx_heading_styles(archive: Any) -> Dict[str, int]:
+    """Style ID -> heading level, by name (``heading 1``) or outline level."""
+
+    if "word/styles.xml" not in archive.namelist():
+        return {}
+    root = ET.fromstring(archive.read("word/styles.xml"))
+    levels: Dict[str, int] = {}
+    for style in root.iter(_WORD + "style"):
+        style_id = style.get(_WORD + "styleId")
+        if not style_id:
+            continue
+        name_el = style.find(_WORD + "name")
+        name = (name_el.get(_WORD + "val") if name_el is not None else "") or ""
+        match = _STYLE_HEADING.match(name.strip())
+        if match:
+            levels[style_id] = int(match.group(1))
+        elif name.strip().lower() == "title":
+            levels[style_id] = 1
+        outline = style.find(f"{_WORD}pPr/{_WORD}outlineLvl")
+        if style_id not in levels and outline is not None:
+            value = outline.get(_WORD + "val", "")
+            if value.isdigit() and int(value) < 9:
+                levels[style_id] = int(value) + 1
+    return levels
+
+
+def _paragraph_text(paragraph: Any) -> str:
+    parts: List[str] = []
+    for node in paragraph.iter():
+        if node.tag == _WORD + "t" and node.text:
+            parts.append(node.text)
+        elif node.tag == _WORD + "tab":
+            parts.append("\t")
+        elif node.tag in (_WORD + "br", _WORD + "cr"):
+            parts.append("\n")
+    return "".join(parts)
+
+
+def _read_docx(path: str, document: _Document) -> None:
+    """Paragraphs and headings of ``word/document.xml``, read as a stream."""
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            styles = _docx_heading_styles(archive)
+            with archive.open("word/document.xml") as f:
+                for _event, element in ET.iterparse(f, events=("end",)):
+                    if element.tag != _WORD + "p":
+                        continue
+                    text = _paragraph_text(element).strip()
+                    style = element.find(f"{_WORD}pPr/{_WORD}pStyle")
+                    level = styles.get(
+                        style.get(_WORD + "val", "") if style is not None else "", 0
+                    )
+                    element.clear()
+                    if not text:
+                        continue
+                    if level:
+                        document.blocks.append(_Block("heading", text, level=level))
+                    else:
+                        document.blocks.append(_Block("para", text))
+    except MemoryError:
+        raise
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, OSError, ValueError):
+        raise AnalysisError("SOURCE_UNREADABLE") from None
+
+
+def _decode_text(data: bytes, encoding: str) -> str:
+    if encoding in ("utf-8", "utf-8-sig"):
+        return data.decode("utf-8-sig", errors="replace")
+    if encoding in ("cp932", "euc-jp"):
+        return data.decode(encoding, errors="replace")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp932", errors="replace")
+
+
+def _read_text(path: str, document: _Document, encoding: str, markdown: bool) -> None:
+    """Paragraphs split at blank lines; ``#`` lines are headings in Markdown."""
+    with open(path, "rb") as f:
+        text = (
+            _decode_text(f.read(), encoding).replace("\r\n", "\n").replace("\r", "\n")
+        )
+    lines: List[str] = []
+
+    def flush() -> None:
+        body = "\n".join(lines).strip()
+        lines.clear()
+        if body:
+            document.blocks.append(_Block("para", body))
+
+    for line in text.split("\n"):
+        heading = _MD_HEADING.match(line) if markdown else None
+        if heading:
+            flush()
+            document.blocks.append(
+                _Block("heading", heading.group(2).strip(), level=len(heading.group(1)))
+            )
+        elif line.strip():
+            lines.append(line)
+        else:
+            flush()
+    flush()
+
+
+def _document_blocks(
+    path: str, fmt: str, encoding: str, on_page: Callable[[int], None]
+) -> _Document:
+    """Read one brought-in document into blocks (BR24.1). OCR is never tried."""
+    document = _Document()
+    if fmt == "pdf":
+        _read_pdf(path, document, on_page)
+    elif fmt == "docx":
+        _read_docx(path, document)
+    else:
+        _read_text(path, document, encoding, markdown=fmt == "md")
+    return document
+
+
+class _Layout:
+    """The joined text and where headings, pages and paragraphs start."""
+
+    def __init__(self, document: _Document) -> None:
+        pieces: List[str] = []
+        length = 0
+        self.headings: List[Tuple[int, int, str]] = []
+        self.pages: List[Tuple[int, int]] = []
+        self.paragraphs: List[int] = []
+        pending_page: Optional[int] = None
+        for block in document.blocks:
+            if block.kind == "page":
+                pending_page = block.page
+                continue
+            if pieces:
+                pieces.append("\n\n")
+                length += 2
+            offset = length
+            if pending_page is not None:
+                self.pages.append((offset, pending_page))
+                pending_page = None
+            if block.kind == "heading":
+                self.headings.append((offset, block.level, block.text))
+                text = "#" * block.level + " " + block.text
+            else:
+                text = block.text
+            self.paragraphs.append(offset)
+            pieces.append(text)
+            length += len(text)
+        self.text = "".join(pieces)
+
+    def page_at(self, offset: int) -> Optional[int]:
+        if not self.pages:
+            return None
+        index = bisect.bisect_right([p[0] for p in self.pages], offset) - 1
+        return self.pages[max(index, 0)][1]
+
+    def heading_path(self, offset: int) -> List[str]:
+        stack: List[Tuple[int, str]] = []
+        for start, level, title in self.headings:
+            if start > offset:
+                break
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, title))
+        return [title for _level, title in stack]
+
+    def split(self, chunk_chars: int, overlap: int) -> List[Tuple[int, int, int]]:
+        """``(start, end, new_start)`` of each chunk (BR24.2).
+
+        A chunk ends before the last heading that fits, else the last page,
+        else the last paragraph, else at ``chunk_chars``; the next one starts
+        ``overlap`` characters before that end.
+        """
+
+        cuts = (
+            [h[0] for h in self.headings],
+            [p[0] for p in self.pages],
+            self.paragraphs,
+        )
+        length = len(self.text)
+        chunks: List[Tuple[int, int, int]] = []
+        start = new_start = 0
+        while True:
+            if length - start <= chunk_chars:
+                chunks.append((start, length, new_start))
+                return chunks
+            limit = start + chunk_chars
+            end = limit
+            for offsets in cuts:
+                index = bisect.bisect_right(offsets, limit) - 1
+                if index >= 0 and offsets[index] > start + overlap:
+                    end = offsets[index]
+                    break
+            chunks.append((start, end, new_start))
+            new_start = end
+            start = end - overlap
+
+
+def _normalize_for_quotes(text: str) -> str:
+    """NFKC, then no white space, soft hyphen or zero-width space (BR27.1)."""
+
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(
+        ch for ch in normalized if not ch.isspace() and ch not in _NOT_COMPARED
+    )
+
+
+def prepare_document(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Turn one document into chunks inside the session (BR24.1〜BR24.6).
+
+    Args: ``source_id``, ``source_index`` (its place in the generation),
+    ``format`` (pdf / docx / txt / md), ``encoding`` (txt / md),
+    ``chunk_chars``, ``overlap_chars`` and ``progress_id``.
+    Returns a DocumentReport (contract C8): ``source_id``, ``chars``,
+    ``chunks``, ``headings``, ``no_text_pages`` and, for a PDF, ``pages``.
+    """
+    source_id = _checked_id(args.get("source_id"), "source_id")
+    source_index = _int_arg(args, "source_index", 0, 1000)
+    fmt = args.get("format")
+    if fmt not in _DOCUMENT_FORMATS:
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "format"})
+    chunk_chars = _int_arg(args, "chunk_chars", 1, 1_000_000)
+    overlap = _int_arg(args, "overlap_chars", 0, chunk_chars - 1)
+    encoding = str(args.get("encoding") or "undetermined")
+    progress_id = args.get("progress_id")
+    if progress_id is not None:
+        progress_id = _checked_id(progress_id, "progress_id")
+    src = _source_path(workdir, source_id)
+    context = {"source_index": source_index}
+    if not os.path.isfile(src) or os.path.getsize(src) == 0:
+        raise DocumentError("SOURCE_UNREADABLE", context)
+
+    def on_page(pages: int) -> None:
+        _write_progress(workdir, progress_id, phase="pages", pages=pages)
+
+    try:
+        document = _document_blocks(src, str(fmt), encoding, on_page)
+        layout = _Layout(document)
+    except MemoryError:
+        raise AnalysisError("OUT_OF_MEMORY", context) from None
+    except AnalysisError as e:
+        if e.code in ("DOCUMENT_ENCRYPTED", "SOURCE_UNREADABLE"):
+            raise DocumentError(e.code, context) from None
+        raise
+    except Exception:  # noqa: BLE001 - a reader failure; its text may hold data
+        raise DocumentError("SOURCE_UNREADABLE", context) from None
+    if not layout.text.strip():
+        raise DocumentError("DOCUMENT_NO_TEXT", context)
+
+    folder = _document_dir(workdir, source_id)
+    os.makedirs(os.path.join(folder, "chunks"), exist_ok=True)
+    index: List[Dict[str, Any]] = []
+    for number, (start, end, new_start) in enumerate(
+        layout.split(chunk_chars, overlap)
+    ):
+        with open(
+            os.path.join(folder, "chunks", f"{number}.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(layout.text[start:end])
+        index.append(
+            {
+                "page_from": layout.page_at(start),
+                "page_to": layout.page_at(max(end - 1, start)),
+                "heading_path": layout.heading_path(new_start),
+            }
+        )
+    with open(os.path.join(folder, "index.json"), "w", encoding="utf-8") as f:
+        json.dump({"chunks": index, "chars": len(layout.text)}, f, ensure_ascii=True)
+    with open(os.path.join(folder, "normalized.txt"), "w", encoding="utf-8") as f:
+        f.write(_normalize_for_quotes(layout.text))
+    report: Dict[str, Any] = {
+        "source_id": source_id,
+        "chars": len(layout.text),
+        "chunks": len(index),
+        "headings": len(layout.headings),
+        "no_text_pages": list(document.no_text_pages),
+    }
+    if document.pages is not None:
+        report["pages"] = document.pages
+    _write_progress(
+        workdir,
+        progress_id,
+        phase="finished",
+        pages=document.pages,
+        chars=report["chars"],
+        chunks=report["chunks"],
+    )
+    return report
+
+
+def _read_index(folder: str) -> Dict[str, Any]:
+    path = os.path.join(folder, "index.json")
+    if not os.path.isfile(path):
+        raise AnalysisError("SOURCE_UNREADABLE")
+    with open(path, encoding="utf-8") as f:
+        return dict(json.load(f))
+
+
+def document_chunk(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Part of one chunk, ``max_chars`` at a time (NFR5.39).
+
+    Args: ``source_id``, ``index``, ``offset`` and ``max_chars``.
+    Returns ``{index, chunks, text, next_offset, page_from, page_to,
+    heading_path}``; ``next_offset`` is ``None`` at the end of the chunk.
+    """
+    folder = _document_dir(workdir, args.get("source_id"))
+    meta = _read_index(folder)
+    chunks = list(meta.get("chunks") or [])
+    index = _int_arg(args, "index", 0, max(len(chunks) - 1, 0))
+    if not chunks:
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "index"})
+    offset = _int_arg(args, "offset", 0, 100_000_000)
+    max_chars = _int_arg(args, "max_chars", 1, 1_000_000)
+    with open(os.path.join(folder, "chunks", f"{index}.txt"), encoding="utf-8") as f:
+        text = f.read()
+    end = offset + max_chars
+    info = chunks[index]
+    return {
+        "index": index,
+        "chunks": len(chunks),
+        "text": text[offset:end],
+        "next_offset": end if end < len(text) else None,
+        "page_from": info.get("page_from"),
+        "page_to": info.get("page_to"),
+        "heading_path": list(info.get("heading_path") or []),
+    }
+
+
+def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Whether each quote is in the document's text (BR27.1).
+
+    Both sides are normalised (:func:`_normalize_for_quotes`), so a quote that
+    runs across a line break or the overlap of two chunks is found. A quote
+    shorter than ``min_chars`` after normalising is never found.
+    Args: ``source_id``, ``quotes`` (50 at most) and ``min_chars``.
+    Returns ``{found: [bool, ...]}`` in the order of ``quotes``.
+    """
+    folder = _document_dir(workdir, args.get("source_id"))
+    quotes = args.get("quotes")
+    if (
+        not isinstance(quotes, list)
+        or len(quotes) > _MAX_QUOTES
+        or not all(isinstance(q, str) for q in quotes)
+    ):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "quotes"})
+    min_chars = _int_arg(args, "min_chars", 1, 10_000)
+    path = os.path.join(folder, "normalized.txt")
+    if not os.path.isfile(path):
+        raise AnalysisError("SOURCE_UNREADABLE")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    found = []
+    for quote in quotes:
+        normalized = _normalize_for_quotes(quote)
+        found.append(len(normalized) >= min_chars and normalized in text)
+    return {"found": found}
+
+
+# ---------------------------------------------------------------------------
 # entry points
 # ---------------------------------------------------------------------------
 
@@ -837,6 +1323,9 @@ FUNCTIONS: Dict[str, Callable[[Dict[str, Any], str], Any]] = {
     "profile_dataset": profile_dataset,
     "run_query": run_query,
     "cluster_segments": cluster_segments,
+    "prepare_document": prepare_document,
+    "document_chunk": document_chunk,
+    "verify_quotes": verify_quotes,
 }
 
 

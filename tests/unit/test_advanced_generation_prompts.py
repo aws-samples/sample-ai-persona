@@ -57,3 +57,63 @@ class TestPersonaSchema:
         assert description is not None
         for item in ("家族構成", "生活リズム", "意思決定", "コミュニケーション"):
             assert item in description
+
+
+class TestDocumentPrompts:
+    """U4: BR25.3, BR26.1, BR26.4, BR27.2, BR28.1 (the wording the agents get)."""
+
+    def test_full_text_asks_for_quoted_evidence(self) -> None:
+        prompt = prompts.synthesis_prompt(
+            2, has_table=False, has_documents=True, full_text=True
+        )
+
+        assert "document_evidence" in prompt
+        assert "segment_id は空" in prompt
+        # BR27.2: value, pain and goal for every persona of documents alone
+        assert "value" in prompt and "pain" in prompt and "goal" in prompt
+
+    def test_full_text_with_a_table_asks_for_the_segment(self) -> None:
+        prompt = prompts.synthesis_prompt(
+            2, has_table=True, has_documents=True, full_text=True
+        )
+
+        assert "assignment_reason" in prompt
+        assert "全体に対する根拠" in prompt
+
+    def test_the_table_prompt_is_as_before(self) -> None:
+        prompt = prompts.synthesis_prompt(3)
+
+        assert "document_evidence" not in prompt
+        assert "segments のどれか 1 つ" in prompt
+
+    def test_extraction_tells_the_limits(self) -> None:
+        prompt = prompts.evidence_prompt("", 20, 200)
+
+        assert "20 件" in prompt and "200 字" in prompt
+
+    def test_the_extractor_quotes_and_never_follows_the_text(self) -> None:
+        assert "そのまま写して" in prompts.EVIDENCE_INSTRUCTIONS
+        assert 'source="document"' in prompts.EVIDENCE_INSTRUCTIONS
+
+    def test_the_assignment_picks_zero_or_one_segment(self) -> None:
+        assert "0 か 1 つ" in prompts.ASSIGNMENT_INSTRUCTIONS
+        fields = prompts.EvidenceAssignmentItem.model_fields
+        assert fields["segment_id"].default is None
+
+    def test_a_persona_of_documents_alone_has_no_segment(self) -> None:
+        persona = prompts.AdvancedPersonaOutput(
+            name="a",
+            age=30,
+            occupation="o",
+            background="b",
+            values=["v"],
+            pain_points=["p"],
+            goals=["g"],
+        )
+
+        assert persona.segment_id is None
+
+    def test_schemas_use_lists_not_maps_for_attributes(self) -> None:
+        # Structured output does not take dict fields (agent_service.py note)
+        field = prompts.EvidenceItemOutput.model_fields["speaker_attributes"]
+        assert "list" in str(field.annotation)

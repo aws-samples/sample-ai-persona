@@ -148,3 +148,66 @@ class TestFails:
         )
 
         assert result.failure is ErrorCode.GENERATION_VERIFICATION_FAILED
+
+
+def _quote(eid: str, kind: EvidenceKind) -> Evidence:
+    return Evidence.for_document(
+        id=eid,
+        source_id="doc-1",
+        location="p.1",
+        kind=kind,
+        claim="c",
+        quote="文書からそのまま写した引用です",
+    )
+
+
+DOCUMENT_EVIDENCE = [
+    _quote("v", EvidenceKind.VALUE),
+    _quote("p", EvidenceKind.PAIN),
+    _quote("g", EvidenceKind.GOAL),
+    _quote("b", EvidenceKind.BEHAVIOR),
+]
+
+
+class TestVerifyDocuments:
+    """U4 BR27.2, AC6.1.3: value, pain and goal for every document-only persona."""
+
+    def test_every_key_item_backed_passes(self) -> None:
+        result = AnalysisVerifier.verify_documents(
+            persona_evidence_ids=[["v", "p", "g"], ["v", "p", "g", "b"]],
+            evidence=DOCUMENT_EVIDENCE,
+        )
+
+        assert result.passed
+
+    @pytest.mark.parametrize("missing", ["v", "p", "g"])
+    def test_a_missing_key_item_fails(self, missing: str) -> None:
+        ids = [i for i in ("v", "p", "g") if i != missing]
+
+        result = AnalysisVerifier.verify_documents(
+            persona_evidence_ids=[["v", "p", "g"], ids], evidence=DOCUMENT_EVIDENCE
+        )
+
+        assert result.failure is ErrorCode.GENERATION_VERIFICATION_FAILED
+        assert result.reason == "document_evidence"
+
+    def test_ids_not_in_the_checked_evidence_do_not_count(self) -> None:
+        # "g" was dropped by the quote check: only v and p remain
+        result = AnalysisVerifier.verify_documents(
+            persona_evidence_ids=[["v", "p", "g", "made-up"]],
+            evidence=DOCUMENT_EVIDENCE[:2],
+        )
+
+        assert not result.passed
+
+    def test_table_evidence_does_not_stand_for_a_quote(self) -> None:
+        table_goal = Evidence(
+            id="g", source_id="t", location="tc-1", kind=EvidenceKind.GOAL, claim="c"
+        )
+
+        result = AnalysisVerifier.verify_documents(
+            persona_evidence_ids=[["v", "p", "g"]],
+            evidence=[*DOCUMENT_EVIDENCE[:2], table_goal],
+        )
+
+        assert not result.passed
