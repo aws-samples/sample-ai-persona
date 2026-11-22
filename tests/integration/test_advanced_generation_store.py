@@ -18,6 +18,8 @@ import boto3  # noqa: E402
 
 from src.models.advanced_generation import (  # noqa: E402
     AdvancedGeneration,
+    ControlAction,
+    ControlRequest,
     EventType,
     GenerationStatus,
     ResultPartName,
@@ -297,6 +299,38 @@ class TestTransitions:
             "missing", GenerationStatus.PREPARING, GenerationStatus.PLANNING
         )
 
+    def test_unless_requested_loses_to_a_pending_cancel(self, store, client):
+        # U5 BR31.2 (review fix): ``done`` is never written over a cancel
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING, GenerationStatus.RUNNING)
+        store.put_control_request(
+            gen.generation_id,
+            ControlRequest(action=ControlAction.CANCEL, requested_at=NOW),
+            allowed_statuses=[GenerationStatus.RUNNING],
+            require_empty=False,
+        )
+
+        assert not store.transition(
+            gen.generation_id,
+            GenerationStatus.RUNNING,
+            GenerationStatus.DONE,
+            unless_requested=True,
+        )
+
+        current = store.get(gen.generation_id)
+        assert current is not None and current.status is GenerationStatus.RUNNING
+        assert current.control_request is not None
+
+    def test_unless_requested_moves_without_a_request(self, store, client):
+        gen = _start(store, client)
+
+        assert store.transition(
+            gen.generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.PLANNING,
+            unless_requested=True,
+        )
+
     def test_heartbeat_only_while_running(self, store, client):
         gen = _start(store, client)
         beat = NOW + timedelta(seconds=30)
@@ -468,3 +502,360 @@ class TestFinish:
         assert not outcome.lock_released
         lock = store.get_lock("sub-a")
         assert lock is not None and lock.generation_id == second.generation_id
+
+    def test_release_holds_leaves_the_end_as_it_is(self, store, client):
+        # U5 review fix: a lock left by an ended generation is freed at a start
+        gen = _start(store, client)
+        store.transition(
+            gen.generation_id, GenerationStatus.PREPARING, GenerationStatus.FAILED
+        )
+
+        released = store.release_holds(gen.generation_id, "sub-a", gen.source_file_ids)
+
+        assert released == (True, True)
+        assert store.get_lock("sub-a") is None
+        mark = _source_item(client, gen.source_file_ids[0])
+        assert "in_use_by" not in mark
+        current = store.get(gen.generation_id)
+        assert current is not None and current.finished_at is None
+
+    def test_release_holds_does_not_touch_another_generations(self, store, client):
+        first = _start(store, client)
+        later = LOCK + timedelta(seconds=1)
+        second = _generation(first.source_file_ids[0])
+        store.create_with_lock(
+            second, lock_until=later + timedelta(hours=1), in_use_until=later, now=later
+        )
+
+        released = store.release_holds(
+            first.generation_id, "sub-a", first.source_file_ids
+        )
+
+        assert released == (False, False)
+        lock = store.get_lock("sub-a")
+        assert lock is not None and lock.generation_id == second.generation_id
+        mark = _source_item(client, first.source_file_ids[0])
+        assert mark["in_use_by"]["S"] == second.generation_id
+
+
+# --- U5: control requests, the reader's end and the plan wait ---------------------
+
+RUNNING_STATES = [s for s in GenerationStatus if not s.is_terminal]
+
+
+def _to(store, gen, *path: GenerationStatus) -> None:
+    previous = GenerationStatus.PREPARING
+    for status in path:
+        assert store.transition(gen.generation_id, previous, status)
+        previous = status
+
+
+def _request(action: ControlAction, minutes: int = 1, **kw) -> ControlRequest:
+    return ControlRequest(
+        action=action, requested_at=NOW + timedelta(minutes=minutes), **kw
+    )
+
+
+class TestControlRequests:
+    def test_a_cancel_is_written_while_the_generation_runs(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING, GenerationStatus.RUNNING)
+
+        assert store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.CANCEL),
+            allowed_statuses=RUNNING_STATES,
+            require_empty=False,
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.control_request is not None
+        assert current.control_request.action is ControlAction.CANCEL
+
+    def test_a_cancel_of_an_ended_generation_is_refused(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.FAILED)
+
+        assert not store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.CANCEL),
+            allowed_statuses=RUNNING_STATES,
+            require_empty=False,
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.control_request is None
+
+    def test_an_approve_needs_the_wait_and_no_pending_request(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        awaiting = [GenerationStatus.AWAITING_PLAN_APPROVAL]
+        approve = _request(ControlAction.APPROVE)
+
+        # not waiting yet
+        assert not store.put_control_request(
+            gen.generation_id, approve, allowed_statuses=awaiting, require_empty=True
+        )
+        _to_awaiting(store, gen)
+        assert store.put_control_request(
+            gen.generation_id, approve, allowed_statuses=awaiting, require_empty=True
+        )
+        # a second one while the first is pending
+        assert not store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.REPLAN, 2, revised_purpose=""),
+            allowed_statuses=awaiting,
+            require_empty=True,
+        )
+
+    def test_a_cancel_overwrites_a_pending_approve(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        _to_awaiting(store, gen)
+        awaiting = [GenerationStatus.AWAITING_PLAN_APPROVAL]
+        store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.APPROVE),
+            allowed_statuses=awaiting,
+            require_empty=True,
+        )
+
+        assert store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.CANCEL, 2),
+            allowed_statuses=RUNNING_STATES,
+            require_empty=False,
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.control_request is not None
+        assert current.control_request.action is ControlAction.CANCEL
+
+    def test_take_removes_the_request_and_moves_on(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        _to_awaiting(store, gen)
+        approve = _request(ControlAction.APPROVE)
+        store.put_control_request(
+            gen.generation_id,
+            approve,
+            allowed_statuses=[GenerationStatus.AWAITING_PLAN_APPROVAL],
+            require_empty=True,
+        )
+
+        assert store.take_control_request(
+            gen.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.RUNNING,
+            approve,
+            updates={"waited_seconds": 120},
+            removes=("awaiting_since",),
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None
+        assert current.status is GenerationStatus.RUNNING
+        assert current.control_request is None and current.awaiting_since is None
+        assert current.waited_seconds == 120
+
+    def test_take_of_a_request_replaced_by_a_cancel_is_lost(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        _to_awaiting(store, gen)
+        approve = _request(ControlAction.APPROVE)
+        store.put_control_request(
+            gen.generation_id,
+            approve,
+            allowed_statuses=[GenerationStatus.AWAITING_PLAN_APPROVAL],
+            require_empty=True,
+        )
+        store.put_control_request(
+            gen.generation_id,
+            _request(ControlAction.CANCEL, 2),
+            allowed_statuses=RUNNING_STATES,
+            require_empty=False,
+        )
+
+        assert not store.take_control_request(
+            gen.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.RUNNING,
+            approve,
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None
+        assert current.status is GenerationStatus.AWAITING_PLAN_APPROVAL
+
+    def test_a_transition_may_remove_attributes(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        _to_awaiting(store, gen)
+
+        assert store.transition(
+            gen.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.FAILED,
+            updates={"error_code": "generation_timeout"},
+            removes=("awaiting_since", "control_request"),
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.awaiting_since is None
+
+
+class TestEndIfUnchanged:
+    def test_ends_while_the_heartbeat_is_the_one_read(self, store, client):
+        gen = _start(store, client)
+        beat = NOW + timedelta(seconds=30)
+        store.heartbeat(gen.generation_id, now=beat)
+
+        assert store.end_if_unchanged(
+            gen.generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.FAILED,
+            field="heartbeat_at",
+            value=beat,
+            updates={"error_code": "generation_stalled"},
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.status is GenerationStatus.FAILED
+        assert current.error_code == "generation_stalled"
+
+    def test_a_newer_heartbeat_keeps_the_generation(self, store, client):
+        gen = _start(store, client)
+        beat = NOW + timedelta(seconds=30)
+        store.heartbeat(gen.generation_id, now=beat)
+        store.heartbeat(gen.generation_id, now=beat + timedelta(seconds=30))
+
+        assert not store.end_if_unchanged(
+            gen.generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.FAILED,
+            field="heartbeat_at",
+            value=beat,
+        )
+
+    def test_no_heartbeat_yet_is_matched_as_missing(self, store, client):
+        gen = _start(store, client)
+
+        assert store.end_if_unchanged(
+            gen.generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.CANCELLED,
+            field="heartbeat_at",
+            value=None,
+        )
+
+    def test_the_reader_and_the_thread_race_and_only_one_wins(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING, GenerationStatus.RUNNING)
+
+        reader = store.end_if_unchanged(
+            gen.generation_id,
+            GenerationStatus.RUNNING,
+            GenerationStatus.FAILED,
+            field="heartbeat_at",
+            value=None,
+        )
+        thread = store.transition(
+            gen.generation_id, GenerationStatus.RUNNING, GenerationStatus.SYNTHESIZING
+        )
+
+        assert [reader, thread] == [True, False]
+
+    def test_the_thread_first_makes_the_reader_lose(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        since = _to_awaiting(store, gen)
+
+        thread = store.transition(
+            gen.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.PLANNING,
+            removes=("awaiting_since",),
+        )
+        reader = store.end_if_unchanged(
+            gen.generation_id,
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            GenerationStatus.FAILED,
+            field="awaiting_since",
+            value=since,
+        )
+
+        assert [thread, reader] == [True, False]
+
+
+def _to_awaiting(store, gen) -> datetime:
+    since = NOW + timedelta(minutes=10)
+    assert store.enter_awaiting(
+        gen.generation_id,
+        gen.owner_sub,
+        gen.source_file_ids,
+        now=since,
+        until=LOCK + timedelta(minutes=15),
+    )
+    return since
+
+
+class TestEnterAwaiting:
+    def test_moves_to_the_wait_and_extends_the_lock_and_the_marks(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+        until = LOCK + timedelta(minutes=15)
+
+        since = _to_awaiting(store, gen)
+
+        current = store.get(gen.generation_id)
+        assert current is not None
+        assert current.status is GenerationStatus.AWAITING_PLAN_APPROVAL
+        assert current.awaiting_since == since
+        lock = store.get_lock("sub-a")
+        assert lock is not None and lock.lock_until == until
+        mark = _source_item(client, gen.source_file_ids[0])
+        assert mark["in_use_until"]["S"] == until.isoformat(timespec="microseconds")
+
+    def test_writes_the_updates_with_the_move(self, store, client):
+        gen = _start(store, client)
+        _to(store, gen, GenerationStatus.PLANNING)
+
+        assert store.enter_awaiting(
+            gen.generation_id,
+            gen.owner_sub,
+            gen.source_file_ids,
+            now=NOW,
+            until=LOCK,
+            updates={"replan_count": 1},
+        )
+        current = store.get(gen.generation_id)
+        assert current is not None and current.replan_count == 1
+
+    def test_not_planning_writes_nothing(self, store, client):
+        gen = _start(store, client)
+
+        assert not store.enter_awaiting(
+            gen.generation_id,
+            gen.owner_sub,
+            gen.source_file_ids,
+            now=NOW,
+            until=LOCK + timedelta(hours=1),
+        )
+        lock = store.get_lock("sub-a")
+        assert lock is not None and lock.lock_until == LOCK
+        current = store.get(gen.generation_id)
+        assert current is not None and current.status is GenerationStatus.PREPARING
+
+    def test_a_lock_of_another_generation_writes_nothing(self, store, client):
+        first = _start(store, client)
+        _to(store, first, GenerationStatus.PLANNING)
+        later = LOCK + timedelta(seconds=1)
+        second = _generation(_put_source(client))
+        store.create_with_lock(
+            second, lock_until=later + timedelta(hours=1), in_use_until=later, now=later
+        )
+
+        assert not store.enter_awaiting(
+            first.generation_id,
+            first.owner_sub,
+            first.source_file_ids,
+            now=later,
+            until=later + timedelta(hours=2),
+        )
+        lock = store.get_lock("sub-a")
+        assert lock is not None and lock.lock_until == later + timedelta(hours=1)
+        current = store.get(first.generation_id)
+        assert current is not None and current.status is GenerationStatus.PLANNING

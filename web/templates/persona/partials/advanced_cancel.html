@@ -1,0 +1,16 @@
+{#
+  区画 C の「中止」（U5 BR31.1、BR31.4）。advanced_progress.html の中止の欄の中身と、中止の POST の応答。
+  引数:
+    generation_id ... 生成の ID
+    cancelling ... 受け付けたあと（「中止しています」で押せなくする）
+#}
+{% if cancelling %}
+<button type="button" data-testid="advanced-cancel-button" disabled aria-disabled="true"
+        class="text-sm px-3 py-1 border border-gray-300 rounded-md text-gray-500 cursor-not-allowed">中止</button>
+<p data-testid="advanced-cancelling" role="status" class="text-sm text-gray-700">中止しています</p>
+{% else %}
+<button type="button" data-testid="advanced-cancel-button"
+        hx-post="/persona/advanced/generations/{{ generation_id | urlencode }}/cancel"
+        hx-target="#advanced-cancel-area" hx-swap="innerHTML"
+        class="text-sm px-3 py-1 border border-gray-400 rounded-md text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500">中止</button>
+{% endif %}

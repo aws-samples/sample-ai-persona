@@ -16,6 +16,8 @@ from src.models.advanced_generation import (
     PERSONA_COUNT_MAX,
     PURPOSE_MAX_CHARS,
     AdvancedGeneration,
+    ControlAction,
+    ControlRequest,
     EventType,
     GenerationEvent,
     GenerationStatus,
@@ -394,7 +396,127 @@ class TestGenerationEvent:
             "plan",
             "result",
             "error",
+            "cancelled",  # U5 BR31.2
         ]
+
+
+class TestGenerationControl:
+    """U5 (entities.md): plan confirmation, the control request, the session ID."""
+
+    def _new(self, **overrides) -> AdvancedGeneration:
+        values = dict(
+            owner_sub="user-1",
+            source_file_ids=["sf-1"],
+            purpose="首都圏の 30 代",
+            persona_count=3,
+            now=NOW,
+            ttl_seconds=48 * 3600,
+        )
+        values.update(overrides)
+        return AdvancedGeneration.create_new(**values)
+
+    def test_awaiting_plan_approval_is_not_terminal(self):
+        status = GenerationStatus("awaiting_plan_approval")
+
+        assert status is GenerationStatus.AWAITING_PLAN_APPROVAL
+        assert not status.is_terminal
+
+    def test_defaults_of_a_new_generation(self):
+        gen = self._new()
+
+        assert gen.options == {"confirm_plan": False}
+        assert gen.confirm_plan is False
+        assert gen.waited_seconds == 0 and gen.replan_count == 0
+        for name in ("control_request", "awaiting_since", "original_purpose"):
+            assert getattr(gen, name) is None
+        assert gen.session_id is None
+
+    def test_confirm_plan_is_kept_in_the_options(self):
+        gen = self._new(confirm_plan=True)
+
+        assert gen.options == {"confirm_plan": True} and gen.confirm_plan
+        assert AdvancedGeneration.from_dict(gen.to_dict()).confirm_plan
+
+    def test_to_dict_leaves_out_none_but_keeps_the_counters(self):
+        data = self._new().to_dict()
+
+        assert data["options"] == {"confirm_plan": False}
+        assert data["waited_seconds"] == 0 and data["replan_count"] == 0
+        for name in (
+            "control_request",
+            "awaiting_since",
+            "original_purpose",
+            "session_id",
+        ):
+            assert name not in data
+        assert None not in data.values()
+
+    def test_round_trip_of_every_new_field(self):
+        request = ControlRequest(
+            action=ControlAction.REPLAN, requested_at=NOW, revised_purpose="20 代"
+        )
+        gen = self._new(confirm_plan=True).update(
+            status=GenerationStatus.AWAITING_PLAN_APPROVAL,
+            control_request=request,
+            awaiting_since=NOW,
+            waited_seconds=120,
+            replan_count=2,
+            original_purpose="首都圏",
+            session_id="session-1",
+        )
+
+        assert AdvancedGeneration.from_dict(gen.to_dict()) == gen
+
+    def test_an_item_written_before_u5_is_still_read(self):
+        data = self._new().to_dict()
+        for name in ("options", "waited_seconds", "replan_count"):
+            data.pop(name)
+
+        gen = AdvancedGeneration.from_dict(data)
+
+        assert gen.options == {"confirm_plan": False}
+        assert gen.waited_seconds == 0 and gen.replan_count == 0
+
+    def test_negative_counters_are_refused(self):
+        with pytest.raises(ValueError):
+            self._new().update(waited_seconds=-1)
+        with pytest.raises(ValueError):
+            self._new().update(replan_count=-1)
+
+
+class TestControlRequest:
+    def test_actions(self):
+        assert [a.value for a in ControlAction] == ["cancel", "approve", "replan"]
+
+    def test_round_trip_without_revised_purpose(self):
+        request = ControlRequest(action="cancel", requested_at=NOW)
+        data = request.to_dict()
+
+        assert data == {
+            "action": "cancel",
+            "requested_at": NOW.isoformat(timespec="microseconds"),
+        }
+        assert ControlRequest.from_dict(data) == request
+        assert request.action is ControlAction.CANCEL
+
+    def test_an_empty_revised_purpose_is_kept(self):
+        request = ControlRequest(
+            action=ControlAction.REPLAN, requested_at=NOW, revised_purpose=""
+        )
+
+        assert ControlRequest.from_dict(request.to_dict()).revised_purpose == ""
+
+    def test_revised_purpose_is_at_most_2000_characters(self):
+        with pytest.raises(ValueError):
+            ControlRequest(
+                action=ControlAction.REPLAN,
+                requested_at=NOW,
+                revised_purpose="x" * (PURPOSE_MAX_CHARS + 1),
+            )
+
+    def test_unknown_action_is_refused(self):
+        with pytest.raises(ValueError):
+            ControlRequest(action="pause", requested_at=NOW)
 
 
 class TestOwnerLockAndResultPart:

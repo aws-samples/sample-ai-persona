@@ -417,6 +417,7 @@ class TestStartGeneration:
             "source_file_ids": [s.FILE_ID],
             "purpose": "30代",
             "persona_count": 2,
+            "confirm_plan": False,
         }
         adv.pool.submit.assert_called_once_with(adv.generations.run, s.GENERATION_ID)
         adv.generations.abort_start.assert_not_called()
@@ -431,11 +432,51 @@ class TestStartGeneration:
         adv.generations.abort_start.assert_called_once_with(s.GENERATION_ID)
         assert "cannot schedule" not in response.headers.get("HX-Trigger", "")
 
-    def test_running_generation_is_a_409_toast(
+    def test_running_generation_reopens_its_progress_with_a_409(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        # U5 BR30.2, AC9.2.2: the notice and the running generation's progress
+        adv.generations.start_generation.side_effect = AdvancedGenerationError(
+            "start refused", code=ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
+        )
+        adv.generations.running_generation_id.return_value = s.GENERATION_ID
+
+        response = self._post(client)
+
+        assert response.status_code == 409
+        assert response.headers["X-Render-Response"] == "true"
+        assert 'data-testid="advanced-already-running"' in response.text
+        assert f'data-generation-id="{s.GENERATION_ID}"' in response.text
+        assert "start refused" not in response.text
+        adv.pool.submit.assert_not_called()
+
+    def test_running_generation_not_found_again_shows_the_notice_only(
         self, client: TestClient, adv: Adv
     ) -> None:
         adv.generations.start_generation.side_effect = AdvancedGenerationError(
             "start refused", code=ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
+        )
+        adv.generations.running_generation_id.return_value = None
+
+        response = self._post(client)
+
+        assert response.status_code == 409
+        assert 'data-testid="advanced-already-running"' in response.text
+        assert 'data-testid="advanced-progress"' not in response.text
+
+    def test_confirm_plan_is_passed_on(self, client: TestClient, adv: Adv) -> None:
+        adv.generations.start_generation.return_value = s.GENERATION_ID
+
+        self._post(client, confirm_plan="true")
+
+        assert adv.generations.start_generation.call_args.kwargs["confirm_plan"]
+
+    def test_a_file_not_ready_yet_is_a_409_toast(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.generations.start_generation.side_effect = AdvancedGenerationError(
+            "source file is not ready yet",
+            code=ErrorCode.GENERATION_SOURCE_NOT_READY,
         )
 
         response = self._post(client)
@@ -1107,3 +1148,212 @@ class TestDocumentScreen:
         )
 
         assert "2,400,000" in message and "2,000,000" in message
+
+
+# --- U5: the plan card, the cancel and the stream (C1, C3) --------------------
+
+
+class TestControlRoutes:
+    """Step 19: BR29.3, BR29.4, BR30.4, BR31.1, NFR3.26, NFR3.27."""
+
+    PLAN = f"/persona/advanced/generations/{s.GENERATION_ID}/plan"
+    CANCEL = f"/persona/advanced/generations/{s.GENERATION_ID}/cancel"
+
+    def test_approve_is_accepted(self, client: TestClient, adv: Adv) -> None:
+        response = client.post(self.PLAN, data={"action": "approve"})
+
+        assert response.status_code == 200
+        assert 'data-testid="advanced-plan-accepted"' in response.text
+        args = adv.generations.decide_plan.call_args
+        assert args.args[1:] == (s.GENERATION_ID, "approve")
+        assert args.kwargs == {"revised_purpose": None}
+
+    def test_a_cancel_sent_to_the_plan_route_is_refused(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        # Review fix 3: cancel goes through /cancel only; /plan never accepts it
+        adv.generations.decide_plan.side_effect = AdvancedGenerationError(
+            "not a plan decision", code=ErrorCode.REQUEST_INVALID
+        )
+
+        response = client.post(self.PLAN, data={"action": "cancel"})
+
+        assert response.status_code == 400
+        assert response.headers["HX-Retarget"] == "find .advanced-plan-error"
+        assert 'data-testid="advanced-plan-accepted"' not in response.text
+        assert "承認しました" not in response.text
+        assert adv.generations.decide_plan.call_args.args[1:] == (
+            s.GENERATION_ID,
+            "cancel",
+        )
+        adv.generations.request_control.assert_not_called()
+
+    def test_replan_sends_the_revised_purpose(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        response = client.post(
+            self.PLAN, data={"action": "replan", "revised_purpose": "20 代"}
+        )
+
+        assert response.status_code == 200
+        assert 'data-testid="advanced-plan-accepted"' in response.text
+        args = adv.generations.decide_plan.call_args
+        assert args.args[1:] == (s.GENERATION_ID, "replan")
+        assert args.kwargs == {"revised_purpose": "20 代"}
+
+    def test_cancel_says_it_is_cancelling(self, client: TestClient, adv: Adv) -> None:
+        response = client.post(self.CANCEL)
+
+        assert response.status_code == 200
+        assert 'data-testid="advanced-cancelling"' in response.text
+        assert "中止しています" in response.text
+        assert adv.generations.request_control.call_args.args[1:] == (
+            s.GENERATION_ID,
+            "cancel",
+        )
+
+    @pytest.mark.parametrize(
+        ("url", "code", "status"),
+        [
+            (PLAN, ErrorCode.GENERATION_NOT_FOUND, 404),
+            (CANCEL, ErrorCode.GENERATION_NOT_FOUND, 404),
+            (PLAN, ErrorCode.GENERATION_NOT_AWAITING_PLAN, 409),
+            (CANCEL, ErrorCode.GENERATION_ALREADY_FINISHED, 409),
+        ],
+    )
+    def test_refusals_are_toasts_with_their_status(
+        self, client: TestClient, adv: Adv, url: str, code: ErrorCode, status: int
+    ) -> None:
+        refusal = AdvancedGenerationError("refused: internal detail", code=code)
+        adv.generations.request_control.side_effect = refusal
+        adv.generations.decide_plan.side_effect = refusal
+
+        response = client.post(url, data={"action": "approve"})
+
+        assert response.status_code == status
+        assert "showToast" in response.headers["HX-Trigger"]
+        assert "internal detail" not in response.headers["HX-Trigger"]
+
+    def test_a_too_long_instruction_is_shown_in_the_card(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.generations.decide_plan.side_effect = AdvancedGenerationError(
+            "revised purpose too long",
+            code=ErrorCode.GENERATION_PURPOSE_TOO_LONG,
+            context={"max_chars": 2000},
+        )
+
+        response = client.post(
+            self.PLAN, data={"action": "replan", "revised_purpose": "x"}
+        )
+
+        assert response.status_code == 400
+        assert response.headers["HX-Retarget"] == "find .advanced-plan-error"
+        assert response.headers["X-Render-Response"] == "true"
+        assert "2000" in response.text
+
+    @pytest.mark.parametrize("url", [PLAN, CANCEL])
+    def test_without_the_csrf_header_nothing_changes(
+        self, test_app: Any, adv: Adv, url: str
+    ) -> None:
+        with TestClient(test_app) as bare:
+            login_as(bare)
+            response = bare.post(url, data={"action": "approve"})
+
+        assert response.status_code == 403
+        adv.generations.request_control.assert_not_called()
+        adv.generations.decide_plan.assert_not_called()
+
+
+class TestControlStream:
+    """Step 19: C3 ``cancelled`` and ``plan`` (BR29.2, BR31.2, NFR3.28)."""
+
+    URL = f"/persona/advanced/generations/{s.GENERATION_ID}/events"
+
+    def test_a_cancel_is_sent_as_cancelled_then_done(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        stage = s.event(1, EventType.STAGE, json.dumps({"status": "running"}))
+        cancelled = s.event(2, EventType.CANCELLED, "{}")
+        adv.generations.stream_events.side_effect = [
+            _progress(GenerationStatus.RUNNING, stage),
+            _progress(GenerationStatus.CANCELLED, cancelled),
+        ]
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        assert [b["event"] for b in blocks] == ["stage", "cancelled", "done"]
+        assert blocks[1]["data"] == "" and blocks[1]["id"] == "2"
+
+    def test_reconnecting_to_a_cancelled_one_sends_cancelled_and_done(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        events = (
+            s.event(1, EventType.STAGE, json.dumps({"status": "running"})),
+            s.event(2, EventType.CANCELLED, "{}"),
+        )
+        adv.generations.stream_events.return_value = _progress(
+            GenerationStatus.CANCELLED, *events
+        )
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        assert [b["event"] for b in blocks] == ["cancelled", "done"]
+
+    def test_a_cancelled_one_without_its_event_still_gets_cancelled(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        adv.generations.stream_events.return_value = _progress(
+            GenerationStatus.CANCELLED
+        )
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        assert [b["event"] for b in blocks] == ["cancelled", "done"]
+
+    def test_a_plan_to_confirm_is_sent_as_the_card(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        plan = s.PLAN.update(interpreted_purpose=s.SCRIPT_TEXT)
+        waiting = s.generation(
+            GenerationStatus.AWAITING_PLAN_APPROVAL,
+            options={"confirm_plan": True},
+            plan=plan,
+            purpose="30 代",
+        )
+        event = s.event(3, EventType.PLAN, json.dumps({"method": "cluster"}))
+        adv.generations.stream_events.side_effect = [
+            GenerationProgress(generation=waiting, events=(event,)),
+            _progress(GenerationStatus.CANCELLED),
+        ]
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        card = next(b["data"] for b in blocks if b["event"] == "plan")
+        assert 'data-testid="advanced-plan-card"' in card
+        assert s.SCRIPT_TEXT not in card  # NFR3.28: escaped
+        assert "&lt;script&gt;" in card
+        assert 'data-testid="advanced-plan-approve"' in card
+        assert "30 代" in card  # the current instruction fills the input
+
+    def test_a_plan_without_confirmation_stays_a_log_line(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        event = s.event(3, EventType.PLAN, json.dumps({"method": "cluster"}))
+        adv.generations.stream_events.side_effect = [
+            _progress(GenerationStatus.RUNNING, event),
+            _progress(GenerationStatus.CANCELLED),
+        ]
+
+        blocks = [b for b in _sse(client.get(self.URL).text) if "event" in b]
+
+        plan = next(b["data"] for b in blocks if b["event"] == "plan")
+        assert json.loads(plan) == {"method": "cluster"}
+
+    def test_the_page_tells_the_plan_wait_from_config(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        html = client.get("/persona/generation/advanced").text
+
+        assert 'data-testid="advanced-confirm-plan"' in html
+        assert "15 分" in html

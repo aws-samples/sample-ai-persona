@@ -44,6 +44,7 @@ from src.services.sandbox_service import InProcessSandbox, SandboxSession  # noq
 from src.services.service_factory import service_factory  # noqa: E402
 from src.services.stores.advanced_generation_store import (  # noqa: E402
     AdvancedGenerationStore,
+    AdvancedGenerationStoreError,
 )
 from src.services.stores.app_settings_store import AppSettingsStore  # noqa: E402
 from src.services.stores.persona_candidate_store import (  # noqa: E402
@@ -182,6 +183,7 @@ class _Sandbox(InProcessSandbox):
         self.called: list[tuple[str, dict[str, Any]]] = []
         self.fake_document_result: Optional[dict[str, Any]] = None
         self.truncate_chunks = False
+        self.stopped_by_id = []
 
     def start_command(self, session, function, args):
         command_id = super().start_command(session, function, args)
@@ -251,6 +253,13 @@ class _Sandbox(InProcessSandbox):
         super().stop_session(session)
         if self.stop_error is not None:
             raise self.stop_error
+
+    #: U5: sessions a reader stopped by their ID (BR32.4, NFR5.48)
+    stopped_by_id: list[str]
+
+    def stop_session_by_id(self, session_id: str) -> None:
+        self.stopped_by_id.append(session_id)
+        super().stop_session_by_id(session_id)
 
 
 class _Agents:
@@ -328,6 +337,8 @@ class _Agents:
             number = self.extracted_count = self.extracted_count + 1
         try:
             time.sleep(0.02)
+            if self.on_extraction is not None:
+                self.on_extraction(number)
             if self.extraction_mode.startswith("fail_at:") and number == int(
                 self.extraction_mode.split(":")[1]
             ):
@@ -368,8 +379,15 @@ class _Agents:
             )
         return dict(self.plan)
 
+    #: U5: called inside the analysis call (the model is "running")
+    on_analysis: Any = None
+    #: U5: called inside each extraction call
+    on_extraction: Any = None
+
     def run_advanced_analysis(self, agent, prompt, data, *, source_id):
         self.calls.append("analysis")
+        if self.on_analysis is not None:
+            self.on_analysis()
         if self.analysis_mode == "zero":
             return {"segments": [], "evidence": []}
         text = self.tools["cluster_segments"](columns=["age", "income"])
@@ -2380,3 +2398,1040 @@ class TestDocumentLogs:
         assert_not_leaked("秘密", logs.records())
         assert_not_leaked("家族と過ごす", logs.records())
         assert env.generations.get(generation_id).status is GenerationStatus.DONE
+
+
+# =============================================================================
+# U5: the generation's controls (BR29〜BR33)
+# =============================================================================
+
+#: The watch and the plan wait read every 10 ms; the heartbeat goes as often.
+FAST_CONTROL = {"control_poll_seconds": 0.01, "heartbeat_seconds": 0.01}
+AWAITING = GenerationStatus.AWAITING_PLAN_APPROVAL
+
+
+def _wait_for(predicate, *, timeout: float = 10.0) -> None:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return
+        time.sleep(0.005)
+    raise AssertionError("the condition was not reached in time")
+
+
+class _Thread:
+    """``manager.run`` in its own thread, like the router's pool."""
+
+    def __init__(self, manager, generation_id: str) -> None:
+        import threading
+
+        # daemon: a run that never ends must not keep the test process alive
+        self.thread = threading.Thread(
+            target=manager.run, args=(generation_id,), daemon=True
+        )
+        self.thread.start()
+
+    def join(self) -> None:
+        self.thread.join(timeout=10)
+        assert not self.thread.is_alive(), "the run did not end"
+
+
+def _current(env: _Env, generation_id: str):
+    generation = env.generations.get(generation_id)
+    assert generation is not None
+    return generation
+
+
+def _start_confirming(manager, file: SourceFile, *, purpose: str = "30 代") -> str:
+    return manager.start_generation(
+        ADMIN,
+        source_file_ids=[file.source_file_id],
+        purpose=purpose,
+        persona_count=2,
+        confirm_plan=True,
+    )
+
+
+def _await_card(env: _Env, generation_id: str, *, replans: int = 0) -> None:
+    _wait_for(
+        lambda: (
+            (g := env.generations.get(generation_id)) is not None
+            and g.status is AWAITING
+            and g.replan_count == replans
+            and _events(env, generation_id)[-1][0] == "plan"
+        )
+    )
+
+
+def _advance(env: _Env, generation_id: str, **delta: float) -> None:
+    """Move the clock and wait until the watch has beaten at the new time."""
+    env.clock.advance(**delta)
+    _wait_for(lambda: _current(env, generation_id).heartbeat_at == env.clock.now)
+
+
+class TestPlanConfirmation:
+    """Step 10: BR29.1〜BR29.7, NFR1.24, NFR5.41, NFR5.42, AC8.1.1〜8.1.4."""
+
+    def test_off_runs_straight_to_the_analysis(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.options == {"confirm_plan": False}
+        stages = [s["status"] for k, s in _events(env, generation_id) if k == "stage"]
+        assert AWAITING.value not in stages
+
+    def test_on_stops_after_the_plan_and_extends_the_lock(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start_confirming(manager, file)
+        run = _Thread(manager, generation_id)
+
+        _await_card(env, generation_id)
+
+        generation = _current(env, generation_id)
+        assert generation.confirm_plan and generation.plan is not None
+        assert generation.awaiting_since == START
+        kinds = [k for k, _ in _events(env, generation_id)]
+        assert kinds[-1] == "plan"
+        assert "analysis" not in env.agents.calls
+        # BR29.6, NFR5.43: created_at + 75 minutes + waited (0) + 15 minutes
+        until = START + timedelta(minutes=75 + 15)
+        lock = env.generations.get_lock(ADMIN.sub)
+        assert lock is not None and lock.lock_until == until
+        mark = env.files.get(file.source_file_id)
+        assert mark is not None and mark.in_use_until == until
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+    def test_approve_runs_on_and_adds_the_wait(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        _advance(env, generation_id, minutes=10)  # AC8.1.3: 10 minutes of thought
+
+        manager.request_control(ADMIN, generation_id, "approve")
+        run.join()
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.waited_seconds == 600
+        assert generation.awaiting_since is None
+        assert generation.control_request is None
+        stages = [s["status"] for k, s in _events(env, generation_id) if k == "stage"]
+        assert stages[:4] == ["preparing", "planning", AWAITING.value, "running"]
+
+    def test_replan_replaces_the_purpose_and_plans_again(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file(), purpose="30 代")
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        manager.request_control(ADMIN, generation_id, "replan", revised_purpose="20 代")
+        _await_card(env, generation_id, replans=1)
+        manager.request_control(ADMIN, generation_id, "replan", revised_purpose="")
+        _await_card(env, generation_id, replans=2)
+
+        generation = _current(env, generation_id)
+        assert generation.purpose == ""
+        assert generation.original_purpose == "30 代"  # only the first is kept
+        # every plan was made with the instruction of its time
+        purposes = [d["purpose"] for d in env.agents.data_seen]
+        assert list(dict.fromkeys(purposes)) == ["30 代", "20 代", ""]
+        manager.request_control(ADMIN, generation_id, "approve")
+        run.join()
+        assert _current(env, generation_id).status is GenerationStatus.DONE
+
+    def test_a_revised_purpose_over_the_limit_is_refused(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_PURPOSE_TOO_LONG
+        ):
+            manager.request_control(
+                ADMIN, generation_id, "replan", revised_purpose="あ" * 2001
+            )
+
+    def test_fifteen_minutes_untouched_stop_the_generation(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start_confirming(manager, file)
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        env.clock.advance(minutes=15, seconds=1)
+        run.join()
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_TIMEOUT.value
+        assert generation.error_context == {"limit": "plan_wait_minutes", "value": 15}
+        assert generation.awaiting_since is None
+        assert len(env.sandbox.stopped) == 1
+        assert env.generations.get_lock(ADMIN.sub) is None
+        released = env.files.get(file.source_file_id)
+        assert released is not None and released.in_use_by is None
+        assert "analysis" not in env.agents.calls
+
+    def test_sixty_minutes_of_waits_in_total_stop_the_generation(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        for n in range(1, 5):
+            _advance(env, generation_id, minutes=14)
+            manager.request_control(ADMIN, generation_id, "replan", revised_purpose="")
+            _await_card(env, generation_id, replans=n)
+        # BR29.6: every card extends from the deadline, never shrinking it
+        lock = env.generations.get_lock(ADMIN.sub)
+        assert lock is not None
+        assert lock.lock_until == START + timedelta(minutes=75 + 56 + 15)
+
+        env.clock.advance(minutes=4, seconds=1)  # 56 + 4 minutes and a second
+        run.join()
+
+        generation = _current(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_TIMEOUT.value
+        assert generation.error_context == {
+            "limit": "plan_wait_total_minutes",
+            "value": 60,
+        }
+        assert generation.waited_seconds == 56 * 60
+
+    def test_the_wait_moves_the_sixty_minute_deadline(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        _advance(env, generation_id, minutes=14)
+        # 49 minutes of analysis end 63 minutes after the start: within 60 + 14
+        env.agents.on_analysis = lambda: env.clock.advance(minutes=49)
+
+        manager.request_control(ADMIN, generation_id, "approve")
+        run.join()
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.waited_seconds == 14 * 60
+
+
+class _FlakyStore(AdvancedGenerationStore):
+    """The real store whose watch reads or heartbeats fail on demand (NFR5.51)."""
+
+    watch_read_failures = 0
+    heartbeat_fails = False
+
+    def get(self, generation_id: str):
+        import threading
+
+        if (
+            threading.current_thread().name == "advanced-generation-watch"
+            and self.watch_read_failures > 0
+        ):
+            self.watch_read_failures -= 1
+            raise AdvancedGenerationStoreError("get_item unreachable")
+        return super().get(generation_id)
+
+    def heartbeat(self, generation_id: str, *, now: datetime) -> bool:
+        if self.heartbeat_fails:
+            raise AdvancedGenerationStoreError("update_item unreachable")
+        return super().heartbeat(generation_id, now=now)
+
+
+def _flaky(env: _Env) -> _FlakyStore:
+    return _FlakyStore(
+        region=REGION,
+        table_name=GENERATIONS_TABLE,
+        source_files_table_name=SOURCE_FILES_TABLE,
+        client=env.generations.client,
+    )
+
+
+def _assert_cancelled_and_released(env: _Env, generation_id: str, file) -> None:
+    generation = _current(env, generation_id)
+    assert generation.status is GenerationStatus.CANCELLED
+    assert generation.error_code is None and generation.control_request is None
+    assert generation.candidate_ids is None and generation.finished_at is not None
+    kinds = [k for k, _ in _events(env, generation_id)]
+    assert kinds[-1] == "cancelled" and "error" not in kinds
+    assert env.generations.get_lock(ADMIN.sub) is None
+    released = env.files.get(file.source_file_id)
+    assert released is not None and released.in_use_by is None
+
+
+class TestCancel:
+    """Step 12: BR31.1〜BR31.5, NFR1.23, NFR5.46, NFR5.51, AC9.3.1, AC9.3.2."""
+
+    def test_a_cancel_is_written_for_the_owners_running_generation(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.request_control(ADMIN, generation_id, "cancel")
+
+        request = _current(env, generation_id).control_request
+        assert request is not None and request.action.value == "cancel"
+        assert request.requested_at == START
+
+    def test_someone_elses_or_a_missing_generation_is_not_found(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        with raises_code(AdvancedGenerationError, ErrorCode.GENERATION_NOT_FOUND):
+            manager.request_control(OTHER, generation_id, "cancel")
+        with raises_code(AdvancedGenerationError, ErrorCode.GENERATION_NOT_FOUND):
+            manager.request_control(ADMIN, "missing", "cancel")
+        assert _current(env, generation_id).control_request is None
+
+    def test_a_finished_generation_cannot_be_cancelled(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+        manager.run(generation_id)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_ALREADY_FINISHED
+        ):
+            manager.request_control(ADMIN, generation_id, "cancel")
+
+    def test_approve_needs_a_waiting_generation_without_a_cancel(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_NOT_AWAITING_PLAN
+        ):
+            manager.request_control(ADMIN, generation_id, "approve")
+        env.generations.transition(
+            generation_id, GenerationStatus.PREPARING, GenerationStatus.PLANNING
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START,
+            until=START + timedelta(hours=1),
+        )
+        manager.request_control(ADMIN, generation_id, "cancel")
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_NOT_AWAITING_PLAN
+        ):
+            manager.request_control(ADMIN, generation_id, "replan", revised_purpose="")
+
+    def test_a_cancel_while_the_plan_waits_ends_it(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start_confirming(manager, file)
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        assert len(env.sandbox.stopped) == 1
+        assert "analysis" not in env.agents.calls
+
+    def test_a_cancel_stops_the_preparation_command(self, env: _Env) -> None:
+        env.sandbox.hold_prepare_rows = 10
+        manager = env.manager(**FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        run = _Thread(manager, generation_id)
+        _wait_for(lambda: bool(env.sandbox.started))
+
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        assert len(env.sandbox.cancelled) == 1
+        assert env.agents.calls == []
+        assert len(env.sandbox.stopped) == 1
+        # AC9.3.2: the same file starts again at once
+        env.sandbox.hold_prepare_rows = None
+        _start(manager, file)
+
+    def test_a_cancel_during_a_model_call_takes_effect_when_it_returns(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+
+        def cancel_while_running() -> None:
+            manager.request_control(ADMIN, generation_id, "cancel")
+            time.sleep(0.2)  # the watch reads it while the model "runs"
+
+        env.agents.on_analysis = cancel_while_running
+        manager.run(generation_id)
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        assert "synthesis" not in env.agents.calls
+        with pytest.raises(S3ServiceError):
+            env.s3.get_object_tags(record_key(ADMIN.sub, generation_id))
+
+    def test_a_cancel_drops_the_rest_of_the_extraction(
+        self, env: _Env, monkeypatch, extraction
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_EVIDENCE_MAX_CONCURRENT", 1)
+        manager = env.manager(**FAST_CONTROL)
+        doc = env.ready_document(_interview(8))
+        generation_id = _start_with(manager, doc)
+
+        def cancel_at_the_first(number: int) -> None:
+            if number == 1:
+                manager.request_control(ADMIN, generation_id, "cancel")
+                time.sleep(0.2)
+
+        env.agents.on_extraction = cancel_at_the_first
+        manager.run(generation_id)
+
+        _assert_cancelled_and_released(env, generation_id, doc)
+        assert env.agents.calls.count("extraction") <= 2
+        assert "planning" not in env.agents.calls
+
+    def test_a_cancel_of_a_generation_without_a_thread_ends_it_at_once(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.PREPARING,
+            updates={"session_id": "session-lost"},
+        )
+        env.clock.advance(minutes=5, seconds=1)  # BR31.3: no heartbeat for 5 min
+
+        manager.request_control(ADMIN, generation_id, "cancel")
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        assert env.sandbox.stopped_by_id == ["session-lost"]
+
+    def test_the_watch_survives_failed_reads_and_cancels_later(self, env: _Env) -> None:
+        env.sandbox.hold_prepare_rows = 10
+        store = _flaky(env)
+        store.watch_read_failures = 20
+        manager = env.manager(generation_store=store, **FAST_CONTROL)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        run = _Thread(manager, generation_id)
+        _wait_for(lambda: bool(env.sandbox.started))
+
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+        assert store.watch_read_failures == 0
+        _assert_cancelled_and_released(env, generation_id, file)
+
+    def test_failing_heartbeats_do_not_stop_the_run(self, env: _Env) -> None:
+        store = _flaky(env)
+        store.heartbeat_fails = True
+        manager = env.manager(
+            generation_store=store, control_poll_seconds=0.001, heartbeat_seconds=0.001
+        )
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).status is GenerationStatus.DONE
+
+
+def _left_alone(env: _Env, generation_id: str, *, session_id: str = "s-lost") -> None:
+    """A started generation whose task went away (no heartbeat, a session)."""
+    env.generations.transition(
+        generation_id,
+        GenerationStatus.PREPARING,
+        GenerationStatus.PREPARING,
+        updates={"session_id": session_id},
+    )
+
+
+class TestReaderJudgement:
+    """Step 14: BR30.1, BR32.1〜BR32.5, NFR5.44〜NFR5.47, AC9.2.1, AC9.4.1."""
+
+    def test_the_session_id_is_kept_once_the_session_starts(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).session_id == env.sandbox.stopped[0]
+
+    def test_five_minutes_without_a_heartbeat_fail_as_stalled(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        _left_alone(env, generation_id)
+        env.clock.advance(minutes=5, seconds=1)
+
+        progress = manager.stream_events(ADMIN, generation_id)
+        manager.stream_events(ADMIN, generation_id)  # judged once only
+
+        assert progress.generation.status is GenerationStatus.FAILED
+        generation = _current(env, generation_id)
+        assert generation.error_code == ErrorCode.GENERATION_STALLED.value
+        errors = [s for k, s in _events(env, generation_id) if k == "error"]
+        assert errors == [{"error_code": "generation_stalled", "kind": "transient"}]
+        assert env.generations.get_lock(ADMIN.sub) is None
+        released = env.files.get(file.source_file_id)
+        assert released is not None and released.in_use_by is None
+        assert env.sandbox.stopped_by_id == ["s-lost"]
+        assert generation.finished_at is not None
+
+    def test_exactly_five_minutes_is_not_stalled(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+        env.clock.advance(minutes=5)
+
+        progress = manager.stream_events(ADMIN, generation_id)
+
+        assert progress.generation.status is GenerationStatus.PREPARING
+        assert env.sandbox.stopped_by_id == []
+
+    def test_a_waiting_generation_without_heartbeat_is_stalled_too(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id, GenerationStatus.PREPARING, GenerationStatus.PLANNING
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START,
+            until=START + timedelta(hours=2),
+        )
+        env.clock.advance(minutes=6)
+
+        assert manager.running_generation_id(ADMIN) is None
+        assert _current(env, generation_id).error_code == "generation_stalled"
+
+    def test_the_plan_wait_is_ended_by_a_reader_too(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id, GenerationStatus.PREPARING, GenerationStatus.PLANNING
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START,
+            until=START + timedelta(hours=2),
+        )
+        env.clock.advance(minutes=15, seconds=1)
+        env.generations.heartbeat(generation_id, now=env.clock.now)  # still alive
+
+        manager.stream_events(ADMIN, generation_id)
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.FAILED
+        assert generation.error_context == {"limit": "plan_wait_minutes", "value": 15}
+        assert env.generations.get_lock(ADMIN.sub) is None
+
+    def test_a_stalled_lock_does_not_stop_the_next_start(self, env: _Env) -> None:
+        manager = env.manager(max_concurrent=2)
+        file = env.ready_file()
+        first = _start(manager, file)
+        _left_alone(env, first)
+        env.clock.advance(minutes=6)
+
+        second = _start(manager, file)
+
+        assert second != first
+        assert _current(env, first).error_code == "generation_stalled"
+        lock = env.generations.get_lock(ADMIN.sub)
+        assert lock is not None and lock.generation_id == second
+
+    def test_a_running_generation_still_holds_the_lock(self, env: _Env) -> None:
+        manager = env.manager(max_concurrent=2)
+        file = env.ready_file()
+        first = _start(manager, file)
+        env.clock.advance(minutes=4)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
+        ):
+            _start(manager, env.ready_file())
+        assert _current(env, first).status is GenerationStatus.PREPARING
+
+    def test_a_plan_request_for_a_stalled_one_is_not_awaiting(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+        env.clock.advance(minutes=6)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.GENERATION_NOT_AWAITING_PLAN
+        ):
+            manager.request_control(ADMIN, generation_id, "approve")
+        assert _current(env, generation_id).error_code == "generation_stalled"
+
+    def test_a_thread_ended_by_a_reader_stops_without_writing(self, env: _Env) -> None:
+        manager = env.manager(max_concurrent=1, control_poll_seconds=0.01)
+        file = env.ready_file()
+        generation_id = _start_confirming(manager, file)
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)  # no heartbeat: heartbeat_seconds is long
+        env.clock.advance(minutes=6)
+
+        manager.stream_events(ADMIN, generation_id)
+        run.join()
+
+        kinds = [k for k, _ in _events(env, generation_id)]
+        assert kinds.count("error") == 1 and "cancelled" not in kinds
+        assert _current(env, generation_id).error_code == "generation_stalled"
+        assert len(env.sandbox.stopped) == 1  # its own session, stopped quietly
+        _start(manager, file)  # BR32.5: the slot went back
+
+
+class TestElapsedWithPlanWaits:
+    """W5-1.3: the clock does not count the plan waits."""
+
+    def test_a_waiting_generation_stops_its_clock(self, env: _Env) -> None:
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id,
+            GenerationStatus.PREPARING,
+            GenerationStatus.PLANNING,
+            updates={"waited_seconds": 60},
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START + timedelta(minutes=3),
+            until=START + timedelta(hours=2),
+        )
+        env.clock.advance(minutes=4)
+
+        elapsed = manager.elapsed_clock(ADMIN, generation_id)
+
+        # 3 minutes until the card, less the 60 seconds waited before
+        assert elapsed.seconds == 120 and elapsed.running is False
+
+
+class TestControlLogs:
+    """Step 17: NFR3.29, NFR3.30, NFR6.16〜NFR6.18."""
+
+    def test_a_replan_and_a_cancel_are_logged_without_text(
+        self, env: _Env, capsys
+    ) -> None:
+        logs = LogCapture(capsys)
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+        manager.request_control(
+            ADMIN, generation_id, "replan", revised_purpose="社外秘の指示"
+        )
+        _await_card(env, generation_id, replans=1)
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+        requested = logs.events("advanced_generation.control_requested")
+        assert [r["action"] for r in requested] == ["replan", "cancel"]
+        taken = logs.events("advanced_generation.control_taken")
+        assert [t["action"] for t in taken] == ["replan", "cancel"]
+        assert all(isinstance(t["latency_ms"], int) for t in taken)
+        (finished,) = logs.events("advanced_generation.finished")
+        assert finished["status"] == "cancelled" and finished["replan_count"] == 1
+        assert "waited_seconds" in finished
+        session_id = _current(env, generation_id).session_id
+        assert session_id
+        assert_not_leaked("社外秘", logs.records())
+        assert_not_leaked(session_id, logs.records())
+
+    def test_the_reader_and_the_plan_wait_are_logged(self, env: _Env, capsys) -> None:
+        logs = LogCapture(capsys)
+        manager = env.manager()
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id, GenerationStatus.PREPARING, GenerationStatus.PLANNING
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START,
+            until=START + timedelta(hours=2),
+        )
+        env.clock.advance(minutes=15, seconds=1)
+        env.generations.heartbeat(generation_id, now=env.clock.now)
+
+        manager.stream_events(ADMIN, generation_id)
+
+        (expired,) = logs.events("advanced_generation.plan_wait_expired")
+        assert expired["limit"] == "plan_wait_minutes"
+        assert expired["waited_seconds"] == 901
+        (reader,) = logs.events("advanced_generation.ended_by_reader")
+        assert reader["judged_by"] == "reader"
+        assert reader["error_code"] == ErrorCode.GENERATION_TIMEOUT.value
+
+
+class _UnreachableSandbox(_Sandbox):
+    """Code Interpreter that cannot be reached (BR33.2)."""
+
+    def start_session(self, generation_id: str, lifetime_seconds: int):
+        from src.services.sandbox_service import SandboxUnavailableError
+
+        raise SandboxUnavailableError(
+            "StartCodeInterpreterSession failed: ConnectTimeoutError at endpoint-x",
+            context={"cause": "code_interpreter"},
+        )
+
+
+class TestSandboxUnreachable:
+    """Step 16: BR33.1, BR33.2, NFR5.49, AC9.5.1, AC9.5.2."""
+
+    def test_only_the_advanced_generation_fails(self, env: _Env, capsys) -> None:
+        from src.managers import persona_generation_manager as ordinary
+
+        logs = LogCapture(capsys)
+        env.sandbox = _UnreachableSandbox(
+            read_object=lambda key: b"", root_dir=env.sandbox.root_dir
+        )
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+        agent = Mock()
+        agent.create_generation_agent.return_value = Mock()
+        agent.run_persona_generation.return_value = (
+            ordinary._PersonaListOutput(
+                personas=[
+                    ordinary._PersonaOutput(
+                        name="田中",
+                        age=30,
+                        occupation="会社員",
+                        background="背景",
+                        values=["v"],
+                        pain_points=["p"],
+                        goals=["g"],
+                    )
+                ]
+            ),
+            [],
+        )
+        normal = ordinary.PersonaGenerationManager(
+            agent_service=agent,
+            dataset_analysis_service=Mock(),
+            candidate_store=env.candidates,
+            s3_service=Mock(),
+            clock=env.clock,
+        )
+
+        manager.run(generation_id)
+        result = normal.generate(
+            ADMIN,
+            file_contents=[("十分な長さのインタビュー本文です。".encode(), "a.txt")],
+            data_type="interview",
+            persona_count=1,
+        )
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_SANDBOX_UNAVAILABLE.value
+        assert generation.error_context == {"cause": "code_interpreter"}
+        assert len(result.personas) == 1
+        # AC9.5.1: the exception text is nowhere
+        assert_not_leaked(
+            "ConnectTimeoutError",
+            logs.records(),
+            [e.to_dict() for e in env.generations.read_events(generation_id)],
+            generation.to_dict(),
+        )
+        assert env.generations.get_lock(ADMIN.sub) is None
+
+
+# --- U5 review fixes ----------------------------------------------------------
+
+
+class _ObservedStore(AdvancedGenerationStore):
+    """The real store that notes the holds at each event and runs hooks.
+
+    ``after_verifying`` runs right after the move into ``verifying``;
+    ``before_parts`` right before the result parts are written (after the
+    record and the candidates).
+    """
+
+    def __init__(self, env: _Env) -> None:
+        super().__init__(
+            region=REGION,
+            table_name=GENERATIONS_TABLE,
+            source_files_table_name=SOURCE_FILES_TABLE,
+            client=env.generations.client,
+        )
+        self.env = env
+        self.held_at_event: list[tuple[str, bool]] = []
+        self.after_verifying: Any = None
+        self.before_parts: Any = None
+
+    def append_event(self, generation_id, event_type, **kwargs):
+        lock = self.env.generations.get_lock(ADMIN.sub)
+        held = lock is not None and lock.generation_id == generation_id
+        self.held_at_event.append((event_type.value, held))
+        return super().append_event(generation_id, event_type, **kwargs)
+
+    def transition(self, generation_id, expected, new_status, **kwargs):
+        moved = super().transition(generation_id, expected, new_status, **kwargs)
+        if moved and new_status is GenerationStatus.VERIFYING and self.after_verifying:
+            self.after_verifying()
+        return moved
+
+    def put_result_parts(self, generation_id, parts, **kwargs):
+        if self.before_parts is not None:
+            self.before_parts()
+        return super().put_result_parts(generation_id, parts, **kwargs)
+
+
+def _held_at_stop(env: _Env, file: SourceFile) -> list[bool]:
+    """Whether the lock or the mark was still held each time the session stopped."""
+    seen: list[bool] = []
+    stop = env.sandbox.stop_session
+
+    def observed(session: SandboxSession) -> None:
+        mark = env.files.get(file.source_file_id)
+        seen.append(
+            env.generations.get_lock(ADMIN.sub) is not None
+            or (mark is not None and mark.in_use_by is not None)
+        )
+        stop(session)
+
+    env.sandbox.stop_session = observed  # type: ignore[method-assign]
+    return seen
+
+
+def _candidate_count(env: _Env) -> int:
+    return int(
+        env.candidates.client.scan(TableName=CANDIDATES_TABLE, Select="COUNT")["Count"]
+    )
+
+
+def _record_exists(env: _Env, generation_id: str) -> bool:
+    try:
+        env.s3.get_object_tags(record_key(ADMIN.sub, generation_id))
+    except S3ServiceError:
+        return False
+    return True
+
+
+def _model_down() -> None:
+    raise AgentServiceError(
+        "advanced analysis agent failed (ThrottlingException)",
+        code=ErrorCode.GENERATION_SANDBOX_UNAVAILABLE,
+        context={"cause": "model"},
+    )
+
+
+class TestEndOrder:
+    """Review fix 1: the holds go before the end shows and the session stops."""
+
+    def test_a_failure_releases_before_the_error_and_the_session_stop(
+        self, env: _Env
+    ) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        stops = _held_at_stop(env, file)
+        env.agents.on_analysis = _model_down
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).status is GenerationStatus.FAILED
+        assert ("error", False) in store.held_at_event
+        assert stops == [False]
+        # the same file starts again at once (no 409 after 失敗しました)
+        _start(manager, file)
+
+    def test_done_releases_before_the_result_and_the_session_stop(
+        self, env: _Env
+    ) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        stops = _held_at_stop(env, file)
+
+        manager.run(generation_id)
+
+        generation = _current(env, generation_id)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.finished_at is not None
+        assert ("result", False) in store.held_at_event
+        assert stops == [False]
+
+    def test_a_start_frees_a_lock_left_by_an_ended_generation(self, env: _Env) -> None:
+        manager = env.manager(max_concurrent=2)
+        file = env.ready_file()
+        first = _start(manager, file)
+        # ended, but its lock and mark were not released (yet)
+        env.generations.transition(
+            first, GenerationStatus.PREPARING, GenerationStatus.FAILED
+        )
+
+        second = _start(manager, file)
+
+        lock = env.generations.get_lock(ADMIN.sub)
+        assert lock is not None and lock.generation_id == second
+        mark = env.files.get(file.source_file_id)
+        assert mark is not None and mark.in_use_by == second
+        assert _current(env, first).status is GenerationStatus.FAILED
+
+    def test_a_live_generations_lock_still_refuses_the_start(self, env: _Env) -> None:
+        manager = env.manager(max_concurrent=2)
+        file = env.ready_file()
+        first = _start(manager, file)
+
+        with raises_code(
+            AdvancedGenerationError, ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING
+        ):
+            _start(manager, env.ready_file())
+        lock = env.generations.get_lock(ADMIN.sub)
+        assert lock is not None and lock.generation_id == first
+
+
+#: The watch never reads: only the check right before the results can see it.
+_NO_WATCH = {"control_poll_seconds": 3600}
+
+
+class TestNothingKeptAfterALateEnd:
+    """Review fix 2: BR31.2 holds after the last checkpoint too."""
+
+    def _stall(self, env: _Env, manager, generation_id: str) -> None:
+        env.clock.advance(minutes=6)  # no heartbeat: a reader ends it (BR32.1)
+        manager.stream_events(ADMIN, generation_id)
+
+    def _assert_nothing_kept(self, env: _Env, generation_id: str) -> None:
+        generation = _current(env, generation_id)
+        assert generation.candidate_ids is None
+        assert _candidate_count(env) == 0
+        assert not _record_exists(env, generation_id)
+        kinds = [k for k, _ in _events(env, generation_id)]
+        assert "result" not in kinds
+
+    def test_an_end_by_a_reader_before_the_results_keeps_nothing(
+        self, env: _Env
+    ) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store, **_NO_WATCH)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        store.after_verifying = lambda: self._stall(env, manager, generation_id)
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).error_code == "generation_stalled"
+        self._assert_nothing_kept(env, generation_id)
+        _start(manager, file)
+
+    def test_an_end_by_a_reader_while_writing_removes_what_was_written(
+        self, env: _Env
+    ) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store, **_NO_WATCH)
+        generation_id = _start(manager, env.ready_file())
+        store.before_parts = lambda: self._stall(env, manager, generation_id)
+
+        manager.run(generation_id)
+
+        assert _current(env, generation_id).error_code == "generation_stalled"
+        self._assert_nothing_kept(env, generation_id)
+
+    def test_a_cancel_before_the_results_ends_cancelled(self, env: _Env) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store, **_NO_WATCH)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        store.after_verifying = lambda: manager.request_control(
+            ADMIN, generation_id, "cancel"
+        )
+
+        manager.run(generation_id)
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        self._assert_nothing_kept(env, generation_id)
+
+    def test_a_cancel_while_writing_ends_cancelled_and_removes_them(
+        self, env: _Env
+    ) -> None:
+        store = _ObservedStore(env)
+        manager = env.manager(generation_store=store, **_NO_WATCH)
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        store.before_parts = lambda: manager.request_control(
+            ADMIN, generation_id, "cancel"
+        )
+
+        manager.run(generation_id)
+
+        _assert_cancelled_and_released(env, generation_id, file)
+        self._assert_nothing_kept(env, generation_id)
+
+
+class TestPlanDecisionOnly:
+    """Review fix 3: the plan route takes approve and replan only."""
+
+    def _awaiting(self, env: _Env, manager) -> str:
+        file = env.ready_file()
+        generation_id = _start(manager, file)
+        env.generations.transition(
+            generation_id, GenerationStatus.PREPARING, GenerationStatus.PLANNING
+        )
+        env.generations.enter_awaiting(
+            generation_id,
+            ADMIN.sub,
+            [file.source_file_id],
+            now=START,
+            until=START + timedelta(hours=1),
+        )
+        return generation_id
+
+    @pytest.mark.parametrize("action", ["cancel", "", "stop"])
+    def test_anything_but_approve_or_replan_is_refused(
+        self, env: _Env, action: str
+    ) -> None:
+        manager = env.manager()
+        generation_id = self._awaiting(env, manager)
+
+        with raises_code(AdvancedGenerationError, ErrorCode.REQUEST_INVALID):
+            manager.decide_plan(ADMIN, generation_id, action)
+
+        generation = _current(env, generation_id)
+        assert generation.status is AWAITING
+        assert generation.control_request is None
+
+    def test_approve_and_replan_are_written(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = self._awaiting(env, manager)
+
+        manager.decide_plan(ADMIN, generation_id, "replan", revised_purpose="20 代")
+
+        request = _current(env, generation_id).control_request
+        assert request is not None and request.action.value == "replan"
+        assert request.revised_purpose == "20 代"
+
+    def test_someone_elses_is_still_not_found(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = self._awaiting(env, manager)
+
+        with raises_code(AdvancedGenerationError, ErrorCode.GENERATION_NOT_FOUND):
+            manager.decide_plan(OTHER, generation_id, "approve")

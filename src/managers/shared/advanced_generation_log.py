@@ -32,7 +32,29 @@ ALLOWED_FIELDS: dict[str, frozenset[str]] = {
             "durations_ms",
             "total_ms",
             "tool_calls",
+            # U5 NFR6.17
+            "replan_count",
+            "waited_seconds",
         }
+    ),
+    # U5 (observability-design.md NFR6.16): IDs, actions, states, codes,
+    # counts and milliseconds only. Never the instruction or the session ID.
+    "advanced_generation.control_requested": frozenset({"generation_id", "action"}),
+    "advanced_generation.control_taken": frozenset(
+        {
+            "generation_id",
+            "action",
+            "stage",
+            "replan_count",
+            "waited_seconds",
+            "latency_ms",
+        }
+    ),
+    "advanced_generation.ended_by_reader": frozenset(
+        {"generation_id", "stage", "error_code", "status", "judged_by"}
+    ),
+    "advanced_generation.plan_wait_expired": frozenset(
+        {"generation_id", "limit", "waited_seconds"}
     ),
     # U3 (observability-design.md): counts, codes and time of the preparation.
     # No line number, column name or value.

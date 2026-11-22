@@ -125,6 +125,10 @@ class SandboxService(Protocol):
 
     def stop_session(self, session: SandboxSession) -> None: ...
 
+    def stop_session_by_id(self, session_id: str) -> None:
+        """Stop a session known only by its ID (U5: a reader ends a generation)."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # shared helpers
@@ -537,17 +541,22 @@ class CodeInterpreterSandbox:
 
     def stop_session(self, session: SandboxSession) -> None:
         """Stop the session; raises after the retries (the caller logs it)."""
+        self.stop_session_by_id(session.session_id)
+
+    def stop_session_by_id(self, session_id: str) -> None:
+        """Stop a session by its ID; raises after the retries (NFR5.48)."""
 
         def stop() -> Any:
             return self.client.stop_code_interpreter_session(
                 codeInterpreterIdentifier=self.code_interpreter_id,
-                sessionId=session.session_id,
+                sessionId=session_id,
             )
 
         self._retrying("StopCodeInterpreterSession", stop)
-        logger.info(
-            "code interpreter session stopped: session_id=%s", session.session_id
-        )
+        with self._lock:
+            for key in [k for k in self._commands if k[0] == session_id]:
+                self._commands.pop(key)
+        logger.info("code interpreter session stopped: session_id=%s", session_id)
 
     def _stop_quietly(self, session: SandboxSession) -> None:
         try:
@@ -749,9 +758,13 @@ class InProcessSandbox:
             self._commands.pop((session.session_id, command_id), None)
 
     def stop_session(self, session: SandboxSession) -> None:
+        self.stop_session_by_id(session.session_id)
+
+    def stop_session_by_id(self, session_id: str) -> None:
+        """Remove the session's folder; an unknown ID does nothing."""
         with self._lock:
-            workdir = self._workdirs.pop(session.session_id, None)
-            for key in [k for k in self._commands if k[0] == session.session_id]:
+            workdir = self._workdirs.pop(session_id, None)
+            for key in [k for k in self._commands if k[0] == session_id]:
                 self._commands.pop(key)
         if workdir:
             shutil.rmtree(workdir, ignore_errors=True)

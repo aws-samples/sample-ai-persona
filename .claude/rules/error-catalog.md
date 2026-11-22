@@ -106,6 +106,12 @@ flowchart TD
   （例: `SEGMENT_CSV_URL_MISSING` は名前に `MISSING` を含むが内部要因なので `TRANSIENT`、
   `FILE_DELETE_NOT_ALLOWED` は入力修正で解決しないので `VALIDATION` ではない）
 - `UNKNOWN` は `TRANSIENT`。未分類の失敗が「入力を直せば解決する」ように見えてはならない
+- 高度な生成（ベータ）の途中の操作（U5）のコードはすべて `TRANSIENT`。どれも入力を直すのではなく、
+  待つ・進み具合を確かめる・始め直すことで解決するため（`GENERATION_STALLED`: 止まった生成、
+  `GENERATION_NOT_AWAITING_PLAN`: 計画の確認待ちでない・中止の手続き中、`GENERATION_ALREADY_FINISHED`:
+  終わった生成への中止、`GENERATION_SOURCE_NOT_READY`: 検査中のファイル）。Router はこの 3 つと
+  `ADVANCED_GENERATION_ALREADY_RUNNING` を 409 で返す（`_CONFLICT_CODES`）。`GENERATION_TIMEOUT` の文言は
+  `context["limit"]`（`generation_minutes`・`plan_wait_minutes`・`plan_wait_total_minutes`）で分ける
 - **同じ事象でも、利用者が取れる行動が違えばコードを分ける。** 例: 件数不足はフィルタありなら
   「条件を緩める」（`SURVEY_AVAILABLE_PERSONAS_TOO_FEW`）、フィルタなしなら「データセットを変える」
   （`SURVEY_DATASET_TOO_FEW_ROWS`）。行動につながらない案内は VALIDATION の意味を失わせる

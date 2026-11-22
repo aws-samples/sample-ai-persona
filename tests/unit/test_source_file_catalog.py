@@ -200,9 +200,31 @@ class TestReadySources:
             catalog.ready_sources(OWNER, [d.source_file_id for d in docs])
 
     @pytest.mark.parametrize(
+        "status", [SourceFileStatus.UPLOADING, SourceFileStatus.INSPECTING]
+    )
+    def test_a_file_still_uploading_or_inspected_is_not_ready(self, status) -> None:
+        # U5 BR30.3, AC9.2.3: the user waits until it is ready
+        good, waiting = _document(), _document(status=status)
+        catalog = self._catalog_of(good, waiting)
+
+        with raises_code(_CallerError, ErrorCode.GENERATION_SOURCE_NOT_READY):
+            catalog.ready_sources(OWNER, [good.source_file_id, waiting.source_file_id])
+
+    def test_someone_elses_waiting_file_is_still_not_found(self) -> None:
+        waiting = _document(
+            owner_sub="someone-else", status=SourceFileStatus.INSPECTING
+        )
+        catalog, store = _catalog()
+        store.get_for_owner.side_effect = lambda i, owner: (
+            waiting if waiting.owner_sub == owner else None
+        )
+
+        with raises_code(_CallerError, ErrorCode.GENERATION_SOURCE_NOT_FOUND):
+            catalog.ready_sources(OWNER, [waiting.source_file_id])
+
+    @pytest.mark.parametrize(
         "bad",
         [
-            lambda: _document(status=SourceFileStatus.INSPECTING),
             lambda: _document(owner_sub="someone-else"),
             lambda: _document(status=SourceFileStatus.ERROR),
         ],

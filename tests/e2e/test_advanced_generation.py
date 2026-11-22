@@ -141,8 +141,9 @@ def test_code_interpreter_session_outlives_15_minutes() -> None:
     """The session opened with the app's lifetime is still usable after 16 minutes.
 
     Code Interpreter's default session timeout is 900 seconds; the app asks for
-    ``ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS`` (3900) so the 60-minute
-    generation keeps its session (NFR5.10). Also shows that a session opens on
+    ``ADVANCED_GENERATION_SESSION_TIMEOUT_SECONDS`` (7800 since U5: 60 minutes
+    of work and 60 of plan waits) so the generation keeps its session (NFR5.10,
+    NFR5.50). Also shows that a session opens on
     the Code Interpreter without an execution role.
     """
     code_interpreter_id = os.environ.get("E2E_CODE_INTERPRETER_ID", "").strip()
@@ -549,4 +550,97 @@ def test_table_and_document_together(
     )
     assert quotes.count() > 0, "no document evidence reached the result"
     created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()
+
+
+# --- U5: the plan confirmation and the cancel (NFR1.23, NFR7.4, NFR9.10) ------
+
+#: The plan of a small CSV comes within a few minutes; wait a little longer.
+PLAN_TIMEOUT_MS = 10 * 60 * 1000
+#: NFR1.23: a cancel takes effect within 10 seconds (plus a model call that
+#: was running, which may take minutes).
+CANCEL_TIMEOUT_MS = 6 * 60 * 1000
+
+
+def _start_without_waiting(page: Page, run_tag: str, *, confirm_plan: bool) -> None:
+    page.get_by_test_id("advanced-purpose").fill(
+        f"{run_tag} 年代と購入の傾向で分かれるお客さまの層を知りたい"
+    )
+    page.get_by_test_id("advanced-persona-count").select_option(str(PERSONA_COUNT))
+    if confirm_plan:
+        page.get_by_test_id("advanced-confirm-plan").check()
+    button = page.get_by_test_id("advanced-generate-button")
+    expect(button).to_be_enabled()
+    button.click()
+    expect(page.get_by_test_id("advanced-progress")).to_be_visible()
+
+
+def test_plan_is_confirmed_and_the_generation_completes(
+    session_context: BrowserContext, created: CreatedRecords, run_tag: str
+) -> None:
+    """US8.1 (AC8.1.1): the card shows the plan, approving runs to the end."""
+    before = _persona_ids(session_context)
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    _upload_sample(page)
+    _start_without_waiting(page, run_tag, confirm_plan=True)
+
+    card = page.get_by_test_id("advanced-plan-card")
+    expect(card).to_be_visible(timeout=PLAN_TIMEOUT_MS)
+    expect(page.get_by_test_id("advanced-stage-awaiting_plan_approval")).to_be_visible()
+    expect(card.get_by_test_id("advanced-plan-purpose")).not_to_be_empty()
+    card.get_by_test_id("advanced-plan-approve").click()
+    expect(page.get_by_test_id("advanced-plan-accepted")).to_be_visible()
+
+    page.locator(
+        '[data-testid="advanced-result"], [data-testid="advanced-failure"]:not([hidden])'
+    ).first.wait_for(timeout=GENERATION_TIMEOUT_MS)
+    failure = page.get_by_test_id("advanced-failure")
+    assert failure.is_hidden(), f"generation failed: {failure.inner_text()}"
+    expect(
+        page.get_by_test_id("advanced-result").get_by_test_id("advanced-candidate")
+    ).to_have_count(PERSONA_COUNT)
+    created.persona_ids.extend(sorted(_persona_ids(session_context) - before))
+    page.close()
+
+
+def test_a_running_generation_is_cancelled_and_started_again(
+    session_context: BrowserContext, run_tag: str
+) -> None:
+    """US9.3 (AC9.3.1, AC9.3.2): cancel, see 中止しました, start again at once.
+
+    The seconds from the click to 中止しました are printed for code-summary.md
+    (NFR1.23, NFR7.4).
+    """
+    page = session_context.new_page()
+    _open_advanced_page(page)
+    _upload_sample(page)
+    _start_without_waiting(page, run_tag, confirm_plan=False)
+    # Cancel while it runs: once the preparation has reported something
+    expect(page.get_by_test_id("advanced-log")).not_to_be_empty(timeout=PLAN_TIMEOUT_MS)
+
+    clicked = time.monotonic()
+    page.get_by_test_id("advanced-cancel-button").click()
+    expect(page.get_by_test_id("advanced-cancelling")).to_be_visible()
+    cancelled = page.get_by_test_id("advanced-cancelled")
+    expect(cancelled).to_be_visible(timeout=CANCEL_TIMEOUT_MS)
+    seconds = time.monotonic() - clicked
+    print(f"\n[U5 E2E] seconds from the cancel click to 中止しました: {seconds:.1f}")
+    expect(page.get_by_test_id("advanced-failure")).to_be_hidden()
+    # BR33.3: the instruction stays; the same file starts again at once
+    expect(page.get_by_test_id("advanced-purpose")).to_have_value(
+        re.compile(re.escape(run_tag))
+    )
+    button = page.get_by_test_id("advanced-generate-button")
+    expect(button).to_be_enabled()
+    button.click()
+    expect(page.get_by_test_id("advanced-already-running")).to_have_count(0)
+    new_panel = page.get_by_test_id("advanced-progress")
+    expect(new_panel).to_be_visible()
+    expect(page.get_by_test_id("advanced-cancelled")).to_be_hidden()
+    # Leave nothing running behind
+    page.get_by_test_id("advanced-cancel-button").click()
+    expect(page.get_by_test_id("advanced-cancelled")).to_be_visible(
+        timeout=CANCEL_TIMEOUT_MS
+    )
     page.close()

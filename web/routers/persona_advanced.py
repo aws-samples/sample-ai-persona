@@ -50,6 +50,7 @@ from src.managers.source_upload_manager import SourceUploadManager
 from src.models.advanced_generation import (
     PERSONA_COUNT_MAX,
     PURPOSE_MAX_CHARS,
+    AdvancedGeneration,
     EventType,
     GenerationEvent,
     GenerationStatus,
@@ -90,9 +91,16 @@ generation_executor = ThreadPoolExecutor(
 )
 
 _GENERATION_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-#: Statuses answered with 409 instead of the TRANSIENT 503 (contract C1).
-_CONFLICT_CODES = frozenset({ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING.value})
-_TERMINAL_EVENTS = frozenset({EventType.RESULT, EventType.ERROR})
+#: Statuses answered with 409 instead of the TRANSIENT 503 (contract C1, U5 §5).
+_CONFLICT_CODES = frozenset(
+    {
+        ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING.value,
+        ErrorCode.GENERATION_NOT_AWAITING_PLAN.value,
+        ErrorCode.GENERATION_ALREADY_FINISHED.value,
+        ErrorCode.GENERATION_SOURCE_NOT_READY.value,
+    }
+)
+_TERMINAL_EVENTS = frozenset({EventType.RESULT, EventType.ERROR, EventType.CANCELLED})
 
 _source_upload_manager: SourceUploadManager | None = None
 _advanced_generation_manager: AdvancedPersonaGenerationManager | None = None
@@ -145,6 +153,8 @@ def screen_limits() -> dict[str, object]:
         "inspect_poll_seconds": int(config.ADVANCED_UPLOAD_INSPECT_POLL_SECONDS),
         "inspect_stop_seconds": int(config.ADVANCED_UPLOAD_INSPECT_RETRY_SECONDS),
         "retention_days": int(config.ADVANCED_SOURCE_RETENTION_DAYS),
+        # U5 NFR8.8: 計画のカードを待てる分（「15 分以内に選んでください」）
+        "plan_wait_minutes": int(config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS) // 60,
     }
 
 
@@ -477,14 +487,55 @@ def render_progress(request: Request, generation_id: str) -> HTMLResponse:
     )
 
 
+async def _already_running(
+    request: Request, principal: Principal, message: str
+) -> Response:
+    """The notice under the form and the running generation's progress (BR30.2).
+
+    409 so the request reads as refused; ``mark_renderable`` lets htmx put it
+    in the progress area below the form. No running one found: the notice only.
+    """
+    manager = get_advanced_generation_manager()
+    generation_id: Optional[str] = None
+    elapsed: Optional[ElapsedClock] = None
+    try:
+        generation_id = await run_in_threadpool(
+            manager.running_generation_id, principal
+        )
+        if generation_id is not None:
+            elapsed = await run_in_threadpool(
+                manager.elapsed_clock, principal, generation_id
+            )
+    except CodedError:
+        logger.info("running advanced generation not readable")
+    return mark_renderable(
+        templates.TemplateResponse(
+            request,
+            "persona/partials/advanced_progress.html",
+            {
+                "request": request,
+                "generation_id": generation_id,
+                "elapsed": elapsed,
+                "notice": message,
+            },
+            status_code=409,
+        )
+    )
+
+
 @router.post("/advanced/generations", response_class=HTMLResponse)
 async def start_generation(
     request: Request,
     source_file_ids: list[str] = Form(default=[]),
     purpose: str = Form(""),
     persona_count: int = Form(...),
+    confirm_plan: bool = Form(False),
 ) -> Any:
-    """生成を始め、進み具合の区画を返す（W4）。``run`` は専用のプールで動く。"""
+    """生成を始め、進み具合の区画を返す（W4）。``run`` は専用のプールで動く。
+
+    U5: 「分析の計画を確認してから実行する」を ``confirm_plan`` で受け取る（BR29.1）。
+    実行中の生成があるときは、その旨と実行中の生成の進み具合を 409 で返す（BR30.2）。
+    """
     principal = _principal(request)
     manager = get_advanced_generation_manager()
     try:
@@ -494,6 +545,7 @@ async def start_generation(
             source_file_ids=list(source_file_ids),
             purpose=purpose,
             persona_count=persona_count,
+            confirm_plan=confirm_plan,
         )
     except CodedError as e:
         logger.info("advanced generation not started")
@@ -501,7 +553,10 @@ async def start_generation(
             raise  # 403 は共通の例外ハンドラ（トースト）
         if is_correctable(e):
             return _form_error(request, user_message_for(e))
-        return toast_response(e, status_code=_status_of(error_payload(e)["error_code"]))
+        code = error_payload(e)["error_code"]
+        if code == ErrorCode.ADVANCED_GENERATION_ALREADY_RUNNING.value:
+            return await _already_running(request, principal, user_message_for(e))
+        return toast_response(e, status_code=_status_of(code))
     except Exception as e:
         logger.error("advanced generation start failed", exc_info=True)
         return toast_response(e, default="生成を始められませんでした", status_code=500)
@@ -516,6 +571,100 @@ async def start_generation(
         busy = CodedError(code=ErrorCode.ADVANCED_GENERATION_BUSY)
         return toast_response(busy, status_code=503)
     return render_progress(request, generation_id)
+
+
+# --- U5: the plan card and the cancel (C1) -----------------------------------
+
+
+async def _control(
+    request: Request,
+    generation_id: str,
+    action: str,
+    revised_purpose: Optional[str] = None,
+    *,
+    plan_only: bool = False,
+) -> Optional[Response]:
+    """Hand one request to the Manager; the refusal as a response, else ``None``.
+
+    Someone else's or a missing generation is 404, a state that does not
+    allow it 409 (toasts, the screen is left as it is); a too long instruction
+    or an action the plan card does not send goes into the card's own error
+    area (VALIDATION, the input stays). ``plan_only``: the plan route, which
+    takes approve and replan only.
+    """
+    manager = get_advanced_generation_manager()
+    try:
+        await run_in_threadpool(
+            manager.decide_plan if plan_only else manager.request_control,
+            _principal(request),
+            generation_id,
+            action,
+            revised_purpose=revised_purpose,
+        )
+    except CodedError as e:
+        logger.info("advanced generation control refused")
+        if is_correctable(e):
+            return mark_renderable(
+                templates.TemplateResponse(
+                    request,
+                    "partials/error_inline.html",
+                    {"request": request, "error": user_message_for(e)},
+                    status_code=400,
+                    headers={
+                        "HX-Retarget": "find .advanced-plan-error",
+                        "HX-Reswap": "innerHTML",
+                    },
+                )
+            )
+        return toast_response(e, status_code=_status_of(error_payload(e)["error_code"]))
+    except Exception as e:
+        logger.error("advanced generation control failed", exc_info=True)
+        return toast_response(
+            e, default="操作を受け付けられませんでした", status_code=500
+        )
+    return None
+
+
+@router.post("/advanced/generations/{generation_id}/plan", response_class=HTMLResponse)
+async def decide_plan(
+    request: Request,
+    generation_id: str,
+    action: str = Form(...),
+    revised_purpose: str = Form(""),
+) -> Any:
+    """計画の承認、または指示を直して計画し直す（W5-1、BR29.3、BR29.4）。"""
+    revised = revised_purpose if action == "replan" else None
+    refused = await _control(request, generation_id, action, revised, plan_only=True)
+    if refused is not None:
+        return refused
+    return templates.TemplateResponse(
+        request,
+        "persona/partials/advanced_plan_card.html",
+        {
+            "request": request,
+            "generation_id": generation_id,
+            "plan": None,
+            "purpose": revised or "",
+            "awaiting": False,
+            "accepted": action,
+            "limits": screen_limits(),
+        },
+    )
+
+
+@router.post(
+    "/advanced/generations/{generation_id}/cancel", response_class=HTMLResponse
+)
+async def cancel_generation(request: Request, generation_id: str) -> Any:
+    """中止を受け付け、「中止しています」を返す（W5-3、BR31.1、BR31.4）。"""
+    refused = await _control(request, generation_id, "cancel")
+    if refused is not None:
+        return refused
+    return templates.TemplateResponse(
+        request,
+        "persona/partials/advanced_cancel.html",
+        {"request": request, "generation_id": generation_id, "cancelling": True},
+    )
 
 
 # --- progress (C3) -----------------------------------------------------------
@@ -583,6 +732,31 @@ def render_result(result: AdvancedGenerationResult) -> str:
     )
 
 
+def _has_card(progress: GenerationProgress) -> bool:
+    """A plan the user confirms is shown as its card (U5 BR29.2)."""
+    generation = progress.generation
+    return generation.confirm_plan and generation.plan is not None
+
+
+def render_plan_card(
+    generation: AdvancedGeneration, *, accepted: Optional[str] = None
+) -> str:
+    """The plan card as HTML (the C3 ``plan`` payload; escaped, NFR3.28).
+
+    ``accepted``: ``approve`` or ``replan`` once the user chose (the POST's
+    answer); the buttons are then left out.
+    """
+    template = templates.get_template("persona/partials/advanced_plan_card.html")
+    return template.render(
+        generation_id=generation.generation_id,
+        plan=generation.plan,
+        purpose=generation.purpose,
+        awaiting=generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL,
+        accepted=accepted,
+        limits=screen_limits(),
+    )
+
+
 async def _result_frame(
     manager: AdvancedPersonaGenerationManager,
     principal: Principal,
@@ -620,6 +794,14 @@ async def _event_frames(
                     manager, principal, generation_id, event.sequence
                 )
                 terminal_sent = True
+            elif event.event_type is EventType.CANCELLED:
+                # U5 BR31.2: the cancel is not an error; the payload is empty
+                frame = _frame("cancelled", "", event.sequence)
+                terminal_sent = True
+            elif event.event_type is EventType.PLAN and _has_card(progress):
+                frame = _frame(
+                    "plan", render_plan_card(progress.generation), event.sequence
+                )
             elif event.event_type is EventType.ERROR:
                 summary = _summary(event)
                 frame = _frame(
@@ -640,6 +822,8 @@ async def _event_frames(
                 generation = progress.generation
                 if generation.status is GenerationStatus.DONE:
                     yield await _result_frame(manager, principal, generation_id, None)
+                elif generation.status is GenerationStatus.CANCELLED:
+                    yield _frame("cancelled", "")
                 else:
                     yield _frame(
                         "error",
