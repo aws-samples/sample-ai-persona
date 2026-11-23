@@ -292,6 +292,8 @@ class _Agents:
         self.extracted_count = 0
         #: The ``may_retry`` each extraction call was given (BR26.2)
         self.may_retry: list[Any] = []
+        #: The ``purpose`` each extraction call was given (BR26.1)
+        self.extraction_purposes: list[str] = []
         self.instructions_seen = []
         self.documents_seen = []
         self.assignments = {}
@@ -331,11 +333,13 @@ class _Agents:
         document_index,
         chunk_index,
         may_retry=None,
+        purpose="",
     ):
         import threading
 
         with self.lock:
             self.may_retry.append(may_retry)
+            self.extraction_purposes.append(purpose)
             self.calls.append("extraction")
             self.running += 1
             self.max_running = max(self.max_running, self.running)
@@ -2118,6 +2122,21 @@ class TestEvidenceExtraction:
         assert chunks >= 4
         assert env.agents.calls.count("extraction") == chunks
         assert env.agents.max_running <= 2
+
+    @pytest.mark.parametrize("purpose", ["30 代の不満を優先", ""])
+    def test_every_chunk_call_gets_the_users_purpose(
+        self, env: _Env, extraction, purpose: str
+    ) -> None:
+        """The prompt asks to favour the instruction, so it must be sent (BR26.1)."""
+        doc = env.ready_document(_interview(8))
+        manager = env.manager()
+        generation_id = _start_with(manager, doc, purpose=purpose)
+
+        manager.run(generation_id)
+
+        assert env.generations.get(generation_id).status is GenerationStatus.DONE
+        assert env.agents.extraction_purposes
+        assert set(env.agents.extraction_purposes) == {purpose}
 
     def test_progress_says_n_of_m_up_to_the_end(self, env: _Env, extraction) -> None:
         doc = env.ready_document(_interview(8))

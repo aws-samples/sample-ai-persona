@@ -1637,8 +1637,12 @@ class AgentService:
         document_index: int,
         chunk_index: int,
         may_retry: Optional[Callable[[], bool]] = None,
+        purpose: str = "",
     ) -> tuple[Any, dict[str, int]]:
         """Pick evidence out of one chunk with the Manager's schema (U4 BR26.1).
+
+        A non-blank ``purpose`` (the user's instruction) is sent as its own
+        ``purpose`` data block before the chunk; a blank one sends nothing.
 
         ``agent(message, structured_output_model=...)`` is used rather than
         ``structured_output()`` because only the former returns the token
@@ -1660,17 +1664,19 @@ class AgentService:
             AgentServiceError: The model call failed
                 (``GENERATION_SANDBOX_UNAVAILABLE``, cause ``model``).
         """
-        message = "\n\n".join(
-            [
-                prompt,
-                wrap_untrusted_data(
-                    chunk_text,
-                    "document",
-                    document_index=str(document_index),
-                    chunk_index=str(chunk_index),
-                ),
-            ]
+        blocks = [prompt]
+        if purpose.strip():
+            # The prompt says the user's instruction follows as data (BR26.1)
+            blocks.append(wrap_untrusted_data(purpose, "purpose"))
+        blocks.append(
+            wrap_untrusted_data(
+                chunk_text,
+                "document",
+                document_index=str(document_index),
+                chunk_index=str(chunk_index),
+            )
         )
+        message = "\n\n".join(blocks)
 
         retries = max(0, int(config.ADVANCED_EVIDENCE_MAX_RETRIES))
         wait = float(config.ADVANCED_EVIDENCE_RETRY_BASE_SECONDS)

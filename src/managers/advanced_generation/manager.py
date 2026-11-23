@@ -1499,6 +1499,7 @@ class AdvancedPersonaGenerationManager:
                 document_index=source_index,
                 chunk_index=chunk,
                 may_retry=lambda: not stopped.is_set(),
+                purpose=state.generation.purpose,
             )
         except BaseException as e:
             # list.append is atomic: the first item is the earliest failure.
