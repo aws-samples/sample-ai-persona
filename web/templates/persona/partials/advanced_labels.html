@@ -8,7 +8,7 @@
 
 {# U6 の追加の設計: 計画の手順の種類と、読んだ定石の名前 #}
 {% macro step_label(kind) -%}
-{{ {"filter": "対象を絞って集計", "compare": "群どうしを比べる", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定"}.get(kind, kind) }}
+{{ {"filter": "対象を絞って集計", "compare": "群どうしの比較", "cluster": "似た人をまとめる", "join": "CSV を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定"}.get(kind, kind) }}
 {%- endmacro %}
 
 {% macro encoding_label(encoding) -%}
@@ -42,19 +42,19 @@
 
 {# 分析の記録: 分析エージェントが使った道具の名前（決まった 5 つ） #}
 {% macro tool_label(tool) -%}
-{{ {"profile_dataset": "データの全体像を確かめた", "analyze_dataset": "条件を指定して集計した", "cluster_segments": "似た人をまとめた", "run_code": "AI が書いたプログラムで分析した", "load_playbook": "分析の定石を読んだ"}.get(tool, "分析した") }}
+{{ {"profile_dataset": "データの全体像を確認", "analyze_dataset": "条件を指定して集計", "cluster_segments": "似た人のグループ分け", "run_code": "AI が書いたプログラムで分析", "load_playbook": "分析の定石を読み込み"}.get(tool, "分析") }}
 {%- endmacro %}
 
 {# 分析の記録: 実行したコードのブロックが何をしたか（関数名でなく処理の言葉）。固定の対応で、利用者のデータは入らない #}
 {% macro block_summary(block) -%}
 {%- set code = block.get("code", "") -%}
-{%- if block.get("kind") == "ai_written" -%}AI が書いたプログラムで、条件に合わせて分析した
-{%- elif code.startswith("prepare_document(") -%}文書を読み込み、文字を取り出した
-{%- elif code.startswith("prepare(") -%}CSV を読み込み、文字コードと列の型を確かめた
-{%- elif code.startswith("profile_dataset(") -%}各列の型・欠けた値・分布を調べて、データの全体像をつかんだ
-{%- elif code.startswith("analyze_dataset(") -%}条件を指定して、群ごとに集計した
-{%- elif code.startswith("cluster_segments(") -%}似た特徴の人どうしをまとめて、層に分けた
-{%- elif code.startswith("verify_quotes(") -%}根拠の引用が、文書の中にあるかを照合した
-{%- else -%}分析の処理を行った
+{%- if block.get("kind") == "ai_written" -%}AI が書いたプログラムによる分析
+{%- elif code.startswith("prepare_document(") -%}文書の読み込み（文字の取り出し）
+{%- elif code.startswith("prepare(") -%}CSV の読み込み（文字コードと列の型を確認）
+{%- elif code.startswith("profile_dataset(") -%}データの全体像を確認（列の型・欠けた値・分布）
+{%- elif code.startswith("analyze_dataset(") -%}条件を指定した群ごとの集計
+{%- elif code.startswith("cluster_segments(") -%}似た特徴の人どうしのグループ分け
+{%- elif code.startswith("verify_quotes(") -%}根拠の引用を文書と照合
+{%- else -%}分析の処理
 {%- endif -%}
 {%- endmacro %}

@@ -15,9 +15,9 @@
     {% if record %}
     {% set plan = record.plan %}
     {% set steps = plan.get("steps") or [{"kind": plan.get("method", ""), "reason": plan.get("rationale", "")}] %}
-    <ol class="space-y-4 text-sm text-gray-800 mb-4" data-testid="advanced-record-flow">
-        <li data-testid="advanced-record-purpose">
-            <h3 class="font-medium text-gray-900">1. AI が読み取った目的</h3>
+    <ol class="space-y-3 text-sm text-gray-800 mb-5" data-testid="advanced-record-flow">
+        <li data-testid="advanced-record-purpose" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">1</span>AI が読み取った目的</h3>
             <p class="mt-1">{{ plan.get("interpreted_purpose", "") }}</p>
             {% if plan.get("questions") %}
             <p class="mt-2 text-gray-600">答えを出そうとした問い</p>
@@ -26,43 +26,44 @@
             </ul>
             {% endif %}
         </li>
-        <li data-testid="advanced-record-plan">
-            <h3 class="font-medium text-gray-900">2. 分析の計画</h3>
-            <ol class="list-decimal ml-5 mt-1" data-testid="advanced-record-steps">
+        <li data-testid="advanced-record-plan" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">2</span>分析の計画</h3>
+            <ol class="list-decimal ml-5 mt-2 space-y-1" data-testid="advanced-record-steps">
                 {% for step in steps %}
-                <li data-kind="{{ step.get('kind', '') }}"><span class="font-medium">{{ step_label(step.get("kind", "")) }}</span>{% if step.get("reason") %}: {{ step.get("reason") }}{% endif %}</li>
+                <li data-kind="{{ step.get('kind', '') }}"><span class="font-semibold">{{ step_label(step.get("kind", "")) }}</span>{% if step.get("reason") %}<span class="block text-gray-700">{{ step.get("reason") }}</span>{% endif %}</li>
                 {% endfor %}
             </ol>
             {% if plan.get("deviation_reason") %}
             <p class="mt-2 text-gray-700" data-testid="advanced-record-deviation">通常と違う方法を選んだ理由: {{ plan.get("deviation_reason") }}</p>
             {% endif %}
         </li>
-        <li data-testid="advanced-record-run">
-            <h3 class="font-medium text-gray-900">3. 実際に行った分析</h3>
+        <li data-testid="advanced-record-run" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">3</span>実際に行った分析</h3>
             {% if record.tool_calls %}
             {#- 同じ定石を読み直した呼び出しは 1 つにまとめる -#}
             {% set read = namespace(names=[]) %}
-            <ol class="list-decimal ml-5 mt-1" data-testid="advanced-record-calls">
+            <ul class="mt-2 space-y-1" data-testid="advanced-record-calls">
                 {% for call in record.tool_calls %}
                 {% set again = call.get("playbook") and call.get("playbook") in read.names %}
                 {% if call.get("playbook") and not again %}{% set read.names = read.names + [call.get("playbook")] %}{% endif %}
                 {% if not again %}
                 <li data-testid="advanced-record-call" data-tool="{{ call.get('tool', '') }}">
+                    {% if call.get("ok") is sameas false %}<span aria-hidden="true" class="text-red-800">✗</span>{% else %}<span aria-hidden="true" class="text-green-800">✓</span>{% endif %}
                     {{ tool_label(call.get("tool", "")) }}
                     {%- if call.get("playbook") %}（<span data-testid="advanced-record-playbook" data-name="{{ call.get('playbook') }}">{{ step_label(call.get("playbook")) }}</span>）{% endif %}
-                    {%- if call.get("ok") is sameas false %} <span class="text-red-800" data-testid="advanced-record-call-failed">うまくいかず、やり直した</span>{% endif %}
+                    {%- if call.get("ok") is sameas false %} <span class="text-red-800" data-testid="advanced-record-call-failed">失敗（やり直し）</span>{% endif %}
                 </li>
                 {% endif %}
                 {% endfor %}
-            </ol>
+            </ul>
             {% else %}
             <p class="mt-1 text-gray-700">分析の操作の記録はありません</p>
             {% endif %}
         </li>
-        <li data-testid="advanced-record-files">
-            <h3 class="font-medium text-gray-900">4. 使ったファイル</h3>
+        <li data-testid="advanced-record-files" class="border border-gray-200 rounded-lg p-4">
+            <h3 class="font-semibold text-gray-900 flex items-center gap-2"><span class="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold" aria-hidden="true">4</span>使ったファイル</h3>
             {% if record.source_checksums %}
-            <ul class="mt-1" data-testid="advanced-record-sources">
+            <ul class="mt-2 space-y-1 break-all" data-testid="advanced-record-sources">
                 {% for _ in record.source_checksums %}
                 {% set name = record.source_display_names[loop.index0] if loop.index0 < record.source_display_names | length else "" %}
                 {% set found = judged[loop.index0] if judged and loop.index0 < judged | length else none %}

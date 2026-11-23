@@ -994,6 +994,37 @@ def _record_with_ai_code() -> Any:
     )
 
 
+class TestSegmentCards:
+    def test_layers_are_named_without_ids_and_compared_with_the_whole(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        cards = ui.page.locator("[data-testid='advanced-segment-row']")
+        assert cards.count() == 2
+        names = ui.page.locator("[data-testid='advanced-segment-name']")
+        assert names.nth(0).inner_text() == "若い学生"
+        for i in range(2):
+            assert names.nth(i).inner_text() not in ("S1", "S2")
+        text = ui.page.inner_text("[data-testid='advanced-segments']")
+        assert "S1" not in text and "S2" not in text
+        # S1 is below the whole, S2 is unverified (no share, no features compared)
+        assert "▼ 全体より低い" in cards.nth(0).inner_text()
+        assert "検証で外したため" in cards.nth(1).inner_text()
+        assert (
+            ui.page.locator("[data-testid='advanced-result-summary'] dt").count() >= 1
+        )
+        ui.check_a11y()
+
+
 class TestProgressBar:
     def test_bar_follows_the_stages_in_words_and_value(self, ui: UiHarness) -> None:
         SseFake(
@@ -1092,7 +1123,7 @@ class TestRecordReadsAsTheFlowOfTheAnalysis:
         assert "members.csv" in text
         calls = ui.page.locator("[data-testid='advanced-record-call']")
         assert calls.count() == 2
-        assert "データの全体像" in calls.nth(0).inner_text()
+        assert "データの全体像を確認" in calls.nth(0).inner_text()
         assert (
             ui.page.locator("[data-testid='advanced-record-call-failed']").count() == 1
         )
@@ -1118,9 +1149,9 @@ class TestRecordCodeKinds:
         kinds = ui.page.locator("[data-testid='advanced-record-code-kind']")
         assert "決まった関数" in kinds.nth(0).inner_text()
         # what was done is told in words, not by the function name
-        assert "似た特徴の人どうしをまとめて" in kinds.nth(0).inner_text()
+        assert "似た特徴の人どうしのグループ分け" in kinds.nth(0).inner_text()
         assert "cluster_segments" not in kinds.nth(0).inner_text()
-        assert "AI が書いたプログラムで" in kinds.nth(1).inner_text()
+        assert "AI が書いたプログラムによる分析" in kinds.nth(1).inner_text()
         assert "AI による詳細分析" in kinds.nth(1).inner_text()
         joined = ui.page.inner_text("[data-testid='advanced-record-joined']")
         assert "customer_id" in joined and "80%" in joined
