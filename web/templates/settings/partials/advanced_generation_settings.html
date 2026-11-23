@@ -39,17 +39,17 @@
                        data-testid="advanced-setting-departments"
                        {% if mode != "everyone" %}checked{% endif %}
                        class="border-gray-300 text-blue-600 focus:ring-blue-500">
-                選んだ部署だけ
+                選択グループのみ
             </label>
         </div>
         <p class="text-xs text-gray-600 mt-2">何も選ばないときは、管理者だけが使えます。管理者はいつでも使えます。</p>
     </fieldset>
 
     <div>
-        {{ department_picker("departments", view.departments, selected, mode="scope", id_prefix="advanced-generation-departments", vanished=view.missing_groups, vanished_label="（見つからない部署）", free=True, legend_text="許可グループ（複数選択可）") }}
+        {{ department_picker("departments", view.departments, selected, mode="scope", id_prefix="advanced-generation-departments", vanished=view.missing_groups, vanished_label="（見つからないグループ）", free=True, legend_text="許可グループ（複数選択可）") }}
         {% if view.missing_groups %}
         <p data-testid="advanced-setting-missing" class="text-xs text-yellow-800 mt-2">
-            見つからない部署が {{ view.missing_groups | length }} 件あります。誰にも当たらないので、外して保存できます。
+            見つからないグループが {{ view.missing_groups | length }} 件あります。誰にも当たらないので、外して保存できます。
         </p>
         {% endif %}
     </div>
@@ -59,18 +59,17 @@
         <button type="button" role="switch" id="advanced-setting-detailed"
                 aria-checked="{{ 'true' if allow else 'false' }}"
                 :aria-checked="on.toString()"
-                aria-describedby="advanced-setting-detailed-help advanced-setting-detailed-caution"
+                aria-describedby="advanced-setting-detailed-help"
                 data-testid="advanced-setting-detailed"
                 @click="on = !on"
                 class="mt-0.5 inline-flex items-center gap-2 px-3 py-1 rounded-full border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 :class="on ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-400 text-gray-800'">
             <span x-text="on ? 'ON' : 'OFF'">{{ 'ON' if allow else 'OFF' }}</span>
-            <span class="sr-only">AI による詳細分析を許可する</span>
+            <span class="sr-only">AI による詳細分析を許可</span>
         </button>
         <div>
-            <label for="advanced-setting-detailed" class="text-sm font-medium text-gray-800">AI による詳細分析を許可する</label>
-            <p id="advanced-setting-detailed-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、ほかから切り離した環境で動かして深く分析します。ON にすると、利用者の詳細設定に表示され、最初からチェックが入ります</p>
-            <p id="advanced-setting-detailed-caution" class="text-xs text-gray-600" data-testid="advanced-setting-detailed-caution">ベータの注意: この環境からは AWS の一部のサービスに接続できます。信頼できるデータにだけ使ってください（外部の人が書いた指示が入っているかもしれないファイルには使わないでください）</p>
+            <label for="advanced-setting-detailed" class="text-sm font-medium text-gray-800">AI による詳細分析を許可</label>
+            <p id="advanced-setting-detailed-help" class="text-xs text-gray-600">AI が自律的に分析用のプログラムを作り、サンドボックス環境で動かして分析します。ON にすると、利用者の詳細設定に表示され、最初からチェックが入ります</p>
         </div>
     </div>
 

@@ -777,7 +777,9 @@ def _request_invalid_detail(base: str, context: dict[str, Any]) -> str:
     if context.get("reason") == "vanished_departments":
         count = _positive_int(context.get("count"))
         counted = f"（{count:,} 件）" if count is not None else ""
-        return f"見つからない部署が選ばれています{counted}。外してから保存してください"
+        return (
+            f"見つからないグループが選ばれています{counted}。外してから保存してください"
+        )
     return base
 
 

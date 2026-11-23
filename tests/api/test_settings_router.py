@@ -475,8 +475,8 @@ class TestAdvancedGenerationSection:
         """Security review: the sandbox can reach some AWS services."""
         html = client.get(_SECTION).text
 
-        assert 'data-testid="advanced-setting-detailed-caution"' in html
-        assert "信頼できるデータ" in html
+        assert "advanced-setting-detailed-caution" not in html
+        assert "信頼できるデータ" not in html
 
     def test_a_save_returns_the_new_version_with_a_toast(self, aw, ag, client):
         response = _save(client)
@@ -557,6 +557,27 @@ class TestAdvancedGenerationSectionWhenTheFeatureIsOff:
         from src.config import config
 
         monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+    def test_the_page_labels_which_features_each_block_serves(
+        self, aw, ag, off, client
+    ):
+        html = client.get("/settings/").text
+
+        # dataset and knowledge base: interview and discussion (not the survey)
+        assert html.count('data-testid="feature-badges"') == 3
+        assert html.count(">インタビュー</li>") == 2
+        assert html.count(">議論</li>") == 2
+        assert (
+            "アンケート"
+            not in html.split("</h1>")[1].split("<!-- ナレッジベース登録")[0]
+        )
+        # the advanced generation block is first, the data analysis agent last
+        if "advanced-generation-settings-title" in html:
+            assert html.index("高度な生成（ベータ）") < html.index("データ連携機能")
+        assert html.index("データ分析エージェント 連携") > html.index(
+            "ナレッジベース管理"
+        )
+        assert ">レポート</li>" in html
 
     def test_the_settings_page_has_no_section(self, aw, ag, off, client):
         response = client.get("/settings/")

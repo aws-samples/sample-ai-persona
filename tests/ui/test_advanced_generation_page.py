@@ -1329,7 +1329,7 @@ class TestSettingsSection:
 
         assert ui.page.is_checked("[data-testid='advanced-setting-departments']")
         assert ui.page.input_value("input[name='version']") == "4"
-        assert "（見つからない部署）" in ui.page.inner_text(
+        assert "（見つからないグループ）" in ui.page.inner_text(
             "[data-testid='department-picker']"
         )
         assert "管理 太郎" in ui.page.inner_text(
