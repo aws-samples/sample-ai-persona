@@ -1716,6 +1716,40 @@ class TestPlaybookFunctions:
         assert len(set(frame.columns)) == len(frame.columns)
         assert frame["source_2_購入_金額_sum_2"].tolist()[0] == 20
 
+    def test_names_differing_only_in_case_never_collide(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        """Code review: DuckDB names are case-insensitive."""
+        import duckdb
+
+        axis, other = str(tmp_path / "axis.parquet"), str(tmp_path / "other.parquet")
+        con = duckdb.connect()
+        con.execute(
+            "COPY (SELECT * FROM (VALUES (1, 5)) t(id, SOURCE_2_AMOUNT_SUM)) "
+            f"TO '{axis}' (FORMAT parquet)"
+        )
+        con.execute(
+            "COPY (SELECT * FROM (VALUES (1, 10)) t(id, amount)) "
+            f"TO '{other}' (FORMAT parquet)"
+        )
+        con.close()
+
+        frame = lib.join_tables(
+            "source_1",
+            "id",
+            [
+                {
+                    "source": "source_2",
+                    "aggregations": [{"column": "amount", "func": "sum"}],
+                }
+            ],
+            paths={"source_1": axis, "source_2": other},
+        )
+
+        lowered = [c.lower() for c in frame.columns]
+        assert len(set(lowered)) == len(lowered)
+        assert frame.attrs["joined_columns"][1] == "source_2_amount_sum_2"
+
     def test_compare_groups_tests_numbers_and_categories(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
     ) -> None:

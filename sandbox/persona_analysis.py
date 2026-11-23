@@ -1365,12 +1365,15 @@ _NAME_PART = re.compile(r"[^\w]")
 
 
 def _unique_name(name: str, used: set) -> str:
-    """``name``, or ``name_2``, ``name_3``.. when it is taken (U6 addendum)."""
+    """``name``, or ``name_2``, ``name_3``.. when it is taken (U6 addendum).
+
+    ``used`` holds lower-cased names: DuckDB identifiers are case-insensitive.
+    """
     out, n = name, 1
-    while out in used:
+    while out.lower() in used:
         n += 1
         out = f"{name}_{n}"
-    used.add(out)
+    used.add(out.lower())
     return out
 
 
@@ -2068,7 +2071,7 @@ def join_tables(
         ).description
     finally:
         con.close()
-    used = {str(d[0]) for d in described or []}
+    used = {str(d[0]).lower() for d in described or []}
     for n, spec in enumerate(others):
         alias = str(spec.get("source"))
         if alias not in tables or alias == axis:

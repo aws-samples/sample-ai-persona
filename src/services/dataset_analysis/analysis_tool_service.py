@@ -698,7 +698,7 @@ class AnalysisToolService:
         if (
             not timed_out
             and str(run_value.get("status")) == "ok"
-            and str(value.get("error") or _NO_RESULT) == _NO_RESULT
+            and value.get("error") == _NO_RESULT  # the marker: emit_result never ran
             and not isinstance(value.get("result"), Mapping)
         ):
             return self._no_result(code, str(run_value.get("stdout") or ""), elapsed)
@@ -708,7 +708,7 @@ class AnalysisToolService:
         elif str(run_value.get("status")) != "ok":
             code_error = "RUN_CODE_FAILED"
         elif value.get("error") or not isinstance(value.get("result"), Mapping):
-            code_error = str(value.get("error") or "NO_RESULT")
+            code_error = str(value.get("error") or "RESULT_INVALID")
         result: Optional[EmittedResult] = None
         if code_error is None:
             try:

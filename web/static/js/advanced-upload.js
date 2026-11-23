@@ -632,17 +632,24 @@
         var percent = total ? Math.round(done * 100 / total) : 0;
         bar.setAttribute('aria-valuenow', String(percent));
         var fill = bar.querySelector('[data-role="fill"]');
-        fill.style.width = percent + '%';
-        fill.className = 'h-2 rounded transition-all duration-500 ' + (failed ? 'bg-red-700' : (finished ? 'bg-green-700' : 'bg-blue-600'));
         var label = panel.querySelector('[data-testid="advanced-progress-label"]');
         var count = panel.querySelector('[data-testid="advanced-progress-count"]');
+        if (fill) {
+            fill.style.width = percent + '%';
+            fill.className = 'h-2 rounded transition-all duration-500 ' + (failed ? 'bg-red-700' : (finished ? 'bg-green-700' : 'bg-blue-600'));
+        }
+        if (!label || !count) return;
         if (finished) {
             label.textContent = '完了';
             count.textContent = total + ' / ' + total + ' 段階';
         } else if (at) {
-            var name = shown[at - 1].textContent.replace(/（[未済中]）/, '').trim();
+            var name = shown[at - 1].textContent.replace(/（[未済中×]）/, '').trim();
             label.textContent = (failed ? '止まりました: ' : '今: ') + name;
             count.textContent = at + ' / ' + total + ' 段階';
+        } else if (failed) {
+            // the failing stage is not one of the shown stages
+            label.textContent = '止まりました';
+            count.textContent = '';
         }
     }
 

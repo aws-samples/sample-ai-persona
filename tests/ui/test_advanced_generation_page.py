@@ -426,6 +426,15 @@ class TestProgress:
         assert "生成が止まりました" in failure
         assert error["message"] in failure
         assert ui.page.evaluate("document.getElementById('advanced-inputs').open")
+        # the bar says it stopped, in words as well as in colour
+        label = ui.page.inner_text("[data-testid='advanced-progress-label']")
+        assert label.startswith("止まりました")
+        assert "bg-red-700" in (
+            ui.page.locator(
+                "[data-testid='advanced-progress-bar'] [data-role='fill']"
+            ).first.get_attribute("class")
+            or ""
+        )
         ui.check_a11y()
 
     def test_running_generation_collapses_the_inputs(self, ui: UiHarness) -> None:

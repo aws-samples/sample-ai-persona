@@ -684,6 +684,9 @@ class TestRunCode:
         [
             ({"status": "failed", "error_text": "boom"}, {"error": "NO_RESULT"}),
             ({"status": "ok"}, {"error": "EMIT_TWICE"}),
+            # code review: no marker that emit_result was never called
+            ({"status": "ok"}, {}),
+            ({"status": "ok"}, {"error": None, "result": "oops"}),
         ],
     )
     def test_errors_and_a_second_emit_stay_failures(

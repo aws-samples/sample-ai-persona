@@ -262,10 +262,10 @@ class AnalysisPolicy:
         known = dict(tables) if tables is not None else {"source_1": list(columns)}
         steps: Optional[tuple[AnalysisStep, ...]] = None
         if raw.get("steps"):
-            steps = _settle_steps(raw["steps"], detailed=detailed, tables=known) or (
-                AnalysisStep(
-                    AnalysisStepKind(method.value), str(raw.get("rationale", ""))
-                ),
+            steps = _end_with_method(
+                _settle_steps(raw["steps"], detailed=detailed, tables=known),
+                method,
+                str(raw.get("rationale", "")),
             )
         return AnalysisPlan(
             interpreted_purpose=str(raw.get("interpreted_purpose", "")),
@@ -309,7 +309,24 @@ def _settle_steps(
         if out and out[-1].kind is step.kind:
             continue
         out.append(step)
-    return tuple(out[:MAX_PLAN_STEPS])
+    return tuple(out)
+
+
+def _end_with_method(
+    steps: tuple[AnalysisStep, ...], method: AnalysisMethod, reason: str
+) -> tuple[AnalysisStep, ...]:
+    """Steps whose last one makes the segments of ``method``, at most four.
+
+    The plan's ``method`` is the method of the step that makes the segments
+    (U6 addendum). When the agent's steps end elsewhere (a join, or another
+    method because ``method`` was forced to the guide), one step of ``method``
+    is added; the earliest steps go first when there are too many.
+    """
+    if not steps:
+        return (AnalysisStep(AnalysisStepKind(method.value), reason),)
+    if step_method(steps[-1].kind) is not method:
+        steps = (*steps, AnalysisStep(AnalysisStepKind(method.value), reason))
+    return steps[-MAX_PLAN_STEPS:]
 
 
 def _is_history(profile: Mapping[str, Any], joined: bool) -> bool:

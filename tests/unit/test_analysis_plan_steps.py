@@ -212,6 +212,7 @@ def _settle(steps: list[dict], *, detailed: bool = True, method: str = "filter")
         "questions": ["q"],
         "method": method,
         "rationale": "r",
+        "deviation_reason": "手順に合わせる",
         "steps": steps,
     }
     plan = AnalysisPolicy.settle_plan(
@@ -253,6 +254,7 @@ class TestSettleSteps:
                 {"kind": "compare_groups", "reason": "検定"},
             ],
             detailed=False,
+            method="compare",
         )
 
         assert [s.kind for s in plan.plan_steps()] == [K.FILTER, K.COMPARE]
@@ -274,7 +276,8 @@ class TestSettleSteps:
                     "table": "source_1",
                     "column": "地域",
                 },
-            ]
+            ],
+            method="compare",
         )
 
         assert [s.reason for s in plan.plan_steps()] == ["d"]
@@ -293,6 +296,46 @@ class TestSettleSteps:
         plan = _settle([{"kind": "join", "reason": "x"}], detailed=False)
 
         assert [s.kind for s in plan.plan_steps()] == [K.FILTER]
+
+    def test_the_last_step_always_makes_the_segments_of_the_method(self) -> None:
+        # code review: steps ending with a join (which makes no segments)
+        plan = _settle(
+            [{"kind": "rfm", "reason": "a"}, {"kind": "join", "reason": "b"}]
+        )
+
+        kinds = [s.kind for s in plan.plan_steps()]
+        assert kinds[-1] is K.FILTER and plan.method is AnalysisMethod.FILTER
+        assert step_method(kinds[-1]) is plan.method
+
+    def test_cutting_to_four_keeps_the_step_that_makes_the_segments(self) -> None:
+        plan = _settle(
+            [{"kind": k, "reason": k} for k in ("compare", "cluster") * 3],
+            method="cluster",
+        )
+
+        kinds = [s.kind for s in plan.plan_steps()]
+        assert len(kinds) == MAX_PLAN_STEPS
+        assert step_method(kinds[-1]) is AnalysisMethod.CLUSTER
+
+    def test_a_method_forced_to_the_guide_rewrites_the_last_step(self) -> None:
+        # code review: guide cluster, the agent answered filter twice
+        raw = {
+            "interpreted_purpose": "p",
+            "questions": ["q"],
+            "method": "filter",
+            "rationale": "r",
+            "steps": [{"kind": "filter", "reason": "絞る"}],
+        }
+        plan = AnalysisPolicy.settle_plan(
+            raw,
+            guide=AnalysisMethod.CLUSTER,
+            attempt=2,
+            columns=TABLES["source_1"],
+            tables=TABLES,
+        )
+
+        assert plan is not None and plan.method is AnalysisMethod.CLUSTER
+        assert plan.plan_steps()[-1].kind is K.CLUSTER
 
     def test_no_steps_given_keeps_the_old_shape(self) -> None:
         plan = _settle([])
