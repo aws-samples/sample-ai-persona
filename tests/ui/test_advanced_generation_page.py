@@ -1335,6 +1335,12 @@ class TestSettingsSection:
         assert "管理 太郎" in ui.page.inner_text(
             "[data-testid='advanced-setting-updated']"
         )
+        assert "最終更新者" in ui.page.inner_text(
+            "[data-testid='advanced-setting-updated']"
+        )
+        text = ui.page.inner_text("#advanced-generation-settings")
+        assert "利用範囲" in text and "許可グループ" in text
+        assert "使える人" not in text and "利用できるグループ" not in text
         ui.check_a11y()
 
     def test_the_switch_is_a_labelled_toggle_not_only_a_colour(

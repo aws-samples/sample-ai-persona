@@ -2,7 +2,7 @@
 {#
   設定画面の高度な生成（ベータ）の区画（U6、S12、契約 C11、BR34、BR35.1）。
   引数:
-    view  ... SettingSectionView（今の値・版・部署の一覧・見つからない部署・最後に変えた人）
+    view  ... SettingSectionView（今の値・版・部署の一覧・見つからない部署・最終更新者）
     error ... 入力の誤り（400）か版の衝突（409）の文言。区画の中に出す
     form  ... 入力の誤りのときに送られた値（入力を残す）。f['key'] の形で読む
 #}
@@ -25,7 +25,7 @@
     <input type="hidden" name="version" value="{{ version }}">
 
     <fieldset>
-        <legend class="text-sm font-medium text-gray-700 mb-2">使える人</legend>
+        <legend class="text-sm font-medium text-gray-700 mb-2">利用範囲</legend>
         <div class="flex flex-wrap gap-6">
             <label class="flex items-center gap-2 text-sm text-gray-800">
                 <input type="radio" name="audience_mode" value="everyone"
@@ -46,7 +46,7 @@
     </fieldset>
 
     <div>
-        {{ department_picker("departments", view.departments, selected, mode="scope", id_prefix="advanced-generation-departments", vanished=view.missing_groups, vanished_label="（見つからない部署）", free=True) }}
+        {{ department_picker("departments", view.departments, selected, mode="scope", id_prefix="advanced-generation-departments", vanished=view.missing_groups, vanished_label="（見つからない部署）", free=True, legend_text="許可グループ（複数選択可）") }}
         {% if view.missing_groups %}
         <p data-testid="advanced-setting-missing" class="text-xs text-yellow-800 mt-2">
             見つからない部署が {{ view.missing_groups | length }} 件あります。誰にも当たらないので、外して保存できます。
@@ -78,7 +78,7 @@
         <button type="submit" data-testid="advanced-setting-save"
                 class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors text-sm">保存</button>
         <p class="text-xs text-gray-600" data-testid="advanced-setting-updated">
-            {% if s.updated_at %}最後に変えた人: {{ view.updated_by_name or "管理者" }}（{{ s.updated_at[:16] | replace("T", " ") }}）{% else %}まだ保存されていません{% endif %}
+            {% if s.updated_at %}最終更新者: {{ view.updated_by_name or "管理者" }}（{{ s.updated_at[:16] | replace("T", " ") }}）{% else %}まだ保存されていません{% endif %}
         </p>
     </div>
 </form>
