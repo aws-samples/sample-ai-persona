@@ -27,6 +27,7 @@ from ...models.analysis import (
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
     LIMIT_RUN_CODE_MAX_FAILURES,
+    LIMIT_RUN_CODE_MAX_CHARS,
     LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     U1_ANALYSIS_TOOLS,
     AnalysisMethod,
@@ -90,6 +91,7 @@ class AnalysisPolicy:
             limits[LIMIT_RUN_CODE_TIMEOUT_SECONDS] = int(
                 config.ADVANCED_RUN_CODE_TIMEOUT_SECONDS
             )
+            limits[LIMIT_RUN_CODE_MAX_CHARS] = int(config.ADVANCED_RUN_CODE_MAX_CHARS)
         return AnalysisToolPolicy(tools=tools, limits=limits, sources=tuple(sources))
 
     @staticmethod

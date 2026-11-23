@@ -30,6 +30,7 @@ LIMIT_MAX_OUTPUT_CHARS = "max_output_chars"
 #: U6 keys of the AI-written code (BR36.2).
 LIMIT_RUN_CODE_MAX_FAILURES = "run_code_max_failures"
 LIMIT_RUN_CODE_TIMEOUT_SECONDS = "run_code_timeout_seconds"
+LIMIT_RUN_CODE_MAX_CHARS = "run_code_max_chars"
 
 #: Names of the tables of one generation, in the order chosen (BR37.2).
 TABLE_ALIASES: tuple[str, ...] = ("source_1", "source_2", "source_3")
@@ -769,6 +770,27 @@ class EmittedResult:
         )
 
 
+#: ``RunCodeOutcome.changed`` when the check found processes the code left.
+CHANGED_PROCESS = "process"
+_PROCESS_SCAN_OK = "ok"
+
+
+def processes_left(value: Mapping[str, Any]) -> Optional[bool]:
+    """Whether the isolated check found processes AI-written code left.
+
+    Security review: the check lists the session's processes and stops those
+    the code left (``process_scan``, ``leftover_processes``). Any left is a
+    change. ``None`` when the scan did not run or its answer cannot be read:
+    the caller fails closed, but that is no tamper.
+    """
+    if value.get("process_scan") != _PROCESS_SCAN_OK:
+        return None
+    count = value.get("leftover_processes")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        return None
+    return count > 0
+
+
 @dataclass(frozen=True)
 class RunCodeOutcome:
     """How one ``run_code`` call ended, as the Service tells the gate (NFR5.55).
@@ -780,7 +802,8 @@ class RunCodeOutcome:
         cancel_failed: The cancel raised or the stop could not be read.
         tampered: The library or a prepared Parquet changed (BR36.6), or a
             hash to compare was missing (fail closed).
-        changed: What changed: ``library`` and / or ``parquet``.
+        changed: What changed: ``library``, ``parquet`` and / or ``process``
+            (processes the code left, security review).
         verify_failed: The isolated check itself failed or its answer could
             not be read. The tools halt (fail closed) but it is no tamper.
     """

@@ -54,7 +54,6 @@ import math
 import re
 import threading
 import time
-import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -74,7 +73,9 @@ from ...models.advanced_generation import (
     ResultPartName,
 )
 from ...models.analysis import (
+    CHANGED_PROCESS,
     TABLE_ALIASES,
+    processes_left,
     AnalysisMethod,
     AnalysisPlan,
     AnalysisRecord,
@@ -2036,15 +2037,17 @@ class AdvancedPersonaGenerationManager:
         """Fail on a change: one found by a run, or one left after the last run.
 
         BR36.6: a halted budget fails the generation. When run_code ran at
-        least once, the hashes are checked once more with the library written
-        again (security-design.md), before anything reaches the synthesis.
+        least once, the hashes are checked once more with the app's own
+        library sent inside the command (security-design.md), before anything
+        reaches the synthesis. Processes the code left are a change
+        (``process``); a process scan that could not run fails closed but is
+        no tamper (security review).
         """
         assert state.budget is not None and state.session is not None
         if state.budget.halted():
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
         if not state.tools.run_code_ids():
             return
-        token = uuid.uuid4().hex[:16]
         result = self._sandbox.call_verified(
             state.session,
             "verify_hashes",
@@ -2052,15 +2055,27 @@ class AdvancedPersonaGenerationManager:
                 "pgid_files": state.tools.pgid_files(),
                 "sources": {t.alias: t.source.source_file_id for t in state.tables},
             },
-            f"verify/{token}",
         )
         value = result.get("value") if result.get("ok") else None
         hashes = value.get("hashes") if isinstance(value, Mapping) else None
-        if not isinstance(hashes, Mapping):
+        # security review: processes the code left are a change; a scan that
+        # could not run fails closed like a failed check
+        left = processes_left(value) if isinstance(value, Mapping) else None
+        changed = (
+            self._changed_hashes(state, hashes) if isinstance(hashes, Mapping) else []
+        )
+        if left:
+            changed.append(CHANGED_PROCESS)
+        if changed:
+            self._log_tamper(state.generation.generation_id, changed)
+            raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
+        if not isinstance(hashes, Mapping) or left is None:
             # review-01 R-03: the check itself failed -> fail closed, no tamper
             self._log_verify_failed(state)
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "check failed")
-        # review-01 R-01: a missing expected or returned hash is a change
+
+    def _changed_hashes(self, state: _Run, hashes: Mapping[str, Any]) -> list[str]:
+        """review-01 R-01: a missing expected or returned hash is a change."""
         changed: list[str] = []
         library = hashes.get("library")
         expected_library = self._sandbox.library_sha256
@@ -2074,9 +2089,7 @@ class AdvancedPersonaGenerationManager:
             for t in state.tables
         ):
             changed.append("parquet")
-        if changed:
-            self._log_tamper(state.generation.generation_id, changed)
-            raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
+        return changed
 
     @staticmethod
     def _check_cluster_calls(state: _Run) -> None:

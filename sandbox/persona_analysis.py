@@ -37,6 +37,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -1326,11 +1327,12 @@ def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 # ``run_ai_code`` runs the code as its own process group in an empty folder
 # ``ai_work/<random>``; the code gets the names of :func:`_ai_namespace` and
 # hands its result to :func:`emit_result`, which writes the person IDs and
-# their segment only. ``finalize_ai_result`` is run from a copy of this file
-# written again by the app (``python -I``): it stops the group, hashes the
-# prepared Parquets and the session's own copy of this file, and counts the
-# sizes and the population again from the data. Nothing the code printed or
-# wrote as a number is used.
+# their segment only. ``finalize_ai_result`` is run from the source of this
+# file the app sends inside the command (``python -I -c``; nothing is written
+# to disk, so a process the code left cannot swap it): it stops the group and
+# anything else the code left, hashes the prepared Parquets and the session's
+# own copy of this file, and counts the sizes and the population again from
+# the data. Nothing the code printed or wrote as a number is used.
 
 _SOURCE_ALIAS = re.compile(r"^source_[1-3]$")
 _POPULATION_SOURCE = re.compile(
@@ -1620,16 +1622,221 @@ def _kill_group(pgid: int) -> None:
         pass
 
 
-def _kill_recorded(workdir: str, pgid_rel: Any) -> None:
+def _read_recorded(workdir: str, pgid_rel: Any) -> Optional[int]:
+    """The pid in a ``.pgid`` file: also the run's session and group ID.
+
+    ``run_ai_code`` starts the code with ``start_new_session``, so the pid it
+    records leads its own session and process group.
+    """
     if not isinstance(pgid_rel, str) or not _PGID_FILE.match(pgid_rel):
-        return
+        return None
     path = _inside(workdir, pgid_rel)
     try:
         with open(path, encoding="utf-8") as f:
-            pgid = int(f.read().strip())
+            return int(f.read().strip())
     except (OSError, ValueError):
-        return
-    _kill_group(pgid)
+        return None
+
+
+# Security review: AI-written code can ``fork()`` and ``setsid()`` so a child
+# survives the group stop and stays in the session (and could swap files
+# between two checks). Every check therefore lists the processes, stops those
+# the code left and reports how many there were; the app treats any as a
+# change. ``/proc`` is read in the session (Linux); ``ps`` is the fallback of
+# machines without it (macOS, tests), which knows no session ID nor folder.
+_PROC_ROOT = "/proc"
+_PS = "/bin/ps"
+_SCAN_ROUNDS = 5
+_GONE_WAIT_SECONDS = 2.0
+_GONE_POLL_SECONDS = 0.02
+
+
+def _proc_table(proc_root: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """Every process under ``proc_root``, or ``None`` when it cannot be read.
+
+    Each entry holds ``ppid``, ``pgid``, ``sid``, ``cwd`` (``""`` when hidden),
+    ``cmdline`` (arguments joined by spaces) and ``zombie``. A table without
+    this process is not trusted (``None``).
+    """
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return None
+    table: Dict[int, Dict[str, Any]] = {}
+    for name in names:
+        if not name.isdigit():
+            continue
+        base = os.path.join(proc_root, name)
+        try:
+            with open(
+                os.path.join(base, "stat"), encoding="utf-8", errors="replace"
+            ) as f:
+                stat = f.read()
+            # The command name may hold ")" and spaces: read after the last one.
+            fields = stat[stat.rindex(")") + 1 :].split()
+            state, ppid, pgid, sid = fields[0], *map(int, fields[1:4])
+        except (OSError, ValueError, IndexError):
+            continue  # gone meanwhile, or not a process entry
+        try:
+            cwd = os.readlink(os.path.join(base, "cwd"))
+        except OSError:
+            cwd = ""
+        try:
+            with open(os.path.join(base, "cmdline"), "rb") as f:
+                raw = f.read()
+            cmdline = raw.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            cmdline = ""
+        table[int(name)] = {
+            "ppid": ppid,
+            "pgid": pgid,
+            "sid": sid,
+            "cwd": cwd,
+            "cmdline": cmdline,
+            "zombie": state in ("Z", "X"),
+        }
+    return table if os.getpid() in table else None
+
+
+def _ps_table(ps: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """The same table from ``ps`` (no session ID, no folder), or ``None``."""
+    try:
+        listed = subprocess.run(  # noqa: S603 - a fixed absolute path, no shell
+            [ps, "-A", "-o", "pid=,ppid=,pgid=,stat=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    table: Dict[int, Dict[str, Any]] = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        table[pid] = {
+            "ppid": ppid,
+            "pgid": pgid,
+            "sid": None,
+            "cwd": "",
+            "cmdline": parts[4] if len(parts) > 4 else "",
+            "zombie": parts[3].startswith("Z"),
+        }
+    return table if os.getpid() in table else None
+
+
+def _process_table() -> Optional[Dict[int, Dict[str, Any]]]:
+    if os.path.isdir(_PROC_ROOT):
+        return _proc_table(_PROC_ROOT)
+    return _ps_table(_PS)
+
+
+def _protected(table: Dict[int, Dict[str, Any]], self_pid: int) -> set:
+    """This process, its ancestors and pid 0 / 1: never stopped."""
+    keep = {0, 1, self_pid}
+    pid = self_pid
+    while pid in table and table[pid]["ppid"] not in keep:
+        pid = table[pid]["ppid"]
+        keep.add(pid)
+    return keep
+
+
+def _find_leftovers(
+    table: Dict[int, Dict[str, Any]],
+    recorded: set,
+    ai_root: str,
+    *,
+    self_pid: int,
+) -> List[int]:
+    """Live processes the code left: by its run, its session, group or folder.
+
+    A process counts when it is a recorded run, shares a recorded session or
+    group, descends from a recorded run, works inside ``ai_root`` or names
+    ``ai_root`` in its command. This process and its ancestors never count.
+    """
+    keep = _protected(table, self_pid)
+    runs = {r for r in recorded if r not in keep}
+    inside = ai_root.rstrip(os.sep) + os.sep
+    found: List[int] = []
+    for pid, info in table.items():
+        if pid in keep or info["zombie"]:
+            continue
+        cwd = str(info.get("cwd") or "")
+        hit = (
+            pid in runs
+            or info.get("sid") in runs
+            or info.get("pgid") in runs
+            or cwd == inside[:-1]
+            or cwd.startswith(inside)
+            or inside in str(info.get("cmdline") or "") + os.sep
+        )
+        parent, seen = info["ppid"], {pid}
+        while not hit and parent in table and parent not in seen:
+            hit = parent in runs
+            seen.add(parent)
+            parent = table[parent]["ppid"]
+        if hit:
+            found.append(pid)
+    return found
+
+
+def _wait_gone(pids: set, groups: set) -> None:
+    """Wait a little for stopped processes to end (a zombie counts as ended)."""
+    deadline = time.monotonic() + _GONE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        table = _process_table()
+        if table is None:
+            return
+        keep = _protected(table, os.getpid())
+        if not any(
+            not info["zombie"]
+            and pid not in keep
+            and (pid in pids or info.get("pgid") in groups)
+            for pid, info in table.items()
+        ):
+            return
+        time.sleep(_GONE_POLL_SECONDS)
+
+
+def _stop_leftovers(workdir: str, pgid_files: List[Any]) -> Dict[str, Any]:
+    """Stop the recorded groups, then find and stop what is still left.
+
+    Returns ``{process_scan: "ok", leftover_processes: n}``, ``n`` counting the
+    processes that survived the group stop, or ``{process_scan:
+    "unavailable"}`` when the processes cannot be listed (the app fails closed).
+    """
+    recorded = set()
+    for pgid_rel in pgid_files:
+        pid = _read_recorded(workdir, pgid_rel)
+        if pid is not None and pid > 1:
+            recorded.add(pid)
+    for pid in recorded:
+        _kill_group(pid)
+    _wait_gone(set(), recorded)
+    ai_root = os.path.join(os.path.realpath(workdir), "ai_work")
+    left: set = set()
+    for _ in range(_SCAN_ROUNDS):
+        table = _process_table()
+        if table is None:
+            return {"process_scan": "unavailable"}
+        found = _find_leftovers(table, recorded, ai_root, self_pid=os.getpid())
+        if not found:
+            break
+        for pid in found:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        left.update(found)
+        _wait_gone(set(found), set())
+    return {"process_scan": "ok", "leftover_processes": len(left)}
 
 
 def _hashes(workdir: str, sources: Dict[str, str], library: Any) -> Dict[str, Any]:
@@ -1731,24 +1938,31 @@ def _recount(
 def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     """The check after one ``run_ai_code`` (NFR3.35 (4)).
 
-    Run from the copy the app wrote again (``python -I``). Stops the code's
-    process group, hashes the prepared Parquets and ``session_library``, then
-    recounts the assignment. Returns ``{hashes, result, error}``.
+    Run from the source the app sent with the command (``python -I -c``).
+    Stops the code's process group and anything else it left (see
+    :func:`_stop_leftovers`), hashes the prepared Parquets and
+    ``session_library``, then recounts the assignment. Returns ``{hashes,
+    result, error, process_scan[, leftover_processes]}``.
     """
     work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
     sources = _checked_sources(args.get("sources"))
-    _kill_recorded(workdir, args.get("pgid_file"))
+    processes = _stop_leftovers(workdir, [args.get("pgid_file")])
     hashes = _hashes(workdir, sources, args.get("session_library"))
     result, error = _recount(workdir, _inside(workdir, work_rel), sources)
-    return {"hashes": hashes, "result": result, "error": error}
+    return {"hashes": hashes, "result": result, "error": error, **processes}
 
 
 def verify_hashes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
-    """Stop what is left and return the hashes only (before the synthesis)."""
+    """Stop what is left and return the hashes (before the synthesis).
+
+    Returns ``{hashes, process_scan[, leftover_processes]}``.
+    """
     sources = _checked_sources(args.get("sources"))
-    for pgid_rel in list(args.get("pgid_files") or []):
-        _kill_recorded(workdir, pgid_rel)
-    return {"hashes": _hashes(workdir, sources, args.get("session_library"))}
+    processes = _stop_leftovers(workdir, list(args.get("pgid_files") or []))
+    return {
+        "hashes": _hashes(workdir, sources, args.get("session_library")),
+        **processes,
+    }
 
 
 def key_overlap(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:

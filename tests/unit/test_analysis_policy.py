@@ -14,6 +14,7 @@ from src.models.analysis import (
     LIMIT_MAX_CALLS,
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
+    LIMIT_RUN_CODE_MAX_CHARS,
     LIMIT_RUN_CODE_MAX_FAILURES,
     LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     AnalysisMethod,
@@ -164,6 +165,7 @@ class TestToolsU6:
     ) -> None:
         monkeypatch.setattr(config, "ADVANCED_RUN_CODE_MAX_FAILURES", 4)
         monkeypatch.setattr(config, "ADVANCED_RUN_CODE_TIMEOUT_SECONDS", 90)
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_MAX_CHARS", 12_345)
 
         policy = AnalysisPolicy.tool_policy(
             detailed=True, in_process=False, sources=SOURCES
@@ -172,6 +174,7 @@ class TestToolsU6:
         assert policy.tools[-2:] == (AnalysisTool.RUN_CODE, AnalysisTool.LOAD_PLAYBOOK)
         assert policy.limits[LIMIT_RUN_CODE_MAX_FAILURES] == 4
         assert policy.limits[LIMIT_RUN_CODE_TIMEOUT_SECONDS] == 90
+        assert policy.limits[LIMIT_RUN_CODE_MAX_CHARS] == 12_345
         assert policy.sources == SOURCES
 
     @pytest.mark.parametrize(

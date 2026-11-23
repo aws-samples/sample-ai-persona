@@ -26,13 +26,14 @@ import importlib.util
 import json
 import logging
 import os
-import re
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
+import zlib
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
@@ -131,15 +132,17 @@ class SandboxService(Protocol):
         session: SandboxSession,
         function: str,
         args: Mapping[str, Any],
-        library_dir: str,
     ) -> dict[str, Any]:
-        """U6: write this app's library into ``library_dir`` and run it isolated.
+        """U6: run this app's own library isolated, sent inside one command.
 
         The check after AI-written code (NFR3.35): the library the session
         holds may have been changed by that code, so the copy this process
-        holds is written into a fresh ``verify/<random>`` folder and run with
-        ``python -I``. ``session_library`` (the session's own copy, to be
-        hashed) is added to ``args``.
+        holds is sent compressed inside the command and run with ``python -I
+        -c`` (security review: nothing is written, so a process the code left
+        cannot swap it between a write and the run). ``session_library`` (the
+        session's own copy, to be hashed) is added to ``args``. A command
+        longer than :data:`VERIFY_COMMAND_MAX_CHARS` is not sent; the result
+        is then ``COMMAND_TOO_LONG`` (the caller fails closed).
         """
         ...
 
@@ -250,30 +253,41 @@ def _library_command(function: str, args: Mapping[str, Any]) -> str:
     )
 
 
-def _sha256_of(path: str) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
-
-
-#: ``verify/<random>``: the only folders the check writes its library into.
-_VERIFY_DIR = re.compile(r"^verify/[A-Za-z0-9_-]{1,64}$")
 #: The argument naming the session's own library copy (hashed by the check).
 SESSION_LIBRARY_ARG = "session_library"
+#: Longest check command (security review). One argument of a Linux command
+#: may be 128 KiB at most; past this bound the check fails closed.
+VERIFY_COMMAND_MAX_CHARS = 100_000
+#: Runs the library sent as the first argument (zlib + base64) as ``__main__``
+#: with the remaining arguments. Nothing is written to disk.
+_VERIFY_BOOTSTRAP = (
+    "import base64,sys,zlib;"
+    "s=zlib.decompress(base64.b64decode(sys.argv.pop(1)));"
+    'exec(compile(s,"persona_analysis.py","exec"),{"__name__":"__main__"})'
+)
 
 
-def _checked_verify_dir(library_dir: str) -> str:
-    if not isinstance(library_dir, str) or not _VERIFY_DIR.match(library_dir):
-        raise ValueError("the check runs from a verify/<random> folder only")
-    return library_dir
+def _packed_library(source: bytes) -> str:
+    return base64.b64encode(zlib.compress(source, 9)).decode("ascii")
 
 
-def _verified_command(library_dir: str, function: str, args: Mapping[str, Any]) -> str:
-    # ``-I``: the script's folder, PYTHON* variables and the user's
+def _verified_argv(
+    packed_library: str, workdir: str, function: str, args: Mapping[str, Any]
+) -> list[str]:
+    # Security review: the library travels inside the command, so a process
+    # the AI-written code left cannot swap a file between a write and the run.
+    # ``-I``: the current folder, PYTHON* variables and the user's
     # site-packages are not read, so a module the code left cannot stand in.
-    return (
-        f"python -I {library_dir}/{_LIBRARY_NAME} --workdir {_WORKDIR} "
-        f"{function} {_encode_args(args)}"
-    )
+    return [
+        "-I",
+        "-c",
+        _VERIFY_BOOTSTRAP,
+        packed_library,
+        "--workdir",
+        workdir,
+        function,
+        _encode_args(args),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +355,11 @@ class CodeInterpreterSandbox:
         self._sleep = sleep
         self._commands: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
-        self._library_sha256 = _sha256_of(library_path)
+        # Read once: the hash is of the very bytes written and sent (U6).
+        with open(library_path, "rb") as f:
+            self._library_source = f.read()
+        self._library_sha256 = hashlib.sha256(self._library_source).hexdigest()
+        self._packed_library = _packed_library(self._library_source)
 
     @staticmethod
     def _create_client(region_name: str) -> Any:
@@ -462,8 +480,7 @@ class CodeInterpreterSandbox:
             session.session_id,
             generation_id,
         )
-        with open(self.library_path, encoding="utf-8") as f:
-            source = f.read()
+        source = self._library_source.decode("utf-8")
         try:
             self._invoke(
                 session,
@@ -590,23 +607,19 @@ class CodeInterpreterSandbox:
         session: SandboxSession,
         function: str,
         args: Mapping[str, Any],
-        library_dir: str,
     ) -> dict[str, Any]:
-        """Write this app's library into ``library_dir`` and run it with ``-I``."""
-        folder = _checked_verify_dir(library_dir)
-        with open(self.library_path, encoding="utf-8") as f:
-            source = f.read()
-        self._invoke(
-            session,
-            "writeFiles",
-            {"content": [{"path": f"{folder}/{_LIBRARY_NAME}", "text": source}]},
-        )
+        """Run this app's library sent inside one ``executeCommand``."""
         full_args = {**dict(args), SESSION_LIBRARY_ARG: _LIBRARY_NAME}
-        content = self._invoke(
-            session,
-            "executeCommand",
-            {"command": _verified_command(folder, function, full_args)},
-        )
+        argv = _verified_argv(self._packed_library, _WORKDIR, function, full_args)
+        command = " ".join(["python", *(shlex.quote(a) for a in argv)])
+        if len(command) > VERIFY_COMMAND_MAX_CHARS:
+            logger.warning(
+                "verify command not sent: length=%d limit=%d",
+                len(command),
+                VERIFY_COMMAND_MAX_CHARS,
+            )
+            return _failure("COMMAND_TOO_LONG", limit=VERIFY_COMMAND_MAX_CHARS)
+        content = self._invoke(session, "executeCommand", {"command": command})
         result = _parse_result(str(content.get("stdout", "")))
         return limit_output(result, self.max_output_chars)
 
@@ -702,7 +715,10 @@ class InProcessSandbox:
         self.library_path = library_path
         self._read_object = read_object
         self._library = _load_library(library_path)
-        self._library_sha256 = _sha256_of(library_path)
+        with open(library_path, "rb") as f:
+            source = f.read()
+        self._library_sha256 = hashlib.sha256(source).hexdigest()
+        self._packed_library = _packed_library(source)
         self._workdirs: dict[str, str] = {}
         self._commands: dict[tuple[str, str], _Command] = {}
         self._lock = threading.Lock()
@@ -842,28 +858,17 @@ class InProcessSandbox:
         session: SandboxSession,
         function: str,
         args: Mapping[str, Any],
-        library_dir: str,
     ) -> dict[str, Any]:
-        """Write the library into ``library_dir`` and run it in a new process."""
-        folder = _checked_verify_dir(library_dir)
+        """Run the library sent in the arguments of a new process (no file)."""
         workdir = self.workdir_of(session)
-        target = os.path.join(workdir, folder, _LIBRARY_NAME)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copyfile(self.library_path, target)
         full_args = {
             **dict(args),
             SESSION_LIBRARY_ARG: os.path.join(workdir, _LIBRARY_NAME),
         }
+        argv = _verified_argv(self._packed_library, workdir, function, full_args)
         completed = subprocess.run(  # noqa: S603 - our own library, no shell
-            [
-                sys.executable,
-                "-I",
-                target,
-                "--workdir",
-                workdir,
-                function,
-                _encode_args(full_args),
-            ],
+            [sys.executable, *argv],
+            cwd=workdir,
             capture_output=True,
             text=True,
             timeout=_DOWNLOAD_TIMEOUT_SECONDS,

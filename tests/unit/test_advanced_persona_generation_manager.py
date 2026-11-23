@@ -12,7 +12,9 @@ fake that calls the real tools and answers with the shapes AgentService returns.
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -3793,10 +3795,38 @@ class _FailingCheckSandbox(_CodeSandbox):
 
     failing: str = "verify_hashes"
 
-    def call_verified(self, session, function, args, library_dir):
+    def call_verified(self, session, function, args):
         if function == self.failing:
             return {"ok": False, "error_code": "SANDBOX_COMMAND_FAILED"}
-        return super().call_verified(session, function, args, library_dir)
+        return super().call_verified(session, function, args)
+
+
+class _ScanSandbox(_CodeSandbox):
+    """The final check reports this process scan (security review)."""
+
+    scan: dict = {"process_scan": "ok", "leftover_processes": 1}
+
+    def call_verified(self, session, function, args):
+        result = super().call_verified(session, function, args)
+        if function == "verify_hashes" and isinstance(result.get("value"), dict):
+            value = {
+                k: v
+                for k, v in result["value"].items()
+                if k not in ("process_scan", "leftover_processes")
+            }
+            return {**result, "value": {**value, **self.scan}}
+        return result
+
+
+_ESCAPE_THEN_EMIT = (
+    "import os, time\n"
+    "pid = os.fork()\n"
+    "if pid == 0:\n"
+    "    os.setsid()\n"
+    "    time.sleep(30)\n"
+    "    os._exit(0)\n"
+    "open('child.pid', 'w').write(str(pid))\n" + _EMIT
+)
 
 
 def _with_sandbox(env: _Env, cls: type) -> _Env:
@@ -3864,6 +3894,85 @@ class TestDetailedAnalysisFailsClosed:
         (disabled,) = logs.events("advanced_generation.run_code_disabled")
         assert disabled["status"] == "disabled"
         assert disabled["reason"] == "verify_failed"
+
+    def test_a_process_left_at_the_final_check_fails_as_a_tamper(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _with_sandbox(env, _ScanSandbox)
+        env.sandbox.scan = {"process_scan": "ok", "leftover_processes": 1}
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis()
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert "synthesis" not in env.agents.calls
+        (tamper,) = logs.events("advanced_generation.tamper_detected")
+        assert tamper["changed"] == ["process"]
+
+    @pytest.mark.parametrize(
+        "scan",
+        [{"process_scan": "unavailable"}, {}],
+        ids=["unavailable", "missing"],
+    )
+    def test_a_final_scan_that_could_not_run_fails_closed_but_is_no_tamper(
+        self, env: _Env, capsys: pytest.CaptureFixture[str], scan: dict
+    ) -> None:
+        env = _with_sandbox(env, _ScanSandbox)
+        env.sandbox.scan = scan
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        env.agents.analysis_fn = _code_analysis()
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert (
+            _failed(env, gid).error_code == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+        )
+        assert logs.events("advanced_generation.tamper_detected") == []
+        (disabled,) = logs.events("advanced_generation.run_code_disabled")
+        assert disabled["reason"] == "verify_failed"
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+    def test_code_that_leaves_a_process_fails_the_generation(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        children: list[int] = []
+
+        def collect(holder: dict) -> None:
+            # read before the session folder goes, to stop them in any case
+            root = Path(env.sandbox.root_dir)
+            children.extend(
+                int(p.read_text()) for p in root.glob("*/ai_work/*/child.pid")
+            )
+
+        env.agents.analysis_fn = _code_analysis(code=_ESCAPE_THEN_EMIT, after=collect)
+        logs = LogCapture(capsys)
+        try:
+            manager.run(gid)
+
+            assert children
+            assert (
+                _failed(env, gid).error_code
+                == ErrorCode.GENERATION_ANALYSIS_FAILED.value
+            )
+            assert "synthesis" not in env.agents.calls
+            (tamper,) = logs.events("advanced_generation.tamper_detected")
+            assert tamper["changed"] == ["process"]
+        finally:
+            for pid in children:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
 
 
 class TestSeveralTables:

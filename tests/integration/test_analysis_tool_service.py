@@ -12,6 +12,8 @@ from __future__ import annotations
 import inspect
 import itertools
 import json
+import os
+import signal
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -329,7 +331,7 @@ class _CodeSandbox(_SpySandbox):
     def __init__(self) -> None:
         super().__init__()
         self.started: list[tuple[str, dict[str, Any]]] = []
-        self.verified: list[tuple[str, dict[str, Any], str]] = []
+        self.verified: list[tuple[str, dict[str, Any]]] = []
         self.cancelled: list[str] = []
         self.done = True
         self.cancel_error: Exception | None = None
@@ -345,6 +347,11 @@ class _CodeSandbox(_SpySandbox):
             "parquet": dict(_PARQUET_SHA),
         }
         self.final: dict[str, Any] = {"result": _EMITTED}
+        #: What the check's process scan reports (security review).
+        self.processes: dict[str, Any] = {
+            "process_scan": "ok",
+            "leftover_processes": 0,
+        }
         #: When set, the isolated check itself answers with this.
         self.verified_answer: dict[str, Any] | None = None
 
@@ -379,12 +386,14 @@ class _CodeSandbox(_SpySandbox):
         session: Any,
         function: str,
         args: Mapping[str, Any],
-        library_dir: str,
     ) -> dict[str, Any]:
-        self.verified.append((function, dict(args), library_dir))
+        self.verified.append((function, dict(args)))
         if self.verified_answer is not None:
             return dict(self.verified_answer)
-        return {"ok": True, "value": {"hashes": self.hashes, **self.final}}
+        return {
+            "ok": True,
+            "value": {"hashes": self.hashes, **self.final, **self.processes},
+        }
 
 
 def _detailed(
@@ -499,9 +508,8 @@ class TestRunCode:
         assert args1["work_dir"] != args2["work_dir"]
         assert args1["sources"] == {"source_1": "f1", "source_2": "f2"}
         assert not args1["pgid_file"].startswith(args1["work_dir"] + "/")
-        function, verify_args, folder = sandbox.verified[0]
+        function, verify_args = sandbox.verified[0]
         assert function == "finalize_ai_result"
-        assert folder.startswith("verify/") and folder != sandbox.verified[1][2]
         assert verify_args["work_dir"] == args1["work_dir"]
         call_id = _tool_call_id(first)
         assert service.emitted_results()[call_id].population == 60
@@ -589,6 +597,24 @@ class TestRunCode:
         text = _by_name(service)["run_code"](code="x = 1")
 
         assert sandbox.started == [] and "LIMIT_REACHED" in text
+
+    def test_the_code_limit_comes_from_the_policy(self) -> None:
+        sandbox = _CodeSandbox()
+        gate = _Gate()
+        tools = _by_name(_detailed(sandbox, gate, run_code_max_chars=10))
+
+        text = tools["run_code"](code="x" * 11)
+        ok = tools["run_code"](code="x" * 10)
+
+        assert "CODE_TOO_LONG" in text and '"max_chars": 10' in text
+        assert len(sandbox.started) == 1 and "CODE_TOO_LONG" not in ok
+
+    def test_the_tool_does_not_promise_no_network(self) -> None:
+        run_code = _by_name(_detailed(_CodeSandbox()))["run_code"]
+        doc = run_code.tool_spec["description"]
+
+        assert "no network" not in doc
+        assert "network" in doc and "untrusted" in doc
 
     def test_code_over_the_limit_is_a_failure_without_running(self) -> None:
         sandbox = _CodeSandbox()
@@ -736,6 +762,57 @@ class TestRunCodeFailsClosed:
         assert "分析を続けられません" in text and "分析を続けられません" in after
         assert service.emitted_results() == {}
 
+    def test_a_process_the_code_left_is_a_tamper(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.processes = {"process_scan": "ok", "leftover_processes": 2}
+        gate = _Gate()
+        service = _detailed(sandbox, gate)
+        tools = _by_name(service)
+
+        text = tools["run_code"](code="x = 1")
+        after = tools["profile_dataset"](source="source_1")
+
+        assert gate.outcomes[-1].tampered is True
+        assert gate.outcomes[-1].changed == ("process",)
+        assert "分析を続けられません" in text and "分析を続けられません" in after
+        assert service.emitted_results() == {}
+
+    def test_a_left_process_and_a_changed_hash_are_both_told(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.hashes = {"library": "9" * 64, "parquet": dict(_PARQUET_SHA)}
+        sandbox.processes = {"process_scan": "ok", "leftover_processes": 1}
+        gate = _Gate()
+
+        _by_name(_detailed(sandbox, gate))["run_code"](code="x = 1")
+
+        assert gate.outcomes[-1].changed == ("library", "process")
+
+    @pytest.mark.parametrize(
+        "processes",
+        [
+            {"process_scan": "unavailable"},
+            {},
+            {"process_scan": "ok"},
+            {"process_scan": "ok", "leftover_processes": "0"},
+            {"process_scan": "ok", "leftover_processes": -1},
+        ],
+        ids=["unavailable", "missing", "no_count", "not_int", "negative"],
+    )
+    def test_a_scan_that_could_not_run_fails_closed_but_is_no_tamper(
+        self, processes: dict[str, Any]
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.processes = processes
+        gate = _Gate()
+        service = _detailed(sandbox, gate)
+
+        text = _by_name(service)["run_code"](code="x = 1")
+
+        assert gate.outcomes[-1].verify_failed is True
+        assert gate.outcomes[-1].tampered is False
+        assert "分析を続けられません" in text
+        assert service.emitted_results() == {}
+
     def test_the_output_kept_for_the_checks_is_only_the_recounted_numbers(
         self,
     ) -> None:
@@ -858,3 +935,36 @@ class TestRunCodeInProcess:
         )
 
         assert gate.halted() and gate.outcomes[-1].changed == ("parquet",)
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork (POSIX)")
+    def test_a_process_that_left_its_group_is_stopped_and_halts(
+        self, session: tuple[InProcessSandbox, SandboxSession, str]
+    ) -> None:
+        sandbox, sandbox_session, _ = session
+        service, gate = self._service(*session)
+        code = (
+            "import os, time\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    os.setsid()\n"
+            "    time.sleep(30)\n"
+            "    os._exit(0)\n"
+            "open('child.pid', 'w').write(str(pid))\n"
+        )
+        workdir = Path(sandbox.workdir_of(sandbox_session))
+        children: list[int] = []
+        try:
+            text = _by_name(service)["run_code"](code=code)
+            children = [int(p.read_text()) for p in workdir.glob("ai_work/*/child.pid")]
+
+            assert children
+            assert "分析を続けられません" in text
+            assert gate.halted() and gate.outcomes[-1].tampered is True
+            assert gate.outcomes[-1].changed == ("process",)
+            assert service.emitted_results() == {}
+        finally:
+            for pid in children:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass

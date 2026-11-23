@@ -1390,11 +1390,243 @@ class TestEmitAndFinalize:
             str(tmp_path),
         )
 
-        assert set(result["value"]) == {"hashes"}
+        assert set(result["value"]) == {"hashes", "process_scan", "leftover_processes"}
+        assert result["value"]["process_scan"] == "ok"
+        assert result["value"]["leftover_processes"] == 0
         assert (
             result["value"]["hashes"]["parquet"]["cust"]
             == (tables["cust"]["parquet_sha256"])
         )
+
+
+# --- security review: a process that left the group (fork + setsid) --------
+
+_ESCAPE = (
+    "import os, time\n"
+    "pid = os.fork()\n"
+    "if pid == 0:\n"
+    "    os.setsid()\n"
+    "    time.sleep(30)\n"
+    "    os._exit(0)\n"
+    "open('child.pid', 'w').write(str(pid))\n"
+)
+_needs_fork = pytest.mark.skipif(
+    not hasattr(__import__("os"), "fork"), reason="needs os.fork (POSIX)"
+)
+
+
+def _alive(pid: int) -> bool:
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+    except OSError:
+        pass
+    state = subprocess.run(
+        ["/bin/ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def _wait_dead(pid: int, seconds: float = 3.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _alive(pid)
+
+
+@pytest.fixture()
+def escaped_pids() -> Iterator[list[int]]:
+    """Pids the tests started; killed at the end whatever happened."""
+    import os
+    import signal
+
+    pids: list[int] = []
+    yield pids
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+class TestLeftoverProcesses:
+    """A process the code left outside its group is found, stopped and told."""
+
+    def _escape(
+        self, lib: ModuleType, tmp_path: Path, pids: list[int], token: str = "t1"
+    ) -> int:
+        value = _run_ai(lib, tmp_path, _ESCAPE, token=token)["value"]
+        assert value["status"] == "ok", value["error_text"]
+        child = int((tmp_path / "ai_work" / token / "child.pid").read_text())
+        pids.append(child)
+        assert _alive(child)
+        return child
+
+    @_needs_fork
+    def test_finalize_stops_an_escaped_process_and_counts_it(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        escaped_pids: list[int],
+    ) -> None:
+        child = self._escape(lib, tmp_path, escaped_pids)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["process_scan"] == "ok"
+        assert value["leftover_processes"] >= 1
+        assert _wait_dead(child)
+
+    @_needs_fork
+    def test_verify_hashes_stops_an_escaped_process_and_counts_it(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        escaped_pids: list[int],
+    ) -> None:
+        child = self._escape(lib, tmp_path, escaped_pids)
+
+        result = lib.dispatch(
+            "verify_hashes",
+            {
+                "pgid_files": ["ai_work/t1.pgid"],
+                "sources": _SOURCES,
+                "session_library": str(tmp_path / "persona_analysis.py"),
+            },
+            str(tmp_path),
+        )
+
+        assert result["value"]["leftover_processes"] >= 1
+        assert _wait_dead(child)
+
+    def test_nothing_left_is_zero(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["process_scan"] == "ok" and value["leftover_processes"] == 0
+
+    def test_a_child_inside_the_group_is_stopped_but_not_a_leftover(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; "
+            "time.sleep(30)'])\n"
+            "open('child.pid', 'w').write(str(p.pid))\n"
+        )
+        _run_ai(lib, tmp_path, code)
+        child = int((tmp_path / "ai_work" / "t1" / "child.pid").read_text())
+
+        value = _finalize(lib, tmp_path)
+
+        # the group stop reaches it: nothing escaped
+        assert value["leftover_processes"] == 0
+        assert _wait_dead(child)
+
+    def test_without_a_process_list_the_scan_is_unavailable(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(lib, "_PROC_ROOT", str(tmp_path / "no-proc"))
+        monkeypatch.setattr(lib, "_PS", str(tmp_path / "no-ps"))
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["process_scan"] == "unavailable"
+        assert "leftover_processes" not in value
+
+    def test_the_proc_table_is_read(self, lib: ModuleType, tmp_path: Path) -> None:
+        import os
+
+        proc = tmp_path / "proc"
+        for pid, stat, cmd, cwd in [
+            (os.getpid(), f"{os.getpid()} (py) R 1 7 7 0", b"python\0", "/"),
+            (40, "40 (python3 (x)) S 1 40 40 0 1 2", b"python\0-c\0x\0", "/w/a"),
+            (41, "41 (sh) Z 40 40 40 0", b"", "/"),
+        ]:
+            d = proc / str(pid)
+            d.mkdir(parents=True)
+            (d / "stat").write_text(stat)
+            (d / "cmdline").write_bytes(cmd)
+            os.symlink(cwd, d / "cwd")
+        (proc / "self").mkdir()
+        (proc / "41" / "cwd").unlink()
+
+        table = lib._proc_table(str(proc))
+
+        assert table is not None and set(table) == {os.getpid(), 40, 41}
+        assert table[40] == {
+            "ppid": 1,
+            "pgid": 40,
+            "sid": 40,
+            "cwd": "/w/a",
+            "cmdline": "python -c x",
+            "zombie": False,
+        }
+        assert table[41]["zombie"] is True and table[41]["cwd"] == ""
+
+    def test_a_proc_table_without_this_process_is_unavailable(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        (tmp_path / "proc").mkdir()
+
+        assert lib._proc_table(str(tmp_path / "proc")) is None
+
+    def test_what_counts_as_left_by_the_code(self, lib: ModuleType) -> None:
+        root = "/s/work/ai_work"
+
+        def proc(ppid: int, pgid: int, sid: int, cwd: str = "/", cmd: str = "x"):
+            return {
+                "ppid": ppid,
+                "pgid": pgid,
+                "sid": sid,
+                "cwd": cwd,
+                "cmdline": cmd,
+                "zombie": False,
+            }
+
+        table = {
+            1: proc(0, 1, 1),
+            10: proc(1, 10, 10),  # the command server
+            11: proc(10, 11, 11),  # the check itself
+            20: proc(1, 21, 20),  # same session as a recorded run
+            30: proc(1, 30, 31),  # same group as a recorded run
+            40: proc(1, 40, 40, cwd=root + "/t9"),  # works inside ai_work
+            50: proc(1, 50, 50, cmd=f"python -c b {root}/t9 x"),  # its command
+            60: proc(55, 60, 60),  # a descendant of a recorded run
+            55: proc(1, 56, 56, cmd="sleep"),
+            70: proc(1, 70, 70, cwd="/s/work/ai_workx"),  # a look-alike folder
+            80: {**proc(1, 20, 20), "zombie": True},  # already dead
+            90: proc(1, 90, 90),  # something else
+        }
+
+        found = lib._find_leftovers(table, {20, 30, 55, 11, 1}, root, self_pid=11)
+
+        assert sorted(found) == [20, 30, 40, 50, 55, 60]
 
 
 class TestPlaybookFunctions:

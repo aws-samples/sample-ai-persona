@@ -12,7 +12,12 @@ import base64
 import hashlib
 import json
 import logging
+import os
+import shlex
+import subprocess
+import sys
 import time
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +27,7 @@ from botocore.stub import ANY, Stubber
 
 from src.models.errors import ErrorCode
 from src.services.sandbox_service import (
+    VERIFY_COMMAND_MAX_CHARS,
     CodeInterpreterSandbox,
     InProcessSandbox,
     SandboxCapacityError,
@@ -839,59 +845,100 @@ class TestInProcessSandbox:
 
 
 # ---------------------------------------------------------------------------
-# U6: the check with the library written again (NFR3.35, security-design.md)
+# U6: the check with the app's own library (NFR3.35, security-design.md)
 # ---------------------------------------------------------------------------
 
 
 class TestCodeInterpreterCallVerified:
-    def test_writes_the_local_library_then_runs_it_isolated(
-        self, sandbox: CodeInterpreterSandbox, stub: Any
-    ) -> None:
+    """Security review: one ``executeCommand`` carries the library; no file."""
+
+    def _verified(
+        self, sandbox: CodeInterpreterSandbox, stub: Any, result: dict[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        # Only an executeCommand is stubbed: a writeFiles would fail the test.
         capture = _CommandCapture()
-        stub.add_response(
-            "invoke_code_interpreter",
-            _stream(),
-            _invoke_params(
-                "writeFiles",
-                {
-                    "content": [
-                        {
-                            "path": "verify/abc123/persona_analysis.py",
-                            "text": _LIBRARY.read_text(encoding="utf-8"),
-                        }
-                    ]
-                },
-            ),
-        )
-        result = {"ok": True, "value": {"hashes": {"parquet": {}}}}
         stub.add_response(
             "invoke_code_interpreter",
             _stdout(result),
             _invoke_params("executeCommand", capture),
         )
+        got = sandbox.call_verified(_session(), "verify_hashes", {"source_ids": ["f1"]})
+        (command,) = capture.commands
+        return got, command
 
-        got = sandbox.call_verified(
-            _session(), "verify_hashes", {"source_ids": ["f1"]}, "verify/abc123"
-        )
+    def test_sends_the_local_library_inside_one_command(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        result = {"ok": True, "value": {"hashes": {"parquet": {}}}}
 
-        command = capture.commands[0]
-        assert command.startswith(
-            "python -I verify/abc123/persona_analysis.py --workdir work verify_hashes "
-        )
+        got, command = self._verified(sandbox, stub, result)
+
+        parts = shlex.split(command)
+        assert parts[:3] == ["python", "-I", "-c"]
+        packed = parts[4]
+        assert zlib.decompress(base64.b64decode(packed)) == _LIBRARY.read_bytes()
+        assert parts[5:8] == ["--workdir", "work", "verify_hashes"]
+        assert "verify/" not in command and "writeFiles" not in command
         args = _decoded_args(command)
         assert args["source_ids"] == ["f1"]
         # the library the fixed functions use, hashed by the check (BR36.6)
         assert args["session_library"] == "persona_analysis.py"
         assert got == result
 
-    @pytest.mark.parametrize(
-        "folder", ["verify", "verify/../x", "/tmp/verify/a", "ai_work/a", "verify/a b"]
-    )
-    def test_only_a_fresh_verify_folder_is_accepted(
-        self, sandbox: CodeInterpreterSandbox, folder: str
+    def test_the_command_stays_under_its_bound(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
     ) -> None:
-        with pytest.raises(ValueError):
-            sandbox.call_verified(_session(), "verify_hashes", {}, folder)
+        _, command = self._verified(sandbox, stub, {"ok": True, "value": {}})
+
+        assert len(command) < VERIFY_COMMAND_MAX_CHARS <= 100_000
+
+    def test_the_library_hash_is_of_the_bytes_it_sends(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        _, command = self._verified(sandbox, stub, {"ok": True, "value": {}})
+
+        sent = zlib.decompress(base64.b64decode(shlex.split(command)[4]))
+        assert sandbox.library_sha256 == hashlib.sha256(sent).hexdigest()
+
+    def test_the_command_runs_the_library_in_a_shell(
+        self, sandbox: CodeInterpreterSandbox, stub: Any, tmp_path: Path
+    ) -> None:
+        _, command = self._verified(sandbox, stub, {"ok": True, "value": {}})
+        (tmp_path / "work").mkdir()
+        local = shlex.quote(sys.executable) + command[len("python") :]
+
+        completed = subprocess.run(  # noqa: S602 - the command under test
+            local, shell=True, cwd=tmp_path, capture_output=True, text=True
+        )
+
+        # verify_hashes itself ran and refused its arguments (no "sources"):
+        # not a usage error of the command line, not a Python error
+        answer = json.loads(completed.stdout.strip().splitlines()[-1])
+        assert answer == {
+            "ok": False,
+            "error": {"code": "INVALID_ARGUMENT", "context": {"field": "sources"}},
+        }
+        assert not (tmp_path / "verify").exists()
+
+    def test_a_library_too_long_for_one_command_fails_closed(
+        self, client: Any, stub: Any, tmp_path: Path
+    ) -> None:
+        big = tmp_path / "persona_analysis.py"
+        big.write_text(
+            "X = " + repr(base64.b64encode(os.urandom(120_000)).decode()) + "\n"
+        )
+        sandbox = CodeInterpreterSandbox(
+            code_interpreter_id=_CI_ID,
+            region_name="ap-northeast-1",
+            library_path=str(big),
+            client=client,
+        )
+
+        # nothing is sent (the stub holds no response)
+        got = sandbox.call_verified(_session(), "verify_hashes", {})
+
+        assert got["ok"] is False
+        assert got["error"]["code"] == "COMMAND_TOO_LONG"
 
     def test_kind(self, sandbox: CodeInterpreterSandbox) -> None:
         assert sandbox.kind == "code_interpreter"
@@ -907,7 +954,7 @@ class TestInProcessCallVerified:
         assert copy.read_bytes() == _LIBRARY.read_bytes()
         assert local.kind == "in_process"
 
-    def test_runs_the_written_library_in_its_own_process(
+    def test_runs_the_sent_library_in_its_own_process(
         self, local: InProcessSandbox
     ) -> None:
         session = local.start_session("gen1", lifetime_seconds=60)
@@ -919,13 +966,11 @@ class TestInProcessCallVerified:
         )
         _poll_until_done(local, session, command_id)
 
-        result = local.call_verified(
-            session, "profile_dataset", {"source_id": "f1"}, "verify/v1"
-        )
+        result = local.call_verified(session, "profile_dataset", {"source_id": "f1"})
 
-        written = Path(local.workdir_of(session)) / "verify" / "v1"
-        assert (written / "persona_analysis.py").read_bytes() == _LIBRARY.read_bytes()
         assert result["ok"] is True and result["value"]["rows"] == 4
+        # nothing is written for the check (security review)
+        assert not (Path(local.workdir_of(session)) / "verify").exists()
 
     def test_a_changed_session_library_does_not_change_the_check(
         self, local: InProcessSandbox
@@ -935,9 +980,26 @@ class TestInProcessCallVerified:
         copy.write_text("raise SystemExit('replaced')\n", encoding="utf-8")
 
         result = local.call_verified(
-            session, "profile_dataset", {"source_id": "missing"}, "verify/v2"
+            session, "profile_dataset", {"source_id": "missing"}
         )
 
-        # the written library ran (a C9 failure), not the replaced copy
+        # the sent library ran (a C9 failure), not the replaced copy
+        assert result["ok"] is False
+        assert result["error"]["code"] == "SOURCE_UNREADABLE"
+
+    def test_a_library_left_under_verify_has_no_effect(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+        forged = 'print(\'{"ok": true, "value": {"hashes": "forged"}}\')\n'
+        for folder in ("verify/abc", "verify"):
+            target = Path(local.workdir_of(session)) / folder / "persona_analysis.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(forged, encoding="utf-8")
+
+        result = local.call_verified(
+            session, "profile_dataset", {"source_id": "missing"}
+        )
+
         assert result["ok"] is False
         assert result["error"]["code"] == "SOURCE_UNREADABLE"

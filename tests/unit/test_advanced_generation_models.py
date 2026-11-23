@@ -46,6 +46,8 @@ from src.models.analysis import (
     PrepareReport,
     ReportColumn,
     Segment,
+    processes_left,
+    CHANGED_PROCESS,
 )
 from src.models.errors import ErrorCode, ErrorKind
 from src.models.source_file import (
@@ -1302,6 +1304,24 @@ class TestRunCodeOutcomeAndGate:
 
         assert isinstance(Gate(), RunCodeGate)
         assert not isinstance(object(), RunCodeGate)
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ({"process_scan": "ok", "leftover_processes": 0}, False),
+            ({"process_scan": "ok", "leftover_processes": 3}, True),
+            ({"process_scan": "unavailable"}, None),
+            ({"process_scan": "ok"}, None),
+            ({"leftover_processes": 0}, None),
+            ({"process_scan": "ok", "leftover_processes": True}, None),
+            ({"process_scan": "ok", "leftover_processes": "1"}, None),
+            ({"process_scan": "ok", "leftover_processes": -1}, None),
+        ],
+    )
+    def test_processes_left_reads_the_scan_fail_closed(self, value, expected):
+        """Security review: only a readable scan answers; else ``None``."""
+        assert processes_left(value) is expected
+        assert CHANGED_PROCESS == "process"
 
 
 class TestSegmentSourceAndKey:

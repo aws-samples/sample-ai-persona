@@ -471,6 +471,13 @@ class TestAdvancedGenerationSection:
         assert "営業部" in html and "管理 太郎" in html
         assert 'data-testid="advanced-setting-missing"' in html
 
+    def test_the_detailed_switch_carries_the_beta_caution(self, aw, ag, client):
+        """Security review: the sandbox can reach some AWS services."""
+        html = client.get(_SECTION).text
+
+        assert 'data-testid="advanced-setting-detailed-caution"' in html
+        assert "信頼できるデータ" in html
+
     def test_a_save_returns_the_new_version_with_a_toast(self, aw, ag, client):
         response = _save(client)
 

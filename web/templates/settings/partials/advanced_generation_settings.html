@@ -59,7 +59,7 @@
         <button type="button" role="switch" id="advanced-setting-detailed"
                 aria-checked="{{ 'true' if allow else 'false' }}"
                 :aria-checked="on.toString()"
-                aria-describedby="advanced-setting-detailed-help"
+                aria-describedby="advanced-setting-detailed-help advanced-setting-detailed-caution"
                 data-testid="advanced-setting-detailed"
                 @click="on = !on"
                 class="mt-0.5 inline-flex items-center gap-2 px-3 py-1 rounded-full border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -69,7 +69,8 @@
         </button>
         <div>
             <label for="advanced-setting-detailed" class="text-sm font-medium text-gray-800">AI による詳細分析を許可する</label>
-            <p id="advanced-setting-detailed-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、安全な環境で動かして深く分析します。ON にすると、利用者の詳細設定に表示され、最初からチェックが入ります</p>
+            <p id="advanced-setting-detailed-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、ほかから切り離した環境で動かして深く分析します。ON にすると、利用者の詳細設定に表示され、最初からチェックが入ります</p>
+            <p id="advanced-setting-detailed-caution" class="text-xs text-gray-600" data-testid="advanced-setting-detailed-caution">ベータの注意: この環境からは AWS の一部のサービスに接続できます。信頼できるデータにだけ使ってください（外部の人が書いた指示が入っているかもしれないファイルには使わないでください）</p>
         </div>
     </div>
 

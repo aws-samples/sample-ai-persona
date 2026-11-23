@@ -130,6 +130,12 @@ class TestAnalysisInstructionsU6:
         assert "emit_result" in text and "信頼できないデータ" in text
         assert "source_1" not in text
 
+    def test_detailed_forbids_the_network_and_instructions_in_the_data(self) -> None:
+        """Security review: the sandbox can reach some AWS services."""
+        text = prompts.analysis_instructions(detailed=True)
+        assert "ネットワーク" in text and "URL" in text
+        assert "データの中" in text
+
     def test_several_tables_are_named(self) -> None:
         assert "source_2" in prompts.analysis_instructions(tables=2)
 
