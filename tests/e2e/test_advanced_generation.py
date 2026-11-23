@@ -689,8 +689,23 @@ def _save_section(page: Page, form: Locator) -> Locator:
     return page.get_by_test_id("advanced-setting-form")
 
 
+def _real_options(form: Locator) -> Locator:
+    """Department choices that exist now (a vanished one cannot be saved, BR34.3)."""
+    return form.locator(
+        "[data-testid='department-option']:not([data-department-vanished])"
+    )
+
+
+def _vanished_checked(form: Locator) -> int:
+    return form.locator(
+        "[data-testid='department-option'][data-department-vanished]:checked"
+    ).count()
+
+
 def _restore_section(page: Page, before: dict) -> None:
     form = _open_section(page)
+    if _section_state(form) == before:
+        return  # nothing was changed: leave the stored setting as it is
     radio = (
         "advanced-setting-everyone"
         if before["everyone"]
@@ -712,9 +727,14 @@ def test_settings_section_saves_departments_and_the_version(
     page = session_context.new_page()
     form = _open_section(page)
     before = _section_state(form)
-    options = form.get_by_test_id("department-option")
+    options = _real_options(form)
     if options.count() == 0:
         pytest.skip("no department (Cognito group:) exists in the dev environment")
+    if _vanished_checked(form):
+        pytest.skip(
+            "the stored setting holds a department this environment does not have;"
+            " saving it would be refused (BR34.3)"
+        )
     try:
         form.get_by_test_id("advanced-setting-departments").check()
         first = options.first
@@ -750,8 +770,13 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
     try:
         switch = form.get_by_test_id("advanced-setting-detailed")
         if switch.get_attribute("aria-checked") != "true":
+            if _vanished_checked(form):
+                pytest.skip(
+                    "the stored setting holds a department this environment does"
+                    " not have; turn the detailed analysis on by hand first"
+                )
             switch.click()
-        _save_section(page, form)
+            _save_section(page, form)
 
         _open_advanced_page(page)
         box = page.get_by_test_id("advanced-detailed-analysis")

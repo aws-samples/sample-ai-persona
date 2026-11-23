@@ -132,7 +132,7 @@ def test_method_selection_with_the_real_models(
         switch = form.get_by_test_id("advanced-setting-detailed")
         if switch.get_attribute("aria-checked") != "true":
             switch.click()
-        _save_section(page, form)
+            _save_section(page, form)
         for case in CASES:
             outcomes.append(_run_case(page, case, run_tag))
     finally:
