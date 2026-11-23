@@ -2,15 +2,16 @@
 
 PK ``setting_key``. U1 only reads the advanced generation setting: when it is
 missing, ``AdvancedGenerationPolicy`` opens the feature to administrators only
-(BR1.2). Writes (with the optimistic ``version``) arrive with U6.
+(BR1.2). U6 writes it with the optimistic ``version`` (BR34.4, NFR3.32): the
+version read is the condition of the conditional ``PutItem``.
 """
 
 import logging
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 
 import boto3
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.models.errors import CodedError, ErrorCode
@@ -25,6 +26,25 @@ class AppSettingsStoreError(CodedError):
     """A read of ``AppSettings`` failed."""
 
     code = ErrorCode.DATABASE_OPERATION_FAILED
+
+
+class SettingsVersionConflict(AppSettingsStoreError):
+    """Someone wrote the setting after it was read (the condition lost)."""
+
+    code = ErrorCode.SETTINGS_VERSION_CONFLICT
+
+
+def _to_dynamo(value: Any) -> Any:
+    """``float`` to ``Decimal`` (the serializer refuses floats)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, Mapping):
+        return {str(k): _to_dynamo(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_dynamo(v) for v in value]
+    return value
 
 
 def _from_dynamo(value: Any) -> Any:
@@ -52,6 +72,70 @@ class AppSettingsStore:
         self.table_name = table_name
         self.client = client or boto3.client("dynamodb", region_name=region)
         self._deserializer = TypeDeserializer()
+        self._serializer = TypeSerializer()
+
+    def put_if_version(
+        self, setting_key: str, item: Mapping[str, Any], expected_version: int
+    ) -> int:
+        """Write the setting only when its version is still ``expected_version``.
+
+        ``0`` means no item yet: the write needs the item to be missing.
+        Otherwise ``version`` must equal ``expected_version``. The item is
+        written with ``version = expected_version + 1`` (BR34.4).
+
+        Args:
+            setting_key: The setting (``advanced_generation``).
+            item: The values to write (``updated_by``, ``updated_at`` included).
+            expected_version: The version read when the section was opened.
+
+        Returns:
+            The new version.
+
+        Raises:
+            SettingsVersionConflict: The condition lost.
+            AppSettingsStoreError: DynamoDB failed.
+        """
+        new_version = int(expected_version) + 1
+        values = {
+            **{k: v for k, v in item.items() if v is not None},
+            "setting_key": setting_key,
+            "version": new_version,
+        }
+        condition: dict[str, Any]
+        if int(expected_version) == 0:
+            condition = {"ConditionExpression": "attribute_not_exists(setting_key)"}
+        else:
+            condition = {
+                "ConditionExpression": "#version = :expected",
+                "ExpressionAttributeNames": {"#version": "version"},
+                "ExpressionAttributeValues": {
+                    ":expected": {"N": str(int(expected_version))}
+                },
+            }
+        try:
+            self.client.put_item(
+                TableName=self.table_name,
+                Item={
+                    k: self._serializer.serialize(_to_dynamo(v))
+                    for k, v in values.items()
+                },
+                **condition,
+            )
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "ConditionalCheckFailedException":
+                logger.info("app settings write lost its version condition")
+                raise SettingsVersionConflict(
+                    "the setting changed after it was read"
+                ) from e
+            logger.warning("put_item on app settings failed: %s", code)
+            raise AppSettingsStoreError(f"put_item failed: {code}") from e
+        except BotoCoreError as e:
+            logger.warning("put_item on app settings unreachable: %s", type(e).__name__)
+            raise AppSettingsStoreError(
+                f"put_item unreachable: {type(e).__name__}"
+            ) from e
+        return new_version
 
     def get(self, setting_key: str) -> dict[str, Any] | None:
         """The setting item as plain values, or ``None`` when it is missing.

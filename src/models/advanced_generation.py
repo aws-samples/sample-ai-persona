@@ -122,7 +122,8 @@ class ControlRequest:
 
 
 def _default_options() -> dict[str, Any]:
-    return {"confirm_plan": False}
+    # U6 BR35.2: ``use_detailed_analysis`` is decided at the start and kept
+    return {"confirm_plan": False, "use_detailed_analysis": False}
 
 
 class ResultPartName(StrEnum):
@@ -163,7 +164,8 @@ class AdvancedGeneration:
             (U4 BR25.2, decided right after the preparation).
         evidence_stats: ``{extracted, discarded_unverified}`` of the document
             evidence (U4 BR27.1).
-        options: ``{confirm_plan}`` chosen at the start (U5 BR29.1).
+        options: ``{confirm_plan, use_detailed_analysis}`` chosen at the start
+            (U5 BR29.1, U6 BR35.2).
         control_request: The pending cancel / approve / replan (U5 BR29.3,
             BR31.1); removed once the run takes it.
         awaiting_since: When the current plan card was shown (only while
@@ -239,10 +241,14 @@ class AdvancedGeneration:
         ttl_seconds: int,
         generation_id: str | None = None,
         confirm_plan: bool = False,
+        use_detailed_analysis: bool = False,
     ) -> "AdvancedGeneration":
         """A new generation in ``preparing`` that expires ``ttl_seconds`` later."""
         return cls(
-            options={"confirm_plan": bool(confirm_plan)},
+            options={
+                "confirm_plan": bool(confirm_plan),
+                "use_detailed_analysis": bool(use_detailed_analysis),
+            },
             generation_id=generation_id or str(uuid.uuid4()),
             owner_sub=owner_sub,
             status=GenerationStatus.PREPARING,
@@ -261,6 +267,11 @@ class AdvancedGeneration:
     def confirm_plan(self) -> bool:
         """Whether the run stops for the user's plan approval (U5 BR29.1)."""
         return bool(self.options.get("confirm_plan"))
+
+    @property
+    def use_detailed_analysis(self) -> bool:
+        """Whether AI-written code may run, decided at the start (U6 BR35.2)."""
+        return bool(self.options.get("use_detailed_analysis"))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the generation item without ``None`` values."""

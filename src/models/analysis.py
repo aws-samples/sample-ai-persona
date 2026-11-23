@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from ._advanced_common import drop_none, iso, parse_dt
 from .source_file import SourceEncoding
@@ -27,6 +27,16 @@ DEFAULT_SEED = 42
 LIMIT_MAX_CALLS = "max_calls"
 LIMIT_MAX_TOTAL_SECONDS = "max_total_seconds"
 LIMIT_MAX_OUTPUT_CHARS = "max_output_chars"
+#: U6 keys of the AI-written code (BR36.2).
+LIMIT_RUN_CODE_MAX_FAILURES = "run_code_max_failures"
+LIMIT_RUN_CODE_TIMEOUT_SECONDS = "run_code_timeout_seconds"
+
+#: Names of the tables of one generation, in the order chosen (BR37.2).
+TABLE_ALIASES: tuple[str, ...] = ("source_1", "source_2", "source_3")
+#: ``source_n`` or ``join:<axis>+<table>[+<table>]`` (BR37.4).
+_POPULATION_SOURCE = re.compile(
+    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
+)
 
 # ``<data``, ``</data``, ``< / DATA`` and the like inside the data.
 _DATA_MARKER = re.compile(r"<(\s*/?\s*data)", re.IGNORECASE)
@@ -87,11 +97,15 @@ DOCUMENT_PREPARE_VERSION = "doc-1"
 
 
 class AnalysisTool(StrEnum):
-    """Fixed tools an analysis agent may use (BR5.2; ``run_code`` is U6)."""
+    """Tools an analysis agent may use (BR5.2; U6 adds the last two, BR35.3)."""
 
     PROFILE_DATASET = "profile_dataset"
     ANALYZE_DATASET = "analyze_dataset"
     CLUSTER_SEGMENTS = "cluster_segments"
+    #: U6: run AI-written code in the generation's session (BR36)
+    RUN_CODE = "run_code"
+    #: U6: read one playbook by name (BR39.1)
+    LOAD_PLAYBOOK = "load_playbook"
 
 
 #: The tools of U1, in the order they are offered (BR5.2).
@@ -140,6 +154,10 @@ class PrepareReport:
         prepare_version: Version of the fixed preparation code.
         encoding_retried: Read as UTF-8 first, then again as CP932 (FD-Q5).
         excluded_reasons: Counts per reason and up to five example lines.
+        parquet_sha256: U6: SHA-256 of the prepared Parquet, counted right
+            after it was written and before any AI-written code ran
+            (security-design.md NFR3.35). Kept by the run only, never stored
+            on the generation.
     """
 
     source_id: str
@@ -150,6 +168,7 @@ class PrepareReport:
     prepare_version: str
     encoding_retried: bool = False
     excluded_reasons: dict[str, Any] | None = None
+    parquet_sha256: str | None = None
 
     def __post_init__(self) -> None:
         encoding = SourceEncoding(self.encoding)
@@ -170,12 +189,18 @@ class PrepareReport:
                 "encoding_retried": bool(self.encoding_retried),
                 "prepare_version": self.prepare_version,
                 "excluded_reasons": self.excluded_reasons,
+                "parquet_sha256": self.parquet_sha256,
             }
         )
+
+    def without_hash(self) -> "PrepareReport":
+        """The report as it is stored (the hash stays with the run, NFR3.35)."""
+        return replace(self, parquet_sha256=None)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "PrepareReport":
         reasons = data.get("excluded_reasons")
+        digest = data.get("parquet_sha256")
         return cls(
             source_id=str(data["source_id"]),
             rows_read=int(data["rows_read"]),
@@ -185,6 +210,7 @@ class PrepareReport:
             prepare_version=str(data["prepare_version"]),
             encoding_retried=bool(data.get("encoding_retried", False)),
             excluded_reasons=dict(reasons) if reasons is not None else None,
+            parquet_sha256=str(digest) if digest else None,
         )
 
 
@@ -345,6 +371,27 @@ class Segment:
 
     def update(self, **changes: Any) -> "Segment":
         return replace(self, **changes)
+
+    @property
+    def source(self) -> str | None:
+        """U6: the table (``source_n``) or joined table it rests on (BR37.2)."""
+        value = self.definition.get("source")
+        return str(value) if value else None
+
+    def _spec_value(self, key: str) -> str | None:
+        spec = self.definition.get("spec")
+        value = spec.get(key) if isinstance(spec, Mapping) else None
+        return str(value) if value not in (None, "") else None
+
+    @property
+    def tool_call_id(self) -> str | None:
+        """The tool call the segment was made from (``spec.tool_call_id``)."""
+        return self._spec_value("tool_call_id")
+
+    @property
+    def segment_key(self) -> str | None:
+        """U6: the key of an ``emit_result`` segment (BR36.3)."""
+        return self._spec_value("segment_key")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -561,30 +608,211 @@ class AnalysisToolPolicy:
     """Tools and limits the Manager grants an analysis (contract C8, ADR-012).
 
     Attributes:
-        tools: Allowed tools (a subset of :data:`U1_ANALYSIS_TOOLS` in U1).
-        limits: Call count, total time and output characters (NFR5.8〜NFR5.10).
+        tools: Allowed tools (a subset of :data:`U1_ANALYSIS_TOOLS` in U1;
+            U6 may add ``run_code`` and ``load_playbook``, BR35.3).
+        limits: Call count, total time and output characters (NFR5.8〜NFR5.10);
+            U6 adds the failures and the time of one ``run_code`` (BR36.2).
+        sources: U6: the table aliases the tools may choose (BR37.2). Empty
+            means the one table of U1.
     """
 
     tools: tuple[AnalysisTool, ...]
     limits: dict[str, int]
+    sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "tools", tuple(AnalysisTool(str(t)) for t in self.tools)
         )
+        object.__setattr__(self, "sources", tuple(str(s) for s in self.sources))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "tools": [t.value for t in self.tools],
             "limits": {k: int(v) for k, v in self.limits.items()},
         }
+        if self.sources:
+            data["sources"] = list(self.sources)
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AnalysisToolPolicy":
         return cls(
             tools=tuple(AnalysisTool(str(t)) for t in data.get("tools", [])),
             limits={str(k): int(v) for k, v in dict(data.get("limits", {})).items()},
+            sources=tuple(str(s) for s in data.get("sources", [])),
         )
+
+
+@dataclass(frozen=True)
+class JoinPlan:
+    """The join key found between the axis table and one other (BR37.3, BR37.6).
+
+    Attributes:
+        axis: The alias of the axis table (one row per person).
+        table: The alias of the table joined onto the axis.
+        key_column: The same-named column of matching type in both tables;
+            its values all differ in the axis table.
+        match_rate: Share of the smaller table's values found in the other.
+    """
+
+    axis: str
+    table: str
+    key_column: str
+    match_rate: float
+
+    def __post_init__(self) -> None:
+        if self.axis == self.table:
+            raise ValueError("a table is not joined to itself")
+        if not 0.0 <= float(self.match_rate) <= 1.0:
+            raise ValueError("match_rate must be within 0..1")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "axis": self.axis,
+            "table": self.table,
+            "key_column": self.key_column,
+            "match_rate": float(self.match_rate),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "JoinPlan":
+        return cls(
+            axis=str(data["axis"]),
+            table=str(data["table"]),
+            key_column=str(data["key_column"]),
+            match_rate=float(data["match_rate"]),
+        )
+
+
+@dataclass(frozen=True)
+class EmittedResult:
+    """What ``emit_result`` leaves, partly recounted by the library (BR36.3, C9).
+
+    ``finalize_ai_result`` counts ``population`` and each segment's ``size``
+    again from the data; those (and the shares made of them,
+    :meth:`recounted`) are the only numbers that may back a segment or an
+    evidence. ``statistics`` and each segment's ``features`` are what the
+    AI-written code passed to ``emit_result``: they are shown back to the
+    analysis agent but are NOT recounted, so they never validate anything
+    (review-01 R-02, NFR3.39).
+
+    Attributes:
+        population: People of ``population_source`` (the axis table's people
+            for a joined table). Recounted.
+        population_source: ``source_n`` or ``join:<axis>+<table>[+<table>]``.
+        segments: ``{segment_key, size, features}`` per segment. ``size`` is
+            recounted; ``features`` is the code's own (not recounted).
+        statistics: ``{name, value, p_value?, effect_size?}`` of tests, as the
+            code passed them (not recounted).
+        joined_columns: The key and the columns used, for a joined table.
+    """
+
+    population: int
+    population_source: str
+    segments: tuple[dict[str, Any], ...]
+    statistics: tuple[dict[str, Any], ...] = ()
+    joined_columns: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "segments", tuple(dict(s) for s in self.segments))
+        object.__setattr__(self, "statistics", tuple(dict(s) for s in self.statistics))
+        object.__setattr__(
+            self, "joined_columns", tuple(str(c) for c in self.joined_columns)
+        )
+        if not _POPULATION_SOURCE.match(str(self.population_source)):
+            raise ValueError("unknown population source")
+        if int(self.population) < 0:
+            raise ValueError("population must not be negative")
+        for segment in self.segments:
+            if int(segment.get("size", -1)) < 0 or not segment.get("segment_key"):
+                raise ValueError("a segment has a key and a size of 0 or more")
+
+    def size_of(self, segment_key: str) -> int | None:
+        """The recounted size of ``segment_key``, or ``None`` when absent."""
+        for segment in self.segments:
+            if str(segment.get("segment_key")) == segment_key:
+                return int(segment["size"])
+        return None
+
+    def recounted(self) -> dict[str, Any]:
+        """Only the numbers the library counted: the population and the sizes."""
+        return {
+            "population": int(self.population),
+            "population_source": self.population_source,
+            "segments": [
+                {"segment_key": str(s["segment_key"]), "size": int(s["size"])}
+                for s in self.segments
+            ],
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "population": int(self.population),
+            "population_source": self.population_source,
+            "segments": [dict(s) for s in self.segments],
+        }
+        if self.statistics:
+            data["statistics"] = [dict(s) for s in self.statistics]
+        if self.joined_columns:
+            data["joined_columns"] = list(self.joined_columns)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "EmittedResult":
+        return cls(
+            population=int(data["population"]),
+            population_source=str(data["population_source"]),
+            segments=tuple(dict(s) for s in data.get("segments") or []),
+            statistics=tuple(dict(s) for s in data.get("statistics") or []),
+            joined_columns=tuple(str(c) for c in data.get("joined_columns") or []),
+        )
+
+
+@dataclass(frozen=True)
+class RunCodeOutcome:
+    """How one ``run_code`` call ended, as the Service tells the gate (NFR5.55).
+
+    Attributes:
+        ok: The code ran and ``emit_result`` was recounted.
+        error_code: Fixed code of a failure (never the error text).
+        timed_out: The run passed its time and was cancelled.
+        cancel_failed: The cancel raised or the stop could not be read.
+        tampered: The library or a prepared Parquet changed (BR36.6), or a
+            hash to compare was missing (fail closed).
+        changed: What changed: ``library`` and / or ``parquet``.
+        verify_failed: The isolated check itself failed or its answer could
+            not be read. The tools halt (fail closed) but it is no tamper.
+    """
+
+    ok: bool
+    error_code: Optional[str] = None
+    timed_out: bool = False
+    cancel_failed: bool = False
+    tampered: bool = False
+    changed: tuple[str, ...] = ()
+    verify_failed: bool = False
+
+
+@runtime_checkable
+class RunCodeGate(Protocol):
+    """What ``AnalysisToolService`` asks before and tells after ``run_code``.
+
+    The Manager's budget implements it, so the Service never imports the
+    Manager (reliability-design.md NFR5.55).
+    """
+
+    def allows_run_code(self) -> bool:
+        """Whether ``run_code`` may still run (not taken off)."""
+        ...
+
+    def halted(self) -> bool:
+        """Whether every tool must stop (a change was found)."""
+        ...
+
+    def record(self, outcome: RunCodeOutcome) -> None:
+        """Count the outcome of one call."""
+        ...
 
 
 @dataclass(frozen=True)

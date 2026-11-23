@@ -1,4 +1,9 @@
-"""The advanced generation (beta) of personas from one table (U1, W4〜W6).
+"""The advanced generation (beta) of personas from tables and documents (W4〜W6).
+
+U6: up to three tables (``source_1``〜), prepared one at a time; with the
+AI detailed analysis (decided at the start, BR35.2) the join keys are found
+(BR37.3), ``run_code`` is given with a budget (BR36.2) and a change of the
+library or a Parquet fails the generation (BR36.6).
 
 ``start_generation`` checks the request and writes the owner's lock, the
 generation and the file's in-use mark in one transaction (BR7.5, BR6.4);
@@ -49,6 +54,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -68,12 +74,16 @@ from ...models.advanced_generation import (
     ResultPartName,
 )
 from ...models.analysis import (
+    TABLE_ALIASES,
     AnalysisMethod,
     AnalysisPlan,
     AnalysisRecord,
+    AnalysisTool,
     DocumentMode,
     DocumentReport,
+    EmittedResult,
     Evidence,
+    JoinPlan,
     PrepareReport,
     Segment,
 )
@@ -81,6 +91,7 @@ from ...models.authz import Principal
 from ...models.errors import CodedError, ErrorCode, ErrorKind
 from ...models.persona_candidate import MAX_CANDIDATE_ITEM_BYTES, PersonaCandidate
 from ...models.source_file import SourceFile, SourceKind
+from ...services.dataset_analysis.analysis_tool_service import AnalysisTable
 from ...services.s3_service import S3ServiceError
 from ...services.service_factory import service_factory
 from ...services.stores.advanced_generation_store import (
@@ -96,6 +107,13 @@ from ..shared.advanced_generation_log import log_advanced_event
 from . import documents, prompts
 from .analysis_policy import PLAN_ATTEMPTS, AnalysisPolicy
 from .analysis_verifier import AnalysisVerifier, VerificationResult
+from .detailed_analysis import (
+    REASON_MISSING_HASH,
+    REASON_VERIFY_FAILED,
+    RunCodeBudget,
+    filter_evidence,
+)
+from .join_planner import PlannedTable, plan_joins
 from .results import build_analysis_run, build_candidates, build_record
 
 if TYPE_CHECKING:
@@ -273,6 +291,20 @@ class _NoTools:
 
 
 @dataclass
+class _Table:
+    """U6: one prepared table of the run, named in the order chosen (BR37.2)."""
+
+    alias: str
+    source: SourceFile
+    report: PrepareReport
+    profile: dict[str, Any]
+
+
+#: U6: the progress notice when run_code is taken off (BR36.2, AC5.4.2).
+_RUN_CODE_DISABLED_NOTICE = "AI による詳細分析をやめて、決まった関数で続けます"
+
+
+@dataclass
 class _Run:
     """The state of one ``run`` (one thread)."""
 
@@ -324,6 +356,14 @@ class _Run:
     beat_failures: int = 0
     #: The end (lock, marks, ``finished_at``) is already written.
     finished: bool = False
+    #: U6: every table, in the order chosen (``source_1``〜``source_3``).
+    tables: list[_Table] = field(default_factory=list)
+    #: U6: the join plans and the axis people each matched (BR37.3).
+    joins: list[tuple[JoinPlan, int]] = field(default_factory=list)
+    #: U6: the run_code budget (the gate the tools ask, NFR5.55).
+    budget: Optional[RunCodeBudget] = None
+    #: review-01 R-01: why detailed analysis was not offered after all
+    detailed_fallback: Optional[str] = None
 
     @property
     def deadline(self) -> datetime:
@@ -445,6 +485,18 @@ class AdvancedPersonaGenerationManager:
         """Whether the tab and the page are shown to ``principal`` (BR1.1)."""
         return self._advanced_generation_policy.is_available(principal)
 
+    def detailed_analysis_offered(self, principal: Principal) -> bool:
+        """U6 BR35.4: whether the detailed settings show "AI による詳細分析"."""
+        return self._advanced_generation_policy.availability(
+            principal, in_process=self._in_process()
+        ).detailed
+
+    def _in_process(self) -> bool:
+        """The sandbox runs in this process (only an injected one can, ADR-004)."""
+        return getattr(self._sandbox_service, "kind", "code_interpreter") == (
+            "in_process"
+        )
+
     def start_generation(
         self,
         principal: Principal,
@@ -453,6 +505,7 @@ class AdvancedPersonaGenerationManager:
         purpose: str,
         persona_count: int,
         confirm_plan: bool = False,
+        use_detailed_analysis: bool = False,
     ) -> str:
         """Check the request and write the start transaction (W4, BR7.5, BR6.4).
 
@@ -480,14 +533,26 @@ class AdvancedPersonaGenerationManager:
         )
         ids = list(dict.fromkeys(i for i in source_file_ids if i))
         self._check_input(purpose, persona_count)
-        # U4 BR23.1: documents alone, or one table with documents
-        self._catalog.ready_sources(principal.sub, ids)
+        # U4 BR23.1 / U6 BR37.1: documents alone, or up to three tables
+        found = self._catalog.ready_sources(principal.sub, ids)
+        # U6 BR35.2: decided now and kept; a box sent without the
+        # administrator's permission is quietly off
+        detailed = (
+            bool(use_detailed_analysis)
+            and any(s.kind is SourceKind.TABLE for s in found)
+            and self.detailed_analysis_offered(principal)
+        )
         self._judge_lock_holder(principal)  # U5 BR30.1: a stalled one lets go
         if not self._slots.acquire(blocking=False):
             raise _fail(ErrorCode.ADVANCED_GENERATION_BUSY, "no free generation slot")
         try:
             return self._write_start(
-                principal, ids, purpose, int(persona_count), bool(confirm_plan)
+                principal,
+                ids,
+                purpose,
+                int(persona_count),
+                bool(confirm_plan),
+                detailed,
             )
         except BaseException:
             self._release_slot()
@@ -544,6 +609,7 @@ class AdvancedPersonaGenerationManager:
         purpose: str,
         persona_count: int,
         confirm_plan: bool,
+        use_detailed_analysis: bool = False,
     ) -> str:
         now = self._clock()
         generation = AdvancedGeneration.create_new(
@@ -554,6 +620,7 @@ class AdvancedPersonaGenerationManager:
             now=now,
             ttl_seconds=config.ADVANCED_GENERATION_ITEM_TTL_SECONDS,
             confirm_plan=confirm_plan,
+            use_detailed_analysis=use_detailed_analysis,
         )
         lock_until = now + timedelta(seconds=config.ADVANCED_GENERATION_LOCK_SECONDS)
         try:
@@ -780,8 +847,15 @@ class AdvancedPersonaGenerationManager:
         for source in state.sources:
             self._bring_in(state, source)
         prepare_started = self._clock()
-        if state.source is not None:
-            self._prepare_table(state, state.source, prepare_started)
+        # U6 NFR1.28: each table in the order chosen, one at a time, within
+        # the same 20 minutes as the documents
+        tables = [s for s in state.sources if s.kind is SourceKind.TABLE]
+        for alias, table in zip(TABLE_ALIASES, tables):
+            self._prepare_table(
+                state, table, prepare_started, alias=alias, only=len(tables) == 1
+            )
+        if state.tables:
+            self._settle_guide_table(state)
         position = 0
         for source_index, source in enumerate(state.sources):
             if source.kind is not SourceKind.DOCUMENT:
@@ -795,22 +869,90 @@ class AdvancedPersonaGenerationManager:
             self._decide_document_mode(state)
 
     def _prepare_table(
-        self, state: _Run, source: SourceFile, prepare_started: datetime
+        self,
+        state: _Run,
+        source: SourceFile,
+        prepare_started: datetime,
+        *,
+        alias: str = TABLE_ALIASES[0],
+        only: bool = True,
     ) -> None:
-        """The table's preparation and its checks (U1, U3: BR16, BR18)."""
+        """One table's preparation and its checks (U1, U3: BR16, BR18; U6 BR37.2)."""
         assert state.session is not None
         started = time.monotonic()
+        state.report = None
         try:
             state.report = self._run_prepare(state, source, prepare_started)
         except CodedError as e:
             self._log_prepared(state, started, e.code, e.context)
             raise
         self._log_prepared(state, started, None, {})
-        self._check_enough_rows(state)
+        if only:
+            self._check_enough_rows(state)
         profile = self._sandbox.call(
             state.session, "profile_dataset", {"source_id": source.source_file_id}
         )
         state.profile = dict(self._library_value(profile))
+        state.tables.append(_Table(alias, source, state.report, state.profile))
+
+    def _settle_guide_table(self, state: _Run) -> None:
+        """The table the guide and the population read (U6 BR37.2), then joins.
+
+        With several tables the row check (BR18.1) is made on that table, and
+        the join keys are found when the detailed analysis is on (BR37.3).
+        """
+        alias = AnalysisPolicy.guide_table([(t.alias, t.profile) for t in state.tables])
+        guide = next(t for t in state.tables if t.alias == alias)
+        state.source, state.report, state.profile = (
+            guide.source,
+            guide.report,
+            guide.profile,
+        )
+        if len(state.tables) > 1:
+            self._check_enough_rows(state)
+            if state.generation.use_detailed_analysis:
+                self._plan_joins(state)
+
+    def _plan_joins(self, state: _Run) -> None:
+        """Find the join keys with the fixed ``key_overlap`` (BR37.3, NFR1.29)."""
+        deadline = self._clock() + timedelta(
+            seconds=config.ADVANCED_JOIN_CHECK_TIMEOUT_SECONDS
+        )
+
+        def overlap(
+            axis: PlannedTable, other: PlannedTable, columns: list[str]
+        ) -> Optional[list[Mapping[str, Any]]]:
+            assert state.session is not None
+            command_id = self._sandbox.start_command(
+                state.session,
+                "key_overlap",
+                {"axis": axis.source_id, "other": other.source_id, "columns": columns},
+            )
+            while True:
+                status = self._sandbox.poll_command(state.session, command_id)
+                if status.get("done"):
+                    result = status.get("result") or {}
+                    value = result.get("value") if result.get("ok") else None
+                    rows = value.get("columns") if isinstance(value, Mapping) else None
+                    return list(rows) if isinstance(rows, list) else None
+                self._checkpoint(state)
+                if self._clock() > deadline:
+                    self._cancel_quietly(state, command_id)
+                    return None
+                self._sleep(
+                    self._poll_seconds
+                    if self._poll_seconds is not None
+                    else config.ADVANCED_GENERATION_PREPARE_POLL_SECONDS
+                )
+
+        state.joins = plan_joins(
+            [
+                PlannedTable(t.alias, t.source.source_file_id, t.profile)
+                for t in state.tables
+            ],
+            overlap=overlap,
+            min_match_rate=float(config.ADVANCED_JOIN_MIN_MATCH_RATE),
+        )
 
     def _check_enough_rows(self, state: _Run) -> None:
         """Stop when the table has fewer rows than persona count x 10 (BR18.1).
@@ -1474,7 +1616,33 @@ class AdvancedPersonaGenerationManager:
         return [str(c.get("name")) for c in state.profile.get("columns") or []]
 
     def _profile_text(self, state: _Run) -> str:
+        if len(state.tables) > 1:
+            # U6 BR37.2: every table's profile under its name
+            return json.dumps(
+                {t.alias: t.profile for t in state.tables},
+                ensure_ascii=False,
+                default=str,
+            )
         return json.dumps(state.profile, ensure_ascii=False, default=str)
+
+    def _table_data(self, state: _Run) -> dict[str, str]:
+        """U6: the table names, the guide table and the join plans (BR37.2〜37.4)."""
+        if len(state.tables) <= 1 and not state.joins:
+            return {}
+        data = {
+            "tables": json.dumps(
+                [{"name": t.alias, "rows": t.report.rows_read} for t in state.tables],
+                ensure_ascii=False,
+            ),
+            "guide_table": next(
+                t.alias for t in state.tables if t.source is state.source
+            ),
+        }
+        if state.joins:
+            data["join_plans"] = json.dumps(
+                [plan.to_dict() for plan, _ in state.joins], ensure_ascii=False
+            )
+        return data
 
     def _full_texts(self, state: _Run) -> list[str]:
         """The whole document texts for the prompts (``full_text`` only, BR25.3)."""
@@ -1496,7 +1664,11 @@ class AdvancedPersonaGenerationManager:
             prompts.DOCUMENT_PLANNING_NOTE if state.documents else ""
         )
         agent = self._agents.create_advanced_planning_agent(instructions)
-        data = {"purpose": generation.purpose, "profile": self._profile_text(state)}
+        data = {
+            "purpose": generation.purpose,
+            "profile": self._profile_text(state),
+            **self._table_data(state),
+        }
         if state.document_mode is DocumentMode.EXTRACTION:
             # BR26.3: the checked evidence only, never the text
             data["document_evidence"] = self._document_evidence_text(state)
@@ -1707,34 +1879,204 @@ class AdvancedPersonaGenerationManager:
             return
         self._before_model(state)
         generation = state.generation
+        aliases = tuple(t.alias for t in state.tables)
+        # U6 BR35.3: run_code only when decided at the start (never re-read)
+        policy = AnalysisPolicy.tool_policy(
+            detailed=generation.use_detailed_analysis,
+            in_process=self._in_process(),
+            sources=aliases,
+        )
+        detailed = AnalysisTool.RUN_CODE in policy.tools
+        if detailed and not self._hashes_known(state):
+            # review-01 R-01: nothing to compare a change with -> fail closed,
+            # the fixed functions go on (as in-process does)
+            detailed = False
+            state.detailed_fallback = REASON_MISSING_HASH
+            policy = AnalysisPolicy.tool_policy(
+                detailed=False, in_process=self._in_process(), sources=aliases
+            )
+            self._event(state, EventType.PROGRESS, message=_RUN_CODE_DISABLED_NOTICE)
+            self._log(
+                "advanced_generation.run_code_disabled",
+                generation_id=generation.generation_id,
+                status="disabled",
+                reason=REASON_MISSING_HASH,
+                failures=0,
+            )
+        extra: dict[str, Any] = {
+            "tables": [
+                AnalysisTable(
+                    t.alias,
+                    t.source.source_file_id,
+                    tuple(str(c.get("name")) for c in t.profile.get("columns") or []),
+                )
+                for t in state.tables
+            ]
+        }
+        if detailed:
+            state.budget = self._new_budget(state)
+            extra.update(
+                gate=state.budget,
+                expected_library_sha256=self._sandbox.library_sha256,
+                expected_parquet_sha256=self._expected_parquet(state),
+            )
         tools = self._tool_factory(
             state.session,
-            AnalysisPolicy.tool_policy(),
+            policy,
             source_id=state.source.source_file_id,
             columns=self._columns(state),
             persona_count=generation.persona_count,
             sandbox=self._sandbox,
+            **extra,
         )
         state.tools = tools
         agent = self._agents.create_advanced_analysis_agent(
-            prompts.ANALYSIS_INSTRUCTIONS, tools.tools()
+            prompts.analysis_instructions(detailed=detailed, tables=len(aliases)),
+            tools.tools(),
         )
         output = self._agents.run_advanced_analysis(
             agent,
-            prompts.analysis_prompt(state.plan, generation.persona_count),
+            prompts.analysis_prompt(
+                state.plan,
+                generation.persona_count,
+                joins=[plan for plan, _ in state.joins] if detailed else (),
+            ),
             {
                 "plan": json.dumps(state.plan.to_dict(), ensure_ascii=False),
                 "profile": self._profile_text(state),
+                **self._table_data(state),
             },
             source_id=state.source.source_file_id,
         )
         self._checkpoint(state)  # U5: a cancel during the call
         if tools.sandbox_error is not None:
             raise tools.sandbox_error
+        if state.budget is not None:
+            self._check_untouched(state)
         self._check_cluster_calls(state)
         state.segments, state.evidence = self._parse_analysis(output)
+        if state.budget is not None:
+            # BR36.4, NFR3.39: only what a successful run recounted goes on
+            runs: dict[str, Optional[EmittedResult]] = {
+                call_id: None for call_id in tools.run_code_ids()
+            }
+            runs.update(tools.emitted_results())
+            state.segments, state.evidence = filter_evidence(
+                state.segments, state.evidence, runs
+            )
         if not state.segments:
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "no segment")
+
+    # --- U6: the AI detailed analysis (BR36, NFR3.35, NFR5.55) -----------------
+
+    def _new_budget(self, state: _Run) -> RunCodeBudget:
+        generation_id = state.generation.generation_id
+
+        def disabled(reason: str, failures: int) -> None:
+            # AC5.4.2: once, then the fixed functions go on
+            self._event(state, EventType.PROGRESS, message=_RUN_CODE_DISABLED_NOTICE)
+            self._log(
+                "advanced_generation.run_code_disabled",
+                generation_id=generation_id,
+                status="disabled",
+                reason=reason,
+                failures=failures,
+            )
+
+        def tampered(changed: tuple[str, ...]) -> None:
+            self._log_tamper(generation_id, changed)
+
+        def verify_failed() -> None:
+            self._log_verify_failed(state)
+
+        return RunCodeBudget(
+            max_failures=int(config.ADVANCED_RUN_CODE_MAX_FAILURES),
+            on_disabled=disabled,
+            on_tampered=tampered,
+            on_verify_failed=verify_failed,
+        )
+
+    def _log_verify_failed(self, state: _Run) -> None:
+        """review-01 R-03: the check failed; told apart from a tamper."""
+        budget = state.budget
+        self._log(
+            "advanced_generation.run_code_disabled",
+            generation_id=state.generation.generation_id,
+            status="disabled",
+            reason=REASON_VERIFY_FAILED,
+            failures=budget.failures if budget is not None else 0,
+        )
+
+    def _log_tamper(self, generation_id: str, changed: Sequence[str]) -> None:
+        self._log(
+            "advanced_generation.tamper_detected",
+            generation_id=generation_id,
+            status="detected",
+            changed=list(changed),
+        )
+
+    @staticmethod
+    def _expected_parquet(state: _Run) -> dict[str, str]:
+        """The Parquet hashes the preparation counted (held by the run only)."""
+        return {
+            t.source.source_file_id: t.report.parquet_sha256
+            for t in state.tables
+            if t.report.parquet_sha256
+        }
+
+    def _hashes_known(self, state: _Run) -> bool:
+        """Every table's Parquet hash and the library hash are there (R-01)."""
+        return (
+            bool(self._sandbox.library_sha256)
+            and bool(state.tables)
+            and all(t.report.parquet_sha256 for t in state.tables)
+        )
+
+    def _check_untouched(self, state: _Run) -> None:
+        """Fail on a change: one found by a run, or one left after the last run.
+
+        BR36.6: a halted budget fails the generation. When run_code ran at
+        least once, the hashes are checked once more with the library written
+        again (security-design.md), before anything reaches the synthesis.
+        """
+        assert state.budget is not None and state.session is not None
+        if state.budget.halted():
+            raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
+        if not state.tools.run_code_ids():
+            return
+        token = uuid.uuid4().hex[:16]
+        result = self._sandbox.call_verified(
+            state.session,
+            "verify_hashes",
+            {
+                "pgid_files": state.tools.pgid_files(),
+                "sources": {t.alias: t.source.source_file_id for t in state.tables},
+            },
+            f"verify/{token}",
+        )
+        value = result.get("value") if result.get("ok") else None
+        hashes = value.get("hashes") if isinstance(value, Mapping) else None
+        if not isinstance(hashes, Mapping):
+            # review-01 R-03: the check itself failed -> fail closed, no tamper
+            self._log_verify_failed(state)
+            raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "check failed")
+        # review-01 R-01: a missing expected or returned hash is a change
+        changed: list[str] = []
+        library = hashes.get("library")
+        expected_library = self._sandbox.library_sha256
+        if not expected_library or not library or library != expected_library:
+            changed.append("library")
+        found = hashes.get("parquet")
+        parquet: Mapping[str, Any] = found if isinstance(found, Mapping) else {}
+        if not state.tables or any(
+            not t.report.parquet_sha256
+            or parquet.get(t.source.source_file_id) != t.report.parquet_sha256
+            for t in state.tables
+        ):
+            changed.append("parquet")
+        if changed:
+            self._log_tamper(state.generation.generation_id, changed)
+            raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "analysis changed")
 
     @staticmethod
     def _check_cluster_calls(state: _Run) -> None:
@@ -1896,13 +2238,20 @@ class AdvancedPersonaGenerationManager:
         outputs = {
             cid: state.tools.output_of(cid) for cid in state.tools.tool_call_ids()
         }
+        # U6 BR37.5: the population of each table (the first one is the
+        # default of a segment without a source), and the recounted results
+        populations = {t.alias: t.report.rows_read for t in state.tables} or {
+            TABLE_ALIASES[0]: state.report.rows_read
+        }
+        emitted = state.tools.emitted_results() if state.budget is not None else {}
         result = AnalysisVerifier.verify(
             method=state.plan.method,
             segments=state.segments,
             evidence=state.evidence,
             persona_segment_ids=[p.segment_id for p in personas],
-            population=state.report.rows_read,
+            populations=populations,
             outputs=outputs,
+            emitted=emitted,
         )
         if not result.passed:
             logger.info("advanced generation verification failed: %s", result.reason)
@@ -1929,6 +2278,11 @@ class AdvancedPersonaGenerationManager:
         now = self._clock()
         sha = self._sandbox.library_sha256
         unverified = verification.unverified_segment_ids
+        ai_code = [
+            (r.tool_call_id, r.code, r.sha256, self._join_title(state, r.result))
+            for r in getattr(state.tools, "code_runs", [])
+            if r.ok
+        ]
         run = build_analysis_run(
             generation=generation,
             plan=state.plan,
@@ -1938,6 +2292,8 @@ class AdvancedPersonaGenerationManager:
             library_sha256=sha,
             unverified_segment_ids=unverified,
             document_mode=state.document_mode,
+            ai_code_sha256=[s for _, _, s, _ in ai_code],
+            extra_params=self._u6_params(state),
         )
         record = build_record(
             generation=generation,
@@ -1948,6 +2304,7 @@ class AdvancedPersonaGenerationManager:
             library_sha256=sha,
             now=now,
             document_mode=state.document_mode,
+            ai_code=ai_code,
         )
         candidates = build_candidates(
             generation=generation,
@@ -1977,8 +2334,11 @@ class AdvancedPersonaGenerationManager:
             }
         self._check_item_size(state, done_updates)
         parts: dict[ResultPartName, list[dict[str, Any]]] = {
+            # U6: every table; the Parquet hash stays with the run (NFR3.35)
             ResultPartName.PREPARE_REPORTS: (
-                [state.report.to_dict()] if state.report else []
+                [t.report.without_hash().to_dict() for t in state.tables]
+                if state.tables
+                else ([state.report.without_hash().to_dict()] if state.report else [])
             ),
             ResultPartName.DOCUMENT_REPORTS: [
                 r.to_dict() for _, _, r in state.documents
@@ -2022,6 +2382,63 @@ class AdvancedPersonaGenerationManager:
             persona_count=len(candidates),
             unverified=len(verification.unverified_segment_ids),
         )
+
+    @staticmethod
+    def _join_title(state: _Run, result: Optional[EmittedResult]) -> Optional[str]:
+        """The record's line for a joined result: columns and match rates (BR38.1)."""
+        if result is None or not result.population_source.startswith("join:"):
+            return None
+        rates = "、".join(
+            f"{plan.table} の一致 {plan.match_rate:.0%}" for plan, _ in state.joins
+        )
+        columns = ", ".join(result.joined_columns) or "（なし）"
+        return f"結合した列: {columns}" + (f"（{rates}）" if rates else "")
+
+    @staticmethod
+    def _u6_params(state: _Run) -> dict[str, Any]:
+        """``detailed_analysis`` and ``join`` of AnalysisRun.params (BR37.4, C8)."""
+        params: dict[str, Any] = {}
+        budget = state.budget
+        if budget is not None:
+            params["detailed_analysis"] = {
+                "used": True,
+                "fell_back": budget.disabled_reason is not None,
+                "failures": budget.failures,
+            }
+        elif state.detailed_fallback is not None:
+            # review-01 R-01: asked for, but not offered (no hash to compare)
+            params["detailed_analysis"] = {
+                "used": False,
+                "fell_back": True,
+                "failures": 0,
+                "reason": state.detailed_fallback,
+            }
+        if state.joins and budget is not None:
+            plan_only: dict[str, Any] = {
+                "axis": state.joins[0][0].axis,
+                "tables": [
+                    {
+                        "table": plan.table,
+                        "key_column": plan.key_column,
+                        "match_rate": plan.match_rate,
+                        "matched_people": matched,
+                    }
+                    for plan, matched in state.joins
+                ],
+            }
+            # review-01 R-04: "join" only when a joined result was adopted (a
+            # kept segment rests on it); otherwise only the plan is recorded
+            emitted = state.tools.emitted_results()
+            joined: Optional[list[str]] = None
+            for segment in state.segments:
+                result = emitted.get(segment.tool_call_id or "")
+                if result is not None and result.population_source.startswith("join:"):
+                    joined = list(result.joined_columns)
+            if joined is None:
+                params["join_plan"] = plan_only
+            else:
+                params["join"] = {**plan_only, "joined_columns": joined}
+        return params
 
     @staticmethod
     def _trimmed_evidence(
@@ -2320,6 +2737,7 @@ class AdvancedPersonaGenerationManager:
 
     def _log_finished(self, state: _Run) -> None:
         report = state.report
+        budget = state.budget
         log_advanced_event(
             "advanced_generation.finished",
             generation_id=state.generation.generation_id,
@@ -2337,6 +2755,20 @@ class AdvancedPersonaGenerationManager:
             # U5 NFR6.17
             replan_count=state.replan_count,
             waited_seconds=state.waited_seconds,
+            # U6 NFR6.20: counts only, never the code or its output
+            detailed_analysis_used=state.generation.use_detailed_analysis,
+            run_code_calls=budget.calls if budget is not None else 0,
+            run_code_failures=budget.failures if budget is not None else 0,
+            run_code_disabled=(
+                budget.disabled_reason is not None or budget.verify_failed
+                if budget is not None
+                else state.detailed_fallback is not None
+            ),
+            table_count=len(state.tables),
+            joined_tables=len(state.joins),
+            join_match_rate=(
+                min(plan.match_rate for plan, _ in state.joins) if state.joins else None
+            ),
         )
 
     # --- U5: control logs (observability-design.md NFR6.16) ---------------------

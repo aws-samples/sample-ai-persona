@@ -4,8 +4,9 @@ Only ``AdvancedPersonaGenerationManager`` uses this, so it is a module of that
 Manager's package (components.md, "採らなかった分け方").
 
 - Tools (BR5.2): the three fixed tools ``profile_dataset``,
-  ``analyze_dataset`` and ``cluster_segments``. ``run_code`` is never given
-  in U1.
+  ``analyze_dataset`` and ``cluster_segments``. U6 (BR35.3, replacing
+  BR5.2's "never ``run_code``"): ``run_code`` and ``load_playbook`` with the
+  detailed analysis outside this process.
 - Limits (NFR5.8〜NFR5.10): call count, total time and characters of one
   output, from ``config``; the Service uses only what it is given.
 - Guide (BR5.1): a named target is ``filter``, a comparison ``compare``, an
@@ -25,9 +26,12 @@ from ...models.analysis import (
     LIMIT_MAX_CALLS,
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
+    LIMIT_RUN_CODE_MAX_FAILURES,
+    LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     U1_ANALYSIS_TOOLS,
     AnalysisMethod,
     AnalysisPlan,
+    AnalysisTool,
     AnalysisToolPolicy,
 )
 
@@ -50,16 +54,51 @@ class AnalysisPolicy:
     """The decisions on tools, limits and the plan of one analysis."""
 
     @staticmethod
-    def tool_policy() -> AnalysisToolPolicy:
-        """The tools and limits handed to ``AnalysisToolService`` (ADR-012)."""
-        return AnalysisToolPolicy(
-            tools=U1_ANALYSIS_TOOLS,
-            limits={
-                LIMIT_MAX_CALLS: int(config.ADVANCED_TOOL_MAX_CALLS),
-                LIMIT_MAX_TOTAL_SECONDS: int(config.ADVANCED_TOOL_MAX_TOTAL_SECONDS),
-                LIMIT_MAX_OUTPUT_CHARS: int(config.ADVANCED_TOOL_MAX_OUTPUT_CHARS),
-            },
-        )
+    def tool_policy(
+        *,
+        detailed: bool = False,
+        in_process: bool = False,
+        sources: Sequence[str] = (),
+    ) -> AnalysisToolPolicy:
+        """The tools and limits handed to ``AnalysisToolService`` (ADR-012).
+
+        U6 BR35.3 (replaces BR5.2): ``run_code`` and ``load_playbook`` are
+        added only when the generation uses the detailed analysis, has a
+        table and does not run in this process (NFR3.33), with the failures
+        and the time of one run (BR36.2).
+
+        Args:
+            detailed: ``AdvancedGeneration.use_detailed_analysis``.
+            in_process: The sandbox runs in this process.
+            sources: The table aliases the tools may choose (BR37.2).
+        """
+        limits = {
+            LIMIT_MAX_CALLS: int(config.ADVANCED_TOOL_MAX_CALLS),
+            LIMIT_MAX_TOTAL_SECONDS: int(config.ADVANCED_TOOL_MAX_TOTAL_SECONDS),
+            LIMIT_MAX_OUTPUT_CHARS: int(config.ADVANCED_TOOL_MAX_OUTPUT_CHARS),
+        }
+        tools: tuple[AnalysisTool, ...] = U1_ANALYSIS_TOOLS
+        if detailed and not in_process and sources:
+            tools = (
+                *U1_ANALYSIS_TOOLS,
+                AnalysisTool.RUN_CODE,
+                AnalysisTool.LOAD_PLAYBOOK,
+            )
+            limits[LIMIT_RUN_CODE_MAX_FAILURES] = int(
+                config.ADVANCED_RUN_CODE_MAX_FAILURES
+            )
+            limits[LIMIT_RUN_CODE_TIMEOUT_SECONDS] = int(
+                config.ADVANCED_RUN_CODE_TIMEOUT_SECONDS
+            )
+        return AnalysisToolPolicy(tools=tools, limits=limits, sources=tuple(sources))
+
+    @staticmethod
+    def guide_table(tables: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
+        """The table the guide reads: one row per person, else the first (BR37.2)."""
+        for alias, profile in tables:
+            if any(_is_person_id(c) for c in profile.get("columns") or []):
+                return alias
+        return tables[0][0]
 
     @staticmethod
     def budget() -> dict[str, int]:
@@ -118,6 +157,16 @@ class AnalysisPolicy:
             split_axis=str(axis) if axis in set(columns) else None,
             deviation_reason=reason if method is not guide else None,
         )
+
+
+def is_numeric_type(type_name: str) -> bool:
+    """Whether a profiled DuckDB type is a number."""
+    return bool(_NUMERIC_TYPE.match(str(type_name)))
+
+
+def is_person_id(column: Mapping[str, Any]) -> bool:
+    """A column that looks like a person's ID (BR5.1, U6 BR37.6)."""
+    return _is_person_id(column)
 
 
 def _is_person_id(column: Mapping[str, Any]) -> bool:

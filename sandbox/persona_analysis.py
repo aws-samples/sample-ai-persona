@@ -28,10 +28,13 @@ import bisect
 import codecs
 import datetime as _dt
 import decimal
+import hashlib
 import io
 import json
 import os
 import re
+import signal
+import subprocess
 import sys
 import threading
 import unicodedata
@@ -532,6 +535,8 @@ def prepare(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
         report["excluded_reasons"] = {"counts": counts}
         if examples:
             report["excluded_reasons"]["examples"] = examples
+    # U6 (NFR3.35): counted before any AI-written code can run
+    report["parquet_sha256"] = _file_sha256(out)
     _write_progress(
         workdir, progress_id, phase="finished", rows=rows, rows_excluded=excluded
     )
@@ -1314,6 +1319,686 @@ def verify_quotes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# U6: AI-written code (BR36), the check after it (NFR3.35) and the playbook
+# functions (BR37.3, BR37.4, BR39.2)
+# ---------------------------------------------------------------------------
+#
+# ``run_ai_code`` runs the code as its own process group in an empty folder
+# ``ai_work/<random>``; the code gets the names of :func:`_ai_namespace` and
+# hands its result to :func:`emit_result`, which writes the person IDs and
+# their segment only. ``finalize_ai_result`` is run from a copy of this file
+# written again by the app (``python -I``): it stops the group, hashes the
+# prepared Parquets and the session's own copy of this file, and counts the
+# sizes and the population again from the data. Nothing the code printed or
+# wrote as a number is used.
+
+_SOURCE_ALIAS = re.compile(r"^source_[1-3]$")
+_POPULATION_SOURCE = re.compile(
+    r"^(source_[1-3])$|^join:source_[1-3](\+source_[1-3])+$"
+)
+_WORK_DIR = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}$")
+_PGID_FILE = re.compile(r"^ai_work/[A-Za-z0-9_-]{1,64}\.pgid$")
+_AI_STDOUT_MAX_CHARS = 20_000
+_AI_ERROR_MAX_CHARS = 4_000
+_AI_DEFAULT_TIMEOUT_SECONDS = 120
+_ASSIGNMENT_FILE = "assignment.parquet"
+_META_FILE = "meta.json"
+_EMIT_COUNT_FILE = "emit_count"
+_MAX_STATISTICS = 50
+_MAX_FEATURES = 20
+_JOIN_FUNCS = {
+    "count": "count({col})",
+    "count_distinct": "count(DISTINCT {col})",
+    "sum": "sum({col})",
+    "mean": "avg({col})",
+    "avg": "avg({col})",
+    "min": "min({col})",
+    "max": "max({col})",
+    "first": "min({col})",
+    "last": "max({col})",
+}
+_NAME_PART = re.compile(r"[^A-Za-z0-9_]")
+
+# What the code runs with (filled in by :func:`_ai_namespace`).
+_AI_CONTEXT: Dict[str, Any] = {}
+
+_BOOTSTRAP = """
+import importlib.util, json, sys
+lib_path, workdir, work, sources, code_path = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("persona_analysis", lib_path)
+lib = importlib.util.module_from_spec(spec)
+sys.modules["persona_analysis"] = lib
+spec.loader.exec_module(lib)
+names = lib._ai_namespace(workdir, work, json.loads(sources))
+with open(code_path, encoding="utf-8") as f:
+    code = f.read()
+exec(compile(code, "ai_code.py", "exec"), names)
+"""
+
+
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _hash_or_missing(path: str) -> str:
+    return _file_sha256(path) if os.path.isfile(path) else "missing"
+
+
+def _checked_sources(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "sources"})
+    return {
+        str(alias): _checked_id(source_id, "sources")
+        for alias, source_id in value.items()
+        if _SOURCE_ALIAS.match(str(alias))
+    }
+
+
+def _checked_relative(value: Any, pattern: "re.Pattern[str]", name: str) -> str:
+    if not isinstance(value, str) or not pattern.match(value):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": name})
+    return value
+
+
+def _ai_namespace(workdir: str, work: str, sources: Dict[str, str]) -> Dict[str, Any]:
+    """The names AI-written code sees (the tested functions, bound here)."""
+    paths = {
+        str(alias): _parquet_path(workdir, _checked_id(source_id, "sources"))
+        for alias, source_id in sources.items()
+        if _SOURCE_ALIAS.match(str(alias))
+    }
+    _AI_CONTEXT.clear()
+    _AI_CONTEXT.update(workdir=workdir, work=work, paths=paths)
+
+    def read_table(alias: str) -> Any:
+        """The prepared table ``alias`` as a pandas DataFrame."""
+        import duckdb
+
+        if alias not in paths:
+            raise KeyError(f"unknown table {alias}; use one of {sorted(paths)}")
+        con = duckdb.connect(":memory:")
+        try:
+            return con.execute(
+                f"SELECT * FROM read_parquet({_sql_literal(paths[alias])})"
+            ).df()
+        finally:
+            con.close()
+
+    def emit(frame: Any, assign_column: str, population_source: str, **kw: Any) -> None:
+        emit_result(frame, assign_column, population_source, out_dir=work, **kw)
+
+    def join(axis: str, key: str, others: List[Dict[str, Any]]) -> Any:
+        return join_tables(axis, key, others, paths=paths)
+
+    return {
+        "__name__": "__ai_code__",
+        "SOURCES": dict(paths),
+        "read_table": read_table,
+        "emit_result": emit,
+        "join_tables": join,
+        "compare_groups": compare_groups,
+        "rfm": rfm,
+    }
+
+
+def _columns_of(frame: Any, *names: str) -> Dict[str, List[Any]]:
+    """Columns of a pandas DataFrame, a pyarrow Table or a dict of lists."""
+    if hasattr(frame, "to_pydict"):
+        data = frame.to_pydict()
+    elif hasattr(frame, "columns") and hasattr(frame, "__getitem__"):
+        data = {str(c): list(frame[c]) for c in frame.columns if str(c) in names}
+    elif isinstance(frame, dict):
+        data = {str(k): list(v) for k, v in frame.items()}
+    else:
+        raise TypeError("emit_result needs a DataFrame, a pyarrow Table or a dict")
+    missing = [n for n in names if n not in data]
+    if missing:
+        raise KeyError(f"emit_result: no column {missing[0]}")
+    return {n: data[n] for n in names}
+
+
+def _short_features(features: Any) -> Dict[str, List[Dict[str, Any]]]:
+    if not isinstance(features, dict):
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for key, items in list(features.items())[:_MAX_FEATURES]:
+        if isinstance(items, list):
+            out[str(key)[:_VALUE_MAX_CHARS]] = [
+                {str(k)[:_VALUE_MAX_CHARS]: _short(v) for k, v in dict(i).items()}
+                for i in items[:_MAX_FEATURES]
+                if isinstance(i, dict)
+            ]
+    return out
+
+
+def emit_result(
+    frame: Any,
+    assign_column: str,
+    population_source: str,
+    *,
+    id_column: str,
+    statistics: Optional[List[Dict[str, Any]]] = None,
+    joined_columns: Optional[List[str]] = None,
+    features: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    out_dir: Optional[str] = None,
+) -> None:
+    """Hand the result of AI-written code over, once (BR36.3).
+
+    ``frame`` has one row per person: ``id_column`` names the person (for a
+    joined table, the axis table's ID column) and ``assign_column`` the
+    segment of the row. Only the IDs and the segments are written; sizes and
+    the population are counted again from the data by the check.
+    ``statistics`` and ``features`` are kept as passed and are NOT recounted
+    (the app never lets them back an evidence).
+
+    Raises:
+        RuntimeError: Called a second time.
+        KeyError / TypeError / ValueError: The frame does not fit.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    folder = out_dir or os.getcwd()
+    count_path = os.path.join(folder, _EMIT_COUNT_FILE)
+    previous = 0
+    if os.path.exists(count_path):
+        with open(count_path, encoding="utf-8") as f:
+            previous = int(f.read().strip() or 0)
+    with open(count_path, "w", encoding="utf-8") as f:
+        f.write(str(previous + 1))
+    if previous:
+        raise RuntimeError("emit_result is called once per run")
+    if not _POPULATION_SOURCE.match(str(population_source)):
+        raise ValueError("population_source is source_n or join:source_n+source_m")
+    columns = _columns_of(frame, id_column, assign_column)
+    if joined_columns is None:
+        attrs = getattr(frame, "attrs", None)
+        joined_columns = list(attrs.get("joined_columns", [])) if attrs else []
+    table = pa.table(
+        {
+            "person_id": [None if v is None else str(v) for v in columns[id_column]],
+            "segment": [None if v is None else str(v) for v in columns[assign_column]],
+        }
+    )
+    pq.write_table(table, os.path.join(folder, _ASSIGNMENT_FILE))
+    meta = {
+        "population_source": str(population_source),
+        "id_column": str(id_column),
+        "statistics": _json_safe(list(statistics or [])[:_MAX_STATISTICS]),
+        "joined_columns": [str(c)[:_VALUE_MAX_CHARS] for c in joined_columns][:50],
+        "features": _short_features(features),
+    }
+    with open(os.path.join(folder, _META_FILE), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=True)
+
+
+def run_ai_code(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Run AI-written code as its own process group (BR36.1, NFR3.35).
+
+    Args: ``code``, ``work_dir`` (``ai_work/<random>``, must not exist),
+    ``pgid_file`` (``ai_work/<random>.pgid``, outside that folder),
+    ``sources`` (alias -> source_id) and ``timeout_seconds``.
+    Returns ``{status, exit_code, timed_out, stdout, error_text}``; the app
+    reads only whether it ended, the output goes to the agent as data.
+    """
+    code = args.get("code")
+    if not isinstance(code, str):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "code"})
+    work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
+    pgid_rel = _checked_relative(args.get("pgid_file"), _PGID_FILE, "pgid_file")
+    sources = _checked_sources(args.get("sources"))
+    timeout = int(args.get("timeout_seconds", _AI_DEFAULT_TIMEOUT_SECONDS))
+    work = _inside(workdir, work_rel)
+    if os.path.exists(work):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "work_dir"})
+    os.makedirs(work)
+    code_path = os.path.join(work, "ai_code.py")
+    with open(code_path, "w", encoding="utf-8") as f:
+        f.write(code)
+    # Files, not pipes: a process the code leaves behind keeps a pipe open,
+    # and the wait is for the code's own process only.
+    base = _inside(workdir, pgid_rel[: -len(".pgid")])
+    with (
+        open(base + ".out", "w", encoding="utf-8") as out,
+        open(base + ".err", "w", encoding="utf-8") as err,
+    ):
+        process = subprocess.Popen(  # noqa: S603 - the sandbox's own interpreter
+            [
+                sys.executable,
+                "-c",
+                _BOOTSTRAP,
+                os.path.abspath(__file__),
+                os.path.abspath(workdir),
+                work,
+                json.dumps(sources),
+                code_path,
+            ],
+            cwd=work,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+        )
+        with open(_inside(workdir, pgid_rel), "w", encoding="utf-8") as f:
+            f.write(str(process.pid))
+        timed_out = False
+        try:
+            process.wait(timeout=max(timeout, 1))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(process.pid)
+            process.wait()
+    ok = process.returncode == 0 and not timed_out
+    return {
+        "status": "ok" if ok else "failed",
+        "exit_code": process.returncode,
+        "timed_out": timed_out,
+        "stdout": _tail(base + ".out", _AI_STDOUT_MAX_CHARS),
+        "error_text": _tail(base + ".err", _AI_ERROR_MAX_CHARS),
+    }
+
+
+def _tail(path: str, max_chars: int) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()[-max_chars:]
+    except OSError:
+        return ""
+
+
+def _kill_group(pgid: int) -> None:
+    """Stop the process group ``pgid`` (never this process's own group)."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _kill_recorded(workdir: str, pgid_rel: Any) -> None:
+    if not isinstance(pgid_rel, str) or not _PGID_FILE.match(pgid_rel):
+        return
+    path = _inside(workdir, pgid_rel)
+    try:
+        with open(path, encoding="utf-8") as f:
+            pgid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+    _kill_group(pgid)
+
+
+def _hashes(workdir: str, sources: Dict[str, str], library: Any) -> Dict[str, Any]:
+    return {
+        "library": (
+            _hash_or_missing(str(library)) if isinstance(library, str) else "missing"
+        ),
+        "parquet": {
+            source_id: _hash_or_missing(_parquet_path(workdir, source_id))
+            for source_id in sources.values()
+        },
+    }
+
+
+def _recount(
+    workdir: str, work: str, sources: Dict[str, str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Count sizes and the population again from the assignment and the data."""
+    count_path = os.path.join(work, _EMIT_COUNT_FILE)
+    assignment = os.path.join(work, _ASSIGNMENT_FILE)
+    if not os.path.isfile(assignment):
+        return None, "NO_RESULT"
+    try:
+        with open(count_path, encoding="utf-8") as f:
+            calls = int(f.read().strip() or 0)
+        with open(os.path.join(work, _META_FILE), encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None, "RESULT_INVALID"
+    if calls != 1:
+        return None, "EMIT_TWICE" if calls > 1 else "NO_RESULT"
+    population_source = str(meta.get("population_source", ""))
+    match = _POPULATION_SOURCE.match(population_source)
+    if not isinstance(meta, dict) or not match:
+        return None, "RESULT_INVALID"
+    axis = match.group(1) or population_source[len("join:") :].split("+")[0]
+    if axis not in sources:
+        return None, "RESULT_INVALID"
+    id_column = str(meta.get("id_column", ""))
+    source = _parquet_path(workdir, sources[axis])
+    con = _connect(workdir)
+    try:
+        con.execute(
+            f"CREATE VIEW a AS SELECT * FROM read_parquet({_sql_literal(assignment)})"
+        )
+        con.execute(
+            "CREATE VIEW s AS SELECT CAST("
+            f"{_quote_ident(id_column)} AS VARCHAR) AS person_id "
+            f"FROM read_parquet({_sql_literal(source)})"
+        )
+        n_a, d_a, null_a, n_s, d_s = con.execute(
+            "SELECT (SELECT count(*) FROM a), (SELECT count(DISTINCT person_id) "
+            "FROM a), (SELECT count(*) FROM a WHERE person_id IS NULL OR segment "
+            "IS NULL), (SELECT count(*) FROM s), (SELECT count(DISTINCT person_id) "
+            "FROM s WHERE person_id IS NOT NULL)"
+        ).fetchone()
+        if null_a:
+            return None, "UNASSIGNED"
+        if n_a != d_a or n_s != d_s:
+            return None, "DUPLICATE_IDS"
+        missing, unknown = con.execute(
+            "SELECT (SELECT count(*) FROM s WHERE person_id NOT IN "
+            "(SELECT person_id FROM a)), (SELECT count(*) FROM a WHERE person_id "
+            "NOT IN (SELECT person_id FROM s))"
+        ).fetchone()
+        if missing or unknown or n_a != n_s:
+            return None, "ID_MISMATCH"
+        sizes = con.execute(
+            "SELECT segment, count(*) FROM a GROUP BY segment ORDER BY 2 DESC, 1"
+        ).fetchall()
+    except Exception as e:  # noqa: BLE001 - a missing column or a bad file
+        if _is_out_of_memory(e):
+            raise AnalysisError("OUT_OF_MEMORY") from None
+        return None, "RESULT_INVALID"
+    finally:
+        con.close()
+    features = meta.get("features") if isinstance(meta.get("features"), dict) else {}
+    result: Dict[str, Any] = {
+        "population": int(n_s),
+        "population_source": population_source,
+        "segments": [
+            {
+                "segment_key": str(key)[:_VALUE_MAX_CHARS],
+                "size": int(size),
+                "features": list(features.get(str(key)) or []),
+            }
+            for key, size in sizes
+        ],
+    }
+    statistics = meta.get("statistics")
+    if isinstance(statistics, list) and statistics:
+        result["statistics"] = [s for s in statistics if isinstance(s, dict)]
+    joined = meta.get("joined_columns")
+    if isinstance(joined, list) and joined:
+        result["joined_columns"] = [str(c) for c in joined]
+    return result, None
+
+
+def finalize_ai_result(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """The check after one ``run_ai_code`` (NFR3.35 (4)).
+
+    Run from the copy the app wrote again (``python -I``). Stops the code's
+    process group, hashes the prepared Parquets and ``session_library``, then
+    recounts the assignment. Returns ``{hashes, result, error}``.
+    """
+    work_rel = _checked_relative(args.get("work_dir"), _WORK_DIR, "work_dir")
+    sources = _checked_sources(args.get("sources"))
+    _kill_recorded(workdir, args.get("pgid_file"))
+    hashes = _hashes(workdir, sources, args.get("session_library"))
+    result, error = _recount(workdir, _inside(workdir, work_rel), sources)
+    return {"hashes": hashes, "result": result, "error": error}
+
+
+def verify_hashes(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Stop what is left and return the hashes only (before the synthesis)."""
+    sources = _checked_sources(args.get("sources"))
+    for pgid_rel in list(args.get("pgid_files") or []):
+        _kill_recorded(workdir, pgid_rel)
+    return {"hashes": _hashes(workdir, sources, args.get("session_library"))}
+
+
+def key_overlap(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """How far the values of same-named columns meet (BR37.3). No values.
+
+    Args: ``axis`` and ``other`` (source IDs), ``columns``.
+    Returns ``{columns: [{column, match_rate, overlap, axis_matched}]}``:
+    ``match_rate`` is the share of the smaller table's distinct values found in
+    the other; ``axis_matched`` the axis rows whose value the other has.
+    """
+    axis = _parquet_path(workdir, _checked_id(args.get("axis"), "axis"))
+    other = _parquet_path(workdir, _checked_id(args.get("other"), "other"))
+    columns = [str(c) for c in list(args.get("columns") or [])][:20]
+    if not os.path.isfile(axis) or not os.path.isfile(other):
+        raise AnalysisError("SOURCE_UNREADABLE")
+    con = _connect(workdir)
+    out: List[Dict[str, Any]] = []
+    try:
+        con.execute(
+            f"CREATE VIEW x AS SELECT * FROM read_parquet({_sql_literal(axis)})"
+        )
+        con.execute(
+            f"CREATE VIEW y AS SELECT * FROM read_parquet({_sql_literal(other)})"
+        )
+        names_x = {str(r[0]) for r in con.execute("DESCRIBE x").fetchall()}
+        names_y = {str(r[0]) for r in con.execute("DESCRIBE y").fetchall()}
+        rows_x = int(con.execute("SELECT count(*) FROM x").fetchone()[0])
+        rows_y = int(con.execute("SELECT count(*) FROM y").fetchone()[0])
+        for name in columns:
+            if name not in names_x or name not in names_y:
+                out.append(
+                    {"column": name, "match_rate": 0.0, "overlap": 0, "axis_matched": 0}
+                )
+                continue
+            col = _quote_ident(name)
+            vx = f"SELECT DISTINCT CAST({col} AS VARCHAR) AS v FROM x WHERE {col} IS NOT NULL"
+            vy = f"SELECT DISTINCT CAST({col} AS VARCHAR) AS v FROM y WHERE {col} IS NOT NULL"
+            dx, dy, overlap = con.execute(
+                f"SELECT (SELECT count(*) FROM ({vx})), (SELECT count(*) FROM ({vy})), "
+                f"(SELECT count(*) FROM ({vx}) WHERE v IN ({vy}))"
+            ).fetchone()
+            matched = con.execute(
+                f"SELECT count(*) FROM x WHERE CAST({col} AS VARCHAR) IN ({vy})"
+            ).fetchone()[0]
+            smaller = dx if rows_x <= rows_y else dy
+            out.append(
+                {
+                    "column": name,
+                    "match_rate": round(int(overlap) / int(smaller), 4)
+                    if smaller
+                    else 0.0,
+                    "overlap": int(overlap),
+                    "axis_matched": int(matched),
+                }
+            )
+    finally:
+        con.close()
+    return {"columns": out}
+
+
+def join_tables(
+    axis: str,
+    key: str,
+    others: List[Dict[str, Any]],
+    *,
+    paths: Optional[Dict[str, str]] = None,
+) -> Any:
+    """Left join onto the axis table, one row per person (BR37.4).
+
+    Each of ``others`` is ``{"source": alias, "key": column?, "aggregations":
+    [{"column", "func", "as"?}]}``; the other table is first reduced to one
+    row per key with the aggregations (count, count_distinct, sum, mean, min,
+    max, first, last). People without a match stay: ``<alias>_rows`` is 0,
+    ``<alias>_matched`` False and the other columns empty. The result is a
+    pandas DataFrame whose ``attrs["joined_columns"]`` names the key and the
+    columns added.
+    """
+    import duckdb
+
+    tables = paths if paths is not None else dict(_AI_CONTEXT.get("paths") or {})
+    if axis not in tables:
+        raise KeyError(f"unknown table {axis}")
+    selects = ["a.*"]
+    joins: List[str] = []
+    added: List[str] = []
+    for n, spec in enumerate(others):
+        alias = str(spec.get("source"))
+        if alias not in tables or alias == axis:
+            raise KeyError(f"unknown table {alias}")
+        other_key = _quote_ident(str(spec.get("key") or key))
+        parts = [f"{other_key} AS __k", "count(*) AS __n"]
+        for agg in list(spec.get("aggregations") or []):
+            func = str(agg.get("func", "")).lower()
+            if func not in _JOIN_FUNCS:
+                raise ValueError(f"unknown aggregation {func}")
+            column = str(agg.get("column", ""))
+            name = str(agg.get("as") or f"{alias}_{_NAME_PART.sub('_', column)}_{func}")
+            parts.append(
+                _JOIN_FUNCS[func].format(col=_quote_ident(column))
+                + f" AS {_quote_ident(name)}"
+            )
+            selects.append(f"b{n}.{_quote_ident(name)}")
+            added.append(name)
+        rows_name, matched_name = f"{alias}_rows", f"{alias}_matched"
+        selects += [
+            f"coalesce(b{n}.__n, 0) AS {_quote_ident(rows_name)}",
+            f"(b{n}.__k IS NOT NULL) AS {_quote_ident(matched_name)}",
+        ]
+        added += [rows_name, matched_name]
+        joins.append(
+            f"LEFT JOIN (SELECT {', '.join(parts)} FROM "
+            f"read_parquet({_sql_literal(tables[alias])}) GROUP BY {other_key}) b{n} "
+            f"ON CAST(a.{_quote_ident(key)} AS VARCHAR) = CAST(b{n}.__k AS VARCHAR)"
+        )
+    con = duckdb.connect(":memory:")
+    try:
+        frame = con.execute(
+            f"SELECT {', '.join(selects)} FROM "
+            f"read_parquet({_sql_literal(tables[axis])}) a {' '.join(joins)}"
+        ).df()
+    finally:
+        con.close()
+    frame.attrs["joined_columns"] = [key, *added]
+    return frame
+
+
+def compare_groups(
+    frame: Any, group_column: str, columns: List[str]
+) -> List[Dict[str, Any]]:
+    """Tests of differences between groups (BR39.2).
+
+    Numeric columns: Welch's t-test and Cohen's d for two groups (each group
+    against the rest for more). Other columns: the chi-square test and
+    Cramér's V. Returns ``[{name, column, value, p_value, effect_size}]``.
+    """
+    import numpy as np
+    from scipy import stats as st
+
+    groups = [g for g in frame[group_column].dropna().unique()]
+    out: List[Dict[str, Any]] = []
+    for column in columns:
+        series = frame[column]
+        numeric = str(series.dtype).startswith(("int", "float", "uint", "Int", "Float"))
+        if numeric:
+            pairs = (
+                [(groups[0], groups[1])]
+                if len(groups) == 2
+                else [(g, None) for g in groups]
+            )
+            for first, second in pairs:
+                a = series[frame[group_column] == first].dropna().astype(float)
+                b = (
+                    (
+                        series[frame[group_column] == second]
+                        if second is not None
+                        else series[frame[group_column] != first]
+                    )
+                    .dropna()
+                    .astype(float)
+                )
+                if len(a) < 2 or len(b) < 2:
+                    continue
+                test = st.ttest_ind(a, b, equal_var=False)
+                pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
+                effect = float((a.mean() - b.mean()) / pooled) if pooled > 0 else 0.0
+                out.append(
+                    _json_safe(
+                        {
+                            "name": "welch_t",
+                            "column": column,
+                            "groups": [
+                                str(first),
+                                "rest" if second is None else str(second),
+                            ],
+                            "value": float(test.statistic),
+                            "p_value": float(test.pvalue),
+                            "effect_size": effect,
+                        }
+                    )
+                )
+            continue
+        import pandas as pd
+
+        table = pd.crosstab(frame[group_column], series)
+        if table.shape[0] < 2 or table.shape[1] < 2:
+            continue
+        chi2, p_value, _, _ = st.chi2_contingency(table)
+        n = float(table.to_numpy().sum())
+        smaller = min(table.shape) - 1
+        cramers_v = float(np.sqrt(chi2 / (n * smaller))) if n and smaller else 0.0
+        out.append(
+            _json_safe(
+                {
+                    "name": "chi_square",
+                    "column": column,
+                    "value": float(chi2),
+                    "p_value": float(p_value),
+                    "effect_size": cramers_v,
+                }
+            )
+        )
+    return out
+
+
+def rfm(
+    frame: Any,
+    id_column: str,
+    date_column: str,
+    amount_column: str,
+    *,
+    as_of: Optional[str] = None,
+    bins: int = 5,
+) -> Any:
+    """Recency, frequency and monetary value per person, scored 1..bins (BR39.2).
+
+    Returns a pandas DataFrame of ``id_column``, ``recency`` (days since the
+    last date), ``frequency``, ``monetary`` and ``r_score`` / ``f_score`` /
+    ``m_score`` (a more recent, more frequent, larger customer scores higher).
+    """
+    import pandas as pd
+
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    data = pd.DataFrame(
+        {
+            "id": frame[id_column],
+            "date": dates,
+            "amount": pd.to_numeric(frame[amount_column], errors="coerce"),
+        }
+    )
+    reference = pd.Timestamp(as_of) if as_of else data["date"].max()
+    grouped = data.groupby("id").agg(
+        last=("date", "max"), frequency=("date", "count"), monetary=("amount", "sum")
+    )
+    grouped["recency"] = (reference - grouped["last"]).dt.days
+
+    def score(values: Any, ascending: bool) -> Any:
+        ranked = values.rank(method="first", ascending=ascending)
+        count = max(min(bins, len(values)), 1)
+        return pd.qcut(ranked, count, labels=False).astype(int) + 1
+
+    grouped["r_score"] = score(grouped["recency"], ascending=False)
+    grouped["f_score"] = score(grouped["frequency"], ascending=True)
+    grouped["m_score"] = score(grouped["monetary"], ascending=True)
+    result = (
+        grouped.drop(columns=["last"]).reset_index().rename(columns={"id": id_column})
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # entry points
 # ---------------------------------------------------------------------------
 
@@ -1326,6 +2011,11 @@ FUNCTIONS: Dict[str, Callable[[Dict[str, Any], str], Any]] = {
     "prepare_document": prepare_document,
     "document_chunk": document_chunk,
     "verify_quotes": verify_quotes,
+    # U6
+    "run_ai_code": run_ai_code,
+    "finalize_ai_result": finalize_ai_result,
+    "verify_hashes": verify_hashes,
+    "key_overlap": key_overlap,
 }
 
 

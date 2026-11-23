@@ -836,3 +836,108 @@ class TestInProcessSandbox:
         assert state["result"]["value"]["chunks"] == 1
         assert chunk["value"]["text"].startswith("# 第1章")
         assert checked["value"]["found"] == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# U6: the check with the library written again (NFR3.35, security-design.md)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeInterpreterCallVerified:
+    def test_writes_the_local_library_then_runs_it_isolated(
+        self, sandbox: CodeInterpreterSandbox, stub: Any
+    ) -> None:
+        capture = _CommandCapture()
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stream(),
+            _invoke_params(
+                "writeFiles",
+                {
+                    "content": [
+                        {
+                            "path": "verify/abc123/persona_analysis.py",
+                            "text": _LIBRARY.read_text(encoding="utf-8"),
+                        }
+                    ]
+                },
+            ),
+        )
+        result = {"ok": True, "value": {"hashes": {"parquet": {}}}}
+        stub.add_response(
+            "invoke_code_interpreter",
+            _stdout(result),
+            _invoke_params("executeCommand", capture),
+        )
+
+        got = sandbox.call_verified(
+            _session(), "verify_hashes", {"source_ids": ["f1"]}, "verify/abc123"
+        )
+
+        command = capture.commands[0]
+        assert command.startswith(
+            "python -I verify/abc123/persona_analysis.py --workdir work verify_hashes "
+        )
+        args = _decoded_args(command)
+        assert args["source_ids"] == ["f1"]
+        # the library the fixed functions use, hashed by the check (BR36.6)
+        assert args["session_library"] == "persona_analysis.py"
+        assert got == result
+
+    @pytest.mark.parametrize(
+        "folder", ["verify", "verify/../x", "/tmp/verify/a", "ai_work/a", "verify/a b"]
+    )
+    def test_only_a_fresh_verify_folder_is_accepted(
+        self, sandbox: CodeInterpreterSandbox, folder: str
+    ) -> None:
+        with pytest.raises(ValueError):
+            sandbox.call_verified(_session(), "verify_hashes", {}, folder)
+
+    def test_kind(self, sandbox: CodeInterpreterSandbox) -> None:
+        assert sandbox.kind == "code_interpreter"
+
+
+class TestInProcessCallVerified:
+    def test_the_session_holds_a_copy_of_the_library(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+
+        copy = Path(local.workdir_of(session)) / "persona_analysis.py"
+        assert copy.read_bytes() == _LIBRARY.read_bytes()
+        assert local.kind == "in_process"
+
+    def test_runs_the_written_library_in_its_own_process(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+        local.put_files(session, [{"source_file_id": "f1", "s3_key": "sources/u/f1"}])
+        command_id = local.start_command(
+            session,
+            "prepare",
+            {"source_id": "f1", "metadata": {"encoding": "utf-8", "delimiter": ","}},
+        )
+        _poll_until_done(local, session, command_id)
+
+        result = local.call_verified(
+            session, "profile_dataset", {"source_id": "f1"}, "verify/v1"
+        )
+
+        written = Path(local.workdir_of(session)) / "verify" / "v1"
+        assert (written / "persona_analysis.py").read_bytes() == _LIBRARY.read_bytes()
+        assert result["ok"] is True and result["value"]["rows"] == 4
+
+    def test_a_changed_session_library_does_not_change_the_check(
+        self, local: InProcessSandbox
+    ) -> None:
+        session = local.start_session("gen1", lifetime_seconds=60)
+        copy = Path(local.workdir_of(session)) / "persona_analysis.py"
+        copy.write_text("raise SystemExit('replaced')\n", encoding="utf-8")
+
+        result = local.call_verified(
+            session, "profile_dataset", {"source_id": "missing"}, "verify/v2"
+        )
+
+        # the written library ran (a C9 failure), not the replaced copy
+        assert result["ok"] is False
+        assert result["error"]["code"] == "SOURCE_UNREADABLE"

@@ -52,6 +52,7 @@ def _open(
         active_tab="advanced",
         upload_rows=context.get("upload_rows", []),
         upload_list_failed=False,
+        detailed_analysis_offered=context.get("detailed_analysis_offered", False),
     )
     ui.settle()
 
@@ -918,3 +919,180 @@ class TestGenerationControls:
         ui.page.wait_for_selector("[data-testid='advanced-cancelling']")
 
         assert ui.page.is_disabled("[data-testid='advanced-cancel-button']")
+
+
+# ---------------------------------------------------------------------------
+# U6: the detailed analysis box, up to three tables, the record's code kinds
+# and the settings section (BR34, BR35.4, BR37.1, BR38.1, NFR3.37, NFR10.5)
+# ---------------------------------------------------------------------------
+
+GENERATE = "[data-testid='advanced-generate-button']"
+
+
+def _tables(count: int) -> list[dict[str, Any]]:
+    return [
+        _row_context(s.ready_file(source_file_id=f"table-{i}")) for i in range(count)
+    ]
+
+
+def _check_all(ui: UiHarness) -> None:
+    for box in ui.page.query_selector_all("[data-testid='advanced-upload-select']"):
+        box.check()
+    ui.settle()
+
+
+class TestDetailedAnalysisAndTables:
+    def test_the_box_is_checked_labelled_and_reachable(self, ui: UiHarness) -> None:
+        _open(ui, detailed_analysis_offered=True)
+
+        box = "[data-testid='advanced-detailed-analysis']"
+        assert ui.page.is_checked(box)
+        ui.page.focus(box)
+        ui.page.keyboard.press("Space")
+        assert not ui.page.is_checked(box)
+        label = ui.page.inner_text("label[for='advanced-detailed-analysis']")
+        assert label == "AI による詳細分析"
+        ui.check_a11y()
+
+    def test_no_box_when_not_offered(self, ui: UiHarness) -> None:
+        _open(ui)
+
+        assert (
+            ui.page.query_selector("[data-testid='advanced-detailed-analysis']") is None
+        )
+
+    def test_three_tables_may_start(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_tables(3))
+
+        _check_all(ui)
+
+        assert not ui.page.is_disabled(GENERATE)
+
+    def test_four_tables_cannot_start_and_say_why(self, ui: UiHarness) -> None:
+        _open(ui, upload_rows=_tables(4))
+
+        _check_all(ui)
+
+        assert ui.page.is_disabled(GENERATE)
+        reason = ui.page.inner_text("[data-testid='advanced-generate-reason']")
+        assert "表は 3 つまで選べます" in reason
+        ui.check_a11y()
+
+
+def _record_with_ai_code() -> Any:
+    record = s.record()
+    return record.update(
+        code_blocks=(
+            *record.code_blocks,
+            {
+                "kind": "ai_written",
+                "code": f"emit_result(df, 'seg', 'source_1')  # {s.SCRIPT_TEXT}",
+                "sha256": "c" * 64,
+                "title": "結合した列: customer_id, source_2_amount_sum（source_2 の一致 80%）",
+            },
+        )
+    )
+
+
+class TestRecordCodeKinds:
+    def test_kinds_are_written_and_code_is_text(self, ui: UiHarness) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            # the dialog's own title stands above its content
+            fragment="<h2>分析の記録</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html",
+                record=_record_with_ai_code(),
+            ),
+        )
+        ui.settle()
+
+        kinds = ui.page.locator("[data-testid='advanced-record-code-kind']")
+        assert "決まった関数" in kinds.nth(0).inner_text()
+        assert "AI による詳細分析" in kinds.nth(1).inner_text()
+        joined = ui.page.inner_text("[data-testid='advanced-record-joined']")
+        assert "customer_id" in joined and "80%" in joined
+        ui.page.locator("[data-testid='advanced-record-code']").nth(1).locator(
+            "summary"
+        ).click()
+        assert s.SCRIPT_TEXT in ui.page.locator("pre code").nth(1).inner_text()
+        assert ui.page.query_selector("script:has-text('alert(1)')") is None
+        ui.check_a11y()
+
+
+def _section_view(**setting: Any) -> Any:
+    from src.managers.components.advanced_generation_policy import (
+        AdvancedGenerationSetting,
+        SettingSectionView,
+    )
+    from src.models.authz import Department
+
+    values: dict[str, Any] = {
+        "audience_mode": "departments",
+        "department_groups": ("sales", "gone"),
+        "allow_detailed_analysis": False,
+        "version": 4,
+        "updated_by": "admin-1",
+        "updated_at": "2026-11-20T09:00:00+00:00",
+    }
+    values.update(setting)
+    return SettingSectionView(
+        setting=AdvancedGenerationSetting(**values),
+        departments=(Department("sales", "営業部"), Department("hr", "人事部")),
+        missing_groups=("gone",),
+        updated_by_name="管理 太郎",
+    )
+
+
+class TestSettingsSection:
+    def _open(self, ui: UiHarness, **setting: Any) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-generation-settings",
+            fragment=render_page(
+                "settings/partials/advanced_generation_settings.html",
+                view=_section_view(**setting),
+                error=None,
+                form=None,
+            ),
+        )
+        ui.settle()
+
+    def test_the_section_shows_its_values_and_the_version(self, ui: UiHarness) -> None:
+        self._open(ui)
+
+        assert ui.page.is_checked("[data-testid='advanced-setting-departments']")
+        assert ui.page.input_value("input[name='version']") == "4"
+        assert "（見つからない部署）" in ui.page.inner_text(
+            "[data-testid='department-picker']"
+        )
+        assert "管理 太郎" in ui.page.inner_text(
+            "[data-testid='advanced-setting-updated']"
+        )
+        ui.check_a11y()
+
+    def test_the_switch_is_a_labelled_toggle_not_only_a_colour(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui)
+        switch = "[data-testid='advanced-setting-detailed']"
+
+        assert ui.page.get_attribute(switch, "aria-checked") == "false"
+        assert "OFF" in ui.page.inner_text(switch)
+        ui.page.focus(switch)
+        ui.page.keyboard.press("Enter")
+        ui.settle()
+
+        assert ui.page.get_attribute(switch, "aria-checked") == "true"
+        assert "ON" in ui.page.inner_text(switch)
+        hidden = "input[name='allow_detailed_analysis']"
+        assert ui.page.input_value(hidden) == "true"
+        ui.check_a11y()
+
+    def test_the_save_button_stays_usable_without_a_department_change(
+        self, ui: UiHarness
+    ) -> None:
+        self._open(ui)
+
+        assert not ui.page.is_disabled("[data-testid='advanced-setting-save']")

@@ -1667,6 +1667,31 @@ class TestAdvancedGenerationAgents:
         assert evidence.statistic == {"value": 120, "population": 300}
         agent.assert_called_once()  # the tools run before the structured output
 
+    def test_analysis_keeps_the_table_and_the_segment_key(self) -> None:
+        # U6 BR36.3, BR37.2: the table a segment rests on and its emit_result key
+        from src.models.analysis import Segment
+
+        output = _analysis_output()
+        output.segments[0] = output.segments[0].model_copy(
+            update={
+                "definition_source": "join:source_1+source_2",
+                "definition_segment_key": "young",
+                "cluster_index": None,
+                "definition_kind": "derived",
+            }
+        )
+        agent = Mock()
+        agent.structured_output.return_value = output
+
+        result = AgentService().run_advanced_analysis(
+            agent, "分析", {"plan": "{}"}, source_id="f1"
+        )
+
+        segment = Segment.from_dict(result["segments"][0])
+        assert segment.source == "join:source_1+source_2"
+        assert segment.segment_key == "young"
+        assert segment.tool_call_id == "tc-3"
+
     def test_synthesis_uses_the_callers_schema(self, strands):
         agent = Mock()
         agent.structured_output.return_value = "personas"

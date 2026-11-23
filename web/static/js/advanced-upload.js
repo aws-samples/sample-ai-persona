@@ -140,6 +140,10 @@
             document.querySelectorAll('[name="source_file_ids"]:checked')
         );
         var tables = chosen.filter(function (input) { return input.dataset.kind !== 'document'; });
+        // U6 BR37.1: up to three tables (the limit comes from the page; the server refuses too)
+        var form = generateButton.form;
+        var maxTables = Number((form && form.dataset.maxTables) || 3);
+        var tooMany = tables.length > maxTables;
         var reason = '';
         if (submitting) {
             reason = '開始しています';
@@ -147,10 +151,10 @@
             reason = '実行中の生成があります。終わるか中止してから始めてください';
         } else if (!chosen.length) {
             reason = '準備OK のファイルを選んでください';
-        } else if (tables.length > 1) {
-            reason = '表は 1 つだけ選んでください（文書はいくつでも一緒に選べます）';
+        } else if (tooMany) {
+            reason = '表は ' + maxTables + ' つまで選べます（文書はいくつでも一緒に選べます）';
         }
-        generateButton.disabled = submitting || running || !chosen.length || tables.length > 1;
+        generateButton.disabled = submitting || running || !chosen.length || tooMany;
         generateReason.textContent = reason;
         updateDocumentEstimate(chosen);
     }

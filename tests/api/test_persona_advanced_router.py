@@ -47,6 +47,8 @@ class Adv:
         self.uploads.inspection_stuck.return_value = False
         self.generations = Mock(spec=AdvancedPersonaGenerationManager)
         self.generations.is_available.return_value = True
+        # U6 BR35.4: the box shows only when the Manager offers it
+        self.generations.detailed_analysis_offered.return_value = False
         self.generations.running_generation_id.return_value = None
         self.generations.elapsed_clock.return_value = ElapsedClock(
             seconds=0, running=True
@@ -115,6 +117,28 @@ class TestPage:
         assert "ベータ" in html
         assert 'data-testid="advanced-file-input"' in html
         assert 'data-testid="advanced-progress"' not in html
+
+    def test_the_detailed_analysis_box_shows_checked_when_offered(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        # U6 BR35.4, AC5.4.4
+        adv.generations.detailed_analysis_offered.return_value = True
+
+        html = client.get("/persona/generation/advanced").text
+
+        box = re.search(
+            r'<input[^>]*data-testid="advanced-detailed-analysis"[^>]*>', html
+        )
+        assert box is not None and "checked" in box.group(0)
+        assert 'name="use_detailed_analysis"' in box.group(0)
+
+    def test_no_detailed_analysis_box_when_not_offered(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        html = client.get("/persona/generation/advanced").text
+
+        assert 'data-testid="advanced-detailed-analysis"' not in html
+        assert 'data-max-tables="3"' in html
 
     def test_unavailable_user_goes_back_to_the_ordinary_page(
         self, client: TestClient, adv: Adv
@@ -418,6 +442,7 @@ class TestStartGeneration:
             "purpose": "30代",
             "persona_count": 2,
             "confirm_plan": False,
+            "use_detailed_analysis": False,
         }
         adv.pool.submit.assert_called_once_with(adv.generations.run, s.GENERATION_ID)
         adv.generations.abort_start.assert_not_called()
@@ -470,6 +495,33 @@ class TestStartGeneration:
         self._post(client, confirm_plan="true")
 
         assert adv.generations.start_generation.call_args.kwargs["confirm_plan"]
+
+    def test_the_detailed_analysis_box_is_passed_on(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        # U6 BR35.2: the Manager decides; the Router passes the box as sent
+        adv.generations.start_generation.return_value = s.GENERATION_ID
+
+        self._post(client, use_detailed_analysis="true")
+
+        kwargs = adv.generations.start_generation.call_args.kwargs
+        assert kwargs["use_detailed_analysis"] is True
+
+    def test_four_tables_are_a_400_in_the_form(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        # U6 BR37.1: the server refuses too (the screen disables the button)
+        adv.generations.start_generation.side_effect = AdvancedGenerationError(
+            "too many tables",
+            code=ErrorCode.UPLOAD_SOURCE_INVALID,
+            context={"reason": "tables", "max": 3},
+        )
+
+        response = self._post(client)
+
+        assert response.status_code == 400
+        assert "表は 3 つまで選べます" in response.text
+        adv.pool.submit.assert_not_called()
 
     def test_a_file_not_ready_yet_is_a_409_toast(
         self, client: TestClient, adv: Adv

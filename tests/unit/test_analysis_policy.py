@@ -14,6 +14,8 @@ from src.models.analysis import (
     LIMIT_MAX_CALLS,
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
+    LIMIT_RUN_CODE_MAX_FAILURES,
+    LIMIT_RUN_CODE_TIMEOUT_SECONDS,
     AnalysisMethod,
     AnalysisTool,
 )
@@ -149,3 +151,60 @@ class TestSettlePlan:
         )
 
         assert plan is not None and len(plan.questions) == 1
+
+
+# --- U6: run_code and several tables (BR35.3, BR36.2, BR37.2, NFR3.33) ------
+
+SOURCES = ("source_1", "source_2")
+
+
+class TestToolsU6:
+    def test_detailed_outside_the_process_adds_run_code_and_playbooks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_MAX_FAILURES", 4)
+        monkeypatch.setattr(config, "ADVANCED_RUN_CODE_TIMEOUT_SECONDS", 90)
+
+        policy = AnalysisPolicy.tool_policy(
+            detailed=True, in_process=False, sources=SOURCES
+        )
+
+        assert policy.tools[-2:] == (AnalysisTool.RUN_CODE, AnalysisTool.LOAD_PLAYBOOK)
+        assert policy.limits[LIMIT_RUN_CODE_MAX_FAILURES] == 4
+        assert policy.limits[LIMIT_RUN_CODE_TIMEOUT_SECONDS] == 90
+        assert policy.sources == SOURCES
+
+    @pytest.mark.parametrize(
+        ("detailed", "in_process"), [(False, False), (True, True), (False, True)]
+    )
+    def test_otherwise_the_fixed_tools_only(
+        self, detailed: bool, in_process: bool
+    ) -> None:
+        policy = AnalysisPolicy.tool_policy(
+            detailed=detailed, in_process=in_process, sources=SOURCES
+        )
+
+        assert AnalysisTool.RUN_CODE not in policy.tools
+        assert AnalysisTool.LOAD_PLAYBOOK not in policy.tools
+        assert LIMIT_RUN_CODE_MAX_FAILURES not in policy.limits
+
+    def test_no_table_no_run_code(self) -> None:
+        policy = AnalysisPolicy.tool_policy(detailed=True, in_process=False, sources=())
+
+        assert AnalysisTool.RUN_CODE not in policy.tools
+
+
+class TestGuideTable:
+    def test_the_first_one_row_per_person_table_decides(self) -> None:
+        tables = [
+            ("source_1", _profile(AGE, SPEND)),
+            ("source_2", _profile(ID_COLUMN, AREA)),
+            ("source_3", _profile(ID_COLUMN)),
+        ]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_2"
+
+    def test_without_one_source_1_decides(self) -> None:
+        tables = [("source_1", _profile(AREA)), ("source_2", _profile(AGE, SPEND))]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_1"

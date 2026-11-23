@@ -31,7 +31,7 @@
                 <span class="bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center text-sm font-bold" aria-hidden="true">1</span>
                 データファイルのアップロード
             </h2>
-            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる表や文書のファイルを選択してください。表は 1 つまで、文書は表と一緒にも文書だけでも使えます</p>
+            <p class="text-sm text-gray-500 mb-4 ml-9">ペルソナ生成の元となる表や文書のファイルを選択してください。表は {{ limits.max_tables }} つまで、文書は表と一緒にも文書だけでも使えます</p>
             <div class="mb-3 p-3 bg-gray-50 rounded-md ml-9">
                 <p id="advanced-file-limits" class="text-xs text-gray-500">
                     <strong>表:</strong> .csv, .tsv（{{ limits.max_size_mb }}MB/ファイルまで）　｜　<strong>文書:</strong> .pdf, .docx, .txt, .md（{{ limits.max_document_size_mb }}MB/ファイルまで）　｜　<strong>合計:</strong> {{ limits.max_files }} ファイルまで<br>
@@ -96,6 +96,7 @@
         </section>
 
         <form id="advanced-generation-form" data-testid="advanced-generation-form"
+              data-max-tables="{{ limits.max_tables }}"
               hx-post="/persona/advanced/generations"
               hx-target="#advanced-progress-area"
               hx-swap="innerHTML"
@@ -125,6 +126,18 @@
                             <p id="advanced-confirm-plan-help" class="text-xs text-gray-600">計画を確かめてから分析を始めます。{{ limits.plan_wait_minutes }} 分のうちに承認してください</p>
                         </div>
                     </div>
+                    {# U6 BR35.4: 管理者が許していて実行先が Code Interpreter のときだけ。最初からチェック #}
+                    {% if detailed_analysis_offered %}
+                    <div class="mt-3 flex items-start gap-2">
+                        <input type="checkbox" id="advanced-detailed-analysis" name="use_detailed_analysis" value="true" checked
+                               data-testid="advanced-detailed-analysis" aria-describedby="advanced-detailed-analysis-help"
+                               class="mt-1 h-4 w-4 border-gray-300 rounded focus:ring-2 focus:ring-blue-500">
+                        <div>
+                            <label for="advanced-detailed-analysis" class="text-sm text-gray-800">AI による詳細分析</label>
+                            <p id="advanced-detailed-analysis-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、安全な環境で動かして深く分析します</p>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </section>
 

@@ -26,7 +26,10 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -122,6 +125,23 @@ class SandboxService(Protocol):
     ) -> dict[str, Any]: ...
 
     def cancel_command(self, session: SandboxSession, command_id: str) -> None: ...
+
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+        library_dir: str,
+    ) -> dict[str, Any]:
+        """U6: write this app's library into ``library_dir`` and run it isolated.
+
+        The check after AI-written code (NFR3.35): the library the session
+        holds may have been changed by that code, so the copy this process
+        holds is written into a fresh ``verify/<random>`` folder and run with
+        ``python -I``. ``session_library`` (the session's own copy, to be
+        hashed) is added to ``args``.
+        """
+        ...
 
     def stop_session(self, session: SandboxSession) -> None: ...
 
@@ -235,6 +255,27 @@ def _sha256_of(path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
+#: ``verify/<random>``: the only folders the check writes its library into.
+_VERIFY_DIR = re.compile(r"^verify/[A-Za-z0-9_-]{1,64}$")
+#: The argument naming the session's own library copy (hashed by the check).
+SESSION_LIBRARY_ARG = "session_library"
+
+
+def _checked_verify_dir(library_dir: str) -> str:
+    if not isinstance(library_dir, str) or not _VERIFY_DIR.match(library_dir):
+        raise ValueError("the check runs from a verify/<random> folder only")
+    return library_dir
+
+
+def _verified_command(library_dir: str, function: str, args: Mapping[str, Any]) -> str:
+    # ``-I``: the script's folder, PYTHON* variables and the user's
+    # site-packages are not read, so a module the code left cannot stand in.
+    return (
+        f"python -I {library_dir}/{_LIBRARY_NAME} --workdir {_WORKDIR} "
+        f"{function} {_encode_args(args)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Code Interpreter version
 # ---------------------------------------------------------------------------
@@ -321,6 +362,11 @@ class CodeInterpreterSandbox:
     @property
     def library_sha256(self) -> str:
         return self._library_sha256
+
+    @property
+    def kind(self) -> str:
+        """``code_interpreter``: AI-written code may run here (U6 ADR-004)."""
+        return "code_interpreter"
 
     # --- retries -----------------------------------------------------------
 
@@ -539,6 +585,31 @@ class CodeInterpreterSandbox:
         with self._lock:
             self._commands.pop((session.session_id, command_id), None)
 
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+        library_dir: str,
+    ) -> dict[str, Any]:
+        """Write this app's library into ``library_dir`` and run it with ``-I``."""
+        folder = _checked_verify_dir(library_dir)
+        with open(self.library_path, encoding="utf-8") as f:
+            source = f.read()
+        self._invoke(
+            session,
+            "writeFiles",
+            {"content": [{"path": f"{folder}/{_LIBRARY_NAME}", "text": source}]},
+        )
+        full_args = {**dict(args), SESSION_LIBRARY_ARG: _LIBRARY_NAME}
+        content = self._invoke(
+            session,
+            "executeCommand",
+            {"command": _verified_command(folder, function, full_args)},
+        )
+        result = _parse_result(str(content.get("stdout", "")))
+        return limit_output(result, self.max_output_chars)
+
     def stop_session(self, session: SandboxSession) -> None:
         """Stop the session; raises after the retries (the caller logs it)."""
         self.stop_session_by_id(session.session_id)
@@ -628,6 +699,7 @@ class InProcessSandbox:
     ) -> None:
         self.root_dir = root_dir
         self.max_output_chars = max_output_chars
+        self.library_path = library_path
         self._read_object = read_object
         self._library = _load_library(library_path)
         self._library_sha256 = _sha256_of(library_path)
@@ -638,6 +710,11 @@ class InProcessSandbox:
     @property
     def library_sha256(self) -> str:
         return self._library_sha256
+
+    @property
+    def kind(self) -> str:
+        """``in_process``: AI-written code is never given here (U6 NFR3.33)."""
+        return "in_process"
 
     def workdir_of(self, session: SandboxSession) -> str:
         with self._lock:
@@ -654,6 +731,9 @@ class InProcessSandbox:
         )
         workdir = os.path.join(self.root_dir, session.session_id)
         os.makedirs(workdir, exist_ok=False)
+        # U6: the session's own copy, as Code Interpreter holds one (the
+        # check hashes it, BR36.6); the functions here run from memory.
+        shutil.copyfile(self.library_path, os.path.join(workdir, _LIBRARY_NAME))
         with self._lock:
             self._workdirs[session.session_id] = workdir
         return session
@@ -756,6 +836,40 @@ class InProcessSandbox:
         # A Python thread cannot be stopped; the session folder goes at stop.
         with self._lock:
             self._commands.pop((session.session_id, command_id), None)
+
+    def call_verified(
+        self,
+        session: SandboxSession,
+        function: str,
+        args: Mapping[str, Any],
+        library_dir: str,
+    ) -> dict[str, Any]:
+        """Write the library into ``library_dir`` and run it in a new process."""
+        folder = _checked_verify_dir(library_dir)
+        workdir = self.workdir_of(session)
+        target = os.path.join(workdir, folder, _LIBRARY_NAME)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copyfile(self.library_path, target)
+        full_args = {
+            **dict(args),
+            SESSION_LIBRARY_ARG: os.path.join(workdir, _LIBRARY_NAME),
+        }
+        completed = subprocess.run(  # noqa: S603 - our own library, no shell
+            [
+                sys.executable,
+                "-I",
+                target,
+                "--workdir",
+                workdir,
+                function,
+                _encode_args(full_args),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_DOWNLOAD_TIMEOUT_SECONDS,
+            check=False,
+        )
+        return limit_output(_parse_result(completed.stdout), self.max_output_chars)
 
     def stop_session(self, session: SandboxSession) -> None:
         self.stop_session_by_id(session.session_id)

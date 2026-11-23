@@ -155,6 +155,8 @@ def screen_limits() -> dict[str, object]:
         "retention_days": int(config.ADVANCED_SOURCE_RETENTION_DAYS),
         # U5 NFR8.8: 計画のカードを待てる分（「15 分以内に選んでください」）
         "plan_wait_minutes": int(config.ADVANCED_GENERATION_PLAN_WAIT_SECONDS) // 60,
+        # U6 BR37.1: 1 回の生成に選べる表の数
+        "max_tables": int(config.ADVANCED_MAX_TABLES),
     }
 
 
@@ -204,6 +206,10 @@ async def advanced_generation_page(
     except Exception:
         logger.warning("advanced upload list not readable", exc_info=True)
         list_failed = True
+    # U6 BR35.4: the box shows (checked) only when the Manager offers it
+    detailed_offered = await run_in_threadpool(
+        manager.detailed_analysis_offered, principal
+    )
     return templates.TemplateResponse(
         request,
         "persona/advanced_generation.html",
@@ -217,6 +223,7 @@ async def advanced_generation_page(
             "active_tab": "advanced",
             "upload_rows": rows,
             "upload_list_failed": list_failed,
+            "detailed_analysis_offered": detailed_offered,
         },
     )
 
@@ -530,10 +537,13 @@ async def start_generation(
     purpose: str = Form(""),
     persona_count: int = Form(...),
     confirm_plan: bool = Form(False),
+    use_detailed_analysis: bool = Form(False),
 ) -> Any:
     """生成を始め、進み具合の区画を返す（W4）。``run`` は専用のプールで動く。
 
     U5: 「分析の計画を確認してから実行する」を ``confirm_plan`` で受け取る（BR29.1）。
+    U6: 「AI による詳細分析」を ``use_detailed_analysis`` で受け取る。使うかどうかは
+    Manager が開始のときに決める（BR35.2。許されていなければ送られても使わない）。
     実行中の生成があるときは、その旨と実行中の生成の進み具合を 409 で返す（BR30.2）。
     """
     principal = _principal(request)
@@ -546,6 +556,7 @@ async def start_generation(
             purpose=purpose,
             persona_count=persona_count,
             confirm_plan=confirm_plan,
+            use_detailed_analysis=use_detailed_analysis,
         )
     except CodedError as e:
         logger.info("advanced generation not started")

@@ -173,12 +173,13 @@ class SourceFileCatalog:
     ) -> list[SourceFile]:
         """The owner's live ready files for one generation (U4 BR23.1, NFR3.24).
 
-        Documents alone (1〜10), or one table with documents; more than one
-        table waits for U6.
+        Documents alone (1〜10), or up to three tables with documents (U6
+        BR37.1), the tables within 1GB together (NFR5.54).
 
         Raises:
             CodedError: ``UPLOAD_SOURCE_INVALID`` (nothing, more than ten, or
-                two tables or more: ``reason=tables``),
+                four tables or more: ``reason=tables``, ``max=3``),
+                ``GENERATION_SOURCE_TOO_LARGE`` (``limit=tables_total``),
                 ``GENERATION_SOURCE_NOT_READY`` (U5: a file still uploading or
                 being inspected), ``GENERATION_SOURCE_NOT_FOUND`` (any file
                 someone else's, missing, expired, failed or being deleted).
@@ -201,11 +202,21 @@ class SourceFileCatalog:
         for source in found:
             if source.status is not SourceFileStatus.READY or source.metadata is None:
                 raise self._error_type("source file is not ready", code=code)
-        if sum(1 for s in found if s.kind is SourceKind.TABLE) > 1:
+        tables = [s for s in found if s.kind is SourceKind.TABLE]
+        max_tables = int(config.ADVANCED_MAX_TABLES)
+        if len(tables) > max_tables:
+            # U6 BR37.1 (replaces U4's one table): up to three tables
             raise self._error_type(
-                "one table per generation",
+                "too many tables for one generation",
                 code=ErrorCode.UPLOAD_SOURCE_INVALID,
-                context={"reason": "tables"},
+                context={"reason": "tables", "max": max_tables},
+            )
+        if sum(s.size_bytes for s in tables) > int(config.ADVANCED_UPLOAD_MAX_BYTES):
+            # U6 NFR5.54: the tables together stay within the 1GB of one table
+            raise self._error_type(
+                "tables over the total size",
+                code=ErrorCode.GENERATION_SOURCE_TOO_LARGE,
+                context={"limit": "tables_total"},
             )
         return found
 

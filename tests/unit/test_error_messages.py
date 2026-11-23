@@ -713,3 +713,31 @@ class TestGenerationControlWording:
         message = self._message(timeout, limit="plan_wait_minutes", value="x")
 
         assert message == error_messages._CATALOG[timeout]
+
+
+class TestSettingsAndTablesWordingU6:
+    """U6 (functional-spec.md §4, BR34.4, BR37.1, NFR5.54)."""
+
+    @staticmethod
+    def _message(code: ErrorCode, **context: object) -> str:
+        return user_message_for(CodedError("diag", code=code, context=context))
+
+    def test_the_version_conflict_is_transient_and_worded(self):
+        code = ErrorCode["SETTINGS_VERSION_CONFLICT"]
+
+        assert code.kind is ErrorKind.TRANSIENT
+        assert self._message(code) != FALLBACK_MESSAGE
+
+    def test_tables_names_the_limit_of_three(self):
+        code = ErrorCode["UPLOAD_SOURCE_INVALID"]
+        message = self._message(code, reason="tables", max=3)
+
+        assert "3" in message
+        assert message != error_messages._CATALOG[code]
+
+    def test_tables_total_is_its_own_wording(self):
+        code = ErrorCode["GENERATION_SOURCE_TOO_LARGE"]
+        message = self._message(code, limit="tables_total")
+
+        assert message != error_messages._CATALOG[code]
+        assert message != self._message(code, total_chars=10, max_chars=5)

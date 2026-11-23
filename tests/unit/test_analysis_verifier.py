@@ -10,7 +10,13 @@ from __future__ import annotations
 import pytest
 
 from src.managers.advanced_generation.analysis_verifier import AnalysisVerifier
-from src.models.analysis import AnalysisMethod, Evidence, EvidenceKind, Segment
+from src.models.analysis import (
+    AnalysisMethod,
+    EmittedResult,
+    Evidence,
+    EvidenceKind,
+    Segment,
+)
 from src.models.errors import ErrorCode
 
 pytestmark = pytest.mark.unit
@@ -211,3 +217,148 @@ class TestVerifyDocuments:
         )
 
         assert not result.passed
+
+
+# --- U6: populations per table and run_code segments (BR36.3, BR37.5) -------
+
+_EMITTED = EmittedResult(
+    population=50,
+    population_source="join:source_1+source_2",
+    segments=(
+        {"segment_key": "buyer", "size": 20, "features": []},
+        {"segment_key": "none", "size": 30, "features": []},
+    ),
+)
+
+
+def _on(source: str, sid: str, size: int, share: float, *, call: str = "tc-1"):
+    return _segment(sid, size, share, call=call).update(
+        definition={"kind": "filter", "source": source, "spec": {"tool_call_id": call}}
+    )
+
+
+def _coded(sid: str, key: str, size: int, share: float, *, call: str = "tc-5"):
+    return _segment(sid, size, share, call=call).update(
+        definition={
+            "kind": "derived",
+            "source": "join:source_1+source_2",
+            "spec": {"tool_call_id": call, "segment_key": key},
+        }
+    )
+
+
+def _verify_u6(segments, *, outputs, populations, emitted=None, method=None):
+    return AnalysisVerifier.verify(
+        method=method or AnalysisMethod.FILTER,
+        segments=segments,
+        evidence=[_evidence(s.id, s.tool_call_id or "tc-1") for s in segments],
+        persona_segment_ids=[s.id for s in segments],
+        populations=populations,
+        outputs=outputs,
+        emitted=emitted or {},
+    )
+
+
+class TestPopulationsPerTable:
+    def test_each_segment_uses_its_tables_people(self) -> None:
+        outputs = {"tc-1": {"rows": [[60]]}, "tc-2": {"rows": [[10]]}}
+        segments = [
+            _on("source_1", "a", 60, 0.6, call="tc-1"),
+            _on("source_2", "b", 10, 0.5, call="tc-2"),
+        ]
+
+        result = _verify_u6(
+            segments, outputs=outputs, populations={"source_1": 100, "source_2": 20}
+        )
+
+        assert result.passed and result.unverified_segment_ids == ()
+
+    def test_the_sum_is_checked_per_population(self) -> None:
+        outputs = {"tc-1": {"rows": [[60], [50]]}}
+        segments = [
+            _on("source_1", "a", 60, 0.6),
+            _on("source_1", "b", 50, 0.5),
+            _on("source_2", "c", 1, 0.05),
+        ]
+
+        result = _verify_u6(
+            segments, outputs=outputs, populations={"source_1": 100, "source_2": 20}
+        )
+
+        assert not result.passed and result.reason == "sum"
+
+    def test_two_tables_may_add_up_to_more_than_one_of_them(self) -> None:
+        outputs = {"tc-1": {"rows": [[90]]}, "tc-2": {"rows": [[15]]}}
+        segments = [
+            _on("source_1", "a", 90, 0.9, call="tc-1"),
+            _on("source_2", "b", 15, 0.75, call="tc-2"),
+        ]
+
+        result = _verify_u6(
+            segments, outputs=outputs, populations={"source_1": 100, "source_2": 20}
+        )
+
+        assert result.passed
+
+    def test_a_segment_without_a_source_uses_the_first_table(self) -> None:
+        segments = [_segment("a", 60, 0.6)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-1": CLUSTER_OUTPUT},
+            populations={"source_1": 100, "source_2": 7},
+        )
+
+        assert result.unverified_segment_ids == ()
+
+
+class TestRunCodeSegments:
+    def test_the_same_key_and_size_pass_with_the_recounted_population(self) -> None:
+        segments = [_coded("a", "buyer", 20, 0.4), _coded("b", "none", 30, 0.6)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+        )
+
+        assert result.passed and result.unverified_segment_ids == ()
+
+    def test_another_integer_of_the_output_does_not_pass(self) -> None:
+        # 30 is in the output (the other key's size), not the size of "buyer"
+        segments = [_coded("a", "buyer", 30, 0.6)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+        )
+
+        assert result.unverified_segment_ids == ("a",)
+
+    def test_an_unknown_key_is_unverified(self) -> None:
+        segments = [_coded("a", "vip", 20, 0.4)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+        )
+
+        assert result.unverified_segment_ids == ("a",)
+
+    def test_a_joined_cluster_must_add_up_to_its_own_population(self) -> None:
+        segments = [_coded("a", "buyer", 20, 0.4)]
+
+        result = _verify_u6(
+            segments,
+            outputs={"tc-5": _EMITTED.to_dict()},
+            populations={"source_1": 50},
+            emitted={"tc-5": _EMITTED},
+            method=AnalysisMethod.CLUSTER,
+        )
+
+        assert not result.passed and result.reason == "cluster_sum"

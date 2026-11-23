@@ -31,8 +31,10 @@
     <ol class="space-y-2">
         {% for block in record.code_blocks %}
         <li>
+            {#- U6 BR38.1: 結合した列と一致の割合は、コードを開かなくても読める -#}
+            {% if block.get("title") %}<p class="text-xs text-gray-700 mb-1" data-testid="advanced-record-joined">{{ block.get("title") }}</p>{% endif %}
             <details data-testid="advanced-record-code">
-                <summary class="cursor-pointer text-sm">{{ loop.index }}. {{ code_kind_label(block.get("kind")) }}</summary>
+                <summary class="cursor-pointer text-sm" data-testid="advanced-record-code-kind" data-kind="{{ block.get('kind', 'fixed') }}">{{ loop.index }}. {{ code_kind_label(block.get("kind")) }}</summary>
                 <pre class="mt-1 bg-gray-50 border border-gray-200 rounded p-2 text-xs font-mono overflow-x-auto max-h-64" tabindex="0"><code>{{ block.get("code", "") }}</code></pre>
                 <p class="text-xs text-gray-600 mt-1">ハッシュ <code>{{ block.get("sha256", "") }}</code></p>
             </details>

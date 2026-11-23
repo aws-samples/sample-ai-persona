@@ -1,0 +1,83 @@
+{% from "components/department_picker.html" import department_picker %}
+{#
+  設定画面の高度な生成（ベータ）の区画（U6、S12、契約 C11、BR34、BR35.1）。
+  引数:
+    view  ... SettingSectionView（今の値・版・部署の一覧・見つからない部署・最後に変えた人）
+    error ... 入力の誤り（400）か版の衝突（409）の文言。区画の中に出す
+    form  ... 入力の誤りのときに送られた値（入力を残す）。f['key'] の形で読む
+#}
+{%- set s = view.setting -%}
+{%- set f = form or none -%}
+{%- set mode = f['audience_mode'] if f else s.audience_mode -%}
+{%- set selected = (f['department_groups'] if f else s.department_groups) | map('replace', 'group:', '') | list -%}
+{%- set allow = f['allow_detailed_analysis'] if f else s.allow_detailed_analysis -%}
+{%- set version = f['version'] if f else s.version -%}
+<form hx-post="/settings/advanced-generation"
+      hx-target="#advanced-generation-settings"
+      hx-swap="innerHTML"
+      data-testid="advanced-setting-form"
+      class="space-y-5">
+    {% if error %}
+    <div role="alert"
+         data-testid="{{ 'advanced-setting-conflict' if view.notice == 'conflict' else 'advanced-setting-error' }}"
+         class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-3">{{ error }}</div>
+    {% endif %}
+    <input type="hidden" name="version" value="{{ version }}">
+
+    <fieldset>
+        <legend class="text-sm font-medium text-gray-700 mb-2">使える人</legend>
+        <div class="flex flex-wrap gap-6">
+            <label class="flex items-center gap-2 text-sm text-gray-800">
+                <input type="radio" name="audience_mode" value="everyone"
+                       data-testid="advanced-setting-everyone"
+                       {% if mode == "everyone" %}checked{% endif %}
+                       class="border-gray-300 text-blue-600 focus:ring-blue-500">
+                全員
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-800">
+                <input type="radio" name="audience_mode" value="departments"
+                       data-testid="advanced-setting-departments"
+                       {% if mode != "everyone" %}checked{% endif %}
+                       class="border-gray-300 text-blue-600 focus:ring-blue-500">
+                選んだ部署だけ
+            </label>
+        </div>
+        <p class="text-xs text-gray-600 mt-2">何も選ばないときは、管理者だけが使えます。管理者はいつでも使えます。</p>
+    </fieldset>
+
+    <div>
+        {{ department_picker("departments", view.departments, selected, mode="scope", id_prefix="advanced-generation-departments", vanished=view.missing_groups, vanished_label="（見つからない部署）", free=True) }}
+        {% if view.missing_groups %}
+        <p data-testid="advanced-setting-missing" class="text-xs text-yellow-800 mt-2">
+            見つからない部署が {{ view.missing_groups | length }} 件あります。誰にも当たらないので、外して保存できます。
+        </p>
+        {% endif %}
+    </div>
+
+    <div x-data="{ on: {{ 'true' if allow else 'false' }} }" class="flex items-start gap-3">
+        <input type="hidden" name="allow_detailed_analysis" :value="on ? 'true' : ''" value="{{ 'true' if allow else '' }}">
+        <button type="button" role="switch" id="advanced-setting-detailed"
+                aria-checked="{{ 'true' if allow else 'false' }}"
+                :aria-checked="on.toString()"
+                aria-describedby="advanced-setting-detailed-help"
+                data-testid="advanced-setting-detailed"
+                @click="on = !on"
+                class="mt-0.5 inline-flex items-center gap-2 px-3 py-1 rounded-full border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                :class="on ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-400 text-gray-800'">
+            <span x-text="on ? 'ON' : 'OFF'">{{ 'ON' if allow else 'OFF' }}</span>
+            <span class="sr-only">AI による詳細分析を許可する</span>
+        </button>
+        <div>
+            <label for="advanced-setting-detailed" class="text-sm font-medium text-gray-800">AI による詳細分析を許可する</label>
+            <p id="advanced-setting-detailed-help" class="text-xs text-gray-600">AI が分析用のプログラムを作り、安全な環境で動かして深く分析します。ON にすると、利用者の詳細設定に表示され、最初からチェックが入ります</p>
+        </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-4">
+        <button type="submit" data-testid="advanced-setting-save"
+                class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors text-sm">保存</button>
+        <p class="text-xs text-gray-600" data-testid="advanced-setting-updated">
+            {% if s.updated_at %}最後に変えた人: {{ view.updated_by_name or "管理者" }}（{{ s.updated_at[:16] | replace("T", " ") }}）{% else %}まだ保存されていません{% endif %}
+        </p>
+    </div>
+</form>

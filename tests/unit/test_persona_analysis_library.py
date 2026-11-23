@@ -1052,3 +1052,426 @@ class TestVerifyQuotes:
         result = self._verify(lib, tmp_path, ["x" * 10] * 51)
 
         assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+
+# ---------------------------------------------------------------------------
+# U6: AI-written code, the check and the playbook functions
+# (BR36.3, BR36.6, BR37.3, BR37.4, BR39.2, NFR3.35)
+# ---------------------------------------------------------------------------
+
+_SOURCES = {"source_1": "cust", "source_2": "buys"}
+
+
+def _customers(rows: int = 30) -> bytes:
+    lines = ["customer_id,age,plan"]
+    for i in range(rows):
+        lines.append(f"C{i:03d},{20 + i},{'gold' if i % 3 == 0 else 'basic'}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _purchases(people: int = 24) -> bytes:
+    lines = ["customer_id,amount,bought_on"]
+    for i in range(people):
+        for n in range(1 + i % 3):
+            lines.append(f"C{i:03d},{100 * (n + 1) + i},2026-0{1 + n}-1{i % 9}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+@pytest.fixture()
+def tables(lib: ModuleType, tmp_path: Path) -> dict[str, Any]:
+    customers = _prepare(lib, tmp_path, _customers(), source_id="cust")
+    purchases = _prepare(lib, tmp_path, _purchases(), source_id="buys")
+    assert customers["ok"] and purchases["ok"]
+    (tmp_path / "persona_analysis.py").write_bytes(_LIBRARY_PATH.read_bytes())
+    return {"cust": customers["value"], "buys": purchases["value"]}
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _run_ai(
+    lib: ModuleType, workdir: Path, code: str, token: str = "t1", **extra: Any
+) -> dict[str, Any]:
+    args = {
+        "code": code,
+        "work_dir": f"ai_work/{token}",
+        "pgid_file": f"ai_work/{token}.pgid",
+        "sources": _SOURCES,
+        "timeout_seconds": 60,
+        **extra,
+    }
+    return lib.dispatch("run_ai_code", args, str(workdir))
+
+
+def _finalize(lib: ModuleType, workdir: Path, token: str = "t1") -> dict[str, Any]:
+    result = lib.dispatch(
+        "finalize_ai_result",
+        {
+            "work_dir": f"ai_work/{token}",
+            "pgid_file": f"ai_work/{token}.pgid",
+            "sources": _SOURCES,
+            "session_library": str(workdir / "persona_analysis.py"),
+        },
+        str(workdir),
+    )
+    assert result["ok"] is True
+    return result["value"]
+
+
+_EMIT_BY_AGE = """
+df = read_table("source_1")
+df["seg"] = ["young" if a < 35 else "old" for a in df["age"]]
+emit_result(df, "seg", "source_1", id_column="customer_id")
+"""
+
+
+class TestPrepareHash:
+    def test_prepare_reports_the_parquet_hash(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        parquet = tmp_path / "prepared" / "cust.parquet"
+
+        assert tables["cust"]["parquet_sha256"] == _sha(parquet)
+
+
+class TestRunAiCode:
+    def test_runs_in_its_own_process_group_and_records_it(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        result = _run_ai(
+            lib, tmp_path, "import os\nprint('pgid', os.getpgrp(), os.getpid())"
+        )
+
+        value = result["value"]
+        assert value["status"] == "ok" and value["exit_code"] == 0
+        _, pgid, pid = value["stdout"].split()
+        assert pgid == pid  # a new session: the code leads its own group
+        recorded = (tmp_path / "ai_work" / "t1.pgid").read_text().strip()
+        assert recorded == pgid
+
+    def test_a_folder_used_before_is_refused(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        assert _run_ai(lib, tmp_path, "x = 1")["ok"]
+
+        again = _run_ai(lib, tmp_path, "x = 1")
+
+        assert again["ok"] is False and again["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_an_exception_is_a_failure_with_its_text(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        value = _run_ai(lib, tmp_path, "raise KeyError('income')")["value"]
+
+        assert value["status"] == "failed"
+        assert "KeyError" in value["error_text"]
+
+    def test_an_exception_after_emit_result_is_still_a_failure(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        value = _run_ai(lib, tmp_path, _EMIT_BY_AGE + "\nraise ValueError('late')")[
+            "value"
+        ]
+
+        assert value["status"] == "failed"
+
+    def test_a_run_past_its_time_is_stopped(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        value = _run_ai(lib, tmp_path, "while True:\n    pass", timeout_seconds=1)[
+            "value"
+        ]
+
+        assert value["status"] == "failed" and value["timed_out"] is True
+
+
+class TestEmitAndFinalize:
+    def test_the_check_counts_sizes_and_population_from_the_data(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        assert _run_ai(lib, tmp_path, _EMIT_BY_AGE)["value"]["status"] == "ok"
+
+        value = _finalize(lib, tmp_path)
+
+        result = value["result"]
+        assert value["error"] is None
+        assert result["population"] == 30
+        assert result["population_source"] == "source_1"
+        sizes = {s["segment_key"]: s["size"] for s in result["segments"]}
+        assert sizes == {"young": 15, "old": 15}
+        assert value["hashes"]["parquet"] == {
+            "cust": tables["cust"]["parquet_sha256"],
+            "buys": tables["buys"]["parquet_sha256"],
+        }
+        assert value["hashes"]["library"] == _sha(_LIBRARY_PATH)
+
+    def test_emit_result_writes_only_ids_and_segments(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        import pyarrow.parquet as pq
+
+        written = pq.read_table(tmp_path / "ai_work" / "t1" / "assignment.parquet")
+        assert written.column_names == ["person_id", "segment"]
+
+    def test_a_second_emit_result_raises_and_fails_the_check(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            _EMIT_BY_AGE
+            + "\ntry:\n"
+            + "".join(
+                "    " + line + "\n" for line in _EMIT_BY_AGE.strip().splitlines()
+            )
+            + "except Exception:\n    pass\n"
+        )
+        _run_ai(lib, tmp_path, code)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["result"] is None and value["error"] == "EMIT_TWICE"
+
+    def test_no_emit_result_is_no_result(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, "x = 1")
+
+        assert _finalize(lib, tmp_path)["error"] == "NO_RESULT"
+
+    @pytest.mark.parametrize(
+        ("code", "error"),
+        [
+            # a person left out
+            (
+                'df = read_table("source_1").iloc[1:]\ndf["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "ID_MISMATCH",
+            ),
+            # a person who is not in the table
+            (
+                'import pandas as pd\ndf = read_table("source_1")\n'
+                'df = pd.concat([df, df.iloc[:1].assign(customer_id="X999")])\n'
+                'df["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "ID_MISMATCH",
+            ),
+            # the same person twice
+            (
+                'import pandas as pd\ndf = read_table("source_1")\n'
+                "df = pd.concat([df.iloc[1:], df.iloc[:1], df.iloc[:1]])\n"
+                'df["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_1", id_column="customer_id")',
+                "DUPLICATE_IDS",
+            ),
+            # the purchases table has several rows per person
+            (
+                'df = read_table("source_2")\ndf["seg"] = "a"\n'
+                'emit_result(df, "seg", "source_2", id_column="customer_id")',
+                "DUPLICATE_IDS",
+            ),
+        ],
+    )
+    def test_people_must_match_the_source_exactly(
+        self,
+        lib: ModuleType,
+        tmp_path: Path,
+        tables: dict[str, Any],
+        code: str,
+        error: str,
+    ) -> None:
+        _run_ai(lib, tmp_path, code)
+
+        value = _finalize(lib, tmp_path)
+
+        assert value["result"] is None and value["error"] == error
+
+    def test_a_result_file_written_by_hand_is_recounted(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            "import json, pyarrow as pa, pyarrow.parquet as pq\n"
+            'ids = list(read_table("source_1")["customer_id"])\n'
+            "pq.write_table(pa.table({'person_id': ids, 'segment': ['a'] * len(ids)}),"
+            " 'assignment.parquet')\n"
+            "open('emit_count', 'w').write('1')\n"
+            "json.dump({'population_source': 'source_1', 'id_column': 'customer_id',"
+            " 'population': 5000, 'sizes': {'a': 4999}}, open('meta.json', 'w'))\n"
+            'print(json.dumps({"ok": True, "value": {"population": 5000}}))\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        assert result["population"] == 30
+        assert result["segments"] == [{"segment_key": "a", "size": 30, "features": []}]
+
+    def test_a_replaced_emit_result_does_not_change_the_numbers(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            "import persona_analysis\n"
+            "real = emit_result\n"
+            "def emit_result(frame, *a, **k):\n"
+            "    persona_analysis._EMIT_POPULATION = 9999\n"
+            "    real(frame, *a, **k)\n" + _EMIT_BY_AGE
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        assert result["population"] == 30
+
+    def test_a_changed_parquet_shows_in_the_hash(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(
+            lib,
+            tmp_path,
+            "open('../../prepared/cust.parquet', 'ab').write(b'x')",
+        )
+
+        hashes = _finalize(lib, tmp_path)["hashes"]
+
+        assert hashes["parquet"]["cust"] != tables["cust"]["parquet_sha256"]
+        assert hashes["parquet"]["buys"] == tables["buys"]["parquet_sha256"]
+
+    def test_a_changed_library_shows_in_the_hash(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, "open('../../persona_analysis.py', 'a').write('#')")
+
+        assert _finalize(lib, tmp_path)["hashes"]["library"] != _sha(_LIBRARY_PATH)
+
+    def test_the_check_stops_what_the_code_left_running(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        import os
+
+        code = (
+            "import subprocess, sys\n"
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            "open('child.pid', 'w').write(str(p.pid))\n"
+        )
+        _run_ai(lib, tmp_path, code)
+        child = int((tmp_path / "ai_work" / "t1" / "child.pid").read_text())
+
+        _finalize(lib, tmp_path)
+
+        import time
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            try:
+                os.waitpid(child, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            time.sleep(0.05)
+        else:
+            raise AssertionError("the left process still runs")
+
+    def test_verify_hashes_returns_the_hashes_only(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        result = lib.dispatch(
+            "verify_hashes",
+            {
+                "pgid_files": [],
+                "sources": _SOURCES,
+                "session_library": str(tmp_path / "persona_analysis.py"),
+            },
+            str(tmp_path),
+        )
+
+        assert set(result["value"]) == {"hashes"}
+        assert (
+            result["value"]["hashes"]["parquet"]["cust"]
+            == (tables["cust"]["parquet_sha256"])
+        )
+
+
+class TestPlaybookFunctions:
+    def test_key_overlap_counts_without_values(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        result = lib.dispatch(
+            "key_overlap",
+            {"axis": "cust", "other": "buys", "columns": ["customer_id", "missing"]},
+            str(tmp_path),
+        )
+
+        rows = {r["column"]: r for r in result["value"]["columns"]}
+        # the smaller table (30 customers): 24 of their IDs are among the buyers
+        assert rows["customer_id"]["match_rate"] == 0.8
+        assert rows["customer_id"]["axis_matched"] == 24
+        assert rows["missing"]["match_rate"] == 0.0
+        assert "C001" not in json.dumps(result)
+
+    def test_join_tables_keeps_everyone_and_marks_no_match(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = join_tables("source_1", "customer_id", [{"source": "source_2",'
+            ' "aggregations": [{"column": "amount", "func": "sum"},'
+            ' {"column": "bought_on", "func": "last"}]}])\n'
+            "import json\n"
+            "print(json.dumps({'rows': len(df), 'cols': list(df.columns),"
+            " 'unmatched': int((~df['source_2_matched']).sum()),"
+            " 'zero': int((df.loc[~df['source_2_matched'], 'source_2_rows'] == 0).all()),"
+            " 'joined': df.attrs['joined_columns']}))\n"
+            'df["seg"] = ["buyer" if m else "none" for m in df["source_2_matched"]]\n'
+            'emit_result(df, "seg", "join:source_1+source_2", id_column="customer_id")\n'
+        )
+        value = _run_ai(lib, tmp_path, code)["value"]
+
+        printed = json.loads(value["stdout"].strip().splitlines()[-1])
+        assert printed["rows"] == 30 and printed["unmatched"] == 6
+        assert printed["zero"] == 1
+        assert "source_2_amount_sum" in printed["cols"]
+        assert printed["joined"][0] == "customer_id"
+        result = _finalize(lib, tmp_path)["result"]
+        assert result["population"] == 30
+        assert result["population_source"] == "join:source_1+source_2"
+        assert "source_2_amount_sum" in result["joined_columns"]
+
+    def test_compare_groups_tests_numbers_and_categories(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            "import json\n"
+            'df = read_table("source_1")\n'
+            'df["grp"] = ["a" if a < 35 else "b" for a in df["age"]]\n'
+            'stats = compare_groups(df, "grp", ["age", "plan"])\n'
+            "print(json.dumps(stats))\n"
+        )
+        value = _run_ai(lib, tmp_path, code)["value"]
+
+        stats = {s["column"]: s for s in json.loads(value["stdout"].splitlines()[-1])}
+        assert stats["age"]["name"] == "welch_t"
+        assert stats["age"]["p_value"] < 0.001 and abs(stats["age"]["effect_size"]) > 1
+        assert stats["plan"]["name"] == "chi_square"
+        assert 0 <= stats["plan"]["p_value"] <= 1
+
+    def test_rfm_scores_each_person(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            "import json\n"
+            'df = rfm(read_table("source_2"), "customer_id", "bought_on", "amount",'
+            ' as_of="2026-12-31")\n'
+            "print(json.dumps({'rows': len(df), 'cols': sorted(df.columns),"
+            " 'scores': sorted(set(df['r_score']))}))\n"
+        )
+        value = _run_ai(lib, tmp_path, code)["value"]
+
+        printed = json.loads(value["stdout"].splitlines()[-1])
+        assert printed["rows"] == 24
+        assert {"recency", "frequency", "monetary", "r_score"} <= set(printed["cols"])
+        assert set(printed["scores"]) <= {1, 2, 3, 4, 5}

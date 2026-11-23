@@ -124,7 +124,9 @@ DECISION_PORTS: dict[str, frozenset[str]] = {
     # 判定（BR1.1）。is_available は同じ判定を真偽で返す（タブとページの出し分け）。
     # SourceFileCatalog の各メソッドは owner_sub を条件にした読み書きで、
     # 他人のものとないものを同じ NOT_FOUND にする（NFR3.9）。
-    "AdvancedGenerationPolicy": frozenset({"ensure_available", "is_available"}),
+    "AdvancedGenerationPolicy": frozenset(
+        {"ensure_available", "is_available", "availability"}
+    ),
     "SourceFileCatalog": frozenset(
         {
             "get_owned",
@@ -317,6 +319,10 @@ CLASSIFICATION: dict[str, Entry] = {
     "SettingsManager.is_data_agent_allowed": NO_USER_DATA,  # 環境の事実だけ（U3 BR3.6）
     "SettingsManager.test_data_agent_connection": CHECKS,
     "SettingsManager.get_data_agent_settings": CHECKS,
+    # 高度な生成 U6（GET は settings:manage がなければ 404、保存は 403。NFR3.31）
+    "AdvancedPersonaGenerationManager.detailed_analysis_offered": CHECKS,  # BR35.4
+    "SettingsManager.advanced_generation_section": CHECKS,
+    "SettingsManager.save_advanced_generation_setting": CHECKS,
     # survey_analysis_manager.py — U7（判定のあとだけ CSV とキャッシュ、BR2.4・BR2.11）
     "SurveyAnalysisManager.result_cache": NO_USER_DATA,  # キャッシュの実体を返すだけ
     "SurveyAnalysisManager.get_visual_analysis": CHECKS,  # ensure_readable

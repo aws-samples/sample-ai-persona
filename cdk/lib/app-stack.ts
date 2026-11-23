@@ -131,6 +131,15 @@ const ADVANCED_GENERATION_METRICS: {
     status: 'failed',
     dimensions: { error_code: '$.error_code' },
   },
+  // U6（NFR6.22）: AI による詳細分析を外した数（失敗 5 回・取り消しの失敗）と、書き換えを見つけた数。
+  // アプリのログはこの 2 つにも status（disabled・detected）を持たせる。アラームは足さない
+  {
+    name: 'RunCodeDisabled',
+    event: 'advanced_generation.run_code_disabled',
+    status: 'disabled',
+    dimensions: { reason: '$.reason' },
+  },
+  { name: 'TamperDetected', event: 'advanced_generation.tamper_detected', status: 'detected' },
 ];
 
 /** dev の Stage のバケットの CORS に足すローカルのアプリのオリジン（security-design.md §5）。 */

@@ -104,6 +104,13 @@ class SegmentOutput(BaseModel):
     cluster_index: Optional[int] = Field(
         default=None, description="cluster のときの群の index"
     )
+    definition_source: Optional[str] = Field(
+        default=None,
+        description="層が乗る表の名前（source_1 など。結合した表は join:... ）",
+    )
+    definition_segment_key: Optional[str] = Field(
+        default=None, description="run_code の結果から作った層の segment_key"
+    )
     size: int = Field(description="ツールの出力に出てきた行数")
     share: float = Field(description="母数に対する割合（0〜1）")
     features: list[SegmentFeatureOutput]
@@ -141,11 +148,16 @@ def _analysis_to_contract(
         }
         if s.cluster_index is not None:
             spec["cluster_index"] = s.cluster_index
+        if s.definition_segment_key:
+            spec["segment_key"] = s.definition_segment_key
+        definition: dict[str, Any] = {"kind": s.definition_kind, "spec": spec}
+        if s.definition_source:
+            definition["source"] = s.definition_source
         segments.append(
             {
                 "id": s.id,
                 "label": s.label,
-                "definition": {"kind": s.definition_kind, "spec": spec},
+                "definition": definition,
                 "size": s.size,
                 "share": s.share,
                 "features": [f.model_dump() for f in s.features],

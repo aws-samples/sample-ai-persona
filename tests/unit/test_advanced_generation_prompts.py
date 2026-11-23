@@ -117,3 +117,37 @@ class TestDocumentPrompts:
         # Structured output does not take dict fields (agent_service.py note)
         field = prompts.EvidenceItemOutput.model_fields["speaker_attributes"]
         assert "list" in str(field.annotation)
+
+
+class TestAnalysisInstructionsU6:
+    """BR36.5, BR37.2, BR37.4: the notes appear only when they apply."""
+
+    def test_one_table_without_detailed_is_the_u1_text(self) -> None:
+        assert prompts.analysis_instructions() == prompts.ANALYSIS_INSTRUCTIONS
+
+    def test_detailed_tells_emit_result_and_untrusted_output(self) -> None:
+        text = prompts.analysis_instructions(detailed=True)
+        assert "emit_result" in text and "信頼できないデータ" in text
+        assert "source_1" not in text
+
+    def test_several_tables_are_named(self) -> None:
+        assert "source_2" in prompts.analysis_instructions(tables=2)
+
+    def test_a_join_plan_reaches_the_request(self) -> None:
+        from src.models.analysis import AnalysisMethod, AnalysisPlan, JoinPlan
+
+        plan = AnalysisPlan(
+            interpreted_purpose="",
+            questions=("q",),
+            method=AnalysisMethod.CLUSTER,
+            rationale="",
+            budget={},
+        )
+        join = JoinPlan(
+            axis="source_1", table="source_2", key_column="customer_id", match_rate=0.9
+        )
+
+        text = prompts.analysis_prompt(plan, 3, joins=[join])
+
+        assert "customer_id" in text and 'load_playbook("join")' in text
+        assert "customer_id" not in prompts.analysis_prompt(plan, 3)

@@ -1198,6 +1198,8 @@ registerBlock('DepartmentPicker', function() {
     }
 
     function saveButtonsOf(picker) {
+        // U6: a section that saves more than the departments keeps its button
+        if ('departmentFree' in picker.dataset) return [];
         const form = picker.form || picker.closest('form');
         return form ? Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]')) : [];
     }
@@ -1225,6 +1227,7 @@ registerBlock('DepartmentPicker', function() {
     // 選択の部署が 1 つでも残れば全対象に残る。中間だけが残るときは、残る件数の
     // 合計が対象の件数に満たなければ、どれにも残らない対象が必ずある
     function needsConfirm(picker) {
+        if ('departmentFree' in picker.dataset) return false;
         const options = optionsOf(picker);
         if (!options.length || options.some((o) => stateOf(o) === 'checked')) return false;
         const kept = options.filter((o) => stateOf(o) === 'mixed')
