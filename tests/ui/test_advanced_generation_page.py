@@ -1058,6 +1058,11 @@ class TestStageStepper:
 
         assert stage("preparing", "mark") == "✓" and stage("preparing", "state") == "済"
         assert stage("running", "mark") == "●" and stage("running", "state") == "進行中"
+        # the current stage carries a filled label, apart from the plain stage names
+        cls = ui.page.get_attribute(
+            "[data-testid='advanced-stage-running'] [data-role='state']", "class"
+        )
+        assert "bg-blue-600" in (cls or "") and "rounded-full" in (cls or "")
         assert stage("verifying", "mark") == ""
         # the label of the bar names the stage without the marks
         assert (

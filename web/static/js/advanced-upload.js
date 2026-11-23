@@ -47,8 +47,10 @@
         reached: 'absolute top-3 right-1/2 w-full h-0.5 bg-blue-600',
         pending: 'absolute top-3 right-1/2 w-full h-0.5 bg-gray-300'
     };
+    // 進行中・失敗は、段階の名前と区別できるラベル（塗りの角丸）にする
     var STATE_CLASS = {
-        shown: 'block text-xs font-medium text-gray-800',
+        current: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-600 text-white',
+        failed: 'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-700 text-white',
         hidden: 'sr-only'
     };
     var METHOD_LABELS = { filter: '絞り込み', compare: '群どうしの比較', cluster: 'クラスタ分析' };
@@ -637,7 +639,7 @@
             var word = item.querySelector('[data-role="state"]');
             if (word) {
                 word.textContent = STATE_WORDS[state];
-                word.className = (state === 'current' || state === 'failed') ? STATE_CLASS.shown : STATE_CLASS.hidden;
+                word.className = STATE_CLASS[state] || STATE_CLASS.hidden;
             }
         });
         updateBar(panel, current, failed);
