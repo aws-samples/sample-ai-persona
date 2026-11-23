@@ -317,6 +317,8 @@ CLASSIFICATION: dict[str, Entry] = {
     "SettingsManager.save_data_agent_settings": CHECKS,
     "SettingsManager.is_data_agent_available": NO_USER_DATA,  # 設定の有無だけ
     "SettingsManager.is_data_agent_allowed": NO_USER_DATA,  # 環境の事実だけ（U3 BR3.6）
+    # 環境の事実だけ（ENABLE_ADVANCED_GENERATION、U6 BR1.3）
+    "SettingsManager.is_advanced_generation_section_offered": NO_USER_DATA,
     "SettingsManager.test_data_agent_connection": CHECKS,
     "SettingsManager.get_data_agent_settings": CHECKS,
     # 高度な生成 U6（GET は settings:manage がなければ 404、保存は 403。NFR3.31）

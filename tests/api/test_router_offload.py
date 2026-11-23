@@ -90,6 +90,11 @@ ALLOWED_DIRECT_CALLS: dict[tuple[str, str, str], str] = {
     ): f"ロールを見て、メモリ上の設定値を返すだけで{_NO_IO}",
     (
         "settings.py",
+        "settings_page",
+        "is_advanced_generation_section_offered",
+    ): f"環境変数の ON/OFF（メモリ上の設定値）を返すだけで{_NO_IO}",
+    (
+        "settings.py",
         "data_agent_status",
         "get_data_agent_settings",
     ): f"ロールを見て、メモリ上の設定値を返すだけで{_NO_IO}",

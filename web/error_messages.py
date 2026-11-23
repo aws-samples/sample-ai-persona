@@ -772,6 +772,15 @@ def _source_invalid_detail(base: str, context: dict[str, Any]) -> str:
     return base
 
 
+def _request_invalid_detail(base: str, context: dict[str, Any]) -> str:
+    """A department gone since the settings screen opened (U6 BR34.3)."""
+    if context.get("reason") == "vanished_departments":
+        count = _positive_int(context.get("count"))
+        counted = f"（{count:,} 件）" if count is not None else ""
+        return f"見つからない部署が選ばれています{counted}。外してから保存してください"
+    return base
+
+
 def _no_text_detail(base: str, context: dict[str, Any]) -> str:
     """Names the file without text (BR24.4); the plain wording without it."""
     name = _filename(context)
@@ -827,6 +836,7 @@ _DETAIL_WORDING: dict[ErrorCode, Callable[[str, dict[str, Any]], str]] = {
     ErrorCode.GENERATION_SOURCE_UNREADABLE: _unreadable_detail,
     ErrorCode.GENERATION_CAPACITY: _capacity_detail,
     ErrorCode.GENERATION_INSUFFICIENT_DATA: _insufficient_detail,
+    ErrorCode.REQUEST_INVALID: _request_invalid_detail,
     ErrorCode.UPLOAD_SOURCE_INVALID: _source_invalid_detail,
     ErrorCode.DOCUMENT_NO_TEXT: _no_text_detail,
     ErrorCode.DOCUMENT_ENCRYPTED: _encrypted_detail,

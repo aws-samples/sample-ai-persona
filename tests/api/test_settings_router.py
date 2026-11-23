@@ -499,6 +499,33 @@ class TestAdvancedGenerationSection:
         assert 'value="everyone"' in response.text
         ag.put_if_version.assert_not_called()
 
+    def test_a_vanished_department_tells_the_cause_in_the_section(self, aw, ag, client):
+        """BR34.3: a department gone since the screen opened, still checked."""
+        from src.models.errors import CodedError, ErrorCode
+        from web.error_messages import user_message_for
+
+        response = _save(client, departments=["sales", "gone"])
+
+        assert response.status_code == 400
+        assert response.headers["X-Render-Response"] == "true"
+        expected = user_message_for(
+            CodedError(
+                "diag",
+                code=ErrorCode.REQUEST_INVALID,
+                context={"reason": "vanished_departments", "count": 1},
+            )
+        )
+        generic = user_message_for(CodedError("diag", code=ErrorCode.REQUEST_INVALID))
+        error_area = re.search(
+            r'data-testid="advanced-setting-error"[^>]*>(.*?)</div>',
+            response.text,
+            re.S,
+        )
+        assert error_area is not None
+        assert error_area.group(1).strip() == expected != generic
+        assert "gone" not in error_area.group(1)
+        ag.put_if_version.assert_not_called()
+
     def test_a_lost_version_is_a_409_with_the_latest_values(self, aw, ag, client):
         from src.services.stores.app_settings_store import SettingsVersionConflict
 
@@ -520,6 +547,39 @@ class TestAdvancedGenerationSection:
         assert _save(client).status_code == 403
         ag.put_if_version.assert_not_called()
         ag.get.assert_not_called()
+
+
+class TestAdvancedGenerationSectionWhenTheFeatureIsOff:
+    """The closed network Stage passes ENABLE_ADVANCED_GENERATION=false (BR1.3)."""
+
+    @pytest.fixture
+    def off(self, monkeypatch):
+        from src.config import config
+
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+    def test_the_settings_page_has_no_section(self, aw, ag, off, client):
+        response = client.get("/settings/")
+
+        assert response.status_code == 200
+        assert f'hx-get="{_SECTION}"' not in response.text
+        assert 'data-testid="advanced-generation-settings"' not in response.text
+        assert "advanced-generation-settings-title" not in response.text
+
+    def test_the_section_is_404_and_nothing_is_read_or_written(
+        self, aw, ag, off, client
+    ):
+        assert client.get(_SECTION).status_code == 404
+        assert _save(client).status_code == 404
+        ag.get.assert_not_called()
+        ag.put_if_version.assert_not_called()
+
+    def test_member_still_gets_404_and_403(self, aw, ag, off, client):
+        ME.login(client)
+
+        assert client.get(_SECTION).status_code == 404
+        assert _save(client).status_code == 403
+        ag.put_if_version.assert_not_called()
 
 
 def test_the_section_save_needs_the_csrf_header(test_app):

@@ -134,6 +134,9 @@ async def settings_page(request: Request) -> Any:
             **_dataset_context(datasets),
             **_kb_context(knowledge_bases),
             **data_agent,
+            "show_advanced_generation_settings": (
+                settings_manager.is_advanced_generation_section_offered()
+            ),
         },
     )
 

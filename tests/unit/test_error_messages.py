@@ -741,3 +741,28 @@ class TestSettingsAndTablesWordingU6:
 
         assert message != error_messages._CATALOG[code]
         assert message != self._message(code, total_chars=10, max_chars=5)
+
+    def test_a_vanished_department_tells_the_cause_and_the_count(self):
+        """BR34.3: not the generic 「入力内容を確認してください」."""
+        code = ErrorCode["REQUEST_INVALID"]
+        message = self._message(
+            code, field="department_groups", reason="vanished_departments", count=2
+        )
+
+        assert message != error_messages._CATALOG[code]
+        assert "2" in message
+        assert message != self._message(code, field="department_groups")
+
+    @pytest.mark.parametrize("count", [None, "x", 0, True])
+    def test_a_vanished_department_without_a_usable_count_still_tells_the_cause(
+        self, count
+    ):
+        code = ErrorCode["REQUEST_INVALID"]
+        context: dict[str, object] = {"reason": "vanished_departments"}
+        if count is not None:
+            context["count"] = count
+        message = self._message(code, **context)
+
+        assert message != error_messages._CATALOG[code]
+        assert message != FALLBACK_MESSAGE
+        assert "x" not in message and "True" not in message

@@ -121,15 +121,33 @@ class SettingsManager:
 
     # --- U6: 高度な生成（ベータ）の区画（BR34、C11） ---
 
+    @staticmethod
+    def is_advanced_generation_section_offered() -> bool:
+        """Whether the settings screen shows the advanced generation section.
+
+        False where the feature is off (the closed network Stage, BR1.3).
+        """
+        return AdvancedGenerationPolicy.feature_enabled()
+
+    @classmethod
+    def _require_section_offered(cls) -> None:
+        if not cls.is_advanced_generation_section_offered():
+            raise SettingsManagerError(
+                "advanced generation is off in this environment",
+                code=ErrorCode.SETTINGS_NOT_FOUND,
+            )
+
     def advanced_generation_section(self, principal: Principal) -> SettingSectionView:
         """The advanced generation section of the settings screen (BR34.1, BR34.3).
 
         Raises:
             CodedError: ``SETTINGS_NOT_FOUND`` without ``settings:manage``
                 (nothing is read).
-            SettingsManagerError: The setting could not be read.
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read), or the setting could not be read.
         """
         self._require_manage(principal)
+        self._require_section_offered()
         try:
             view = self._generation_policy.section_view(
                 self._department_directory.list_all()
@@ -151,11 +169,13 @@ class SettingsManager:
         Raises:
             AccessDeniedError: ``ACCESS_DENIED`` without ``settings:manage``
                 (nothing is read or written).
-            SettingsManagerError: ``REQUEST_INVALID``,
+            SettingsManagerError: ``SETTINGS_NOT_FOUND`` where the feature is
+                off (nothing is read or written), ``REQUEST_INVALID``,
                 ``SETTINGS_VERSION_CONFLICT`` (the latest section in
                 ``context["section"]``) or a failed DynamoDB call.
         """
         AccessPolicy.require(principal, Permission.SETTINGS_MANAGE, resource_type=_KB)
+        self._require_section_offered()
         try:
             view = self._generation_policy.save_setting(
                 principal,

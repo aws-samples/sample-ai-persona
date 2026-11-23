@@ -306,6 +306,38 @@ class TestSaveSetting:
             )
         store.put_if_version.assert_not_called()
 
+    def test_a_vanished_department_tells_the_cause_and_the_count(self) -> None:
+        """BR34.3: the screen asks to take off the departments that are gone."""
+        policy, store = _policy(_stored())
+
+        with raises_code(
+            _CallerError,
+            ErrorCode.REQUEST_INVALID,
+            field="department_groups",
+            reason="vanished_departments",
+            count=2,
+        ) as raised:
+            self._save(
+                policy, department_groups=["group:sales", "group:gone", "group:old"]
+            )
+        # no group id reaches the context (only the count is shown)
+        assert "gone" not in repr(raised.value.context)
+        store.put_if_version.assert_not_called()
+
+    def test_too_many_departments_is_not_called_vanished(self) -> None:
+        many = [Department(f"d{i}", f"部 {i}") for i in range(101)]
+        policy, _ = _policy(_stored())
+
+        with raises_code(_CallerError, ErrorCode.REQUEST_INVALID) as raised:
+            policy.save_setting(
+                ADMIN,
+                _form(department_groups=[f"group:d{i}" for i in range(101)]),
+                many,
+                now=NOW,
+                error_type=_CallerError,
+            )
+        assert "reason" not in raised.value.context
+
     def test_a_lost_version_shows_the_latest_values(self) -> None:
         policy, store = _policy(_stored(version=5, audience_mode="everyone"))
         store.put_if_version.side_effect = SettingsVersionConflict("lost")

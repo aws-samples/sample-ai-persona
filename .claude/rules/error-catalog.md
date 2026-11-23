@@ -115,7 +115,10 @@ flowchart TD
 - 設定画面の高度な生成の区画（U6）の保存で版の条件に負けたときの `SETTINGS_VERSION_CONFLICT` は `TRANSIENT`。
   入力を直すのではなく、最新の値を確かめて保存し直すことで解決するため。Router は 409 で、最新の値で
   出し直した区画を返す（`mark_renderable()`）。区画の GET は `settings:manage` がなければ既存の
-  `SETTINGS_NOT_FOUND`（404）、保存の POST は既存の `ACCESS_DENIED`（403）。表を 4 つ以上選んだ開始は
+  `SETTINGS_NOT_FOUND`（404）、保存の POST は既存の `ACCESS_DENIED`（403）。`ENABLE_ADVANCED_GENERATION`
+  が false の環境（閉域）では、admin でも GET・POST とも `SETTINGS_NOT_FOUND`（404）で、設定画面に区画を出さない。
+  なくなった部署を選んだままの保存は既存の `REQUEST_INVALID`（`context["reason"]="vanished_departments"`、
+  `count`）で、部署の ID・名前は載せず件数だけを文言に出す。表を 4 つ以上選んだ開始は
   既存の `UPLOAD_SOURCE_INVALID`（`context["reason"]="tables"`、`max=3`）、表の合計が 1GB を超えた開始は
   既存の `GENERATION_SOURCE_TOO_LARGE`（`context["limit"]="tables_total"`）で、文言を `context` で分ける
 - **同じ事象でも、利用者が取れる行動が違えばコードを分ける。** 例: 件数不足はフィルタありなら

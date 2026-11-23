@@ -201,6 +201,16 @@ class AdvancedGenerationPolicy:
 
     # --- U6: the settings screen section (BR34) ---------------------------------
 
+    @staticmethod
+    def feature_enabled() -> bool:
+        """Whether this environment has the feature at all (BR1.3, BR1.4).
+
+        ``ENABLE_ADVANCED_GENERATION`` only: the closed network Stage passes
+        false. The settings section follows this so that an administrator can
+        prepare the audience before the sandbox is configured.
+        """
+        return bool(config.ENABLE_ADVANCED_GENERATION)
+
     def section_view(self, departments: Sequence[Department]) -> SettingSectionView:
         """The current values, version, choices and missing departments (BR34.3).
 
@@ -298,8 +308,19 @@ class AdvancedGenerationPolicy:
             if len(groups) > MAX_DEPARTMENTS:
                 raise invalid("department_groups")
             existing = {d.group_id for d in departments}
-            if any(g not in existing for g in groups):
-                raise invalid("department_groups")
+            vanished = sum(1 for g in groups if g not in existing)
+            if vanished:
+                # BR34.3: the screen tells the cause; only the count is shown
+                # (the group ids are not, NFR3.38)
+                raise error_type(
+                    "advanced generation setting names a missing department",
+                    code=ErrorCode.REQUEST_INVALID,
+                    context={
+                        "field": "department_groups",
+                        "reason": "vanished_departments",
+                        "count": vanished,
+                    },
+                )
             if not groups:
                 # BR34.2 (FD6-Q2=A): no department chosen is administrators only
                 mode = AUDIENCE_ADMINS_ONLY

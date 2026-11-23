@@ -11,6 +11,7 @@ from datetime import datetime
 import pytest
 from unittest.mock import Mock, patch
 
+from src.config import config
 from src.managers.settings_manager import SettingsManager, SettingsManagerError
 from src.models.authz import Department
 from src.services.stores.app_settings_store import (
@@ -455,6 +456,52 @@ class TestAdvancedGenerationSection:
         (event,) = logs.events("settings.advanced_generation_conflict")
         assert event == {**event, "actor_sub": ADMIN.sub, "sent_version": 2}
         assert logs.events("settings.advanced_generation_changed") == []
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_the_section_is_offered_only_while_the_feature_is_on(
+        self, section, monkeypatch, enabled
+    ):
+        manager, _, _ = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", enabled)
+
+        assert manager.is_advanced_generation_section_offered() is enabled
+
+    def test_the_feature_off_hides_the_section_and_its_save(self, section, monkeypatch):
+        """The closed network Stage (BR1.3): the same 404 as a missing page."""
+        manager, settings, departments = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+        with raises_code(SettingsManagerError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.advanced_generation_section(ADMIN)
+        with raises_code(SettingsManagerError, ErrorCode.SETTINGS_NOT_FOUND):
+            manager.save_advanced_generation_setting(ADMIN, _form())
+        settings.get.assert_not_called()
+        settings.put_if_version.assert_not_called()
+        departments.list_all.assert_not_called()
+
+    def test_the_feature_off_keeps_the_members_save_forbidden(
+        self, section, monkeypatch
+    ):
+        manager, settings, _ = section
+        monkeypatch.setattr(config, "ENABLE_ADVANCED_GENERATION", False)
+
+        with raises_code(CodedError, ErrorCode.ACCESS_DENIED):
+            manager.save_advanced_generation_setting(MEMBER_A, _form())
+        settings.put_if_version.assert_not_called()
+
+    def test_a_vanished_department_tells_the_cause(self, section):
+        manager, settings, _ = section
+
+        with raises_code(
+            SettingsManagerError,
+            ErrorCode.REQUEST_INVALID,
+            reason="vanished_departments",
+            count=1,
+        ):
+            manager.save_advanced_generation_setting(
+                ADMIN, _form(department_groups=["group:sales", "group:gone"])
+            )
+        settings.put_if_version.assert_not_called()
 
     def test_bad_input_is_the_managers_validation_error(self, section):
         manager, settings, _ = section
