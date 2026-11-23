@@ -68,12 +68,32 @@ class ColumnMappingOutput(BaseModel):
 # --- 高度な生成（ベータ）の構造化出力（契約 C8。dict の項目は使わない: 上の注記と同じ理由） ---
 
 
+class AdvancedPlanStepOutput(BaseModel):
+    """One step of the plan (AnalysisStep, U6 addendum)."""
+
+    kind: Literal["filter", "compare", "cluster", "join", "rfm", "compare_groups"] = (
+        Field(description="手順の種類")
+    )
+    reason: str = Field(default="", description="この手順を選んだ理由")
+    table: Optional[str] = Field(
+        default=None, description="使う表の名前（source_1 など。あるとき）"
+    )
+    column: Optional[str] = Field(
+        default=None, description="使う列（プロファイルにある列名。あるとき）"
+    )
+
+
 class AdvancedPlanOutput(BaseModel):
     """The analysis plan the planning agent returns (AnalysisPlan, BR5.1)."""
 
     interpreted_purpose: str = Field(description="利用者の指示をどう読んだか")
     questions: list[str] = Field(description="分析で答える問い（1 つ以上）")
-    method: Literal["filter", "compare", "cluster"] = Field(description="手法")
+    method: Literal["filter", "compare", "cluster"] = Field(
+        description="最後に層を作る手順の手法（rfm は filter、compare_groups は compare）"
+    )
+    steps: list[AdvancedPlanStepOutput] = Field(
+        default_factory=list, description="手順の並び（最大 4 つ、行う順）"
+    )
     rationale: str = Field(description="その手法を選んだ理由")
     split_axis: Optional[str] = Field(
         default=None, description="filter で層を分ける列（プロファイルにある列名）"

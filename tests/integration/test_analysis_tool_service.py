@@ -313,7 +313,7 @@ class _Gate:
         self.outcomes: list[RunCodeOutcome] = []
 
     def allows_run_code(self) -> bool:
-        failures = sum(1 for o in self.outcomes if not o.ok)
+        failures = sum(1 for o in self.outcomes if not o.ok and not o.no_result)
         return failures < self.max_failures and not self.halted()
 
     def halted(self) -> bool:
@@ -655,6 +655,62 @@ class TestRunCode:
         assert service.calls[-1].ok is False
         assert service.emitted_results() == {}
 
+    def test_a_look_around_without_emit_result_is_no_failure(self) -> None:
+        """U6 addendum: a normal end without emit_result is "no result"."""
+        sandbox = _CodeSandbox()
+        sandbox.run_value = {**sandbox.run_value, "stdout": "columns: id, age"}
+        sandbox.final = {"result": None, "error": "NO_RESULT"}
+        gate = _Gate(max_failures=1)
+        service = _detailed(sandbox, gate)
+        run = _by_name(service)["run_code"]
+
+        text = run(code="print(read_table('source_1').columns)")
+        sandbox.final = {"result": _EMITTED}
+        again = run(code="emit_result(df, 'seg', 'source_1', id_column='id')")
+
+        outcome = gate.outcomes[0]
+        assert outcome.no_result is True and outcome.ok is False
+        assert outcome.error_code == "NO_RESULT"
+        assert "NO_RESULT" in text and "結果なし" in text
+        assert "columns: id, age" in text and text.count("</data>") == 1
+        # still one of the calls (the 30), but run_code is not taken off
+        assert len(sandbox.started) == 2 and "使えません" not in again
+        assert service.calls[0].error_code == "NO_RESULT"
+        assert service.code_runs[0].ok is False
+        assert service.emitted_results().keys() == {_tool_call_id(again)}
+
+    @pytest.mark.parametrize(
+        ("run_value", "final"),
+        [
+            ({"status": "failed", "error_text": "boom"}, {"error": "NO_RESULT"}),
+            ({"status": "ok"}, {"error": "EMIT_TWICE"}),
+        ],
+    )
+    def test_errors_and_a_second_emit_stay_failures(
+        self, run_value: dict, final: dict
+    ) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.run_value = {**sandbox.run_value, **run_value}
+        sandbox.final = {"result": None, **final}
+        gate = _Gate()
+
+        _by_name(_detailed(sandbox, gate))["run_code"](code="x = 1")
+
+        assert gate.outcomes[-1].no_result is False
+        assert gate.outcomes[-1].ok is False
+
+    def test_a_timeout_without_a_result_stays_a_failure(self) -> None:
+        sandbox = _CodeSandbox()
+        sandbox.done = False
+        sandbox.final = {"result": None, "error": "NO_RESULT"}
+        ticks = itertools.count(0, 30)
+        gate = _Gate()
+        service = _detailed(sandbox, gate, clock=lambda: float(next(ticks)))
+
+        _by_name(service)["run_code"](code="while True: pass")
+
+        assert gate.outcomes[-1].timed_out and not gate.outcomes[-1].no_result
+
     def test_a_result_the_check_refused_is_a_failure(self) -> None:
         sandbox = _CodeSandbox()
         sandbox.final = {"result": None, "error": "ID_MISMATCH"}
@@ -856,6 +912,22 @@ class TestLoadPlaybook:
         text = _by_name(service)["load_playbook"](name=name)
 
         assert f"# {name}" in text and service.calls[-1].ok is True
+        # U6 addendum: the record keeps which playbook was read
+        assert service.calls[-1].playbook == name
+
+    def test_a_refused_name_records_no_playbook(self, playbooks: Path) -> None:
+        service = _detailed(_CodeSandbox(), playbooks_dir=playbooks)
+
+        _by_name(service)["load_playbook"](name="../secrets")
+
+        assert service.calls[-1].ok is False and service.calls[-1].playbook is None
+
+    def test_other_tools_record_no_playbook(self) -> None:
+        service = _detailed(_CodeSandbox())
+
+        _by_name(service)["run_code"](code="emit_result(df, 's', 'source_1')")
+
+        assert service.calls[-1].playbook is None
 
     def test_another_name_lists_the_names_and_is_no_failure_of_run_code(
         self, playbooks: Path

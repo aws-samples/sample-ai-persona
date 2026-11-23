@@ -12,7 +12,8 @@ from typing import Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from ...models.analysis import AnalysisMethod, AnalysisPlan, JoinPlan
+from ...models.analysis import AnalysisMethod, AnalysisPlan, AnalysisStepKind, JoinPlan
+from .analysis_policy import StepCandidate
 from ...prompts.persona_generation_prompts import (
     PERSONA_FIELDS_GUIDE,
     PERSONA_PURPOSE_AND_PRINCIPLES,
@@ -22,7 +23,18 @@ PLANNING_INSTRUCTIONS = (
     "あなたは表データの分析の計画を立てる担当です。利用者の指示（purpose）と、"
     "表の列ごとの要約（profile）を読み、分析の計画を 1 つ作ってください。\n"
     "手法の目安: 対象を指定する指示なら filter、比較を求める指示なら compare、"
-    "指示が空欄で 1 人 1 行の表なら cluster。目安と違う手法を選ぶときは、"
+    "指示が空欄で 1 人 1 行の表なら cluster。\n"
+    "計画は手順の並び（steps、最大 4 つ）で書きます。手順の種類は次のとおりです。\n"
+    "- filter: 対象を絞って集計する\n"
+    "- compare: 群どうしを比べる\n"
+    "- cluster: 似た人をまとめる\n"
+    "- join: 表どうしを結合する（AI による詳細分析が使えるときだけ）\n"
+    "- rfm: 履歴を新しさ・頻度・金額で点数にして分ける（同上）\n"
+    "- compare_groups: 群の差が偶然かどうかを検定する（同上）\n"
+    "依頼に添えた手順の候補から、目的に合う手順を組み合わせてください。"
+    "手順ごとに reason を書き、使う表や列があれば table と column に profile の"
+    "名前のまま書いてください。method は最後に層を作る手順の手法にします"
+    "（rfm は filter、compare_groups は compare）。目安と違う最後の手法を選ぶときは、"
     "deviation_reason に理由を必ず書いてください。\n"
     "filter で複数のペルソナを作るときは、層を分ける列を split_axis に、"
     "profile にある列名のまま書いてください。"
@@ -75,9 +87,45 @@ _METHOD_GUIDE = {
 }
 
 
-def planning_prompt(persona_count: int, attempt: int) -> str:
-    """The planning request (asked again once when the reason is missing)."""
+#: U6 addendum: how each step runs, in the order the plan lists them.
+_STEP_GUIDE: dict[AnalysisStepKind, str] = {
+    AnalysisStepKind(method.value): text for method, text in _METHOD_GUIDE.items()
+}
+_STEP_GUIDE.update(
+    {
+        AnalysisStepKind.JOIN: (
+            '表を結合します。load_playbook("join") を読み、run_code で join_tables を'
+            "使って軸の表に左結合し、結合した表の上で次の手順を進めてください。"
+        ),
+        AnalysisStepKind.RFM: (
+            '履歴を点数にします。load_playbook("rfm") を読み、run_code で rfm を使って'
+            "新しさ・頻度・金額で点数にし、その点数で層に分けてください。"
+        ),
+        AnalysisStepKind.COMPARE_GROUPS: (
+            '群の差を検定します。load_playbook("compare_groups") を読み、run_code で '
+            "compare_groups を使って、群の差が偶然かどうかを確かめてください。"
+            "検定の値は根拠の数値には使えません。"
+        ),
+    }
+)
+
+
+def planning_prompt(
+    persona_count: int,
+    attempt: int,
+    *,
+    candidates: Sequence[StepCandidate] = (),
+) -> str:
+    """The planning request (asked again once when the reason is missing).
+
+    U6 addendum: the guide's step candidates and their reasons are listed
+    (fixed words, never the data).
+    """
     prompt = f"作るペルソナの数は {persona_count} 人です。分析の計画を作ってください。"
+    if candidates:
+        prompt += "\n手順の候補（目安。最後が目安の手法です）:\n" + "\n".join(
+            f"{n}. {c.kind.value}: {c.reason}" for n, c in enumerate(candidates, 1)
+        )
     if attempt > 1:
         prompt += (
             "\n前回の計画は目安と違う手法なのに deviation_reason がありませんでした。"
@@ -96,8 +144,14 @@ _TABLES_NOTE = (
 
 #: U6 (BR36, BR36.5, BR39): only when run_code is given.
 _DETAILED_NOTE = (
-    "\n決まったツールで足りないときだけ run_code を使ってください。使う前に "
-    "load_playbook で定石（join・compare_groups・rfm）を 1 つ読んでください。"
+    "\n決まったツールで足りない手順には run_code を使ってください。"
+    "load_playbook で読める定石は次の 3 つです。\n"
+    "- join: 表どうしの結合\n"
+    "- compare_groups: 群の差が偶然かどうかの検定\n"
+    "- rfm: 履歴を新しさ・頻度・金額で点数にして分ける\n"
+    "run_code の前に、計画の手順に合う定石を読んでください。"
+    "下見のために emit_result を呼ばずに終えた run_code は、失敗に数えず"
+    "「結果なし」として返ります。\n"
     "run_code のコードは結果を emit_result に 1 回だけ渡します（1 行 1 人の表、"
     "層の割り当ての列、母数の表の名前、人の ID の列）。人数と母数はデータから"
     "数え直されるので、print した数字は結果として使われません。\n"
@@ -128,19 +182,34 @@ def analysis_instructions(*, detailed: bool = False, tables: int = 1) -> str:
 def analysis_prompt(
     plan: AnalysisPlan, persona_count: int, *, joins: Sequence[JoinPlan] = ()
 ) -> str:
-    """The analysis request for the planned method (BR5.2〜BR5.4, U6 BR37.4)."""
-    lines = [
-        _METHOD_GUIDE[plan.method],
-        f"層の数はペルソナの数と同じ {persona_count} にしてください。",
-    ]
+    """The analysis request for the planned steps (BR5.2〜BR5.4, U6 BR37.4).
+
+    U6 addendum: a plan of one step is the request of its method as before;
+    with more steps each step's guide is listed in order. The join playbook
+    is named only when a step is ``join``.
+    """
+    steps = plan.plan_steps()
+    if len(steps) == 1 and steps[0].kind is AnalysisStepKind(plan.method.value):
+        lines = [_METHOD_GUIDE[plan.method]]
+    else:
+        lines = ["計画の手順（plan の steps）の順に進めてください。"] + [
+            f"手順 {n}: {_STEP_GUIDE[step.kind]}" for n, step in enumerate(steps, 1)
+        ]
+    lines.append(f"層の数はペルソナの数と同じ {persona_count} にしてください。")
+    has_join = any(s.kind is AnalysisStepKind.JOIN for s in steps)
     for join in joins:
-        lines.append(
+        line = (
             f"{join.axis} と {join.table} は列 {join.key_column} で結合できます"
-            f'（一致の割合 {join.match_rate:.0%}）。load_playbook("join") を読み、'
-            "run_code で join_tables を使って軸の表に左結合し、結合した表の上で層を"
-            "作ってください。"
+            f"（一致の割合 {join.match_rate:.0%}）。"
         )
-    if plan.method is AnalysisMethod.FILTER and persona_count >= 2:
+        if has_join:
+            line += (
+                'load_playbook("join") を読み、run_code で join_tables を使って軸の表に'
+                "左結合し、結合した表の上で層を作ってください。"
+            )
+        lines.append(line)
+    final = steps[-1].kind
+    if final is AnalysisStepKind.FILTER and persona_count >= 2:
         axis = plan.split_axis or "絞った層をよく分ける列"
         lines.append(
             f"絞った層を {axis} で group_by し、行数の多い順に {persona_count} 個の"

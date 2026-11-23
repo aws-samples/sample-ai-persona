@@ -10,7 +10,8 @@ Manager's package (logical-components.md).
   (BR36.2, NFR1.27); a changed library or Parquet halts every tool, and the
   Manager then fails the generation (BR36.6, NFR5.55). A check that itself
   failed halts the same way (fail closed) but is not told as a tamper
-  (review-01 R-03).
+  (review-01 R-03). A run that ended without ``emit_result`` (a look around,
+  U6 addendum) is a call but no failure.
 - :func:`filter_evidence` keeps, of what rests on ``run_code``, only what a
   successful call recounted: its ``tool_call_id``, a known ``segment_key`` and
   numbers the library recounted (population, sizes and their shares). The
@@ -59,6 +60,8 @@ class RunCodeBudget:
         self._on_verify_failed = on_verify_failed
         self.failures = 0
         self.successes = 0
+        #: U6 addendum: runs that ended without emit_result (no failure)
+        self.no_results = 0
         self.disabled_reason: Optional[str] = None
         self.changed: tuple[str, ...] = ()
         self.verify_failed = False
@@ -72,8 +75,8 @@ class RunCodeBudget:
 
     @property
     def calls(self) -> int:
-        """Outcomes recorded (successes and failures)."""
-        return self.successes + self.failures
+        """Outcomes recorded (successes, failures and runs without a result)."""
+        return self.successes + self.failures + self.no_results
 
     def record(self, outcome: RunCodeOutcome) -> None:
         if outcome.verify_failed:
@@ -92,6 +95,10 @@ class RunCodeBudget:
             return
         if outcome.ok:
             self.successes += 1
+            return
+        if outcome.no_result:
+            # U6 addendum: a look around is a call, never a failure
+            self.no_results += 1
             return
         self.failures += 1
         if self.disabled_reason is not None:

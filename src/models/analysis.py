@@ -67,6 +67,88 @@ class AnalysisMethod(StrEnum):
     CLUSTER = "cluster"
 
 
+class AnalysisStepKind(StrEnum):
+    """Kinds of one step of a plan (U6 addendum: the plan as steps).
+
+    The first three run with the fixed tools; the last three need the AI
+    detailed analysis (``run_code`` and the playbooks).
+    """
+
+    FILTER = "filter"
+    COMPARE = "compare"
+    CLUSTER = "cluster"
+    JOIN = "join"
+    RFM = "rfm"
+    COMPARE_GROUPS = "compare_groups"
+
+
+#: Step kinds that need the AI detailed analysis.
+DETAILED_STEP_KINDS: frozenset[AnalysisStepKind] = frozenset(
+    {AnalysisStepKind.JOIN, AnalysisStepKind.RFM, AnalysisStepKind.COMPARE_GROUPS}
+)
+#: Steps one plan may hold.
+MAX_PLAN_STEPS = 4
+#: The playbooks ``load_playbook`` reads (BR39.1); the only names recorded.
+PLAYBOOK_NAMES: tuple[str, ...] = ("join", "compare_groups", "rfm")
+
+
+def step_method(kind: AnalysisStepKind | str) -> Optional["AnalysisMethod"]:
+    """The method a step stands for when it makes the segments.
+
+    ``rfm`` makes its segments as a filter (matched by ``segment_key``,
+    BR36.3) and ``compare_groups`` as a comparison; ``join`` makes none.
+    """
+    kind = AnalysisStepKind(kind)
+    if kind is AnalysisStepKind.JOIN:
+        return None
+    if kind is AnalysisStepKind.RFM:
+        return AnalysisMethod.FILTER
+    if kind is AnalysisStepKind.COMPARE_GROUPS:
+        return AnalysisMethod.COMPARE
+    return AnalysisMethod(kind.value)
+
+
+@dataclass(frozen=True)
+class AnalysisStep:
+    """One step of a plan.
+
+    Attributes:
+        kind: One of :class:`AnalysisStepKind`.
+        reason: Why the step is taken (the planning agent's words).
+        table: The table it works on (``source_1``..), when named.
+        column: The profiled column it works on, when named.
+    """
+
+    kind: AnalysisStepKind
+    reason: str = ""
+    table: str | None = None
+    column: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", AnalysisStepKind(self.kind))
+
+    def to_dict(self) -> dict[str, Any]:
+        return drop_none(
+            {
+                "kind": self.kind.value,
+                "reason": self.reason,
+                "table": self.table,
+                "column": self.column,
+            }
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AnalysisStep":
+        table = data.get("table")
+        column = data.get("column")
+        return cls(
+            kind=AnalysisStepKind(str(data["kind"])),
+            reason=str(data.get("reason") or ""),
+            table=str(table) if table is not None else None,
+            column=str(column) if column is not None else None,
+        )
+
+
 class SegmentDefinitionKind(StrEnum):
     """How a segment can be reproduced on the same data (FR10.5)."""
 
@@ -289,6 +371,9 @@ class AnalysisPlan:
         budget: Upper bounds the plan works within (tool calls, time).
         split_axis: Column to split a filtered group by (FD-Q6).
         deviation_reason: Required when the method departs from the guide.
+        steps: U6 addendum: the steps in order (up to four). ``method`` stays
+            the method of the step that makes the segments. ``None`` (records
+            before the addendum) reads as one step of ``method``.
     """
 
     interpreted_purpose: str
@@ -298,12 +383,24 @@ class AnalysisPlan:
     budget: dict[str, Any]
     split_axis: str | None = None
     deviation_reason: str | None = None
+    steps: tuple[AnalysisStep, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "method", AnalysisMethod(self.method))
         object.__setattr__(self, "questions", tuple(self.questions))
         if not self.questions:
             raise ValueError("a plan has at least one question")
+        if self.steps is not None:
+            steps = tuple(self.steps)
+            if len(steps) > MAX_PLAN_STEPS:
+                raise ValueError("a plan has four steps at most")
+            object.__setattr__(self, "steps", steps or None)
+
+    def plan_steps(self) -> tuple[AnalysisStep, ...]:
+        """The steps to run; one step of ``method`` when none were planned."""
+        if self.steps:
+            return self.steps
+        return (AnalysisStep(AnalysisStepKind(self.method.value), self.rationale),)
 
     def update(self, **changes: Any) -> "AnalysisPlan":
         return replace(self, **changes)
@@ -318,12 +415,15 @@ class AnalysisPlan:
                 "budget": dict(self.budget),
                 "split_axis": self.split_axis,
                 "deviation_reason": self.deviation_reason,
+                "steps": [s.to_dict() for s in self.steps] if self.steps else None,
             }
         )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AnalysisPlan":
+        steps = data.get("steps")
         return cls(
+            steps=tuple(AnalysisStep.from_dict(s) for s in steps) if steps else None,
             interpreted_purpose=str(data.get("interpreted_purpose", "")),
             questions=tuple(str(q) for q in data.get("questions", [])),
             method=AnalysisMethod(str(data["method"])),
@@ -806,6 +906,8 @@ class RunCodeOutcome:
             (processes the code left, security review).
         verify_failed: The isolated check itself failed or its answer could
             not be read. The tools halt (fail closed) but it is no tamper.
+        no_result: U6 addendum: the code ended normally without calling
+            ``emit_result`` (a look around). It is a call but no failure.
     """
 
     ok: bool
@@ -815,6 +917,7 @@ class RunCodeOutcome:
     tampered: bool = False
     changed: tuple[str, ...] = ()
     verify_failed: bool = False
+    no_result: bool = False
 
 
 @runtime_checkable
@@ -855,7 +958,8 @@ class AnalysisRecord:
         prepare_version: Version of the preparation code.
         source_checksums: Checksums of the source files.
         created_at: When the record was written.
-        tool_calls: ``[{tool_call_id, tool, ok, error_code}]`` (no output).
+        tool_calls: ``[{tool_call_id, tool, ok, error_code, playbook}]`` (no
+            output; ``playbook`` is the fixed name ``load_playbook`` read).
         source_file_ids: The files used, in ``source_checksums`` order (U2,
             BR14.3). Empty in U1 records.
         source_display_names: Their display names, kept so the record can

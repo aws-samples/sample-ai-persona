@@ -140,14 +140,25 @@ class TestAnalysisInstructionsU6:
         assert "source_2" in prompts.analysis_instructions(tables=2)
 
     def test_a_join_plan_reaches_the_request(self) -> None:
-        from src.models.analysis import AnalysisMethod, AnalysisPlan, JoinPlan
+        from src.models.analysis import (
+            AnalysisMethod,
+            AnalysisPlan,
+            AnalysisStep,
+            AnalysisStepKind,
+            JoinPlan,
+        )
 
+        # U6 addendum: the join playbook is named only with a join step
         plan = AnalysisPlan(
             interpreted_purpose="",
             questions=("q",),
             method=AnalysisMethod.CLUSTER,
             rationale="",
             budget={},
+            steps=(
+                AnalysisStep(AnalysisStepKind.JOIN, "結合"),
+                AnalysisStep(AnalysisStepKind.CLUSTER, "まとめる"),
+            ),
         )
         join = JoinPlan(
             axis="source_1", table="source_2", key_column="customer_id", match_rate=0.9

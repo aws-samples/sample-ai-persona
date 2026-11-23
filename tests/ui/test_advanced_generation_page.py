@@ -1021,6 +1021,129 @@ class TestRecordCodeKinds:
         ui.check_a11y()
 
 
+def _load_plan_card(ui: UiHarness, plan: Any) -> None:
+    ui.load_component(
+        "fragment.html",
+        container_id="advanced-plan-area",
+        fragment="<h2>計画</h2>"
+        + render_page(
+            "persona/partials/advanced_plan_card.html",
+            generation_id=s.GENERATION_ID,
+            plan=plan,
+            purpose="",
+            awaiting=False,
+            accepted=None,
+            limits=screen_limits(),
+        ),
+    )
+    ui.settle()
+
+
+class TestPlanSteps:
+    """U6 addendum: the plan card numbers the steps; the record names playbooks."""
+
+    def test_the_card_numbers_the_steps_with_their_names_and_reasons(
+        self, ui: UiHarness
+    ) -> None:
+        from src.models.analysis import AnalysisStep, AnalysisStepKind
+
+        plan = s.PLAN.update(
+            steps=(
+                AnalysisStep(AnalysisStepKind.JOIN, "購入の表を足す"),
+                AnalysisStep(AnalysisStepKind.RFM, s.SCRIPT_TEXT),
+                AnalysisStep(AnalysisStepKind.COMPARE_GROUPS, "差を確かめる"),
+            )
+        )
+
+        _load_plan_card(ui, plan)
+
+        steps = ui.page.locator("[data-testid='advanced-plan-step']")
+        assert steps.count() == 3
+        assert [steps.nth(i).get_attribute("data-kind") for i in range(3)] == [
+            "join",
+            "rfm",
+            "compare_groups",
+        ]
+        assert steps.nth(0).inner_text() == "表を結合: 購入の表を足す"
+        assert "新しさ・頻度・金額で点数化" in steps.nth(1).inner_text()
+        assert s.SCRIPT_TEXT in steps.nth(1).inner_text()  # text, never run
+        assert ui.page.evaluate("window.__xss === undefined")
+        assert "群の差を検定" in steps.nth(2).inner_text()
+        tag = ui.page.eval_on_selector(
+            "[data-testid='advanced-plan-steps']", "e => e.tagName"
+        )
+        assert tag == "OL"
+        # the method stays as before
+        assert ui.page.is_visible("[data-testid='advanced-plan-method']")
+        ui.check_a11y()
+
+    def test_a_plan_without_steps_shows_its_method_as_one_step(
+        self, ui: UiHarness
+    ) -> None:
+        _load_plan_card(ui, s.PLAN)
+
+        steps = ui.page.locator("[data-testid='advanced-plan-step']")
+        assert steps.count() == 1
+        assert steps.nth(0).inner_text() == "似た人をまとめる: 指示が空欄のため"
+
+    def test_the_record_names_the_playbooks_read(self, ui: UiHarness) -> None:
+        record = s.record().update(
+            tool_calls=(
+                {
+                    "tool_call_id": "tc-1",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "rfm",
+                },
+                {
+                    "tool_call_id": "tc-2",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "join",
+                },
+                {
+                    "tool_call_id": "tc-3",
+                    "tool": "load_playbook",
+                    "ok": True,
+                    "playbook": "rfm",
+                },
+            )
+        )
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の記録</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=record
+            ),
+        )
+        ui.settle()
+
+        names = ui.page.locator("[data-testid='advanced-record-playbook']")
+        assert [names.nth(i).get_attribute("data-name") for i in range(2)] == [
+            "rfm",
+            "join",
+        ]
+        assert names.count() == 2
+        assert "新しさ・頻度・金額で点数化" in names.nth(0).inner_text()
+        ui.check_a11y()
+
+    def test_a_record_without_playbooks_says_nothing_of_them(
+        self, ui: UiHarness
+    ) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の記録</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=s.record()
+            ),
+        )
+        ui.settle()
+
+        assert ui.page.locator("[data-testid='advanced-record-playbooks']").count() == 0
+
+
 def _section_view(**setting: Any) -> Any:
     from src.managers.components.advanced_generation_policy import (
         AdvancedGenerationSetting,

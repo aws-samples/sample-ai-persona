@@ -1640,6 +1640,42 @@ class TestAdvancedGenerationAgents:
         assert AnalysisPlan.from_dict(plan).method.value == "cluster"
         assert "deviation_reason" not in plan
 
+    def test_planning_returns_the_steps_without_empty_fields(self, strands):
+        from src.services.agent_service import (
+            AdvancedPlanOutput,
+            AdvancedPlanStepOutput,
+        )
+
+        agent = Mock()
+        agent.structured_output.return_value = AdvancedPlanOutput(
+            interpreted_purpose="優良な顧客",
+            questions=["誰が優良か"],
+            method="filter",
+            rationale="履歴がある",
+            steps=[
+                AdvancedPlanStepOutput(kind="join", reason="結合できる"),
+                AdvancedPlanStepOutput(
+                    kind="rfm", reason="履歴", table="source_2", column="amount"
+                ),
+            ],
+        )
+
+        plan = AgentService().run_advanced_planning(agent, "計画", {})
+
+        assert plan["steps"] == [
+            {"kind": "join", "reason": "結合できる"},
+            {"kind": "rfm", "reason": "履歴", "table": "source_2", "column": "amount"},
+        ]
+
+    def test_the_step_kinds_are_the_six_of_the_plan(self, strands):
+        from typing import get_args
+
+        from src.models.analysis import AnalysisStepKind
+        from src.services.agent_service import AdvancedPlanStepOutput
+
+        annotation = AdvancedPlanStepOutput.model_fields["kind"].annotation
+        assert set(get_args(annotation)) == {k.value for k in AnalysisStepKind}
+
     def test_analysis_returns_segments_and_evidence_only(self, strands):
         from src.models.analysis import Evidence, Segment
 

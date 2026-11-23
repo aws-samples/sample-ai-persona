@@ -44,7 +44,7 @@ import logging
 import os
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
@@ -73,6 +73,7 @@ from ...models.analysis import (
     RunCodeOutcome,
     wrap_untrusted_data,
 )
+from ...models.analysis import PLAYBOOK_NAMES as ANALYSIS_PLAYBOOK_NAMES
 from ...models.errors import CodedError
 from .dataset_tools import Filter, GroupBy, Metric, OrderBy, ToolLimits
 from .query_backend import DatasetQueryTimeout
@@ -98,7 +99,13 @@ _RESELECT_CODES = frozenset({"TOO_FEW_COLUMNS", "EMPTY_CLUSTER"})
 #: Seconds between two polls of a running ``run_code`` (NFR1.27).
 RUN_CODE_POLL_SECONDS = 1.0
 #: The playbooks of the beta (BR39.1), kept as documents in the repository.
-PLAYBOOK_NAMES: tuple[str, ...] = ("join", "compare_groups", "rfm")
+PLAYBOOK_NAMES: tuple[str, ...] = ANALYSIS_PLAYBOOK_NAMES
+#: U6 addendum: run_code ended normally without emit_result (a look around).
+_NO_RESULT = "NO_RESULT"
+_NO_RESULT_TEXT = (
+    "結果なし: emit_result が呼ばれませんでした。失敗には数えません。"
+    "下見で分かったことをもとに続けてください"
+)
 _PLAYBOOKS_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent / "sandbox" / "playbooks"
 )
@@ -124,7 +131,11 @@ class AnalysisTable:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One tool call, kept for the Manager (IDs, counts and codes only)."""
+    """One tool call, kept for the Manager (IDs, counts and codes only).
+
+    ``playbook`` (U6 addendum) is the name a successful ``load_playbook``
+    read: one of :data:`PLAYBOOK_NAMES`, never the user's data.
+    """
 
     tool_call_id: str
     tool: str
@@ -132,6 +143,7 @@ class ToolCall:
     error_code: Optional[str]
     elapsed_seconds: float
     output_chars: int
+    playbook: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -524,8 +536,7 @@ class AnalysisToolService:
     # --- U6: load_playbook (BR39.1) --------------------------------------------
 
     def _playbook_tool(self) -> Callable:
-        run = self._run
-        read = self._read_playbook
+        read = self._load_playbook
 
         @tool
         def load_playbook(name: str) -> str:
@@ -537,9 +548,17 @@ class AnalysisToolService:
             Returns:
                 The playbook as text inside a data block, with its tool_call_id.
             """
-            return run("load_playbook", lambda: read(str(name)))
+            return read(str(name))
 
         return load_playbook
+
+    def _load_playbook(self, name: str) -> str:
+        """Read the playbook and keep its name on the call (U6 addendum)."""
+        count = len(self.calls)
+        text = self._run("load_playbook", lambda: self._read_playbook(name))
+        if len(self.calls) > count and self.calls[-1].ok and name in PLAYBOOK_NAMES:
+            self.calls[-1] = replace(self.calls[-1], playbook=name)
+        return text
 
     def _read_playbook(self, name: str) -> Dict[str, Any]:
         if name not in PLAYBOOK_NAMES:
@@ -676,6 +695,13 @@ class AnalysisToolService:
             return self._fail(tool_name, "ANALYSIS_HALTED", elapsed)
         assert isinstance(value, Mapping)  # read above, or it halted
         error_text = str(run_value.get("error_text") or "")
+        if (
+            not timed_out
+            and str(run_value.get("status")) == "ok"
+            and str(value.get("error") or _NO_RESULT) == _NO_RESULT
+            and not isinstance(value.get("result"), Mapping)
+        ):
+            return self._no_result(code, str(run_value.get("stdout") or ""), elapsed)
         code_error: Optional[str] = None
         if timed_out:
             code_error = "RUN_CODE_TIMEOUT"
@@ -718,6 +744,31 @@ class AnalysisToolService:
         self._outputs[call_id] = result.recounted()
         logger.info(
             "analysis tool ok: tool=run_code tool_call_id=%s elapsed=%.2fs",
+            call_id,
+            elapsed,
+        )
+        return text
+
+    def _no_result(self, code: str, stdout: str, elapsed: float) -> str:
+        """U6 addendum: a look around (no ``emit_result``) is no failure.
+
+        It counts as one of the calls but not as a failure of ``run_code``;
+        the printed output goes back to the agent as untrusted data.
+        """
+        assert self._gate is not None
+        tool_name = "run_code"
+        self._gate.record(
+            RunCodeOutcome(ok=False, error_code=_NO_RESULT, no_result=True)
+        )
+        call_id = self._next_call_id()
+        self.code_runs.append(CodeRun(call_id, code, _sha(code), False))
+        header = f"tool_call_id: {call_id}\nresult: {_NO_RESULT}\n{_NO_RESULT_TEXT}\n"
+        text = self._wrapped(header, stdout, tool_name, call_id)
+        self.calls.append(
+            ToolCall(call_id, tool_name, False, _NO_RESULT, elapsed, len(text))
+        )
+        logger.info(
+            "analysis tool no result: tool=run_code tool_call_id=%s elapsed=%.2fs",
             call_id,
             elapsed,
         )

@@ -1662,6 +1662,22 @@ class AdvancedPersonaGenerationManager:
     def _plan(self, state: _Run) -> None:
         generation = state.generation
         guide = AnalysisPolicy.guide_method(generation.purpose, state.profile)
+        detailed = self._detailed_in_use(state)
+        # U6 addendum: the step candidates from the words and the column shapes
+        candidates = (
+            AnalysisPolicy.guide_candidates(
+                generation.purpose,
+                [(t.alias, t.profile) for t in state.tables],
+                [plan for plan, _ in state.joins],
+                detailed,
+            )
+            if state.source is not None
+            else []
+        )
+        table_columns = {
+            t.alias: [str(c.get("name")) for c in t.profile.get("columns") or []]
+            for t in state.tables
+        }
         instructions = prompts.PLANNING_INSTRUCTIONS + (
             prompts.DOCUMENT_PLANNING_NOTE if state.documents else ""
         )
@@ -1679,13 +1695,20 @@ class AdvancedPersonaGenerationManager:
             self._before_model(state)
             raw = self._agents.run_advanced_planning(
                 agent,
-                prompts.planning_prompt(generation.persona_count, attempt),
+                prompts.planning_prompt(
+                    generation.persona_count, attempt, candidates=candidates
+                ),
                 data,
                 documents=self._full_texts(state),
             )
             self._checkpoint(state)  # U5: a cancel during the call
             plan = AnalysisPolicy.settle_plan(
-                raw, guide=guide, attempt=attempt, columns=self._columns(state)
+                raw,
+                guide=guide,
+                attempt=attempt,
+                columns=self._columns(state),
+                detailed=detailed,
+                tables=table_columns or None,
             )
             if plan is not None:
                 break
@@ -2025,6 +2048,20 @@ class AdvancedPersonaGenerationManager:
             for t in state.tables
             if t.report.parquet_sha256
         }
+
+    def _detailed_in_use(self, state: _Run) -> bool:
+        """Whether the analysis will get ``run_code`` (as :meth:`_analyze` decides).
+
+        U6 addendum: the planning is told the detailed-only steps only then.
+        """
+        if state.source is None:
+            return False
+        policy = AnalysisPolicy.tool_policy(
+            detailed=state.generation.use_detailed_analysis,
+            in_process=self._in_process(),
+            sources=tuple(t.alias for t in state.tables),
+        )
+        return AnalysisTool.RUN_CODE in policy.tools and self._hashes_known(state)
 
     def _hashes_known(self, state: _Run) -> bool:
         """Every table's Parquet hash and the library hash are there (R-01)."""

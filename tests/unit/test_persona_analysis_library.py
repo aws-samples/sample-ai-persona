@@ -1673,6 +1673,49 @@ class TestPlaybookFunctions:
         assert result["population_source"] == "join:source_1+source_2"
         assert "source_2_amount_sum" in result["joined_columns"]
 
+    def test_joined_names_keep_japanese_and_never_collide(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        """U6 addendum: only characters unusable in a name become ``_``."""
+        import duckdb
+
+        axis, other = str(tmp_path / "axis.parquet"), str(tmp_path / "other.parquet")
+        con = duckdb.connect()
+        con.execute(
+            f"COPY (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) t(顧客ID, 名前)) "
+            f"TO '{axis}' (FORMAT parquet)"
+        )
+        con.execute(
+            "COPY (SELECT * FROM (VALUES (1, 10, 20, 30)) "
+            f't(顧客ID, "購入 金額", "購入-金額", 単価)) TO \'{other}\' (FORMAT parquet)'
+        )
+        con.close()
+
+        frame = lib.join_tables(
+            "source_1",
+            "顧客ID",
+            [
+                {
+                    "source": "source_2",
+                    "aggregations": [
+                        {"column": "単価", "func": "sum"},
+                        {"column": "購入 金額", "func": "sum"},
+                        {"column": "購入-金額", "func": "sum"},
+                    ],
+                }
+            ],
+            paths={"source_1": axis, "source_2": other},
+        )
+
+        joined = frame.attrs["joined_columns"]
+        assert joined[1:4] == [
+            "source_2_単価_sum",
+            "source_2_購入_金額_sum",
+            "source_2_購入_金額_sum_2",
+        ]
+        assert len(set(frame.columns)) == len(frame.columns)
+        assert frame["source_2_購入_金額_sum_2"].tolist()[0] == 20
+
     def test_compare_groups_tests_numbers_and_categories(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
     ) -> None:

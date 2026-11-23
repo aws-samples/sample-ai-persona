@@ -6,6 +6,11 @@
 {{ {"filter": "絞り込み", "compare": "群どうしの比較", "cluster": "クラスタ分析"}.get(method, method) }}
 {%- endmacro %}
 
+{# U6 の追加の設計: 計画の手順の種類と、読んだ定石の名前 #}
+{% macro step_label(kind) -%}
+{{ {"filter": "対象を絞って集計", "compare": "群どうしを比べる", "cluster": "似た人をまとめる", "join": "表を結合", "rfm": "新しさ・頻度・金額で点数化", "compare_groups": "群の差を検定"}.get(kind, kind) }}
+{%- endmacro %}
+
 {% macro encoding_label(encoding) -%}
 {{ {"utf-8": "UTF-8", "utf-8-sig": "UTF-8", "cp932": "CP932", "euc-jp": "EUC-JP", "undetermined": "英数字だけ（前準備で確定）"}.get(encoding, encoding) }}
 {%- endmacro %}

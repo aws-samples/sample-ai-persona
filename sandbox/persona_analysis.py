@@ -1359,7 +1359,20 @@ _JOIN_FUNCS = {
     "first": "min({col})",
     "last": "max({col})",
 }
-_NAME_PART = re.compile(r"[^A-Za-z0-9_]")
+# Characters that cannot be part of a name; letters of any script (Japanese
+# included), digits and ``_`` stay (U6 addendum).
+_NAME_PART = re.compile(r"[^\w]")
+
+
+def _unique_name(name: str, used: set) -> str:
+    """``name``, or ``name_2``, ``name_3``.. when it is taken (U6 addendum)."""
+    out, n = name, 1
+    while out in used:
+        n += 1
+        out = f"{name}_{n}"
+    used.add(out)
+    return out
+
 
 # What the code runs with (filled in by :func:`_ai_namespace`).
 _AI_CONTEXT: Dict[str, Any] = {}
@@ -2048,6 +2061,14 @@ def join_tables(
     selects = ["a.*"]
     joins: List[str] = []
     added: List[str] = []
+    con = duckdb.connect(":memory:")
+    try:
+        described = con.execute(
+            f"SELECT * FROM read_parquet({_sql_literal(tables[axis])}) LIMIT 0"
+        ).description
+    finally:
+        con.close()
+    used = {str(d[0]) for d in described or []}
     for n, spec in enumerate(others):
         alias = str(spec.get("source"))
         if alias not in tables or alias == axis:
@@ -2059,14 +2080,18 @@ def join_tables(
             if func not in _JOIN_FUNCS:
                 raise ValueError(f"unknown aggregation {func}")
             column = str(agg.get("column", ""))
-            name = str(agg.get("as") or f"{alias}_{_NAME_PART.sub('_', column)}_{func}")
+            name = _unique_name(
+                str(agg.get("as") or f"{alias}_{_NAME_PART.sub('_', column)}_{func}"),
+                used,
+            )
             parts.append(
                 _JOIN_FUNCS[func].format(col=_quote_ident(column))
                 + f" AS {_quote_ident(name)}"
             )
             selects.append(f"b{n}.{_quote_ident(name)}")
             added.append(name)
-        rows_name, matched_name = f"{alias}_rows", f"{alias}_matched"
+        rows_name = _unique_name(f"{alias}_rows", used)
+        matched_name = _unique_name(f"{alias}_matched", used)
         selects += [
             f"coalesce(b{n}.__n, 0) AS {_quote_ident(rows_name)}",
             f"(b{n}.__k IS NOT NULL) AS {_quote_ident(matched_name)}",

@@ -15,6 +15,7 @@ from ...models.advanced_generation import AdvancedGeneration
 from ...models.analysis import (
     DEFAULT_SEED,
     DOCUMENT_PREPARE_VERSION,
+    PLAYBOOK_NAMES,
     AnalysisPlan,
     AnalysisRecord,
     AnalysisRun,
@@ -175,10 +176,19 @@ def build_record(
                 "tool": c.tool,
                 "ok": c.ok,
                 **({"error_code": c.error_code} if c.error_code else {}),
+                **_playbook_of(c),
             }
             for c in calls
         ],
     )
+
+
+def _playbook_of(call: Any) -> dict[str, str]:
+    """U6 addendum: the playbook a ``load_playbook`` read (a fixed name only)."""
+    name = getattr(call, "playbook", None)
+    if call.tool == "load_playbook" and name in PLAYBOOK_NAMES:
+        return {"playbook": str(name)}
+    return {}
 
 
 def build_candidates(

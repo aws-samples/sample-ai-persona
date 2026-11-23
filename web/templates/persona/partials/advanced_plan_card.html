@@ -9,7 +9,7 @@
     accepted ... None、"approve"（承認した）、"replan"（計画し直している）
     limits ... screen_limits()（plan_wait_minutes、purpose_max_chars）
 #}
-{% from "persona/partials/advanced_labels.html" import method_label %}
+{% from "persona/partials/advanced_labels.html" import method_label, step_label %}
 <section data-testid="advanced-plan-card" aria-labelledby="advanced-plan-title"
          class="mt-4 border border-blue-200 bg-blue-50 rounded-md p-4">
     <h3 id="advanced-plan-title" tabindex="-1" class="font-semibold text-gray-900">分析の計画</h3>
@@ -34,6 +34,14 @@
         <div>
             <dt class="font-medium text-gray-700">手法と選んだ理由</dt>
             <dd data-testid="advanced-plan-method">{{ method_label(plan.method.value) }}: {{ plan.rationale }}</dd>
+        </div>
+        <div>
+            <dt class="font-medium text-gray-700">手順</dt>
+            <dd>
+                <ol class="list-decimal ml-5" data-testid="advanced-plan-steps">
+                    {% for step in plan.plan_steps() %}<li data-testid="advanced-plan-step" data-kind="{{ step.kind.value }}">{{ step_label(step.kind.value) }}{% if step.reason %}: {{ step.reason }}{% endif %}</li>{% endfor %}
+                </ol>
+            </dd>
         </div>
         {% if plan.deviation_reason %}
         <div>

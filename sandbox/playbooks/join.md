@@ -13,7 +13,9 @@
    - `key`: キーの列（JoinPlan の `key_column`）。
    - `others`: 付ける表ごとに `{"source": "source_2", "aggregations": [{"column": "amount", "func": "sum"}, {"column": "bought_on", "func": "last"}]}`。
    - 使える集計: `count`、`count_distinct`、`sum`、`mean`（`avg`）、`min`、`max`、`first`（最初の値・日付）、`last`（最後の値・日付）。
-2. 結果は 1 行 1 人の pandas DataFrame。付けた列の名前は `<表>_<列>_<集計>`（例: `source_2_amount_sum`）。
+2. 結果は 1 行 1 人の pandas DataFrame。付けた列の名前は `<表>_<列>_<集計>`（例: `source_2_amount_sum`、`source_2_購入金額_sum`）。
+   - 日本語の列名はそのまま残る。名前に使えない文字（空白や記号）だけが `_` になる。
+   - 名前がぶつかったら、後の列に `_2`・`_3` が付く。正確な名前は `df.attrs["joined_columns"]` で確かめる。
    - 付けた表ごとに `<表>_rows`（その人の行数。一致しない人は 0）と `<表>_matched`（一致したか）が足される。
    - 一致しなかった人も残る。付けた列は空になる。消さずに「一致なし」の層として扱う。
 3. 結合した表の上で、層の割り当ての列を作る（しきい値・分位・クラスタリングなど）。

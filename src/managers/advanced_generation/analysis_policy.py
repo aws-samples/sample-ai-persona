@@ -14,15 +14,25 @@ Manager's package (components.md, "採らなかった分け方").
   ``cluster`` with two numeric columns or more, else ``filter``.
 - A plan whose method departs from the guide needs ``deviation_reason``;
   without one it is asked once more, then the guide's method is used.
+- U6 addendum: the plan is a sequence of steps. ``guide_candidates`` suggests
+  them from the words and the column shapes (the guide's method stays the
+  last), and ``settle_plan`` drops the steps that cannot run.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from ...config import config
 from ...models.analysis import (
+    DETAILED_STEP_KINDS,
+    MAX_PLAN_STEPS,
+    AnalysisStep,
+    AnalysisStepKind,
+    JoinPlan,
+    step_method,
     LIMIT_MAX_CALLS,
     LIMIT_MAX_OUTPUT_CHARS,
     LIMIT_MAX_TOTAL_SECONDS,
@@ -45,10 +55,38 @@ _NUMERIC_TYPE = re.compile(
     r"UBIGINT|FLOAT|REAL|DOUBLE|DECIMAL.*|NUMERIC.*)$",
     re.IGNORECASE,
 )
+#: Words that point at a purchase history scored by RFM (U6 addendum).
+_RFM_WORDS = ("購買", "頻度", "最近", "新しさ", "RFM", "rfm", "優良", "離反", "離れ")
+_DATE_TYPE = re.compile(r"^(DATE|TIMESTAMP.*|TIME.*)$", re.IGNORECASE)
+#: Distinct values of a column that splits the rows into a few groups.
+_FEW_VALUES = range(2, 6)
+#: The fixed-tool step a detailed-only kind falls back to (U6 addendum).
+_FIXED_STEP = {
+    AnalysisStepKind.RFM: AnalysisStepKind.FILTER,
+    AnalysisStepKind.COMPARE_GROUPS: AnalysisStepKind.COMPARE,
+}
+_REASON = {
+    AnalysisStepKind.JOIN: "結合できる表の組がある",
+    AnalysisStepKind.RFM: "1 人に複数行の履歴があり、日付と数値の列がある",
+    AnalysisStepKind.COMPARE: "数種類の値の列と数値の列があり、群どうしを比べられる",
+    AnalysisStepKind.COMPARE_GROUPS: "群の差が偶然かどうかを確かめられる",
+    AnalysisStepKind.CLUSTER: "指示が空欄で、人の ID の列か数値の列が 2 つ以上ある",
+    AnalysisStepKind.FILTER: "指示が対象を指定している",
+}
+_REASON_RFM_WORDS = "指示に購買の新しさ・頻度・優良などの語がある"
+_REASON_COMPARE_WORDS = "指示が比較を求めている"
 #: The plan's question when the agent wrote none.
 _DEFAULT_QUESTION = "データの中にどのような層があるか"
 #: Attempts the planning agent gets before the guide's method is used.
 PLAN_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class StepCandidate:
+    """A step the guide suggests to the planning agent, with its reason."""
+
+    kind: AnalysisStepKind
+    reason: str
 
 
 class AnalysisPolicy:
@@ -127,12 +165,78 @@ class AnalysisPolicy:
         return AnalysisMethod.FILTER
 
     @staticmethod
+    def guide_candidates(
+        purpose: str,
+        tables: Sequence[tuple[str, Mapping[str, Any]]],
+        joins: Sequence[JoinPlan],
+        detailed: bool,
+    ) -> list[StepCandidate]:
+        """The steps the guide suggests, from the words and the column shapes.
+
+        U6 addendum: a join plan puts ``join`` first; a history with a date
+        and a number (or purchase words) suggests ``rfm``; comparison words,
+        or a column of two to five values beside a number, suggest
+        ``compare`` and then ``compare_groups``. The last candidate always
+        stands for :meth:`guide_method` (matching and BR5.1 use it). The
+        detailed-only kinds come only when the detailed analysis is used.
+
+        Args:
+            purpose: The user's instruction.
+            tables: ``(alias, profile)`` of every table, in order.
+            joins: The join plans found (BR37.3).
+            detailed: The generation uses the AI detailed analysis.
+        """
+        if not tables:
+            return []
+        text = purpose.strip()
+        out: list[StepCandidate] = []
+        if detailed and joins:
+            out.append(
+                StepCandidate(AnalysisStepKind.JOIN, _REASON[AnalysisStepKind.JOIN])
+            )
+        if detailed:
+            joined = {j.table for j in joins}
+            if any(word in text for word in _RFM_WORDS):
+                out.append(StepCandidate(AnalysisStepKind.RFM, _REASON_RFM_WORDS))
+            elif any(
+                _is_history(profile, alias in joined) for alias, profile in tables
+            ):
+                out.append(
+                    StepCandidate(AnalysisStepKind.RFM, _REASON[AnalysisStepKind.RFM])
+                )
+        compare_words = bool(text) and any(word in text for word in _COMPARE_WORDS)
+        if compare_words or any(_has_groups(profile) for _, profile in tables):
+            reason = (
+                _REASON_COMPARE_WORDS
+                if compare_words
+                else _REASON[AnalysisStepKind.COMPARE]
+            )
+            out.append(StepCandidate(AnalysisStepKind.COMPARE, reason))
+            if detailed:
+                out.append(
+                    StepCandidate(
+                        AnalysisStepKind.COMPARE_GROUPS,
+                        _REASON[AnalysisStepKind.COMPARE_GROUPS],
+                    )
+                )
+        guide_alias = AnalysisPolicy.guide_table(tables)
+        profile = next(p for alias, p in tables if alias == guide_alias)
+        guide = AnalysisPolicy.guide_method(purpose, profile)
+        if not out or step_method(out[-1].kind) is not guide:
+            kind = AnalysisStepKind(guide.value)
+            out = [c for c in out if c.kind is not kind]
+            out.append(StepCandidate(kind, _REASON[kind]))
+        return out
+
+    @staticmethod
     def settle_plan(
         raw: Mapping[str, Any],
         *,
         guide: AnalysisMethod,
         attempt: int,
         columns: Sequence[str],
+        detailed: bool = False,
+        tables: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Optional[AnalysisPlan]:
         """The plan to run, or ``None`` to ask the planning agent again (BR5.1).
 
@@ -141,6 +245,11 @@ class AnalysisPolicy:
             guide: :meth:`guide_method`'s answer.
             attempt: 1 for the first answer, 2 for the second.
             columns: Profiled column names; ``split_axis`` must be one.
+            detailed: U6 addendum: the generation uses the detailed analysis;
+                without it the detailed-only steps are replaced or dropped.
+            tables: U6 addendum: profiled column names per table alias; a
+                step naming another table or column is dropped. Defaults to
+                ``columns`` as ``source_1``.
         """
         method = AnalysisMethod(str(raw.get("method")))
         reason = str(raw.get("deviation_reason") or "").strip() or None
@@ -150,6 +259,14 @@ class AnalysisPolicy:
             method = guide
         axis = raw.get("split_axis")
         questions = [str(q) for q in raw.get("questions") or [] if str(q).strip()]
+        known = dict(tables) if tables is not None else {"source_1": list(columns)}
+        steps: Optional[tuple[AnalysisStep, ...]] = None
+        if raw.get("steps"):
+            steps = _settle_steps(raw["steps"], detailed=detailed, tables=known) or (
+                AnalysisStep(
+                    AnalysisStepKind(method.value), str(raw.get("rationale", ""))
+                ),
+            )
         return AnalysisPlan(
             interpreted_purpose=str(raw.get("interpreted_purpose", "")),
             questions=tuple(questions or [_DEFAULT_QUESTION]),
@@ -158,7 +275,70 @@ class AnalysisPolicy:
             budget=AnalysisPolicy.budget(),
             split_axis=str(axis) if axis in set(columns) else None,
             deviation_reason=reason if method is not guide else None,
+            steps=steps,
         )
+
+
+def _settle_steps(
+    raw_steps: Any, *, detailed: bool, tables: Mapping[str, Sequence[str]]
+) -> tuple[AnalysisStep, ...]:
+    """The steps that can run, in order, at most four (U6 addendum)."""
+    every_column = {str(c) for names in tables.values() for c in names}
+    out: list[AnalysisStep] = []
+    for item in raw_steps if isinstance(raw_steps, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            step = AnalysisStep.from_dict(item)
+        except (KeyError, ValueError):
+            continue
+        if step.kind in DETAILED_STEP_KINDS and not detailed:
+            fixed = _FIXED_STEP.get(step.kind)
+            if fixed is None:
+                continue
+            step = AnalysisStep(fixed, step.reason, step.table, step.column)
+        if step.table is not None and step.table not in tables:
+            continue
+        names = (
+            {str(c) for c in tables[step.table]}
+            if step.table is not None
+            else every_column
+        )
+        if step.column is not None and step.column not in names:
+            continue
+        if out and out[-1].kind is step.kind:
+            continue
+        out.append(step)
+    return tuple(out[:MAX_PLAN_STEPS])
+
+
+def _is_history(profile: Mapping[str, Any], joined: bool) -> bool:
+    """A table with several rows per person, a date and a number (U6 addendum)."""
+    columns = list(profile.get("columns") or [])
+    several = joined or any(
+        _ID_NAME.search(str(c.get("name", ""))) and not c.get("all_distinct")
+        for c in columns
+    )
+    has_date = any(_DATE_TYPE.match(str(c.get("type", ""))) for c in columns)
+    has_number = any(
+        _NUMERIC_TYPE.match(str(c.get("type", "")))
+        and not _ID_NAME.search(str(c.get("name", "")))
+        for c in columns
+    )
+    return bool(several and has_date and has_number)
+
+
+def _has_groups(profile: Mapping[str, Any]) -> bool:
+    """A column of two to five values and another numeric column (U6 addendum)."""
+    columns = list(profile.get("columns") or [])
+    groups = [c for c in columns if c.get("distinct") in _FEW_VALUES]
+    return any(
+        _NUMERIC_TYPE.match(str(n.get("type", "")))
+        and not _ID_NAME.search(str(n.get("name", "")))
+        and n is not g
+        for g in groups
+        for n in columns
+    )
 
 
 def is_numeric_type(type_name: str) -> bool:

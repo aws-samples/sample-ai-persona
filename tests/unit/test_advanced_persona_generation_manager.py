@@ -376,7 +376,12 @@ class _Agents:
             with self.lock:
                 self.running -= 1
 
+    #: U6 addendum: the planning and analysis requests, in order
+    planning_prompts: list[str] = []
+    analysis_prompts: list[str] = []
+
     def run_advanced_planning(self, agent, prompt, data, documents=()):
+        self.planning_prompts = [*self.planning_prompts, prompt]
         self.calls.append("planning")
         self.data_seen.append(data)
         self.documents_seen.append(list(documents))
@@ -397,6 +402,7 @@ class _Agents:
     analysis_fn: Any = None
 
     def run_advanced_analysis(self, agent, prompt, data, *, source_id):
+        self.analysis_prompts = [*self.analysis_prompts, prompt]
         self.calls.append("analysis")
         if self.on_analysis is not None:
             self.on_analysis()
@@ -4079,3 +4085,111 @@ class TestSeveralTables:
         assert _current(env, gid).status is GenerationStatus.DONE
         assert "join_plans" not in env.agents.data_seen[0]
         assert "join" not in _current(env, gid).analysis_run.params
+
+
+class TestMultiStepPlan:
+    """U6 addendum: the plan as steps, the candidates and the playbooks read."""
+
+    def test_the_plan_keeps_its_steps_and_the_requests_follow_them(
+        self, env: _Env
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        people, buys = env.ready_file(), env.ready_file(data=_purchases_csv())
+        gid = _start_detailed(manager, people, buys)
+        env.agents.plan = {
+            **env.agents.plan,
+            "steps": [
+                {"kind": "join", "reason": "結合できる"},
+                {"kind": "cluster", "reason": "まとめる", "table": "source_1"},
+            ],
+        }
+        env.agents.analysis_fn = _code_analysis(code=_EMIT_JOIN)
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.plan is not None
+        assert [s.kind.value for s in generation.plan.plan_steps()] == [
+            "join",
+            "cluster",
+        ]
+        # the guide's candidates reach the planning request
+        assert "1. join:" in env.agents.planning_prompts[0]
+        assert 'load_playbook("join")' in env.agents.analysis_prompts[0]
+        record = manager.get_record(ADMIN, gid)
+        assert [s["kind"] for s in record.plan["steps"]] == ["join", "cluster"]
+
+    def test_without_the_detailed_analysis_no_detailed_step_is_kept(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        gid = _start(manager, env.ready_file())
+        env.agents.plan = {
+            **env.agents.plan,
+            "steps": [
+                {"kind": "join", "reason": "結合"},
+                {"kind": "cluster", "reason": "まとめる"},
+            ],
+        }
+
+        manager.run(gid)
+
+        generation = _current(env, gid)
+        assert generation.status is GenerationStatus.DONE
+        assert generation.plan is not None
+        assert [s.kind.value for s in generation.plan.plan_steps()] == ["cluster"]
+        prompt = env.agents.planning_prompts[0]
+        assert "cluster:" in prompt
+        for kind in ("join:", "rfm:", "compare_groups:"):
+            assert kind not in prompt
+
+    def test_the_record_names_the_playbooks_read(self, env: _Env) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+        analysis = _code_analysis()
+
+        def read_then_analyse(tools: dict, holder: dict, source_id: str):
+            tools["load_playbook"](name="rfm")
+            tools["load_playbook"](name="../secrets")
+            return analysis(tools, holder, source_id)
+
+        env.agents.analysis_fn = read_then_analyse
+
+        manager.run(gid)
+
+        record = manager.get_record(ADMIN, gid)
+        loads = [c for c in record.tool_calls if c["tool"] == "load_playbook"]
+        assert [c.get("playbook") for c in loads] == ["rfm", None]
+        assert all(
+            "playbook" not in c
+            for c in record.tool_calls
+            if c["tool"] != "load_playbook"
+        )
+
+    def test_look_arounds_never_take_run_code_off(
+        self, env: _Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env = _detailed_env(env)
+        manager = env.manager()
+        gid = _start_detailed(manager, env.ready_file())
+
+        def look_around_then_emit(tools: dict, holder: dict, source_id: str):
+            for _ in range(6):
+                tools["run_code"](code='print(read_table("source_1").shape)')
+            return _code_analysis()(tools, holder, source_id)
+
+        env.agents.analysis_fn = look_around_then_emit
+        logs = LogCapture(capsys)
+
+        manager.run(gid)
+
+        assert _current(env, gid).status is GenerationStatus.DONE
+        assert logs.events("advanced_generation.run_code_disabled") == []
+        record = manager.get_record(ADMIN, gid)
+        calls = [c for c in record.tool_calls if c["tool"] == "run_code"]
+        assert [c.get("error_code") for c in calls] == ["NO_RESULT"] * 6 + [None]
+        written = [b for b in record.code_blocks if b["kind"] == "ai_written"]
+        assert [b["code"] for b in written] == [_EMIT]

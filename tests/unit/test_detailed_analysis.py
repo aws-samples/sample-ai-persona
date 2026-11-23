@@ -58,6 +58,21 @@ class TestRunCodeBudget:
         assert budget.failures == 2 and budget.allows_run_code() is False
         assert budget.successes == 1
 
+    def test_a_look_around_is_a_call_but_no_failure(self) -> None:
+        """U6 addendum: run_code ending without emit_result."""
+        told: list[tuple[str, int]] = []
+        budget = RunCodeBudget(
+            max_failures=2, on_disabled=lambda reason, n: told.append((reason, n))
+        )
+        look = RunCodeOutcome(ok=False, error_code="NO_RESULT", no_result=True)
+
+        for _ in range(3):
+            budget.record(look)
+
+        assert budget.failures == 0 and budget.no_results == 3
+        assert budget.calls == 3
+        assert budget.allows_run_code() is True and told == []
+
     def test_a_failed_cancel_takes_it_off_at_once(self) -> None:
         told: list[tuple[str, int]] = []
         budget = RunCodeBudget(
