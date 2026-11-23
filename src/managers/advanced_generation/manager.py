@@ -304,6 +304,33 @@ class _Table:
 #: U6: the progress notice when run_code is taken off (BR36.2, AC5.4.2).
 _RUN_CODE_DISABLED_NOTICE = "AI による詳細分析をやめて、決まった関数で続けます"
 
+#: What the screen's log calls a plan step and a tool (fixed names only; the
+#: user's data never goes into a progress message).
+_STEP_NAMES = {
+    "filter": "対象を絞って集計",
+    "compare": "群どうしの比較",
+    "cluster": "似た人のグループ分け",
+    "join": "CSV を結合",
+    "rfm": "新しさ・頻度・金額で点数化",
+    "compare_groups": "群の差を検定",
+}
+#: Why a call did not give a result (fixed words; a look around is no failure).
+_CALL_TROUBLE = "（うまくいかなかったため、やり直します）"
+_CALL_TROUBLES = {
+    "NO_RESULT": "（結果は出さずにデータを確かめました）",
+    "RUN_CODE_FAILED": "（プログラムがエラーになったため、書き直します）",
+    "RUN_CODE_TIMEOUT": "（時間内に終わらなかったため、やり直します）",
+    "RESULT_INVALID": "（結果の形が合わなかったため、やり直します）",
+    "EMIT_TWICE": "（結果を 2 回出したため、やり直します）",
+}
+_TOOL_NAMES = {
+    "profile_dataset": "データの全体像を確認",
+    "analyze_dataset": "条件を指定して集計",
+    "cluster_segments": "似た人のグループ分け",
+    "run_code": "AI が書いたプログラムで分析",
+    "load_playbook": "分析の定石を読み込み",
+}
+
 
 @dataclass
 class _Run:
@@ -742,7 +769,15 @@ class AdvancedPersonaGenerationManager:
         self._enter(state, GenerationStatus.SYNTHESIZING)
         personas = self._synthesize(state)
         self._enter(state, GenerationStatus.VERIFYING)
+        self._event(state, EventType.PROGRESS, message="数字を数え直して検証しています")
         verification = self._verify(state, personas)
+        dropped = len(verification.unverified_segment_ids)
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message="検証できました"
+            + (f"（数字が合わず外した層 {dropped} 件）" if dropped else ""),
+        )
         self._write_results(state, personas, verification)
 
     def _enter(
@@ -1691,6 +1726,7 @@ class AdvancedPersonaGenerationManager:
             # BR26.3: the checked evidence only, never the text
             data["document_evidence"] = self._document_evidence_text(state)
         plan: Optional[AnalysisPlan] = None
+        self._event(state, EventType.PROGRESS, message="分析の計画を作っています")
         for attempt in range(1, PLAN_ATTEMPTS + 1):
             self._before_model(state)
             raw = self._agents.run_advanced_planning(
@@ -1714,6 +1750,14 @@ class AdvancedPersonaGenerationManager:
                 break
         assert plan is not None
         state.plan = plan
+        names = " → ".join(
+            _STEP_NAMES.get(step.kind.value, "分析") for step in plan.plan_steps()
+        )
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message=f"計画ができました（手順 {len(plan.plan_steps())} 件: {names}）",
+        )
         if not generation.confirm_plan:
             # U5: a plan to confirm is announced once its card can be shown
             self._plan_event(state)
@@ -1955,6 +1999,8 @@ class AdvancedPersonaGenerationManager:
             **extra,
         )
         state.tools = tools
+        self._listen_to_calls(state, tools)
+        self._event(state, EventType.PROGRESS, message="分析を始めます")
         agent = self._agents.create_advanced_analysis_agent(
             prompts.analysis_instructions(detailed=detailed, tables=len(aliases)),
             tools.tools(),
@@ -1991,6 +2037,37 @@ class AdvancedPersonaGenerationManager:
             )
         if not state.segments:
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "no segment")
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message=f"分析が終わりました（{len(state.segments)} つの層）",
+        )
+
+    def _listen_to_calls(self, state: _Run, tools: Any) -> None:
+        """Tell the screen each tool call as it finishes (fixed words only)."""
+        listen = getattr(tools, "set_call_listener", None)
+        if listen is None:
+            return
+        count = {"n": 0}
+
+        def told(call: Any) -> None:
+            count["n"] += 1
+            name = _TOOL_NAMES.get(call.tool, "分析")
+            if call.playbook:
+                # the fixed name of the playbook read, never the user's data
+                name += f"（{_STEP_NAMES.get(call.playbook, call.playbook)}）"
+            tail = (
+                ""
+                if call.ok
+                else _CALL_TROUBLES.get(call.error_code or "", _CALL_TROUBLE)
+            )
+            self._event(
+                state,
+                EventType.PROGRESS,
+                message=f"操作 {count['n']}: {name}{tail}",
+            )
+
+        listen(told)
 
     # --- U6: the AI detailed analysis (BR36, NFR3.35, NFR5.55) -----------------
 
@@ -2197,6 +2274,11 @@ class AdvancedPersonaGenerationManager:
         if state.document_mode is DocumentMode.EXTRACTION:
             self._assign_to_segments(state)
         self._before_model(state)
+        self._event(
+            state,
+            EventType.PROGRESS,
+            message=f"ペルソナ {generation.persona_count} 人を作っています",
+        )
         agent = self._agents.create_advanced_synthesis_agent(
             prompts.SYNTHESIS_INSTRUCTIONS
             + (prompts.DOCUMENT_SYNTHESIS_NOTE if has_documents else "")
@@ -2439,8 +2521,10 @@ class AdvancedPersonaGenerationManager:
         """The record's line for a joined result: columns and match rates (BR38.1)."""
         if result is None or not result.population_source.startswith("join:"):
             return None
+        names = {t.alias: t.source.display_name for t in state.tables}
         rates = "、".join(
-            f"{plan.table} の一致 {plan.match_rate:.0%}" for plan, _ in state.joins
+            f"{names.get(plan.table, '結合した CSV')} の一致 {plan.match_rate:.0%}"
+            for plan, _ in state.joins
         )
         columns = ", ".join(result.joined_columns) or "（なし）"
         return f"結合した列: {columns}" + (f"（{rates}）" if rates else "")

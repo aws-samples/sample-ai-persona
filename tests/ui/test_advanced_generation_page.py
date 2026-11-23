@@ -375,9 +375,9 @@ class TestProgress:
         log = ui.page.inner_text("[data-testid='advanced-log']")
         assert "300 行を読み込みました" in log
         mark = ui.page.inner_text(
-            "[data-testid='advanced-stage-preparing'] [data-role='mark']"
+            "[data-testid='advanced-stage-preparing'] [data-role='state']"
         )
-        assert mark == "（済）"
+        assert mark == "済"
         assert ui.page.evaluate("document.activeElement.id") == "advanced-result-title"
 
     def test_share_badges_are_text_and_dropped_values_are_not_shown(
@@ -1034,6 +1034,39 @@ class TestSegmentCards:
         ui.check_a11y()
 
 
+class TestStageStepper:
+    def test_stages_show_done_current_and_pending_in_words_and_marks(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("stage", json.dumps({"status": "running"}), 1)
+                + _frame("progress", json.dumps({"message": "x"}), 2)
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_function(
+            "document.querySelector(\"[data-testid='advanced-stage-running']\")"
+            ".dataset.state === 'current'"
+        )
+
+        def stage(key: str, role: str) -> str:
+            return ui.page.inner_text(
+                f"[data-testid='advanced-stage-{key}'] [data-role='{role}']"
+            )
+
+        assert stage("preparing", "mark") == "✓" and stage("preparing", "state") == "済"
+        assert stage("running", "mark") == "●" and stage("running", "state") == "進行中"
+        assert stage("verifying", "mark") == ""
+        # the label of the bar names the stage without the marks
+        assert (
+            ui.page.inner_text("[data-testid='advanced-progress-label']")
+            == "現在: 実行"
+        )
+        ui.check_a11y()
+
+
 class TestProgressBar:
     def test_bar_follows_the_stages_in_words_and_value(self, ui: UiHarness) -> None:
         SseFake(
@@ -1114,7 +1147,7 @@ class TestRecordReadsAsTheFlowOfTheAnalysis:
         ui.load_component(
             "fragment.html",
             container_id="advanced-record-area",
-            fragment="<h2>分析の記録</h2>"
+            fragment="<h2>分析の詳細</h2>"
             + render_page(
                 "persona/partials/advanced_record_dialog.html", record=record
             ),
@@ -1147,7 +1180,7 @@ class TestRecordCodeKinds:
             "fragment.html",
             container_id="advanced-record-area",
             # the dialog's own title stands above its content
-            fragment="<h2>分析の記録</h2>"
+            fragment="<h2>分析の詳細</h2>"
             + render_page(
                 "persona/partials/advanced_record_dialog.html",
                 record=_record_with_ai_code(),
@@ -1263,7 +1296,7 @@ class TestPlanSteps:
         ui.load_component(
             "fragment.html",
             container_id="advanced-record-area",
-            fragment="<h2>分析の記録</h2>"
+            fragment="<h2>分析の詳細</h2>"
             + render_page(
                 "persona/partials/advanced_record_dialog.html", record=record
             ),
@@ -1285,7 +1318,7 @@ class TestPlanSteps:
         ui.load_component(
             "fragment.html",
             container_id="advanced-record-area",
-            fragment="<h2>分析の記録</h2>"
+            fragment="<h2>分析の詳細</h2>"
             + render_page(
                 "persona/partials/advanced_record_dialog.html", record=s.record()
             ),

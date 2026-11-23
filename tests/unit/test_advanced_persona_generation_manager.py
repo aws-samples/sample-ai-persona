@@ -1662,6 +1662,58 @@ class TestInsufficientData:
         assert context["required_rows"] == 200
 
 
+class TestStageProgressMessages:
+    """The screen's log says what is going on in every stage, not only the rows."""
+
+    def test_every_stage_tells_what_it_does_without_the_users_data(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        messages = [
+            str(s.get("message", ""))
+            for k, s in _events(env, generation_id)
+            if k == "progress"
+        ]
+        text = "\n".join(messages)
+        assert "分析の計画を作っています" in text
+        assert "計画ができました" in text
+        assert "分析を始めます" in text
+        assert "分析が終わりました" in text
+        assert "ペルソナ" in text and "作っています" in text
+        assert "検証" in text
+        # the order follows the stages
+        order = [
+            next(i for i, m in enumerate(messages) if needle in m)
+            for needle in (
+                "分析の計画を作っています",
+                "計画ができました",
+                "分析を始めます",
+                "分析が終わりました",
+                "検証できました",
+            )
+        ]
+        assert order == sorted(order)
+
+    def test_each_tool_call_is_told_as_it_finishes(self, env: _Env) -> None:
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        messages = [
+            str(s.get("message", ""))
+            for k, s in _events(env, generation_id)
+            if k == "progress"
+        ]
+        calls = len(env.holder["service"].calls)
+        told = [m for m in messages if m.startswith("操作 ")]
+        assert calls >= 1 and len(told) == calls
+
+
 class TestPrepareNotice:
     """BR17.2, NFR1.13: a notice every 60 seconds while the rows stand still."""
 

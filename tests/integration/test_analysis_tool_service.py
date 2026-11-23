@@ -207,6 +207,57 @@ class TestToolsInTheSession:
         assert service.calls[-1].ok is False
 
 
+class TestCallListener:
+    """Progress for the screen: each finished call is told (tool, ok)."""
+
+    def test_each_call_is_told_with_its_result(
+        self, prepared: tuple[InProcessSandbox, SandboxSession]
+    ) -> None:
+        told: list[tuple[str, bool, str | None]] = []
+        service = _service(*prepared)
+        service.set_call_listener(
+            lambda call: told.append((call.tool, call.ok, call.error_code))
+        )
+        tools = _by_name(service)
+
+        tools["profile_dataset"]()
+        tools["cluster_segments"](columns=["no_such_column"])
+
+        assert told[0] == ("profile_dataset", True, None)
+        assert told[1][:2] == ("cluster_segments", False) and told[1][2]
+
+    def test_a_playbook_call_is_told_with_the_playbook_name(
+        self, prepared: tuple[InProcessSandbox, SandboxSession]
+    ) -> None:
+        told: list[Any] = []
+        service = _service(
+            *prepared,
+            policy=_policy(
+                tools=(AnalysisTool.PROFILE_DATASET, AnalysisTool.LOAD_PLAYBOOK)
+            ),
+        )
+        service.set_call_listener(told.append)
+
+        _by_name(service)["load_playbook"](name="join")
+
+        assert told[0].tool == "load_playbook" and told[0].playbook == "join"
+        assert service.calls[0].playbook == "join"
+
+    def test_a_failing_listener_never_breaks_the_tool(
+        self, prepared: tuple[InProcessSandbox, SandboxSession]
+    ) -> None:
+        service = _service(*prepared)
+
+        def boom(call: Any) -> None:
+            raise RuntimeError("screen is gone")
+
+        service.set_call_listener(boom)
+
+        text = _by_name(service)["profile_dataset"]()
+
+        assert "tc-1" in text and service.calls[-1].ok is True
+
+
 class TestLimits:
     def test_call_count(self) -> None:
         spy = _SpySandbox()

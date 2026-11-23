@@ -34,7 +34,23 @@
     // U5: 計画の確認待ちは、計画を確かめる生成でだけ出す（その段に入ったら表示する）
     var AWAITING = 'awaiting_plan_approval';
     var STAGES = ['preparing', 'planning', AWAITING, 'running', 'synthesizing', 'verifying'];
-    var MARKS = { pending: '（未）', current: '（中）', done: '（済）', failed: '（×）' };
+    var MARKS = { pending: '', current: '●', done: '✓', failed: '×' };
+    var STATE_WORDS = { pending: '未', current: '進行中', done: '済', failed: '失敗' };
+    // 段階の丸・線・文字のクラス（Tailwind が拾えるよう、全体を書く）
+    var MARK_CLASS = {
+        pending: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-gray-300 bg-white text-xs font-bold text-gray-500',
+        current: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-blue-600 bg-white text-xs font-bold text-blue-700',
+        done: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-blue-600 bg-blue-600 text-xs font-bold text-white',
+        failed: 'relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-red-700 bg-red-700 text-xs font-bold text-white'
+    };
+    var LINE_CLASS = {
+        reached: 'absolute top-3 right-1/2 w-full h-0.5 bg-blue-600',
+        pending: 'absolute top-3 right-1/2 w-full h-0.5 bg-gray-300'
+    };
+    var STATE_CLASS = {
+        shown: 'block text-xs font-medium text-gray-800',
+        hidden: 'sr-only'
+    };
     var METHOD_LABELS = { filter: '絞り込み', compare: '群どうしの比較', cluster: 'クラスタ分析' };
     var FAILURE_TITLES = {
         generation_timeout: '生成が止まりました',
@@ -613,7 +629,16 @@
             if (current === 'done' || position < index) state = 'done';
             else if (position === index) state = failed ? 'failed' : 'current';
             item.dataset.state = state;
-            item.querySelector('[data-role="mark"]').textContent = MARKS[state];
+            var mark = item.querySelector('[data-role="mark"]');
+            mark.textContent = MARKS[state];
+            mark.className = MARK_CLASS[state];
+            var line = item.querySelector('[data-role="line"]');
+            if (line) line.className = state === 'pending' ? LINE_CLASS.pending : LINE_CLASS.reached;
+            var word = item.querySelector('[data-role="state"]');
+            if (word) {
+                word.textContent = STATE_WORDS[state];
+                word.className = (state === 'current' || state === 'failed') ? STATE_CLASS.shown : STATE_CLASS.hidden;
+            }
         });
         updateBar(panel, current, failed);
     }
@@ -643,8 +668,9 @@
             label.textContent = '完了';
             count.textContent = total + ' / ' + total + ' 段階';
         } else if (at) {
-            var name = shown[at - 1].textContent.replace(/（[未済中×]）/, '').trim();
-            label.textContent = (failed ? '止まりました: ' : '今: ') + name;
+            var nameNode = shown[at - 1].querySelector('[data-role="label"]');
+            var name = nameNode ? nameNode.textContent.trim() : '';
+            label.textContent = (failed ? '止まりました: ' : '現在: ') + name;
             count.textContent = at + ' / ' + total + ' 段階';
         } else if (failed) {
             // the failing stage is not one of the shown stages
@@ -656,7 +682,9 @@
     function addLog(panel, text) {
         var item = document.createElement('li');
         item.textContent = text;
-        panel.querySelector('[data-testid="advanced-log"]').appendChild(item);
+        var list = panel.querySelector('[data-testid="advanced-log"]');
+        list.appendChild(item);
+        list.scrollTop = list.scrollHeight;  // the newest line stays in view
     }
 
     function parseData(evt) {

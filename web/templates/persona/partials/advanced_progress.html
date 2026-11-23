@@ -40,9 +40,16 @@
             <div data-role="fill" data-state="current" class="h-2 bg-blue-600 rounded transition-all duration-500" style="width: 0%"></div>
         </div>
     </div>
-    <ol data-testid="advanced-stages" class="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-700 mb-4">
+    {# 段階の丸と線。状態は advanced-upload.js の setStages が data-state・印・クラスで書き換える。
+       印と文字（済・進行中・未・失敗）で示し、色だけには頼らない #}
+    <ol data-testid="advanced-stages" class="flex items-start text-sm text-gray-700 mb-4">
         {% for key, label in [("preparing", "前準備"), ("planning", "計画"), ("awaiting_plan_approval", "計画の確認待ち"), ("running", "実行"), ("synthesizing", "合成"), ("verifying", "検証")] %}
-        <li data-stage="{{ key }}" data-state="pending" data-testid="advanced-stage-{{ key }}"{% if key == "awaiting_plan_approval" %} hidden{% endif %}><span data-role="mark">（未）</span> {{ label }}</li>
+        <li data-stage="{{ key }}" data-state="pending" data-testid="advanced-stage-{{ key }}" class="relative flex-1 min-w-0 text-center"{% if key == "awaiting_plan_approval" %} hidden{% endif %}>
+            {% if not loop.first %}<span data-role="line" aria-hidden="true" class="absolute top-3 right-1/2 w-full h-0.5 bg-gray-300"></span>{% endif %}
+            <span data-role="mark" aria-hidden="true" class="relative z-10 mx-auto flex w-6 h-6 items-center justify-center rounded-full border-2 border-gray-300 bg-white text-xs font-bold text-gray-500"></span>
+            <span data-role="label" class="block text-xs mt-1 text-gray-800">{{ label }}</span>
+            <span data-role="state" class="sr-only">未</span>
+        </li>
         {% endfor %}
     </ol>
     <p data-testid="advanced-reconnecting" hidden class="text-sm text-amber-900 mb-2">接続し直しています</p>
@@ -51,7 +58,7 @@
         <button type="button" data-testid="advanced-reload-button" data-action="reload"
                 class="mt-2 text-sm underline text-amber-900">読み直す</button>
     </div>
-    <ul data-testid="advanced-log" aria-live="polite" class="text-sm text-gray-800 space-y-1 bg-gray-50 rounded-md p-3 min-h-[3rem]"></ul>
+    <ul data-testid="advanced-log" aria-live="polite" tabindex="0" aria-label="進行の記録" class="text-sm text-gray-800 space-y-1 bg-gray-50 rounded-md p-3 min-h-[3rem] max-h-48 overflow-y-auto"></ul>
     {# U5 BR29.2: SSE の plan（計画のカード）をここに入れる #}
     <div data-testid="advanced-plan-area"></div>
     {# U5 BR31.4: 中止はエラーの見た目にしない #}

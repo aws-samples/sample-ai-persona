@@ -31,6 +31,17 @@
     <span></span>
     {%- endif %}
     <div class="flex flex-wrap items-center gap-2" data-testid="persona-detail-actions">
+        {#- 高度な生成（ベータ）のペルソナ: 分析の詳細（ダイアログは詳細の本文にある）。通常の「生成ログ・評価」と同じ場所 -#}
+        {% if (persona.generation_context or {}).get("mode") == "advanced" %}
+        <button type="button" aria-haspopup="dialog"
+                data-dialog-open="persona-analysis-record" data-testid="persona-analysis-detail-button"
+                class="whitespace-nowrap inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 px-4 py-2 rounded-md hover:bg-purple-100 transition-colors text-sm font-medium">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+            </svg>
+            分析の詳細
+        </button>
+        {% endif %}
         {% include "persona/partials/generation_log_modal.html" %}
         {#- エクスポートは読める人すべてに出す（BR7.1、M8） #}
         <a href="/persona/{{ persona.id }}/export" download

@@ -18,10 +18,10 @@
      data-inspect-stop-seconds="{{ limits.inspect_stop_seconds }}">
     <h1 class="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">{{ icon_sparkles("w-8 h-8 text-blue-600") }} AIペルソナ生成</h1>
     {% include "persona/partials/generation_tabs.html" %}
-    <p class="text-gray-600 mb-4">CSV のデータやインタビューの記録などの文書をアップロードし、AI が分析した結果からペルソナを生成します。</p>
-    <p data-testid="advanced-beta-notice" class="mb-6 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
-        試験的な機能です。結果の形や仕様は予告なく変わることがあります
+    <p data-testid="advanced-beta-notice" class="mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3">
+        現在、高度な生成は試験的な機能です。
     </p>
+    <p class="text-gray-600 mb-4">CSV のデータやインタビューの記録などの文書をアップロードし、AI が分析した結果からペルソナを生成します。</p>
 
     <details id="advanced-inputs" data-testid="advanced-inputs" open class="mb-6">
         <summary class="cursor-pointer text-sm font-medium text-gray-700 mb-4" data-testid="advanced-inputs-summary">データと指示</summary>

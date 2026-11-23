@@ -227,6 +227,8 @@ class AnalysisToolService:
         self._elapsed = 0.0
         #: A sandbox failure seen during a tool call; the Manager fails on it.
         self.sandbox_error: Optional[CodedError] = None
+        self._reading: Optional[str] = None  # the playbook being read
+        self._on_call: Optional[Callable[[ToolCall], None]] = None
 
     # --- what the Manager reads ------------------------------------------------
 
@@ -269,6 +271,24 @@ class AnalysisToolService:
     def _halted(self) -> bool:
         return self._gate is not None and self._gate.halted()
 
+    def set_call_listener(self, listener: Optional[Callable[[ToolCall], None]]) -> None:
+        """Tell ``listener(call)`` (a :class:`ToolCall`) after each finished call.
+
+        The listener only reports; an error in it never reaches the tool.
+        """
+        self._on_call = listener
+
+    def _record_call(self, call: ToolCall) -> None:
+        if call.tool == "load_playbook" and call.ok and self._reading in PLAYBOOK_NAMES:
+            call = replace(call, playbook=self._reading)
+        self.calls.append(call)
+        if self._on_call is None:
+            return
+        try:
+            self._on_call(call)
+        except Exception:  # noqa: BLE001 - progress must never break a tool
+            logger.warning("call listener failed", exc_info=True)
+
     def _next_call_id(self) -> str:
         return f"tc-{len(self.calls) + 1}"
 
@@ -281,7 +301,7 @@ class AnalysisToolService:
         detail: Optional[str] = None,
     ) -> str:
         call_id = self._next_call_id()
-        self.calls.append(ToolCall(call_id, tool_name, False, code, elapsed, 0))
+        self._record_call(ToolCall(call_id, tool_name, False, code, elapsed, 0))
         logger.info(
             "analysis tool failed: tool=%s tool_call_id=%s error_code=%s",
             tool_name,
@@ -314,7 +334,7 @@ class AnalysisToolService:
             return self._fail(tool_name, code, elapsed, error.get("context"))
         call_id = self._next_call_id()
         text = self._result_text(tool_name, call_id, result.get("value"))
-        self.calls.append(ToolCall(call_id, tool_name, True, None, elapsed, len(text)))
+        self._record_call(ToolCall(call_id, tool_name, True, None, elapsed, len(text)))
         self._outputs[call_id] = result.get("value")
         logger.info(
             "analysis tool ok: tool=%s tool_call_id=%s chars=%d elapsed=%.2fs",
@@ -554,11 +574,11 @@ class AnalysisToolService:
 
     def _load_playbook(self, name: str) -> str:
         """Read the playbook and keep its name on the call (U6 addendum)."""
-        count = len(self.calls)
-        text = self._run("load_playbook", lambda: self._read_playbook(name))
-        if len(self.calls) > count and self.calls[-1].ok and name in PLAYBOOK_NAMES:
-            self.calls[-1] = replace(self.calls[-1], playbook=name)
-        return text
+        self._reading = name
+        try:
+            return self._run("load_playbook", lambda: self._read_playbook(name))
+        finally:
+            self._reading = None
 
     def _read_playbook(self, name: str) -> Dict[str, Any]:
         if name not in PLAYBOOK_NAMES:
@@ -739,7 +759,7 @@ class AnalysisToolService:
             "stdout": str(run_value.get("stdout") or ""),
         }
         text = self._result_text(tool_name, call_id, payload)
-        self.calls.append(ToolCall(call_id, tool_name, True, None, elapsed, len(text)))
+        self._record_call(ToolCall(call_id, tool_name, True, None, elapsed, len(text)))
         # review-01 R-02: only the recounted numbers can back a segment
         self._outputs[call_id] = result.recounted()
         logger.info(
@@ -764,7 +784,7 @@ class AnalysisToolService:
         self.code_runs.append(CodeRun(call_id, code, _sha(code), False))
         header = f"tool_call_id: {call_id}\nresult: {_NO_RESULT}\n{_NO_RESULT_TEXT}\n"
         text = self._wrapped(header, stdout, tool_name, call_id)
-        self.calls.append(
+        self._record_call(
             ToolCall(call_id, tool_name, False, _NO_RESULT, elapsed, len(text))
         )
         logger.info(

@@ -5,7 +5,7 @@
   利用者が振り返るための表示にする: 目的の解釈 → 計画 → 実行した分析 → 使ったファイル → コード。
   ハッシュ・チェックサム・乱数のシード・前準備の版は、保存はするが画面には出さない。
   引数:
-    record  ... AnalysisRecord。ないとき（none）は「分析の記録は残っていません」
+    record  ... AnalysisRecord。ないとき（none）は「分析の詳細は残っていません」
     sources ... SourceAvailability の並び（保存したペルソナの詳細だけ、U2 BR14.3）。
                 元のファイルが消えていれば「元のファイルは消えています」、U1 の記録で
                 ファイルの ID がなければ「元のファイルの記録はありません」と出す
@@ -93,7 +93,7 @@
         {% endfor %}
     </ol>
     {% else %}
-    <p class="text-sm text-gray-700" data-testid="advanced-record-missing">分析の記録は残っていません</p>
+    <p class="text-sm text-gray-700" data-testid="advanced-record-missing">分析の詳細は残っていません</p>
     {% endif %}
     <div class="mt-4 text-right">
         <button type="button" data-dialog-close class="px-4 py-2 text-sm border border-gray-300 rounded-md">閉じる</button>

@@ -180,7 +180,7 @@ def _run_case(page: Page, case: Case, run_tag: str) -> Outcome:
         outcome.failed = failure.inner_text()[:200]
         return outcome
     result = page.get_by_test_id("advanced-result")
-    result.get_by_role("button", name="分析の記録").click()
+    result.get_by_role("button", name="分析の詳細").click()
     record = page.get_by_test_id("advanced-record")
     expect(record).to_be_visible()
     for name in record.get_by_test_id("advanced-record-playbook").all():

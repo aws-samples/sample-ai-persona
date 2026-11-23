@@ -14,13 +14,13 @@
     <p class="mb-2"><span data-testid="persona-advanced-badge" class="inline-flex items-center px-2 py-0.5 rounded border border-amber-600 text-amber-800 bg-amber-50 text-sm">高度な生成（ベータ）で作成</span></p>
     <p class="text-sm text-gray-800">
         分析の要約: {{ method_label((advanced_context.get("plan_summary") or {}).get("method", "")) }}
-        {%- if advanced_segment %} / {{ advanced_segment["id"] }} {{ advanced_segment["label"] }}
+        {%- if advanced_segment %} / {{ advanced_segment["label"] or "層" }}
         {%- if advanced_segment["id"] not in advanced_unverified %}（全体の {{ share_text(advanced_segment["share"]) }}）{% endif %}
         {%- endif %}
     </p>
     {% if analysis_record_checked %}
-    {{ dialog_open_button("persona-analysis-record", "分析の記録", "mt-2 text-sm text-blue-700 underline hover:text-blue-900") }}
-    {% call dialog("persona-analysis-record", "分析の記録", panel_class="max-w-3xl") %}
+    {#- 開くボタンはヘッダーの操作の並び（生成ログ・評価と同じ場所）にある -#}
+    {% call dialog("persona-analysis-record", "分析の詳細", panel_class="max-w-3xl") %}
     {% with record = analysis_record, sources = analysis_sources %}{% include "persona/partials/advanced_record_dialog.html" %}{% endwith %}
     {% endcall %}
     {% endif %}

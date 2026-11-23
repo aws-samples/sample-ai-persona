@@ -113,7 +113,7 @@ def test_upload_generate_save_and_badge(
     expect(result.get_by_test_id("advanced-segment-row").first).to_be_visible()
 
     # The analysis record opens before saving (US10.2)
-    result.get_by_role("button", name="分析の記録").click()
+    result.get_by_role("button", name="分析の詳細").click()
     expect(page.get_by_test_id("advanced-record")).to_be_visible()
     page.keyboard.press("Escape")
 
@@ -790,7 +790,7 @@ def test_detailed_analysis_joins_two_tables_and_records_the_code(
         )
 
         result = page.get_by_test_id("advanced-result")
-        result.get_by_role("button", name="分析の記録").click()
+        result.get_by_role("button", name="分析の詳細").click()
         record = page.get_by_test_id("advanced-record")
         expect(record).to_be_visible()
         kinds = record.get_by_test_id("advanced-record-code-kind")

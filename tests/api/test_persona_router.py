@@ -173,6 +173,16 @@ class TestAdvancedPersonaDetail:
         assert "高度な生成（ベータ）で作成" in html_text
         assert "クラスタ分析" in html_text
         assert "全体の 50%" in html_text
+        # the segment is named, never shown by its internal ID
+        summary = html_text.split('data-testid="persona-advanced-summary"')[1][:900]
+        assert "若い学生" in summary and "S1 " not in summary
+        assert "分析の詳細" in html_text and "分析の記録" not in html_text
+        # the button stands among the header's actions, like 生成ログ・評価
+        assert 'data-testid="persona-analysis-detail-button"' in html_text
+        actions = html_text.split('data-testid="persona-detail-actions"')[1]
+        assert actions.index("persona-analysis-detail-button") < actions.index(
+            "persona-export-button"
+        )
         assert 'data-testid="advanced-record"' in html_text
         assert SCRIPT_TEXT not in html_text
         assert manager.get_analysis_record.call_args.args[1] == persona.id
@@ -233,7 +243,7 @@ class TestAdvancedPersonaDetail:
         html_text = client.get(f"/persona/{persona.id}").text
 
         assert "全体の 50%" not in html_text
-        assert "分析の記録は残っていません" in html_text
+        assert "分析の詳細は残っていません" in html_text
 
     @patch("web.routers.persona.get_persona_manager")
     def test_unreadable_record_still_shows_the_detail(
@@ -250,7 +260,7 @@ class TestAdvancedPersonaDetail:
 
         assert response.status_code == 200
         assert 'data-testid="persona-advanced-badge"' in response.text
-        assert "分析の記録は残っていません" in response.text
+        assert "分析の詳細は残っていません" in response.text
         assert "s3 read failed" not in response.text
 
     @patch("web.routers.persona.get_persona_manager")
@@ -264,6 +274,7 @@ class TestAdvancedPersonaDetail:
 
         assert 'data-testid="persona-advanced-badge"' not in html_text
         manager.get_analysis_record.assert_not_called()
+        assert "persona-analysis-detail-button" not in html_text
 
 
 class TestPersonaManagementPage:
