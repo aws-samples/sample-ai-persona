@@ -520,7 +520,7 @@ class TestStartGeneration:
         response = self._post(client)
 
         assert response.status_code == 400
-        assert "表は 3 つまで選べます" in response.text
+        assert "CSV は 3 つまで選べます" in response.text
         adv.pool.submit.assert_not_called()
 
     def test_a_file_not_ready_yet_is_a_409_toast(
@@ -821,9 +821,9 @@ class TestRecord:
         assert response.status_code == 200
         assert s.SCRIPT_TEXT not in response.text
         assert "&lt;script&gt;" in response.text
-        assert "b" * 64 in response.text
-        assert "42" in response.text
-        assert "prepare 1.0.0" in response.text
+        assert "b" * 64 not in response.text  # the hash is kept, not shown
+        assert "乱数のシード" not in response.text
+        assert "prepare 1.0.0" not in response.text
 
     def test_missing_record_is_404(self, client: TestClient, adv: Adv) -> None:
         adv.generations.get_record.side_effect = AdvancedGenerationError(
@@ -1083,7 +1083,7 @@ class TestDocumentScreen:
         for ext in (".csv", ".tsv", ".pdf", ".docx", ".txt", ".md"):
             assert ext in accept.group(1)
         assert 'data-max-document-bytes="100000000"' in html
-        assert ".docx で保存し直して" in html
+        assert ".docx で保存し直して" not in html
         assert 'data-testid="advanced-document-estimate"' in html
 
     def test_a_document_row_shows_its_format_size_and_estimate(
@@ -1099,7 +1099,7 @@ class TestDocumentScreen:
         assert "前準備で確定" in html
         assert re.search(r'type="checkbox"[^>]*name="source_file_ids"', html)
         assert 'data-estimated-chars="1600000"' in html
-        assert "列を見る" not in html
+        assert "プレビュー" not in html
 
     def test_a_table_row_is_chosen_with_the_same_checkbox(
         self, client: TestClient, adv: Adv
@@ -1110,7 +1110,7 @@ class TestDocumentScreen:
 
         assert 'data-kind="table"' in html
         assert re.search(r'type="checkbox"[^>]*name="source_file_ids"', html)
-        assert "列を見る" in html
+        assert "プレビュー" in html
 
     def test_two_files_go_to_the_start_together(
         self, client: TestClient, adv: Adv

@@ -141,7 +141,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "実行中の生成があります。進み具合を表示しました"
     ),
     ErrorCode.UPLOAD_SOURCE_INVALID: (
-        "このファイルは使えません。CSV・TSV の表か、PDF・Word（.docx）・テキスト"
+        "このファイルは使えません。CSV・TSV か、PDF・Word（.docx）・テキスト"
         "（.txt・.md）の文書を上げてください"
     ),
     ErrorCode.UPLOAD_TOO_LARGE: (
@@ -170,7 +170,7 @@ _CATALOG: dict[ErrorCode, str] = {
         "文字コードを判定できませんでした。UTF-8 で保存し直してください"
     ),
     ErrorCode.SOURCE_NOT_A_TABLE: (
-        "表として読めませんでした。CSV か TSV の表（1 行目が列名）を上げてください"
+        "CSV として読めませんでした。CSV か TSV（1 行目が列名）を上げてください"
     ),
     # --- 高度な生成（ベータ）U4（rules.md BR21〜BR25） ---
     ErrorCode.SOURCE_NOT_A_DOCUMENT: (
@@ -768,7 +768,7 @@ def _source_invalid_detail(base: str, context: dict[str, Any]) -> str:
     if context.get("reason") == "tables":
         # U6 BR37.1: up to three tables (the limit comes from the context)
         limit = _positive_int(context.get("max")) or 3
-        return f"表は {limit} つまで選べます。文書はいくつでも一緒に選べます"
+        return f"CSV は {limit} つまで選べます。文書はいくつでも一緒に選べます"
     return base
 
 
@@ -806,7 +806,9 @@ def _too_large_detail(base: str, context: dict[str, Any]) -> str:
     """The settled characters and the limit (BR25.1), integers only."""
     if context.get("limit") == "tables_total":
         # U6 NFR5.54: the chosen tables add up to more than 1GB
-        return "選んだ表の合計が 1GB を超えています。表を減らして生成し直してください"
+        return (
+            "選んだ CSV の合計が 1GB を超えています。CSV を減らして生成し直してください"
+        )
     total = _non_negative_int(context.get("total_chars"))
     limit = _positive_int(context.get("max_chars"))
     if total is None or limit is None:

@@ -116,7 +116,20 @@
                     {{ segment.id }} {{ segment.label }}
                 </p>
                 {% endif %}
-                <p class="text-sm text-gray-700 mt-1">職業: {{ p.get("occupation", "") }}</p>
+                <p class="text-sm text-gray-600 mt-1" data-testid="advanced-candidate-profile">{{ p.get("age", "") }}歳 / {{ p.get("occupation", "") }}{% if p.get("gender") %} / {{ gender_label(p.get("gender")) }}{% endif %}{% if p.get("country") %} / {{ country_name(p.get("country")) }}{% if p.get("city") %}・{{ p.get("city") }}{% endif %}{% endif %}</p>
+                {% if p.get("background") %}<p class="text-sm text-gray-700 mt-2" data-testid="advanced-candidate-background">{{ p.get("background") }}</p>{% endif %}
+                {# Tailwind は組み立てたクラス名を拾えないので、色ごとに全体のクラスを書く #}
+                {% for key, label, label_class, chip_class in [
+                    ("values", "価値観", "text-blue-800", "bg-blue-50"),
+                    ("pain_points", "課題", "text-orange-800", "bg-orange-50"),
+                    ("goals", "目標", "text-green-800", "bg-green-50")] %}
+                {% if p.get(key) %}
+                <div class="mt-2" data-testid="advanced-candidate-{{ key }}">
+                    <span class="text-xs font-medium {{ label_class }}">{{ label }}:</span>
+                    <div class="text-xs text-gray-700 mt-1">{% for item in p.get(key) %}<span class="inline-block {{ chip_class }} px-2 py-1 rounded mr-1 mb-1">{{ item }}</span>{% endfor %}</div>
+                </div>
+                {% endif %}
+                {% endfor %}
                 <details class="mt-2 text-sm" data-testid="advanced-evidence">
                     <summary class="cursor-pointer">根拠（{{ evidence | length }}）</summary>
                     <ul class="mt-1 space-y-1">

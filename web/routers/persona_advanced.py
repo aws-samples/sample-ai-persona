@@ -70,10 +70,16 @@ from web.error_messages import (
     user_message_for_code,
 )
 
+from src.models.demographics import gender_label  # noqa: E402
+from src.services import country_service  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
+# Display helpers for the candidate cards (same as the ordinary generation page)
+templates.env.globals["gender_label"] = gender_label
+templates.env.globals["country_name"] = country_service.country_name
 
 #: Seconds between reads of the store while a generation runs (C3).
 SSE_POLL_SECONDS = 1.0

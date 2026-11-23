@@ -629,7 +629,7 @@ class TestFileList:
                     s.error_file("source_not_a_table").update(
                         source_file_id="file-2", expires_at=WEEK
                     ),
-                    "表として読めませんでした",
+                    "CSV として読めませんでした",
                 ),
             ),
         )
@@ -975,7 +975,7 @@ class TestDetailedAnalysisAndTables:
 
         assert ui.page.is_disabled(GENERATE)
         reason = ui.page.inner_text("[data-testid='advanced-generate-reason']")
-        assert "表は 3 つまで選べます" in reason
+        assert "CSV は 3 つまで選べます" in reason
         ui.check_a11y()
 
 
@@ -994,6 +994,113 @@ def _record_with_ai_code() -> Any:
     )
 
 
+class TestProgressBar:
+    def test_bar_follows_the_stages_in_words_and_value(self, ui: UiHarness) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("stage", json.dumps({"status": "running"}), 1)
+                + _frame("progress", json.dumps({"message": "x"}), 2)
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_function(
+            "document.querySelector(\"[data-testid='advanced-progress-count']\")"
+            ".textContent.includes('/')"
+        )
+
+        count = ui.page.inner_text("[data-testid='advanced-progress-count']")
+        assert count == "3 / 5 段階"
+        assert "実行" in ui.page.inner_text("[data-testid='advanced-progress-label']")
+        bar = ui.page.locator("[data-testid='advanced-progress-bar']")
+        assert bar.get_attribute("aria-valuenow") == "40"
+        assert bar.get_attribute("role") == "progressbar"
+        ui.check_a11y()
+
+
+class TestCandidateCardHasTheOrdinaryProfile:
+    def test_background_values_pain_points_and_goals_are_shown(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        card = ui.page.locator("[data-testid='advanced-candidate']").first
+        assert (
+            "背景"
+            in card.locator(
+                "[data-testid='advanced-candidate-background']"
+            ).inner_text()
+        )
+        assert (
+            "効率"
+            in card.locator("[data-testid='advanced-candidate-values']").inner_text()
+        )
+        assert (
+            "時間"
+            in card.locator(
+                "[data-testid='advanced-candidate-pain_points']"
+            ).inner_text()
+        )
+        assert (
+            "成長"
+            in card.locator("[data-testid='advanced-candidate-goals']").inner_text()
+        )
+        assert (
+            "歳"
+            in card.locator("[data-testid='advanced-candidate-profile']").inner_text()
+        )
+        ui.check_a11y()
+
+
+class TestRecordReadsAsTheFlowOfTheAnalysis:
+    """The record is for looking back: purpose, plan, what ran, files, code."""
+
+    def test_flow_is_shown_and_internal_values_are_not(self, ui: UiHarness) -> None:
+        record = s.record().update(
+            tool_calls=(
+                {"tool_call_id": "t1", "tool": "profile_dataset", "ok": True},
+                {"tool_call_id": "t2", "tool": "run_code", "ok": False},
+            ),
+            source_display_names=("members.csv",),
+        )
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-record-area",
+            fragment="<h2>分析の記録</h2>"
+            + render_page(
+                "persona/partials/advanced_record_dialog.html", record=record
+            ),
+        )
+        ui.settle()
+
+        text = ui.page.inner_text("[data-testid='advanced-record']")
+        for heading in (
+            "読み取った目的",
+            "分析の計画",
+            "実際に行った分析",
+            "使ったファイル",
+        ):
+            assert heading in text
+        assert "members.csv" in text
+        calls = ui.page.locator("[data-testid='advanced-record-call']")
+        assert calls.count() == 2
+        assert "データの全体像" in calls.nth(0).inner_text()
+        assert (
+            ui.page.locator("[data-testid='advanced-record-call-failed']").count() == 1
+        )
+        for hidden in ("チェックサム", "ハッシュ", "乱数のシード", "前準備の版"):
+            assert hidden not in text
+        ui.check_a11y()
+
+
 class TestRecordCodeKinds:
     def test_kinds_are_written_and_code_is_text(self, ui: UiHarness) -> None:
         ui.load_component(
@@ -1010,6 +1117,10 @@ class TestRecordCodeKinds:
 
         kinds = ui.page.locator("[data-testid='advanced-record-code-kind']")
         assert "決まった関数" in kinds.nth(0).inner_text()
+        # what was done is told in words, not by the function name
+        assert "似た特徴の人どうしをまとめて" in kinds.nth(0).inner_text()
+        assert "cluster_segments" not in kinds.nth(0).inner_text()
+        assert "AI が書いたプログラムで" in kinds.nth(1).inner_text()
         assert "AI による詳細分析" in kinds.nth(1).inner_text()
         joined = ui.page.inner_text("[data-testid='advanced-record-joined']")
         assert "customer_id" in joined and "80%" in joined
@@ -1064,7 +1175,7 @@ class TestPlanSteps:
             "rfm",
             "compare_groups",
         ]
-        assert steps.nth(0).inner_text() == "表を結合: 購入の表を足す"
+        assert steps.nth(0).inner_text() == "CSV を結合: 購入の表を足す"
         assert "新しさ・頻度・金額で点数化" in steps.nth(1).inner_text()
         assert s.SCRIPT_TEXT in steps.nth(1).inner_text()  # text, never run
         assert ui.page.evaluate("window.__xss === undefined")

@@ -152,7 +152,7 @@
         } else if (!chosen.length) {
             reason = '準備OK のファイルを選んでください';
         } else if (tooMany) {
-            reason = '表は ' + maxTables + ' つまで選べます（文書はいくつでも一緒に選べます）';
+            reason = 'CSV は ' + maxTables + ' つまで選べます（文書はいくつでも一緒に選べます）';
         }
         generateButton.disabled = submitting || running || !chosen.length || tooMany;
         generateReason.textContent = reason;
@@ -209,7 +209,7 @@
             return '上げられません: 古い Word の形式（.doc）は使えません。.docx で保存し直して上げてください';
         }
         if (!isDocument && TABLE_EXTENSIONS.indexOf(extension) === -1) {
-            return '上げられません: CSV・TSV の表か、PDF・Word（.docx）・テキスト（.txt・.md）の文書を選んでください';
+            return '上げられません: CSV・TSV か、PDF・Word（.docx）・テキスト（.txt・.md）の文書を選んでください';
         }
         if (file.size > maxBytes) {
             return '上げられません: 1 ファイル ' + maxSizeMb + 'MB までです。分けて上げてください';
@@ -615,6 +615,35 @@
             item.dataset.state = state;
             item.querySelector('[data-role="mark"]').textContent = MARKS[state];
         });
+        updateBar(panel, current, failed);
+    }
+
+    // 段階の数から出す目安の棒（実際の割合ではない）。表示している段階だけを数える
+    function updateBar(panel, current, failed) {
+        var bar = panel.querySelector('[data-testid="advanced-progress-bar"]');
+        if (!bar) return;
+        var shown = Array.prototype.filter.call(
+            panel.querySelectorAll('[data-stage]'), function (item) { return !item.hidden; });
+        var total = shown.length;
+        var finished = current === 'done';
+        var at = 0;
+        shown.forEach(function (item, i) { if (item.dataset.stage === current) at = i + 1; });
+        var done = finished ? total : Math.max(at - 1, 0);
+        var percent = total ? Math.round(done * 100 / total) : 0;
+        bar.setAttribute('aria-valuenow', String(percent));
+        var fill = bar.querySelector('[data-role="fill"]');
+        fill.style.width = percent + '%';
+        fill.className = 'h-2 rounded transition-all duration-500 ' + (failed ? 'bg-red-700' : (finished ? 'bg-green-700' : 'bg-blue-600'));
+        var label = panel.querySelector('[data-testid="advanced-progress-label"]');
+        var count = panel.querySelector('[data-testid="advanced-progress-count"]');
+        if (finished) {
+            label.textContent = '完了';
+            count.textContent = total + ' / ' + total + ' 段階';
+        } else if (at) {
+            var name = shown[at - 1].textContent.replace(/（[未済中]）/, '').trim();
+            label.textContent = (failed ? '止まりました: ' : '今: ') + name;
+            count.textContent = at + ' / ' + total + ' 段階';
+        }
     }
 
     function addLog(panel, text) {
