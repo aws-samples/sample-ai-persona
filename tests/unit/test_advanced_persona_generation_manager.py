@@ -3557,7 +3557,7 @@ _EMIT_JOIN = (
     'df["seg"] = ["young" if a < 40 else "old" for a in df["age"]]\n'
     'emit_result(df, "seg", "join:source_1+source_2", id_column="id")\n'
 )
-_DISABLED_NOTICE = "AI による詳細分析をやめて、決まった関数で続けます"
+_DISABLED_NOTICE = "AI による詳細分析をやめて、事前定義された関数で続けます"
 
 
 class _CodeSandbox(_Sandbox):

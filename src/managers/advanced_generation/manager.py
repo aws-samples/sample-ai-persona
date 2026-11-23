@@ -302,7 +302,7 @@ class _Table:
 
 
 #: U6: the progress notice when run_code is taken off (BR36.2, AC5.4.2).
-_RUN_CODE_DISABLED_NOTICE = "AI による詳細分析をやめて、決まった関数で続けます"
+_RUN_CODE_DISABLED_NOTICE = "AI による詳細分析をやめて、事前定義された関数で続けます"
 
 #: What the screen's log calls a plan step and a tool (fixed names only; the
 #: user's data never goes into a progress message).

@@ -1194,7 +1194,7 @@ class TestRecordCodeKinds:
         ui.settle()
 
         kinds = ui.page.locator("[data-testid='advanced-record-code-kind']")
-        assert "決まった関数" in kinds.nth(0).inner_text()
+        assert "事前定義された関数" in kinds.nth(0).inner_text()
         # what was done is told in words, not by the function name
         assert "似た特徴の人どうしのグループ分け" in kinds.nth(0).inner_text()
         assert "cluster_segments" not in kinds.nth(0).inner_text()

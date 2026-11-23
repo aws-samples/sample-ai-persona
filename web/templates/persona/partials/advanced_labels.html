@@ -33,11 +33,11 @@
 {%- endmacro %}
 
 {#
-  ai_written は U6（AI による詳細分析）で記録に現れる。U1 の記録は決まった関数（fixed）だけで、
+  ai_written は U6（AI による詳細分析）で記録に現れる。U1 の記録は事前定義された関数（fixed）だけで、
   この分岐はまだ通らない。U6 で使うため残している。
 #}
 {% macro code_kind_label(kind) -%}
-{{ "AI による詳細分析" if kind == "ai_written" else "決まった関数" }}
+{{ "AI による詳細分析" if kind == "ai_written" else "事前定義された関数" }}
 {%- endmacro %}
 
 {# 分析の記録: 分析エージェントが使った道具の名前（決まった 5 つ） #}
