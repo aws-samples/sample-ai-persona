@@ -48,8 +48,22 @@ from ...models.analysis import (
 
 #: Words that ask for a comparison (BR5.1).
 _COMPARE_WORDS = ("比較", "比べ", "違い", "差", "対比", "vs", "VS", "compare")
-#: Column names that look like a person's ID (BR5.1).
-_ID_NAME = re.compile(r"(id|ＩＤ|番号)", re.IGNORECASE)
+#: Column names that look like a person's ID (BR5.1): "id" as a word of its own
+#: (``id``, ``customer_id``, ``customerId``, ``顧客ID``), ``ＩＤ`` and ``番号``.
+#: A name that merely holds the letters (``residence``, ``paid``, ``video``) is not.
+_ID_NAME = re.compile(
+    r"(?<![A-Za-z])[Ii][Dd](?![a-z])"
+    r"|(?<=[a-z])I[Dd](?![a-z])"
+    r"|(?<=[a-z])ID(?![A-Za-z])"
+    r"|ＩＤ|番号"
+)
+
+
+def is_id_name(name: str) -> bool:
+    """Whether a column name says it is an ID (see ``_ID_NAME``)."""
+    return bool(_ID_NAME.search(str(name)))
+
+
 _NUMERIC_TYPE = re.compile(
     r"^(TINYINT|SMALLINT|INTEGER|INT|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|"
     r"UBIGINT|FLOAT|REAL|DOUBLE|DECIMAL.*|NUMERIC.*)$",
@@ -134,11 +148,29 @@ class AnalysisPolicy:
 
     @staticmethod
     def guide_table(tables: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
-        """The table the guide reads: one row per person, else the first (BR37.2)."""
+        """The table the guide reads: one row per person, else the first (BR37.2).
+
+        A history (a person ID that repeats) is not a table of people, even
+        when another column such as an order ID is all distinct.
+        """
         for alias, profile in tables:
-            if any(_is_person_id(c) for c in profile.get("columns") or []):
+            if not _repeats_a_person_id(profile) and any(
+                _is_person_id(c) for c in profile.get("columns") or []
+            ):
                 return alias
         return tables[0][0]
+
+    @staticmethod
+    def rows_are_not_people(
+        tables: Sequence[tuple[str, Mapping[str, Any]]],
+    ) -> bool:
+        """Whether every table is a history, so what is counted is rows (U6).
+
+        True when each table has a column named like an ID whose values repeat
+        and no table has one row per person. The counts and shares of such a
+        result are of rows (orders, events), not of people.
+        """
+        return bool(tables) and all(_repeats_a_person_id(p) for _, p in tables)
 
     @staticmethod
     def budget() -> dict[str, int]:
@@ -157,7 +189,7 @@ class AnalysisPolicy:
                 return AnalysisMethod.COMPARE
             return AnalysisMethod.FILTER
         columns = list(profile.get("columns") or [])
-        if any(_is_person_id(c) for c in columns):
+        if not _repeats_a_person_id(profile) and any(_is_person_id(c) for c in columns):
             return AnalysisMethod.CLUSTER
         numeric = [c for c in columns if _NUMERIC_TYPE.match(str(c.get("type", "")))]
         if len(numeric) >= 2:
@@ -327,6 +359,14 @@ def _end_with_method(
     if step_method(steps[-1].kind) is not method:
         steps = (*steps, AnalysisStep(AnalysisStepKind(method.value), reason))
     return steps[-MAX_PLAN_STEPS:]
+
+
+def _repeats_a_person_id(profile: Mapping[str, Any]) -> bool:
+    """A column named like an ID whose values repeat: several rows per person."""
+    return any(
+        _ID_NAME.search(str(c.get("name", ""))) and not c.get("all_distinct")
+        for c in profile.get("columns") or []
+    )
 
 
 def _is_history(profile: Mapping[str, Any], joined: bool) -> bool:

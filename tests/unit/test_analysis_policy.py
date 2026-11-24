@@ -35,13 +35,14 @@ AREA = {"name": "地域", "type": "VARCHAR", "all_distinct": False}
 
 
 class TestTools:
-    def test_only_the_three_fixed_tools(self) -> None:
+    def test_only_the_four_fixed_tools(self) -> None:
         policy = AnalysisPolicy.tool_policy()
 
         assert policy.tools == (
             AnalysisTool.PROFILE_DATASET,
             AnalysisTool.ANALYZE_DATASET,
             AnalysisTool.CLUSTER_SEGMENTS,
+            AnalysisTool.PROFILE_SEGMENTS,
         )
 
     def test_limits_come_from_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,3 +212,106 @@ class TestGuideTable:
         tables = [("source_1", _profile(AREA)), ("source_2", _profile(AGE, SPEND))]
 
         assert AnalysisPolicy.guide_table(tables) == "source_1"
+
+
+ORDER_ID = {"name": "注文ID", "type": "VARCHAR", "all_distinct": True}
+BUYER_ID = {"name": "顧客ID", "type": "VARCHAR", "all_distinct": False}
+BOUGHT_ON = {"name": "注文日", "type": "DATE", "all_distinct": False}
+AMOUNT = {"name": "金額", "type": "BIGINT", "all_distinct": False}
+
+
+class TestRowsAreNotPeople:
+    def test_a_table_where_the_person_id_repeats_counts_rows(self) -> None:
+        orders = _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", orders)]) is True
+
+    def test_a_table_with_one_row_per_person_counts_people(self) -> None:
+        customers = _profile(ID_COLUMN, AGE)
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", customers)]) is False
+
+    def test_a_people_table_next_to_a_history_counts_people(self) -> None:
+        tables = [
+            ("source_1", _profile(BUYER_ID, BOUGHT_ON, AMOUNT)),
+            ("source_2", _profile({**ID_COLUMN, "name": "顧客ID"}, AGE)),
+        ]
+
+        assert AnalysisPolicy.rows_are_not_people(tables) is False
+
+    def test_a_table_without_an_id_column_is_not_told_as_rows(self) -> None:
+        assert (
+            AnalysisPolicy.rows_are_not_people([("source_1", _profile(AGE))]) is False
+        )
+
+    def test_the_order_id_is_not_taken_for_the_person_in_the_guide(self) -> None:
+        orders = _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)
+
+        # no purpose: it would cluster on "people" when the order ID passed as one
+        method = AnalysisPolicy.guide_method("", orders)
+
+        assert method is AnalysisMethod.FILTER
+
+    def test_the_guide_table_skips_a_history(self) -> None:
+        tables = [
+            ("source_1", _profile(ORDER_ID, BUYER_ID, BOUGHT_ON, AMOUNT)),
+            ("source_2", _profile(ID_COLUMN, AGE)),
+        ]
+
+        assert AnalysisPolicy.guide_table(tables) == "source_2"
+
+
+class TestIdNames:
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "id",
+            "ID",
+            "customer_id",
+            "customerId",
+            "customerID",
+            "顧客ID",
+            "user id",
+            "注文番号",
+            "ＩＤ",
+            "ID番号",
+            "id_customer",
+        ],
+    )
+    def test_names_that_say_id_are_ids(self, name: str) -> None:
+        from src.managers.advanced_generation.analysis_policy import is_id_name
+
+        assert is_id_name(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "residence",
+            "paid",
+            "video",
+            "width",
+            "side",
+            "kids",
+            "provider",
+            "median",
+            "identity_theft_flag_x",
+            "Idea",
+            "年齢",
+            "地域",
+            "",
+        ],
+    )
+    def test_names_that_merely_contain_id_are_not(self, name: str) -> None:
+        from src.managers.advanced_generation.analysis_policy import is_id_name
+
+        assert is_id_name(name) is False
+
+    def test_a_table_of_people_with_a_residence_column_counts_people(self) -> None:
+        people = _profile(
+            {"name": "社員ID", "type": "VARCHAR", "all_distinct": True},
+            {"name": "residence", "type": "VARCHAR", "all_distinct": False},
+            AGE,
+        )
+
+        assert AnalysisPolicy.rows_are_not_people([("source_1", people)]) is False
+        assert AnalysisPolicy.guide_method("", people) is AnalysisMethod.CLUSTER

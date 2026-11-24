@@ -20,6 +20,34 @@
 <span class="block text-xs text-gray-600">{{ result.source_names.get(item.source_id, "文書") }} {{ item.location }}{% if item.speaker_attributes %} / 発言者: {% for k, v in item.speaker_attributes.items() %}{{ k }} {{ v }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}</span>
 {% if item.assignment_reason %}<span class="block text-xs text-gray-600">セグメントに対応づけた理由: {{ item.assignment_reason }}</span>{% endif %}
 {%- endmacro %}
+{% macro feature_row(feature) %}
+{% set names = {"recency": "最後の購入からの日数", "frequency": "購入回数", "monetary": "購入金額の合計"} %}
+{% set v = feature["value"] | float(none) %}
+{% set base = feature["baseline"] | float(none) %}
+{% set is_share = feature["kind"] == "share" %}
+<tr class="border-t border-gray-200 align-top">
+    <th scope="row" class="py-1.5 pr-2 text-left font-normal text-gray-900">{{ names.get(feature["name"], feature["name"]) }}{% if feature["kind"] == "derived" %}<span class="block text-xs text-gray-700">AI の計算</span>{% elif is_share %}<span class="block text-xs text-gray-700">その人の割合</span>{% endif %}</th>
+    <td class="py-1.5 pr-2 text-right font-medium text-gray-900 tabular-nums whitespace-nowrap">{% if v is none %}{{ feature["value"] }}{% elif is_share %}{{ '%.0f' | format(v * 100) }}%{% else %}{{ '{:,.1f}'.format(v) }}{% endif %}</td>
+    <td class="py-1.5 pr-2 text-right text-gray-800 tabular-nums whitespace-nowrap">{% if base is none %}{{ feature["baseline"] }}{% elif is_share %}{{ '%.0f' | format(base * 100) }}%{% else %}{{ '{:,.1f}'.format(base) }}{% endif %}</td>
+    <td class="py-1.5 text-gray-800 whitespace-nowrap">{% if v is not none and base is not none and v > base %}▲ 高い{% elif v is not none and base is not none and v < base %}▼ 低い{% else %}—{% endif %}</td>
+</tr>
+{% endmacro %}
+{% macro feature_table(features, caption="この層と全体の比べ") %}
+<table class="mt-1 w-full text-sm">
+    <caption class="sr-only">{{ caption }}</caption>
+    <thead>
+        <tr class="text-xs text-gray-700">
+            <th scope="col" class="pb-1 pr-2 text-left font-normal">項目</th>
+            <th scope="col" class="pb-1 pr-2 text-right font-normal">この層</th>
+            <th scope="col" class="pb-1 pr-2 text-right font-normal">全体</th>
+            <th scope="col" class="pb-1 text-left font-normal">比べると</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for feature in features %}{{ feature_row(feature) }}{% endfor %}
+    </tbody>
+</table>
+{% endmacro %}
 {% set report = result.prepare_reports[0] if result.prepare_reports else none %}
 {% set unverified = result.unverified_segment_ids %}
 {% set plan = result.generation.plan %}
@@ -39,6 +67,15 @@
         <div class="bg-gray-50 border border-gray-200 rounded-md p-3">
             <dt class="text-xs text-gray-600">除外した行数</dt>
             <dd class="text-xl font-semibold text-gray-900 tabular-nums">{{ "{:,}".format(report.rows_excluded) }}</dd>
+        </div>
+        {% endif %}
+        {# 層の割合の母数（人数）。行数と違うとき（履歴を人ごとに集計したとき）だけ併記する #}
+        {% set counted = result.segments | rejectattr("id", "in", unverified) | selectattr("share") | list %}
+        {% set people = (counted[0].size / counted[0].share) | round | int if counted else none %}
+        {% if people and report and people != report.rows_read %}
+        <div class="bg-gray-50 border border-gray-200 rounded-md p-3" data-testid="advanced-population">
+            <dt class="text-xs text-gray-600">層に分けた母数（人数）</dt>
+            <dd class="text-xl font-semibold text-gray-900 tabular-nums">{{ "{:,}".format(people) }}</dd>
         </div>
         {% endif %}
         <div class="bg-gray-50 border border-gray-200 rounded-md p-3">
@@ -71,6 +108,13 @@
     {# 層の名前だけを出す。内部の ID は data 属性に残し、名前がないときは順番で「層 N」と呼ぶ #}
     <section data-testid="advanced-segments" aria-labelledby="advanced-segments-title" class="mb-4">
         <h3 id="advanced-segments-title" class="font-medium text-gray-900 mb-2">セグメント（{{ result.segments | length }} つの層に分けました）</h3>
+        {% set run_params = result.generation.analysis_run.params if result.generation.analysis_run else {} %}
+        {% if run_params.get("rows_are_not_people") %}
+        <p data-testid="advanced-rows-notice" class="text-sm text-gray-800 border border-gray-300 rounded-md px-3 py-2 mb-2">この表は 1 人に複数行（注文や履歴）があるため、人数や割合は、人でなく行の数です。</p>
+        {% endif %}
+        {% if result.segments | length < result.generation.persona_count %}
+        <p data-testid="advanced-segments-few" class="text-sm text-gray-800 border border-gray-300 rounded-md px-3 py-2 mb-2">層は {{ result.segments | length }} 個しか作れませんでした（ペルソナは {{ result.generation.persona_count }} 人を依頼）。同じ層を代表するペルソナがあります。</p>
+        {% endif %}
         <ul class="grid grid-cols-1 md:grid-cols-2 gap-3">
             {% for segment in result.segments %}
             <li class="border border-gray-200 rounded-lg p-4" data-testid="advanced-segment-row" data-segment-id="{{ segment.id }}">
@@ -84,20 +128,23 @@
                 </p>
                 {% endif %}
                 {% if segment.features %}
-                <ul class="mt-2 text-sm text-gray-800 space-y-1" data-testid="advanced-segment-features">
-                    {% for feature in segment.features %}
-                    {% set v = feature["value"] | float(none) %}
-                    {% set base = feature["baseline"] | float(none) %}
-                    <li>{{ feature["name"] }} <span class="font-medium">{{ feature["value"] }}</span>
-                        {%- if v is not none and base is not none and v > base %} <span class="text-gray-700">▲ 全体より高い</span>
-                        {%- elif v is not none and base is not none and v < base %} <span class="text-gray-700">▼ 全体より低い</span>{% endif %}
-                        <span class="text-gray-600">（全体 {{ feature["baseline"] }}）</span></li>
-                    {% endfor %}
-                </ul>
+                <div class="mt-2" data-testid="advanced-segment-features">
+                    {{ feature_table(segment.features, "層の特徴と全体の比べ") }}
+                </div>
                 {% endif %}
             </li>
             {% endfor %}
         </ul>
+        {# どの層にも入らなかった人数（重なる層・検証で外した層があるときは数えない） #}
+        {# 表が 1 つのときだけ（結合した結果の母数は、最初の表の行数とは違う） #}
+        {% set rows = report.rows_read if report and result.prepare_reports | length == 1 else none %}
+        {% set sources = result.segments | map(attribute="definition") | map(attribute="source", default="") | list | unique | list %}
+        {% if rows and sources | length <= 1 and not (result.segments | selectattr("overlaps") | list) and not unverified %}
+        {% set rest = rows - (result.segments | sum(attribute="size")) %}
+        {% if rest > 0 %}
+        <p class="text-sm text-gray-700 mt-2" data-testid="advanced-segments-rest">どの層にも入らなかった人が {{ "{:,}".format(rest) }} 人（{{ '%.0f' | format(rest / rows * 100) }}%）います。</p>
+        {% endif %}
+        {% endif %}
     </section>
     {% endif %}
     {% set overall = result.evidence | selectattr("quote") | rejectattr("segment_id") | list %}
@@ -152,17 +199,30 @@
                 </div>
                 {% endif %}
                 {% endfor %}
-                <details class="mt-2 text-sm" data-testid="advanced-evidence">
-                    <summary class="cursor-pointer">根拠（{{ evidence | length }}）</summary>
-                    <ul class="mt-1 space-y-1">
-                        {% for item in evidence %}
-                        {% if item.quote %}
-                        <li>{{ document_evidence(item) }}</li>
-                        {% else %}
-                        <li>{{ item.claim }}{% if item.statistic %} — 統計: 値 {{ item.statistic["value"] }}（対象 {{ item.statistic["population"] }} 行）{% endif %}</li>
-                        {% endif %}
-                        {% endfor %}
-                    </ul>
+                {% set has_basis = segment and segment.features and segment.id not in unverified %}
+                <p class="mt-2 text-xs text-gray-700" data-testid="advanced-candidate-imagined">名前・職業・居住地・家族・エピソード・口調は、データにない部分を AI が想像して補ったものです。{% if has_basis %}背景・価値観・課題・目標は、下の「根拠」にある「データに基づく点」から AI が読み解いたものです。{% else %}背景・価値観・課題・目標も、層の情報から AI が読み解いたもので、数値の裏づけは示せていません。{% endif %}</p>
+                <details class="mt-3 text-sm border-t border-gray-200 pt-2" data-testid="advanced-evidence">
+                    <summary class="cursor-pointer font-medium text-gray-900">根拠（{{ evidence | length }}）</summary>
+                    {% if has_basis %}
+                    <div class="mt-2" data-testid="advanced-candidate-basis">
+                        <p class="font-medium text-gray-900">データに基づく点</p>
+                        {{ feature_table(segment.features) }}
+                    </div>
+                    {% endif %}
+                    {% if evidence %}
+                    <div class="mt-3" data-testid="advanced-evidence-list">
+                        <p class="font-medium text-gray-900">分析の根拠</p>
+                        <ul class="mt-1 space-y-2">
+                            {% for item in evidence %}
+                            {% if item.quote %}
+                            <li>{{ document_evidence(item) }}</li>
+                            {% else %}
+                            <li class="text-gray-800">{{ item.claim }}{% if item.statistic %}<span class="block text-xs text-gray-700 mt-0.5">数え直した数: {{ item.statistic["value"] }}（対象 {{ item.statistic["population"] }} 行）</span>{% endif %}</li>
+                            {% endif %}
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
                 </details>
             </div>
             {% endfor %}

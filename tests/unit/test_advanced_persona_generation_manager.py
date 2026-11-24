@@ -474,8 +474,15 @@ class _Agents:
             wanted.group(1) if wanted else 2
         )
         personas = []
+        same_layer = self.synthesis_mode == "same_layer" or (
+            self.synthesis_mode == "same_layer_first"
+            and self.calls.count("synthesis") == 1
+        )
         for i, segment in enumerate(segments):
             segment_id = segment["id"]
+            if same_layer:
+                segment = segments[0]
+                segment_id = segment["id"]
             if self.synthesis_mode == "orphan" and i == 0:
                 segment_id = "seg-missing"
             personas.append(
@@ -760,6 +767,100 @@ class TestStart:
             _start(manager, env.ready_file())
         # The refused start gave its slot back: another user can still start.
         _start(manager, env.ready_file(owner=OTHER.sub), principal=OTHER)
+
+
+class TestPersonaCheck:
+    def test_a_synthesis_that_leaves_a_layer_out_is_written_again_once(
+        self, env: _Env
+    ) -> None:
+        env.agents.synthesis_mode = "same_layer_first"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.DONE
+        assert env.agents.calls.count("synthesis") == 2
+
+    def test_a_synthesis_that_still_leaves_a_layer_out_fails_the_generation(
+        self, env: _Env
+    ) -> None:
+        env.agents.synthesis_mode = "same_layer"
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        generation = env.generations.get(generation_id)
+        assert generation is not None and generation.status is GenerationStatus.FAILED
+        assert generation.error_code == ErrorCode.GENERATION_VERIFICATION_FAILED.value
+        assert env.agents.calls.count("synthesis") == 2
+
+
+class TestRowsAreNotPeopleParam:
+    @staticmethod
+    def _state(profile: dict[str, Any]) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            budget=None,
+            detailed_fallback=None,
+            joins=[],
+            tables=[SimpleNamespace(alias="source_1", profile=profile)],
+            profile=profile,
+        )
+
+    def test_a_history_is_recorded_as_counting_rows(self) -> None:
+        profile = {
+            "columns": [
+                {"name": "注文ID", "type": "VARCHAR", "all_distinct": True},
+                {"name": "顧客ID", "type": "VARCHAR", "all_distinct": False},
+            ]
+        }
+
+        params = AdvancedPersonaGenerationManager._u6_params(self._state(profile))
+
+        assert params["rows_are_not_people"] is True
+
+    def test_a_table_of_people_records_nothing(self) -> None:
+        profile = {
+            "columns": [{"name": "顧客ID", "type": "VARCHAR", "all_distinct": True}]
+        }
+
+        params = AdvancedPersonaGenerationManager._u6_params(self._state(profile))
+
+        assert "rows_are_not_people" not in params
+
+
+class TestSegmentFeatures:
+    def test_the_synthesis_gets_the_features_the_library_counted(
+        self, env: _Env
+    ) -> None:
+        def analysis(tools: dict, holder: dict, source_id: str) -> dict[str, Any]:
+            output = _cluster_fallback(tools, holder)
+            for segment in output["segments"]:
+                # free text the agent wrote: nothing backs it
+                segment["features"] = [
+                    {"name": "年齢", "value": "43.7歳", "baseline": "別の層は41歳"}
+                ]
+            return output
+
+        env.agents.analysis_fn = analysis
+        manager = env.manager()
+        generation_id = _start(manager, env.ready_file())
+
+        manager.run(generation_id)
+
+        synthesis = next(
+            d for d in env.agents.data_seen if "segments" in d and "purpose" in d
+        )
+        segments = json.loads(synthesis["segments"])
+        features = [f for s in segments for f in s["features"]]
+        assert features, "the cluster features reach the synthesis"
+        assert all(f["kind"] in ("mean", "share") for f in features)
+        assert all(isinstance(f["value"], float) for f in features)
+        assert not any("別の層" in str(f) for f in features)
 
 
 class TestRun:

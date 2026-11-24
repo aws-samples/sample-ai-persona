@@ -115,7 +115,9 @@ from .detailed_analysis import (
     filter_evidence,
 )
 from .join_planner import PlannedTable, plan_joins
+from .persona_check import check_personas
 from .results import build_analysis_run, build_candidates, build_record
+from .segment_features import settle_features
 
 if TYPE_CHECKING:
     from ...services.agent_service import AgentService
@@ -327,6 +329,7 @@ _TOOL_NAMES = {
     "profile_dataset": "データの全体像を確認",
     "analyze_dataset": "条件を指定して集計",
     "cluster_segments": "似た人のグループ分け",
+    "profile_segments": "層の特徴を数える",
     "run_code": "AI が書いたプログラムで分析",
     "load_playbook": "分析の定石を読み込み",
 }
@@ -768,6 +771,23 @@ class AdvancedPersonaGenerationManager:
         self._analyze(state)
         self._enter(state, GenerationStatus.SYNTHESIZING)
         personas = self._synthesize(state)
+        problem = self._persona_problem(state, personas)
+        if problem is not None:
+            # U6 addendum: a persona that is not complete, or a layer left out,
+            # is written once more; a second time fails the generation
+            logger.info("advanced generation personas rejected: %s", problem)
+            self._event(
+                state,
+                EventType.PROGRESS,
+                message="ペルソナに足りないところがあったため、書き直します",
+            )
+            personas = self._synthesize(state)
+            problem = self._persona_problem(state, personas)
+            if problem is not None:
+                logger.info("advanced generation personas rejected again: %s", problem)
+                raise _fail(
+                    ErrorCode.GENERATION_VERIFICATION_FAILED, "persona incomplete"
+                )
         self._enter(state, GenerationStatus.VERIFYING)
         self._event(state, EventType.PROGRESS, message="数字を数え直して検証しています")
         verification = self._verify(state, personas)
@@ -779,6 +799,16 @@ class AdvancedPersonaGenerationManager:
             + (f"（数字が合わず外した層 {dropped} 件）" if dropped else ""),
         )
         self._write_results(state, personas, verification)
+
+    @staticmethod
+    def _persona_problem(
+        state: _Run, personas: Sequence[prompts.AdvancedPersonaOutput]
+    ) -> Optional[str]:
+        return check_personas(
+            personas,
+            [s.id for s in state.segments],
+            has_table=state.source is not None,
+        )
 
     def _enter(
         self,
@@ -2026,15 +2056,20 @@ class AdvancedPersonaGenerationManager:
             self._check_untouched(state)
         self._check_cluster_calls(state)
         state.segments, state.evidence = self._parse_analysis(output)
+        runs: dict[str, Optional[EmittedResult]] = {}
         if state.budget is not None:
             # BR36.4, NFR3.39: only what a successful run recounted goes on
-            runs: dict[str, Optional[EmittedResult]] = {
-                call_id: None for call_id in tools.run_code_ids()
-            }
+            runs = {call_id: None for call_id in tools.run_code_ids()}
             runs.update(tools.emitted_results())
             state.segments, state.evidence = filter_evidence(
                 state.segments, state.evidence, runs
             )
+        # U6 addendum: a feature is a number that was counted, never free text
+        state.segments = settle_features(
+            state.segments,
+            runs=runs,
+            outputs={cid: tools.output_of(cid) for cid in tools.tool_call_ids()},
+        )
         if not state.segments:
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "no segment")
         self._event(
@@ -2548,6 +2583,12 @@ class AdvancedPersonaGenerationManager:
                 "failures": 0,
                 "reason": state.detailed_fallback,
             }
+        tables = [(t.alias, t.profile) for t in state.tables] or [
+            ("source_1", state.profile)
+        ]
+        if AnalysisPolicy.rows_are_not_people(tables):
+            # U6 addendum: the counts are of rows (orders, events), not people
+            params["rows_are_not_people"] = True
         if state.joins and budget is not None:
             plan_only: dict[str, Any] = {
                 "axis": state.joins[0][0].axis,

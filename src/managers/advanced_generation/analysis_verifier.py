@@ -50,17 +50,57 @@ class VerificationResult:
     reason: Optional[str] = None
 
 
-def _numbers(value: Any) -> Iterator[int]:
-    """Every integer inside a tool output (bools left out)."""
+#: Keys that hold a number of people, wherever they are in a tool output.
+_COUNT_KEYS = frozenset({"size", "count", "population", "rows", "rows_read"})
+
+
+def _is_count_label(label: object) -> bool:
+    """``count`` and ``count(column)`` count rows; ``count(distinct ..)`` does not."""
+    text = str(label)
+    return text == "count" or (
+        text.startswith("count(") and not text.startswith("count(distinct")
+    )
+
+
+def _as_int(value: Any) -> Iterator[int]:
     if isinstance(value, bool):
         return
     if isinstance(value, int):
         yield value
     elif isinstance(value, float) and value.is_integer():
         yield int(value)
-    elif isinstance(value, Mapping):
-        for item in value.values():
-            yield from _numbers(item)
+
+
+def _numbers(value: Any) -> Iterator[int]:
+    """The integers of a tool output that count people (BR8.1, review of U6).
+
+    A size is backed only by a value that is a count: a cell of a ``count`` /
+    ``count(column)`` column, or a value under a key such as ``size`` or
+    ``population``. An average, a sum or any other number that merely equals
+    the size does not back it.
+    """
+    if isinstance(value, Mapping):
+        columns, rows = value.get("columns"), value.get("rows")
+        tabular = isinstance(rows, list)
+        if isinstance(rows, list):
+            names = columns if isinstance(columns, list) else []
+            at = [i for i, c in enumerate(names) if _is_count_label(c)]
+            for row in rows:
+                if isinstance(row, (list, tuple)):
+                    for i in at:
+                        if i < len(row):
+                            yield from _as_int(row[i])
+                elif isinstance(row, Mapping):
+                    for key, cell in row.items():
+                        if _is_count_label(key):
+                            yield from _as_int(cell)
+        for key, item in value.items():
+            if tabular and key in ("columns", "rows"):
+                continue
+            if key in _COUNT_KEYS:
+                yield from _as_int(item)
+            elif isinstance(item, (Mapping, list, tuple)):
+                yield from _numbers(item)
     elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _numbers(item)

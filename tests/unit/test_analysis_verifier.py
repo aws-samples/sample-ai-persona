@@ -73,7 +73,7 @@ class TestPasses:
         assert result.unverified_segment_ids == ()
 
     def test_share_is_compared_at_three_decimals(self) -> None:
-        output = {"rows": [{"count": 33}]}
+        output = {"columns": ["plan", "count"], "rows": [["gold", 33]]}
         result = _verify(
             [_segment("a", 33, 0.3304)],
             ["a"],
@@ -84,9 +84,45 @@ class TestPasses:
         assert result.passed and result.unverified_segment_ids == ()
 
 
+class TestOnlyCountsBackASize:
+    def _check(self, output: dict, size: int, share: float):
+        return _verify(
+            [_segment("a", size, share)],
+            ["a"],
+            outputs={"tc-1": output},
+            method=AnalysisMethod.FILTER,
+        )
+
+    def test_an_average_equal_to_the_size_does_not_back_it(self) -> None:
+        # 20 people, average age 42: "42 people" is not in a count column
+        output = {"columns": ["plan", "count", "avg(age)"], "rows": [["gold", 20, 42]]}
+
+        result = self._check(output, 42, 0.42)
+
+        assert result.unverified_segment_ids == ("a",)
+
+    def test_a_count_of_a_column_backs_it(self) -> None:
+        output = {"columns": ["count(id)"], "rows": [[42]]}
+
+        assert self._check(output, 42, 0.42).unverified_segment_ids == ()
+
+    def test_a_distinct_count_is_not_the_people_of_a_segment(self) -> None:
+        output = {"columns": ["count(distinct plan)"], "rows": [[42]]}
+
+        assert self._check(output, 42, 0.42).unverified_segment_ids == ("a",)
+
+    def test_the_size_of_a_cluster_backs_it(self) -> None:
+        assert (
+            _verify(
+                [_segment("a", 60, 0.6), _segment("b", 40, 0.4)], ["a", "b"]
+            ).unverified_segment_ids
+            == ()
+        )
+
+
 class TestUnverified:
     def test_a_size_no_tool_printed_is_unverified(self) -> None:
-        output = {"rows": [{"count": 55}]}
+        output = {"columns": ["plan", "count"], "rows": [["gold", 55]]}
         result = _verify(
             [_segment("a", 50, 0.5)],
             ["a"],
@@ -98,7 +134,7 @@ class TestUnverified:
         assert result.unverified_segment_ids == ("a",)
 
     def test_a_wrong_share_is_unverified(self) -> None:
-        output = {"rows": [{"count": 50}]}
+        output = {"columns": ["plan", "count"], "rows": [["gold", 50]]}
         result = _verify(
             [_segment("a", 50, 0.7)],
             ["a"],
@@ -121,7 +157,7 @@ class TestUnverified:
 
 class TestFails:
     def test_non_overlapping_sizes_over_the_population_fail(self) -> None:
-        output = {"rows": [{"count": 70}, {"count": 50}]}
+        output = {"columns": ["plan", "count"], "rows": [["a", 70], ["b", 50]]}
         result = _verify(
             [_segment("a", 70, 0.7), _segment("b", 50, 0.5)],
             ["a", "b"],
@@ -133,7 +169,7 @@ class TestFails:
         assert result.failure is ErrorCode.GENERATION_VERIFICATION_FAILED
 
     def test_overlapping_segments_are_not_summed(self) -> None:
-        output = {"rows": [{"count": 70}, {"count": 50}]}
+        output = {"columns": ["plan", "count"], "rows": [["a", 70], ["b", 50]]}
         result = _verify(
             [_segment("a", 70, 0.7), _segment("b", 50, 0.5, overlaps=True)],
             ["a", "b"],
@@ -261,7 +297,10 @@ def _verify_u6(segments, *, outputs, populations, emitted=None, method=None):
 
 class TestPopulationsPerTable:
     def test_each_segment_uses_its_tables_people(self) -> None:
-        outputs = {"tc-1": {"rows": [[60]]}, "tc-2": {"rows": [[10]]}}
+        outputs = {
+            "tc-1": {"columns": ["count"], "rows": [[60]]},
+            "tc-2": {"columns": ["count"], "rows": [[10]]},
+        }
         segments = [
             _on("source_1", "a", 60, 0.6, call="tc-1"),
             _on("source_2", "b", 10, 0.5, call="tc-2"),
@@ -274,7 +313,7 @@ class TestPopulationsPerTable:
         assert result.passed and result.unverified_segment_ids == ()
 
     def test_the_sum_is_checked_per_population(self) -> None:
-        outputs = {"tc-1": {"rows": [[60], [50]]}}
+        outputs = {"tc-1": {"columns": ["count"], "rows": [[60], [50]]}}
         segments = [
             _on("source_1", "a", 60, 0.6),
             _on("source_1", "b", 50, 0.5),
@@ -288,7 +327,10 @@ class TestPopulationsPerTable:
         assert not result.passed and result.reason == "sum"
 
     def test_two_tables_may_add_up_to_more_than_one_of_them(self) -> None:
-        outputs = {"tc-1": {"rows": [[90]]}, "tc-2": {"rows": [[15]]}}
+        outputs = {
+            "tc-1": {"columns": ["count"], "rows": [[90]]},
+            "tc-2": {"columns": ["count"], "rows": [[15]]},
+        }
         segments = [
             _on("source_1", "a", 90, 0.9, call="tc-1"),
             _on("source_2", "b", 15, 0.75, call="tc-2"),

@@ -104,10 +104,15 @@ class _SpySandbox:
 
 
 class TestToolSet:
-    def test_makes_the_three_tools_of_the_policy(self) -> None:
+    def test_makes_the_four_fixed_tools_of_the_policy(self) -> None:
         names = [t.tool_name for t in _service(_SpySandbox(), object()).tools()]
 
-        assert names == ["profile_dataset", "analyze_dataset", "cluster_segments"]
+        assert names == [
+            "profile_dataset",
+            "analyze_dataset",
+            "cluster_segments",
+            "profile_segments",
+        ]
 
     def test_makes_only_the_tools_the_policy_allows(self) -> None:
         policy = _policy(tools=(AnalysisTool.PROFILE_DATASET,))
@@ -176,6 +181,47 @@ class TestToolsInTheSession:
         assert output["k"] == 3
         assert output["seed"] == 42
         assert sum(c["size"] for c in output["clusters"]) == 60
+
+    def test_profile_segments_counts_the_layers_in_the_sandbox(
+        self, prepared: tuple[InProcessSandbox, SandboxSession]
+    ) -> None:
+        service = _service(*prepared)
+
+        text = _by_name(service)["profile_segments"](by="job")
+
+        call_id = _tool_call_id(text)
+        output = service.output_of(call_id)
+        assert output["population"] == 60
+        assert {layer["key"]: layer["size"] for layer in output["layers"]} == {
+            "学生": 20,
+            "会社員": 20,
+            "無職": 20,
+        }
+        assert service.calls[-1].tool == "profile_segments" and service.calls[-1].ok
+
+    def test_profile_segments_passes_the_filters_as_data(self) -> None:
+        spy = _SpySandbox()
+        service = _service(spy, object())
+        filters = [{"column": "age", "operator": "gte", "value": 40}]
+
+        _by_name(service)["profile_segments"](filters=filters, by="job")
+
+        function, args = spy.calls[0]
+        assert function == "profile_segments"
+        assert args["filters"] == filters and args["by"] == "job"
+        assert args["source_id"] == "f1"
+
+    def test_profile_segments_allows_only_profiled_columns(self) -> None:
+        spy = _SpySandbox()
+        service = _service(spy, object())
+
+        by_secret = _by_name(service)["profile_segments"](by="password")
+        filter_secret = _by_name(service)["profile_segments"](
+            filters=[{"column": "secret", "operator": "eq", "value": 1}]
+        )
+
+        assert spy.calls == []
+        assert "INVALID_ARGUMENT" in by_secret and "INVALID_ARGUMENT" in filter_secret
 
     def test_cluster_segments_allows_only_profiled_columns(self) -> None:
         spy = _SpySandbox()

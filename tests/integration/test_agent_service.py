@@ -1728,6 +1728,43 @@ class TestAdvancedGenerationAgents:
         assert segment.segment_key == "young"
         assert segment.tool_call_id == "tc-3"
 
+    def test_analysis_keeps_the_layer_that_counted_the_features(self) -> None:
+        from src.models.analysis import Segment
+
+        output = _analysis_output()
+        output.segments[0] = output.segments[0].model_copy(
+            update={
+                "definition_kind": "filter",
+                "cluster_index": None,
+                "profile_tool_call_id": "tc-4",
+                "profile_key": "gold",
+                "features": [],
+            }
+        )
+        agent = Mock()
+        agent.structured_output.return_value = output
+
+        result = AgentService().run_advanced_analysis(
+            agent, "分析", {"plan": "{}"}, source_id="f1"
+        )
+
+        segment = Segment.from_dict(result["segments"][0])
+        assert segment.profile_tool_call_id == "tc-4"
+        assert segment.profile_key == "gold"
+
+    def test_a_segment_without_a_counted_layer_has_no_profile_fields(self) -> None:
+        from src.models.analysis import Segment
+
+        agent = Mock()
+        agent.structured_output.return_value = _analysis_output()
+
+        result = AgentService().run_advanced_analysis(
+            agent, "分析", {"plan": "{}"}, source_id="f1"
+        )
+
+        segment = Segment.from_dict(result["segments"][0])
+        assert segment.profile_tool_call_id is None and segment.profile_key is None
+
     def test_synthesis_uses_the_callers_schema(self, strands):
         agent = Mock()
         agent.structured_output.return_value = "personas"
@@ -2035,7 +2072,7 @@ def _analysis_output():
                 cluster_index=0,
                 size=120,
                 share=0.4,
-                features=[SegmentFeatureOutput(name="age", value="25", baseline="40")],
+                features=[SegmentFeatureOutput(name="age", value=25.0, baseline=40.0)],
                 evidence_ids=["e1"],
                 overlaps=False,
             )

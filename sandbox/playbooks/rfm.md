@@ -22,13 +22,22 @@
 ```python
 scores = rfm(read_table("source_2"), "customer_id", "bought_on", "amount")
 df = join_tables("source_1", "customer_id", [{"source": "source_2", "aggregations": [{"column": "amount", "func": "sum"}]}])
-df = df.merge(scores[["customer_id", "r_score", "f_score"]], on="customer_id", how="left")
+df = df.merge(
+    scores[["customer_id", "recency", "frequency", "monetary", "r_score", "f_score"]],
+    on="customer_id",
+    how="left",
+)
 df["segment"] = [
     "優良" if (r or 0) >= 4 and (f or 0) >= 4 else ("離反の恐れ" if (r or 0) <= 2 else "その他")
     for r, f in zip(df["r_score"], df["f_score"])
 ]
-emit_result(df, "segment", "join:source_1+source_2", id_column="customer_id")
+emit_result(
+    df, "segment", "join:source_1+source_2", id_column="customer_id",
+    metrics=["recency", "frequency", "monetary"],
+)
 ```
+
+- `metrics` に、人ごとに計算した数値の列（`recency`・`frequency`・`monetary` など）を渡すと、層ごとの平均が「AI の計算」の特徴として画面と人物像の材料に出る。購買の行動で分けたときは、必ず渡す。
 
 ## 使う関数
 

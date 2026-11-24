@@ -544,6 +544,160 @@ def https_base(
 _SECRET_QUERY = "?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA"
 
 
+def _members_csv() -> bytes:
+    lines = ["id,age,plan,area"]
+    for i in range(12):
+        lines.append(
+            f"M{i:02d},{20 + i * 2},{'gold' if i < 4 else 'basic'},"
+            f"{'east' if i % 2 == 0 else 'west'}"
+        )
+    return ("\n".join(lines) + "\n").encode()
+
+
+class TestProfileSegments:
+    """Features of the layers a fixed tool made, counted by the library (U6)."""
+
+    def _profile(self, lib: ModuleType, tmp_path: Path, **args: Any) -> Any:
+        _prepare(lib, tmp_path, _members_csv(), source_id="src1")
+        return _call(lib, tmp_path, "profile_segments", source_id="src1", **args)
+
+    def test_each_value_of_a_column_is_a_layer_with_its_features(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        result = self._profile(lib, tmp_path, by="plan", filters=[])
+
+        value = result["value"]
+        assert value["population"] == 12
+        layers = {layer["key"]: layer for layer in value["layers"]}
+        assert {k: layer["size"] for k, layer in layers.items()} == {
+            "basic": 8,
+            "gold": 4,
+        }
+        age = next(f for f in layers["gold"]["features"] if f["name"] == "age")
+        # the whole is every row, not the rows of the layers
+        assert age["value"] == 23.0 and age["baseline"] == 31.0
+        assert age["kind"] == "mean" and age["spread"] > 0
+        assert [layer["key"] for layer in value["layers"]] == ["basic", "gold"]
+
+    def test_the_grouping_column_is_not_a_feature_of_its_own_layer(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        result = self._profile(lib, tmp_path, by="plan", filters=[])
+
+        names = {
+            f["name"] for layer in result["value"]["layers"] for f in layer["features"]
+        }
+        assert "age" in names
+        assert not any(n.startswith("plan") for n in names)
+
+    def test_filters_make_one_layer_and_an_equal_column_is_left_out(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        filters = [
+            {"column": "plan", "operator": "eq", "value": "basic"},
+            {"column": "age", "operator": "gte", "value": 30},
+        ]
+
+        result = self._profile(lib, tmp_path, filters=filters)
+
+        [layer] = result["value"]["layers"]
+        assert layer["size"] == 7 and layer["share"] == round(7 / 12, 6)
+        names = {f["name"] for f in layer["features"]}
+        assert "age" in names  # a range is no trait given away by the filter
+        assert not any(n.startswith("plan") for n in names)
+        area = next(f for f in layer["features"] if f["name"].startswith("area="))
+        assert area["kind"] == "share" and 0.0 <= area["baseline"] <= 1.0
+
+    def test_the_share_baseline_counts_every_row_of_the_table(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        filters = [{"column": "plan", "operator": "eq", "value": "gold"}]
+
+        result = self._profile(lib, tmp_path, filters=filters)
+
+        [layer] = result["value"]["layers"]
+        area = next(f for f in layer["features"] if f["name"].startswith("area="))
+        # gold = M00..M03: east twice of four; the whole: east 6 of 12
+        assert area["value"] == 0.5 and area["baseline"] == 0.5
+
+    def test_no_row_matching_gives_no_layer(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        filters = [{"column": "age", "operator": "gt", "value": 999}]
+
+        result = self._profile(lib, tmp_path, filters=filters)
+
+        assert result["value"]["layers"] == [] and result["value"]["population"] == 12
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            {"by": "nope"},
+            {"filters": [{"column": "nope", "operator": "eq", "value": 1}]},
+            {"filters": [{"column": "age", "operator": "like", "value": 1}]},
+            {"filters": [{"column": "age", "operator": "in", "value": []}]},
+            {"filters": [{"column": "age", "operator": "eq", "value": {"a": 1}}]},
+            {"filters": "age>3"},
+        ],
+    )
+    def test_a_bad_argument_is_refused(
+        self, lib: ModuleType, tmp_path: Path, args: dict[str, Any]
+    ) -> None:
+        result = self._profile(lib, tmp_path, **args)
+
+        assert result["ok"] is False
+        assert result["error"]["code"] == "INVALID_ARGUMENT"
+
+    def test_a_value_that_looks_like_sql_is_only_a_value(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        filters = [
+            {"column": "plan", "operator": "eq", "value": "x'; DROP VIEW dataset; --"}
+        ]
+
+        result = self._profile(lib, tmp_path, filters=filters)
+
+        assert result["value"]["layers"] == [] and result["value"]["population"] == 12
+
+    def test_a_key_like_column_is_not_a_feature(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        data = "id,age,zip_code\n" + "\n".join(
+            f"M{i},{20 + i},{1000000 + i}" for i in range(10)
+        )
+        _prepare(lib, tmp_path, (data + "\n").encode(), source_id="src1")
+
+        result = _call(
+            lib,
+            tmp_path,
+            "profile_segments",
+            source_id="src1",
+            filters=[{"column": "age", "operator": "gte", "value": 25}],
+        )
+
+        names = {f["name"] for f in result["value"]["layers"][0]["features"]}
+        assert "zip_code" not in names
+
+    def test_at_most_twenty_layers_come_back_the_biggest_first(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        rows = ["id,group,v"]
+        for g in range(30):
+            for n in range(g + 1):
+                rows.append(f"R{g}_{n},g{g:02d},{n}")
+        _prepare(lib, tmp_path, ("\n".join(rows) + "\n").encode(), source_id="src1")
+
+        result = _call(
+            lib, tmp_path, "profile_segments", source_id="src1", by="group", filters=[]
+        )
+
+        layers = result["value"]["layers"]
+        assert len(layers) == 20 and layers[0]["key"] == "g29"
+        assert [x["size"] for x in layers] == sorted(
+            (x["size"] for x in layers), reverse=True
+        )
+
+
 class TestDownload:
     def test_downloads_to_the_sources_folder(
         self, lib: ModuleType, tmp_path: Path, https_base: str
@@ -1216,7 +1370,9 @@ class TestEmitAndFinalize:
         import pyarrow.parquet as pq
 
         written = pq.read_table(tmp_path / "ai_work" / "t1" / "assignment.parquet")
-        assert written.column_names == ["person_id", "segment"]
+        assert written.column_names[:2] == ["person_id", "segment"]
+        # nothing else of the table: only numbers the code computed (metrics)
+        assert all(c.startswith("metric_") for c in written.column_names[2:])
 
     def test_a_second_emit_result_raises_and_fails_the_check(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
@@ -1307,7 +1463,148 @@ class TestEmitAndFinalize:
         result = _finalize(lib, tmp_path)["result"]
 
         assert result["population"] == 30
-        assert result["segments"] == [{"segment_key": "a", "size": 30, "features": []}]
+        assert [(s["segment_key"], s["size"]) for s in result["segments"]] == [
+            ("a", 30)
+        ]
+
+    def test_features_are_counted_by_the_library_for_each_segment(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        by_key = {s["segment_key"]: s["features"] for s in result["segments"]}
+        age = {f["kind"]: f for f in by_key["young"] if f["name"] == "age"}["mean"]
+        assert age["value"] == 27.0 and age["baseline"] == 34.5
+        old_age = next(f for f in by_key["old"] if f["name"] == "age")
+        assert old_age["value"] == 42.0 and old_age["baseline"] == 34.5
+        plan = [f for f in by_key["old"] if f["name"].startswith("plan=")]
+        assert plan and plan[0]["kind"] == "share"
+        assert 0.0 <= plan[0]["value"] <= 1.0 and 0.0 <= plan[0]["baseline"] <= 1.0
+        # the person's ID is not a feature
+        assert not any(f["name"].startswith("customer_id") for f in by_key["old"])
+
+    def test_features_the_code_passed_are_not_used(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = read_table("source_1")\n'
+            'df["seg"] = ["young" if a < 35 else "old" for a in df["age"]]\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id",'
+            ' features={"young": [{"name": "made_up", "value": 1, "baseline": 2}]})\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        names = {f["name"] for s in result["segments"] for f in s["features"]}
+        assert "made_up" not in names and "age" in names
+
+    def test_a_metric_the_code_computed_is_averaged_by_the_library(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = read_table("source_1")\n'
+            'df["seg"] = ["young" if a < 35 else "old" for a in df["age"]]\n'
+            'df["score"] = df["age"] * 2\n'
+            'df["note"] = "text"\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id",'
+            ' metrics=["score", "note"])\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        by_key = {s["segment_key"]: s["features"] for s in result["segments"]}
+        score = next(f for f in by_key["young"] if f["name"] == "score")
+        assert score == {
+            "name": "score",
+            "kind": "derived",
+            "value": 54.0,
+            "baseline": 69.0,
+            "spread": pytest.approx(17.3109, abs=1e-3),
+        }
+        # text is no metric
+        assert not any(f["name"] == "note" for f in by_key["young"])
+
+    def test_numeric_columns_the_code_added_are_metrics_without_being_named(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = read_table("source_1")\n'
+            'df["seg"] = ["young" if a < 35 else "old" for a in df["age"]]\n'
+            'df["score"] = df["age"] * 2\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id")\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        features = {
+            (f["name"], f["kind"])
+            for s in result["segments"]
+            if s["segment_key"] == "young"
+            for f in s["features"]
+        }
+        assert ("score", "derived") in features
+        # a column of the table is counted by the library, not as a metric
+        assert ("age", "mean") in features and ("age", "derived") not in features
+
+    def test_a_metric_that_is_not_a_column_is_an_error_of_the_code(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = read_table("source_1")\ndf["seg"] = "a"\n'
+            'emit_result(df, "seg", "source_1", id_column="customer_id",'
+            ' metrics=["nope"])\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        assert _finalize(lib, tmp_path)["error"] == "NO_RESULT"
+
+    def test_every_column_is_looked_at_and_ids_are_not_features(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        cols = ["customer_id", "age", "zip_code", "member_no", "residence"]
+        cols += [f"q{i}" for i in range(30)] + ["key_metric"]
+        lines = [",".join(cols)]
+        for i in range(30):
+            row = [f"C{i:03d}", str(20 + i), str(1500000 + i * 37), str(i + 1)]
+            row.append("east" if i % 2 else "west")
+            row += [str((i * 7 + j) % 5) for j in range(30)]
+            row.append(str(1000 if i < 15 else 9000))
+            lines.append(",".join(row))
+        assert _prepare(
+            lib, tmp_path, ("\n".join(lines) + "\n").encode(), source_id="cust"
+        )["ok"]
+        (tmp_path / "persona_analysis.py").write_bytes(_LIBRARY_PATH.read_bytes())
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        names = {f["name"] for s in result["segments"] for f in s["features"]}
+        # the last of 35 columns is the one that differs: it is not skipped
+        assert "key_metric" in names
+        # a numeric ID or a number is no trait of a person
+        assert "zip_code" not in names and "member_no" not in names
+        # a word that merely holds "id" is an ordinary column
+        assert any(n.startswith("residence=") for n in names)
+
+    def test_a_mean_carries_the_spread_of_the_whole(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        _run_ai(lib, tmp_path, _EMIT_BY_AGE)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        age = next(f for f in result["segments"][0]["features"] if f["name"] == "age")
+        # ages 20..49: the population standard deviation is sqrt((30**2 - 1) / 12)
+        assert age["spread"] == pytest.approx(8.6554, abs=1e-3)
+        share = next(
+            f for f in result["segments"][0]["features"] if f["kind"] == "share"
+        )
+        assert "spread" not in share
 
     def test_a_replaced_emit_result_does_not_change_the_numbers(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
@@ -1767,6 +2064,58 @@ class TestPlaybookFunctions:
         assert stats["age"]["p_value"] < 0.001 and abs(stats["age"]["effect_size"]) > 1
         assert stats["plan"]["name"] == "chi_square"
         assert 0 <= stats["plan"]["p_value"] <= 1
+
+    def test_rfm_gives_people_with_the_same_behaviour_the_same_scores(
+        self, lib: ModuleType
+    ) -> None:
+        import pandas as pd
+
+        rows = [{"id": f"C{i:02d}", "d": "2026-03-01", "a": 1000} for i in range(20)]
+
+        out = lib.rfm(pd.DataFrame(rows), "id", "d", "a")
+
+        for column in ("r_score", "f_score", "m_score"):
+            assert out[column].nunique() == 1
+
+    def test_rfm_scores_follow_the_values_and_ties_share_a_score(
+        self, lib: ModuleType
+    ) -> None:
+        import pandas as pd
+
+        rows = []
+        for i in range(10):
+            # persons 0-4 buy once for 100, persons 5-9 buy 3 times for 900
+            times = 1 if i < 5 else 3
+            for n in range(times):
+                rows.append(
+                    {
+                        "id": f"C{i}",
+                        "d": f"2026-0{1 + n}-15",
+                        "a": 100 if i < 5 else 300,
+                    }
+                )
+
+        out = lib.rfm(pd.DataFrame(rows), "id", "d", "a", as_of="2026-12-31")
+        by_id = out.set_index("id")
+
+        low = by_id.loc[[f"C{i}" for i in range(5)]]
+        high = by_id.loc[[f"C{i}" for i in range(5, 10)]]
+        for column in ("f_score", "m_score"):
+            assert low[column].nunique() == 1 and high[column].nunique() == 1
+            assert high[column].iloc[0] > low[column].iloc[0]
+
+    def test_rfm_spreads_distinct_values_over_the_scores(self, lib: ModuleType) -> None:
+        import pandas as pd
+
+        rows = [
+            {"id": f"C{i:02d}", "d": f"2026-01-{1 + i:02d}", "a": 100 * (i + 1)}
+            for i in range(10)
+        ]
+
+        out = lib.rfm(pd.DataFrame(rows), "id", "d", "a", as_of="2026-12-31")
+
+        assert sorted(set(out["m_score"])) == [1, 2, 3, 4, 5]
+        assert sorted(set(out["r_score"])) == [1, 2, 3, 4, 5]
 
     def test_rfm_scores_each_person(
         self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]

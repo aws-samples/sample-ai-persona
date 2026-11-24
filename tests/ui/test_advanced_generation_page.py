@@ -1026,11 +1026,251 @@ class TestSegmentCards:
         text = ui.page.inner_text("[data-testid='advanced-segments']")
         assert "S1" not in text and "S2" not in text
         # S1 is below the whole, S2 is unverified (no share, no features compared)
-        assert "▼ 全体より低い" in cards.nth(0).inner_text()
+        assert "▼ 低い" in cards.nth(0).inner_text()
         assert "検証で外したため" in cards.nth(1).inner_text()
         assert (
             ui.page.locator("[data-testid='advanced-result-summary'] dt").count() >= 1
         )
+        ui.check_a11y()
+
+
+class TestSegmentNumbers:
+    def _result(self, sizes: tuple[int, int]) -> Any:
+        from dataclasses import replace
+
+        from src.models.analysis import Segment
+
+        def segment(n: int, size: int, features: tuple[dict, ...]) -> Segment:
+            return Segment(
+                id=f"S{n}",
+                label=f"層{n}",
+                definition={"kind": "derived", "spec": {"tool_call_id": "tc-1"}},
+                size=size,
+                share=size / 300,
+                features=features,
+                evidence_ids=("E1",),
+            )
+
+        features = (
+            {"name": "年齢", "kind": "mean", "value": 27.0, "baseline": 34.5},
+            {"name": "プラン=gold", "kind": "share", "value": 0.48, "baseline": 0.33},
+            {"name": "recency", "kind": "derived", "value": 12.0, "baseline": 45.0},
+        )
+        base = s.result()
+        return replace(
+            base,
+            segments=(segment(1, sizes[0], features), segment(2, sizes[1], ())),
+            unverified_segment_ids=(),
+        )
+
+    def _open_with(self, ui: UiHarness, result: Any) -> None:
+        SseFake(
+            ui,
+            [_frame("result", render_result(result), 4) + "event: done\ndata: \n\n"],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+    def test_a_share_is_shown_as_a_percent_and_a_mean_as_a_number(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        features = ui.page.locator("[data-testid='advanced-segment-row']").nth(0)
+        rows = [
+            r.inner_text().replace("\n", " ").replace("\t", " ")
+            for r in features.locator(
+                "[data-testid='advanced-segment-features'] tbody tr"
+            ).all()
+        ]
+        # the same table as the data part of a candidate
+        assert any("プラン=gold" in r and "48%" in r and "33%" in r for r in rows)
+        assert any("年齢" in r and "27.0" in r and "34.5" in r for r in rows)
+        assert any("最後の購入からの日数" in r and "AI の計算" in r for r in rows)
+        assert any("▼ 低い" in r for r in rows) and any("▲ 高い" in r for r in rows)
+        ui.check_a11y()
+
+    def test_people_in_no_layer_are_told_with_their_number(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        rest = ui.page.inner_text("[data-testid='advanced-segments-rest']")
+        assert "80 人（27%）" in rest
+
+    def test_the_population_is_told_when_it_differs_from_the_rows(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        report = replace(result.prepare_reports[0], rows_read=3335)
+        self._open_with(ui, replace(result, prepare_reports=(report,)))
+
+        tile = ui.page.inner_text("[data-testid='advanced-population']")
+        assert "300" in tile and "人数" in tile
+
+    def test_the_population_is_told_with_several_tables_too(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        first = replace(result.prepare_reports[0], rows_read=3335)
+        second = replace(result.prepare_reports[0], rows_read=300)
+        self._open_with(ui, replace(result, prepare_reports=(first, second)))
+
+        assert "300" in ui.page.inner_text("[data-testid='advanced-population']")
+
+    def test_the_population_is_not_repeated_when_it_equals_the_rows(
+        self, ui: UiHarness
+    ) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        report = replace(result.prepare_reports[0], rows_read=300)
+        self._open_with(ui, replace(result, prepare_reports=(report,)))
+
+        assert ui.page.locator("[data-testid='advanced-population']").count() == 0
+
+    def test_fewer_layers_than_personas_are_told(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        # three personas were asked for, two layers were made
+        result = replace(result, generation=result.generation.update(persona_count=3))
+        self._open_with(ui, result)
+
+        note = ui.page.inner_text("[data-testid='advanced-segments-few']")
+        assert "2 個" in note and "3 人" in note
+
+    def test_as_many_layers_as_personas_tell_nothing(self, ui: UiHarness) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        assert ui.page.locator("[data-testid='advanced-segments-few']").count() == 0
+
+    def test_a_result_counted_in_rows_says_so(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        run = result.generation.analysis_run
+        marked = run.update(params={**run.params, "rows_are_not_people": True})
+        result = replace(
+            result, generation=result.generation.update(analysis_run=marked)
+        )
+        self._open_with(ui, result)
+
+        note = ui.page.inner_text("[data-testid='advanced-rows-notice']")
+        assert "行" in note and "人" in note
+        ui.check_a11y()
+
+    def test_a_result_counted_in_people_says_nothing_of_rows(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+
+        assert ui.page.locator("[data-testid='advanced-rows-notice']").count() == 0
+
+    def test_the_data_part_is_a_table_with_readable_names_and_units(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 120)))
+        first = ui.page.locator("[data-testid='advanced-candidate']").nth(0)
+        first.locator("[data-testid='advanced-evidence'] summary").click()
+
+        rows = first.locator("[data-testid='advanced-candidate-basis'] tbody tr")
+        texts = [
+            r.inner_text().replace("\n", " ").replace("\t", " ") for r in rows.all()
+        ]
+
+        assert any("最後の購入からの日数 AI の計算" in t and "12.0" in t for t in texts)
+        assert any(
+            "プラン=gold その人の割合" in t and "48%" in t and "33%" in t for t in texts
+        )
+        assert any("年齢" in t and "▼ 低い" in t for t in texts)
+        # the evidence has its own heading below the table
+        assert (
+            "分析の根拠"
+            in first.locator("[data-testid='advanced-evidence-list']").inner_text()
+        )
+        ui.check_a11y()
+
+    def test_nothing_is_told_when_there_are_several_tables(self, ui: UiHarness) -> None:
+        from dataclasses import replace
+
+        result = self._result((100, 120))
+        # a joined result: the first table's rows are not the people counted
+        result = replace(
+            result, prepare_reports=(*result.prepare_reports, result.prepare_reports[0])
+        )
+        self._open_with(ui, result)
+
+        assert ui.page.locator("[data-testid='advanced-segments-rest']").count() == 0
+
+    def test_nothing_is_told_when_every_person_is_in_a_layer(
+        self, ui: UiHarness
+    ) -> None:
+        self._open_with(ui, self._result((100, 200)))
+
+        assert ui.page.locator("[data-testid='advanced-segments-rest']").count() == 0
+
+
+class TestCandidateShowsWhatIsData:
+    def test_the_data_part_and_the_imagined_part_are_told_apart(
+        self, ui: UiHarness
+    ) -> None:
+        SseFake(
+            ui,
+            [
+                _frame("result", render_result(s.result()), 4)
+                + "event: done\ndata: \n\n"
+            ],
+        )
+        _open(ui, generation_id=s.GENERATION_ID)
+        ui.page.wait_for_selector("[data-testid='advanced-result']")
+
+        cards = ui.page.locator("[data-testid='advanced-candidate']")
+        first = cards.nth(0)
+        evidence = first.locator("[data-testid='advanced-evidence']")
+        basis = first.locator("[data-testid='advanced-candidate-basis']")
+        # the data part is inside the evidence, which is closed at first
+        assert basis.count() == 1
+        assert evidence.locator("[data-testid='advanced-candidate-basis']").count() == 1
+        assert not basis.is_visible()
+        evidence.locator("summary").click()
+        assert basis.is_visible()
+        assert "データに基づく点" in basis.inner_text()
+        # a table: item, this layer, the whole, the comparison
+        cells = basis.locator("tbody tr").nth(0).locator("th, td").all_inner_texts()
+        assert cells[0].startswith("年齢") and cells[1] == "26.0" and cells[2] == "44.5"
+        assert cells[3] == "▼ 低い"
+        assert basis.locator("thead th").all_inner_texts() == [
+            "項目",
+            "この層",
+            "全体",
+            "比べると",
+        ]
+        # the data part comes before the list of evidence
+        order = first.evaluate(
+            """el => {
+                const pos = id => el.querySelector(`[data-testid='${id}']`)
+                    .getBoundingClientRect().top;
+                return [pos('advanced-candidate-imagined'),
+                        pos('advanced-candidate-basis')];
+            }"""
+        )
+        assert order == sorted(order)
+        note = first.locator("[data-testid='advanced-candidate-imagined']").inner_text()
+        assert "想像" in note
+        # the note points where the data part is: inside the evidence, below
+        assert "下の「根拠」にある「データに基づく点」" in note and "上の" not in note
+        # the layer dropped by the verification shows no figures as data
+        assert (
+            cards.nth(1).locator("[data-testid='advanced-candidate-basis']").count()
+            == 0
+        )
+        second = cards.nth(1).locator("[data-testid='advanced-candidate-imagined']")
+        assert second.count() == 1
+        # no data part to point at: the note does not refer to one
+        assert "データに基づく点" not in second.inner_text()
         ui.check_a11y()
 
 

@@ -238,6 +238,7 @@ class AnalysisToolService:
             AnalysisTool.PROFILE_DATASET: self._profile_tool,
             AnalysisTool.ANALYZE_DATASET: self._analyze_tool,
             AnalysisTool.CLUSTER_SEGMENTS: self._cluster_tool,
+            AnalysisTool.PROFILE_SEGMENTS: self._profile_segments_tool,
             AnalysisTool.RUN_CODE: self._run_code_tool,
             AnalysisTool.LOAD_PLAYBOOK: self._playbook_tool,
         }
@@ -537,6 +538,64 @@ class AnalysisToolService:
             )
 
         return cluster_segments
+
+    def _profile_segments_tool(self) -> Callable:
+        with_table = self._with_table
+        profile = self._profile_segments
+
+        @tool
+        def profile_segments(
+            by: Optional[str] = None,
+            filters: Optional[List[Filter]] = None,
+            source: Optional[str] = None,
+        ) -> str:
+            """Count the features of the layers you made with analyze_dataset.
+
+            Give the same filters (and the same group_by column as ``by``) you
+            used there. Each value of ``by`` is a layer; without ``by`` the
+            filtered rows are one layer. For each layer it returns the size and
+            the features (mean or share, with the figure of all rows). Put the
+            tool_call_id of this call and the layer's key on the segment: the
+            features are used only when the layer's size equals the segment's.
+
+            Args:
+                by: The column whose values are the layers (a comparison).
+                filters: Conditions of column / operator / value (as in
+                    analyze_dataset).
+                source: The table (source_1, source_2, source_3). It may be
+                    left out when there is one table.
+
+            Returns:
+                The layers as JSON inside a data block, with its tool_call_id.
+            """
+            return with_table(
+                "profile_segments",
+                source,
+                lambda t: profile(t, by, [dict(f) for f in filters or []]),
+            )
+
+        return profile_segments
+
+    def _profile_segments(
+        self,
+        table: AnalysisTable,
+        by: Optional[str],
+        filters: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        known = set(table.columns)
+        if (by is not None and by not in known) or any(
+            f.get("column") not in known for f in filters
+        ):
+            return {"ok": False, "error": {"code": "INVALID_ARGUMENT"}}
+        return self._sandbox_call(
+            "profile_segments",
+            {
+                "source_id": table.source_id,
+                "by": by,
+                "filters": filters,
+                "timeout_seconds": self._query_limits.timeout_seconds,
+            },
+        )
 
     def _cluster(self, table: AnalysisTable, columns: List[str]) -> Dict[str, Any]:
         known = set(table.columns)

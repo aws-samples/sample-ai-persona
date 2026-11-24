@@ -104,11 +104,11 @@ class AdvancedPlanOutput(BaseModel):
 
 
 class SegmentFeatureOutput(BaseModel):
-    """One feature of a segment, as seen in a tool output."""
+    """One feature of a segment: numbers seen in a tool output (U6 addendum)."""
 
     name: str
-    value: str
-    baseline: str
+    value: float = Field(description="この層の値（ツールの出力に出た数値）")
+    baseline: float = Field(description="全体の値（ツールの出力に出た数値）")
 
 
 class SegmentOutput(BaseModel):
@@ -131,9 +131,21 @@ class SegmentOutput(BaseModel):
     definition_segment_key: Optional[str] = Field(
         default=None, description="run_code の結果から作った層の segment_key"
     )
+    profile_tool_call_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "analyze_dataset で作った層の特徴を数えた profile_segments の tool_call_id"
+        ),
+    )
+    profile_key: Optional[str] = Field(
+        default=None, description="その呼び出しの結果にある、この層の key"
+    )
     size: int = Field(description="ツールの出力に出てきた行数")
     share: float = Field(description="母数に対する割合（0〜1）")
-    features: list[SegmentFeatureOutput]
+    features: list[SegmentFeatureOutput] = Field(
+        default_factory=list,
+        description=("書かない（空のままにする。システムが数え直して付ける）"),
+    )
     evidence_ids: list[str]
     overlaps: bool = Field(default=False, description="ほかの層と重なりうるか")
 
@@ -170,6 +182,9 @@ def _analysis_to_contract(
             spec["cluster_index"] = s.cluster_index
         if s.definition_segment_key:
             spec["segment_key"] = s.definition_segment_key
+        if s.profile_tool_call_id and s.profile_key is not None:
+            spec["profile_tool_call_id"] = s.profile_tool_call_id
+            spec["profile_key"] = s.profile_key
         definition: dict[str, Any] = {"kind": s.definition_kind, "spec": spec}
         if s.definition_source:
             definition["source"] = s.definition_source

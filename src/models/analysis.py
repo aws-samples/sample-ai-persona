@@ -185,17 +185,21 @@ class AnalysisTool(StrEnum):
     PROFILE_DATASET = "profile_dataset"
     ANALYZE_DATASET = "analyze_dataset"
     CLUSTER_SEGMENTS = "cluster_segments"
+    #: U6 addendum: count the features of the layers a fixed tool made
+    PROFILE_SEGMENTS = "profile_segments"
     #: U6: run AI-written code in the generation's session (BR36)
     RUN_CODE = "run_code"
     #: U6: read one playbook by name (BR39.1)
     LOAD_PLAYBOOK = "load_playbook"
 
 
-#: The tools of U1, in the order they are offered (BR5.2).
+#: The fixed tools, in the order they are offered (BR5.2; U6 addendum adds
+#: ``profile_segments``).
 U1_ANALYSIS_TOOLS: tuple[AnalysisTool, ...] = (
     AnalysisTool.PROFILE_DATASET,
     AnalysisTool.ANALYZE_DATASET,
     AnalysisTool.CLUSTER_SEGMENTS,
+    AnalysisTool.PROFILE_SEGMENTS,
 )
 
 #: Encodings a finished preparation may report (``undetermined`` is settled).
@@ -493,6 +497,16 @@ class Segment:
     def segment_key(self) -> str | None:
         """U6: the key of an ``emit_result`` segment (BR36.3)."""
         return self._spec_value("segment_key")
+
+    @property
+    def profile_tool_call_id(self) -> str | None:
+        """U6 addendum: the ``profile_segments`` call that counted the features."""
+        return self._spec_value("profile_tool_call_id")
+
+    @property
+    def profile_key(self) -> str | None:
+        """U6 addendum: the key of the segment's layer in that call."""
+        return self._spec_value("profile_key")
 
     def to_dict(self) -> dict[str, Any]:
         return {

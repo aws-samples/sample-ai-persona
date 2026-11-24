@@ -31,6 +31,7 @@ import decimal
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import signal
@@ -618,6 +619,144 @@ def run_query(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# profile_segments (U6 addendum: the features of a layer a fixed tool made)
+# ---------------------------------------------------------------------------
+
+_SEGMENT_COMPARISONS = {
+    "eq": "=",
+    "ne": "<>",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+}
+_MAX_IN_VALUES = 100
+_MAX_LAYERS = 20
+_MISSING_KEY = "（欠損）"
+_FILTERED_KEY = "filtered"
+
+
+def _filter_value(value: Any) -> Any:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    return value
+
+
+def _where_clause(filters: Any, names: set) -> Tuple[str, List[Any], set]:
+    """``WHERE`` text, its parameters and the columns an ``eq`` filter fixes.
+
+    The columns must be the table's, the operators are an allowlist and every
+    value is a bound parameter, so nothing the AI wrote becomes SQL text.
+    """
+    if filters is None:
+        return "", [], set()
+    if not isinstance(filters, list):
+        raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    parts: List[str] = []
+    params: List[Any] = []
+    fixed: set = set()
+    for item in filters:
+        if not isinstance(item, dict):
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+        column, operator, value = (
+            item.get("column"),
+            item.get("operator"),
+            item.get("value"),
+        )
+        if column not in names or not isinstance(operator, str):
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+        col = _quote_ident(column)
+        if operator in _SEGMENT_COMPARISONS:
+            parts.append(f"{col} {_SEGMENT_COMPARISONS[operator]} ?")
+            params.append(_filter_value(value))
+            if operator == "eq":
+                fixed.add(column)
+        elif operator == "in":
+            if not isinstance(value, list) or not 1 <= len(value) <= _MAX_IN_VALUES:
+                raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+            parts.append(f"{col} IN ({', '.join('?' for _ in value)})")
+            params.extend(_filter_value(v) for v in value)
+            if len(value) == 1:
+                fixed.add(column)
+        elif operator == "contains":
+            parts.append(f"contains(lower(CAST({col} AS VARCHAR)), lower(?))")
+            params.append(str(_filter_value(value)))
+        else:
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "filters"})
+    return (" WHERE " + " AND ".join(parts)) if parts else "", params, fixed
+
+
+def profile_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
+    """Count each layer's size and features from the rows of a table.
+
+    Args: ``source_id``, ``filters`` (``{column, operator, value}`` list) and
+    ``by`` (a column). With ``by`` each value of the column (after the filters)
+    is a layer, the 20 biggest at most; without it the filtered rows are one
+    layer (``filtered``). Returns ``{population, layers: [{key, size, share,
+    features}]}``. The features are those of the recount (``mean`` with
+    ``spread`` and ``share``) against all rows of the table; the ``by`` column
+    and the columns an equal filter fixes are left out.
+    """
+    timeout = float(args.get("timeout_seconds", 30))
+    con = _open_dataset(workdir, args.get("source_id"))
+    timer = threading.Timer(timeout, con.interrupt)
+    timer.start()
+    try:
+        schema = _schema(con)
+        names = {name for name, _ in schema}
+        by = args.get("by")
+        if by is not None and by not in names:
+            raise AnalysisError("INVALID_ARGUMENT", {"field": "by"})
+        where, params, fixed = _where_clause(args.get("filters"), names)
+        key = (
+            f"coalesce(CAST({_quote_ident(by)} AS VARCHAR), {_sql_literal(_MISSING_KEY)})"
+            if by is not None
+            else _sql_literal(_FILTERED_KEY)
+        )
+        population = int(con.execute("SELECT count(*) FROM dataset").fetchone()[0])
+        con.execute(
+            "CREATE VIEW d AS SELECT CAST(file_row_number AS VARCHAR) AS __pid, "
+            "* FROM dataset"
+        )
+        con.execute(
+            "CREATE TEMP TABLE a0 AS SELECT CAST(file_row_number AS VARCHAR) AS person_id, "
+            f"{key} AS segment FROM dataset{where}",
+            params,
+        )
+        con.execute(
+            "CREATE VIEW a AS SELECT * FROM a0 WHERE segment IN (SELECT segment "
+            f"FROM a0 GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT {_MAX_LAYERS})"
+        )
+        sizes = con.execute(
+            "SELECT segment, count(*) FROM a GROUP BY 1 ORDER BY 2 DESC, 1"
+        ).fetchall()
+        features = _profile_views(con, schema, set(fixed) | ({by} if by else set()))
+    except AnalysisError:
+        raise
+    except Exception as e:  # noqa: BLE001 - map to codes; drop the text
+        if not timer.is_alive():
+            raise AnalysisError("QUERY_TIMEOUT", {"seconds": timeout}) from None
+        if _is_out_of_memory(e):
+            raise AnalysisError("OUT_OF_MEMORY") from None
+        raise AnalysisError("QUERY_FAILED") from None
+    finally:
+        timer.cancel()
+        con.close()
+    return {
+        "population": population,
+        "layers": [
+            {
+                "key": str(key_),
+                "size": int(size),
+                "share": round(int(size) / population, 6) if population else 0.0,
+                "features": features.get(str(key_), []),
+            }
+            for key_, size in sizes
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # cluster_segments (BR5.3)
 # ---------------------------------------------------------------------------
 
@@ -740,8 +879,10 @@ class _Tally:
                 out.append(
                     {
                         "name": name,
+                        "kind": "mean",
                         "value": round(self.sums[name][label] / size, 4),
                         "baseline": round(total / population, 4),
+                        "spread": round(float(self.features.stats[name][1]), 4),
                     }
                 )
                 continue
@@ -751,6 +892,7 @@ class _Tally:
             out.append(
                 {
                     "name": f"{name}={_short(top)}",
+                    "kind": "share",
                     "value": round(bucket[top] / size, 4),
                     "baseline": round(overall / population, 4),
                 }
@@ -780,7 +922,7 @@ def cluster_segments(args: Dict[str, Any], workdir: str) -> Dict[str, Any]:
     Args: ``source_id``, ``columns``, ``k`` (the persona count), ``seed``
     (default 42), ``sample_max_rows`` (default 1,000,000).
     Returns ``{k, seed, population, sample_rows, clusters: [{index, size,
-    share, features: [{name, value, baseline}]}]}``; sizes sum to the population.
+    share, features: [{name, kind, value, baseline}]}]}``; sizes sum to the population.
     """
     k = args.get("k")
     if not isinstance(k, int) or isinstance(k, bool) or k < 1:
@@ -1347,6 +1489,7 @@ _ASSIGNMENT_FILE = "assignment.parquet"
 _META_FILE = "meta.json"
 _EMIT_COUNT_FILE = "emit_count"
 _MAX_STATISTICS = 50
+_MAX_METRICS = 10
 _MAX_FEATURES = 20
 _JOIN_FUNCS = {
     "count": "count({col})",
@@ -1479,6 +1622,28 @@ def _columns_of(frame: Any, *names: str) -> Dict[str, List[Any]]:
     return {n: data[n] for n in names}
 
 
+def _numeric_columns(frame: Any, skip: Tuple[str, ...]) -> List[str]:
+    """Names of the numeric columns of a pandas DataFrame (none for other frames)."""
+    if not (hasattr(frame, "select_dtypes") and hasattr(frame, "columns")):
+        return []
+    try:
+        numeric = frame.select_dtypes(include="number")
+    except Exception:  # noqa: BLE001 - a frame that cannot say its dtypes
+        return []
+    return [str(c) for c in numeric.columns if str(c) not in skip]
+
+
+def _metric_value(value: Any) -> Optional[float]:
+    """A number the code computed as a float; text, bools and NaN are no metric."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
 def _short_features(features: Any) -> Dict[str, List[Dict[str, Any]]]:
     if not isinstance(features, dict):
         return {}
@@ -1502,6 +1667,7 @@ def emit_result(
     statistics: Optional[List[Dict[str, Any]]] = None,
     joined_columns: Optional[List[str]] = None,
     features: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    metrics: Optional[List[str]] = None,
     out_dir: Optional[str] = None,
 ) -> None:
     """Hand the result of AI-written code over, once (BR36.3).
@@ -1511,7 +1677,12 @@ def emit_result(
     segment of the row. Only the IDs and the segments are written; sizes and
     the population are counted again from the data by the check.
     ``statistics`` and ``features`` are kept as passed and are NOT recounted
-    (the app never lets them back an evidence).
+    (the app never lets them back an evidence); ``features`` is not used at all,
+    the library counts the features itself. ``metrics`` names numeric columns
+    of ``frame`` the code computed (such as ``recency``); their mean in each
+    segment is shown as ``derived`` features (the values are the code's own).
+    Left out, every numeric column of a pandas frame counts (the columns of the
+    axis table are counted by the library itself and are not repeated).
 
     Raises:
         RuntimeError: Called a second time.
@@ -1532,16 +1703,20 @@ def emit_result(
         raise RuntimeError("emit_result is called once per run")
     if not _POPULATION_SOURCE.match(str(population_source)):
         raise ValueError("population_source is source_n or join:source_n+source_m")
-    columns = _columns_of(frame, id_column, assign_column)
+    if metrics is None:
+        metrics = _numeric_columns(frame, (id_column, assign_column))
+    names = [str(m) for m in metrics][:_MAX_METRICS]
+    columns = _columns_of(frame, id_column, assign_column, *names)
     if joined_columns is None:
         attrs = getattr(frame, "attrs", None)
         joined_columns = list(attrs.get("joined_columns", [])) if attrs else []
-    table = pa.table(
-        {
-            "person_id": [None if v is None else str(v) for v in columns[id_column]],
-            "segment": [None if v is None else str(v) for v in columns[assign_column]],
-        }
-    )
+    data: Dict[str, Any] = {
+        "person_id": [None if v is None else str(v) for v in columns[id_column]],
+        "segment": [None if v is None else str(v) for v in columns[assign_column]],
+    }
+    for index, name in enumerate(names):
+        data[f"metric_{index}"] = [_metric_value(v) for v in columns[name]]
+    table = pa.table(data)
     pq.write_table(table, os.path.join(folder, _ASSIGNMENT_FILE))
     meta = {
         "population_source": str(population_source),
@@ -1549,6 +1724,7 @@ def emit_result(
         "statistics": _json_safe(list(statistics or [])[:_MAX_STATISTICS]),
         "joined_columns": [str(c)[:_VALUE_MAX_CHARS] for c in joined_columns][:50],
         "features": _short_features(features),
+        "metrics": [str(m)[:_VALUE_MAX_CHARS] for m in names],
     }
     with open(os.path.join(folder, _META_FILE), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=True)
@@ -1867,6 +2043,184 @@ def _hashes(workdir: str, sources: Dict[str, str], library: Any) -> Dict[str, An
     }
 
 
+_PROFILE_MAX_COLUMNS = 400
+_PROFILE_MAX_VALUES = 30
+_PROFILE_CHUNK = 40
+#: Column names that say a number or a text is a key, not a trait (kept in step
+#: with ``analysis_policy._ID_NAME`` in the app, plus codes and numbers).
+_KEY_NAME = re.compile(
+    r"(?<![A-Za-z])[Ii][Dd](?![a-z])|(?<=[a-z])I[Dd](?![a-z])|(?<=[a-z])ID(?![A-Za-z])"
+    r"|ＩＤ|番号|コード|郵便|(?<![A-Za-z])(?:no|num|code|zip|postal)(?![a-z])",
+    re.IGNORECASE,
+)
+
+
+def _chunks(items: List[Any], size: int) -> Any:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _profile_features(
+    con: Any, source: str, id_column: str, metrics: Optional[List[str]] = None
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Features of each segment, counted from the axis table (U6 addendum).
+
+    Per segment and per column of the axis table (the ID column and columns
+    named like a key left out): the mean of a numeric column (``kind``
+    ``mean``, with ``spread``, the standard deviation of all rows) and the
+    share of the commonest value of a category column (``kind`` ``share``),
+    each with the figure of all rows (``baseline``). Every column is read, a
+    chunk of columns per query; which of them matter is decided by the app
+    from the sizes of the differences. The code's own ``features`` are never
+    used.
+    """
+    schema = con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet({_sql_literal(source)})"
+    ).fetchall()
+    con.execute(
+        f"CREATE VIEW d AS SELECT CAST({_quote_ident(id_column)} AS VARCHAR) "
+        f"AS __pid, * FROM read_parquet({_sql_literal(source)})"
+    )
+    return _profile_views(con, schema, {id_column}, metrics)
+
+
+def _profile_views(
+    con: Any,
+    schema: List[Any],
+    skip: set,
+    metrics: Optional[List[str]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Features per segment from the views ``d`` (all rows, with ``__pid``) and
+    ``a`` (``person_id``, ``segment``): the part shared by the recount and
+    :func:`profile_segments`. ``skip`` names the columns that are no trait."""
+    total = int(con.execute("SELECT count(*) FROM d").fetchone()[0])
+    sizes = {
+        str(k): int(n)
+        for k, n in con.execute("SELECT segment, count(*) FROM a GROUP BY 1").fetchall()
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {key: [] for key in sizes}
+    numeric: List[str] = []
+    categories: List[str] = []
+    for row in schema:
+        name, type_name = str(row[0]), str(row[1])
+        if name in skip or name == "file_row_number" or _KEY_NAME.search(name):
+            continue
+        if _is_numeric(type_name):
+            numeric.append(name)
+        elif type_name in ("VARCHAR", "BOOLEAN"):
+            categories.append(name)
+    numeric = numeric[:_PROFILE_MAX_COLUMNS]
+    categories = categories[:_PROFILE_MAX_COLUMNS]
+    join = "FROM d JOIN a ON d.__pid = a.person_id"
+
+    for chunk in _chunks(numeric, _PROFILE_CHUNK):
+        cols = [_quote_ident(n) for n in chunk]
+        overall = con.execute(
+            "SELECT "
+            + ", ".join(
+                f"avg(CAST({c} AS DOUBLE)), stddev_pop(CAST({c} AS DOUBLE))"
+                for c in cols
+            )
+            + " FROM d"
+        ).fetchone()
+        per_segment = con.execute(
+            "SELECT a.segment, "
+            + ", ".join(f"avg(CAST(d.{c} AS DOUBLE))" for c in cols)
+            + f" {join} GROUP BY 1"
+        ).fetchall()
+        for index, name in enumerate(chunk):
+            mean_all, spread = overall[2 * index], overall[2 * index + 1]
+            if mean_all is None:
+                continue
+            for record in per_segment:
+                mean = record[1 + index]
+                if mean is not None:
+                    out[str(record[0])].append(
+                        {
+                            "name": _short(name),
+                            "kind": "mean",
+                            "value": round(float(mean), 4),
+                            "baseline": round(float(mean_all), 4),
+                            "spread": round(float(spread or 0.0), 4),
+                        }
+                    )
+
+    for chunk in _chunks(categories, _PROFILE_CHUNK):
+        cols = [_quote_ident(n) for n in chunk]
+        kinds = con.execute(
+            "SELECT " + ", ".join(f"count(DISTINCT {c})" for c in cols) + " FROM d"
+        ).fetchone()
+        usable = [
+            (name, col)
+            for name, col, k in zip(chunk, cols, kinds)
+            if 2 <= int(k) <= _PROFILE_MAX_VALUES and int(k) < total
+        ]
+        if not usable:
+            continue
+        union = " UNION ALL ".join(
+            f"SELECT a.segment AS seg, {_sql_literal(name)} AS col, "
+            f"CAST(d.{col} AS VARCHAR) AS val, count(*) AS n, false AS whole {join} "
+            f"WHERE d.{col} IS NOT NULL GROUP BY 1, 2, 3"
+            f" UNION ALL SELECT '', {_sql_literal(name)}, "
+            f"CAST({col} AS VARCHAR), count(*), true FROM d "
+            f"WHERE {col} IS NOT NULL GROUP BY 2, 3"
+            for name, col in usable
+        )
+        counts: Dict[str, Dict[str, Dict[str, int]]] = {}
+        everyone: Dict[str, Dict[str, int]] = {}
+        for seg, col_name, value, n, whole_row in con.execute(union).fetchall():
+            if whole_row:
+                everyone.setdefault(str(col_name), {})[str(value)] = int(n)
+            else:
+                counts.setdefault(str(col_name), {}).setdefault(str(seg), {})[
+                    str(value)
+                ] = int(n)
+        for name, _ in usable:
+            by_segment = counts.get(name, {})
+            whole = everyone.get(name, {})
+            for key, values in by_segment.items():
+                value, n = sorted(values.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                out[key].append(
+                    {
+                        "name": f"{_short(name)}={_short(value)}",
+                        "kind": "share",
+                        "value": round(n / sizes[key], 4),
+                        "baseline": round(whole.get(value, 0) / total, 4),
+                    }
+                )
+
+    profiled = {str(row[0]) for row in schema}
+    for index, name in enumerate(metrics or []):
+        if name in profiled:
+            continue  # a column of the axis table is counted above
+        col = f"metric_{index}"
+        try:
+            overall_row = con.execute(
+                f"SELECT avg({col}), stddev_pop({col}) FROM a"
+            ).fetchone()
+            rows = con.execute(
+                f"SELECT segment, avg({col}) FROM a GROUP BY 1"
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001 - a result file without the column
+            if _is_out_of_memory(e):
+                raise
+            continue
+        if overall_row[0] is None:
+            continue
+        for key, mean in rows:
+            if mean is not None and str(key) in out:
+                out[str(key)].append(
+                    {
+                        "name": _short(name),
+                        "kind": "derived",
+                        "value": round(float(mean), 4),
+                        "baseline": round(float(overall_row[0]), 4),
+                        "spread": round(float(overall_row[1] or 0.0), 4),
+                    }
+                )
+    return out
+
+
 def _recount(
     workdir: str, work: str, sources: Dict[str, str]
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -1923,13 +2277,26 @@ def _recount(
         sizes = con.execute(
             "SELECT segment, count(*) FROM a GROUP BY segment ORDER BY 2 DESC, 1"
         ).fetchall()
+        metric_names = meta.get("metrics")
+        try:
+            profile = _profile_features(
+                con,
+                source,
+                id_column,
+                [str(m) for m in metric_names]
+                if isinstance(metric_names, list)
+                else [],
+            )
+        except Exception as e:  # noqa: BLE001 - the features are a help, not a result
+            if _is_out_of_memory(e):
+                raise
+            profile = {}
     except Exception as e:  # noqa: BLE001 - a missing column or a bad file
         if _is_out_of_memory(e):
             raise AnalysisError("OUT_OF_MEMORY") from None
         return None, "RESULT_INVALID"
     finally:
         con.close()
-    features = meta.get("features") if isinstance(meta.get("features"), dict) else {}
     result: Dict[str, Any] = {
         "population": int(n_s),
         "population_source": population_source,
@@ -1937,7 +2304,7 @@ def _recount(
             {
                 "segment_key": str(key)[:_VALUE_MAX_CHARS],
                 "size": int(size),
-                "features": list(features.get(str(key)) or []),
+                "features": list(profile.get(str(key)) or []),
             }
             for key, size in sizes
         ],
@@ -2227,9 +2594,12 @@ def rfm(
     grouped["recency"] = (reference - grouped["last"]).dt.days
 
     def score(values: Any, ascending: bool) -> Any:
-        ranked = values.rank(method="first", ascending=ascending)
+        # Ties share a rank (the mean of theirs), so people who behave the same
+        # get the same score; the score is the rank's place among ``bins`` parts.
+        ranked = values.rank(method="average", ascending=ascending)
         count = max(min(bins, len(values)), 1)
-        return pd.qcut(ranked, count, labels=False).astype(int) + 1
+        place = (ranked / len(values) * count).apply(math.ceil)
+        return place.clip(lower=1, upper=count).astype(int)
 
     grouped["r_score"] = score(grouped["recency"], ascending=False)
     grouped["f_score"] = score(grouped["frequency"], ascending=True)
@@ -2250,6 +2620,7 @@ FUNCTIONS: Dict[str, Callable[[Dict[str, Any], str], Any]] = {
     "profile_dataset": profile_dataset,
     "run_query": run_query,
     "cluster_segments": cluster_segments,
+    "profile_segments": profile_segments,
     "prepare_document": prepare_document,
     "document_chunk": document_chunk,
     "verify_quotes": verify_quotes,

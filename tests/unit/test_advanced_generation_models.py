@@ -621,11 +621,12 @@ class TestAnalysisModels:
         assert run.seed == 42
         assert AnalysisRun.from_dict(run.to_dict()) == run
 
-    def test_u1_tools_are_the_three_fixed_tools(self):
+    def test_u1_tools_are_the_four_fixed_tools(self):
         assert U1_ANALYSIS_TOOLS == (
             AnalysisTool.PROFILE_DATASET,
             AnalysisTool.ANALYZE_DATASET,
             AnalysisTool.CLUSTER_SEGMENTS,
+            AnalysisTool.PROFILE_SEGMENTS,
         )
 
     def test_tool_policy_round_trip(self):
