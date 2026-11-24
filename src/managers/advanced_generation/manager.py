@@ -71,6 +71,7 @@ from ...models.advanced_generation import (
     GenerationEvent,
     GenerationStatus,
     ResultPartName,
+    TableReading,
 )
 from ...models.analysis import (
     CHANGED_PROCESS,
@@ -395,6 +396,8 @@ class _Run:
     budget: Optional[RunCodeBudget] = None
     #: review-01 R-01: why detailed analysis was not offered after all
     detailed_fallback: Optional[str] = None
+    #: U6 addendum: how each table reads (proposed, then as the user confirmed).
+    reading: tuple[TableReading, ...] = ()
 
     @property
     def deadline(self) -> datetime:
@@ -766,7 +769,10 @@ class AdvancedPersonaGenerationManager:
             self._enter(
                 state,
                 GenerationStatus.RUNNING,
-                updates={"plan": state.plan.to_dict() if state.plan else None},
+                updates={
+                    "plan": state.plan.to_dict() if state.plan else None,
+                    **self._reading_update(state.reading),
+                },
             )
         self._analyze(state)
         self._enter(state, GenerationStatus.SYNTHESIZING)
@@ -967,17 +973,24 @@ class AdvancedPersonaGenerationManager:
         With several tables the row check (BR18.1) is made on that table, and
         the join keys are found when the detailed analysis is on (BR37.3).
         """
-        alias = AnalysisPolicy.guide_table([(t.alias, t.profile) for t in state.tables])
+        state.reading = AnalysisPolicy.read_tables(
+            [(t.alias, t.source.display_name, t.profile) for t in state.tables],
+            joined=len(state.tables) > 1,
+        )
+        self._use_guide_table(state, AnalysisPolicy.guide_alias(state.reading))
+        if len(state.tables) > 1:
+            self._check_enough_rows(state)
+            if state.generation.use_detailed_analysis:
+                self._plan_joins(state)
+
+    @staticmethod
+    def _use_guide_table(state: _Run, alias: str) -> None:
         guide = next(t for t in state.tables if t.alias == alias)
         state.source, state.report, state.profile = (
             guide.source,
             guide.report,
             guide.profile,
         )
-        if len(state.tables) > 1:
-            self._check_enough_rows(state)
-            if state.generation.use_detailed_analysis:
-                self._plan_joins(state)
 
     def _plan_joins(self, state: _Run) -> None:
         """Find the join keys with the fixed ``key_overlap`` (BR37.3, NFR1.29)."""
@@ -1680,7 +1693,19 @@ class AdvancedPersonaGenerationManager:
     # --- planning, running, synthesizing ----------------------------------------
 
     def _columns(self, state: _Run) -> list[str]:
-        return [str(c.get("name")) for c in state.profile.get("columns") or []]
+        """The guide table's columns a person can be told apart by (no IDs)."""
+        skip = self._skipped(state)
+        return [
+            str(c.get("name"))
+            for c in state.profile.get("columns") or []
+            if str(c.get("name")) not in skip
+        ]
+
+    @staticmethod
+    def _skipped(state: _Run) -> set[str]:
+        """Columns of the guide table that are no trait (what the user confirmed)."""
+        guide = next((t.alias for t in state.tables if t.source is state.source), None)
+        return {c for r in state.reading if r.alias == guide for c in r.skip}
 
     def _profile_text(self, state: _Run) -> str:
         if len(state.tables) > 1:
@@ -1691,6 +1716,26 @@ class AdvancedPersonaGenerationManager:
                 default=str,
             )
         return json.dumps(state.profile, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _reading_data(state: _Run) -> dict[str, str]:
+        """The tables' reading for the prompts (names are the aliases, not files)."""
+        if not state.reading:
+            return {}
+        return {
+            "data_reading": json.dumps(
+                [
+                    {
+                        "table": r.alias,
+                        "kind": r.kind,
+                        "person_id": r.person_id,
+                        "skip": list(r.skip),
+                    }
+                    for r in state.reading
+                ],
+                ensure_ascii=False,
+            )
+        }
 
     def _table_data(self, state: _Run) -> dict[str, str]:
         """U6: the table names, the guide table and the join plans (BR37.2〜37.4)."""
@@ -1743,14 +1788,17 @@ class AdvancedPersonaGenerationManager:
             t.alias: [str(c.get("name")) for c in t.profile.get("columns") or []]
             for t in state.tables
         }
-        instructions = prompts.PLANNING_INSTRUCTIONS + (
-            prompts.DOCUMENT_PLANNING_NOTE if state.documents else ""
+        instructions = (
+            prompts.PLANNING_INSTRUCTIONS
+            + prompts.READING_NOTE
+            + (prompts.DOCUMENT_PLANNING_NOTE if state.documents else "")
         )
         agent = self._agents.create_advanced_planning_agent(instructions)
         data = {
             "purpose": generation.purpose,
             "profile": self._profile_text(state),
             **self._table_data(state),
+            **self._reading_data(state),
         }
         if state.document_mode is DocumentMode.EXTRACTION:
             # BR26.3: the checked evidence only, never the text
@@ -1847,7 +1895,10 @@ class AdvancedPersonaGenerationManager:
             generation.source_file_ids,
             now=now,
             until=until,
-            updates={"plan": state.plan.to_dict()},
+            updates={
+                "plan": state.plan.to_dict(),
+                **self._reading_update(state.reading),
+            },
         ):
             raise _StopRun()
         state.awaiting_since = now
@@ -1916,17 +1967,55 @@ class AdvancedPersonaGenerationManager:
         current = int((self._clock() - state.awaiting_since).total_seconds())
         return state.waited_seconds + max(0, current)
 
+    @staticmethod
+    def _reading_update(readings: Sequence[TableReading]) -> dict[str, Any]:
+        return {"data_reading": [r.to_dict() for r in readings]} if readings else {}
+
+    @staticmethod
+    def _chosen_reading(
+        state: _Run, request: ControlRequest
+    ) -> tuple[TableReading, ...]:
+        """The tables' reading with the user's choices of the request put in."""
+        choices = request.data_reading or {}
+        out: list[TableReading] = []
+        for reading in state.reading:
+            choice = choices.get(reading.alias)
+            if choice is None:
+                out.append(reading)
+                continue
+            try:
+                out.append(
+                    reading.choose(
+                        str(choice.get("kind")),
+                        choice.get("person_id"),
+                        choice.get("skip") or (),
+                    )
+                )
+            except ValueError:
+                out.append(reading)  # checked when it was asked; never trust twice
+        return tuple(out)
+
+    def _use_reading(self, state: _Run, chosen: Sequence[TableReading]) -> None:
+        """Take the confirmed reading; the guide table follows a changed kind."""
+        if tuple(chosen) == state.reading or not chosen:
+            return
+        state.reading = tuple(chosen)
+        if state.tables:
+            self._use_guide_table(state, AnalysisPolicy.guide_alias(state.reading))
+
     def _take_approve(self, state: _Run, request: ControlRequest) -> bool:
         waited = self._waited_now(state)
+        chosen = self._chosen_reading(state, request)
         if not self._store.take_control_request(
             state.generation.generation_id,
             GenerationStatus.AWAITING_PLAN_APPROVAL,
             GenerationStatus.RUNNING,
             request,
-            updates={"waited_seconds": waited},
+            updates={"waited_seconds": waited, **self._reading_update(chosen)},
             removes=("awaiting_since",),
         ):
             return False
+        self._use_reading(state, chosen)
         self._taken(state, request, waited)
         self._enter(state, GenerationStatus.RUNNING, moved=True)
         return True
@@ -1942,6 +2031,7 @@ class AdvancedPersonaGenerationManager:
             else generation.purpose
         )
         replans = state.replan_count + 1
+        chosen = self._chosen_reading(state, request)
         if not self._store.take_control_request(
             generation.generation_id,
             GenerationStatus.AWAITING_PLAN_APPROVAL,
@@ -1952,10 +2042,12 @@ class AdvancedPersonaGenerationManager:
                 "purpose": purpose,
                 "original_purpose": original,
                 "replan_count": replans,
+                **self._reading_update(chosen),
             },
             removes=("awaiting_since",),
         ):
             return False
+        self._use_reading(state, chosen)
         state.generation = generation.update(
             purpose=purpose, original_purpose=original, replan_count=replans
         )
@@ -2032,7 +2124,8 @@ class AdvancedPersonaGenerationManager:
         self._listen_to_calls(state, tools)
         self._event(state, EventType.PROGRESS, message="分析を始めます")
         agent = self._agents.create_advanced_analysis_agent(
-            prompts.analysis_instructions(detailed=detailed, tables=len(aliases)),
+            prompts.analysis_instructions(detailed=detailed, tables=len(aliases))
+            + prompts.READING_NOTE,
             tools.tools(),
         )
         output = self._agents.run_advanced_analysis(
@@ -2046,6 +2139,7 @@ class AdvancedPersonaGenerationManager:
                 "plan": json.dumps(state.plan.to_dict(), ensure_ascii=False),
                 "profile": self._profile_text(state),
                 **self._table_data(state),
+                **self._reading_data(state),
             },
             source_id=state.source.source_file_id,
         )
@@ -2069,6 +2163,7 @@ class AdvancedPersonaGenerationManager:
             state.segments,
             runs=runs,
             outputs={cid: tools.output_of(cid) for cid in tools.tool_call_ids()},
+            skip=self._skipped(state),
         )
         if not state.segments:
             raise _fail(ErrorCode.GENERATION_ANALYSIS_FAILED, "no segment")
@@ -2583,10 +2678,7 @@ class AdvancedPersonaGenerationManager:
                 "failures": 0,
                 "reason": state.detailed_fallback,
             }
-        tables = [(t.alias, t.profile) for t in state.tables] or [
-            ("source_1", state.profile)
-        ]
-        if AnalysisPolicy.rows_are_not_people(tables):
+        if AnalysisPolicy.readings_count_rows(state.reading):
             # U6 addendum: the counts are of rows (orders, events), not people
             params["rows_are_not_people"] = True
         if state.joins and budget is not None:
@@ -3024,12 +3116,52 @@ class AdvancedPersonaGenerationManager:
         request = self._control_request(action, revised_purpose)
         self._write_control(self._owned(principal, generation_id), request)
 
+    @staticmethod
+    def _checked_reading(
+        generation: AdvancedGeneration,
+        choices: Optional[Mapping[str, Mapping[str, Any]]],
+    ) -> Optional[dict[str, dict[str, Any]]]:
+        """The user's table choices, each checked against the table's columns.
+
+        Raises:
+            AdvancedGenerationError: ``REQUEST_INVALID`` for a table the run
+                does not have, a kind that is none of the two, or a column the
+                table does not have.
+        """
+        if not choices:
+            return None
+        known = {r.alias: r for r in generation.data_reading or ()}
+        out: dict[str, dict[str, Any]] = {}
+        for alias, choice in choices.items():
+            reading = known.get(alias)
+            try:
+                if reading is None:
+                    raise ValueError("unknown table")
+                chosen = reading.choose(
+                    str(choice.get("kind")),
+                    choice.get("person_id") or None,
+                    choice.get("skip") or (),
+                )
+            except ValueError:
+                raise _fail(
+                    ErrorCode.REQUEST_INVALID,
+                    "invalid data reading",
+                    reason="data_reading",
+                ) from None
+            out[alias] = {
+                "kind": chosen.kind,
+                "person_id": chosen.person_id,
+                "skip": list(chosen.skip),
+            }
+        return out
+
     def decide_plan(
         self,
         principal: Principal,
         generation_id: str,
         action: str,
         revised_purpose: Optional[str] = None,
+        data_reading: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> None:
         """Approve the plan or replan it; nothing else (W5-1, BR29.3, BR29.4).
 
@@ -3042,11 +3174,17 @@ class AdvancedPersonaGenerationManager:
         """
         if action not in _PLAN_DECISIONS:
             raise _fail(ErrorCode.REQUEST_INVALID, "not a plan decision")
-        request = self._control_request(action, revised_purpose)
-        self._write_control(self._owned(principal, generation_id), request)
+        generation = self._owned(principal, generation_id)
+        request = self._control_request(
+            action, revised_purpose, self._checked_reading(generation, data_reading)
+        )
+        self._write_control(generation, request)
 
     def _control_request(
-        self, action: str, revised_purpose: Optional[str]
+        self,
+        action: str,
+        revised_purpose: Optional[str],
+        data_reading: Optional[dict[str, dict[str, Any]]] = None,
     ) -> ControlRequest:
         """The request for ``action``, its instruction checked (BR29.4)."""
         try:
@@ -3065,7 +3203,10 @@ class AdvancedPersonaGenerationManager:
                     max_chars=PURPOSE_MAX_CHARS,
                 )
         return ControlRequest(
-            action=kind, requested_at=self._clock(), revised_purpose=revised
+            action=kind,
+            requested_at=self._clock(),
+            revised_purpose=revised,
+            data_reading=data_reading if kind is not ControlAction.CANCEL else None,
         )
 
     def _write_control(

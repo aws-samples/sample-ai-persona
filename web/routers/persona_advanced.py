@@ -600,6 +600,7 @@ async def _control(
     revised_purpose: Optional[str] = None,
     *,
     plan_only: bool = False,
+    data_reading: Optional[dict[str, dict[str, Any]]] = None,
 ) -> Optional[Response]:
     """Hand one request to the Manager; the refusal as a response, else ``None``.
 
@@ -617,6 +618,7 @@ async def _control(
             generation_id,
             action,
             revised_purpose=revised_purpose,
+            **({"data_reading": data_reading} if plan_only else {}),
         )
     except CodedError as e:
         logger.info("advanced generation control refused")
@@ -642,6 +644,25 @@ async def _control(
     return None
 
 
+def _reading_choices(form: Any) -> Optional[dict[str, dict[str, Any]]]:
+    """The plan card's table choices: ``reading_kind__<alias>`` and its fellows.
+
+    The Manager checks every value against the table's own columns; here the
+    form is only put into shape.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for key in form.keys():
+        if not key.startswith("reading_kind__"):
+            continue
+        alias = key.removeprefix("reading_kind__")
+        out[alias] = {
+            "kind": str(form.get(key)),
+            "person_id": str(form.get(f"reading_person__{alias}") or "") or None,
+            "skip": [str(v) for v in form.getlist(f"reading_skip__{alias}")],
+        }
+    return out or None
+
+
 @router.post("/advanced/generations/{generation_id}/plan", response_class=HTMLResponse)
 async def decide_plan(
     request: Request,
@@ -651,7 +672,14 @@ async def decide_plan(
 ) -> Any:
     """計画の承認、または指示を直して計画し直す（W5-1、BR29.3、BR29.4）。"""
     revised = revised_purpose if action == "replan" else None
-    refused = await _control(request, generation_id, action, revised, plan_only=True)
+    refused = await _control(
+        request,
+        generation_id,
+        action,
+        revised,
+        plan_only=True,
+        data_reading=_reading_choices(await request.form()),
+    )
     if refused is not None:
         return refused
     return templates.TemplateResponse(
@@ -767,6 +795,7 @@ def render_plan_card(
     return template.render(
         generation_id=generation.generation_id,
         plan=generation.plan,
+        reading=generation.data_reading,
         purpose=generation.purpose,
         awaiting=generation.status is GenerationStatus.AWAITING_PLAN_APPROVAL,
         accepted=accepted,

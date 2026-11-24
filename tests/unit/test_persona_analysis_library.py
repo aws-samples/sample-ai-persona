@@ -2133,3 +2133,71 @@ class TestPlaybookFunctions:
         assert printed["rows"] == 24
         assert {"recency", "frequency", "monetary", "r_score"} <= set(printed["cols"])
         assert set(printed["scores"]) <= {1, 2, 3, 4, 5}
+
+
+class TestKeyNames:
+    """A column named like a key is no trait; one that merely holds the letters is."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "id",
+            "customer_id",
+            "customerId",
+            "顧客ID",
+            "zip",
+            "ZIP",
+            "postal_code",
+            "price_no",
+            "郵便番号",
+            "コード",
+        ],
+    )
+    def test_keys_are_keys(self, lib: ModuleType, name: str) -> None:
+        assert lib._KEY_NAME.search(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "paid",
+            "is_valid",
+            "android",
+            "valid",
+            "residence",
+            "video",
+            "NOTE",
+            "number_of_visits",
+        ],
+    )
+    def test_names_that_only_hold_the_letters_are_not_keys(
+        self, lib: ModuleType, name: str
+    ) -> None:
+        assert not lib._KEY_NAME.search(name)
+
+
+class TestDefaultMetrics:
+    def _emit(self, lib: ModuleType, tmp_path: Path, **kwargs: Any) -> dict[str, Any]:
+        import json
+
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {"pid": [f"p{i}" for i in range(4)], "seg": ["a", "a", "b", "b"]}
+            | {f"c{i}": [float(i + n) for n in range(4)] for i in range(15)}
+        )
+        lib.emit_result(
+            frame, "seg", "source_1", id_column="pid", out_dir=str(tmp_path), **kwargs
+        )
+        return json.loads((tmp_path / lib._META_FILE).read_text(encoding="utf-8"))
+
+    def test_left_out_every_numeric_column_is_kept_for_the_check_to_sort(
+        self, lib: ModuleType, tmp_path: Path
+    ) -> None:
+        meta = self._emit(lib, tmp_path)
+
+        assert len(meta["metrics"]) == 15
+
+    def test_named_metrics_stay_at_ten(self, lib: ModuleType, tmp_path: Path) -> None:
+        meta = self._emit(lib, tmp_path, metrics=[f"c{i}" for i in range(15)])
+
+        assert len(meta["metrics"]) == 10

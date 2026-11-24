@@ -107,8 +107,10 @@ class SegmentFeatureOutput(BaseModel):
     """One feature of a segment: numbers seen in a tool output (U6 addendum)."""
 
     name: str
-    value: float = Field(description="この層の値（ツールの出力に出た数値）")
-    baseline: float = Field(description="全体の値（ツールの出力に出た数値）")
+    # Not used: the app counts the features again, so a text here must not
+    # fail the whole output.
+    value: float | str = Field(description="この層の値（書かなくてよい）")
+    baseline: float | str = Field(description="全体の値（書かなくてよい）")
 
 
 class SegmentOutput(BaseModel):

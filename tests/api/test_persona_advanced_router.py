@@ -1218,7 +1218,7 @@ class TestControlRoutes:
         assert 'data-testid="advanced-plan-accepted"' in response.text
         args = adv.generations.decide_plan.call_args
         assert args.args[1:] == (s.GENERATION_ID, "approve")
-        assert args.kwargs == {"revised_purpose": None}
+        assert args.kwargs == {"revised_purpose": None, "data_reading": None}
 
     def test_a_cancel_sent_to_the_plan_route_is_refused(
         self, client: TestClient, adv: Adv
@@ -1251,7 +1251,32 @@ class TestControlRoutes:
         assert 'data-testid="advanced-plan-accepted"' in response.text
         args = adv.generations.decide_plan.call_args
         assert args.args[1:] == (s.GENERATION_ID, "replan")
-        assert args.kwargs == {"revised_purpose": "20 代"}
+        assert args.kwargs == {"revised_purpose": "20 代", "data_reading": None}
+
+    def test_the_table_choices_of_the_card_are_sent_on(
+        self, client: TestClient, adv: Adv
+    ) -> None:
+        response = client.post(
+            self.PLAN,
+            data={
+                "action": "approve",
+                "reading_kind__source_1": "history",
+                "reading_person__source_1": "user_id",
+                "reading_skip__source_1": ["user_id", "store_id"],
+                "reading_kind__source_2": "people",
+                "reading_person__source_2": "",
+            },
+        )
+
+        assert response.status_code == 200
+        assert adv.generations.decide_plan.call_args.kwargs["data_reading"] == {
+            "source_1": {
+                "kind": "history",
+                "person_id": "user_id",
+                "skip": ["user_id", "store_id"],
+            },
+            "source_2": {"kind": "people", "person_id": None, "skip": []},
+        }
 
     def test_cancel_says_it_is_cancelling(self, client: TestClient, adv: Adv) -> None:
         response = client.post(self.CANCEL)

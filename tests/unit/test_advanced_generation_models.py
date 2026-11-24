@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 
 from src.models.advanced_generation import (
@@ -1345,3 +1347,63 @@ class TestSegmentSourceAndKey:
 
         assert segment.source is None
         assert segment.segment_key is None
+
+
+class TestTableReading:
+    def _reading(self) -> Any:
+        from src.models.advanced_generation import TableReading
+
+        return TableReading(
+            alias="source_1",
+            name="a.csv",
+            kind="people",
+            person_id="id",
+            skip=("id",),
+            columns=("id", "age", "zip"),
+        )
+
+    def test_the_person_id_is_never_a_trait(self) -> None:
+        chosen = self._reading().choose("history", "id", ["zip"])
+
+        assert chosen.kind == "history" and chosen.skip == ("id", "zip")
+
+    def test_a_choice_the_table_cannot_take_is_an_error(self) -> None:
+        reading = self._reading()
+
+        with pytest.raises(ValueError):
+            reading.choose("weird", "id", [])
+        with pytest.raises(ValueError):
+            reading.choose("people", "nope", [])
+        with pytest.raises(ValueError):
+            reading.choose("people", None, ["nope"])
+
+    def test_it_round_trips_through_the_generation_and_the_request(self) -> None:
+        from datetime import datetime, timezone
+
+        from src.models.advanced_generation import (
+            AdvancedGeneration,
+            ControlAction,
+            ControlRequest,
+            TableReading,
+        )
+
+        reading = self._reading()
+        assert TableReading.from_dict(reading.to_dict()) == reading
+        now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+        generation = AdvancedGeneration.create_new(
+            owner_sub="u",
+            source_file_ids=["s"],
+            purpose="",
+            persona_count=2,
+            now=now,
+            ttl_seconds=3600,
+        ).update(data_reading=(reading,))
+        assert AdvancedGeneration.from_dict(generation.to_dict()).data_reading == (
+            reading,
+        )
+        request = ControlRequest(
+            action=ControlAction.APPROVE,
+            requested_at=now,
+            data_reading={"source_1": {"kind": "people", "skip": []}},
+        )
+        assert ControlRequest.from_dict(request.to_dict()) == request

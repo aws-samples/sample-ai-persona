@@ -1490,6 +1490,7 @@ _META_FILE = "meta.json"
 _EMIT_COUNT_FILE = "emit_count"
 _MAX_STATISTICS = 50
 _MAX_METRICS = 10
+_MAX_DEFAULT_METRICS = 60
 _MAX_FEATURES = 20
 _JOIN_FUNCS = {
     "count": "count({col})",
@@ -1703,9 +1704,12 @@ def emit_result(
         raise RuntimeError("emit_result is called once per run")
     if not _POPULATION_SOURCE.match(str(population_source)):
         raise ValueError("population_source is source_n or join:source_n+source_m")
+    # Left out, many columns are taken: those of the axis table are dropped
+    # when the features are counted, and the first ten that are left stay.
+    cap = _MAX_METRICS if metrics is not None else _MAX_DEFAULT_METRICS
     if metrics is None:
         metrics = _numeric_columns(frame, (id_column, assign_column))
-    names = [str(m) for m in metrics][:_MAX_METRICS]
+    names = [str(m) for m in metrics][:cap]
     columns = _columns_of(frame, id_column, assign_column, *names)
     if joined_columns is None:
         attrs = getattr(frame, "attrs", None)
@@ -2050,8 +2054,7 @@ _PROFILE_CHUNK = 40
 #: with ``analysis_policy._ID_NAME`` in the app, plus codes and numbers).
 _KEY_NAME = re.compile(
     r"(?<![A-Za-z])[Ii][Dd](?![a-z])|(?<=[a-z])I[Dd](?![a-z])|(?<=[a-z])ID(?![A-Za-z])"
-    r"|ＩＤ|番号|コード|郵便|(?<![A-Za-z])(?:no|num|code|zip|postal)(?![a-z])",
-    re.IGNORECASE,
+    r"|ＩＤ|番号|コード|郵便|(?<![A-Za-z])(?i:no|num|code|zip|postal)(?![A-Za-z])"
 )
 
 
@@ -2190,9 +2193,12 @@ def _profile_views(
                 )
 
     profiled = {str(row[0]) for row in schema}
+    derived = 0
     for index, name in enumerate(metrics or []):
         if name in profiled:
             continue  # a column of the axis table is counted above
+        if derived >= _MAX_METRICS:
+            break
         col = f"metric_{index}"
         try:
             overall_row = con.execute(
@@ -2207,6 +2213,7 @@ def _profile_views(
             continue
         if overall_row[0] is None:
             continue
+        derived += 1
         for key, mean in rows:
             if mean is not None and str(key) in out:
                 out[str(key)].append(

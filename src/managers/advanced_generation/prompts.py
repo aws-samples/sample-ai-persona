@@ -192,6 +192,14 @@ _DETAILED_NOTE = (
 )
 
 
+#: The user-confirmed reading of the tables (U6 addendum); both agents get it.
+READING_NOTE = (
+    "\ndata_reading は、利用者が確かめた表の読み取りです。kind が people なら 1 人 1 行、"
+    "history なら 1 人に複数行（注文や履歴）の表です。person_id は人を指す列、"
+    "skip は人の特徴にしない列（ID やコード）です。skip の列を、切り口や特徴に使わないでください。"
+)
+
+
 def analysis_instructions(*, detailed: bool = False, tables: int = 1) -> str:
     """The analysis agent's instructions, with the U6 notes when they apply."""
     return (

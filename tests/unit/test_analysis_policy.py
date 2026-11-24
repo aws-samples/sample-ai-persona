@@ -315,3 +315,73 @@ class TestIdNames:
 
         assert AnalysisPolicy.rows_are_not_people([("source_1", people)]) is False
         assert AnalysisPolicy.guide_method("", people) is AnalysisMethod.CLUSTER
+
+
+def _col(name: str, *, distinct: bool, type_: str = "VARCHAR") -> dict:
+    return {"name": name, "type": type_, "all_distinct": distinct}
+
+
+class TestReadTables:
+    """The proposal of how each table reads (U6 addendum)."""
+
+    def test_a_customer_table_with_a_repeating_store_id_is_people(self) -> None:
+        profile = {
+            "columns": [
+                _col("customer_id", distinct=True),
+                _col("store_id", distinct=False),
+                _col("age", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "c.csv", profile)])
+
+        assert reading.kind == "people"
+        assert reading.person_id == "customer_id"
+        assert "store_id" in reading.skip and "customer_id" in reading.skip
+        assert not AnalysisPolicy.readings_count_rows([reading])
+
+    def test_a_repeating_person_id_is_a_history(self) -> None:
+        profile = {
+            "columns": [
+                _col("user_id", distinct=False),
+                _col("利用日", distinct=False, type_="DATE"),
+                _col("利用分", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "e.csv", profile)])
+
+        assert reading.kind == "history" and reading.person_id == "user_id"
+        assert AnalysisPolicy.readings_count_rows([reading])
+
+    def test_an_order_table_points_at_the_customer_not_the_order(self) -> None:
+        profile = {
+            "columns": [
+                _col("order_id", distinct=True),
+                _col("customer_id", distinct=False),
+                _col("金額", distinct=False, type_="BIGINT"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "o.csv", profile)])
+
+        assert reading.kind == "history" and reading.person_id == "customer_id"
+
+    def test_codes_and_ids_are_not_traits(self) -> None:
+        profile = {
+            "columns": [
+                _col("id", distinct=True),
+                _col("郵便番号", distinct=False),
+                _col("zip", distinct=False),
+                _col("paid", distinct=False, type_="BOOLEAN"),
+            ]
+        }
+        (reading,) = AnalysisPolicy.read_tables([("source_1", "x.csv", profile)])
+
+        assert set(reading.skip) == {"id", "郵便番号", "zip"}
+
+    def test_the_guide_reads_the_people_table(self) -> None:
+        history = {"columns": [_col("user_id", distinct=False)]}
+        people = {"columns": [_col("user_id", distinct=True)]}
+        readings = AnalysisPolicy.read_tables(
+            [("source_1", "e.csv", history), ("source_2", "u.csv", people)]
+        )
+
+        assert AnalysisPolicy.guide_alias(readings) == "source_2"

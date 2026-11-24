@@ -2088,3 +2088,24 @@ def _analysis_output():
             )
         ],
     )
+
+
+def test_a_text_feature_does_not_fail_the_segment_output() -> None:
+    """The app counts features again, so what the agent wrote there is not checked."""
+    from src.services.agent_service import SegmentOutput
+
+    segment = SegmentOutput.model_validate(
+        {
+            "id": "s1",
+            "label": "層",
+            "definition_kind": "filter",
+            "definition_tool_call_id": "tc-1",
+            "definition_description": "条件",
+            "size": 3,
+            "share": 0.5,
+            "evidence_ids": ["e1"],
+            "features": [{"name": "年齢", "value": "約30歳", "baseline": "全体は41歳"}],
+        }
+    )
+
+    assert segment.features[0].value == "約30歳"

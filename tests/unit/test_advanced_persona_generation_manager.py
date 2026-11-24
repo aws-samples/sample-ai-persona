@@ -27,6 +27,7 @@ import pytest
 moto = pytest.importorskip("moto")
 
 from src.config import config  # noqa: E402
+from src.managers.advanced_generation.analysis_policy import AnalysisPolicy  # noqa: E402
 from src.managers.advanced_generation.manager import (  # noqa: E402
     AdvancedGenerationError,
     AdvancedPersonaGenerationManager,
@@ -403,6 +404,7 @@ class _Agents:
 
     def run_advanced_analysis(self, agent, prompt, data, *, source_id):
         self.analysis_prompts = [*self.analysis_prompts, prompt]
+        self.analysis_data = data
         self.calls.append("analysis")
         if self.on_analysis is not None:
             self.on_analysis()
@@ -809,6 +811,7 @@ class TestRowsAreNotPeopleParam:
             joins=[],
             tables=[SimpleNamespace(alias="source_1", profile=profile)],
             profile=profile,
+            reading=AnalysisPolicy.read_tables([("source_1", "f.csv", profile)]),
         )
 
     def test_a_history_is_recorded_as_counting_rows(self) -> None:
@@ -3589,6 +3592,76 @@ class TestNothingKeptAfterALateEnd:
 
         _assert_cancelled_and_released(env, generation_id, file)
         self._assert_nothing_kept(env, generation_id)
+
+
+class TestDataReading:
+    """U6 addendum: the plan card shows how the tables read, and the user may fix it."""
+
+    def test_the_card_has_the_proposed_reading(self, env: _Env) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        (reading,) = _current(env, generation_id).data_reading or ()
+
+        assert reading.name == "people.csv" and reading.kind == "people"
+        assert reading.person_id == "id" and "id" in reading.skip
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
+
+    def test_a_choice_at_approve_is_kept_and_told_to_the_analysis(
+        self, env: _Env
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        manager.decide_plan(
+            ADMIN,
+            generation_id,
+            "approve",
+            data_reading={
+                "source_1": {"kind": "people", "person_id": "id", "skip": ["income"]}
+            },
+        )
+        run.join()
+
+        generation = _current(env, generation_id)
+        (reading,) = generation.data_reading or ()
+        assert generation.status is GenerationStatus.DONE
+        assert reading.skip == ("id", "income")
+        assert '"income"' in env.agents.analysis_data["data_reading"]
+
+    @pytest.mark.parametrize(
+        "choice",
+        [
+            {"kind": "weird", "person_id": "id", "skip": []},
+            {"kind": "people", "person_id": "nope", "skip": []},
+            {"kind": "people", "person_id": "id", "skip": ["nope"]},
+        ],
+    )
+    def test_a_choice_the_table_cannot_take_is_refused(
+        self, env: _Env, choice: dict
+    ) -> None:
+        manager = env.manager(**FAST_CONTROL)
+        generation_id = _start_confirming(manager, env.ready_file())
+        run = _Thread(manager, generation_id)
+        _await_card(env, generation_id)
+
+        with raises_code(AdvancedGenerationError, ErrorCode.REQUEST_INVALID):
+            manager.decide_plan(
+                ADMIN, generation_id, "approve", data_reading={"source_1": choice}
+            )
+        with raises_code(AdvancedGenerationError, ErrorCode.REQUEST_INVALID):
+            manager.decide_plan(
+                ADMIN, generation_id, "approve", data_reading={"source_9": choice}
+            )
+
+        assert _current(env, generation_id).control_request is None
+        manager.request_control(ADMIN, generation_id, "cancel")
+        run.join()
 
 
 class TestPlanDecisionOnly:

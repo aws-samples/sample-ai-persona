@@ -32,7 +32,7 @@ known, under :data:`MIN_DIFFERENCE` of the whole.
 from __future__ import annotations
 
 import math
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Collection, Iterator, Mapping, Optional, Sequence
 
 from ...models.analysis import EmittedResult, Segment
 
@@ -159,14 +159,16 @@ def _ranked_by_distance(
     return tuple(dict(f) for f in kept)
 
 
-def _counted(items: Any) -> tuple[dict[str, Any], ...]:
+def _counted(items: Any, skip: Collection[str] = ()) -> tuple[dict[str, Any], ...]:
     if not isinstance(items, (list, tuple)):
         return ()
-    return _ranked([f for f in (_feature(i) for i in items) if f is not None])
+    made = (_feature(i) for i in items)
+    return _ranked([f for f in made if f is not None and _column_of(f) not in skip])
 
 
 def _cluster_features(segment: Segment, outputs: Mapping[str, Any]) -> Any:
-    index = segment.definition.get("spec", {}).get("cluster_index")
+    spec = segment.definition.get("spec")
+    index = spec.get("cluster_index") if isinstance(spec, Mapping) else None
     output = outputs.get(segment.tool_call_id or "")
     clusters = output.get("clusters") if isinstance(output, Mapping) else None
     if not isinstance(clusters, list):
@@ -193,11 +195,17 @@ def _profiled(segment: Segment, outputs: Mapping[str, Any]) -> Any:
     return ()
 
 
+def _column_of(feature: Mapping[str, Any]) -> str:
+    """The column a feature is about (``プラン=無料`` is about ``プラン``)."""
+    return str(feature.get("name", "")).split("=", 1)[0]
+
+
 def settle_features(
     segments: Sequence[Segment],
     *,
     runs: Mapping[str, Optional[EmittedResult]],
     outputs: Mapping[str, Any],
+    skip: Collection[str] = (),
 ) -> list[Segment]:
     """Give each segment the features that were counted (see the module doc).
 
@@ -205,6 +213,8 @@ def settle_features(
         segments: Segments from the analysis agent.
         runs: ``run_code`` call ID -> its recounted result (``None`` failed).
         outputs: Tool call ID -> structured tool output.
+        skip: Columns confirmed as no trait (IDs, codes); no feature is made
+            of them.
     """
     settled: list[Segment] = []
     for segment in segments:
@@ -217,10 +227,10 @@ def settle_features(
                 for entry in result.segments:
                     if str(entry.get("segment_key")) == key:
                         items = entry.get("features")
-            features = _counted(items)
+            features = _counted(items, skip)
         elif str(segment.definition.get("kind")) == "cluster":
-            features = _counted(_cluster_features(segment, outputs))
+            features = _counted(_cluster_features(segment, outputs), skip)
         else:
-            features = _counted(_profiled(segment, outputs))
+            features = _counted(_profiled(segment, outputs), skip)
         settled.append(segment.update(features=features))
     return settled

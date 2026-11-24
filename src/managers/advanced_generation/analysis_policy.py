@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from ...config import config
+from ...models.advanced_generation import TableReading
 from ...models.analysis import (
     DETAILED_STEP_KINDS,
     MAX_PLAN_STEPS,
@@ -56,6 +57,18 @@ _ID_NAME = re.compile(
     r"|(?<=[a-z])I[Dd](?![a-z])"
     r"|(?<=[a-z])ID(?![A-Za-z])"
     r"|ＩＤ|番号"
+)
+
+#: Words of an ID column that points at a person (not at a store or a product).
+_PERSON_WORD = re.compile(
+    r"customer|user|member|person|client|employee|staff|respondent|account"
+    r"|顧客|会員|ユーザー|社員|従業員|回答者|利用者|アカウント",
+    re.IGNORECASE,
+)
+#: Columns that are codes (no trait of a person): ``zip``, ``postal``, ``code``,
+#: ``no``, ``num`` as a word of their own, ``コード`` and ``郵便``.
+_CODE_NAME = re.compile(
+    r"(?<![A-Za-z])(?:no|num|code|zip|postal)(?![a-z])|コード|郵便", re.IGNORECASE
 )
 
 
@@ -147,30 +160,50 @@ class AnalysisPolicy:
         return AnalysisToolPolicy(tools=tools, limits=limits, sources=tuple(sources))
 
     @staticmethod
-    def guide_table(tables: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
-        """The table the guide reads: one row per person, else the first (BR37.2).
+    def read_tables(
+        tables: Sequence[tuple[str, str, Mapping[str, Any]]], *, joined: bool = False
+    ) -> tuple[TableReading, ...]:
+        """How each table reads, proposed from its column profile (U6 addendum).
 
-        A history (a person ID that repeats) is not a table of people, even
-        when another column such as an order ID is all distinct.
+        ``tables`` are ``(alias, file name, profile)``. The user may correct
+        the proposal on the plan card; what they confirmed is used as it is.
         """
-        for alias, profile in tables:
-            if not _repeats_a_person_id(profile) and any(
-                _is_person_id(c) for c in profile.get("columns") or []
-            ):
-                return alias
-        return tables[0][0]
+        return tuple(
+            _read_table(alias, name, profile, joined) for alias, name, profile in tables
+        )
+
+    @staticmethod
+    def guide_alias(readings: Sequence[TableReading]) -> str:
+        """The table the guide reads: one row per person, else the first (BR37.2)."""
+        for reading in readings:
+            if reading.kind == "people" and reading.person_id is not None:
+                return reading.alias
+        return readings[0].alias
+
+    @staticmethod
+    def readings_count_rows(readings: Sequence[TableReading]) -> bool:
+        """Whether every table is a history, so what is counted is rows (U6)."""
+        return bool(readings) and all(r.kind == "history" for r in readings)
+
+    @staticmethod
+    def guide_table(tables: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
+        """The table the guide reads, from the profiles alone (BR37.2)."""
+        return AnalysisPolicy.guide_alias(
+            AnalysisPolicy.read_tables([(a, a, p) for a, p in tables])
+        )
 
     @staticmethod
     def rows_are_not_people(
         tables: Sequence[tuple[str, Mapping[str, Any]]],
     ) -> bool:
-        """Whether every table is a history, so what is counted is rows (U6).
+        """Whether every table is a history, from the profiles alone (U6).
 
-        True when each table has a column named like an ID whose values repeat
-        and no table has one row per person. The counts and shares of such a
-        result are of rows (orders, events), not of people.
+        The counts and shares of such a result are of rows (orders, events),
+        not of people.
         """
-        return bool(tables) and all(_repeats_a_person_id(p) for _, p in tables)
+        return AnalysisPolicy.readings_count_rows(
+            AnalysisPolicy.read_tables([(a, a, p) for a, p in tables])
+        )
 
     @staticmethod
     def budget() -> dict[str, int]:
@@ -189,7 +222,8 @@ class AnalysisPolicy:
                 return AnalysisMethod.COMPARE
             return AnalysisMethod.FILTER
         columns = list(profile.get("columns") or [])
-        if not _repeats_a_person_id(profile) and any(_is_person_id(c) for c in columns):
+        kind, person = _kind_and_person(profile)
+        if kind == "people" and person is not None:
             return AnalysisMethod.CLUSTER
         numeric = [c for c in columns if _NUMERIC_TYPE.match(str(c.get("type", "")))]
         if len(numeric) >= 2:
@@ -361,21 +395,70 @@ def _end_with_method(
     return steps[-MAX_PLAN_STEPS:]
 
 
-def _repeats_a_person_id(profile: Mapping[str, Any]) -> bool:
-    """A column named like an ID whose values repeat: several rows per person."""
-    return any(
-        _ID_NAME.search(str(c.get("name", ""))) and not c.get("all_distinct")
+def _id_columns(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [
+        c
         for c in profile.get("columns") or []
+        if _ID_NAME.search(str(c.get("name", "")))
+    ]
+
+
+def _kind_and_person(profile: Mapping[str, Any]) -> tuple[str, Optional[str]]:
+    """``(kind, person ID column)`` read from the names and the distinct counts.
+
+    An ID that points at a person (``customer_id``) tells the table's kind. An
+    ID that repeats but points at a store or a product does not: the table of
+    customers that also has ``store_id`` is still one row per person.
+    """
+    ids = _id_columns(profile)
+    persons = [c for c in ids if _PERSON_WORD.search(str(c.get("name", "")))]
+    if persons:
+        chosen = next((c for c in persons if c.get("all_distinct")), persons[0])
+        return (
+            "people" if chosen.get("all_distinct") else "history",
+            str(chosen.get("name")),
+        )
+    unique = next((c for c in ids if c.get("all_distinct")), None)
+    if unique is not None:
+        return "people", str(unique.get("name"))
+    if ids:
+        return "history", str(ids[0].get("name"))
+    text = next(
+        (c for c in profile.get("columns") or [] if _is_person_id(c)),
+        None,
+    )
+    return "people", (str(text.get("name")) if text is not None else None)
+
+
+def _read_table(
+    alias: str, name: str, profile: Mapping[str, Any], joined: bool
+) -> TableReading:
+    kind, person = _kind_and_person(profile)
+    if kind == "people" and _is_history(profile, joined):
+        kind = "history"
+    columns = [str(c.get("name")) for c in profile.get("columns") or []]
+    keys = [
+        str(c.get("name"))
+        for c in profile.get("columns") or []
+        if _ID_NAME.search(str(c.get("name", "")))
+        or _CODE_NAME.search(str(c.get("name", "")))
+        or _is_person_id(c)
+    ]
+    skip = list(dict.fromkeys([*([person] if person else []), *keys]))
+    return TableReading(
+        alias=alias,
+        name=name,
+        kind=kind,
+        person_id=person,
+        skip=tuple(skip),
+        columns=tuple(columns),
     )
 
 
 def _is_history(profile: Mapping[str, Any], joined: bool) -> bool:
     """A table with several rows per person, a date and a number (U6 addendum)."""
     columns = list(profile.get("columns") or [])
-    several = joined or any(
-        _ID_NAME.search(str(c.get("name", ""))) and not c.get("all_distinct")
-        for c in columns
-    )
+    several = joined or _kind_and_person(profile)[0] == "history"
     has_date = any(_DATE_TYPE.match(str(c.get("type", ""))) for c in columns)
     has_number = any(
         _NUMERIC_TYPE.match(str(c.get("type", "")))

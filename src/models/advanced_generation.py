@@ -80,6 +80,82 @@ class ControlAction(StrEnum):
     REPLAN = "replan"
 
 
+#: How a table reads: one row per person, or several rows per person.
+READING_KINDS = ("people", "history")
+
+
+@dataclass(frozen=True)
+class TableReading:
+    """How one prepared table is read (U6 addendum; shown on the plan card).
+
+    The system proposes it from the column profile and the user may correct
+    it before the analysis starts; what was confirmed is trusted afterwards.
+
+    Attributes:
+        alias: The table's alias in the run (``source_1``...).
+        name: The file name shown to the user.
+        kind: ``people`` (one row per person) or ``history`` (several rows
+            per person, such as orders or events).
+        person_id: The column that identifies a person, if any.
+        skip: Columns that are no trait of a person (IDs, codes).
+        columns: Every column of the table (what a choice may name).
+    """
+
+    alias: str
+    name: str
+    kind: str
+    person_id: str | None
+    skip: tuple[str, ...]
+    columns: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.kind not in READING_KINDS:
+            raise ValueError("unknown table kind")
+        object.__setattr__(self, "skip", tuple(self.skip))
+        object.__setattr__(self, "columns", tuple(self.columns))
+        names = set(self.columns)
+        if self.person_id is not None and self.person_id not in names:
+            raise ValueError("person_id is not a column")
+        if any(c not in names for c in self.skip):
+            raise ValueError("skip names a column the table does not have")
+
+    def choose(
+        self, kind: str, person_id: str | None, skip: Sequence[str]
+    ) -> "TableReading":
+        """The reading with the user's choice; a bad value is an error.
+
+        The person's ID column is never a trait, so it is always in ``skip``.
+        """
+        left = [c for c in dict.fromkeys(skip) if c != person_id]
+        if person_id is not None:
+            left.insert(0, person_id)
+        return replace(self, kind=kind, person_id=person_id, skip=tuple(left))
+
+    def to_dict(self) -> dict[str, Any]:
+        return drop_none(
+            {
+                "alias": self.alias,
+                "name": self.name,
+                "kind": self.kind,
+                "person_id": self.person_id,
+                "skip": list(self.skip),
+                "columns": list(self.columns),
+            }
+        )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "TableReading":
+        person = data.get("person_id")
+        return cls(
+            alias=str(data["alias"]),
+            name=str(data.get("name", "")),
+            kind=str(data["kind"]),
+            person_id=str(person) if person is not None else None,
+            skip=tuple(str(c) for c in data.get("skip") or []),
+            columns=tuple(str(c) for c in data.get("columns") or []),
+        )
+
+
 @dataclass(frozen=True)
 class ControlRequest:
     """One pending request on a generation (``control_request``, entities.md).
@@ -88,11 +164,14 @@ class ControlRequest:
         action: One of :class:`ControlAction`.
         requested_at: When the request was written.
         revised_purpose: The new instruction of a ``replan`` (may be empty).
+        data_reading: The user's choices for the tables, ``{alias: {kind,
+            person_id, skip}}`` (an approve or a replan; none = as proposed).
     """
 
     action: ControlAction
     requested_at: datetime
     revised_purpose: str | None = None
+    data_reading: dict[str, dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "action", ControlAction(self.action))
@@ -108,16 +187,23 @@ class ControlRequest:
                 "action": self.action.value,
                 "requested_at": iso(self.requested_at),
                 "revised_purpose": self.revised_purpose,
+                "data_reading": self.data_reading,
             }
         )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ControlRequest":
         revised = data.get("revised_purpose")
+        reading = data.get("data_reading")
         return cls(
             action=ControlAction(str(data["action"])),
             requested_at=parse_dt(data["requested_at"]),
             revised_purpose=str(revised) if revised is not None else None,
+            data_reading=(
+                {str(k): dict(v) for k, v in dict(reading).items()}
+                if isinstance(reading, Mapping)
+                else None
+            ),
         )
 
 
@@ -176,6 +262,8 @@ class AdvancedGeneration:
         original_purpose: The first instruction, kept at the first replan.
         session_id: The sandbox session, so a reader can stop it (U5 BR32.4).
             Never shown on the screen.
+        data_reading: How each table is read, as proposed and then as the user
+            confirmed it (U6 addendum).
     """
 
     generation_id: str
@@ -204,6 +292,7 @@ class AdvancedGeneration:
     replan_count: int = 0
     original_purpose: str | None = None
     session_id: str | None = None
+    data_reading: tuple[TableReading, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", GenerationStatus(self.status))
@@ -333,6 +422,11 @@ class AdvancedGeneration:
                     ),
                     "original_purpose": self.original_purpose,
                     "session_id": self.session_id,
+                    "data_reading": (
+                        [r.to_dict() for r in self.data_reading]
+                        if self.data_reading is not None
+                        else None
+                    ),
                 }
             )
         )
@@ -352,7 +446,13 @@ class AdvancedGeneration:
         request = data.get("control_request")
         original = data.get("original_purpose")
         session_id = data.get("session_id")
+        reading = data.get("data_reading")
         return cls(
+            data_reading=(
+                tuple(TableReading.from_dict(r) for r in reading)
+                if isinstance(reading, list)
+                else None
+            ),
             options=dict(options) if isinstance(options, Mapping) else {},
             control_request=(
                 ControlRequest.from_dict(request)

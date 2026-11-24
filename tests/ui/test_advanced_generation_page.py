@@ -1468,6 +1468,79 @@ def _load_plan_card(ui: UiHarness, plan: Any) -> None:
     ui.settle()
 
 
+class TestDataReadingCard:
+    """U6 addendum: the plan card shows how the tables read, as text."""
+
+    @staticmethod
+    def _load(ui: UiHarness, reading: Any) -> None:
+        ui.load_component(
+            "fragment.html",
+            container_id="advanced-plan-area",
+            fragment="<h2>計画</h2>"
+            + render_page(
+                "persona/partials/advanced_plan_card.html",
+                generation_id=s.GENERATION_ID,
+                plan=s.PLAN,
+                purpose="",
+                awaiting=True,
+                accepted=None,
+                limits=screen_limits(),
+                reading=reading,
+            ),
+        )
+        ui.settle()
+
+    @staticmethod
+    def _reading(name: str = "顧客.csv") -> Any:
+        from src.models.advanced_generation import TableReading
+
+        return (
+            TableReading(
+                alias="source_1",
+                name=name,
+                kind="history",
+                person_id="user_id",
+                skip=("user_id",),
+                columns=("user_id", "利用日", "store_id"),
+            ),
+        )
+
+    def test_the_card_shows_each_table_with_the_proposed_reading(
+        self, ui: UiHarness
+    ) -> None:
+        self._load(ui, self._reading())
+
+        box = "[data-testid='advanced-reading-table']"
+        assert "顧客.csv" in ui.page.inner_text(box)
+        assert ui.page.is_checked(
+            "input[name='reading_kind__source_1'][value='history']"
+        )
+        assert not ui.page.is_checked(
+            "input[name='reading_kind__source_1'][value='people']"
+        )
+        assert (
+            ui.page.input_value("select[name='reading_person__source_1']") == "user_id"
+        )
+        assert ui.page.is_checked(
+            "input[name='reading_skip__source_1'][value='user_id']"
+        )
+        assert not ui.page.is_checked(
+            "input[name='reading_skip__source_1'][value='store_id']"
+        )
+        ui.check_a11y()
+
+    def test_a_file_name_is_text_never_markup(self, ui: UiHarness) -> None:
+        self._load(ui, self._reading('<img src=x onerror="window.__xss=1">.csv'))
+
+        assert ui.page.evaluate("window.__xss === undefined")
+        assert "<img" in ui.page.inner_text("[data-testid='advanced-reading-table']")
+
+    def test_no_reading_shows_no_section(self, ui: UiHarness) -> None:
+        self._load(ui, None)
+
+        assert ui.page.locator("[data-testid='advanced-reading']").count() == 0
+
+
 class TestPlanSteps:
     """U6 addendum: the plan card numbers the steps; the record names playbooks."""
 

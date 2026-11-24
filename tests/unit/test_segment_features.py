@@ -281,3 +281,47 @@ class TestDifferenceIsMeasuredInSpreads:
         )
 
         assert names == ["割合", "平均"]
+
+
+class TestSkippedColumns:
+    def test_a_column_confirmed_as_no_trait_makes_no_feature(self) -> None:
+        segment = _segment(segment_key="a")
+        runs = {
+            "call-1": _emitted(
+                [
+                    _mean("年齢", 47.0, 41.9),
+                    {
+                        "name": "郵便番号=100",
+                        "kind": "share",
+                        "value": 0.9,
+                        "baseline": 0.1,
+                    },
+                    _mean("顧客番号", 900.0, 100.0),
+                ]
+            )
+        }
+
+        [settled] = settle_features(
+            [segment], runs=runs, outputs={}, skip={"郵便番号", "顧客番号"}
+        )
+
+        assert [f["name"] for f in settled.features] == ["年齢"]
+
+
+class TestMalformedSpec:
+    def test_a_cluster_segment_without_a_spec_has_no_features_and_no_crash(
+        self,
+    ) -> None:
+        segment = Segment(
+            id="seg-1",
+            label="a",
+            definition={"kind": "cluster", "spec": None},
+            size=10,
+            share=0.5,
+            features=(),
+            evidence_ids=("ev-1",),
+        )
+
+        [settled] = settle_features([segment], runs={}, outputs={})
+
+        assert settled.features == ()
