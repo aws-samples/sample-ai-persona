@@ -12,7 +12,13 @@ from typing import Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from ...models.analysis import AnalysisMethod, AnalysisPlan, AnalysisStepKind, JoinPlan
+from ...models.analysis import (
+    DETAILED_STEP_KINDS,
+    AnalysisMethod,
+    AnalysisPlan,
+    AnalysisStepKind,
+    JoinPlan,
+)
 from .analysis_policy import StepCandidate
 from ...prompts.persona_generation_prompts import (
     PERSONA_FIELDS_GUIDE,
@@ -238,6 +244,17 @@ def analysis_prompt(
                 "左結合し、結合した表の上で層を作ってください。"
             )
         lines.append(line)
+    if any(step.kind in DETAILED_STEP_KINDS for step in steps):
+        # a join, a score or a test exists only in run_code; layers made with the
+        # fixed tools (analyze_dataset, profile_segments) would leave them out
+        lines.append(
+            "計画に結合・点数化・検定の手順があります。層は、その手順の結果の上で"
+            "作ってください。この手順は run_code でしかできないので、最後の絞り込みや"
+            "分けるところも同じ run_code の中で行い、emit_result で返してください。"
+            "analyze_dataset や profile_segments で作った層には、結合や点数の結果が"
+            "入りません。run_code が使えなくなったときだけ、それらで続けてください。"
+        )
+        return "\n".join(lines)
     final = steps[-1].kind
     if final is AnalysisStepKind.FILTER and persona_count >= 2:
         axis = plan.split_axis or "絞った層をよく分ける列"

@@ -247,6 +247,21 @@ class TestFilterEvidence:
 
         assert kept == []
 
+    def test_a_layer_the_library_counted_keeps_its_size_as_evidence(self) -> None:
+        """The code's own numbers are not accepted, the layer's size still is."""
+        segments = [_segment("s1", "tc-2", "high", ("e1",))]
+        evidence = [_evidence("e1", "tc-2", {"value": 4242})]  # never recounted
+
+        kept_segments, kept_evidence = filter_evidence(
+            segments, evidence, {"tc-2": _RESULT}
+        )
+
+        assert [s.id for s in kept_segments] == ["s1"]
+        (made,) = kept_evidence
+        assert kept_segments[0].evidence_ids == (made.id,)
+        assert made.location == "tc-2"
+        assert made.statistic == {"value": 30, "population": 100}
+
     def test_a_segment_left_without_evidence_is_dropped(self) -> None:
         segment = _segment("s1", "tc-9", None, ("e1",))  # a fixed tool's call
         evidence = [_evidence("e1", "tc-1", {"value": 30})]  # a failed run

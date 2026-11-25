@@ -24,7 +24,13 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
-from ...models.analysis import EmittedResult, Evidence, RunCodeOutcome, Segment
+from ...models.analysis import (
+    EmittedResult,
+    Evidence,
+    EvidenceKind,
+    RunCodeOutcome,
+    Segment,
+)
 
 #: Reasons ``run_code`` is taken off (``advanced_generation.run_code_disabled``).
 REASON_MAX_FAILURES = "max_failures"
@@ -145,6 +151,30 @@ def _evidence_holds(evidence: Evidence, result: Optional[EmittedResult]) -> bool
     return bool(numbers) and all(round(n, _DIGITS) in known for n in numbers)
 
 
+def _counted_size(
+    segment: Segment,
+    result: EmittedResult,
+    evidence: Sequence[Evidence],
+    taken: set[str],
+) -> Optional[Evidence]:
+    """Evidence made of the layer's recounted size and the population."""
+    key = segment.segment_key
+    size = result.size_of(key) if key is not None else None
+    if size is None or not result.population:
+        return None
+    ident = f"count-{segment.id}"
+    while ident in taken:
+        ident += "_"
+    return Evidence(
+        id=ident,
+        source_id=evidence[0].source_id,
+        location=str(segment.tool_call_id),
+        kind=EvidenceKind.ATTRIBUTE,
+        claim=f"この層の人数は {size}（母数 {result.population}）",
+        statistic={"value": size, "population": result.population},
+    )
+
+
 def filter_evidence(
     segments: Sequence[Segment],
     evidence: Sequence[Evidence],
@@ -172,14 +202,24 @@ def filter_evidence(
     kept_segments: list[Segment] = []
     for segment in segments:
         call = segment.tool_call_id
+        counted: Optional[EmittedResult] = None
         if call in runs:
             result = runs[call] if call is not None else None
             key = segment.segment_key
             if result is None or key is None or result.size_of(key) is None:
                 continue
+            counted = result
         ids = tuple(
             i for i in segment.evidence_ids if i in kept_ids or i not in known_ids
         )
+        if not ids and counted is not None and evidence:
+            # The code's own numbers were not accepted as evidence, but the
+            # layer's size is the library's count: that is evidence enough.
+            fallback = _counted_size(segment, counted, evidence, known_ids | kept_ids)
+            if fallback is not None:
+                kept_evidence.append(fallback)
+                kept_ids.add(fallback.id)
+                ids = (fallback.id,)
         if not ids:
             continue
         kept_segments.append(

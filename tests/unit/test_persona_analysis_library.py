@@ -1970,6 +1970,25 @@ class TestPlaybookFunctions:
         assert result["population_source"] == "join:source_1+source_2"
         assert "source_2_amount_sum" in result["joined_columns"]
 
+    def test_the_join_is_recorded_even_when_the_frame_lost_its_attrs(
+        self, lib: ModuleType, tmp_path: Path, tables: dict[str, Any]
+    ) -> None:
+        code = (
+            'df = join_tables("source_1", "customer_id", [{"source": "source_2",'
+            ' "aggregations": [{"column": "amount", "func": "sum"}]}])\n'
+            "import pandas as pd\n"
+            "# a frame built anew has no attrs\n"
+            "fresh = pd.DataFrame({c: df[c].tolist() for c in df.columns})\n"
+            'fresh["seg"] = ["a" if i % 2 else "b" for i in range(len(fresh))]\n'
+            'emit_result(fresh, "seg", "join:source_1+source_2", id_column="customer_id")\n'
+        )
+        _run_ai(lib, tmp_path, code)
+
+        result = _finalize(lib, tmp_path)["result"]
+
+        assert result["joined_columns"][0] == "customer_id"
+        assert "source_2_amount_sum" in result["joined_columns"]
+
     def test_joined_names_keep_japanese_and_never_collide(
         self, lib: ModuleType, tmp_path: Path
     ) -> None:

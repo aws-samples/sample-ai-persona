@@ -139,6 +139,37 @@ class TestAnalysisInstructionsU6:
     def test_several_tables_are_named(self) -> None:
         assert "source_2" in prompts.analysis_instructions(tables=2)
 
+    def test_layers_of_a_detailed_step_come_from_run_code(self) -> None:
+        from src.models.analysis import (
+            AnalysisMethod,
+            AnalysisPlan,
+            AnalysisStep,
+            AnalysisStepKind,
+        )
+
+        def plan(*kinds: AnalysisStepKind, method: AnalysisMethod) -> AnalysisPlan:
+            return AnalysisPlan(
+                interpreted_purpose="",
+                questions=("q",),
+                method=method,
+                rationale="",
+                budget={},
+                steps=tuple(AnalysisStep(k, "") for k in kinds),
+            )
+
+        detailed = plan(
+            AnalysisStepKind.JOIN,
+            AnalysisStepKind.RFM,
+            AnalysisStepKind.FILTER,
+            method=AnalysisMethod.FILTER,
+        )
+        fixed = plan(AnalysisStepKind.FILTER, method=AnalysisMethod.FILTER)
+
+        # a join or a score exists only in run_code: the layers are made there too
+        assert "emit_result" in prompts.analysis_prompt(detailed, 2)
+        assert "profile_segments" in prompts.analysis_prompt(detailed, 2)
+        assert "emit_result" not in prompts.analysis_prompt(fixed, 2)
+
     def test_a_join_plan_reaches_the_request(self) -> None:
         from src.models.analysis import (
             AnalysisMethod,

@@ -1491,6 +1491,8 @@ _EMIT_COUNT_FILE = "emit_count"
 _MAX_STATISTICS = 50
 _MAX_METRICS = 10
 _MAX_DEFAULT_METRICS = 60
+#: The columns the last ``join_tables`` of this process added (key first).
+_LAST_JOINED: List[str] = []
 _MAX_FEATURES = 20
 _JOIN_FUNCS = {
     "count": "count({col})",
@@ -1714,6 +1716,8 @@ def emit_result(
     if joined_columns is None:
         attrs = getattr(frame, "attrs", None)
         joined_columns = list(attrs.get("joined_columns", [])) if attrs else []
+        if not joined_columns and str(population_source).startswith("join:"):
+            joined_columns = list(_LAST_JOINED)
     data: Dict[str, Any] = {
         "person_id": [None if v is None else str(v) for v in columns[id_column]],
         "segment": [None if v is None else str(v) for v in columns[assign_column]],
@@ -2488,6 +2492,9 @@ def join_tables(
     finally:
         con.close()
     frame.attrs["joined_columns"] = [key, *added]
+    # A frame built from this one (a merge, a groupby) loses its attrs; the
+    # record of what was joined must not depend on that.
+    _LAST_JOINED[:] = [key, *added]
     return frame
 
 
