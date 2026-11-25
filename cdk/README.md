@@ -24,6 +24,7 @@ flowchart TB
 
     SFN["AWS Step Functions<br/>（マスアンケート）"]
     Bedrock[Amazon Bedrock]
+    CodeInterpreter["AgentCore<br/>Code Interpreter<br/>（高度な生成。公開の構成だけ）"]
 
     subgraph Data["Data スタック（すべて RETAIN）"]
         DynamoDB[(DynamoDB)] ~~~ ECR[ECR] ~~~ Memory[AgentCore<br/>Memory]
@@ -33,19 +34,21 @@ flowchart TB
     User -->|HTTPS| CloudFront
     WAF -.- CloudFront
     ECS -->|開始・確認・停止| SFN
+    User -.->|"ファイルを分割で直接アップロード<br/>（署名付き URL）"| S3
     ECS --> Bedrock
+    ECS -->|前準備・分析| CodeInterpreter
     ECS --> Data
     SFN -->|推論| Bedrock
     SFN -->|入力・結果| S3
 ```
 
-利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。
+利用者は CloudFront から内部 ALB を経てアプリへ届きます。WAF は既定で有効で、Edge スタック（us-east-1）に WebACL を作り、CloudFront に関連付けます。アプリは Cognito Managed Login でログインさせ、ログインセッションを DynamoDB に置きます。マスアンケートは、アプリが Step Functions の実行を始め、ペルソナごとの推論と S3 の入力・結果の読み書きは Step Functions が行います。高度な生成（ベータ）では、ブラウザが大きなファイルを署名付き URL で S3 へ直接アップロードし、アプリが AgentCore Code Interpreter のセッションで前準備と分析を行います（公開の構成だけ。詳しくは[高度な生成ガイド](../docs/advanced_generation_guide.md)）。
 
 | スタック（Stage `AIPersonaDev`） | リージョン | 中身 |
 |---|---|---|
 | `AIPersonaDev-Data` | ap-northeast-1 | DynamoDB、S3、ECR、Cognito User Pool、AgentCore Memory、KMS キー、Secrets Manager の鍵 |
 | `AIPersonaDev-Edge` | us-east-1 | CloudFront 用の WAF（`enableWaf: true` のときだけ。既定は有効） |
-| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、ログ |
+| `AIPersonaDev-App` | ap-northeast-1 | VPC、内部 ALB、ECS Fargate、CloudFront、Cognito のアプリクライアント、マスアンケートの Step Functions のステートマシン、AgentCore Code Interpreter（高度な生成。公開の Stage だけ）、ログ |
 
 ## デプロイ
 
