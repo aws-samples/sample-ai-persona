@@ -106,21 +106,13 @@ flowchart TD
   （例: `SEGMENT_CSV_URL_MISSING` は名前に `MISSING` を含むが内部要因なので `TRANSIENT`、
   `FILE_DELETE_NOT_ALLOWED` は入力修正で解決しないので `VALIDATION` ではない）
 - `UNKNOWN` は `TRANSIENT`。未分類の失敗が「入力を直せば解決する」ように見えてはならない
-- 高度な生成（ベータ）の途中の操作（U5）のコードはすべて `TRANSIENT`。どれも入力を直すのではなく、
-  待つ・進み具合を確かめる・始め直すことで解決するため（`GENERATION_STALLED`: 止まった生成、
-  `GENERATION_NOT_AWAITING_PLAN`: 計画の確認待ちでない・中止の手続き中、`GENERATION_ALREADY_FINISHED`:
-  終わった生成への中止、`GENERATION_SOURCE_NOT_READY`: 検査中のファイル）。Router はこの 3 つと
-  `ADVANCED_GENERATION_ALREADY_RUNNING` を 409 で返す（`_CONFLICT_CODES`）。`GENERATION_TIMEOUT` の文言は
-  `context["limit"]`（`generation_minutes`・`plan_wait_minutes`・`plan_wait_total_minutes`）で分ける
-- 設定画面の高度な生成の区画（U6）の保存で版の条件に負けたときの `SETTINGS_VERSION_CONFLICT` は `TRANSIENT`。
-  入力を直すのではなく、最新の値を確かめて保存し直すことで解決するため。Router は 409 で、最新の値で
-  出し直した区画を返す（`mark_renderable()`）。区画の GET は `settings:manage` がなければ既存の
-  `SETTINGS_NOT_FOUND`（404）、保存の POST は既存の `ACCESS_DENIED`（403）。`ENABLE_ADVANCED_GENERATION`
-  が false の環境（閉域）では、admin でも GET・POST とも `SETTINGS_NOT_FOUND`（404）で、設定画面に区画を出さない。
-  なくなった部署を選んだままの保存は既存の `REQUEST_INVALID`（`context["reason"]="vanished_departments"`、
-  `count`）で、部署の ID・名前は載せず件数だけを文言に出す。表を 4 つ以上選んだ開始は
-  既存の `UPLOAD_SOURCE_INVALID`（`context["reason"]="tables"`、`max=3`）、表の合計が 1GB を超えた開始は
-  既存の `GENERATION_SOURCE_TOO_LARGE`（`context["limit"]="tables_total"`）で、文言を `context` で分ける
+- **待つ・確かめる・やり直すで解決するものは `TRANSIENT`。** 競合（版の条件に負けた、すでに実行中、終わった処理への操作）や
+  一時的に操作できない状態は、入力を直しても解決しない。分類は `ErrorCode` の定義で行い、競合を 409 で返すコードの集合は
+  Router が持つ
+- **既存のコードを `context` で使い分けられるときは、新しいコードを増やさない。** 文言だけが違う場合は
+  `context["reason"]` / `context["limit"]` などの安定キーで分ける（フィールド単位のバリデーションと同じ考え方）
+- **利用者に見せてよいのは件数・上限値までで、ID・名前は載せない。** 権限の有無で資源の存在が分かる応答にしない
+  （権限がないときと存在しないときは同じコードにする）
 - **同じ事象でも、利用者が取れる行動が違えばコードを分ける。** 例: 件数不足はフィルタありなら
   「条件を緩める」（`SURVEY_AVAILABLE_PERSONAS_TOO_FEW`）、フィルタなしなら「データセットを変える」
   （`SURVEY_DATASET_TOO_FEW_ROWS`）。行動につながらない案内は VALIDATION の意味を失わせる
